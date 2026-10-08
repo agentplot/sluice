@@ -1,0 +1,11 @@
+adr_dir = "docs/adr"
+mode = "ng"
+no_edit = true
+
+[templates]
+format = "madr"
+variant = "bare"
+
+[generate]
+
+[export]

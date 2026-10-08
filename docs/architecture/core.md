@@ -1,0 +1,55 @@
+# sluice rules
+
+The rules that bind wherever a change is made in this repository,
+written so a reviewer can point at a diff and say which rule it breaks.
+The narrative is the statement in agentplot/blueprints,
+`design/sluice/requirements.md`; a rule here names the clause it
+enforces and never restates it. There are no area pages yet; a rule
+that binds only one part of the tree moves to an area page when that
+part exists.
+
+## Rules
+
+### The core and its seams
+
+- **[core.1]** Code outside a profile names no task runner, worktree tool, multiplexer, service manager or forge.
+- **[core.2]** Every seam of Part B is reached through exactly one interface, and a profile implements that interface and nothing of the core.
+- **[core.3]** A seam with a single profile has an ADR saying why one is enough.
+
+### Lines and landings
+
+- **[core.4]** No code path reachable from a submission writes a line's ref.
+- **[core.5]** A line is moved only with the expected old revision, and a move whose expectation fails is reported, never retried blind.
+- **[core.6]** A candidate is formed from the line's revision and the entries ahead in its lane, in order, and from nothing else.
+
+### Verdicts and attribution
+
+- **[core.7]** Every check run is recorded with its key, outcome and executor before any verdict is read from it, a fail exactly as a pass.
+- **[core.8]** A failure is attributed to one entry, and only after every candidate ahead of it has a verdict.
+- **[core.9]** A replay is recorded as a replay, never as a run.
+
+### Places and services
+
+- **[core.10]** The core starts no process that outlives a place and binds no port; what a place needs goes through the service seam.
+- **[core.11]** Every record a reader may need is a file readable with no sluice process running.
+
+### Design and records
+
+- **[core.12]** A change that bears on a clause cites the clause by number; a clause that no longer holds is changed in the statement first, never worked around here.
+- **[core.13]** Nothing commercial, no pricing, tier or customer, appears in this repository.
+
+## Details
+
+- **core.1** Rules out: the strings `moon`, `wt`, `worktrunk`, `devenv`, `herdr`, `gh`, `crew`, `flywheel` in any module outside a profile directory; an import of a profile from the core. Not ruled out: `git`, which section 9 of the statement fixes. Source: statement preamble and clause 52; ADR 0003.
+- **core.2** Rules out: a profile calling another profile; a core function with a profile-specific branch. Source: clauses 52, 53; ADR 0003.
+- **core.3** Rules out: a seam whose only profile is undocumented as such. Source: ADR 0003.
+- **core.4** Rules out: `update-ref`, `push`, a merge or a fast-forward anywhere a session's submit command reaches. Source: clause 1; ADR 0002.
+- **core.5** Rules out: `update-ref` without an old value; a landing loop that re-reads and retries on refusal without re-forming the chain. Source: clauses 24, 45, 46.
+- **core.6** Rules out: a candidate formed from a cached revision of the line; a candidate including an entry removed as culprit or conflict; an entry of another lane. Source: clauses 10, 12, 21.
+- **core.7** Rules out: reading a verdict from the task runner's cache alone; discarding a failed run's record; writing a record after the verdict. Source: clauses 16, 18; ADR 0004.
+- **core.8** Rules out: attributing from a batch with no intermediate verdicts; attributing while a candidate ahead is still running; telling two sessions of one failure. Source: clauses 17, 18, 20.
+- **core.9** Rules out: counting a cache hit as an executor's observation. Source: clause 16, 38; ADR 0004.
+- **core.10** Rules out: starting an emulator, a server or a process manager from the core; computing a port; a process without a tether to its place. Source: clauses 31, 32, 39 to 41.
+- **core.11** Rules out: state held only in a running process's memory or a database only a server reads. Source: clauses 26, 51; C.6.
+- **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
+- **core.13** Rules out: a pricing table, a tier name, a customer name, a hosted-plan reference in any file. Source: ADR 0001.
