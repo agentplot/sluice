@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">sluice: a merge queue for agents in worktrees</title>
+<desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates line plus A, line plus A plus B, and line plus A plus B plus C, and tests them at once. Line plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the line without B, mostly replays from the cache, passes and lands. The line moves only to what passed.</desc>
+<style>
+:root{--bg:#f6f7f8;--panel:#ffffff;--fg:#1d2329;--muted:#5b6670;--rule:#d6dbe0;
+--accent:#1b6d8a;--soft:#e3eef3;--ok:#2e7d4f;--bad:#c0392b;--ink:#ffffff}
+@media (prefers-color-scheme:dark){:root{--bg:#141a1f;--panel:#1b2329;--fg:#e6ebef;
+--muted:#9aa7b2;--rule:#2c3740;--accent:#6fc2de;--soft:#1f2f38;--ok:#6cc58f;--bad:#f08a7e;--ink:#0f1a20}}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
+.mono,.chipt,.pillt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.bg{fill:var(--bg)} .t{fill:var(--fg)} .m{fill:var(--muted)} .ok{fill:var(--ok)} .bad{fill:var(--bad)}
+.b{font-weight:600} .h{font-size:17px;font-weight:700} .hd{font-size:12px;letter-spacing:.06em;fill:var(--muted)}
+.sm{font-size:13px} .xs{font-size:11.5px} .mono{font-size:13px}
+.box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
+.cand{fill:var(--panel);stroke:var(--rule);stroke-width:1}
+.queue{fill:var(--soft);stroke:none}
+.chip{fill:var(--accent)} .chipt{fill:var(--ink);font-size:13px;font-weight:700}
+.track{fill:var(--soft)} .bar{transform-box:fill-box;transform-origin:left center}
+.strike{stroke:var(--bad);stroke-width:1.5}
+.notify{fill:none;stroke:var(--bad);stroke-width:2;stroke-dasharray:80}
+.edge{stroke:var(--muted);stroke-width:2} .commit{fill:var(--muted)}
+.merge{fill:var(--ok)} .mergein{fill:var(--panel)}
+.pill{fill:var(--accent)} .pillt{fill:var(--ink);font-size:12px;font-weight:600}
+.badge{fill:var(--accent)} .badget{fill:var(--ink);font-size:12px;font-weight:700}
+.arrowhead{fill:var(--bad)}
+@media (prefers-reduced-motion:reduce){*{animation-play-state:paused!important;animation-delay:-14.4s!important}
+.cap{animation:none!important;opacity:1}}
+@keyframes k-sA0{0%{opacity:1} 4%{opacity:1} 4.8%{opacity:0} 99.2%{opacity:0} 100%{opacity:1}}.sA0{animation:k-sA0 16s linear infinite}@keyframes k-sA1{0%{opacity:0} 5.2%{opacity:0} 6%{opacity:1} 56%{opacity:1} 56.8%{opacity:0} 100%{opacity:0}}.sA1{animation:k-sA1 16s linear infinite}@keyframes k-sA2{0%{opacity:0} 57.2%{opacity:0} 58%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.sA2{animation:k-sA2 16s linear infinite}@keyframes k-sbA{0%{stroke:var(--rule)} 57.2%{stroke:var(--rule)} 58%{stroke:var(--ok)} 96%{stroke:var(--ok)} 96.8%{stroke:var(--rule)} 100%{stroke:var(--rule)}}.sbA{animation:k-sbA 16s linear infinite}@keyframes k-sB0{0%{opacity:1} 7%{opacity:1} 7.8%{opacity:0} 99.2%{opacity:0} 100%{opacity:1}}.sB0{animation:k-sB0 16s linear infinite}@keyframes k-sB1{0%{opacity:0} 8.2%{opacity:0} 9%{opacity:1} 45%{opacity:1} 45.8%{opacity:0} 100%{opacity:0}}.sB1{animation:k-sB1 16s linear infinite}@keyframes k-sB2{0%{opacity:0} 45.2%{opacity:0} 46%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.sB2{animation:k-sB2 16s linear infinite}@keyframes k-sbB{0%{stroke:var(--rule)} 45.2%{stroke:var(--rule)} 46%{stroke:var(--bad)} 96%{stroke:var(--bad)} 96.8%{stroke:var(--rule)} 100%{stroke:var(--rule)}}.sbB{animation:k-sbB 16s linear infinite}@keyframes k-sC0{0%{opacity:1} 10%{opacity:1} 10.8%{opacity:0} 99.2%{opacity:0} 100%{opacity:1}}.sC0{animation:k-sC0 16s linear infinite}@keyframes k-sC1{0%{opacity:0} 11.2%{opacity:0} 12%{opacity:1} 80%{opacity:1} 80.8%{opacity:0} 100%{opacity:0}}.sC1{animation:k-sC1 16s linear infinite}@keyframes k-sC2{0%{opacity:0} 81.2%{opacity:0} 82%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.sC2{animation:k-sC2 16s linear infinite}@keyframes k-sbC{0%{stroke:var(--rule)} 81.2%{stroke:var(--rule)} 82%{stroke:var(--ok)} 96%{stroke:var(--ok)} 96.8%{stroke:var(--rule)} 100%{stroke:var(--rule)}}.sbC{animation:k-sbC 16s linear infinite}@keyframes k-cA{0%{transform:translate(-190px,16px);opacity:0} 3%{transform:translate(-190px,16px);opacity:0} 4%{transform:translate(-190px,16px);opacity:1} 10%{transform:translate(0px,0px);opacity:1} 57.2%{transform:translate(0px,0px);opacity:1} 58%{transform:translate(0px,0px);opacity:0} 100%{transform:translate(0px,0px);opacity:0}}.cA{animation:k-cA 16s linear infinite}@keyframes k-cB{0%{transform:translate(-230px,106px);opacity:0} 6%{transform:translate(-230px,106px);opacity:0} 7%{transform:translate(-230px,106px);opacity:1} 13%{transform:translate(0px,0px);opacity:1} 57.2%{transform:translate(0px,0px);opacity:1} 58%{transform:translate(0px,0px);opacity:0} 100%{transform:translate(0px,0px);opacity:0}}.cB{animation:k-cB 16s linear infinite}@keyframes k-cC{0%{transform:translate(-270px,196px);opacity:0} 9%{transform:translate(-270px,196px);opacity:0} 10%{transform:translate(-270px,196px);opacity:1} 16%{transform:translate(0px,0px);opacity:1} 81.2%{transform:translate(0px,0px);opacity:1} 82%{transform:translate(0px,0px);opacity:0} 100%{transform:translate(0px,0px);opacity:0}}.cC{animation:k-cC 16s linear infinite}@keyframes k-chiprB{0%{fill:var(--accent)} 44%{fill:var(--accent)} 45%{fill:var(--bad)} 100%{fill:var(--bad)}}.chiprB{animation:k-chiprB 16s linear infinite}@keyframes k-row{0%{opacity:0} 18%{opacity:0} 21%{opacity:1} 96%{opacity:1} 100%{opacity:0}}@keyframes k-row2{0%{opacity:0} 18%{opacity:0} 21%{opacity:1} 56%{opacity:1} 60%{opacity:.3} 96%{opacity:.3} 100%{opacity:0}}.row{animation:k-row 16s linear infinite}.row2{animation:k-row2 16s linear infinite}@keyframes k-r1a{0%{opacity:0} 21.2%{opacity:0} 22%{opacity:1} 36%{opacity:1} 36.8%{opacity:0} 100%{opacity:0}}.r1a{animation:k-r1a 16s linear infinite}@keyframes k-r1b{0%{opacity:0} 35.2%{opacity:0} 36%{opacity:1} 56%{opacity:1} 56.8%{opacity:0} 100%{opacity:0}}.r1b{animation:k-r1b 16s linear infinite}@keyframes k-r1c{0%{opacity:0} 55.2%{opacity:0} 56%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.r1c{animation:k-r1c 16s linear infinite}@keyframes k-r2a{0%{opacity:0} 21.2%{opacity:0} 22%{opacity:1} 32%{opacity:1} 32.8%{opacity:0} 100%{opacity:0}}.r2a{animation:k-r2a 16s linear infinite}@keyframes k-r2b{0%{opacity:0} 31.2%{opacity:0} 32%{opacity:1} 56%{opacity:1} 56.8%{opacity:0} 100%{opacity:0}}.r2b{animation:k-r2b 16s linear infinite}@keyframes k-r2c{0%{opacity:0} 55.2%{opacity:0} 56%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.r2c{animation:k-r2c 16s linear infinite}@keyframes k-l3a{0%{opacity:1} 60%{opacity:1} 60.8%{opacity:0} 99.2%{opacity:0} 100%{opacity:1}}.l3a{animation:k-l3a 16s linear infinite}@keyframes k-l3b{0%{opacity:0} 61.2%{opacity:0} 62%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.l3b{animation:k-l3b 16s linear infinite}@keyframes k-r3a{0%{opacity:0} 21.2%{opacity:0} 22%{opacity:1} 42%{opacity:1} 42.8%{opacity:0} 100%{opacity:0}}.r3a{animation:k-r3a 16s linear infinite}@keyframes k-r3b{0%{opacity:0} 41.2%{opacity:0} 42%{opacity:1} 62%{opacity:1} 62.8%{opacity:0} 100%{opacity:0}}.r3b{animation:k-r3b 16s linear infinite}@keyframes k-r3c{0%{opacity:0} 61.2%{opacity:0} 62%{opacity:1} 70%{opacity:1} 70.8%{opacity:0} 100%{opacity:0}}.r3c{animation:k-r3c 16s linear infinite}@keyframes k-r3d{0%{opacity:0} 69.2%{opacity:0} 70%{opacity:1} 80%{opacity:1} 80.8%{opacity:0} 100%{opacity:0}}.r3d{animation:k-r3d 16s linear infinite}@keyframes k-r3e{0%{opacity:0} 79.2%{opacity:0} 80%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.r3e{animation:k-r3e 16s linear infinite}@keyframes k-strike{0%{opacity:0} 56%{opacity:0} 58%{opacity:1} 100%{opacity:1}}.strike{animation:k-strike 16s linear infinite}@keyframes k-bar1{0%{transform:scaleX(0);fill:var(--accent)} 20%{transform:scaleX(0);fill:var(--accent)} 36%{transform:scaleX(1);fill:var(--accent)} 37%{transform:scaleX(1);fill:var(--ok)} 96%{transform:scaleX(1);fill:var(--ok)} 100%{transform:scaleX(0);fill:var(--accent)}}@keyframes k-bar2{0%{transform:scaleX(0);fill:var(--accent)} 20%{transform:scaleX(0);fill:var(--accent)} 32%{transform:scaleX(.68);fill:var(--accent)} 33%{transform:scaleX(.68);fill:var(--bad)} 96%{transform:scaleX(.68);fill:var(--bad)} 100%{transform:scaleX(0);fill:var(--accent)}}@keyframes k-bar3{0%{transform:scaleX(0);fill:var(--accent);opacity:1} 20%{transform:scaleX(0);fill:var(--accent);opacity:1} 42%{transform:scaleX(.8);fill:var(--accent);opacity:1} 44%{transform:scaleX(.8);fill:var(--accent);opacity:.25} 61%{transform:scaleX(.8);fill:var(--accent);opacity:.25} 62%{transform:scaleX(0);fill:var(--accent);opacity:1} 64%{transform:scaleX(0);fill:var(--accent);opacity:1} 70%{transform:scaleX(1);fill:var(--accent);opacity:1} 71%{transform:scaleX(1);fill:var(--ok);opacity:1} 96%{transform:scaleX(1);fill:var(--ok);opacity:1} 100%{transform:scaleX(0);fill:var(--accent);opacity:1}}.bar1{animation:k-bar1 16s linear infinite}.bar2{animation:k-bar2 16s linear infinite}.bar3{animation:k-bar3 16s linear infinite}@keyframes k-notify{0%{stroke-dashoffset:80;opacity:0} 44%{stroke-dashoffset:80;opacity:0} 44.5%{stroke-dashoffset:80;opacity:1} 47%{stroke-dashoffset:0;opacity:1} 96%{stroke-dashoffset:0;opacity:1} 97%{stroke-dashoffset:0;opacity:0} 100%{stroke-dashoffset:80;opacity:0}}.notify{animation:k-notify 16s linear infinite}@keyframes k-mA{0%{opacity:0} 55.2%{opacity:0} 56%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.mA{animation:k-mA 16s linear infinite}@keyframes k-mC{0%{opacity:0} 79.2%{opacity:0} 80%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.mC{animation:k-mC 16s linear infinite}@keyframes k-eA{0%{opacity:0} 55.2%{opacity:0} 56%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.eA{animation:k-eA 16s linear infinite}@keyframes k-eC{0%{opacity:0} 79.2%{opacity:0} 80%{opacity:1} 96%{opacity:1} 96.8%{opacity:0} 100%{opacity:0}}.eC{animation:k-eC 16s linear infinite}@keyframes k-head{0%{transform:translate(0px,0px)} 56%{transform:translate(0px,0px)} 58%{transform:translate(0px,-66px)} 80%{transform:translate(0px,-66px)} 82%{transform:translate(0px,-136px)} 96%{transform:translate(0px,-136px)} 99%{transform:translate(0px,0px)} 100%{transform:translate(0px,0px)}}.head{animation:k-head 16s linear infinite}@keyframes k-cap1{0%{opacity:0.35} 1.2%{opacity:0.35} 2%{opacity:1} 18%{opacity:1} 18.8%{opacity:0.35} 100%{opacity:0.35}}.cap1{animation:k-cap1 16s linear infinite}@keyframes k-cap2{0%{opacity:0.35} 17.2%{opacity:0.35} 18%{opacity:1} 42%{opacity:1} 42.8%{opacity:0.35} 100%{opacity:0.35}}.cap2{animation:k-cap2 16s linear infinite}@keyframes k-cap3{0%{opacity:0.35} 41.2%{opacity:0.35} 42%{opacity:1} 56%{opacity:1} 56.8%{opacity:0.35} 100%{opacity:0.35}}.cap3{animation:k-cap3 16s linear infinite}@keyframes k-cap4{0%{opacity:0.35} 55.2%{opacity:0.35} 56%{opacity:1} 92%{opacity:1} 92.8%{opacity:0.35} 100%{opacity:0.35}}.cap4{animation:k-cap4 16s linear infinite}</style>
+<rect class="bg" width="900" height="446" rx="10"/>
+<text class="h" x="20" y="32">sluice</text>
+<text class="m sm" x="80" y="32">a merge queue for agents in worktrees</text>
+<text class="hd" x="20" y="62">AGENTS · EACH IN A WORKTREE</text>
+<rect class="queue" x="268" y="44" width="380" height="306" rx="8"/>
+<text class="hd" x="282" y="62">SLUICE · QUEUE OF bolt/pay</text>
+<text class="m xs" x="296" y="88">entries</text>
+<text class="hd" x="664" y="62">THE LINE</text>
+<rect class="box sbA" x="20" y="80" width="200" height="72" rx="6"/>
+<text class="t b" x="34" y="104">agent A</text>
+<text class="m sm" x="34" y="122">worktree unit/auth</text>
+<text class="m xs sA0" x="34" y="140">building…</text>
+<text class="m xs sA1" x="34" y="140">submitted · waiting</text>
+<text class="xs ok sA2" x="34" y="140">landed</text>
+<rect class="box sbB" x="20" y="170" width="200" height="72" rx="6"/>
+<text class="t b" x="34" y="194">agent B</text>
+<text class="m sm" x="34" y="212">worktree unit/ledger</text>
+<text class="m xs sB0" x="34" y="230">building…</text>
+<text class="m xs sB1" x="34" y="230">submitted · waiting</text>
+<text class="xs bad sB2" x="34" y="230">told: pkg-x:test failed</text>
+<rect class="box sbC" x="20" y="260" width="200" height="72" rx="6"/>
+<text class="t b" x="34" y="284">agent C</text>
+<text class="m sm" x="34" y="302">worktree unit/export</text>
+<text class="m xs sC0" x="34" y="320">building…</text>
+<text class="m xs sC1" x="34" y="320">submitted · waiting</text>
+<text class="xs ok sC2" x="34" y="320">landed</text>
+<g class="cA"><rect class="chip chiprA" x="360" y="72" width="30" height="22" rx="4"/><text class="chipt" x="375" y="87" text-anchor="middle">A</text></g>
+<g class="cB"><rect class="chip chiprB" x="400" y="72" width="30" height="22" rx="4"/><text class="chipt" x="415" y="87" text-anchor="middle">B</text></g>
+<g class="cC"><rect class="chip chiprC" x="440" y="72" width="30" height="22" rx="4"/><text class="chipt" x="455" y="87" text-anchor="middle">C</text></g>
+<g class="row">
+<rect class="cand" x="282" y="112" width="352" height="62" rx="6"/>
+<text class="t mono " x="296" y="136">line + A</text>
+<text class="xs m r1a" x="620" y="136" text-anchor="end">testing…</text>
+<text class="xs ok r1b" x="620" y="136" text-anchor="end">passed</text>
+<text class="xs ok r1c" x="620" y="136" text-anchor="end">landed</text>
+<rect class="track" x="296" y="150" width="324" height="10" rx="5"/>
+<rect class="bar bar1" x="296" y="150" width="324" height="10" rx="5"/>
+</g>
+<g class="row2">
+<rect class="cand" x="282" y="192" width="352" height="62" rx="6"/>
+<text class="t mono " x="296" y="216">line + A + B</text>
+<text class="xs m r2a" x="620" y="216" text-anchor="end">testing…</text>
+<text class="xs bad r2b" x="620" y="216" text-anchor="end">failed: pkg-x:test</text>
+<text class="xs bad r2c" x="620" y="216" text-anchor="end">B removed: culprit</text>
+<rect class="track" x="296" y="230" width="324" height="10" rx="5"/>
+<rect class="bar bar2" x="296" y="230" width="324" height="10" rx="5"/>
+<line class="strike" x1="290" y1="212" x2="410" y2="212"/>
+</g>
+<g class="row">
+<rect class="cand" x="282" y="272" width="352" height="62" rx="6"/>
+<text class="t mono l3a" x="296" y="296">line + A + B + C</text>
+<text class="t mono l3b" x="296" y="296">line + A + C</text>
+<text class="xs m r3a" x="620" y="296" text-anchor="end">testing…</text>
+<text class="xs m r3b" x="620" y="296" text-anchor="end">discarded: B is ahead</text>
+<text class="xs m r3c" x="620" y="296" text-anchor="end">re-formed · 9 of 11 replay</text>
+<text class="xs ok r3d" x="620" y="296" text-anchor="end">passed</text>
+<text class="xs ok r3e" x="620" y="296" text-anchor="end">landed</text>
+<rect class="track" x="296" y="310" width="324" height="10" rx="5"/>
+<rect class="bar bar3" x="296" y="310" width="324" height="10" rx="5"/>
+</g>
+<path class="notify" d="M282,222 C250,222 250,208 222,208"/>
+<line class="edge" x1="760" y1="340" x2="760" y2="322"/>
+<line class="edge eA" x1="760" y1="312" x2="760" y2="260"/>
+<line class="edge eC" x1="760" y1="242" x2="760" y2="190"/>
+<circle class="commit" cx="760" cy="317" r="6"/>
+<text class="m xs" x="774" y="321">before</text>
+<g class="mA"><circle class="merge" cx="760" cy="251" r="8"/><circle class="mergein" cx="760" cy="251" r="3.5"/><text class="t sm" x="776" y="249">merge A</text><text class="m xs" x="776" y="264">verdict in trailers</text></g>
+<g class="mC"><circle class="merge" cx="760" cy="181" r="8"/><circle class="mergein" cx="760" cy="181" r="3.5"/><text class="t sm" x="776" y="179">merge C</text><text class="m xs" x="776" y="194">verdict in trailers</text></g>
+<g class="head"><rect class="pill" x="664" y="306" width="76" height="22" rx="11"/><text class="pillt" x="702" y="321" text-anchor="middle">bolt/pay</text></g>
+<text class="m xs" x="664" y="356">moved only by sluice, from the</text>
+<text class="m xs" x="664" y="370">revision the candidate was formed on</text>
+<g class="cap cap1"><circle class="badge" cx="32" cy="412" r="11"/><text class="badget" x="32" y="416" text-anchor="middle">1</text><text class="t sm" x="50" y="408">Agents submit their work.</text><text class="t sm" x="50" y="425">None of them merges.</text></g>
+<g class="cap cap2"><circle class="badge" cx="250" cy="412" r="11"/><text class="badget" x="250" y="416" text-anchor="middle">2</text><text class="t sm" x="268" y="408">Each candidate is tested</text><text class="t sm" x="268" y="425">exactly as it would land.</text></g>
+<g class="cap cap3"><circle class="badge" cx="468" cy="412" r="11"/><text class="badget" x="468" y="416" text-anchor="middle">3</text><text class="t sm" x="486" y="408">A failure has one culprit,</text><text class="t sm" x="486" y="425">and only its agent is told.</text></g>
+<g class="cap cap4"><circle class="badge" cx="686" cy="412" r="11"/><text class="badget" x="686" y="416" text-anchor="middle">4</text><text class="t sm" x="704" y="408">The line moves only</text><text class="t sm" x="704" y="425">to what passed.</text></g>
+</svg>

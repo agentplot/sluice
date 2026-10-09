@@ -5,6 +5,8 @@ submits its head; sluice orders what was submitted, tests each candidate
 exactly as it would land, names the one submission at fault when a
 candidate fails, and moves the line only to a revision that passed.
 
+![sluice: agents submit and never merge; each candidate is tested as it would land; a failure names one culprit and tells only its agent; the line moves only to what passed](docs/diagrams/sluice.svg)
+
 Nothing is built yet. The design is a statement of invariants in
 [agentplot/blueprints](https://github.com/agentplot/blueprints) under
 `design/sluice/requirements.md`, with its book under `books/sluice/`.
