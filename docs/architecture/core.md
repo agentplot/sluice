@@ -32,6 +32,9 @@ part exists.
 
 - **[core.10]** The core starts no process that outlives a place and binds no port; what a place needs goes through the service seam.
 - **[core.11]** Every record a reader may need is a file readable with no sluice process running.
+- **[core.14]** Nothing the core decides is held between steps outside the records, and no two steps act on one line at once.
+- **[core.15]** A line's gate is read from the line's current revision, never from a candidate or a place.
+- **[core.16]** The core releases only places it made, and never a session's.
 
 ### Design and records
 
@@ -51,5 +54,8 @@ part exists.
 - **core.9** Rules out: counting a cache hit as an executor's observation. Source: clause 16, 38; ADR 0004.
 - **core.10** Rules out: starting an emulator, a server or a process manager from the core; computing a port; a process without a tether to its place. Source: clauses 31, 32, 39 to 41.
 - **core.11** Rules out: state held only in a running process's memory or a database only a server reads. Source: clauses 26, 51; C.6.
+- **core.14** Rules out: a decision kept in a loop's memory and not in the records; a step that proceeds without the line's lock; behavior that differs between `sluice run` and `sluice step`. Source: clauses 26, 51, S10; ADR 0005.
+- **core.15** Rules out: reading policy from a candidate's tree or a session's place; a submission whose change to the policy relaxes its own gate. Source: clauses 27, 56; ADR 0007.
+- **core.16** Rules out: removing or cleaning a session's worktree on landing; a candidate place left behind after its verdict is read. Source: clauses 25, 34.
 - **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
 - **core.13** Rules out: a pricing table, a tier name, a customer name, a hosted-plan reference in any file. Source: ADR 0001.

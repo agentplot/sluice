@@ -25,4 +25,14 @@ worktrunk worktree for the place; moon or a script for the check; the
 repository's declared services; local refs or refs pushed to the forge
 for the line; `wt submit`, crew or flywheel for the driver.
 
+## First cut
+
+The bolt line's queue on one host: the core and its conformance suite,
+with the worktree place, the moon and script checks, the declared
+services, local refs, and `wt submit`, which waits and exits with the
+outcome. That covers scenarios S1 to S4, S7 for a bolt's line, S8, S10
+and S11. The shared line's queue waits for a confined executor, which
+its gate requires (clause 29); pushed refs and several hosts wait for a
+second host.
+
 MIT licensed.
