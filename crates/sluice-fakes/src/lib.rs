@@ -710,6 +710,10 @@ impl Branch for FakeBranch {
         ))
     }
 
+    fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool> {
+        Ok(World::ancestors(&self.0 .0.borrow(), tip).contains(rev))
+    }
+
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let mut inner = self.0 .0.borrow_mut();
         if inner.crash == Some(Crash::BeforeMove) {

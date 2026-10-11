@@ -137,15 +137,18 @@ impl Sluice<'_> {
             return Ok(());
         };
         let found = self.seams.branch.read(branch)?;
-        let moved = if found.as_ref() == Some(&intent.to) {
+        let moved = match &found {
             // Moved by a step that stopped before recording it.
-            Moved::Moved
-        } else if found.as_ref() == Some(&intent.from) {
-            self.seams
-                .branch
-                .move_to(branch, &intent.from, &intent.to)?
-        } else {
-            Moved::Elsewhere(found)
+            Some(f) if *f == intent.to => Moved::Moved,
+            Some(f) if *f == intent.from => {
+                self.seams
+                    .branch
+                    .move_to(branch, &intent.from, &intent.to)?
+            }
+            // Moved, then moved again before the landing was recorded: it
+            // is in the line's history all the same.
+            Some(f) if self.seams.branch.contains(f, &intent.to)? => Moved::Moved,
+            _ => Moved::Elsewhere(found.clone()),
         };
         let now = self.now();
         // 55, 70: a landing that changes the gate leaves the line covered
@@ -412,6 +415,7 @@ impl Sluice<'_> {
                             ),
                         };
                         let r = ResultLine {
+                            schema: crate::records::RESULT_SCHEMA.into(),
                             at: now.into(),
                             kind,
                             task: t.task.clone(),

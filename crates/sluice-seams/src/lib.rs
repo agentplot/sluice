@@ -220,6 +220,10 @@ pub trait Branch {
     /// 44: write one landing commit.
     fn commit(&self, commit: &LandingCommit) -> Result<Rev>;
 
+    /// Whether `rev` is `tip` or in its history: a landing found under a
+    /// line moved again since (24).
+    fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool>;
+
     /// 45, 46: move the line from exactly `expected` to `to`, all or
     /// nothing.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved>;

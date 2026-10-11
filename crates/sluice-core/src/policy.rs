@@ -46,21 +46,21 @@ pub struct Rules {
     /// Deepest first, or every candidate (14).
     pub batch: bool,
     pub flaky: Flaky,
-    /// How long one candidate's checks may run (66). `None` when the
-    /// policy states no limit.
+    /// How long one candidate's checks may run (66).
     pub timeout: Option<Duration>,
 }
 
 impl Default for Rules {
-    /// The bolt line's defaults of ADR 0007: every candidate, a window of
-    /// one to four, a flaky key read as passed.
+    /// What a table leaves out, always the conservative reading: every
+    /// candidate, a window of one to four, a flaky key read as failed, an
+    /// hour per candidate.
     fn default() -> Self {
         Rules {
             required: Vec::new(),
             parallel: 4,
             batch: false,
-            flaky: Flaky::Pass,
-            timeout: None,
+            flaky: Flaky::Fail,
+            timeout: Some(Duration::from_secs(3600)),
         }
     }
 }
@@ -109,7 +109,7 @@ impl Policy {
                 }
             };
             let timeout = match r.timeout.as_deref() {
-                None => None,
+                None => d.timeout,
                 Some(t) => Some(
                     parse_duration(t)
                         .with_context(|| format!("[branches.\"{pattern}\"] timeout"))?,
@@ -271,8 +271,8 @@ batch = true
         let main = p.rules_for("main").unwrap().unwrap();
         assert!(main.batch);
         assert_eq!(main.parallel, 2);
-        assert_eq!(main.flaky, Flaky::Pass);
-        assert_eq!(main.timeout, None);
+        assert_eq!(main.flaky, Flaky::Fail);
+        assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
     }

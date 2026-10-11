@@ -158,3 +158,23 @@ fn the_line_moves_only_in_chain_order_from_its_formed_revision() {
     let m = h.w().moves();
     assert_eq!(m.len(), 1);
 }
+
+/// satisfies: 24, 59
+#[test]
+fn a_landing_moved_over_by_hand_before_it_was_recorded_still_counts() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    h.w().crash(Crash::AfterMove);
+    assert!(h.sluice().step(BRANCH).is_err());
+    let by_hand = h.w().hand_commit(BRANCH, &[("c/lib", Some("by hand"))]);
+    h.settle();
+    let s = h.sub(one);
+    assert_eq!(s.state, State::Landed);
+    assert!(h.w().is_ancestor(&s.landed_as.unwrap(), &by_hand));
+    assert!(!h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Refused { .. })));
+}

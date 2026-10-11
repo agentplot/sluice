@@ -117,6 +117,9 @@ impl Branch for Unbuilt {
     fn commit(&self, _: &LandingCommit) -> Result<Rev> {
         self.refuse()
     }
+    fn contains(&self, _: &Rev, _: &Rev) -> Result<bool> {
+        self.refuse()
+    }
     fn move_to(&self, _: &str, _: &Rev, _: &Rev) -> Result<Moved> {
         self.refuse()
     }

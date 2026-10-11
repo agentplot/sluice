@@ -20,6 +20,15 @@ use sluice_seams::{Contested, Outcome, Rev, RunHandle, Submitter, Told};
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
 pub const BRANCH_SCHEMA: &str = "sluice/branch@1";
 pub const LOG_SCHEMA: &str = "sluice/log@1";
+pub const RESULT_SCHEMA: &str = "sluice/result@1";
+
+fn log_schema() -> String {
+    LOG_SCHEMA.into()
+}
+
+fn result_schema() -> String {
+    RESULT_SCHEMA.into()
+}
 
 pub const BRANCH_FILE: &str = "branch.json";
 pub const LOG_FILE: &str = "log.jsonl";
@@ -355,6 +364,8 @@ impl BranchDoc {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
+    #[serde(default = "log_schema")]
+    pub schema: String,
     pub at: String,
     #[serde(flatten)]
     pub event: Event,
@@ -457,6 +468,8 @@ pub enum ResultKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultLine {
+    #[serde(default = "result_schema")]
+    pub schema: String,
     pub at: String,
     pub kind: ResultKind,
     pub task: String,

@@ -56,6 +56,7 @@ impl Line {
 
     pub fn log(&mut self, at: &str, event: Event) {
         self.appended.extend(to_line(&LogLine {
+            schema: crate::records::LOG_SCHEMA.into(),
             at: at.into(),
             event,
         }));
