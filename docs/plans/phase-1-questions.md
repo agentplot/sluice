@@ -152,3 +152,25 @@ the step would hold decisions outside the records (rule core.14).
 replayed` line.** The counts are known when the run finishes, so the CLI
 prints the line with the outcome, not when testing starts. With moon, a
 profile could know them at start, after hashing.
+
+## Found in review
+
+**Q20. Beside clause 32: place names.** The walkthrough names a candidate's
+place `sluice/try/<n>`. A counter per line collides between two lines on
+one host, so the build names it `sluice/try/<branch>/<n>`, which is unique
+per host and a valid branch name for the worktrunk profile.
+
+**Q21. Beside clause 71: the host bound across lines.** The core reads
+`capacity` when it decides and starts the runs after its write; each line
+has its own lock, so two lines stepping at once can together exceed the
+bound. Reading taken: the check seam's `start` enforces the bound itself
+and refuses beyond it, and the core's reading is a hint. Pass 2's runner
+profile must hold to that, or the bound needs a host-wide lock.
+
+**Q22. Beside clause 20: the combination a culprit is told after a
+deepest-first landing.** A failed candidate that survives a landing of
+the submissions ahead of it is carried onto the new revision with those
+submissions dropped; its tree is the tree that failed. The culprit is
+told the carried candidate (its revision and the new line), not the
+longer combination on the old line that the run actually held. The two
+trees are equal. Should the message name the combination as it ran?

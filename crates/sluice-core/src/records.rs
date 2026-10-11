@@ -201,6 +201,10 @@ pub struct Candidate {
     pub run: Option<RunHandle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<FailedTask>,
+    /// Started on a revision covered by no verdict: every required check
+    /// had to run (70).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub every_check: bool,
     #[serde(default)]
     pub ran: usize,
     #[serde(default)]
@@ -468,6 +472,7 @@ impl ResultLine {
             && self.task == other.task
             && self.hash == other.hash
             && self.outcome == other.outcome
+            && self.host == other.host
             && self.branch == other.branch
             && self.combination == other.combination
     }

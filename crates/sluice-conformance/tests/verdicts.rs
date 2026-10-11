@@ -223,3 +223,35 @@ fn a_run_whose_executor_stopped_has_no_outcome_and_runs_again() {
     assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(h.w().started().len(), 2);
 }
+
+/// satisfies: 55, 70, 56
+#[test]
+fn a_landed_change_to_the_gate_runs_every_check_it_now_requires() {
+    // The line requires a:test only; b:test fails on the line as it is.
+    let narrow = policy(false, "fail", 4).replace("[\"#suite\"]", "[\"a:test\"]");
+    let wide = policy(false, "fail", 4).replace("[\"#suite\"]", "[\"a:test\", \"b:test\"]");
+    let h = Harness::new(&narrow);
+    h.w().fails_with("b:test", "b/lib", "b1");
+    h.work("unit/gate", "agent-g", &[(".config/sluice.toml", Some(&wide))]);
+    let one = h.submit("unit/gate");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+
+    // The next candidate touches neither project, yet b:test runs.
+    h.work("unit/c", "agent-c", &[("c/lib", Some("c2"))]);
+    let two = h.submit("unit/c");
+    h.settle();
+    assert_eq!(h.w().requests()[1].since, None);
+    assert_eq!(h.sub(two).state, State::Failed);
+    assert_eq!(h.sub(two).failed[0].task, "b:test");
+}
+
+/// satisfies: 70, 55
+#[test]
+fn a_report_holding_none_of_the_required_checks_is_no_pass() {
+    let h = Harness::new(&policy(false, "fail", 4).replace("#suite", "#nothing"));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Failed);
+}

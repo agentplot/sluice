@@ -138,6 +138,10 @@ impl Sluice<'_> {
             Moved::Elsewhere(found)
         };
         let now = self.now();
+        // 55, 70: a landing that changes the gate leaves the line covered
+        // by no verdict under the gate it now carries.
+        let same_gate = matches!(moved, Moved::Moved)
+            && self.rules_at(branch, &intent.from)? == self.rules_at(branch, &intent.to)?;
         match moved {
             Moved::Moved => self.update(branch, |l| {
                 if l.doc.landing.as_ref() != Some(&intent) {
@@ -184,7 +188,7 @@ impl Sluice<'_> {
                 });
                 l.doc.release.extend(release);
                 l.doc.base = Some(intent.to.clone());
-                l.doc.verified = true;
+                l.doc.verified = same_gate;
                 Ok(())
             }),
             Moved::Elsewhere(found) => self.update(branch, |l| {
@@ -196,6 +200,8 @@ impl Sluice<'_> {
                     let s = l.sub_mut(*id);
                     if s.state == State::Landing {
                         s.state = State::Queued;
+                        s.tested = None;
+                        s.result = None;
                     }
                 }
                 l.log(
@@ -418,7 +424,12 @@ impl Sluice<'_> {
                         self.seams.state.record_results(&bytes)?;
                         results.extend(fresh);
                     }
-                    let v = verdict::read(&report, &results, rules.flaky);
+                    let mut v = verdict::read(&report, &results, rules.flaky);
+                    // 70, 55: a revision with no verdict runs every required
+                    // check; a report holding none of them is no pass.
+                    if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {
+                        v.passed = false;
+                    }
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
                     x.state = if v.passed {
                         CandidateState::Passed
@@ -442,7 +453,7 @@ impl Sluice<'_> {
                             failed: v.failed.iter().map(|f| f.task.clone()).collect(),
                         },
                     );
-                    if v.passed {
+                    if v.passed && Some(&c.on) == line.doc.base.as_ref() {
                         line.doc.window = (line.doc.window + 1).min(rules.parallel);
                     }
                 }
@@ -519,6 +530,7 @@ impl Sluice<'_> {
                             place: None,
                             run: None,
                             failed: Vec::new(),
+                            every_check: false,
                             ran: 0,
                             replayed: 0,
                         });
@@ -844,12 +856,14 @@ impl Sluice<'_> {
                 room -= 1;
             }
         }
+        let every_known = line.doc.verified;
         for id in start {
-            let place = format!("sluice/try/{}", line.doc.next_place);
+            let place = format!("sluice/try/{}/{}", line.branch, line.doc.next_place);
             line.doc.next_place += 1;
             let c = line.candidate_mut(&id).expect("a chain's candidate");
             c.state = CandidateState::Starting;
             c.place = Some(place.clone());
+            c.every_check = !every_known;
             let c = c.clone();
             line.sub_mut(c.newest()).tested = Some(Tested {
                 combination: c.revision.clone(),

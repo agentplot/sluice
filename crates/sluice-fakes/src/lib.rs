@@ -96,6 +96,7 @@ struct Inner {
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     hold: bool,
+    crash_start: bool,
     host_limit: Option<usize>,
     observed: Vec<(String, String, Outcome)>,
     host: String,
@@ -369,6 +370,11 @@ impl World {
     /// The parts `head`'s work affects are unknown.
     pub fn unknown_parts(&self, head: &Rev) {
         self.0.borrow_mut().unknown.insert(head.clone());
+    }
+
+    /// The next start finds its place made and stops before starting.
+    pub fn crash_next_start(&self) {
+        self.0.borrow_mut().crash_start = true;
     }
 
     /// Runs started from now stay running until completed.
@@ -767,6 +773,9 @@ impl Tests for FakeTests {
                 request.place.name,
                 request.revision
             );
+        }
+        if std::mem::take(&mut inner.crash_start) {
+            bail!("crashed before starting a run in {}", request.place.name);
         }
         let complete = !inner.hold;
         inner.runs.push(RunState {
