@@ -59,7 +59,10 @@ fn places_of_two_lines_on_one_host_never_collide() {
     h.w().init(
         other,
         &[
-            (".config/sluice.toml", &sluice_conformance::policy(false, "fail", 4)),
+            (
+                ".config/sluice.toml",
+                &sluice_conformance::policy(false, "fail", 4),
+            ),
             ("a/lib", "a1"),
         ],
     );

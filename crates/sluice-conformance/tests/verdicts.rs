@@ -35,7 +35,9 @@ fn every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass() {
         Event::Ran { task, outcome: Outcome::Fail, host, .. }
             if task == "b:test" && host == "fake-host")));
     let r = results(&h);
-    assert!(r.iter().any(|l| l.task == "b:test" && l.outcome == Outcome::Fail));
+    assert!(r
+        .iter()
+        .any(|l| l.task == "b:test" && l.outcome == Outcome::Fail));
 }
 
 /// satisfies: 15, 38, 69
@@ -81,7 +83,9 @@ fn a_key_that_holds_a_pass_is_read_from_it_on_any_line_and_recorded_as_a_replay(
     let r = results(&h);
     let replays: Vec<&ResultLine> = r.iter().filter(|l| l.branch == other).collect();
     assert_eq!(replays.len(), 3);
-    assert!(replays.iter().all(|l| l.kind == ResultKind::Replayed && l.host.is_none()));
+    assert!(replays
+        .iter()
+        .all(|l| l.kind == ResultKind::Replayed && l.host.is_none()));
 }
 
 /// satisfies: 70, 15, 36
@@ -177,7 +181,11 @@ fn the_window_shrinks_on_a_failure_grows_on_passes_and_the_host_bounds_it() {
     h.w().hold_runs(true);
     h.w().fails_with("a:test", "a/1", "bad");
     for n in 1..=5 {
-        h.work(&format!("unit/{n}"), "agent", &[(&format!("a/{n}"), Some(if n == 1 { "bad" } else { "ok" }))]);
+        h.work(
+            &format!("unit/{n}"),
+            "agent",
+            &[(&format!("a/{n}"), Some(if n == 1 { "bad" } else { "ok" }))],
+        );
         h.submit(&format!("unit/{n}"));
     }
     h.step();
@@ -198,7 +206,11 @@ fn the_window_shrinks_on_a_failure_grows_on_passes_and_the_host_bounds_it() {
     h.w().host_limit(1);
     h.w().hold_runs(true);
     for n in 1..=3 {
-        h.work(&format!("unit/{n}"), "agent", &[(&format!("a/{n}"), Some("ok"))]);
+        h.work(
+            &format!("unit/{n}"),
+            "agent",
+            &[(&format!("a/{n}"), Some("ok"))],
+        );
         h.submit(&format!("unit/{n}"));
     }
     h.step();
@@ -232,7 +244,11 @@ fn a_landed_change_to_the_gate_runs_every_check_it_now_requires() {
     let wide = policy(false, "fail", 4).replace("[\"#suite\"]", "[\"a:test\", \"b:test\"]");
     let h = Harness::new(&narrow);
     h.w().fails_with("b:test", "b/lib", "b1");
-    h.work("unit/gate", "agent-g", &[(".config/sluice.toml", Some(&wide))]);
+    h.work(
+        "unit/gate",
+        "agent-g",
+        &[(".config/sluice.toml", Some(&wide))],
+    );
     let one = h.submit("unit/gate");
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);

@@ -245,7 +245,9 @@ pub fn read_statement(path: &Path) -> Result<Statement> {
 fn clause_id(line: &str) -> Option<String> {
     let (id, _) = line.split_once(". ")?;
     let digits = id.trim_end_matches(|c: char| c.is_ascii_lowercase());
-    (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && id.len() - digits.len() <= 1)
+    (!digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && id.len() - digits.len() <= 1)
         .then(|| id.to_string())
 }
 
@@ -285,9 +287,9 @@ pub fn citations(dir: &Path) -> Result<BTreeMap<String, Vec<String>>> {
                 in_test = true;
             } else if in_test && t.starts_with("fn ") {
                 let f = t[3..].split('(').next().unwrap_or("?");
-                let cited = pending.take().ok_or_else(|| {
-                    anyhow!("{name}::{f} cites no clause in a `satisfies:` line")
-                })?;
+                let cited = pending
+                    .take()
+                    .ok_or_else(|| anyhow!("{name}::{f} cites no clause in a `satisfies:` line"))?;
                 out.insert(format!("{name}::{f}"), cited);
                 in_test = false;
             }

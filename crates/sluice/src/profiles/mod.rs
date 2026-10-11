@@ -11,9 +11,8 @@ pub mod worktrunk;
 
 use anyhow::{bail, Result};
 use sluice_seams::{
-    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved,
-    Notification, Place, Progress, Rev, RunHandle, RunRequest, Session, Snapshot, State, Tests,
-    Written,
+    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification,
+    Place, Progress, Rev, RunHandle, RunRequest, Session, Snapshot, State, Tests, Written,
 };
 
 /// A seam whose profile is not built yet.
@@ -45,11 +44,26 @@ pub struct Bound {
 impl Default for Bound {
     fn default() -> Self {
         Bound {
-            checkout: Unbuilt { seam: "place", profile: "worktrunk" },
-            tests: Unbuilt { seam: "check", profile: "moon" },
-            branch: Unbuilt { seam: "line", profile: "local refs (gix and git)" },
-            driver: Unbuilt { seam: "driver", profile: "worktrunk" },
-            state: Unbuilt { seam: "records", profile: "local files" },
+            checkout: Unbuilt {
+                seam: "place",
+                profile: "worktrunk",
+            },
+            tests: Unbuilt {
+                seam: "check",
+                profile: "moon",
+            },
+            branch: Unbuilt {
+                seam: "line",
+                profile: "local refs (gix and git)",
+            },
+            driver: Unbuilt {
+                seam: "driver",
+                profile: "worktrunk",
+            },
+            state: Unbuilt {
+                seam: "records",
+                profile: "local files",
+            },
         }
     }
 }

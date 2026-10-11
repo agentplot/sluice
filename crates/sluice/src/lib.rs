@@ -188,7 +188,11 @@ pub fn run(
             Err(_) => {
                 let status = s.status(&target)?;
                 if json {
-                    writeln!(out, "{}", serde_json::to_string_pretty(&status_json(&status))?)?;
+                    writeln!(
+                        out,
+                        "{}",
+                        serde_json::to_string_pretty(&status_json(&status))?
+                    )?;
                 } else {
                     write_status(&status, &status.submissions, out)?;
                 }
@@ -270,7 +274,10 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
             format!("refused: no [branches] table in .config/sluice.toml on {branch} names it")
         }
         SubmitRefusal::UnknownAfter(ids) => {
-            format!("refused: --after names no submission to {branch}: {}", hashes(ids))
+            format!(
+                "refused: --after names no submission to {branch}: {}",
+                hashes(ids)
+            )
         }
     }
 }
@@ -503,8 +510,16 @@ fn write_status(status: &Status, subs: &[Submission], out: &mut dyn Write) -> Re
         status.branch, status.testing
     )?;
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
-    let ww = subs.iter().map(|s| s.from.worktree.len()).max().unwrap_or(0);
-    let iw = subs.iter().map(|s| s.id.to_string().len()).max().unwrap_or(0);
+    let ww = subs
+        .iter()
+        .map(|s| s.from.worktree.len())
+        .max()
+        .unwrap_or(0);
+    let iw = subs
+        .iter()
+        .map(|s| s.id.to_string().len())
+        .max()
+        .unwrap_or(0);
     for s in subs {
         let line = format!(
             "  #{:<iw$}  {:<8}  {:<aw$}  {:<ww$}   {}",

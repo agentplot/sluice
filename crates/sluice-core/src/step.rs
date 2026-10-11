@@ -84,7 +84,12 @@ impl Sluice<'_> {
                         c.run = None;
                     }
                 }
-                l.log(&now, Event::Released { place: place.clone() });
+                l.log(
+                    &now,
+                    Event::Released {
+                        place: place.clone(),
+                    },
+                );
                 Ok(())
             })?;
         }
@@ -111,7 +116,12 @@ impl Sluice<'_> {
             self.update(branch, |l| {
                 if let Some(n) = l.doc.release.iter().position(|p| *p == place) {
                     l.doc.release.remove(n);
-                    l.log(&now, Event::Released { place: place.clone() });
+                    l.log(
+                        &now,
+                        Event::Released {
+                            place: place.clone(),
+                        },
+                    );
                 }
                 Ok(())
             })?;
@@ -490,7 +500,12 @@ impl Sluice<'_> {
     /// drop candidates no chain holds, and attribute failures. Returns
     /// each chain's candidates, and whether a submission was removed, in
     /// which case the chains are arranged again (12, 21).
-    fn arrange(&self, line: &mut Line, rules: &Rules, now: &str) -> Result<(Vec<Vec<String>>, bool)> {
+    fn arrange(
+        &self,
+        line: &mut Line,
+        rules: &Rules,
+        now: &str,
+    ) -> Result<(Vec<Vec<String>>, bool)> {
         let base = line.doc.base.clone().expect("decide reads the base first");
         let ord = self.order(line, &base);
         let mut removed = false;

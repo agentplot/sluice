@@ -17,7 +17,10 @@ fn a_submission_names_its_after_priority_and_submitter_and_does_nothing_more() {
 
     let s = h.sub(two.id);
     assert_eq!((s.after.clone(), s.priority), (vec![one], 3));
-    assert_eq!((s.from.agent.as_str(), s.from.worktree.as_str()), ("agent-b", "unit/b"));
+    assert_eq!(
+        (s.from.agent.as_str(), s.from.worktree.as_str()),
+        ("agent-b", "unit/b")
+    );
     assert_eq!(h.sub(one).head, head);
     assert_eq!(s.state, State::Queued);
     // Nothing formed, run, committed or moved (1; rule core.4).
@@ -97,7 +100,10 @@ fn priority_never_displaces_a_combination_under_test() {
     h.work("unit/c", "agent-c", &[("a/three", Some("3"))]);
     let three = h.try_submit("unit/c", &[], 9).unwrap().id;
     h.step();
-    assert_eq!(h.tested(), vec![vec![one], vec![one, two], vec![one, two, three]]);
+    assert_eq!(
+        h.tested(),
+        vec![vec![one], vec![one, two], vec![one, two, three]]
+    );
 
     // Among submissions not under test, priority orders.
     h.work("unit/d", "agent-d", &[("a/four", Some("4"))]);
@@ -211,10 +217,18 @@ fn amend_changes_order_only_for_a_submission_not_under_test() {
             .unwrap(),
         Err(AmendRefusal::NotYours)
     );
-    assert_eq!(s.amend(three, &Requester::Planner, None, Some(5)).unwrap(), Ok(()));
     assert_eq!(
-        s.amend(two, &Requester::Session("agent-b".into()), Some(vec![three]), None)
-            .unwrap(),
+        s.amend(three, &Requester::Planner, None, Some(5)).unwrap(),
+        Ok(())
+    );
+    assert_eq!(
+        s.amend(
+            two,
+            &Requester::Session("agent-b".into()),
+            Some(vec![three]),
+            None
+        )
+        .unwrap(),
         Ok(())
     );
     h.w().hold_runs(false);
@@ -230,7 +244,10 @@ fn amend_changes_order_only_for_a_submission_not_under_test() {
         .flatten()
         .collect();
     assert_eq!(landed, vec![one, three, two]);
-    assert!(h.events().iter().any(|e| matches!(e, Event::Amended { id, .. } if *id == three)));
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Amended { id, .. } if *id == three)));
 }
 
 /// satisfies: 48, 5, 21, 25
@@ -244,11 +261,13 @@ fn withdrawal_by_submitter_planner_or_operator_only() {
     h.step();
     let s = h.sluice();
     assert_eq!(
-        s.withdraw(one, &Requester::Session("agent-b".into())).unwrap(),
+        s.withdraw(one, &Requester::Session("agent-b".into()))
+            .unwrap(),
         Err(WithdrawRefusal::NotYours)
     );
     assert_eq!(
-        s.withdraw(one, &Requester::Session("agent-a".into())).unwrap(),
+        s.withdraw(one, &Requester::Session("agent-a".into()))
+            .unwrap(),
         Ok(())
     );
     // Withdrawn while under test: its place is released and #2 is formed

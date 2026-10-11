@@ -213,7 +213,10 @@ pub struct Candidate {
 
 impl Candidate {
     pub fn newest(&self) -> u64 {
-        *self.submissions.last().expect("a candidate holds a submission")
+        *self
+            .submissions
+            .last()
+            .expect("a candidate holds a submission")
     }
 
     pub fn result_word(&self) -> &'static str {

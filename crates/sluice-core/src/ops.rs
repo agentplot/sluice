@@ -236,7 +236,10 @@ impl Sluice<'_> {
         const PROBE: u64 = u64::MAX;
         let mut entries = Vec::new();
         for s in line.subs.values() {
-            if s.state.is_out() || s.state == State::Landing || s.from.worktree == session.from.worktree {
+            if s.state.is_out()
+                || s.state == State::Landing
+                || s.from.worktree == session.from.worktree
+            {
                 continue;
             }
             let p = match &s.affected {
@@ -279,9 +282,7 @@ impl Sluice<'_> {
         // Its `after` entries are ahead of it whichever lane they are in.
         let mut ahead_ids: Vec<u64> = chain.into_iter().filter(|i| *i != PROBE).collect();
         for a in after {
-            if !ahead_ids.contains(a)
-                && line.subs.get(a).is_some_and(|s| !s.state.is_out())
-            {
+            if !ahead_ids.contains(a) && line.subs.get(a).is_some_and(|s| !s.state.is_out()) {
                 ahead_ids.push(*a);
             }
         }

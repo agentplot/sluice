@@ -56,7 +56,11 @@ fn a_conflict_names_every_submission_it_is_contested_with() {
     h.work("unit/1", "agent-1", &[("a/f", Some("one"))]);
     h.work("unit/2", "agent-2", &[("a/g", Some("two"))]);
     h.work("unit/3", "agent-3", &[("a/h", Some("three"))]);
-    h.work("unit/4", "agent-4", &[("a/f", Some("four")), ("a/g", Some("four"))]);
+    h.work(
+        "unit/4",
+        "agent-4",
+        &[("a/f", Some("four")), ("a/g", Some("four"))],
+    );
     let (one, two, three, four) = (
         h.submit("unit/1"),
         h.submit("unit/2"),

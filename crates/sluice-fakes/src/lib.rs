@@ -16,9 +16,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved,
-    Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
-    Snapshot, Source, State, Submitter, TaskResult, Tests, Written,
+    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification,
+    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source,
+    State, Submitter, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -416,7 +416,12 @@ impl World {
 
     /// Every run request, in order of starting.
     pub fn requests(&self) -> Vec<RunRequest> {
-        self.0.borrow().runs.iter().map(|r| r.request.clone()).collect()
+        self.0
+            .borrow()
+            .runs
+            .iter()
+            .map(|r| r.request.clone())
+            .collect()
     }
 
     /// The revisions runs were started on, in order of starting.
@@ -478,10 +483,7 @@ impl World {
             }
             let hash = Self::task_hash(&t, &tree);
             let key = (t.name.clone(), hash.clone());
-            let scripted = inner
-                .flaky
-                .get_mut(&t.name)
-                .and_then(|q| q.pop_front());
+            let scripted = inner.flaky.get_mut(&t.name).and_then(|q| q.pop_front());
             if scripted.is_none() {
                 if let Some(at) = inner.cache.get(&key) {
                     report.tasks.push(TaskResult {

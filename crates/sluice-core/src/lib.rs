@@ -72,9 +72,7 @@ impl<'a> Sluice<'a> {
     }
 
     fn now(&self) -> String {
-        self.clock
-            .now()
-            .to_rfc3339_opts(SecondsFormat::Secs, true)
+        self.clock.now().to_rfc3339_opts(SecondsFormat::Secs, true)
     }
 
     fn read_line(&self, branch: &str) -> Result<Line> {
@@ -120,7 +118,9 @@ impl<'a> Sluice<'a> {
 
     fn gate(&self, branch: &str, rev: &Rev) -> Result<Rules> {
         self.rules_at(branch, rev)?.ok_or_else(|| {
-            anyhow!("no [branches] table in {POLICY_PATH} at {branch}'s revision {rev} names {branch}")
+            anyhow!(
+                "no [branches] table in {POLICY_PATH} at {branch}'s revision {rev} names {branch}"
+            )
         })
     }
 

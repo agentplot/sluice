@@ -78,7 +78,10 @@ pub fn order(entries: &[Entry], landed: &BTreeSet<u64>, pinned: &[Vec<u64>]) -> 
             let mut n = 0;
             while n < rest.len() {
                 let e = rest[n];
-                if e.after.iter().all(|a| landed.contains(a) || chain.contains(a)) {
+                if e.after
+                    .iter()
+                    .all(|a| landed.contains(a) || chain.contains(a))
+                {
                     chain.push(e.id);
                     rest.remove(n);
                     // An admission may free one waiting ahead of it in
@@ -150,7 +153,11 @@ mod tests {
     #[test]
     fn disjoint_parts_are_separate_lanes() {
         let o = order(
-            &[e(1, Some(&["a"])), e(2, Some(&["b"])), e(3, Some(&["a", "c"]))],
+            &[
+                e(1, Some(&["a"])),
+                e(2, Some(&["b"])),
+                e(3, Some(&["a", "c"])),
+            ],
             &BTreeSet::new(),
             &[],
         );
@@ -186,11 +193,7 @@ mod tests {
         first.priority = 1;
         let mut blocked = e(4, Some(&["b"]));
         blocked.after = vec![9];
-        let o = order(
-            &[first, e(3, Some(&["a"])), blocked],
-            &BTreeSet::new(),
-            &[],
-        );
+        let o = order(&[first, e(3, Some(&["a"])), blocked], &BTreeSet::new(), &[]);
         assert_eq!(o.chains, vec![vec![3, 2]]);
         assert_eq!(o.waiting, BTreeSet::from([4]));
     }
@@ -198,7 +201,12 @@ mod tests {
     #[test]
     fn joined_lanes_keep_order_of_submission_among_pinned() {
         let o = order(
-            &[e(1, Some(&["a"])), e(2, Some(&["b"])), e(3, Some(&["a"])), e(4, None)],
+            &[
+                e(1, Some(&["a"])),
+                e(2, Some(&["b"])),
+                e(3, Some(&["a"])),
+                e(4, None),
+            ],
             &BTreeSet::new(),
             &[vec![1], vec![1, 3], vec![2]],
         );

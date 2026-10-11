@@ -31,11 +31,19 @@ fn s1_two_heads_pass_and_land_in_order() {
     assert_eq!(history[2], base);
     assert_eq!(h.w().parents(k1), vec![base.clone(), a]);
     assert_eq!(h.w().parents(k2), vec![k1.clone(), b]);
-    assert!(h.w().message(k1).starts_with(&format!("Land #{one}: unit/a\n")));
+    assert!(h
+        .w()
+        .message(k1)
+        .starts_with(&format!("Land #{one}: unit/a\n")));
     // Each session learns its own landing, and only its own (50).
     let ta = h.w().told_to("agent-a");
     assert_eq!(ta.len(), 1);
-    assert_eq!(ta[0].told, Told::Landed { landed_as: k1.clone() });
+    assert_eq!(
+        ta[0].told,
+        Told::Landed {
+            landed_as: k1.clone()
+        }
+    );
     assert_eq!(h.w().told_to("agent-b")[0].submission, two);
     // Every place made was released (33, 34).
     assert_eq!(h.w().made_places().len(), 2);
@@ -69,7 +77,11 @@ fn s2_a_conflict_is_told_before_any_check_runs() {
 
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
-    assert!(h.w().told_to("agent-a").iter().all(|n| n.told.word() == "landed"));
+    assert!(h
+        .w()
+        .told_to("agent-a")
+        .iter()
+        .all(|n| n.told.word() == "landed"));
 }
 
 /// satisfies: S3, 16, 17, 18, 20, 22
@@ -93,7 +105,11 @@ fn s3_the_second_fails_and_only_its_session_hears() {
     let told = h.w().told_to("agent-b");
     assert_eq!(told.len(), 1);
     match &told[0].told {
-        Told::Failed { failed, submissions, .. } => {
+        Told::Failed {
+            failed,
+            submissions,
+            ..
+        } => {
             assert_eq!(failed, &vec!["a:test".to_string()]);
             assert_eq!(submissions, &vec![one, two]);
         }
@@ -101,7 +117,11 @@ fn s3_the_second_fails_and_only_its_session_hears() {
     }
     // No other session hears of the failure (20).
     for agent in ["agent-a", "agent-c"] {
-        assert!(h.w().told_to(agent).iter().all(|n| n.told.word() == "landed"));
+        assert!(h
+            .w()
+            .told_to(agent)
+            .iter()
+            .all(|n| n.told.word() == "landed"));
     }
     assert_eq!(h.sub(three).state, State::Landed);
 }
@@ -158,7 +178,10 @@ fn s6_disjoint_parts_land_independently_in_either_order() {
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
     let tree = h.w().tree(&h.tip());
-    assert_eq!((tree["a/lib"].as_str(), tree["b/lib"].as_str()), ("a2", "b2"));
+    assert_eq!(
+        (tree["a/lib"].as_str(), tree["b/lib"].as_str()),
+        ("a2", "b2")
+    );
 }
 
 /// satisfies: S7, 19, 69
@@ -206,7 +229,9 @@ fn s8_a_hand_move_refuses_the_landing_and_forms_again() {
     h.settle();
 
     let refused = h.events().into_iter().find_map(|e| match e {
-        Event::Refused { expected, found, .. } => Some((expected, found)),
+        Event::Refused {
+            expected, found, ..
+        } => Some((expected, found)),
         _ => None,
     });
     assert_eq!(refused, Some((expected.clone(), Some(by_hand.clone()))));
@@ -311,7 +336,10 @@ fn s11_a_landing_names_its_verdict_and_leaves_the_session_place() {
     assert_eq!(h.w().tree(&landed), h.w().tree(&tested));
     // sluice released its own place and never the session's (25).
     assert_eq!(h.w().released_places(), h.w().made_places());
-    assert!(!h.w().released_places().contains(&"unit/touches".to_string()));
+    assert!(!h
+        .w()
+        .released_places()
+        .contains(&"unit/touches".to_string()));
 }
 
 /// satisfies: S12, 56, 27, 15
@@ -323,7 +351,10 @@ fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
     h.work(
         "unit/a",
         "agent-a",
-        &[("a/lib", Some("broken")), (".config/sluice.toml", Some(&loosened))],
+        &[
+            ("a/lib", Some("broken")),
+            (".config/sluice.toml", Some(&loosened)),
+        ],
     );
     let id = h.submit("unit/a");
     h.settle();

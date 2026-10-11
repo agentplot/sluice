@@ -23,7 +23,10 @@ fn every_citation_names_a_clause_and_every_phase_1_clause_is_cited() {
             }
         }
     }
-    assert!(unknown.is_empty(), "cited ids the statement does not hold: {unknown:?}");
+    assert!(
+        unknown.is_empty(),
+        "cited ids the statement does not hold: {unknown:?}"
+    );
 
     let all: BTreeSet<&String> = cited.values().flatten().collect();
     let missing: Vec<String> = statement
@@ -31,7 +34,10 @@ fn every_citation_names_a_clause_and_every_phase_1_clause_is_cited() {
         .into_iter()
         .filter(|c| !all.contains(c))
         .collect();
-    assert!(missing.is_empty(), "phase-1 clauses no scenario cites: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "phase-1 clauses no scenario cites: {missing:?}"
+    );
 
     // The brief's scenarios.
     for s in ["S1", "S2", "S3", "S4", "S7", "S8", "S10", "S11", "S16"] {
@@ -43,9 +49,8 @@ fn every_citation_names_a_clause_and_every_phase_1_clause_is_cited() {
 /// worktree tool, multiplexer, service manager or forge.
 #[test]
 fn no_tool_is_named_outside_a_profile() {
-    const NAMES: [&str; 8] = [
-        "moon", "wt", "worktrunk", "devenv", "herdr", "gh", "crew", "flywheel",
-    ];
+    #[rustfmt::skip]
+    const NAMES: [&str; 8] = ["moon", "wt", "worktrunk", "devenv", "herdr", "gh", "crew", "flywheel"];
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut found = Vec::new();
     let mut todo = vec![root.clone()];
@@ -65,7 +70,7 @@ fn no_tool_is_named_outside_a_profile() {
             let text = std::fs::read_to_string(&p).unwrap();
             for (n, line) in text.lines().enumerate() {
                 // This rule's own list is the one place they are named.
-                if line.contains("const NAMES") || line.trim_start().starts_with("\"moon\"") {
+                if line.contains("const NAMES") {
                     continue;
                 }
                 let words = line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
@@ -77,5 +82,8 @@ fn no_tool_is_named_outside_a_profile() {
             }
         }
     }
-    assert!(found.is_empty(), "tools named outside a profile: {found:#?}");
+    assert!(
+        found.is_empty(),
+        "tools named outside a profile: {found:#?}"
+    );
 }

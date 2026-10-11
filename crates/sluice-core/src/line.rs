@@ -95,7 +95,9 @@ impl Line {
             put(submission_file(s.id), to_document(s));
         }
         if !self.appended.is_empty() {
-            changes.append.insert(LOG_FILE.into(), self.appended.clone());
+            changes
+                .append
+                .insert(LOG_FILE.into(), self.appended.clone());
         }
         changes
     }

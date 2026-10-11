@@ -23,7 +23,10 @@ fn the_walkthrough_records_are_read_as_written() {
         let path = format!("submissions/{name}.json");
         files.insert(path.clone(), std::fs::read(dir.join(&path)).unwrap());
     }
-    files.insert("log.jsonl".into(), std::fs::read(dir.join("log.jsonl")).unwrap());
+    files.insert(
+        "log.jsonl".into(),
+        std::fs::read(dir.join("log.jsonl")).unwrap(),
+    );
     let snap = Snapshot { version: 57, files };
     let line = Line::load("bolt/concurrent-units", snap.clone()).unwrap();
     assert_eq!(line.subs[&12].state, State::Landed);
