@@ -1,0 +1,20 @@
+[package]
+name = "sluice-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The conformance suite: each scenario cites the clauses it exercises."
+publish = false
+
+[dependencies]
+sluice-seams = { path = "../sluice-seams" }
+sluice-core = { path = "../sluice-core" }
+sluice-fakes = { path = "../sluice-fakes" }
+anyhow.workspace = true
+serde_json.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "sluice-seams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The five seams of sluice: one trait each (rule core.2)."
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

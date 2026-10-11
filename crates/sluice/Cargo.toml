@@ -1,0 +1,32 @@
+[package]
+name = "sluice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A merge queue for agents in worktrees."
+
+[[bin]]
+name = "sluice"
+path = "src/main.rs"
+
+# worktrunk runs any `wt-<name>` on the path as `wt <name>`: the driver
+# profile's front door, forwarding to `sluice submit`.
+[[bin]]
+name = "wt-submit"
+path = "src/profiles/worktrunk/wt_submit.rs"
+
+[dependencies]
+sluice-seams = { path = "../sluice-seams" }
+sluice-core = { path = "../sluice-core" }
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+sluice-fakes = { path = "../sluice-fakes" }
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

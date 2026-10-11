@@ -1,0 +1,18 @@
+[package]
+name = "sluice-fakes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-memory profiles of all five seams, scriptable per test."
+
+[dependencies]
+sluice-seams = { path = "../sluice-seams" }
+anyhow.workspace = true
+chrono.workspace = true
+sluice-core = { path = "../sluice-core" }
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
