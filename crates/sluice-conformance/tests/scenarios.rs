@@ -347,7 +347,7 @@ fn s11_a_landing_names_its_verdict_and_leaves_the_session_place() {
 fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
     let h = Harness::bolt();
     h.w().fails_with("a:test", "a/lib", "broken");
-    let loosened = policy(false, "fail", 4).replace("[\"#suite\"]", "[]");
+    let loosened = policy(false, "fail", 4).replace("[\"#gate\"]", "[]");
     h.work(
         "unit/a",
         "agent-a",
@@ -360,7 +360,7 @@ fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
     h.settle();
     // Judged by the policy on the line, so it fails and does not land.
     assert_eq!(h.sub(id).state, State::Failed);
-    assert_eq!(h.w().requests()[0].required, vec!["#suite".to_string()]);
+    assert_eq!(h.w().requests()[0].required, vec!["#gate".to_string()]);
 }
 
 /// satisfies: S16, 64, 65, 47a

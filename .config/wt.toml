@@ -3,10 +3,10 @@
 # The per-commit floor (treefmt, clippy) is git's own pre-commit hook,
 # installed by devenv from devenv.nix.
 
-# Before a branch lands: the suite through moon, which replays every crate
+# Before a branch lands: every crate's cargo tests through moon, which replays every crate
 # whose inputs already passed in any worktree, then the disk check.
 [[pre-merge]]
-suite = "devenv shell -- suite"
+cargo-tests = "devenv shell -- cargo-tests"
 disk = "devenv shell -- disk"
 
 # A new worktree takes the main worktree's build cache (.worktreeinclude).

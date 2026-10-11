@@ -24,7 +24,7 @@ pub const BRANCH: &str = "bolt/x";
 pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
     format!(
         "[tests]\nrunner = \"fake\"\n\n[checkout]\nmethod = \"fake\"\n\n\
-         [branches.\"bolt/*\"]\nrequired = [\"#suite\"]\nparallel = {parallel}\n\
+         [branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = {parallel}\n\
          batch = {batch}\nflaky = \"{flaky}\"\ntimeout = \"20m\"\n"
     )
 }
@@ -35,7 +35,7 @@ pub struct Harness {
 
 impl Harness {
     /// `bolt/x` with three projects, `a/`, `b/` and `c/`, each with one
-    /// check tagged `suite`, under the given policy.
+    /// check tagged `gate`, under the given policy.
     pub fn new(policy: &str) -> Harness {
         let f = Fakes::new();
         f.world.init(

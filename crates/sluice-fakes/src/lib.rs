@@ -330,12 +330,12 @@ impl World {
 
     // -- the check ---------------------------------------------------------
 
-    /// A check reading the paths under `prefix`, tagged `suite`.
+    /// A check reading the paths under `prefix`, tagged `gate`.
     pub fn task(&self, name: &str, prefix: &str) {
         self.0.borrow_mut().tasks.push(TaskDef {
             name: name.into(),
             prefix: prefix.into(),
-            tags: BTreeSet::from(["suite".to_string()]),
+            tags: BTreeSet::from(["gate".to_string()]),
         });
     }
 

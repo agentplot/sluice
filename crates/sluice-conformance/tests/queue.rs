@@ -36,7 +36,7 @@ fn a_submission_names_its_after_priority_and_submitter_and_does_nothing_more() {
         .w()
         .requests()
         .iter()
-        .all(|r| r.required == vec!["#suite".to_string()]));
+        .all(|r| r.required == vec!["#gate".to_string()]));
 }
 
 /// satisfies: 2

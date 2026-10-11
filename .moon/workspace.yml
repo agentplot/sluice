@@ -1,5 +1,5 @@
-# moon runs sluice's suite: one project per crate, each with one `test` task
-# tagged `suite`. A task whose inputs are identical to a run that passed on
+# moon runs sluice's cargo tests: one project per crate, each with one
+# `test` task tagged `cargo-test`. A task whose inputs are identical to a run that passed on
 # this host, in any worktree, replays from .moon/cache/outputs (a link into
 # the git common dir, made by devenv.nix) instead of running again, so every
 # task's inputs name everything its tests read from the tree.

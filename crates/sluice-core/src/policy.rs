@@ -238,20 +238,20 @@ mod tests {
     const POLICY: &str = r##"
 [tests]
 runner = "script"
-command = "tests/suite"
+command = "tests/run"
 
 [checkout]
 method = "scratch"
 
 [branches."bolt/*"]
-required = ["#suite"]
+required = ["#gate"]
 parallel = 4
 batch = false
 flaky = "fail"
 timeout = "20m"
 
 [branches.main]
-required = ["#suite", "#live"]
+required = ["#gate", "#live"]
 parallel = 2
 batch = true
 "##;
@@ -260,10 +260,10 @@ batch = true
     fn reads_the_walkthrough_shape() {
         let p = Policy::parse(POLICY).unwrap();
         assert_eq!(p.tests.name.as_deref(), Some("script"));
-        assert_eq!(p.tests.settings["command"], "tests/suite");
+        assert_eq!(p.tests.settings["command"], "tests/run");
         assert_eq!(p.checkout.name.as_deref(), Some("scratch"));
         let bolt = p.rules_for("bolt/concurrent-units").unwrap().unwrap();
-        assert_eq!(bolt.required, vec!["#suite"]);
+        assert_eq!(bolt.required, vec!["#gate"]);
         assert_eq!(bolt.parallel, 4);
         assert!(!bolt.batch);
         assert_eq!(bolt.flaky, Flaky::Fail);

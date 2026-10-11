@@ -115,25 +115,26 @@ in
     programs.rustfmt.package = rust.rustfmt;
   };
 
-  # `devenv shell -- suite`: every crate's tests through moon, replaying a
-  # crate whose inputs already passed.
-  scripts.suite = {
-    description = "The test suite: moon run of every task tagged suite";
+  # `devenv shell -- cargo-tests`: every crate's cargo tests and the
+  # conformance citations, through moon, replaying a crate whose inputs
+  # already passed.
+  scripts.cargo-tests = {
+    description = "Every crate's cargo tests: moon run of the tasks tagged cargo-test";
     exec = ''
       set -euo pipefail
       cd ${config.devenv.root}
-      moon run ':#suite' "$@" </dev/null
+      moon run ':#cargo-test' "$@" </dev/null
     '';
   };
 
-  # `devenv shell -- affected`: only the crates a change touches, and those
-  # depending on them.
-  scripts.affected = {
-    description = "The suite for what changed since main: moon run --affected";
+  # `devenv shell -- cargo-tests-affected`: only the crates a change
+  # touches, and those depending on them.
+  scripts.cargo-tests-affected = {
+    description = "The cargo tests of what changed since main: moon run --affected";
     exec = ''
       set -euo pipefail
       cd ${config.devenv.root}
-      moon run ':#suite' --affected --downstream deep "$@" </dev/null
+      moon run ':#cargo-test' --affected --downstream deep "$@" </dev/null
     '';
   };
 
