@@ -66,6 +66,11 @@ impl<'a> Sluice<'a> {
         Sluice { seams, clock }
     }
 
+    /// The seams this sluice is bound to, for a reader of the records.
+    pub fn seams(&self) -> Seams<'a> {
+        self.seams
+    }
+
     fn now(&self) -> String {
         self.clock
             .now()
