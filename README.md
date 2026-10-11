@@ -21,13 +21,15 @@ What it will be, in one picture: one queue design, two instances.
    bolt lines     --submit-->  [queue of the shared line] --lands-->  shared line
 ```
 
-The core knows git and six seams: a place, a check, a service, a line,
-a driver and the records. Each is bound by a profile: git archive with
-wtenv, a worktrunk worktree or a container for the place; moon or a
-script for the check; the repository's declared services; local refs or
-refs pushed to the forge for the line; `wt submit`, crew, flywheel or a
-remote submit for the driver; local files, refs on the shared remote or
-a central server for the records.
+The core knows git and five seams: a place, a check, a line, a driver
+and the records. Each is bound by a profile: a worktrunk worktree, a
+plain git worktree, an archive or a container for the place; moon or a
+command for the check; local refs or refs pushed to the forge for the
+line; `wt submit`, crew, flywheel or a remote submit for the driver;
+local files, refs on the shared remote or a central server for the
+records. sluice starts no services: a repository's tests bring up what
+they need. What setting it up looks like is in
+[docs/examples/](docs/examples/README.md).
 
 ## Many hosts
 
@@ -41,8 +43,8 @@ profiles over one core.
 ## First cut
 
 The bolt line's queue on one host: the core and its conformance suite,
-with the worktree place, the moon and script checks, the declared
-services, local refs, and `wt submit`, which waits and exits with the
+with the worktrunk and git worktree places, the moon and command
+checks, local refs, and `wt submit`, which waits and exits with the
 outcome. That covers scenarios S1 to S4, S7 for a bolt's line, S8, S10
 and S11. The shared line's queue waits for a confined executor, which
 its gate requires (clause 29). Several hosts come after the first cut.

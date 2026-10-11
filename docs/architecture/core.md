@@ -28,9 +28,9 @@ part exists.
 - **[core.8]** A failure is attributed to one entry, and only after every candidate ahead of it has a verdict.
 - **[core.9]** A replay is recorded as a replay, never as a run.
 
-### Places and services
+### Places
 
-- **[core.10]** The core starts no process that outlives a place and binds no port; what a place needs goes through the service seam.
+- **[core.10]** The core starts no service and binds no port; the checks it runs are one process group, ended with their place or their time limit.
 - **[core.11]** Every record a reader may need is readable with no sluice process running, from every host that submits to its line.
 - **[core.14]** Nothing the core decides is held between steps outside the records, and no two steps act on one line at once.
 - **[core.15]** A line's gate is read from the line's current revision, never from a candidate or a place.
@@ -52,7 +52,7 @@ part exists.
 - **core.7** Rules out: reading a verdict from the task runner's cache alone; discarding a failed run's record; writing a record after the verdict. Source: clauses 16, 18; ADR 0004.
 - **core.8** Rules out: attributing from a batch with no intermediate verdicts; attributing while a candidate ahead is still running; telling two sessions of one failure. Source: clauses 17, 18, 20.
 - **core.9** Rules out: counting a cache hit as an executor's observation. Source: clause 16, 38; ADR 0004.
-- **core.10** Rules out: starting an emulator, a server or a process manager from the core; computing a port; a process without a tether to its place. Source: clauses 31, 32, 39 to 41.
+- **core.10** Rules out: starting an emulator, a server or a process manager from the core; computing a port; a check's process group left running after its run or its place. Source: clauses 31, 32, 66; ADR 0010.
 - **core.11** Rules out: state held only in a running process's memory; a database only a server reads, except through the records seam's server profile; records reached other than through the records seam. Source: clauses 26, 51, 61 to 63; C.6; ADR 0008.
 - **core.14** Rules out: a decision kept in a loop's memory and not in the records; a step that proceeds without the line's lock; behavior that differs between `sluice run` and `sluice step`. Source: clauses 26, 51, S10; ADR 0005.
 - **core.15** Rules out: reading policy from a candidate's tree or a session's place; a submission whose change to the policy relaxes its own gate. Source: clauses 27, 56; ADR 0007.

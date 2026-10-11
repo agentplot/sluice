@@ -1,0 +1,30 @@
+# sluice config for crew. Checked in. sluice reads it from the target branch, never from
+# the submission, so a submission that edits this file is tested under the rules it replaces.
+
+[tests]
+# How tests run. Which ones must pass is set per branch, below.
+runner = "moon"        # "moon": run moon tasks, only those the change affects, replaying unchanged ones
+                       # "command": run one command; exit 0 passes. Runs in full every time.
+# command = "tests/suite"   # used when runner = "command"
+
+[checkout]
+# How sluice gets a clean copy of the combination it is about to test.
+method = "worktrunk"   # "worktrunk": `wt switch --create sluice/try/<n>`; the checkout gets crew's
+                       #   worktrunk hooks, like any agent's worktree; `wt remove` cleans up
+                       # "git-worktree": `git worktree add --detach`; no hooks run
+                       # "archive": `git archive` into a temp dir; a copy with no git metadata
+
+[branches."bolt/*"]
+# Rules for submissions into any bolt branch.
+required = ["#suite"]  # moon targets that must pass to land here (`#suite`: every task tagged suite)
+parallel = 4           # test up to 4 queued submissions at the same time
+batch = false          # false: test every submission's combination
+                       # true: test only the longest combination; if it fails, test the shorter
+                       # ones to find which submission broke it
+flaky = "fail"         # a test that both passed and failed on identical code counts as "fail" or "pass"
+timeout = "20m"        # how long one combination's tests may run
+
+[branches.main]
+required = ["#suite"]  # main can demand more than a bolt, e.g. ["#suite", "#live"] once a slow tag exists
+parallel = 2
+batch = true

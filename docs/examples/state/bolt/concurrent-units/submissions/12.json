@@ -1,0 +1,15 @@
+{
+  "schema": "sluice/submission@1",
+  "id": 12,
+  "branch": "bolt/concurrent-units",
+  "head": "3f9c2e1a7b",
+  "from": { "agent": "crw-1-unit-1", "worktree": "unit/touches" },
+  "submitted": "2026-10-11T09:14:02Z",
+  "after": [],
+  "priority": 0,
+  "attempt": 1,
+  "state": "landed",
+  "tested": { "combination": "9ab3d07c11", "on": "c41e8f2d90", "submissions": [12] },
+  "result": "passed",
+  "landed_as": "b7d2e94f03"
+}
