@@ -344,20 +344,3 @@ sluice amend 14 --priority 1    # ahead of priority-0 submissions not yet under 
 
 Submitting again from the same worktree withdraws that worktree's earlier
 submission.
-
-## Decisions this walkthrough assumes
-
-These depart from the statement as it stands and need your ruling before
-the statement and the build follow them:
-
-1. **No operator approval in sluice.** The statement's "word" (clause 4, the
-   actors table, S5) goes; the caller submits only approved work.
-2. **No submit gate.** `wt submit` runs nothing in the agent's worktree first;
-   the only tests that decide are the combination's (C.5).
-3. **sluice starts no services.** The test command brings up what it needs;
-   the service seam (B.3, clauses 39 to 41, C.3) goes, and clause 32 is kept
-   by killing the test command's process group.
-4. **No trust settings in phase 1.** They return with several machines.
-5. **Plain words.** Config, CLI and state files say branch, submission,
-   checkout, combination and blame, not line, entry, place, candidate and
-   culprit.
