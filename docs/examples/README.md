@@ -290,12 +290,12 @@ The log, one event per line. A test is logged when it runs, a failure exactly
 like a pass, and a replayed result is logged as a replay, never as a run:
 
 ```json
-{"event":"ran","combination":"9ab3d07c11","task":"tests:t-after","hash":"4d1e22b0c9","outcome":"pass","host":"mac-studio"}
-{"event":"replayed","combination":"9ab3d07c11","task":"tests:t-amend","hash":"77aa01f3de","outcome":"pass"}
-{"event":"ran","combination":"e20a6f9b48","task":"tests:t-batch-cards","hash":"5c0e97aa21","outcome":"fail","host":"mac-studio"}
-{"event":"blamed","id":13,"combination":"e20a6f9b48"}
-{"event":"landing","ids":[12],"from":"c41e8f2d90","to":"b7d2e94f03"}
-{"event":"landed","ids":[12],"to":"b7d2e94f03"}
+{"schema":"sluice/log@1","event":"ran","combination":"9ab3d07c11","task":"tests:t-after","hash":"4d1e22b0c9","outcome":"pass","host":"mac-studio"}
+{"schema":"sluice/log@1","event":"replayed","combination":"9ab3d07c11","task":"tests:t-amend","hash":"77aa01f3de","outcome":"pass"}
+{"schema":"sluice/log@1","event":"ran","combination":"e20a6f9b48","task":"tests:t-batch-cards","hash":"5c0e97aa21","outcome":"fail","host":"mac-studio"}
+{"schema":"sluice/log@1","event":"blamed","id":13,"combination":"e20a6f9b48"}
+{"schema":"sluice/log@1","event":"landing","ids":[12],"from":"c41e8f2d90","to":"b7d2e94f03"}
+{"schema":"sluice/log@1","event":"landed","ids":[12],"to":"b7d2e94f03"}
 ```
 
 `landing` is written before the branch moves and `landed` after, so a round

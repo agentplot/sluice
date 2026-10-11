@@ -18,9 +18,10 @@ part exists.
 
 ### Lines and landings
 
-- **[core.4]** No code path reachable from a submission writes a line's ref.
+- **[core.4]** No code path reachable from the submit operation writes a line's ref; a round of sluice's work may be run by any process, a waiting driver included.
 - **[core.5]** A line is moved only with the expected old revision, and a move whose expectation fails is reported, never retried blind.
 - **[core.6]** A candidate is formed from the line's revision and the entries ahead in its lane, in order, and from nothing else.
+- **[core.17]** A candidate whose entries ahead land exactly as they were tested is the same candidate on the revision they land as: its tree, its runs and its verdict stand, and it is named as that revision extended by the entries still ahead of it.
 
 ### Verdicts and attribution
 
@@ -46,9 +47,10 @@ part exists.
 - **core.1** Rules out: the strings `moon`, `wt`, `worktrunk`, `devenv`, `herdr`, `gh`, `crew`, `flywheel` in any module outside a profile directory; an import of a profile from the core. Not ruled out: `git`, which section 9 of the statement fixes. Source: statement preamble and clause 52; ADR 0003.
 - **core.2** Rules out: a profile calling another profile; a core function with a profile-specific branch. Source: clauses 52, 53; ADR 0003.
 - **core.3** Rules out: a seam whose only profile is undocumented as such. Source: ADR 0003.
-- **core.4** Rules out: `update-ref`, `push`, a merge or a fast-forward anywhere a session's submit command reaches. Source: clause 1; ADR 0002.
+- **core.4** Rules out: `update-ref`, `push`, a merge or a fast-forward in the submit operation or anything it calls; a round that behaves differently because a driver ran it. Not ruled out: a waiting `wt submit` running rounds between reads of its submission's state. Source: clause 1; ADRs 0002, 0005, 0011.
 - **core.5** Rules out: `update-ref` without an old value; a landing loop that re-reads and retries on refusal without re-forming the chain. Source: clauses 24, 45, 46.
 - **core.6** Rules out: a candidate formed from a cached revision of the line; a candidate including an entry removed as culprit or conflict; an entry of another lane. Source: clauses 10, 12, 21.
+- **core.17** Rules out: testing a candidate again because the entries ahead of it landed as tested; telling a culprit, or recording, a combination by a revision the line has left when the line has since landed the entries ahead of it. Holds because a landing commit carries the tested candidate's tree (23): the line after the landing and the candidate before it hold the same tree. Source: clauses 10, 20, 23; answers to the reconstruction, 12; ADR 0006.
 - **core.7** Rules out: reading a verdict from the task runner's cache alone; discarding a failed run's record; writing a record after the verdict. Source: clauses 16, 18; ADR 0004.
 - **core.8** Rules out: attributing from a batch with no intermediate verdicts; attributing while a candidate ahead is still running; telling two sessions of one failure. Source: clauses 17, 18, 20.
 - **core.9** Rules out: counting a cache hit as an executor's observation. Source: clause 16, 38; ADR 0004.

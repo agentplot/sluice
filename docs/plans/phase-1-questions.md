@@ -1,176 +1,119 @@
 # Phase 1: questions the build met
 
-Behaviours the statement, the walkthrough and the rulings do not settle,
-met while building the core. Each names the clause it sits beside, the
-reading the build took (the one the walkthrough implies, where it implies
-one), and where in the code that reading lives. The operator rules; a
-ruling that changes a reading is a change to the statement first (rule
-core.12).
+Things the statement and the walkthrough don't settle. Open questions
+come first, then the rulings made on 2026-10-11, then choices made in the
+build that stand unless overruled. Clause numbers are at the end of each,
+for reference only.
 
-## Submission
+In the examples, A, B and C are three agents' submissions to one bolt
+branch, in that order.
 
-**Q1. Beside clause 1 and rule core.4: does a waiting `wt submit` reach a
-landing?** Walkthrough section 6 has a waiting `wt submit` run rounds of
-sluice's work, and a round lands. Rule core.4 rules out a ref write
-"anywhere a session's submit command reaches". Reading taken: the submit
-operation (`Sluice::submit`) reaches no ref write, and the CLI's wait loop
-calls the step separately, as `sluice step` would. If that is right,
-core.4 might read "reachable from the submit operation". Code:
-`crates/sluice/src/lib.rs`, `submit`.
+---
 
-**Q2. Beside clause 2: who refuses a place holding more than its
-commits?** The statement puts the refusal in the driver. The driver seam's
-`session` reports what the place holds beyond its commits, and the core's
-`submit` refuses on that report, naming the paths. The outcome is the same;
-the refusing code is the core's. Code: `sluice-seams` `Driver::session`,
-`sluice-core/src/ops.rs`.
+## Open
 
-**Q3. Beside clause 27: a submission to a branch no `[branches]` table
-names.** Clause 27 has sluice admit every submission a driver makes. With
-no table there is no gate to judge it by, so it could never land. Reading
-taken: refused at submit ("no [branches] table ... names it"), as a
-statement that the branch is not sluice's, not a gate decision.
+### Lanes: keep them, or one queue per branch?
 
-**Q4. Beside clause 67 and the answer to question 9: does a resubmission
-keep the withdrawn submission's `after` and priority?** The answer says a
-resubmission "joins at the back, keeping its `after` list". Reading taken:
-the new submission carries the `after` and priority it is submitted with;
-nothing is inherited from the one it withdraws. A driver that wants the
-old list passes it again.
+Today sluice splits a branch's queue into lanes: submissions whose
+projects don't overlap (A touches `api/`, B touches `web/`) are tested
+apart, as "branch + A" and "branch + B", and can land in either order.
 
-**Q5. Submission ids are numbered across the repository, not per branch,**
-so `sluice status 12` and `sluice amend 14` need no branch (walkthrough
-sections 5 and 9). The order within a branch is still the order of
-submission (6). The records seam allocates them.
+What lanes buy:
+- B never waits for a slow A to finish before it can land;
+- a failure in A doesn't make B test again.
 
-## Order and lanes
+What they cost:
+- one branch still has one tip, so whenever A lands, B's test was against
+  a tip that is gone and B is tested again anyway (moon's cache makes
+  that mostly replays);
+- a submission whose projects are unknown has to join every lane, which
+  merges lanes and throws away tests already running (the two questions
+  that were D2 and D3);
+- a moon "affected projects" query per submission, every time the branch
+  moves;
+- more of the core to get right.
 
-**Q6. Beside clauses 6 and 9: lanes joined by a submission whose parts
-are unknown.** When an unknown submission joins two lanes that each have
-a candidate under test, at most one of those candidates can stay a prefix
-of the joined chain; the other lacks the first lane's submissions and is
-formed again (10). Reading taken: the joined chain keeps every pinned
-list's own order and merges the lists by order of submission, so no
-submission under test goes behind one submitted after it; the candidates
-that are no longer prefixes are dropped and formed again. Is re-forming
-an entry under test, because of a submission made after it, a
-"displacement" clause 6 forbids? Code: `sluice-core/src/order.rs`,
-`pinned_prefix`.
+With one queue per branch, every submission is tested on top of
+everything ahead of it, the walkthrough's "A, A+B, A+B+C" and nothing
+else. Recommendation: one queue per branch. Lanes are in the statement
+(clauses 8, 9 and scenario S6), so dropping them is a statement change
+first.
 
-**Q7. Beside clause 8: a landing in one lane moves the line under every
-other lane.** Every candidate of the other lanes was formed on the old
-revision, so it is formed again on the new one and tested again (24);
-with a content-keyed cache those runs mostly replay. Reading taken: a
-candidate of another lane still under test when the line moves is ended
-and its place released. Letting it finish would warm the cache but run a
-check whose verdict nothing reads. Code: `step.rs`, `arrange`.
+If lanes stay: let a test already running finish when lanes merge or the
+branch moves, rather than kill it.
 
-**Q8. Beside clause 7: an `after` naming a submission that was blamed,
-conflicted or withdrawn.** It will never land, so the submission waits
-until amended or withdrawn. No bound is applied (5).
+*(clauses 6, 8, 9, 24; S6)*
 
-## Window and deepest first
+---
 
-**Q9. Beside clauses 13 and 14: what the window counts under deepest
-first.** Reading taken: the window is how deep the one tested candidate
-reaches (the deepest within the first `window` candidates), and it counts
-as one toward the line's window; after it fails, every candidate it
-skipped is started at once, within the window. The window halves on a
-blame and grows by one on a pass, between one and `parallel`.
+## Ruled
 
-## Policy
+- **Who runs sluice's rounds.** A waiting `wt submit` runs rounds; the
+  submit operation itself only adds to the queue. Rule core.4 reworded;
+  ADR 0011. *(clause 1)*
+- **Policy defaults are conservative.** A key a `[branches]` table leaves
+  out reads: `parallel = 4`, `batch = false`, `flaky = "fail"`,
+  `timeout = "1h"`. *(clauses 27, 66)*
+- **The machine's test cap.** `parallel` stays per branch. Each machine
+  also caps the runs it holds at once, across every branch: default a
+  quarter of its cores, never fewer than one, overridable per machine,
+  not in the policy file. The cap is enforced where a run starts, which
+  refuses past it; sluice's `capacity` call is a hint. Each run's task
+  runner is told its share of the cores, so the machine is never
+  oversubscribed. Pass 2's test-runner and moon profiles build this.
+  *(clause 71)*
+- **A landing moved over by hand before it was recorded** still counts:
+  the branch seam answers "is this commit in the branch's history?", and
+  a landing found there is recorded as landed. *(clause 24)*
+- **An `after` that will never land.** The submission waits; `sluice
+  status` shows "waiting, after #B". *(clauses 5, 7)*
+- **A resubmission** carries the `after` and priority it is submitted
+  with; nothing is inherited. *(clause 67)*
+- **Which combination a culprit is told.** The combination named on the
+  branch as it is now: once the submissions ahead landed as tested, the
+  combination is the same one on the new branch tip. Rule core.17.
+  *(clauses 10, 20)*
+- **Every log line carries its schema**, `sluice/log@1` in `log.jsonl`
+  and `sluice/result@1` in `results.jsonl`. *(clause 53)*
 
-**Q10. Beside clause 27 and ADR 0007: defaults for keys a table leaves
-out.** Reading taken: ADR 0007's bolt defaults, `parallel = 4`, `batch =
-false`, `flaky = "pass"`; and no time limit when `timeout` is absent (66
-says "the time limit its line's policy states"). The walkthrough's
-`bolt/*` table sets `flaky = "fail"` explicitly and its `main` table
-leaves `flaky` and `timeout` out, so under these defaults `main` reads a
-flaky key as passed and has no limit. ADR 0007's shared-line defaults
-(deepest first, confined only) cannot be told apart by the policy, which
-has no notion of which branch is the shared line.
+---
 
-**Q11. Beside clause 27: which table governs a branch several patterns
-match.** Reading taken: an exact name before any pattern, then the pattern
-with the most literal characters; a tie is an error. `*` matches within
-one path segment, so `bolt/*` matches `bolt/x` and not `bolt/x/y`.
+## Choices made (skim, overrule if wrong)
 
-## Verdicts
-
-**Q12. Beside clauses 15 and 70: when is the line's revision "covered by
-a verdict"?** Reading taken: when sluice landed it. A new line's first
-candidate and the first after a hand move run every required check;
-after a landing, the run is asked only for the checks the candidate
-affects since the line's revision. (With moon, unaffected checks would
-replay anyway.)
-
-**Q13. Beside clause 66: what a timed-out candidate's verdict names.**
-The run is ended; the checks that finished are recorded; the result is
-"timed out" and the submission blamed has `result: "timed out"` and no
-failed checks of its own unless one finished failing. The CLI says
-"timed out".
-
-**Q14. Beside clauses 16 and 69: where a run is recorded.** Reading
-taken: twice, in the branch's `log.jsonl` (`ran`, `replayed`, as the
-walkthrough shows) and in the repository's `results.jsonl`, the record a
-verdict is read from, keyed by task and hash for any branch. The
-repository log is written before the branch write that carries the
-verdict, and a repeat after a crash is not appended again.
-
-## Landing
-
-**Q15. Beside clause 24: a landing that moved the line, after which the
-line was moved again by hand before the move was recorded.** The next
-round finds the line at neither the landing's `from` nor its `to`, and
-records the landing as refused although it happened. Telling the two
-apart needs "is `to` contained in the line", which the line seam does not
-offer. Add it to the seam, or accept the misreport for this race?
-
-**Q16. Beside clauses 14, 22 and the answer to question 12: landing under
-deepest first while a skipped candidate is still under test.** When a
-skipped candidate passes while one ahead of it is still running, the
-prefix up to it lands on its verdict (the deeper candidate's verdict
-covers the shorter one's tree), and the running one is ended.
-
-## Records
-
-**Q17. Beside clause 53 and the brief's "a schema version in every
-document".** Every JSON document names its schema (`sluice/submission@1`,
-`sluice/branch@1`). The lines of `log.jsonl` and `results.jsonl` keep the
-walkthrough's shape with no schema field; `branch.json` names the log's
-schema. Should every log line carry one?
-
-**Q18. A file the walkthrough's section 7 does not list:
-`branch.json`** holds the queue's own state, the revision candidates are
-formed on, the window, the candidates and their places and runs, a
-landing intent, places to release and outcomes not yet told. Without it
-the step would hold decisions outside the records (rule core.14).
-
-## The CLI
-
-**Q19. Walkthrough section 5's `testing ... · 2 tasks to run, 31
-replayed` line.** The counts are known when the run finishes, so the CLI
-prints the line with the outcome, not when testing starts. With moon, a
-profile could know them at start, after hashing.
-
-## Found in review
-
-**Q20. Beside clause 32: place names.** The walkthrough names a candidate's
-place `sluice/try/<n>`. A counter per line collides between two lines on
-one host, so the build names it `sluice/try/<branch>/<n>`, which is unique
-per host and a valid branch name for the worktrunk profile.
-
-**Q21. Beside clause 71: the host bound across lines.** The core reads
-`capacity` when it decides and starts the runs after its write; each line
-has its own lock, so two lines stepping at once can together exceed the
-bound. Reading taken: the check seam's `start` enforces the bound itself
-and refuses beyond it, and the core's reading is a hint. Pass 2's runner
-profile must hold to that, or the bound needs a host-wide lock.
-
-**Q22. Beside clause 20: the combination a culprit is told after a
-deepest-first landing.** A failed candidate that survives a landing of
-the submissions ahead of it is carried onto the new revision with those
-submissions dropped; its tree is the tree that failed. The culprit is
-told the carried candidate (its revision and the new line), not the
-longer combination on the old line that the run actually held. The two
-trees are equal. Should the message name the combination as it ran?
+- **Dirty worktree check.** The driver reports what the worktree holds
+  beyond its commits; sluice's `submit` refuses on that report. The
+  statement says "the driver refuses"; same outcome, different code.
+  *(clause 2)*
+- **A branch with no `[branches]` entry.** `submit` refuses it, since
+  there is no gate to test it against. *(clause 27)*
+- **Submission numbers** count across the whole repository, so
+  `sluice status 12` needs no branch name.
+- **Which `[branches]` entry wins.** An exact name beats a pattern; then
+  the pattern with more literal characters. `bolt/*` matches `bolt/x` but
+  not `bolt/x/y`.
+- **When tests are skipped.** Only after sluice itself landed the
+  current branch tip does it ask the runner for "just what changed".
+  After a hand move, on a new branch, or after a landing that changed
+  `.config/sluice.toml`, every required test runs. *(clauses 15, 70)*
+- **Batch window.** With `batch = true`, `parallel` is how many
+  submissions the one big combination may hold; after it fails, all the
+  smaller combinations are tested at once. *(clauses 13, 14)*
+- **Timeout result.** A timed-out run is recorded "timed out", counts as
+  a failure, and the CLI says "timed out". *(clause 66)*
+- **Results recorded twice.** Each test result goes into the branch's
+  `log.jsonl` (as the walkthrough shows) and into one repository-wide
+  `results.jsonl`, which any branch reads to recognise a test that
+  already passed. *(clauses 16, 69)*
+- **Batch landing early.** With `batch = true`, if A+B passes while A
+  alone is still running, A and B land together and A's run is
+  stopped. *(clauses 14, 22)*
+- **An extra state file.** `branch.json` holds the queue's own state
+  (combinations in flight, a landing in progress, messages not yet
+  delivered). The walkthrough's file list doesn't show it; without it,
+  a crash would lose decisions.
+- **"testing ... · N tasks to run" line.** The counts are only known
+  when the run finishes, so the CLI prints that line with the result,
+  not when testing starts.
+- **Checkout names** are `sluice/try/<branch>/<n>`, not the
+  walkthrough's `sluice/try/<n>`, so two branches on one machine never
+  pick the same name. *(clause 32)*
