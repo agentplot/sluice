@@ -1,0 +1,10 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+dependsOn: [seams, core]
+
+tasks:
+  test:
+    command: 'cargo test -p sluice-fakes'
+    inputs: ['/crates/sluice-fakes/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
+    tags: [suite]
+    options: {runFromWorkspaceRoot: true}

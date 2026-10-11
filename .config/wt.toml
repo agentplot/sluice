@@ -1,0 +1,14 @@
+# Project configuration for worktrunk. Every command runs inside
+# `devenv shell`, so a hook builds with the same toolchain a session does.
+# The per-commit floor (treefmt, clippy) is git's own pre-commit hook,
+# installed by devenv from devenv.nix.
+
+# Before a branch lands: the suite through moon, which replays every crate
+# whose inputs already passed in any worktree, then the disk check.
+[[pre-merge]]
+suite = "devenv shell -- suite"
+disk = "devenv shell -- disk"
+
+# A new worktree takes the main worktree's build cache (.worktreeinclude).
+[post-start]
+copy = "wt step copy-ignored"

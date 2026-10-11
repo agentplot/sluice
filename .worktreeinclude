@@ -1,0 +1,4 @@
+# What a new worktree takes from the main one at post-start, via
+# `wt step copy-ignored`: the build cache, and nothing else. .devenv/ holds
+# absolute paths into the worktree that built it; .moon/cache likewise.
+target

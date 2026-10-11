@@ -1,0 +1,20 @@
+# moon runs sluice's suite: one project per crate, each with one `test` task
+# tagged `suite`. A task whose inputs are identical to a run that passed on
+# this host, in any worktree, replays from .moon/cache/outputs (a link into
+# the git common dir, made by devenv.nix) instead of running again, so every
+# task's inputs name everything its tests read from the tree.
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+projects:
+  seams: 'crates/sluice-seams'
+  core: 'crates/sluice-core'
+  fakes: 'crates/sluice-fakes'
+  conformance: 'crates/sluice-conformance'
+  cli: 'crates/sluice'
+
+# --affected compares against the merge-base with main.
+vcs:
+  client: 'git'
+  defaultBranch: 'main'
+
+telemetry: false
