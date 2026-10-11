@@ -165,7 +165,21 @@ to
 wt submit bolt/concurrent-units
 ```
 
-## 4. An agent submits
+## 4. Branch protection
+
+Every branch with a `[branches]` section is protected: only sluice moves
+it. On one machine sluice installs a git `reference-transaction` hook
+that refuses any other update and logs the attempt:
+
+```console
+$ git merge unit/touches        # on bolt/concurrent-units
+error: bolt/concurrent-units is protected by sluice; use wt submit
+```
+
+On a forge, the same is the forge's branch protection, with sluice's
+identity the only one allowed to push.
+
+## 5. An agent submits
 
 Whatever submits work to sluice and gets the outcome back is a **driver**:
 it is the front door agents and tools use, and it decides nothing about the
@@ -214,7 +228,7 @@ $ wt submit --check bolt/concurrent-units
 would conflict: plugin/lib/plan.py with #12 (crw-1-unit-1, unit/touches)
 ```
 
-## 5. What keeps the queue moving
+## 6. What keeps the queue moving
 
 `wt submit` keeps the queue moving itself while it waits: every few seconds
 it runs one round of sluice's work and checks whether its own submission is
@@ -234,7 +248,7 @@ sluice run                          # rounds for every branch with a queue, unti
 crew's conductor. `sluice run` is for anyone who wants the queue to move
 when no agent is waiting.
 
-## 6. Where sluice keeps its state
+## 7. Where sluice keeps its state
 
 In the repository's git directory, never committed and never pushed, readable
 with plain tools whether or not sluice is running:
@@ -288,7 +302,7 @@ like a pass, and a replayed result is logged as a replay, never as a run:
 that crashes between the two is finished correctly by the next one. The full
 files are beside this walkthrough under `state/`.
 
-## 7. What a landing looks like in history
+## 8. What a landing looks like in history
 
 One merge commit per submission: first parent the branch, second parent the
 agent's head, so the agent's commits stay in history and `wt list` shows its
@@ -309,7 +323,7 @@ Author: sluice <sluice@localhost>
     Sluice-Result: passed (2 run, 31 replayed)
 ```
 
-## 8. Reading the queue
+## 9. Reading and changing the queue
 
 ```console
 $ sluice status bolt/concurrent-units
@@ -320,6 +334,16 @@ bolt/concurrent-units at b7d2e94 · testing 2 at once (up to 4)
 ```
 
 `--json` gives the same for crew's conductor or any other tool.
+
+A queued submission's order can be changed until it is under test:
+
+```sh
+sluice amend 14 --after 12      # #14 lands only after #12
+sluice amend 14 --priority 1    # ahead of priority-0 submissions not yet under test
+```
+
+Submitting again from the same worktree withdraws that worktree's earlier
+submission.
 
 ## Decisions this walkthrough assumes
 
