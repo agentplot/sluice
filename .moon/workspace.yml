@@ -1,5 +1,10 @@
-# moon runs sluice's cargo tests: one project per crate, each with one
-# `test` task tagged `cargo-test`. A task whose inputs are identical to a run that passed on
+# moon runs sluice's checks: one project per crate. Each check is tagged
+# with its tier, which a branch's policy requires by tag:
+#   check-fast    the cargo tests over the fakes and the citations: seconds
+#   check-tools   the profiles against real git, moon and worktrunk on
+#                 scratch repositories, and the conformance suite over them
+#   check-e2e     e2e.sh, a whole repository driven through wt submit
+# The cargo tests are also tagged `cargo-test`. A task whose inputs are identical to a run that passed on
 # this host, in any worktree, replays from .moon/cache/outputs (a link into
 # the git common dir, made by devenv.nix) instead of running again, so every
 # task's inputs name everything its tests read from the tree.

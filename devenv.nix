@@ -3,6 +3,75 @@
 let
   rust = config.languages.rust.toolchain;
 
+  # moonrepo's own release builds: nixpkgs trails moon by a minor version or
+  # more, and sluice runs its own merge queue on the newest moon. Linux takes
+  # the static musl build, so no loader needs patching.
+  fromRelease =
+    {
+      name,
+      repo,
+      version,
+      bins,
+      hashes,
+    }:
+    let
+      system = pkgs.stdenv.hostPlatform.system;
+      target =
+        {
+          aarch64-darwin = "aarch64-apple-darwin";
+          x86_64-darwin = "x86_64-apple-darwin";
+          aarch64-linux = "aarch64-unknown-linux-musl";
+          x86_64-linux = "x86_64-unknown-linux-musl";
+        }
+        .${system} or (throw "${name} ${version}: no release build for ${system}");
+    in
+    pkgs.stdenvNoCC.mkDerivation {
+      pname = name;
+      inherit version;
+      src = pkgs.fetchurl {
+        url = "https://github.com/moonrepo/${repo}/releases/download/v${version}/${name}-${target}.tar.xz";
+        sha256 = hashes.${target};
+      };
+      sourceRoot = "${name}-${target}";
+      installPhase = ''
+        runHook preInstall
+        install -Dm755 -t $out/bin ${pkgs.lib.concatStringsSep " " bins}
+        runHook postInstall
+      '';
+    };
+
+  moon = fromRelease {
+    name = "moon_cli";
+    repo = "moon";
+    version = "2.6.1";
+    bins = [
+      "moon"
+      "moonx"
+    ];
+    hashes = {
+      aarch64-apple-darwin = "2922ce70277cc6f3750106fa9ebd1e25ed890ec8cdba4570148ff8701a5bea53";
+      x86_64-apple-darwin = "ef715c5fa43985de841049c319c52e9307a233a8634c08b6729e7b224592dc8e";
+      aarch64-unknown-linux-musl = "b1fb67933231c9c565ea4375b54f0f9645112d76ede767a6040c5142bf7c0310";
+      x86_64-unknown-linux-musl = "200314608ee89d1deecc7cd0bbd523d4dffa64ffbb365989f003f3a8d91c9080";
+    };
+  };
+
+  proto = fromRelease {
+    name = "proto_cli";
+    repo = "proto";
+    version = "0.63.1";
+    bins = [
+      "proto"
+      "proto-shim"
+    ];
+    hashes = {
+      aarch64-apple-darwin = "8bfde4c862381eeb6e82d0858bb6215732cbd1e384e4eae45da8fa08095e0ffd";
+      x86_64-apple-darwin = "aaaff78c7125de1b765f00177f35da75ee16fb1363e07632ace27213ff5d893b";
+      aarch64-unknown-linux-musl = "111f5b6a38d3979ebafbc095c8d91ef69c99d1f018addb3582179d4ab91b3441";
+      x86_64-unknown-linux-musl = "8596b98ccd833d1203e71931ba25e866d3239f9d3859c922a035a7b830f29d17";
+    };
+  };
+
   # The lint gate. Its own PATH carries the devenv toolchain, because a git
   # hook runs outside any shell a session opened.
   lint = pkgs.writeShellApplication {
@@ -87,7 +156,8 @@ in
   packages = [
     pkgs.git
     pkgs.jq
-    pkgs.moon
+    moon
+    proto
   ];
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common

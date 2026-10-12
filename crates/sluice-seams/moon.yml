@@ -6,5 +6,5 @@ tasks:
   test:
     command: 'cargo test -p sluice-seams'
     inputs: ['/crates/sluice-seams/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
-    tags: [cargo-test]
+    tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
