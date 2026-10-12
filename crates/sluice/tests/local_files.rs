@@ -1,0 +1,262 @@
+//! The `local files` profile on a real filesystem: section 6's acceptance
+//! tests in `docs/plans/phase-1-integrations.md`. It needs no tool, so it
+//! is in the fast tier.
+
+mod support;
+
+use std::collections::BTreeMap;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use sluice::profiles::local_files::LocalFiles;
+use sluice_fakes::Fakes;
+use sluice_seams::{Changes, State, Written};
+use support::Scratch;
+
+fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
+    let m = |xs: &[(&str, &str)]| -> BTreeMap<String, Vec<u8>> {
+        xs.iter()
+            .map(|(p, b)| (p.to_string(), b.as_bytes().to_vec()))
+            .collect()
+    };
+    Changes {
+        put: m(put),
+        append: m(append),
+    }
+}
+
+fn write(s: &LocalFiles, branch: &str, c: Changes) -> Written {
+    let _g = s.lock(branch).unwrap().expect("lock");
+    let at = s.read(branch).unwrap().version;
+    s.write(branch, at, c).unwrap()
+}
+
+/// Held by a child process of this test binary until it is killed.
+#[test]
+fn hold_the_lock_until_killed() {
+    let (Ok(common), Ok(branch)) = (
+        std::env::var("SLUICE_TEST_COMMON"),
+        std::env::var("SLUICE_TEST_BRANCH"),
+    ) else {
+        return;
+    };
+    let s = LocalFiles::new(std::path::Path::new(&common));
+    let _g = s.lock(&branch).unwrap().expect("the holder takes the lock");
+    std::fs::write(std::path::Path::new(&common).join("held"), "").unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// 1, 58, core.14: one step at a time; a holder that dies frees the lock.
+#[test]
+fn the_lock_is_one_holder_and_dies_with_it() {
+    let dir = Scratch::new("lock");
+    let s = LocalFiles::new(dir.path());
+    let held = s.lock("bolt/x").unwrap().expect("free");
+    assert!(LocalFiles::new(dir.path())
+        .lock("bolt/x")
+        .unwrap()
+        .is_none());
+    drop(held);
+    drop(s.lock("bolt/x").unwrap().expect("free again"));
+
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "hold_the_lock_until_killed", "--nocapture"])
+        .env("SLUICE_TEST_COMMON", dir.path())
+        .env("SLUICE_TEST_BRANCH", "bolt/x")
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !dir.path().join("held").exists() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the holder never took the lock"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(s.lock("bolt/x").unwrap().is_none());
+    child.kill().unwrap(); // SIGKILL
+    child.wait().unwrap();
+    assert!(s.lock("bolt/x").unwrap().is_some());
+}
+
+/// 2, 62, 58: two writes from one version; one is written, one refused.
+#[test]
+fn two_writes_from_one_version() {
+    let dir = Scratch::new("version");
+    let s = LocalFiles::new(dir.path());
+    let _g = s.lock("bolt/x").unwrap().unwrap();
+    assert_eq!(
+        s.write("bolt/x", 0, changes(&[("branch.json", "{}\n")], &[]))
+            .unwrap(),
+        Written::Written(1)
+    );
+    assert_eq!(
+        s.write("bolt/x", 0, changes(&[("branch.json", "{\"x\":1}\n")], &[]))
+            .unwrap(),
+        Written::Refused
+    );
+    assert_eq!(s.read("bolt/x").unwrap().files["branch.json"], b"{}\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("sluice/bolt/x/version")).unwrap(),
+        "1\n"
+    );
+}
+
+/// A write needs the branch's lock, held by this process.
+#[test]
+fn a_write_without_the_lock_is_an_error() {
+    let dir = Scratch::new("unlocked");
+    let s = LocalFiles::new(dir.path());
+    assert!(s
+        .write("bolt/x", 0, changes(&[("branch.json", "{}\n")], &[]))
+        .is_err());
+}
+
+/// 3, 4, 63, 51: a crash after the pending write, part way through
+/// applying it, or before the version: a reader with no lock sees the
+/// whole write, the next lock finishes it, and no log line is doubled.
+#[test]
+fn a_crash_mid_write_reads_whole_and_finishes_once() {
+    let dir = Scratch::new("crash");
+    let s = LocalFiles::new(dir.path());
+    write(
+        &s,
+        "bolt/x",
+        changes(
+            &[("branch.json", "{\"v\":1}\n")],
+            &[("log.jsonl", "{\"a\":1}\n")],
+        ),
+    );
+    let branch = dir.path().join("sluice/bolt/x");
+    let pending = r#"{"version":2,"put":{"branch.json":"{\"v\":2}\n","submissions/3.json":"{\"id\":3}\n"},"append":{"log.jsonl":"{\"a\":2}\n"},"lengths":{"log.jsonl":8}}"#;
+    let expect_log = "{\"a\":1}\n{\"a\":2}\n";
+
+    for stage in ["pending written", "applied in part", "applied, version not"] {
+        // Back to version 1, then the crash at `stage`.
+        std::fs::write(branch.join("branch.json"), "{\"v\":1}\n").unwrap();
+        std::fs::write(branch.join("log.jsonl"), "{\"a\":1}\n").unwrap();
+        let _ = std::fs::remove_file(branch.join("submissions/3.json"));
+        std::fs::write(branch.join("version"), "1\n").unwrap();
+        std::fs::write(branch.join(".pending.json"), pending).unwrap();
+        if stage != "pending written" {
+            std::fs::write(branch.join("branch.json"), "{\"v\":2}\n").unwrap();
+            std::fs::write(branch.join("log.jsonl"), expect_log).unwrap();
+        }
+        if stage == "applied, version not" {
+            std::fs::create_dir_all(branch.join("submissions")).unwrap();
+            std::fs::write(branch.join("submissions/3.json"), "{\"id\":3}\n").unwrap();
+        }
+
+        let read = s.read("bolt/x").unwrap();
+        assert_eq!(read.version, 2, "{stage}");
+        assert_eq!(read.files["log.jsonl"], expect_log.as_bytes(), "{stage}");
+        assert_eq!(read.files["submissions/3.json"], b"{\"id\":3}\n", "{stage}");
+
+        drop(s.lock("bolt/x").unwrap().unwrap());
+        assert!(!branch.join(".pending.json").exists(), "{stage}");
+        assert_eq!(
+            std::fs::read_to_string(branch.join("version")).unwrap(),
+            "2\n",
+            "{stage}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(branch.join("log.jsonl")).unwrap(),
+            expect_log,
+            "{stage}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(branch.join("branch.json")).unwrap(),
+            "{\"v\":2}\n",
+            "{stage}"
+        );
+    }
+}
+
+/// 5, 53: the bytes read back are the fake store's bytes for the same
+/// writes, so a reader of one profile's records reads the other's.
+#[test]
+fn the_records_are_the_fake_stores_records() {
+    let dir = Scratch::new("bytes");
+    let real = LocalFiles::new(dir.path());
+    let fakes = Fakes::new();
+    let writes = [
+        changes(
+            &[
+                ("branch.json", "{\"schema\":\"sluice/branch@1\"}\n"),
+                ("submissions/1.json", "{\"id\":1}\n"),
+            ],
+            &[("log.jsonl", "{\"event\":\"submitted\"}\n")],
+        ),
+        changes(
+            &[("submissions/2.json", "{\"id\":2}\n")],
+            &[("log.jsonl", "{\"event\":\"testing\"}\n")],
+        ),
+    ];
+    for c in writes {
+        write(&real, "bolt/x", c.clone());
+        let _g = fakes.state.lock("bolt/x").unwrap().unwrap();
+        let at = fakes.state.read("bolt/x").unwrap().version;
+        fakes.state.write("bolt/x", at, c).unwrap();
+    }
+    assert_eq!(
+        real.read("bolt/x").unwrap(),
+        fakes.state.read("bolt/x").unwrap()
+    );
+}
+
+/// 6: branch names nest as directories; a name that cannot be a branch's,
+/// or whose records would lie inside another's, is refused.
+#[test]
+fn branch_names_round_trip() {
+    let dir = Scratch::new("names");
+    let s = LocalFiles::new(dir.path());
+    for b in ["bolt/x", "main", "a/b/c"] {
+        write(&s, b, changes(&[("branch.json", "{}\n")], &[]));
+    }
+    assert_eq!(s.branches().unwrap(), vec!["a/b/c", "bolt/x", "main"]);
+    assert!(s.read("results.jsonl").is_err());
+    assert!(s.lock("../x").is_err());
+    let _g = s.lock("main/inner").unwrap().unwrap();
+    assert!(s
+        .write("main/inner", 0, changes(&[("branch.json", "{}\n")], &[]))
+        .is_err());
+    // A nested branch's records are not its parent directory's.
+    assert!(!s
+        .read("bolt/x")
+        .unwrap()
+        .files
+        .keys()
+        .any(|k| k.contains("branch.json") && k != "branch.json"));
+}
+
+/// Submission numbers count across the repository.
+#[test]
+fn ids_count_across_the_repository() {
+    let dir = Scratch::new("ids");
+    let s = LocalFiles::new(dir.path());
+    assert_eq!((s.allocate_id().unwrap(), s.allocate_id().unwrap()), (1, 2));
+    assert_eq!(LocalFiles::new(dir.path()).allocate_id().unwrap(), 3);
+}
+
+/// 69: the results log appends whole lines, never one twice, and drops a
+/// line a crash cut short.
+#[test]
+fn results_append_once_and_whole() {
+    let dir = Scratch::new("results");
+    let s = LocalFiles::new(dir.path());
+    s.record_results(b"{\"run\":1}\n{\"run\":2}\n").unwrap();
+    s.record_results(b"{\"run\":2}\n{\"run\":3}\n").unwrap();
+    assert_eq!(
+        s.results().unwrap(),
+        b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n"
+    );
+    let log = dir.path().join("sluice/results.jsonl");
+    let mut cut = std::fs::read(&log).unwrap();
+    cut.extend_from_slice(b"{\"run\":4");
+    std::fs::write(&log, cut).unwrap();
+    s.record_results(b"{\"run\":4}\n").unwrap();
+    assert_eq!(
+        s.results().unwrap(),
+        b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n{\"run\":4}\n"
+    );
+}

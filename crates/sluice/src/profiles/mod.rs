@@ -1,18 +1,22 @@
 //! Binding each seam to a profile (52; ADR 0003). The only directory of
 //! this crate that may name a tool (rule core.1).
 //!
-//! Phase 1 builds the core against fakes; the real profiles are pass 2
-//! (`docs/plans/phase-1-integrations.md`). Until then every seam is bound
-//! to [`Unbuilt`], which refuses every call by naming the profile the
-//! policy asked for, so the CLI's arguments, output and exits are whole
-//! and only the seams are missing.
+//! The real profiles are pass 2's (`docs/plans/phase-1-integrations.md`).
+//! The branch is bound to [`local_refs`] and the records to
+//! [`local_files`]; a seam whose profile is not built yet is bound to
+//! [`Unbuilt`], which refuses every call by naming that profile, so the
+//! CLI's arguments, output and exits are whole and only those seams are
+//! missing.
 
+pub mod local_files;
+pub mod local_refs;
 pub mod worktrunk;
+
+use std::path::Path;
 
 use anyhow::{bail, Result};
 use sluice_seams::{
-    Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification, Place,
-    Progress, Rev, RunHandle, RunRequest, Session, Snapshot, State, Tests, Written,
+    Checkout, Driver, Notification, Place, Progress, Rev, RunHandle, RunRequest, Session, Tests,
 };
 
 /// A seam whose profile is not built yet.
@@ -31,19 +35,22 @@ impl Unbuilt {
     }
 }
 
-/// The phase-1 binding: the profiles the walkthrough's setup names, none
-/// built yet.
+/// The profiles the walkthrough's setup names, for the repository holding
+/// a directory.
 pub struct Bound {
     pub checkout: Unbuilt,
     pub tests: Unbuilt,
-    pub branch: Unbuilt,
+    pub branch: local_refs::LocalRefs,
     pub driver: Unbuilt,
-    pub state: Unbuilt,
+    pub state: local_files::LocalFiles,
 }
 
-impl Default for Bound {
-    fn default() -> Self {
-        Bound {
+impl Bound {
+    /// Bind the repository holding `dir`, a worktree or a git directory.
+    pub fn open(dir: &Path) -> Result<Self> {
+        let branch = local_refs::LocalRefs::open(dir)?;
+        let state = local_files::LocalFiles::new(&branch.common_dir()?);
+        Ok(Bound {
             checkout: Unbuilt {
                 seam: "place",
                 profile: "worktrunk",
@@ -52,23 +59,15 @@ impl Default for Bound {
                 seam: "check",
                 profile: "moon",
             },
-            branch: Unbuilt {
-                seam: "line",
-                profile: "local refs (gix and git)",
-            },
+            branch,
             driver: Unbuilt {
                 seam: "driver",
                 profile: "worktrunk",
             },
-            state: Unbuilt {
-                seam: "records",
-                profile: "local files",
-            },
-        }
+            state,
+        })
     }
-}
 
-impl Bound {
     pub fn seams(&self) -> sluice_core::Seams<'_> {
         sluice_core::Seams {
             checkout: &self.checkout,
@@ -101,56 +100,11 @@ impl Tests for Unbuilt {
     }
 }
 
-impl Branch for Unbuilt {
-    fn read(&self, _: &str) -> Result<Option<Rev>> {
-        self.refuse()
-    }
-    fn read_file(&self, _: &Rev, _: &str) -> Result<Option<Vec<u8>>> {
-        self.refuse()
-    }
-    fn form(&self, _: &Rev, _: &Rev) -> Result<Formed> {
-        self.refuse()
-    }
-    fn commit(&self, _: &LandingCommit) -> Result<Rev> {
-        self.refuse()
-    }
-    fn contains(&self, _: &Rev, _: &Rev) -> Result<bool> {
-        self.refuse()
-    }
-    fn move_to(&self, _: &str, _: &Rev, _: &Rev) -> Result<Moved> {
-        self.refuse()
-    }
-}
-
 impl Driver for Unbuilt {
     fn session(&self, _: &str) -> Result<Session> {
         self.refuse()
     }
     fn notify(&self, _: &Notification) -> Result<()> {
-        self.refuse()
-    }
-}
-
-impl State for Unbuilt {
-    fn lock<'a>(&'a self, _: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
-        self.refuse()
-    }
-    fn read(&self, _: &str) -> Result<Snapshot> {
-        self.refuse()
-    }
-    fn write(&self, _: &str, _: u64, _: Changes) -> Result<Written> {
-        self.refuse()
-    }
-    fn branches(&self) -> Result<Vec<String>> {
-        self.refuse()
-    }
-    fn allocate_id(&self) -> Result<u64> {
-        self.refuse()
-    }
-    fn results(&self) -> Result<Vec<u8>> {
-        self.refuse()
-    }
-    fn record_results(&self, _: &[u8]) -> Result<()> {
         self.refuse()
     }
 }

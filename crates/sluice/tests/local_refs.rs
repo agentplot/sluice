@@ -1,0 +1,335 @@
+//! The `local refs` profile against real repositories: section 1's
+//! acceptance tests in `docs/plans/phase-1-integrations.md`. The
+//! check-tools tier: run with `--features tools`.
+
+#![cfg(feature = "tools")]
+
+mod support;
+
+use sluice::profiles::local_refs::LocalRefs;
+use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use support::Repo;
+
+fn rev(s: String) -> Rev {
+    Rev::new(s)
+}
+
+fn refs(repo: &Repo) -> LocalRefs {
+    LocalRefs::open(repo.dir()).expect("open")
+}
+
+fn formed(f: Formed) -> Rev {
+    match f {
+        Formed::Revision(r) => r,
+        Formed::Conflict { paths } => panic!("unexpected conflict on {paths:?}"),
+    }
+}
+
+fn conflict(f: Formed) -> Vec<String> {
+    match f {
+        Formed::Conflict { paths } => paths,
+        Formed::Revision(r) => panic!("expected a conflict, formed {r}"),
+    }
+}
+
+/// 1, 42: an existing, a missing and a packed branch.
+#[test]
+fn read_existing_missing_and_packed() {
+    let repo = Repo::new("read");
+    let head = repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    let r = refs(&repo);
+    assert_eq!(r.read("bolt/x").unwrap(), Some(rev(head.clone())));
+    assert_eq!(r.read("bolt/none").unwrap(), None);
+    repo.git(&["pack-refs", "--all"]);
+    assert!(!repo.dir().join(".git/refs/heads/bolt/x").exists());
+    assert_eq!(refs(&repo).read("bolt/x").unwrap(), Some(rev(head)));
+}
+
+/// 2, 43: a clean candidate is git's merge, a commit of the two.
+#[test]
+fn form_clean_is_gits_merge_with_both_parents() {
+    let repo = Repo::new("clean");
+    let onto = repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    let head = repo.branch("unit/u", "main", &[("b", Some("2"))]);
+    let c = formed(
+        refs(&repo)
+            .form(&rev(onto.clone()), &rev(head.clone()))
+            .unwrap(),
+    );
+    let tree = repo.git(&["merge-tree", "--write-tree", &onto, &head]);
+    assert_eq!(repo.rev(&format!("{c}^{{tree}}")), tree);
+    assert_eq!(
+        repo.git(&["rev-parse", &format!("{c}^1"), &format!("{c}^2")]),
+        format!("{onto}\n{head}")
+    );
+    // One combination forms one commit, whenever it is formed.
+    let again = formed(refs(&repo).form(&rev(onto), &rev(head)).unwrap());
+    assert_eq!(c, again);
+}
+
+/// 3, 12, 65: content, modify/delete, rename/rename and add/add.
+#[test]
+fn form_conflicts_name_every_path() {
+    let repo = Repo::new("conflicts");
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("plan.py", "base\n");
+    repo.write("del.txt", "keep\n");
+    repo.write("old.txt", "rename me\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "base files"]);
+    repo.git(&["switch", "-q", "--detach", "main"]);
+    let r = refs(&repo);
+
+    let a = repo.branch("unit/a", "main", &[("plan.py", Some("a\n"))]);
+    let b = repo.branch("unit/b", "main", &[("plan.py", Some("b\n"))]);
+    assert_eq!(conflict(r.form(&rev(a), &rev(b)).unwrap()), vec!["plan.py"]);
+
+    let del = repo.branch("unit/del", "main", &[("del.txt", None)]);
+    let modi = repo.branch("unit/mod", "main", &[("del.txt", Some("changed\n"))]);
+    assert_eq!(
+        conflict(r.form(&rev(del), &rev(modi)).unwrap()),
+        vec!["del.txt"]
+    );
+
+    let r1 = repo.branch_with("unit/r1", "main", &[], &[("old.txt", "new.txt")]);
+    let r2 = repo.branch_with("unit/r2", "main", &[], &[("old.txt", "other-name.txt")]);
+    let mut paths = conflict(r.form(&rev(r1), &rev(r2)).unwrap());
+    paths.sort();
+    assert_eq!(paths, vec!["new.txt", "old.txt", "other-name.txt"]);
+
+    let x = repo.branch("unit/x", "main", &[("added.txt", Some("x\n"))]);
+    let y = repo.branch("unit/y", "main", &[("added.txt", Some("y\n"))]);
+    assert_eq!(
+        conflict(r.form(&rev(x), &rev(y)).unwrap()),
+        vec!["added.txt"]
+    );
+}
+
+/// 4, 10: a chain of three, the third conflicting only with the first.
+#[test]
+fn form_a_chain_of_three() {
+    let repo = Repo::new("chain");
+    let r = refs(&repo);
+    let base = rev(repo.rev("main"));
+    let one = repo.branch("unit/1", "main", &[("shared", Some("one\n"))]);
+    let two = repo.branch("unit/2", "main", &[("other", Some("two\n"))]);
+    let three = repo.branch("unit/3", "main", &[("shared", Some("three\n"))]);
+    let c1 = formed(r.form(&base, &rev(one)).unwrap());
+    let c2 = formed(r.form(&c1, &rev(two)).unwrap());
+    assert_eq!(
+        conflict(r.form(&c2, &rev(three.clone())).unwrap()),
+        vec!["shared"]
+    );
+    // Alone on the branch it is clean: the conflict is with the first.
+    formed(r.form(&base, &rev(three)).unwrap());
+}
+
+/// 5: a missing object and unrelated histories are errors, not conflicts.
+#[test]
+fn form_errors_are_not_conflicts() {
+    let repo = Repo::new("errors");
+    let r = refs(&repo);
+    let main = rev(repo.rev("main"));
+    let missing = rev("0123456789abcdef0123456789abcdef01234567".into());
+    assert!(r.form(&main, &missing).is_err());
+    repo.git(&["switch", "-q", "--orphan", "orphan"]);
+    repo.write("lonely", "1\n");
+    repo.git(&["add", "lonely"]);
+    repo.git(&["commit", "-q", "-m", "orphan"]);
+    let orphan = rev(repo.rev("HEAD"));
+    assert!(r.form(&main, &orphan).is_err());
+}
+
+/// 6, 23, 44: one landing commit, its tree the tested candidate's.
+#[test]
+fn commit_writes_the_landing() {
+    let repo = Repo::new("commit");
+    let r = refs(&repo);
+    let onto = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let head = rev(repo.branch("unit/u", "main", &[("b", Some("2"))]));
+    let candidate = formed(r.form(&onto, &head).unwrap());
+    let message = "Land #12: unit/u\n\nSluice-Submission: 12\nSluice-From: agent (unit/u)\nSluice-Tested: CAND\nSluice-Result: passed (2 run, 0 replayed)\n"
+        .replace("CAND", candidate.as_str());
+    let landed = r
+        .commit(&LandingCommit {
+            tree_of: candidate.clone(),
+            parent: onto.clone(),
+            head: head.clone(),
+            message,
+        })
+        .unwrap();
+    let raw = repo.git(&["cat-file", "-p", landed.as_str()]);
+    assert!(
+        raw.contains(&format!("parent {onto}\nparent {head}\n")),
+        "{raw}"
+    );
+    assert!(raw.contains("\nauthor sluice <sluice@localhost> "), "{raw}");
+    assert!(
+        raw.contains("\ncommitter sluice <sluice@localhost> "),
+        "{raw}"
+    );
+    assert_eq!(
+        repo.rev(&format!("{landed}^{{tree}}")),
+        repo.rev(&format!("{candidate}^{{tree}}"))
+    );
+    let body = repo.git(&["log", "-1", "--format=%B", landed.as_str()]);
+    let out = std::process::Command::new("git")
+        .args(["interpret-trailers", "--parse"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(body.as_bytes())?;
+            c.wait_with_output()
+        })
+        .unwrap();
+    let trailers = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        trailers
+            .lines()
+            .filter(|l| l.starts_with("Sluice-"))
+            .count(),
+        4,
+        "{trailers}"
+    );
+}
+
+/// 7, S8, 24, 45: moved from the expected revision, refused from a stale
+/// one, a deleted branch reported, a held lock an error.
+#[test]
+fn move_to_from_expected_only() {
+    let repo = Repo::new("move");
+    let r = refs(&repo);
+    let old = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let new = rev(repo.branch("unit/u", "bolt/x", &[("b", Some("2"))]));
+    assert_eq!(r.move_to("bolt/x", &old, &new).unwrap(), Moved::Moved);
+    assert_eq!(r.read("bolt/x").unwrap(), Some(new.clone()));
+    assert!(repo
+        .git(&["reflog", "bolt/x"])
+        .contains("sluice: land on bolt/x"));
+
+    // Stale: found elsewhere, reported, the branch left where it is.
+    assert_eq!(
+        r.move_to("bolt/x", &old, &old).unwrap(),
+        Moved::Elsewhere(Some(new.clone()))
+    );
+    assert_eq!(r.read("bolt/x").unwrap(), Some(new.clone()));
+
+    // Held by git's lock protocol: an error, tried again by a later step.
+    let lock = repo.dir().join(".git/refs/heads/bolt/x.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert!(r.move_to("bolt/x", &new, &old).is_err());
+    std::fs::remove_file(&lock).unwrap();
+
+    repo.git(&["branch", "-D", "bolt/x"]);
+    assert_eq!(
+        r.move_to("bolt/x", &new, &old).unwrap(),
+        Moved::Elsewhere(None)
+    );
+    assert_eq!(r.read("bolt/x").unwrap(), None);
+}
+
+/// 8, 46: two moves from one expected revision; exactly one succeeds.
+#[test]
+fn two_moves_from_one_revision_one_wins() {
+    let repo = Repo::new("race");
+    let old = repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    let a = repo.branch("unit/a", "bolt/x", &[("b", Some("2"))]);
+    let b = repo.branch("unit/b", "bolt/x", &[("c", Some("3"))]);
+    let dir = repo.dir().to_path_buf();
+    let handles: Vec<_> = [a, b]
+        .into_iter()
+        .map(|to| {
+            let (dir, old) = (dir.clone(), old.clone());
+            std::thread::spawn(move || {
+                let r = LocalRefs::open(&dir).unwrap();
+                r.move_to("bolt/x", &Rev::new(old), &Rev::new(to))
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let moved = results
+        .iter()
+        .filter(|r| matches!(r, Ok(Moved::Moved)))
+        .count();
+    assert_eq!(moved, 1, "{results:?}");
+}
+
+/// 9: gix runs no hooks, so a refusing reference-transaction hook (the
+/// one branch protection installs) does not stop sluice's own move.
+#[test]
+fn a_refusing_hook_does_not_stop_move_to() {
+    let repo = Repo::new("hook");
+    let old = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let new = rev(repo.branch("unit/u", "bolt/x", &[("b", Some("2"))]));
+    let hook = repo.dir().join(".git/hooks/reference-transaction");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!repo
+        .git_raw(&["branch", "-f", "bolt/x", new.as_str()])
+        .status
+        .success());
+    assert_eq!(
+        refs(&repo).move_to("bolt/x", &old, &new).unwrap(),
+        Moved::Moved
+    );
+}
+
+/// 10, 56, S12: the policy is read from the branch's revision, never from
+/// a worktree holding another version of it.
+#[test]
+fn read_file_reads_the_revision_not_the_worktree() {
+    let repo = Repo::new("policy");
+    let on_branch = repo.branch(
+        "bolt/x",
+        "main",
+        &[(".config/sluice.toml", Some("on the branch\n"))],
+    );
+    repo.git(&["switch", "-q", "bolt/x"]);
+    repo.write(".config/sluice.toml", "in the worktree\n");
+    let r = refs(&repo);
+    let read = r
+        .read_file(&rev(on_branch.clone()), ".config/sluice.toml")
+        .unwrap();
+    assert_eq!(read.as_deref(), Some(&b"on the branch\n"[..]));
+    assert_eq!(
+        r.read_file(&rev(on_branch), ".config/none.toml").unwrap(),
+        None
+    );
+}
+
+/// 24: a landing found under a branch moved again since is in its history.
+#[test]
+fn contains_answers_ancestry() {
+    let repo = Repo::new("contains");
+    let r = refs(&repo);
+    let a = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let b = rev(repo.branch("unit/u", "bolt/x", &[("b", Some("2"))]));
+    let other = rev(repo.branch("unit/o", "main", &[("c", Some("3"))]));
+    assert!(r.contains(&b, &a).unwrap());
+    assert!(r.contains(&b, &b).unwrap());
+    assert!(!r.contains(&a, &b).unwrap());
+    assert!(!r.contains(&b, &other).unwrap());
+}
+
+/// The common directory is the same from a linked worktree.
+#[test]
+fn the_common_dir_is_one_from_every_worktree() {
+    let repo = Repo::new("common");
+    let linked = repo.dir().with_extension("linked");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        linked.to_str().unwrap(),
+        "main",
+    ]);
+    let from_main = refs(&repo).common_dir().unwrap();
+    let from_linked = LocalRefs::open(&linked).unwrap().common_dir().unwrap();
+    assert_eq!(from_main, from_linked);
+    assert_eq!(from_main, repo.dir().join(".git"));
+    let _ = std::fs::remove_dir_all(&linked);
+}

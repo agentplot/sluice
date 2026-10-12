@@ -7,7 +7,16 @@ use sluice_core::SystemClock;
 
 fn main() {
     let cli = Cli::parse();
-    let bound = Bound::default();
+    let bound = match std::env::current_dir()
+        .map_err(anyhow::Error::from)
+        .and_then(|dir| Bound::open(&dir))
+    {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("sluice: {e:#}");
+            std::process::exit(3);
+        }
+    };
     let mut out = std::io::stdout();
     match run(
         cli,
