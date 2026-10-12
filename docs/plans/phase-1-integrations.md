@@ -1161,24 +1161,44 @@ repository), `DEVENV_*` or `DIRENV_*` (a waiting `wt submit` runs in a
 session's shell, and that session's place must not leak into the
 candidate's, 35).
 
-**The shell a run happens in.** A repository's tools often exist only
-inside a shell it declares: crew's moon and replay cache only inside
-`devenv shell`. The policy names it:
+**The toolchain a run uses.** A repository's tools often exist only
+inside an environment it declares: crew's moon and replay cache only
+inside its devenv shell. The policy names the command that prints that
+environment as shell code:
 
 ```toml
 [tests]
-shell = ["devenv", "shell", "--"]
+toolchain = ["devenv", "print-dev-env"]
 ```
 
-The executor runs `shell + argv` in the place, so the shell sets the
-tools up and the command runs inside it. The environment above is what
-goes into the shell; what the shell adds is the repository's. The shell
-only enters the toolchain: sluice treats it as opaque and reads no
-confinement or limit from it, which is the executor's (below). Read from
-the branch's revision like the rest of the policy (56). When sluice
-itself already runs inside the repository's shell, as an app does under
-a manifest that declares one, the key is left out: the run keeps that
-shell's `PATH` and, as above, nothing that names a session's place (35).
+`start` runs it in the place, outside the executor, with the environment
+above, and keeps what it prints in the run directory (`toolchain.sh`).
+Every command the runner runs in the place, its queries and the run
+itself, is `bash -c 'source <toolchain.sh> >&2; exec "$@"'`, so the
+script sets the tools up and anything it prints goes to stderr. The
+command is opaque to sluice, which reads no confinement or limit from
+it (those are the executor's, below); read from the branch's revision
+like the rest of the policy (56). Anything that needs the network or the
+user's home to set up (nix evaluating the shell, proto installing a
+pinned version) happens here, outside the executor, so a sandboxed run
+only uses what is already installed. Other toolchains fit the same key:
+`proto activate bash --export`, `mise env -s bash`, `nix
+print-dev-env`, `direnv export bash`. When sluice itself already runs
+inside the repository's environment, the key is left out: the run keeps
+that `PATH` and, as above, nothing that names a session's place (35).
+
+The moon runner also runs `moon setup` outside the executor, after the
+toolchain: it installs the workspace's toolchains (`.moon/toolchains.yml`,
+through proto). Inside, moon still runs its setup actions, which find
+them installed, put them on the task's `PATH` and make each task's hash
+carry the toolchain's version; proto stamps each one it uses with a
+`.last-used` file in the tool's directory, so the sandbox lets the run
+write files of that name and nothing else outside the place. `moon exec
+--no-actions` avoids the stamp but runs whatever is on `PATH` under a
+hash that still names the configured version: captured on 2.6.1, nix's
+cargo ran and the key read rust 1.98.1. So it is never used. With no
+network, moon skips installing dependencies (`No internet connection,
+skipping dependency install`).
 
 The `[tests] runner = "command"` profile runs
 `sh -c <command>` in the place under the same supervisor, one task named
@@ -1256,6 +1276,12 @@ by name (`docker rm -f sluice-<place>`), since its processes live in the
 engine, not in the group.
 
 #### What sluice's own checks need under Seatbelt
+
+With the toolchain started inside the run (`devenv shell --` as a
+prefix), the probe below found what devenv and nix need there. With the
+toolchain printed outside (`[tests] toolchain`, above), sluice's fast
+tier ran under the bare fence: writes only to the place and
+`SLUICE_TMP`, no network at all, all six tasks passed.
 
 Probed on macOS with sluice's fast tier, `devenv shell -- moon exec
 ':#check-fast' --force`, in a detached worktree, under `sandbox-exec`

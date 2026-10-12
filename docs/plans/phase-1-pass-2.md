@@ -35,8 +35,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
-| 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux) | §4, *The executor* | next |
-| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; the conformance suite over the real profiles (the `Rig` split) | §9 | |
+| 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's Rust through moon and proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; Linux to come |
+| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; the conformance suite over the real profiles (the `Rig` split) | §9 | next |
 | 11 | sluice's own policy, and sluice landing sluice | §9 | |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -64,8 +64,12 @@ needed.
   4); records never claim confinement a run lacked.
 - Policy defaults: `parallel = 4`, `batch = false`, `flaky = "fail"`,
   `timeout = "1h"` (`phase-1-questions.md`).
-- moon 2.6.1 and proto 0.63.1 from moonrepo's releases in devenv; the
-  moon profile's floor is 2.6 (section 3).
+- moon 2.6.1 and proto 0.63.1 from moonrepo's releases in devenv, which
+  holds the system tools; Rust is the application toolchain, pinned in
+  `.prototools` and installed through moon and proto, with homes of the
+  repository's own. The moon profile's floor is 2.6 (section 3).
+- A repository's toolchain is printed outside the executor (`[tests]
+  toolchain`) and sourced inside it.
 - gix 0.89 for refs and objects, the git command for merges and ancestry
   (ADR 0009; section 1).
 
