@@ -14,6 +14,11 @@
 //!   `post-*` hooks, which worktrunk runs detached, are not run, since
 //!   nothing started in a place may outlive it (32).
 //!
+//! Once the checkout exists, and before any `pre-start` hook, the place
+//! takes the build cache: every entry git ignores and `.worktreeinclude`
+//! lists in the repository's primary worktree is copied from there
+//! (section 5, *Warming a place*).
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
@@ -102,6 +107,21 @@ impl Places {
             .context("running git")
     }
 
+    /// `git` in a worktree, with nothing of a caller's repository.
+    fn git_in(&self, dir: &Path, args: &[&str]) -> Result<Output> {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .stdin(Stdio::null())
+            .output()
+            .context("running git")
+    }
+
     /// `wt` run in `dir`, the binary itself and never a shell function.
     fn wt(&self, dir: &Path, args: &[&str]) -> Result<Output> {
         Command::new("wt")
@@ -148,7 +168,137 @@ impl Places {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
+        self.copy_ignored(&path)?;
         Ok(path)
+    }
+
+    /// The primary worktree: a normal clone's main worktree, or in a bare
+    /// layout the one with the branch the common dir's `HEAD` names;
+    /// worktrunk's rule.
+    fn primary(&self) -> Result<Option<PathBuf>> {
+        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
+        if !out.status.success() {
+            bail!(
+                "git worktree list: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        // Records of fields, each record ended by an empty field.
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut worktrees: Vec<(PathBuf, bool, Option<&str>)> = Vec::new();
+        for field in text.split('\0') {
+            if let Some(p) = field.strip_prefix("worktree ") {
+                worktrees.push((PathBuf::from(p), false, None));
+            } else if let Some(w) = worktrees.last_mut() {
+                if field == "bare" {
+                    w.1 = true;
+                } else if let Some(b) = field.strip_prefix("branch ") {
+                    w.2 = Some(b);
+                }
+            }
+        }
+        match worktrees.first() {
+            None => Ok(None),
+            Some((p, false, _)) => Ok(Some(p.clone())),
+            Some((_, true, _)) => {
+                let head = self.git(&["symbolic-ref", "--quiet", "HEAD"])?;
+                if !head.status.success() {
+                    return Ok(None);
+                }
+                let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+                Ok(worktrees
+                    .iter()
+                    .skip(1)
+                    .find(|w| w.2 == Some(head.as_str()))
+                    .map(|w| w.0.clone()))
+            }
+        }
+    }
+
+    /// The git-worktree method's warming: each entry the primary's git
+    /// ignores and its `.worktreeinclude` lists, cloned where the
+    /// filesystem allows; an entry already in the place is left alone.
+    fn copy_ignored(&self, place: &Path) -> Result<()> {
+        let Some(primary) = self.primary()? else {
+            return Ok(());
+        };
+        let include = primary.join(".worktreeinclude");
+        if !include.is_file() || primary == place {
+            return Ok(());
+        }
+        let list = |args: &[&str]| -> Result<Vec<String>> {
+            let out = self.git_in(&primary, args)?;
+            if !out.status.success() {
+                bail!(
+                    "git ls-files in {}: {}",
+                    primary.display(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            Ok(String::from_utf8_lossy(&out.stdout)
+                .split('\0')
+                .filter(|e| !e.is_empty())
+                .map(|e| e.trim_end_matches('/').to_string())
+                .collect())
+        };
+        let include = include
+            .to_str()
+            .ok_or_else(|| anyhow!("{} is not UTF-8", include.display()))?;
+        let listed = list(&[
+            "ls-files",
+            "-z",
+            "-o",
+            "-i",
+            "--directory",
+            &format!("--exclude-from={include}"),
+        ])?;
+        let ignored = list(&[
+            "ls-files",
+            "-z",
+            "-o",
+            "-i",
+            "--directory",
+            "--exclude-standard",
+        ])?;
+        for entry in listed {
+            let under = |i: &String| entry == *i || entry.starts_with(&format!("{i}/"));
+            if !ignored.iter().any(under) {
+                continue;
+            }
+            let to = place.join(&entry);
+            if to.symlink_metadata().is_ok() {
+                continue;
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // A clone shares blocks until written; times are kept, which
+            // cargo's fingerprints read. macOS's own `cp`, by path: a
+            // toolchain's GNU `cp` may come first on `PATH`.
+            let mut cp = if cfg!(target_os = "macos") {
+                let mut c = Command::new("/bin/cp");
+                c.args(["-c", "-p", "-R"]);
+                c
+            } else {
+                let mut c = Command::new("cp");
+                c.args(["-a", "--reflink=auto"]);
+                c
+            };
+            let out = cp
+                .arg(primary.join(&entry))
+                .arg(&to)
+                .stdin(Stdio::null())
+                .output()
+                .context("running cp")?;
+            if !out.status.success() {
+                bail!(
+                    "copying {entry} into {}: {}",
+                    place.display(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+        }
+        Ok(())
     }
 
     fn remove_worktree(&self, path: &Path) -> Result<()> {
@@ -222,6 +372,18 @@ impl Places {
                 path: Some(path.clone()),
             },
         )?;
+        // The build cache, before any hook: worktrunk's own copy, which
+        // reads the primary worktree's `.worktreeinclude`.
+        let out = self.wt(
+            &path,
+            &["step", "copy-ignored", "--require-include", "--format=json"],
+        )?;
+        if !out.status.success() {
+            bail!(
+                "wt step copy-ignored in {name}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
         // The candidate's own pre-start hooks, in the place: `--yes`, since
         // nobody can approve hooks in a place sluice makes and removes on
         // its own, and they come from the tree whose checks run there.

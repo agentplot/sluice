@@ -49,8 +49,8 @@ needed.
   not replay a task, it pays a cold build and a fresh devenv evaluation.
   - **The build cache** (section 5, *Warming a place*): the place
     profile copies into each new place, before its `pre-start` hooks, what
-    the repository's `.worktreeinclude` lists and git ignores, from its
-    primary worktree; worktrunk's `wt step copy-ignored` for that method,
+    git ignores and `.worktreeinclude` lists in the repository's primary
+    worktree, from there; worktrunk's `wt step copy-ignored` for that method,
     git and a cloning `cp` for `git-worktree`. sluice's lists `target`
     only. flywheel-next measured a build at 87 s warm against 134 s cold:
     cargo's fingerprints hold each workspace crate's absolute path, so

@@ -295,3 +295,58 @@ fn a_worktrunk_place_runs_the_candidates_hooks_alone() {
     p.release(NAME).unwrap();
     left_behind(&repo, &place);
 }
+
+/// Section 5, *Warming a place*: both methods copy in what the primary
+/// worktree's git ignores and its `.worktreeinclude` lists, with its
+/// times, before any `pre-start` hook; nothing else, and nothing without a
+/// `.worktreeinclude`.
+#[test]
+fn a_place_takes_the_build_cache_worktreeinclude_lists() {
+    for m in ["git-worktree", "worktrunk"] {
+        let (repo, _) = scratch(&format!("places-warm-{m}"));
+        let rev = Rev::new(repo.branch(
+            "cand4",
+            "main",
+            &[
+                ("src/lib", Some("candidate\n")),
+                (".gitignore", Some("target\nonly-ignored\nsaw.ran\n")),
+                (
+                    ".config/wt.toml",
+                    Some("[pre-start]\nsaw = \"cat target/debug/a > saw.ran || echo none > saw.ran\"\n"),
+                ),
+            ],
+        ));
+        repo.git(&["branch", "-D", "cand4"]);
+        repo.write(".gitignore", "target\nonly-ignored\nsaw.ran\n");
+        repo.write(".worktreeinclude", "target\nonly-listed\n");
+        repo.write("target/debug/a", "built\n");
+        repo.write("only-ignored/f", "x\n");
+        repo.write("only-listed/f", "x\n");
+        let built = std::fs::metadata(repo.dir().join("target/debug/a"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        let p = places(&repo);
+        let place = p.materialize(NAME, &rev, &method(m)).unwrap();
+        let a = place.path.join("target/debug/a");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "built\n", "{m}");
+        assert_eq!(std::fs::metadata(&a).unwrap().modified().unwrap(), built);
+        assert!(!place.path.join("only-ignored").exists(), "{m}");
+        assert!(!place.path.join("only-listed").exists(), "{m}");
+        if m == "worktrunk" {
+            assert_eq!(
+                std::fs::read_to_string(place.path.join("saw.ran")).unwrap(),
+                "built\n"
+            );
+        }
+        holds_the_candidate(&repo, &place, &rev);
+        p.release(NAME).unwrap();
+        left_behind(&repo, &place);
+
+        std::fs::remove_file(repo.dir().join(".worktreeinclude")).unwrap();
+        let place = p.materialize(NAME, &rev, &method(m)).unwrap();
+        assert!(!place.path.join("target").exists(), "{m}");
+        p.release(NAME).unwrap();
+    }
+}

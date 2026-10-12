@@ -1496,23 +1496,29 @@ remove:
 A new place has none of the repository's build cache, so a task moon
 does not replay builds cold. Once the checkout exists, and before any
 `pre-start` hook, the place profile copies into it every entry that
-the candidate's `.worktreeinclude` lists *and* git ignores, from the
-repository's primary worktree: the worktree with the branch the common
-dir's `HEAD` names checked out (the main worktree of a normal clone; in a
-bare layout, the default branch's). A repository with no
-`.worktreeinclude`, or no primary worktree, gets no copy; a failed copy
-fails the place.
+git ignores and the `.worktreeinclude` lists, both read in the
+repository's primary worktree: a normal clone's main worktree, whatever
+it has checked out, or in a bare layout the worktree with the branch the
+common dir's `HEAD` names. It is worktrunk's rule: with a
+different `.worktreeinclude` in the place, `wt step copy-ignored` still
+followed the primary's. A primary with no `.worktreeinclude`, or no
+primary worktree, gives no copy; a failed copy fails the place. Copying
+runs nothing, so taking the list from the primary's working copy leaves
+what runs in the place the candidate's (35).
 
 - `worktrunk`: `command wt -C <place> step copy-ignored --require-include
   --format=json </dev/null`. Verified on v0.80.0 with a detached place in
   a bare layout: `{"entries":[{"kind":"dir","path":"target"}],"from":"<main
-  worktree>","outcome":"planned",…}` under `--dry-run`. Without
-  `--require-include` it copies every ignored entry.
+  worktree>","outcome":"planned",…}` under `--dry-run`; a real copy
+  reports `"reflinked"` per file cloned. With no `.worktreeinclude` it
+  exits 0 with `"entries":[]` and `"reason":"require-include-no-worktreeinclude"`;
+  without `--require-include` it copies every ignored entry.
 - `git-worktree`: the entries are those `git -C <primary> ls-files -o -i
-  --directory --exclude-from=<place>/.worktreeinclude` lists that are,
+  --directory --exclude-from=<primary>/.worktreeinclude` lists that are,
   or lie under, an entry `git -C <primary> ls-files -o -i --directory
-  --exclude-standard` lists; each is copied with `cp -c -R` on macOS
-  (a clone, sharing blocks until written) and `cp -a --reflink=auto` on
+  --exclude-standard` lists; each is copied with `/bin/cp -c -p -R` on
+  macOS (a clone, sharing blocks until written; by path, since a
+  toolchain's GNU `cp` may come first on `PATH` and has no `-c`) and `cp -a --reflink=auto` on
   Linux, an existing destination left as it is.
 
 What is copied never decides a verdict: cargo rebuilds what its
