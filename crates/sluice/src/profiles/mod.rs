@@ -2,22 +2,25 @@
 //! this crate that may name a tool (rule core.1).
 //!
 //! The real profiles are pass 2's (`docs/plans/phase-1-integrations.md`).
-//! The branch is bound to [`local_refs`] and the records to
-//! [`local_files`]; a seam whose profile is not built yet is bound to
+//! The branch is bound to [`local_refs`], the records to [`local_files`]
+//! and the check to [`checks`]; a seam whose profile is not built yet is
+//! bound to
 //! [`Unbuilt`], which refuses every call by naming that profile, so the
 //! CLI's arguments, output and exits are whole and only those seams are
 //! missing.
 
+pub mod checks;
 pub mod local_files;
 pub mod local_refs;
+pub mod moon;
 pub mod worktrunk;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
-use sluice_seams::{
-    Checkout, Driver, Notification, Place, Progress, Rev, RunHandle, RunRequest, Session, Tests,
-};
+use sluice_seams::{Checkout, Driver, Notification, Place, Rev, Session};
+
+use crate::instance::Instance;
 
 /// A seam whose profile is not built yet.
 pub struct Unbuilt {
@@ -39,26 +42,30 @@ impl Unbuilt {
 /// a directory.
 pub struct Bound {
     pub checkout: Unbuilt,
-    pub tests: Unbuilt,
+    pub tests: checks::Checks,
     pub branch: local_refs::LocalRefs,
     pub driver: Unbuilt,
     pub state: local_files::LocalFiles,
 }
 
 impl Bound {
-    /// Bind the repository holding `dir`, a worktree or a git directory.
+    /// Bind the repository holding `dir`, a worktree or a git directory,
+    /// for this executable and this instance's settings.
     pub fn open(dir: &Path) -> Result<Self> {
+        Bound::open_with(dir, std::env::current_exe()?, Instance::read()?)
+    }
+
+    /// `program` is the `sluice` executable that supervises check runs.
+    pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
         let branch = local_refs::LocalRefs::open(dir)?;
-        let state = local_files::LocalFiles::new(&branch.common_dir()?);
+        let common = branch.common_dir()?;
+        let state = local_files::LocalFiles::new(&common);
         Ok(Bound {
             checkout: Unbuilt {
                 seam: "place",
                 profile: "worktrunk",
             },
-            tests: Unbuilt {
-                seam: "check",
-                profile: "moon",
-            },
+            tests: checks::Checks::new(&common, program, instance),
             branch,
             driver: Unbuilt {
                 seam: "driver",
@@ -84,18 +91,6 @@ impl Checkout for Unbuilt {
         self.refuse()
     }
     fn release(&self, _: &str) -> Result<()> {
-        self.refuse()
-    }
-}
-
-impl Tests for Unbuilt {
-    fn start(&self, _: &RunRequest) -> Result<RunHandle> {
-        self.refuse()
-    }
-    fn progress(&self, _: &RunHandle) -> Result<Progress> {
-        self.refuse()
-    }
-    fn bound(&self) -> Result<usize> {
         self.refuse()
     }
 }

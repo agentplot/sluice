@@ -25,6 +25,7 @@ serde.workspace = true
 gix.workspace = true
 nix.workspace = true
 chrono.workspace = true
+toml.workspace = true
 
 [features]
 # The acceptance tests that need a real tool (git), the check-tools tier.

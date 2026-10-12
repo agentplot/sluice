@@ -1697,6 +1697,7 @@ dependencies = [
  "sluice-core",
  "sluice-fakes",
  "sluice-seams",
+ "toml",
 ]
 
 [[package]]

@@ -25,6 +25,7 @@ fn request(place: &Path, script: &str, limit: Option<u64>) -> Request {
         env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
         limit,
         grace: 1,
+        meta: serde_json::Value::Null,
     }
 }
 

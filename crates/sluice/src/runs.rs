@@ -51,6 +51,10 @@ pub struct Request {
     /// How long a group asked to end has before it is killed, in seconds.
     #[serde(default = "default_grace")]
     pub grace: u64,
+    /// What the profile that started the run needs to read its result;
+    /// the supervisor does not read it.
+    #[serde(default)]
+    pub meta: serde_json::Value,
 }
 
 fn default_grace() -> u64 {
