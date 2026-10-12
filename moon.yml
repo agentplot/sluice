@@ -1,0 +1,17 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The workspace as a whole: a candidate is held to what the commit hooks
+# hold a commit to.
+tasks:
+  # Every formatter treefmt.nix configures, writing nothing it would change
+  # and keeping no cache outside the tree.
+  format:
+    command: 'treefmt --ci'
+    inputs: ['/**/*.rs', '/**/*.nix', '/**/*.sh', '/**/*.toml', '/**/*.yml', '/**/*.yaml', '/devenv.lock', '/.prototools']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
+  lint:
+    command: 'cargo clippy --workspace --all-targets -- -D warnings'
+    inputs: ['/crates/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock', '/.prototools']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
