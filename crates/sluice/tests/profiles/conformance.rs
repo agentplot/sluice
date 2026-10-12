@@ -31,8 +31,8 @@ use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, SystemClock};
 use sluice_seams::{
-    Checkout, Driver, Notification, Place, Progress, Rev, RunHandle, RunRequest, Session, Settings,
-    Tests,
+    Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
+    RunHandle, RunRequest, Session, Settings, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -76,11 +76,13 @@ impl Checkout for RecordedPlaces {
 
 struct RecordedChecks {
     inner: Checks,
+    requests: RefCell<Vec<RunRequest>>,
     started: RefCell<Vec<Rev>>,
 }
 
 impl Tests for RecordedChecks {
     fn start(&self, request: &RunRequest) -> Result<RunHandle> {
+        self.requests.borrow_mut().push(request.clone());
         let run = self.inner.start(request)?;
         self.started.borrow_mut().push(request.revision.clone());
         Ok(run)
@@ -92,6 +94,42 @@ impl Tests for RecordedChecks {
 
     fn bound(&self) -> Result<usize> {
         self.inner.bound()
+    }
+}
+
+/// The branch, with every move it made counted.
+struct RecordedRefs {
+    inner: LocalRefs,
+    moves: RefCell<usize>,
+}
+
+impl Branch for RecordedRefs {
+    fn read(&self, branch: &str) -> Result<Option<Rev>> {
+        self.inner.read(branch)
+    }
+
+    fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
+        self.inner.read_file(rev, path)
+    }
+
+    fn form(&self, onto: &Rev, head: &Rev) -> Result<Formed> {
+        self.inner.form(onto, head)
+    }
+
+    fn commit(&self, commit: &LandingCommit) -> Result<Rev> {
+        self.inner.commit(commit)
+    }
+
+    fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool> {
+        self.inner.contains(tip, rev)
+    }
+
+    fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
+        let moved = self.inner.move_to(branch, expected, to)?;
+        if moved == Moved::Moved {
+            *self.moves.borrow_mut() += 1;
+        }
+        Ok(moved)
     }
 }
 
@@ -125,7 +163,7 @@ struct Real {
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
-    branch: LocalRefs,
+    branch: RecordedRefs,
     driver: Sessions,
     state: LocalFiles,
 }
@@ -155,6 +193,14 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// A policy written for the fakes, with moon and git worktrees in place
+/// of `fake`.
+fn real_policy(policy: &str) -> String {
+    policy
+        .replace("runner = \"fake\"", "runner = \"moon\"")
+        .replace("method = \"fake\"", "method = \"git-worktree\"")
+}
+
 impl Real {
     /// `bolt/x` holding the three projects under `policy`, its runner and
     /// checkout method moon and git worktrees.
@@ -162,10 +208,7 @@ impl Real {
         let repo = Repo::new(name);
         let rules = repo.dir().join(".git/rig-rules");
         std::fs::write(&rules, "").unwrap();
-        let policy = policy
-            .replace("runner = \"fake\"", "runner = \"moon\"")
-            .replace("method = \"fake\"", "method = \"git-worktree\"");
-        repo.write(".config/sluice.toml", &policy);
+        repo.write(".config/sluice.toml", &real_policy(policy));
         repo.write(
             ".moon/workspace.yml",
             "projects:\n  a: 'a'\n  b: 'b'\n  c: 'c'\n\
@@ -216,9 +259,13 @@ impl Real {
             },
             tests: RecordedChecks {
                 inner: tests,
+                requests: RefCell::default(),
                 started: RefCell::default(),
             },
-            branch,
+            branch: RecordedRefs {
+                inner: branch,
+                moves: RefCell::default(),
+            },
             driver: Sessions {
                 inner: driver,
                 agents: RefCell::default(),
@@ -228,8 +275,23 @@ impl Real {
         }
     }
 
-    fn bolt(name: &str) -> Real {
-        Real::new(name, &policy(false, "fail", 4))
+    /// Commit `changes` in the place `dir`; returns its head.
+    fn commit(&self, dir: &Path, changes: &[(&str, Option<&str>)]) -> Rev {
+        for (path, content) in changes {
+            match content {
+                Some(c) => {
+                    let p = dir.join(path);
+                    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                    std::fs::write(p, c).unwrap();
+                }
+                None => {
+                    git(dir, &["rm", "-q", path]);
+                }
+            }
+        }
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "work"]);
+        Rev::new(git(dir, &["rev-parse", "HEAD"]).trim())
     }
 }
 
@@ -267,25 +329,11 @@ impl Rig for Real {
                 ],
             );
         }
-        for (path, content) in changes {
-            match content {
-                Some(c) => {
-                    let p = dir.join(path);
-                    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-                    std::fs::write(p, c).unwrap();
-                }
-                None => {
-                    git(dir, &["rm", "-q", path]);
-                }
-            }
-        }
-        git(dir, &["add", "-A"]);
-        git(dir, &["commit", "-q", "-m", &format!("{agent}: work")]);
         self.driver
             .agents
             .borrow_mut()
             .insert(place.clone(), agent.into());
-        Rev::new(git(dir, &["rev-parse", "HEAD"]).trim())
+        self.commit(dir, changes)
     }
 
     fn place(&self, worktree: &str) -> String {
@@ -294,6 +342,30 @@ impl Rig for Real {
             .join(worktree.replace('/', "-"))
             .display()
             .to_string()
+    }
+
+    fn work_on(&self, worktree: &str, on: &Rev, changes: &[(&str, Option<&str>)]) -> Rev {
+        let place = self.place(worktree);
+        let dir = Path::new(&place);
+        git(dir, &["switch", "-q", "-C", worktree, on.as_str()]);
+        self.commit(dir, changes)
+    }
+
+    fn dirty(&self, worktree: &str, paths: &[&str]) {
+        let place = self.place(worktree);
+        for path in paths {
+            let p = Path::new(&place).join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "beyond the commits").unwrap();
+        }
+    }
+
+    fn policy_text(&self, policy: &str) -> String {
+        real_policy(policy)
+    }
+
+    fn host(&self) -> String {
+        sluice::profiles::checks::hostname()
     }
 
     fn fails_with(&self, task: &str, path: &str, content: &str) {
@@ -340,6 +412,21 @@ impl Rig for Real {
         self.tests.started.borrow().clone()
     }
 
+    fn requests(&self) -> Vec<RunRequest> {
+        self.tests.requests.borrow().clone()
+    }
+
+    fn moves(&self) -> usize {
+        *self.branch.moves.borrow()
+    }
+
+    fn tree(&self, rev: &Rev) -> String {
+        git(
+            self.repo.dir(),
+            &["rev-parse", &format!("{}^{{tree}}", rev.as_str())],
+        )
+    }
+
     fn made_places(&self) -> Vec<String> {
         self.checkout.log.borrow().made.clone()
     }
@@ -364,27 +451,55 @@ impl Rig for Real {
         .collect()
     }
 
+    /// The message exactly as the commit holds it.
     fn message(&self, rev: &Rev) -> String {
-        git(self.repo.dir(), &["log", "-1", "--format=%B", rev.as_str()])
+        let raw = git(self.repo.dir(), &["cat-file", "commit", rev.as_str()]);
+        raw.split_once("\n\n").map_or("", |(_, m)| m).to_string()
     }
 }
 
-#[test]
-fn s1_two_heads_pass_and_land_in_order() {
-    shared::s1_two_heads_pass_and_land_in_order(&Real::bolt("rig-s1"));
+/// Each scenario of `shared` on its own rig: the bolt policy, or the one
+/// the scenario's fake test gives it.
+macro_rules! scenarios {
+    ($($name:ident: $policy:expr;)*) => {$(
+        #[test]
+        fn $name() {
+            shared::$name(&Real::new(stringify!($name), &$policy));
+        }
+    )*};
 }
 
-#[test]
-fn s2_a_conflict_is_told_before_any_check_runs() {
-    shared::s2_a_conflict_is_told_before_any_check_runs(&Real::bolt("rig-s2"));
+fn bolt() -> String {
+    policy(false, "fail", 4)
 }
 
-#[test]
-fn s3_the_second_fails_and_only_its_session_hears() {
-    shared::s3_the_second_fails_and_only_its_session_hears(&Real::bolt("rig-s3"));
+fn batch() -> String {
+    policy(true, "fail", 4)
 }
 
-#[test]
-fn s4_the_first_fails_and_the_second_is_formed_again_without_it() {
-    shared::s4_the_first_fails_and_the_second_is_formed_again_without_it(&Real::bolt("rig-s4"));
+fn narrow() -> String {
+    bolt().replace("[\"#gate\"]", "[\"a:test\"]")
+}
+
+scenarios! {
+    s1_two_heads_pass_and_land_in_order: bolt();
+    s2_a_conflict_is_told_before_any_check_runs: bolt();
+    s3_the_second_fails_and_only_its_session_hears: bolt();
+    s4_the_first_fails_and_the_second_is_formed_again_without_it: bolt();
+    s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped: batch();
+    s11_a_landing_names_its_verdict_and_leaves_the_session_place: bolt();
+    s12_a_submission_cannot_loosen_the_gate_it_is_judged_by: bolt();
+    s16_a_forecast_names_the_file_and_the_work_and_writes_nothing: bolt();
+    every_submission_is_tested_on_top_of_every_one_ahead: bolt();
+    state_and_status_read_the_records_with_no_step_running: bolt();
+    a_resubmission_withdraws_the_earlier_submission_which_stays_readable: bolt();
+    a_submission_waits_for_its_after_and_holds_no_one: bolt();
+    a_submission_names_its_after_priority_and_submitter_and_does_nothing_more: bolt();
+    a_place_holding_more_than_its_commits_is_refused_and_named: bolt();
+    every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass: bolt();
+    every_observed_result_records_what_its_executor_enforced: bolt();
+    a_landed_change_to_the_gate_runs_every_check_it_now_requires: narrow();
+    deepest_first_the_longest_passes_and_all_land_on_its_verdict: batch();
+    a_conflict_names_every_submission_it_is_contested_with: bolt();
+    every_record_written_is_the_real_format_and_names_its_schema: bolt();
 }
