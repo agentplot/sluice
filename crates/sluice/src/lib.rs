@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
-    AmendRefusal, Clock, Forecast, Requester, Seams, Sluice, Status, Step, SubmitRefusal,
+    AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
     SubmitRequest, WithdrawRefusal,
 };
 use sluice_seams::Rev;
@@ -154,6 +154,7 @@ pub fn run(
             Ok(0)
         }
         Command::Run { rounds } => {
+            let s = s.serving(Serves::Every);
             let mut n = 0;
             loop {
                 for branch in seams.state.branches()? {

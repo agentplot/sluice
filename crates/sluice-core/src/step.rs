@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
     Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunRequest, Source,
     Written,
@@ -26,13 +26,13 @@ use sluice_seams::{
 
 use crate::line::Line;
 use crate::order::{self, Entry};
-use crate::policy::Rules;
+use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord, LandingIntent,
     OutboxItem, ResultKind, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
-use crate::{verdict, Sluice};
+use crate::{verdict, Serves, Sluice};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -279,6 +279,9 @@ impl Sluice<'_> {
         let Some(base) = line.doc.base.clone() else {
             return Ok(());
         };
+        let policy = self
+            .policy_at(&base)?
+            .ok_or_else(|| anyhow!("{branch}'s revision {base} has no {POLICY_PATH}"))?;
         let rules = self.gate(branch, &base)?;
         for c in starting {
             let name = c.place.clone().expect("a starting candidate has a place");
@@ -290,6 +293,8 @@ impl Sluice<'_> {
                 required: rules.required.clone(),
                 since,
                 limit: rules.timeout,
+                limits: policy.limits.clone(),
+                tests: policy.tests.clone(),
             })?;
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
@@ -389,10 +394,11 @@ impl Sluice<'_> {
                     let mut results = self.results()?;
                     let mut fresh = Vec::new();
                     for t in &report.tasks {
-                        let (kind, host, event) = match &t.source {
+                        let (kind, host, executor, event) = match &t.source {
                             Source::Ran { host } => (
                                 ResultKind::Ran,
                                 Some(host.clone()),
+                                Some(report.executor.clone()),
                                 Event::Ran {
                                     combination: c.revision.clone(),
                                     task: t.task.clone(),
@@ -403,6 +409,7 @@ impl Sluice<'_> {
                             ),
                             Source::Replayed { from_run_at } => (
                                 ResultKind::Replayed,
+                                None,
                                 None,
                                 Event::Replayed {
                                     combination: c.revision.clone(),
@@ -421,6 +428,7 @@ impl Sluice<'_> {
                             hash: t.hash.clone(),
                             outcome: t.outcome,
                             host,
+                            executor,
                             branch: line.branch.clone(),
                             combination: c.revision.clone(),
                         };
@@ -773,8 +781,34 @@ impl Sluice<'_> {
         }
     }
 
+    /// 71: how many more runs this instance starts now: its bound less the
+    /// candidates under test in the records of the branches it serves,
+    /// `line` as this step has it.
+    fn capacity(&self, line: &Line) -> Result<usize> {
+        let mut under = line
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| c.state.under_test())
+            .count();
+        if self.serves == Serves::Every {
+            for b in self.seams.state.branches()? {
+                if b != line.branch {
+                    under += self
+                        .read_line(&b)?
+                        .doc
+                        .candidates
+                        .iter()
+                        .filter(|c| c.state.under_test())
+                        .count();
+                }
+            }
+        }
+        Ok(self.seams.tests.bound()?.saturating_sub(under))
+    }
+
     /// 13, 14, 71: start candidates up to the window, and up to what the
-    /// host takes.
+    /// instance takes.
     fn choose_starts(
         &self,
         line: &mut Line,
@@ -792,7 +826,7 @@ impl Sluice<'_> {
         if room == 0 || chain.is_empty() {
             return Ok(());
         }
-        let room = room.min(self.seams.tests.capacity()?);
+        let room = room.min(self.capacity(line)?);
         let mut start: Vec<String> = Vec::new();
         {
             let cands: Vec<&Candidate> = chain

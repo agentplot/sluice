@@ -52,9 +52,20 @@ pub struct Seams<'a> {
     pub state: &'a dyn State,
 }
 
+/// The branches an instance serves, whose runs count against its bound
+/// (71).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Serves {
+    /// The branch it steps: a waiting submit's rounds, or `sluice step`.
+    Stepped,
+    /// Every branch with records: `sluice run`.
+    Every,
+}
+
 pub struct Sluice<'a> {
     seams: Seams<'a>,
     clock: &'a dyn Clock,
+    serves: Serves,
 }
 
 /// How many times a write refused because the records moved is tried
@@ -63,7 +74,16 @@ const WRITE_TRIES: usize = 16;
 
 impl<'a> Sluice<'a> {
     pub fn new(seams: Seams<'a>, clock: &'a dyn Clock) -> Self {
-        Sluice { seams, clock }
+        Sluice {
+            seams,
+            clock,
+            serves: Serves::Stepped,
+        }
+    }
+
+    /// The same sluice, serving `serves` (71).
+    pub fn serving(self, serves: Serves) -> Self {
+        Sluice { serves, ..self }
     }
 
     /// The seams this sluice is bound to, for a reader of the records.

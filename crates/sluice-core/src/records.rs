@@ -15,7 +15,7 @@
 //! the log's (`log`). See `docs/plans/phase-1-questions.md`.
 
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Contested, Outcome, Rev, RunHandle, Submitter, Told};
+use sluice_seams::{Contested, Enforced, Outcome, Rev, RunHandle, Submitter, Told};
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
 pub const BRANCH_SCHEMA: &str = "sluice/branch@1";
@@ -467,6 +467,10 @@ pub struct ResultLine {
     pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// 84: what the executor held the run to; a replay was observed by an
+    /// earlier run, so it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<Enforced>,
     pub branch: String,
     pub combination: Rev,
 }

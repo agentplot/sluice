@@ -95,7 +95,7 @@ impl Tests for Unbuilt {
     fn progress(&self, _: &RunHandle) -> Result<Progress> {
         self.refuse()
     }
-    fn capacity(&self) -> Result<usize> {
+    fn bound(&self) -> Result<usize> {
         self.refuse()
     }
 }

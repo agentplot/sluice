@@ -83,6 +83,50 @@ pub trait Checkout {
 // B.2 The check
 // ---------------------------------------------------------------------------
 
+/// One value of a policy table the core passes to a profile without
+/// reading it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Setting {
+    Text(String),
+    List(Vec<String>),
+}
+
+/// A policy table as the core passes it to a profile: the profile's own
+/// settings, read from the branch's revision (56) and given no meaning by
+/// the core (52).
+pub type Settings = BTreeMap<String, Setting>;
+
+/// 83: what a run may use and reach, as the branch's policy states it.
+/// The processors each run is given are the instance's, not the policy's,
+/// so they are the check seam's own (71).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Limits {
+    /// The executor the policy names; `None` names none, so any executor
+    /// that can hold the other limits runs it.
+    pub executor: Option<String>,
+    /// The most memory the run may use, in bytes.
+    pub memory: Option<u64>,
+    /// Whether the run may reach the network; `None` states nothing.
+    pub network: Option<bool>,
+}
+
+/// 83, 84: what an executor held a run to, recorded with every result it
+/// observed (16), so a gate reads confinement from the record and never
+/// from the policy (28, 29).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Enforced {
+    /// The executor profile: `open`, `sandbox` or `container` (C.2).
+    pub kind: String,
+    /// No session could reach the run's place or what it wrote.
+    pub confined: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processors: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+}
+
 /// What the core asks the check seam to run on one candidate (37).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRequest {
@@ -97,6 +141,11 @@ pub struct RunRequest {
     pub since: Option<Rev>,
     /// The time limit the branch's policy states (66).
     pub limit: Option<Duration>,
+    /// 83: the memory and network the branch's policy states, and the
+    /// executor it names.
+    pub limits: Limits,
+    /// The policy's `[tests]` table: which runner, and its settings.
+    pub tests: Settings,
 }
 
 /// A run in progress, as the check seam names it. The core keeps it in
@@ -132,9 +181,11 @@ pub struct TaskResult {
     pub source: Source,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunReport {
     pub tasks: Vec<TaskResult>,
+    /// 84: what the executor held the run to.
+    pub executor: Enforced,
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
@@ -149,18 +200,20 @@ pub enum Progress {
 }
 
 pub trait Tests {
-    /// 36, 37: start the required checks the candidate affects since
+    /// 36, 37, 83: start the required checks the candidate affects since
     /// `request.since`, in a place, as one process group under the time
-    /// limit (32, 66; rule core.10).
+    /// limit and the request's limits (32, 66; rule core.10). 84: a limit
+    /// the executor cannot hold is an error naming it, and nothing runs.
     fn start(&self, request: &RunRequest) -> Result<RunHandle>;
 
     /// 37: a started run's progress; once finished, every check's key,
     /// outcome, executor and whether it was replayed.
     fn progress(&self, run: &RunHandle) -> Result<Progress>;
 
-    /// 71: how many more runs this instance starts now, whatever the windows
-    /// of the branches it serves.
-    fn capacity(&self) -> Result<usize>;
+    /// 71: the most runs this instance has under test at once, whatever
+    /// the windows of the branches it serves. The core counts the runs
+    /// under test from the records.
+    fn bound(&self) -> Result<usize>;
 }
 
 // ---------------------------------------------------------------------------

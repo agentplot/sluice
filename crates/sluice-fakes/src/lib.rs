@@ -16,9 +16,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification, Outcome,
-    Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source, State,
-    Submitter, TaskResult, Tests, Written,
+    Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Notification,
+    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source,
+    State, Submitter, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -459,7 +459,17 @@ impl World {
             })
             .cloned()
             .collect();
-        let mut report = RunReport::default();
+        let mut report = RunReport {
+            tasks: Vec::new(),
+            executor: Enforced {
+                kind: "open".into(),
+                confined: false,
+                processors: None,
+                memory: None,
+                network: None,
+            },
+            timed_out: false,
+        };
         for t in wanted {
             if let Some(old) = &since {
                 let changed = tree
@@ -747,6 +757,17 @@ impl Tests for FakeTests {
                 request.revision
             );
         }
+        // 84: the fake is an open executor, which holds no memory or
+        // network limit.
+        if let Some(k) = request.limits.executor.as_deref().filter(|k| *k != "open") {
+            bail!("the fake executor is open, not {k}");
+        }
+        if request.limits.memory.is_some() {
+            bail!("the open executor cannot hold a memory limit");
+        }
+        if request.limits.network == Some(false) {
+            bail!("the open executor cannot keep a run off the network");
+        }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
         }
@@ -787,12 +808,8 @@ impl Tests for FakeTests {
         Ok(Progress::Finished(report))
     }
 
-    fn capacity(&self) -> Result<usize> {
-        let inner = self.0 .0.borrow();
-        let live = inner.runs.iter().filter(|r| r.live()).count();
-        Ok(inner
-            .host_limit
-            .map_or(usize::MAX, |l| l.saturating_sub(live)))
+    fn bound(&self) -> Result<usize> {
+        Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
 }
 

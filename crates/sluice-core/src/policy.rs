@@ -2,32 +2,31 @@
 //! revision (56, 27; ADR 0007; rule core.15).
 //!
 //! The core gives `[tests]` and `[checkout]` no meaning: they name the
-//! profiles that bind the check and place seams, which the binary chooses
-//! (52; rule core.1). The core reads only the `[branches]` tables, the
-//! gate of each branch.
+//! profiles that bind the check and place seams and their settings, which
+//! the core passes on (52; rule core.1). It reads the `[branches]` tables,
+//! the gate of each branch, and `[executor]`, the limits a run is held to
+//! (83).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+use sluice_seams::{Limits, Setting, Settings};
 
 /// Where the policy lives in a branch's tree.
 pub const POLICY_PATH: &str = ".config/sluice.toml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    pub tests: Profile,
-    pub checkout: Profile,
+    /// `[tests]`, for the check seam's profile.
+    pub tests: Settings,
+    /// `[checkout]`, for the place seam's profile.
+    pub checkout: Settings,
+    /// `[executor]`: what every run of the repository may use and reach.
+    pub limits: Limits,
     /// Patterns of branch names and their gates, in the order written.
     pub branches: Vec<(String, Rules)>,
-}
-
-/// A profile's name and its own settings, uninterpreted by the core.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Profile {
-    pub name: Option<String>,
-    pub settings: BTreeMap<String, String>,
 }
 
 /// How a flaky key reads (19).
@@ -73,7 +72,17 @@ struct FileForm {
     #[serde(default)]
     checkout: BTreeMap<String, toml::Value>,
     #[serde(default)]
+    executor: ExecutorForm,
+    #[serde(default)]
     branches: BTreeMap<String, RulesForm>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ExecutorForm {
+    kind: Option<String>,
+    memory: Option<String>,
+    network: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -90,8 +99,16 @@ struct RulesForm {
 impl Policy {
     pub fn parse(text: &str) -> Result<Policy> {
         let form: FileForm = toml::from_str(text).context("reading .config/sluice.toml")?;
-        let tests = profile(form.tests, "runner", "[tests]")?;
-        let checkout = profile(form.checkout, "method", "[checkout]")?;
+        let tests = settings(form.tests, "[tests]")?;
+        let checkout = settings(form.checkout, "[checkout]")?;
+        let limits = Limits {
+            executor: form.executor.kind,
+            memory: match form.executor.memory.as_deref() {
+                None => None,
+                Some(m) => Some(parse_size(m).context("[executor] memory")?),
+            },
+            network: form.executor.network,
+        };
         let mut branches = Vec::new();
         for (pattern, r) in form.branches {
             let d = Rules::default();
@@ -129,6 +146,7 @@ impl Policy {
         Ok(Policy {
             tests,
             checkout,
+            limits,
             branches,
         })
     }
@@ -164,20 +182,43 @@ impl Policy {
     }
 }
 
-fn profile(table: BTreeMap<String, toml::Value>, key: &str, section: &str) -> Result<Profile> {
-    let mut p = Profile::default();
+/// A profile's table: each value a string or a list of strings.
+fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Settings> {
+    let mut out = Settings::new();
     for (k, v) in table {
-        let s = match v {
-            toml::Value::String(s) => s,
-            other => bail!("{section} {k} must be a string, not {other}"),
+        let setting = match v {
+            toml::Value::String(s) => Setting::Text(s),
+            toml::Value::Array(xs) => Setting::List(
+                xs.into_iter()
+                    .map(|x| match x {
+                        toml::Value::String(s) => Ok(s),
+                        other => bail!("{section} {k} must list strings, not {other}"),
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            other => bail!("{section} {k} must be a string or a list of strings, not {other}"),
         };
-        if k == key {
-            p.name = Some(s);
-        } else {
-            p.settings.insert(k, s);
-        }
+        out.insert(k, setting);
     }
-    Ok(p)
+    Ok(out)
+}
+
+/// `"512M"`, `"8G"`: bytes, in powers of 1024.
+pub fn parse_size(text: &str) -> Result<u64> {
+    let t = text.trim();
+    let (digits, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len()));
+    let n: u64 = digits
+        .parse()
+        .map_err(|_| anyhow!("{text:?} is not a size such as \"8G\""))?;
+    let scale: u64 = match unit {
+        "K" => 1 << 10,
+        "M" => 1 << 20,
+        "G" => 1 << 30,
+        "T" => 1 << 40,
+        _ => bail!("{text:?} is not a size such as \"8G\""),
+    };
+    n.checked_mul(scale)
+        .ok_or_else(|| anyhow!("{text:?} is too large"))
 }
 
 /// `*` matches any run of characters but `/`.
@@ -259,9 +300,10 @@ batch = true
     #[test]
     fn reads_the_walkthrough_shape() {
         let p = Policy::parse(POLICY).unwrap();
-        assert_eq!(p.tests.name.as_deref(), Some("script"));
-        assert_eq!(p.tests.settings["command"], "tests/run");
-        assert_eq!(p.checkout.name.as_deref(), Some("scratch"));
+        assert_eq!(p.tests["runner"], Setting::Text("script".into()));
+        assert_eq!(p.tests["command"], Setting::Text("tests/run".into()));
+        assert_eq!(p.checkout["method"], Setting::Text("scratch".into()));
+        assert_eq!(p.limits, Limits::default());
         let bolt = p.rules_for("bolt/concurrent-units").unwrap().unwrap();
         assert_eq!(bolt.required, vec!["#gate"]);
         assert_eq!(bolt.parallel, 4);
@@ -283,6 +325,41 @@ batch = true
         assert!(Policy::parse("[branches.main]\nparallel = 0\n").is_err());
         assert!(Policy::parse("[branches.main]\nflaky = \"retry\"\n").is_err());
         assert!(Policy::parse("[branches.main]\ntimeout = \"soon\"\n").is_err());
+    }
+
+    /// 83: the limits a run is held to, and the settings passed on.
+    #[test]
+    fn reads_the_executor_and_the_shell() {
+        let p = Policy::parse(
+            "[tests]\nrunner = \"tasks\"\nshell = [\"env-shell\", \"--\"]\n\
+             [executor]\nkind = \"sandbox\"\nnetwork = false\nmemory = \"8G\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            p.tests["shell"],
+            Setting::List(vec!["env-shell".into(), "--".into()])
+        );
+        assert_eq!(
+            p.limits,
+            Limits {
+                executor: Some("sandbox".into()),
+                memory: Some(8 << 30),
+                network: Some(false),
+            }
+        );
+        assert!(Policy::parse("[executor]\ncpus = 2\n").is_err());
+        assert!(Policy::parse("[executor]\nmemory = \"lots\"\n").is_err());
+        assert!(Policy::parse("[executor]\nmemory = \"8\"\n").is_err());
+        assert!(Policy::parse("[tests]\nshell = [1]\n").is_err());
+        assert!(Policy::parse("[tests]\njobs = 2\n").is_err());
+    }
+
+    #[test]
+    fn sizes() {
+        assert_eq!(parse_size("512M").unwrap(), 512 << 20);
+        assert_eq!(parse_size("1G").unwrap(), 1 << 30);
+        assert!(parse_size("1GB").is_err());
+        assert!(parse_size("G").is_err());
     }
 
     #[test]

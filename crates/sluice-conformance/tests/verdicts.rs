@@ -271,3 +271,94 @@ fn a_report_holding_none_of_the_required_checks_is_no_pass() {
     h.settle();
     assert_eq!(h.sub(one).state, State::Failed);
 }
+
+/// Two bolt branches, each with two submissions, under a bound of two;
+/// how many runs are live after `serves` steps both branches.
+fn live_runs_serving(serves: sluice_core::Serves) -> usize {
+    let h = Harness::bolt();
+    let other = "bolt/y";
+    h.w().init(
+        other,
+        &[
+            (".config/sluice.toml", &policy(false, "fail", 4)),
+            ("a/lib", "a1"),
+        ],
+    );
+    h.w().host_limit(2);
+    h.w().hold_runs(true);
+    for n in 1..=2 {
+        h.work(
+            &format!("unit/x{n}"),
+            "agent",
+            &[(&format!("a/x{n}"), Some("ok"))],
+        );
+        h.submit(&format!("unit/x{n}"));
+        let head = h
+            .w()
+            .work(&h.w().tip(other), &[(&format!("a/y{n}"), Some("ok"))]);
+        h.w().session(&format!("unit/y{n}"), "agent", &head);
+        h.sluice()
+            .submit(&sluice_core::SubmitRequest {
+                worktree: format!("unit/y{n}"),
+                branch: other.into(),
+                after: vec![],
+                priority: 0,
+            })
+            .unwrap()
+            .unwrap();
+    }
+    let s = h.sluice().serving(serves);
+    for _ in 0..3 {
+        s.step(BRANCH).unwrap();
+        s.step(other).unwrap();
+    }
+    h.w().live_runs()
+}
+
+/// satisfies: 71
+#[test]
+fn an_instance_holds_the_branches_it_serves_to_its_bound() {
+    // One instance serving every branch: two runs across both.
+    assert_eq!(live_runs_serving(sluice_core::Serves::Every), 2);
+    // Instances that each serve the branch they step: each holds its own
+    // branch to the bound, and the windows are the only limit between
+    // them.
+    assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 4);
+}
+
+/// satisfies: 84, 16
+#[test]
+fn every_observed_result_records_what_its_executor_enforced() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.settle();
+    let rs = results(&h);
+    assert!(!rs.is_empty());
+    for r in rs {
+        match r.kind {
+            ResultKind::Ran => {
+                let e = r.executor.expect("a run records its executor");
+                assert_eq!(e.kind, "open");
+                assert!(!e.confined, "an open run is never confined");
+            }
+            ResultKind::Replayed => assert!(r.executor.is_none()),
+        }
+    }
+}
+
+/// satisfies: 83, 84
+#[test]
+fn a_limit_the_executor_cannot_hold_refuses_the_run() {
+    let h = Harness::new(&format!(
+        "{}\n[executor]\nmemory = \"1G\"\n",
+        policy(false, "fail", 4)
+    ));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let err = h.sluice().step(BRANCH).unwrap_err();
+    assert!(format!("{err:#}").contains("memory"), "{err:#}");
+    assert!(h.w().started().is_empty());
+    assert!(results(&h).is_empty());
+    assert_ne!(h.sub(one).state, State::Landed);
+}
