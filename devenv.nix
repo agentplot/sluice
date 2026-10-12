@@ -125,8 +125,9 @@ let
 in
 {
   # The system tools are this file's, pinned by devenv.lock; the application
-  # tools (moon, Rust) are .prototools', installed by `proto install` on
-  # entering the shell and activated here. Every cargo and moon command in this
+  # tools (moon, Rust) are .prototools', installed by the
+  # sluice:proto:install task on entering the shell and activated by
+  # enterShell. Every cargo and moon command in this
   # repository runs inside `devenv shell`.
   packages = [
     pkgs.git
@@ -153,12 +154,23 @@ in
     # beside proto's, so no moon of the user's runs in a task.
     MOON_HOME="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir)/moon-home"
     export MOON_HOME
-    # What .prototools pins, installed if missing. Where it cannot be (no
-    # network, or a run held to its place), what is installed is used.
-    ${protoHome}
-    ${proto}/bin/proto install --config-mode upwards >/dev/null 2>&1 || true
+    # Only activates: sluice sources this inside its executor, where
+    # nothing may be installed.
     ${activate}
   '';
+
+  # The tool versions .prototools lists, installed on entering the shell, before
+  # enterShell activates it. A task, not part of enterShell: the script
+  # `devenv print-dev-env` prints holds enterShell and none of the tasks,
+  # so a check run sourcing it never installs. sluice's moon runner runs
+  # `proto install` itself, outside the executor.
+  tasks."sluice:proto:install" = {
+    exec = ''
+      ${protoHome}
+      ${proto}/bin/proto install --config-mode upwards
+    '';
+    before = [ "devenv:enterShell" ];
+  };
 
   treefmt.enable = true;
   treefmt.config = {
