@@ -14,3 +14,9 @@ tasks:
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-tools]
     options: {runFromWorkspaceRoot: true}
+  # S1 to S4 through wt submit on scratch repositories: the check-e2e tier.
+  # It reads the tools it drives from outside the tree, so it never replays.
+  e2e:
+    command: 'bash e2e/check.sh'
+    tags: [check-e2e]
+    options: {runFromWorkspaceRoot: true, cache: false}
