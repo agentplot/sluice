@@ -68,7 +68,7 @@ every agent's worktree.
 
 | `method` | what it does | choose it when |
 |---|---|---|
-| `"worktrunk"` | `wt switch --create sluice/try/<n> --base <combination> --no-cd`, then `wt remove` when done | the default where the repository uses worktrunk: the checkout runs the same worktrunk hooks as every agent's worktree, and the same remove hooks clean it up. Tests start once `wt switch` returns, when only `pre-start` hooks are done, so whatever a check needs goes in a `pre-start` hook or a dependency of the check |
+| `"worktrunk"` | `wt switch --create sluice/try/<branch>/<n> --base <combination> --no-cd`, then `wt remove` when done | the default where the repository uses worktrunk: the combination's own `pre-start` hooks run in the checkout, and its remove hooks clean it up. Tests start once the `pre-start` hooks are done; `post-start` hooks are not run, so whatever a check needs goes in a `pre-start` hook or a dependency of the check |
 | `"git-worktree"` | `git worktree add --detach` at the combination, `git worktree remove` when done | no worktrunk; nothing is run in the checkout but the tests |
 | `"archive"` | `git archive` of the combination into a temp directory | the tests must not see git metadata |
 

@@ -31,8 +31,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 2 | records: local files (`profiles/local_files.rs`) | §6 | **done**: 9 acceptance tests, fast tier |
 | 3 | the supervisor and the `open` executor; the instance's bound | §4 | **done**: `runs.rs` (6 tests), `profiles/checks.rs` with the `command` runner (8 tests), fast tier |
 | 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | **done**: `profiles/moon.rs`, 9 acceptance tests, `cli:tools` |
-| 5 | checkouts: `git worktree` first, then worktrunk | §5 | next |
-| 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | |
+| 5 | checkouts: `git worktree` first, then worktrunk | §5 | **done**: `profiles/places.rs`, 7 acceptance tests, `cli:tools` |
+| 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | next |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux) | §4, *The executor* | |
@@ -48,10 +48,6 @@ needed.
   trusts*), read by the verdict from each result's recorded executor
   (28, 29); `Policy::parse` refuses unknown keys, so it comes with its
   parsing tests.
-- **5, checkouts.** `materialize` and `release` per section 5;
-  `release` removes the place's run first (`Runs::remove`); worktrunk
-  with `--yes`, waiting only for `pre-start` hooks, removing its own
-  `.git/wt/logs/sluice-try-*` after `wt remove`.
 - **6, the driver.** `session` reports the head, who submitted
   (`SLUICE_AGENT`, else the branch) and anything the worktree holds
   beyond its commits; `notify` per section 7, with what the culprit's

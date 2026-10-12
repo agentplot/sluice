@@ -1297,12 +1297,29 @@ git -C <common> worktree remove --force <common>/sluice/.places/<name>
 ### `worktrunk`
 
 ```
-command wt -C <repo> switch --create sluice/try/<branch>/<n> --base <candidate> --no-cd --yes --format=json </dev/null
-command wt -C <repo> remove -D --force --foreground --yes --format=json sluice/try/<branch>/<n> </dev/null
+command wt -C <common> switch --create sluice/try/<branch>/<n> --base <candidate> --no-cd --no-hooks --format=json </dev/null
+command wt -C <place> hook pre-start --yes </dev/null
+command wt -C <place> remove -D --force --foreground --yes --format=json sluice/try/<branch>/<n> </dev/null
 ```
 
-(`<n>` is the place name; `-C` is a global flag; call the binary, not
-the zsh function, which only adds `cd` handling.)
+(`sluice/try/<branch>/<n>` is the place name; `-C` is a global flag;
+call the binary, not the zsh function, which only adds `cd` handling.
+`-C <common>` works for a normal clone and for crew's bare layout.)
+
+**Whose hooks.** worktrunk reads a project's hooks from the working copy
+of the worktree it runs in, uncommitted edits included, not from the
+tree it checks out. Verified on v0.80.0: with different `pre-start`
+hooks committed in the candidate, uncommitted in the primary worktree
+and uncommitted in a session's worktree, `wt -C <primary> switch
+--create … --base <candidate>` ran the primary's, `wt -C <session> …`
+the session's, and `wt -C <common> …` none (`✗ Cannot determine project
+config location — no worktree found`). So the place is made from the
+common dir with `--no-hooks`, and its `pre-start` hooks are run from
+inside it, where the working copy is the candidate: a session never
+decides what runs in sluice's place (35). `wt remove` run from inside
+the place runs the candidate's `pre-remove` (verified). The `post-start`
+and `post-switch` hooks, which worktrunk runs detached, are not run:
+nothing started in a place may outlive it (32).
 
 switch, exit 0, JSON on stdout, progress on stderr:
 
@@ -1316,7 +1333,8 @@ switch, exit 0, JSON on stdout, progress on stderr:
 - `--base` takes a raw commit on no branch; the branch `sluice/try/<branch>/<n>`
   is created. It is not protected (no policy names it), so the hook
   allows it.
-- **Read the path from the JSON**; never compute it. The user's
+- **Read the path from the JSON** (the last JSON document on stdout,
+  after anything a hook printed there); never compute it. The user's
   worktree-path template (`~/.config/worktrunk/config.toml`) puts it at
   `<parent>/<repo>.sluice-try-<n>` for a normal clone and `crew/sluice-try-<n>`
   beside the agents' worktrees for crew's bare layout. `wt list
@@ -1331,7 +1349,7 @@ switch, exit 0, JSON on stdout, progress on stderr:
   check needs is in a `pre-start` hook or a dependency of the check (a
   moon task it depends on), as the walkthrough tells repositories. crew
   has neither today.
-- **Without `--yes`**, an unapproved project hook makes switch exit 1
+- **Without `--yes`**, an unapproved project hook makes `wt hook` and switch exit 1
   with nothing created:
 
   ```
@@ -1341,17 +1359,19 @@ switch, exit 0, JSON on stdout, progress on stderr:
   ```
 
   `--yes` runs them unapproved and writes nothing to
-  `~/.config/worktrunk/approvals.toml`. sluice passes `--yes`: its
-  checkouts are worktrunk's like any other, so the repository's hooks
-  run in them, and nobody can approve hooks in a directory sluice makes
-  and removes on its own. The hooks come from the candidate's tree, the
-  same trust as the checks sluice already runs there. (crew's rule that
+  `~/.config/worktrunk/approvals.toml`. sluice passes `--yes` to `wt hook
+  pre-start` and `wt remove`: nobody can approve hooks in a directory
+  sluice makes and removes on its own, and run from inside the place
+  the hooks are the candidate's, the same trust as the checks sluice
+  already runs there. (crew's rule that
   agents never pass `--yes` is about sessions, not sluice.)
 - Existing branch: exit 1, `✗ Branch sluice/try/2 already exists`.
   Existing directory: exit 1, `✗ Directory already exists: …`
   (`--clobber` moves it to `<path>.bak.<timestamp>` and leaves that
-  behind). After a crash, `materialize` of a name whose branch exists
-  releases it first.
+  behind). What made each place is recorded at
+  `<common>/sluice/.places/<name>.json` before it is made, so after a
+  crash `materialize` of a name with a record releases it first, and
+  `release` needs no policy.
 
 remove:
 
@@ -1411,7 +1431,7 @@ For each method, in a scratch repository:
 2. `tmp` exists, is empty and is outside the checkout.
 3. `release` removes everything listed as left behind, and a second `release` succeeds.
 4. `release` of a name that never existed succeeds and touches nothing else.
-5. worktrunk: a `pre-start` hook has run when `materialize` returns; switch without approval and without `--yes` fails with the approval message; a stale `sluice/try/<branch>/<n>` from a crash is cleaned and recreated.
+5. worktrunk: the candidate's `pre-start` hook has run when `materialize` returns, and neither the primary worktree's nor a session's uncommitted hooks, nor a `post-start` hook; a stale `sluice/try/<branch>/<n>` from a crash is cleaned and recreated.
 6. git-worktree: a `post-checkout` hook is not run.
 7. No session's worktree, and no branch but `sluice/try/<branch>/<n>`, is changed by either call (core.16, S11).
 
