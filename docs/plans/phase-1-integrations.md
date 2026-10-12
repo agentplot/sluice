@@ -1496,6 +1496,9 @@ Open with `OpenOptions::new().create(true).truncate(false).write(true)`;
 never delete the lock file (a delete races a concurrent open, and two
 steps could each lock a different inode). `State::lock` maps
 `WouldBlock` to `Ok(None)`: a step that finds the lock held leaves.
+`State::wait_lock` blocks in `File::lock()` instead: a write outside a
+step (a submission, an amendment, a withdrawal) waits out the round in
+progress and then writes.
 flock is per host; it is not for several hosts (57 to 63 are not phase
 1).
 
@@ -1645,7 +1648,9 @@ What pass 2 adds:
 
 - Ctrl-C while waiting ends only the wait: the submission stays queued
   (5), its run continues (section 4's `setsid`), and `sluice status <id>`
-  reads it later. Print `still queued: sluice status <id>` on SIGINT.
+  reads it later. sluice prints `still queued: sluice status <id>` and
+  exits 130. `wt` runs `wt-submit` as its child, so the terminal's SIGINT
+  reaches both, as it does every process of the foreground group.
 - A waiting submit's step may start runs and land other sessions' work;
   that is pass 1's Q1.
 

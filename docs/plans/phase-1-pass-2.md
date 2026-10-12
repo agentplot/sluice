@@ -32,8 +32,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 3 | the supervisor and the `open` executor; the instance's bound | §4 | **done**: `runs.rs` (6 tests), `profiles/checks.rs` with the `command` runner (8 tests), fast tier |
 | 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | **done**: `profiles/moon.rs`, 9 acceptance tests, `cli:tools` |
 | 5 | checkouts: `git worktree` first, then worktrunk | §5 | **done**: `profiles/places.rs`, 7 acceptance tests, `cli:tools` |
-| 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | next |
-| 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | |
+| 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
+| 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | next |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux) | §4, *The executor* | |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; the conformance suite over the real profiles (the `Rig` split) | §9 | |
@@ -48,14 +48,10 @@ needed.
   trusts*), read by the verdict from each result's recorded executor
   (28, 29); `Policy::parse` refuses unknown keys, so it comes with its
   parsing tests.
-- **6, the driver.** `session` reports the head, who submitted
-  (`SLUICE_AGENT`, else the branch) and anything the worktree holds
-  beyond its commits; `notify` per section 7, with what the culprit's
-  session is shown of its failed tasks' logs (20).
-- **8, end to end.** Section 4's acceptance tests 5 and 7 on real
-  places: a waiting `wt submit` stopped by Ctrl-C leaves its run going,
-  and one `sluice run` with `[runs] max = 2` holds three branches to two
-  runs.
+- **The culprit's session** is shown its failed tasks' logs (20), which
+  stay in the place until it is released.
+- **8, end to end.** Section 4's acceptance test 7 on real places: one
+  `sluice run` with `[runs] max = 2` holds three branches to two runs.
 
 ## Decisions this pass builds on
 
