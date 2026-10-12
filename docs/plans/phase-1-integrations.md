@@ -527,10 +527,10 @@ it out, and `sluice protect` puts it back.
 3. Read `.config/sluice.toml` from `cur`'s tree (56, the same as
    `Branch::read_file`) and match `<b>` against its `[branches]` patterns
    with the core's matcher (pass 1's `policy.rs`). No match: allow.
-4. A match: print `error: <b> is protected by sluice; use wt submit` and
-   a second line, `the worktree may hold the attempted change: git merge
-   --abort or git reset --hard`; append the attempt to the branch's log;
-   exit 1.
+4. A match: print `error: <b> is protected by sluice; submit the change
+   to sluice instead` (naming no driver, core.1) and a second line, `the
+   worktree may hold the attempted change: git merge --abort or git reset
+   --hard`; append the attempt to the branch's log; exit 1.
 
 Captured with a shell stand-in for steps 1 to 4:
 
@@ -549,7 +549,8 @@ fatal: in 'prepared' phase, update aborted by the reference-transaction hook
 Caught, each refused with the same two lines and exit 128: `git merge`
 (fast-forward and `--no-ff`), `git commit`, `git reset --hard <other>`,
 `git rebase`, `git update-ref` (with and without an old value), `git
-branch -f`, `git branch -m bolt/x bolt/y`, `git fetch . a:bolt/x`, and
+branch -f` (of a branch no worktree holds; git refuses one that is
+checked out itself), `git fetch . a:bolt/x`, and
 `wt merge bolt/x` (worktrunk printed `✗ Can't push to local bolt/x
 branch` / `Failed to update ref: error: bolt/x is protected by sluice;
 use wt submit`, exit 1). A `git push` into a checked-out branch is
@@ -560,11 +561,14 @@ deleting one that is not checked out reaches the hook as `new` = zero.
 The hook allows that delete only when sluice holds no submission to the
 branch that is queued, waiting, testing or landing; otherwise it refuses
 and names them, so a bolt is withdrawn or landed before its branch goes.
+`git branch -m bolt/x bolt/y` is a delete and a creation, so it follows
+the same rule.
 The branch's records stay readable after the delete (26).
 
 **Logging the attempt (clause 1: "refused and reported").** The hook
-appends `{"at":…,"event":"refused","ref":"refs/heads/bolt/x","from":<cur>,"to":<new>,"by":"<parent command>"}`
-to the branch's `log.jsonl` through the file store (section 6), taking
+appends `{"at":…,"event":"protected","ref":"refs/heads/bolt/x","from":<cur>,"to":<new>,"by":"<parent command>"}`
+(the `protected` event, since `refused` is a landing that found its
+branch moved) to the branch's `log.jsonl` through the file store (section 6), taking
 the branch's lock with a bounded wait (one second) and bumping the
 version, so the event is a record like any other. The parent command is
 `ps -o command= -p <ppid>` (captured: `git merge unit/touches`, `git
@@ -590,7 +594,7 @@ hazard goes with it.
 In a scratch repository with a policy protecting `bolt/*`, a worktree on
 `bolt/x`, and the hook installed by the installer:
 
-1. Each command in the "caught" list is refused with exit 128 (wt: 1), the branch unmoved, one `refused` event in the log.
+1. Each command in the "caught" list is refused with exit 128, the branch unmoved, one `protected` event in the log.
 2. `git worktree add ../w bolt/x`, `git reset --hard` with no target, `git branch bolt/new` (creation) and commits on `unit/*` are allowed.
 3. A pre-existing `reference-transaction` hook still runs, with the same stdin, and its refusal still refuses.
 4. `/usr/bin/git` (Apple git 2.50) is refused too.
@@ -1974,7 +1978,7 @@ for c in $(git -C "$REPO" rev-list --first-parent main..bolt/s1); do
   expect "S1 $c author" "$(git -C "$REPO" log -1 --format='%an <%ae>' "$c")" "sluice <sluice@localhost>"
   expect "S1 $c second parent" "$(git -C "$REPO" rev-parse "$c^2")" "$(git -C "$REPO" rev-parse unit/a-s1)|$(git -C "$REPO" rev-parse unit/b-s1)"
 done
-expect "S1 moves refused by the hook" "$(grep -c '"event":"refused"' "$COMMON/sluice/bolt/s1/log.jsonl" || true)" 0
+expect "S1 moves refused by the hook" "$(grep -c '"event":"protected"' "$COMMON/sluice/bolt/s1/log.jsonl" || true)" 0
 
 # S2: the second head conflicts with the first; told the paths before any check runs; the first lands.
 A=$(id_of a s2)

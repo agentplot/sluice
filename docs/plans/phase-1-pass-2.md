@@ -33,8 +33,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | **done**: `profiles/moon.rs`, 9 acceptance tests, `cli:tools` |
 | 5 | checkouts: `git worktree` first, then worktrunk | §5 | **done**: `profiles/places.rs`, 7 acceptance tests, `cli:tools` |
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
-| 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | next |
-| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | |
+| 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
+| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | next |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux) | §4, *The executor* | |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; the conformance suite over the real profiles (the `Rig` split) | §9 | |
 | 11 | sluice's own policy, and sluice landing sluice | §9 | |
