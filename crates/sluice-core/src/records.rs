@@ -441,6 +441,16 @@ pub enum Event {
     Released {
         place: String,
     },
+    /// An update to the branch made by anything but sluice, refused (1).
+    Protected {
+        #[serde(rename = "ref")]
+        reference: String,
+        from: Rev,
+        /// `None` for a deletion.
+        to: Option<Rev>,
+        /// The command that tried it.
+        by: String,
+    },
     Told {
         id: u64,
         notification: String,

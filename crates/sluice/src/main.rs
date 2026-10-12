@@ -15,6 +15,28 @@ fn main() {
         }
         return;
     }
+    // Every ref update in every worktree runs the hook: leave at once
+    // unless git asks for the decision.
+    if let Command::Hook { state, .. } = &cli.command {
+        if state != "prepared" {
+            return;
+        }
+    }
+    // 1: whatever runs sluice's work keeps its branches protected.
+    if matches!(
+        cli.command,
+        Command::Submit { .. } | Command::Step { .. } | Command::Run { .. }
+    ) {
+        let ensured = std::env::current_dir()
+            .map_err(anyhow::Error::from)
+            .and_then(|dir| {
+                let exe = std::fs::canonicalize(std::env::current_exe()?)?;
+                sluice::protect::install(&dir, &exe)
+            });
+        if let Err(e) = ensured {
+            eprintln!("sluice: warning: branch protection not installed: {e:#}");
+        }
+    }
     let bound = match std::env::current_dir()
         .map_err(anyhow::Error::from)
         .and_then(|dir| Bound::open(&dir))

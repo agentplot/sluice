@@ -7,6 +7,7 @@
 
 pub mod instance;
 pub mod profiles;
+pub mod protect;
 pub mod runs;
 
 use std::io::Write;
@@ -91,6 +92,16 @@ pub enum Command {
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
     Supervise { dir: std::path::PathBuf },
+    /// Install the hook that refuses updates to protected branches by
+    /// anything but sluice; `submit`, `step` and `run` install it too.
+    Protect {
+        /// Take it out instead.
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
+    #[command(hide = true)]
+    Hook { name: String, state: String },
 }
 
 /// What a waiting command does between rounds.
@@ -285,6 +296,21 @@ pub fn run(
             runs::supervise(&dir)?;
             Ok(0)
         }
+        Command::Protect { remove } => {
+            let dir = std::env::current_dir()?;
+            if remove {
+                protect::remove(&dir)?;
+                writeln!(out, "branch protection removed")?;
+            } else {
+                protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
+                writeln!(out, "branch protection installed")?;
+            }
+            Ok(0)
+        }
+        Command::Hook { name, state } => match name.as_str() {
+            "reference-transaction" => protect::hook(&s, &state, &mut std::io::stdin()),
+            other => anyhow::bail!("sluice runs no {other} hook"),
+        },
     }
 }
 

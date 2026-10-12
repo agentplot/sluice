@@ -76,6 +76,7 @@ impl Repo {
             .env_remove("GIT_INDEX_FILE")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("XDG_CONFIG_HOME", self.dir().join(".git/no-config"))
             .env("GIT_AUTHOR_NAME", "test")
             .env("GIT_AUTHOR_EMAIL", "test@localhost")
             .env("GIT_COMMITTER_NAME", "test")

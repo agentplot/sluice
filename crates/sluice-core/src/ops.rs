@@ -385,6 +385,49 @@ impl Sluice<'_> {
         Ok(self.read_line(&branch)?.subs.remove(&id))
     }
 
+    /// 1: whether sluice guards `branch` at its revision `at`: the
+    /// policy read from that revision names it (56). An update to it by
+    /// anything but sluice is refused.
+    pub fn protects(&self, branch: &str, at: &Rev) -> Result<bool> {
+        Ok(self.rules_at(branch, at)?.is_some())
+    }
+
+    /// The submissions that still need `branch`: in a chain, or landing.
+    /// Its deletion is refused while there are any.
+    pub fn needing(&self, branch: &str) -> Result<Vec<u64>> {
+        Ok(self
+            .read_line(branch)?
+            .subs
+            .values()
+            .filter(|s| !s.state.is_out())
+            .map(|s| s.id)
+            .collect())
+    }
+
+    /// 1: report an update to `branch` that protection refused, in its
+    /// log. The caller holds the branch's lock.
+    pub fn record_protected(
+        &self,
+        branch: &str,
+        from: &Rev,
+        to: Option<&Rev>,
+        by: &str,
+    ) -> Result<()> {
+        let now = self.now();
+        self.update(branch, |l| {
+            l.log(
+                &now,
+                Event::Protected {
+                    reference: format!("refs/heads/{branch}"),
+                    from: from.clone(),
+                    to: to.cloned(),
+                    by: by.to_string(),
+                },
+            );
+            Ok(())
+        })
+    }
+
     /// 26: a branch's queue as last written.
     pub fn status(&self, branch: &str) -> Result<Status> {
         let line = self.read_line(branch)?;
