@@ -1,8 +1,8 @@
 //! Verdicts, attribution and the window: A.3 and A.4.
 
-use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultKind, ResultLine, State};
-use sluice_seams::{Outcome, Told};
+use sluice_seams::Told;
 
 fn results(h: &Harness) -> Vec<ResultLine> {
     sluice_core::records::parse_lines(h.w().results_log().as_bytes()).unwrap()
@@ -11,33 +11,7 @@ fn results(h: &Harness) -> Vec<ResultLine> {
 /// satisfies: 16, 37, 38
 #[test]
 fn every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass() {
-    let h = Harness::bolt();
-    h.w().fails_with("b:test", "b/lib", "broken");
-    h.work("unit/a", "agent-a", &[("b/lib", Some("broken"))]);
-    h.submit("unit/a");
-    h.settle();
-
-    let events = h.events();
-    let result_at = events
-        .iter()
-        .position(|e| matches!(e, Event::Result { .. }))
-        .unwrap();
-    let ran: Vec<usize> = events
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| matches!(e, Event::Ran { .. }))
-        .map(|(n, _)| n)
-        .collect();
-    assert_eq!(ran.len(), 3);
-    assert!(ran.iter().all(|n| *n < result_at));
-    // The fail is recorded with its key, outcome and executor.
-    assert!(events.iter().any(|e| matches!(e,
-        Event::Ran { task, outcome: Outcome::Fail, host, .. }
-            if task == "b:test" && host == "fake-host")));
-    let r = results(&h);
-    assert!(r
-        .iter()
-        .any(|l| l.task == "b:test" && l.outcome == Outcome::Fail));
+    shared::every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass(&Harness::bolt());
 }
 
 /// satisfies: 15, 38, 69
@@ -239,27 +213,9 @@ fn a_run_whose_executor_stopped_has_no_outcome_and_runs_again() {
 /// satisfies: 55, 70, 56
 #[test]
 fn a_landed_change_to_the_gate_runs_every_check_it_now_requires() {
-    // The branch requires a:test only; b:test fails on the branch as it is.
-    let narrow = policy(false, "fail", 4).replace("[\"#gate\"]", "[\"a:test\"]");
-    let wide = policy(false, "fail", 4).replace("[\"#gate\"]", "[\"a:test\", \"b:test\"]");
-    let h = Harness::new(&narrow);
-    h.w().fails_with("b:test", "b/lib", "b1");
-    h.work(
-        "unit/gate",
-        "agent-g",
-        &[(".config/sluice.toml", Some(&wide))],
-    );
-    let one = h.submit("unit/gate");
-    h.settle();
-    assert_eq!(h.sub(one).state, State::Landed);
-
-    // The next candidate touches neither project, yet b:test runs.
-    h.work("unit/c", "agent-c", &[("c/lib", Some("c2"))]);
-    let two = h.submit("unit/c");
-    h.settle();
-    assert_eq!(h.w().requests()[1].since, None);
-    assert_eq!(h.sub(two).state, State::Failed);
-    assert_eq!(h.sub(two).failed[0].task, "b:test");
+    shared::a_landed_change_to_the_gate_runs_every_check_it_now_requires(&Harness::new(
+        &policy(false, "fail", 4).replace("[\"#gate\"]", "[\"a:test\"]"),
+    ));
 }
 
 /// satisfies: 70, 55
@@ -329,22 +285,7 @@ fn an_instance_holds_the_branches_it_serves_to_its_bound() {
 /// satisfies: 84, 16
 #[test]
 fn every_observed_result_records_what_its_executor_enforced() {
-    let h = Harness::bolt();
-    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    h.submit("unit/a");
-    h.settle();
-    let rs = results(&h);
-    assert!(!rs.is_empty());
-    for r in rs {
-        match r.kind {
-            ResultKind::Ran => {
-                let e = r.executor.expect("a run records its executor");
-                assert_eq!(e.kind, "open");
-                assert!(!e.confined, "an open run is never confined");
-            }
-            ResultKind::Replayed => assert!(r.executor.is_none()),
-        }
-    }
+    shared::every_observed_result_records_what_its_executor_enforced(&Harness::bolt());
 }
 
 /// satisfies: 83, 84

@@ -17,10 +17,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use sluice_core::line::Line;
-use sluice_core::records::{Event, LogLine, Submission};
+use sluice_core::records::{parse_lines, Event, LogLine, ResultLine, Submission};
 use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
-use sluice_seams::{Notification, Rev};
+use sluice_seams::{Driver, Notification, Rev, RunRequest};
 
 pub use sluice_fakes::{Crash, World};
 
@@ -54,8 +54,24 @@ pub trait Rig {
     /// What a submission from the place `worktree` names it by.
     fn place(&self, worktree: &str) -> String;
 
+    /// The session in place `worktree` starts its work again on `on`;
+    /// returns its new head.
+    fn work_on(&self, worktree: &str, on: &Rev, changes: &[(&str, Option<&str>)]) -> Rev;
+
+    /// The place `worktree` holds `paths` beyond its commits.
+    fn dirty(&self, worktree: &str, paths: &[&str]);
+
     /// `task` fails on any candidate whose `path` holds `content`.
     fn fails_with(&self, task: &str, path: &str, content: &str);
+
+    /// A policy written for the fakes, as this rig's own: its runner and
+    /// checkout method in place of `fake`.
+    fn policy_text(&self, policy: &str) -> String {
+        policy.into()
+    }
+
+    /// The host the rig's checks run on, as a run records it.
+    fn host(&self) -> String;
 
     /// Step until the branch's work is done.
     fn settle(&self);
@@ -66,13 +82,21 @@ pub trait Rig {
     /// The revisions runs were started on, in order.
     fn started(&self) -> Vec<Rev>;
 
+    /// Every run the core asked the check seam for, in order.
+    fn requests(&self) -> Vec<RunRequest>;
+
+    /// The number of times the branch was moved.
+    fn moves(&self) -> usize;
+
     /// The places made, and those not yet released.
     fn made_places(&self) -> Vec<String>;
     fn live_places(&self) -> Vec<String>;
 
-    /// A commit's parents, and its message.
+    /// A commit's parents, its message, and its tree as a value equal
+    /// exactly when the trees are.
     fn parents(&self, rev: &Rev) -> Vec<Rev>;
     fn message(&self, rev: &Rev) -> String;
+    fn tree(&self, rev: &Rev) -> String;
 
     /// The branch's first-parent history, newest first.
     fn first_parents(&self) -> Vec<Rev> {
@@ -133,6 +157,25 @@ pub trait Rig {
             .state(id)
             .expect("state reads")
             .unwrap_or_else(|| panic!("no submission {id}"))
+    }
+
+    /// The branch's records' version.
+    fn version(&self) -> u64 {
+        let s = self.sluice();
+        s.seams().state.read(BRANCH).expect("records read").version
+    }
+
+    /// The branch's record files, by path.
+    fn files(&self) -> BTreeMap<String, Vec<u8>> {
+        let s = self.sluice();
+        s.seams().state.read(BRANCH).expect("records read").files
+    }
+
+    /// The repository's results log.
+    fn results(&self) -> Vec<ResultLine> {
+        let s = self.sluice();
+        let bytes = s.seams().state.results().expect("results read");
+        parse_lines(&bytes).expect("the results log parses")
     }
 
     fn log(&self) -> Vec<LogLine> {
@@ -214,8 +257,23 @@ impl Rig for Harness {
         worktree.into()
     }
 
+    fn work_on(&self, worktree: &str, on: &Rev, changes: &[(&str, Option<&str>)]) -> Rev {
+        let session = self.f.driver.session(worktree).expect("a session's place");
+        let head = self.w().work(on, changes);
+        self.w().session(worktree, &session.from.agent, &head);
+        head
+    }
+
+    fn dirty(&self, worktree: &str, paths: &[&str]) {
+        self.w().dirty(worktree, paths);
+    }
+
     fn fails_with(&self, task: &str, path: &str, content: &str) {
         self.w().fails_with(task, path, content);
+    }
+
+    fn host(&self) -> String {
+        "fake-host".into()
     }
 
     /// Step until a step changes nothing.
@@ -243,6 +301,14 @@ impl Rig for Harness {
         self.w().started()
     }
 
+    fn requests(&self) -> Vec<RunRequest> {
+        self.w().requests()
+    }
+
+    fn moves(&self) -> usize {
+        self.w().moves().len()
+    }
+
     fn made_places(&self) -> Vec<String> {
         self.w().made_places()
     }
@@ -257,6 +323,10 @@ impl Rig for Harness {
 
     fn message(&self, rev: &Rev) -> String {
         self.w().message(rev)
+    }
+
+    fn tree(&self, rev: &Rev) -> String {
+        format!("{:?}", self.w().tree(rev))
     }
 
     fn first_parents(&self) -> Vec<Rev> {

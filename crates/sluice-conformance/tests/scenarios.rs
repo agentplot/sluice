@@ -126,34 +126,9 @@ fn s8_a_hand_move_refuses_the_landing_and_forms_again() {
 /// satisfies: S9, 14, 17, 18, 23
 #[test]
 fn s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped() {
-    let h = Harness::new(&policy(true, "fail", 4));
-    h.w().fails_with("a:test", "a/two", "bad");
-    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
-    h.work("unit/2", "agent-2", &[("a/two", Some("bad"))]);
-    h.work("unit/3", "agent-3", &[("a/three", Some("3"))]);
-    let (one, two, three) = (h.submit("unit/1"), h.submit("unit/2"), h.submit("unit/3"));
-
-    h.step();
-    // Only the deepest is tested.
-    assert_eq!(h.tested(), vec![vec![one, two, three]]);
-    h.settle();
-
-    // It failed; the skipped ones were tested before any blame (14, 18).
-    let tested = h.tested();
-    assert!(tested.contains(&vec![one]));
-    assert!(tested.contains(&vec![one, two]));
-    let blamed: Vec<u64> = h
-        .events()
-        .into_iter()
-        .filter_map(|e| match e {
-            Event::Blamed { id, .. } => Some(id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(blamed, vec![two]);
-    assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(two).state, State::Failed);
-    assert_eq!(h.sub(three).state, State::Landed);
+    shared::s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped(&Harness::new(&policy(
+        true, "fail", 4,
+    )));
 }
 
 /// satisfies: S10, 26, 49, 59
@@ -192,88 +167,17 @@ fn s10_stopped_and_started_again_it_runs_nothing_already_judged() {
 /// satisfies: S11, 23, 25, 34
 #[test]
 fn s11_a_landing_names_its_verdict_and_leaves_the_session_place() {
-    let h = Harness::bolt();
-    let head = h.work("unit/touches", "crw-1-unit-1", &[("a/lib", Some("a2"))]);
-    let id = h.submit("unit/touches");
-    h.settle();
-
-    let s = h.sub(id);
-    let landed = s.landed_as.clone().unwrap();
-    assert_eq!(h.tip(), landed);
-    assert_eq!(h.w().parents(&landed)[1], head);
-    let tested = s.tested.unwrap().combination;
-    assert_eq!(
-        h.w().message(&landed),
-        format!(
-            "Land #{id}: unit/touches\n\nSluice-Submission: {id}\n\
-             Sluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tested}\n\
-             Sluice-Result: passed (3 run, 0 replayed)\n"
-        )
-    );
-    // The branch had no verdict, so every required check ran (70).
-    // The landed tree is the tested tree (I1).
-    assert_eq!(h.w().tree(&landed), h.w().tree(&tested));
-    // sluice released its own place and never the session's (25).
-    assert_eq!(h.w().released_places(), h.w().made_places());
-    assert!(!h
-        .w()
-        .released_places()
-        .contains(&"unit/touches".to_string()));
+    shared::s11_a_landing_names_its_verdict_and_leaves_the_session_place(&Harness::bolt());
 }
 
 /// satisfies: S12, 56, 27, 15
 #[test]
 fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
-    let h = Harness::bolt();
-    h.w().fails_with("a:test", "a/lib", "broken");
-    let loosened = policy(false, "fail", 4).replace("[\"#gate\"]", "[]");
-    h.work(
-        "unit/a",
-        "agent-a",
-        &[
-            ("a/lib", Some("broken")),
-            (".config/sluice.toml", Some(&loosened)),
-        ],
-    );
-    let id = h.submit("unit/a");
-    h.settle();
-    // Judged by the policy on the branch, so it fails and does not land.
-    assert_eq!(h.sub(id).state, State::Failed);
-    assert_eq!(h.w().requests()[0].required, vec!["#gate".to_string()]);
+    shared::s12_a_submission_cannot_loosen_the_gate_it_is_judged_by(&Harness::bolt());
 }
 
 /// satisfies: S16, 64, 65, 47a
 #[test]
 fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing() {
-    let h = Harness::bolt();
-    let a = h.work("unit/a", "agent-a", &[("a/lib", Some("from a"))]);
-    let one = h.submit("unit/a");
-    h.work("unit/b", "agent-b", &[("a/lib", Some("from b"))]);
-
-    let version = h.w().version(BRANCH);
-    let f = h.sluice().forecast("unit/b", BRANCH, &[]).unwrap().unwrap();
-    match f {
-        sluice_core::Forecast::Conflict { paths, with } => {
-            assert_eq!(paths, vec!["a/lib".to_string()]);
-            assert_eq!(with[0].id, one);
-            assert_eq!(with[0].from.agent, "agent-a");
-        }
-        other => panic!("forecast {other:?}"),
-    }
-    // A forecast creates no entry and changes nothing (64).
-    assert_eq!(h.w().version(BRANCH), version);
-    assert!(h.w().started().is_empty());
-
-    // The session settles it on the first's work; both form and land.
-    let settled = h.w().work(&a, &[("a/lib", Some("from a and b"))]);
-    h.w().session("unit/b", "agent-b", &settled);
-    assert_eq!(
-        h.sluice().forecast("unit/b", BRANCH, &[]).unwrap().unwrap(),
-        sluice_core::Forecast::Clear
-    );
-    let two = h.submit("unit/b");
-    h.settle();
-    assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(two).state, State::Landed);
-    assert_eq!(h.w().tree(&h.tip())["a/lib"], "from a and b");
+    shared::s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(&Harness::bolt());
 }

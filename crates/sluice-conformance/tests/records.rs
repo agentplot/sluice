@@ -2,12 +2,9 @@
 
 use std::path::Path;
 
-use sluice_conformance::{Harness, Rig, BRANCH};
+use sluice_conformance::{shared, Harness, Rig, BRANCH};
 use sluice_core::line::Line;
-use sluice_core::records::{
-    parse_lines, BranchDoc, LogLine, ResultLine, State, Submission, BRANCH_SCHEMA,
-    SUBMISSION_SCHEMA,
-};
+use sluice_core::records::State;
 use sluice_seams::Snapshot;
 
 fn examples() -> std::path::PathBuf {
@@ -41,35 +38,17 @@ fn the_walkthrough_records_are_read_as_written() {
 #[test]
 fn every_record_written_is_the_real_format_and_names_its_schema() {
     let h = Harness::bolt();
-    h.w().fails_with("a:test", "a/lib", "broken");
-    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
-    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
-    let (one, two) = (h.submit("unit/a"), h.submit("unit/b"));
-    h.settle();
-
-    let files = h.w().files(BRANCH);
-    let version: u64 = String::from_utf8(files["version"].clone())
+    shared::every_record_written_is_the_real_format_and_names_its_schema(&h);
+    // The version is a file of its own, as local files keep it.
+    let version: u64 = String::from_utf8(h.w().files(BRANCH)["version"].clone())
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    assert_eq!(version, h.w().version(BRANCH));
-    let doc: BranchDoc = serde_json::from_slice(&files["branch.json"]).unwrap();
-    assert_eq!(doc.schema, BRANCH_SCHEMA);
-    for id in [one, two] {
-        let s: Submission =
-            serde_json::from_slice(&files[&format!("submissions/{id}.json")]).unwrap();
-        assert_eq!(s.schema, SUBMISSION_SCHEMA);
-        // Readable as plain JSON by any reader.
-        let v: serde_json::Value =
-            serde_json::from_slice(&files[&format!("submissions/{id}.json")]).unwrap();
-        assert!(v["state"].is_string());
-    }
-    let log: Vec<LogLine> = parse_lines(&files["log.jsonl"]).unwrap();
-    assert!(!log.is_empty());
-    let results: Vec<ResultLine> = parse_lines(h.w().results_log().as_bytes()).unwrap();
-    // #1 and #1 + #2, then #2 alone once #1 is blamed (21).
-    assert_eq!(results.len(), 3 + 3 + 3);
+    assert_eq!(version, h.version());
+    // The fakes finish every run in the step that starts it, so #1 + #2
+    // is recorded too.
+    assert_eq!(h.results().len(), 3 + 3 + 3);
 }
 
 /// satisfies: 52, 27

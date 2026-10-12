@@ -1,9 +1,8 @@
 //! Landing, conflicts, crashes and notifications: A.3, A.5, B.4, B.5.
 
-use sluice_conformance::{policy, Crash, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, shared, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::Step;
-use sluice_seams::Told;
 
 /// satisfies: 24, 46, 59, S14
 #[test]
@@ -52,61 +51,15 @@ fn a_notification_repeated_after_a_crash_carries_the_same_id_and_outcome() {
 /// satisfies: 65, 12
 #[test]
 fn a_conflict_names_every_submission_it_is_contested_with() {
-    let h = Harness::bolt();
-    h.work("unit/1", "agent-1", &[("a/f", Some("one"))]);
-    h.work("unit/2", "agent-2", &[("a/g", Some("two"))]);
-    h.work("unit/3", "agent-3", &[("a/h", Some("three"))]);
-    h.work(
-        "unit/4",
-        "agent-4",
-        &[("a/f", Some("four")), ("a/g", Some("four"))],
-    );
-    let (one, two, three, four) = (
-        h.submit("unit/1"),
-        h.submit("unit/2"),
-        h.submit("unit/3"),
-        h.submit("unit/4"),
-    );
-    h.settle();
-    match &h.w().told_to("agent-4")[0].told {
-        Told::Conflict { paths, with } => {
-            assert_eq!(paths, &vec!["a/f".to_string(), "a/g".to_string()]);
-            let ids: Vec<u64> = with.iter().map(|c| c.id).collect();
-            // Each it conflicts with alone; not #3.
-            assert_eq!(ids, vec![one, two]);
-            assert_eq!(with[1].from.worktree, "unit/2");
-        }
-        other => panic!("told {other:?}"),
-    }
-    assert_eq!(h.sub(four).conflict.unwrap().with.len(), 2);
-    // The chain continued without it (12).
-    for id in [one, two, three] {
-        assert_eq!(h.sub(id).state, State::Landed);
-    }
+    shared::a_conflict_names_every_submission_it_is_contested_with(&Harness::bolt());
 }
 
 /// satisfies: 14, 22, 23, 55
 #[test]
 fn deepest_first_the_longest_passes_and_all_land_on_its_verdict() {
-    let h = Harness::new(&policy(true, "fail", 4));
-    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
-    h.work("unit/2", "agent-2", &[("a/two", Some("2"))]);
-    h.work("unit/3", "agent-3", &[("a/three", Some("3"))]);
-    let ids = [h.submit("unit/1"), h.submit("unit/2"), h.submit("unit/3")];
-    h.settle();
-
-    assert_eq!(h.tested(), vec![ids.to_vec()]);
-    assert_eq!(h.w().moves().len(), 1);
-    let deepest = h.sub(ids[2]).tested.unwrap().combination;
-    for id in ids {
-        let s = h.sub(id);
-        assert_eq!(s.state, State::Landed);
-        let message = h.w().message(&s.landed_as.unwrap());
-        assert!(
-            message.contains(&format!("Sluice-Tested: {deepest}\n")),
-            "#{id}: {message}"
-        );
-    }
+    shared::deepest_first_the_longest_passes_and_all_land_on_its_verdict(&Harness::new(&policy(
+        true, "fail", 4,
+    )));
 }
 
 /// satisfies: 62, 14
