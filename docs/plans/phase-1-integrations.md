@@ -1242,7 +1242,7 @@ result (16). The policy states what a branch's runs may use and reach:
 ```toml
 [executor]
 kind = "sandbox"          # "open" | "sandbox" | "container"
-network = false
+network = "localhost"     # false: none | "localhost": only 127.0.0.1 and ::1 | true: any
 memory = "8G"
 # processors come from the instance: available_parallelism() / B
 ```
@@ -1252,6 +1252,15 @@ memory = "8G"
 | `open` | the supervisor above: a process group in the place | the processors, through the runner's threads; nothing else; never confined |
 | `sandbox` | the command under the host's kernel sandbox, as Anthropic's sandbox-runtime and Codex's sandbox do: Seatbelt (`sandbox-exec` with a generated profile) on macOS, bubblewrap with Landlock on Linux; writes allowed only to the place and `SLUICE_TMP`, the network only as the policy says | paths and network on both; memory and processors only on Linux, by starting the run in a cgroup (`systemd-run --user --scope -p MemoryMax= -p CPUQuota=`) |
 | `container` | the place mounted into a new container (`docker run --rm --init --cpus --memory --network none -v <place>:<place> -w <place> <image>`), the image the repository declares | processors, memory, paths and network |
+
+`network = "localhost"` is for checks that start a server and test
+against it: on macOS the sandbox lets the run listen and connect on
+localhost, by address or by name, and refuses every other connection,
+name lookups included (`(deny network*)`, then `network-bind` and
+`network-inbound` on local `localhost:*` and `network-outbound` to remote
+`localhost:*`; checked: a remote address fails with "Operation not
+permitted", IPv4 and IPv6 loopback both work). `false` denies local
+sockets too. The `open` executor holds neither, so it refuses both.
 
 A limit the policy states that the executor cannot enforce refuses the
 run (84): a `memory` limit under `sandbox` on macOS is refused with the
@@ -1325,7 +1334,7 @@ paths it may write that the branch's policy states").
 
 #### Acceptance tests
 
-1. `sandbox` on macOS and on Linux: a write outside the place and `SLUICE_TMP` fails inside the run; with `network = false`, a connection fails (83).
+1. `sandbox` on macOS and on Linux: a write outside the place and `SLUICE_TMP` fails inside the run; with `network = false`, a connection fails, even to localhost; with `network = "localhost"`, a server on localhost is reached and any other address is refused as not permitted (83).
 2. `sandbox` with `memory = "1G"` on macOS: the run is refused, naming the limit; on Linux, a run that allocates past it is killed and read as failed (84).
 3. `container`: a run over its time limit is ended and its container removed; nothing of it is left in `docker ps -a`.
 4. Every recorded run carries the executor's `kind`, `confined` and limits; an `open` run is never read as confined (29, 84).

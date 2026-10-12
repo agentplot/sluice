@@ -105,6 +105,16 @@ needed.
   its limits and reports what it enforced (ADR 0012; clauses 71, 83, 84).
 - A branch's gate trusts runs by confinement or executor kind (section
   4); records never claim confinement a run lacked.
+- A branch's policy says how much network a run may reach (83, 84):
+  `[executor] network = false` (none), `"localhost"` (only 127.0.0.1 and
+  ::1, so tests can start servers there and reach them), or `true`
+  (any). The sandbox holds all three and records which it held. sluice's
+  own runs use `"localhost"`: its integration tests listen on
+  localhost.
+- Every moon task says what network its tests need, by tag:
+  `needs-localhost` or `needs-network`; a task with neither needs none.
+  `moon query tasks --tags needs-localhost` finds them, and a task needing
+  more than its tier's policy allows is split so the rest run with less.
 - Policy defaults: `parallel = 4`, `batch = false`, `flaky = "fail"`,
   `timeout = "1h"` (`phase-1-questions.md`).
 - devenv holds the system tools, proto 0.63.1 (moonrepo's release build)
