@@ -229,11 +229,27 @@ impl Runs {
         Ok(())
     }
 
-    /// End the run of the place `name` and remove its directory.
+    /// End the run of the place `name` and remove its directory, once its
+    /// supervisor has let go of it: ending the group is what makes the
+    /// supervisor write the result there, and a removal racing that write
+    /// fails.
     pub fn remove(&self, name: &str) -> Result<()> {
         self.end(name)?;
-        match std::fs::remove_dir_all(self.dir(name)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
+        let dir = self.dir(name);
+        let until = Instant::now() + Duration::from_secs(30);
+        while self.supervised(&dir)? {
+            if Instant::now() >= until {
+                bail!(
+                    "the supervisor of {} still holds it 30 s after its run ended",
+                    dir.display()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", dir.display()))
+            }
             _ => Ok(()),
         }
     }
