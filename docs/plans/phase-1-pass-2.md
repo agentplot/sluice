@@ -119,11 +119,16 @@ needed.
 - Policy defaults: `parallel = 4`, `batch = false`, `flaky = "fail"`,
   `timeout = "1h"` (`phase-1-questions.md`).
 - devenv holds the system tools, proto 0.63.1 (moonrepo's release build)
-  among them. moon 2.6.1 and Rust 1.98.1 are application tools, pinned
-  in `.prototools`, installed by proto on entering the shell, with
+  among them. moon 2.6.1 and Rust 1.98.1 are application tools, their
+  versions written in `.prototools` and installed by proto: in a
+  developer's shell by the devenv task `sluice:proto:install`, never by
+  `enterShell` (the toolchain script sluice sources inside the executor
+  holds `enterShell`, so it only activates); in a check run by the moon
+  runner, which runs `proto install` outside the executor before
+  `moon --version` and `moon setup`. Both use
   `PROTO_HOME` and `MOON_HOME` of the repository's own under the common
   dir (moon puts both homes' `bin` ahead of everything on a task's
-  `PATH`). `.moon/toolchains.yml` reads the Rust pin, so each task's hash
+  `PATH`). `.moon/toolchains.yml` reads the Rust version from it, so each task's hash
   carries the toolchain's version. The moon profile's floor is 2.6
   (section 3).
 - A repository's toolchain is printed outside the executor (`[tests]

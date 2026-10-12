@@ -15,7 +15,7 @@ rules and does not restate them.
 |---|---|---|---|
 | git | 2.54.0 | `/etc/profiles/per-user/chuck/bin/git` | also `/usr/bin/git` 2.50.1 (Apple Git-155), which some tools use: see *Branch protection* |
 | gix | 0.89.0 on crates.io; the APIs below were read in 0.87.1 (gix-ref 0.67.1, gix-actor 0.42.0) | `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` | depend on 0.89 and re-check the calls section 1 names |
-| moon in sluice's shell | 2.6.1 | `<common>/proto/tools/moon/2.6.1/moon` | pinned in `.prototools`, installed by proto on entering the devenv shell; `devenv shell -- moon --version` |
+| moon in sluice's shell | 2.6.1 | `<common>/proto/tools/moon/2.6.1/moon` | its version written in `.prototools`, installed by the devenv task `sluice:proto:install` on entering the shell (never by `enterShell`); `devenv shell -- moon --version` |
 | proto in sluice's devenv | 0.63.1 | `devenv.nix`, moonrepo's release build | moonrepo's toolchain manager, the one application tool devenv holds: installs and runs the application toolchain `.prototools` pins (Rust 1.98.1, through rustup), which `.moon/toolchains.yml` reads; `PROTO_HOME` and `MOON_HOME` are the repository's (`<common>/proto`, `<common>/moon-home`) |
 | moon on `PATH` | 1.41.7 | `~/.bun/bin/moon` | **cannot run crew**: no task tags, no `moon exec` |
 | moon in crew's devenv | 2.5.3 | `/nix/store/xn5qbl6xwpb2d9hlchsjzacx6qkgcrml-moon-2.5.3/bin/moon` | what crew's `tests/suite` runs; below the profile's floor until crew moves to 2.6 |
@@ -1190,7 +1190,22 @@ print-dev-env`, `direnv export bash`. When sluice itself already runs
 inside the repository's environment, the key is left out: the run keeps
 that `PATH` and, as above, nothing that names a session's place (35).
 
-The moon runner also runs `moon setup` outside the executor, after the
+Never install anything in the toolchain's own setup commands
+(devenv's `enterShell`): the printed script holds them, so they run
+again inside the executor, where installing fails. devenv tasks are not
+in the printed script.
+
+Before any moon command, the moon runner runs, in the place and outside
+the executor, with the toolchain sourced:
+
+1. `proto install --config-mode upwards`, when the place has a
+   `.prototools`: it installs the exact versions that file lists, moon
+   among them, so moon exists before anything calls it. Only the
+   repository's own `.prototools` is read, not the user's global one.
+2. `moon --version`, refused below 2.6.
+3. The task queries, then `moon setup`.
+
+The moon runner runs `moon setup` outside the executor, after the
 toolchain: it installs the workspace's toolchains (`.moon/toolchains.yml`,
 through proto). Inside, moon still runs its setup actions, which find
 them installed, put them on the task's `PATH` and make each task's hash
