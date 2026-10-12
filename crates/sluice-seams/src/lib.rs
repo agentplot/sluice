@@ -186,6 +186,9 @@ pub struct RunReport {
     pub tasks: Vec<TaskResult>,
     /// 84: what the executor held the run to.
     pub executor: Enforced,
+    /// 15: required checks the run was to run that it left without a
+    /// result: skipped, or never reached. None of them passes.
+    pub missing: Vec<String>,
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,

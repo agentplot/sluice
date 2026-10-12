@@ -102,6 +102,8 @@ pub struct Tested {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailedTask {
     pub task: String,
+    /// Empty for a required check the run left without a result (15).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hash: String,
 }
 

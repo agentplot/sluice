@@ -21,7 +21,8 @@ pub struct Verdict {
 /// A check reads as its key reads across every recorded result (69): a
 /// pass only passes, a fail only fails, and both read as the policy's
 /// `flaky` says, the same for every candidate of the branch (19). A run
-/// that hit its time limit reads as failed (66).
+/// that hit its time limit reads as failed (66), and so does one that left
+/// a required check without a result (15).
 pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict {
     let mut failed = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
@@ -53,6 +54,13 @@ pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict
                 hash: t.hash.clone(),
             });
         }
+    }
+    // 15: a required check the run left without a result is no pass.
+    for task in &report.missing {
+        failed.push(FailedTask {
+            task: task.clone(),
+            hash: String::new(),
+        });
     }
     Verdict {
         passed: failed.is_empty() && !report.timed_out,

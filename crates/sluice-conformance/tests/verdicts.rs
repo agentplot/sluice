@@ -362,3 +362,19 @@ fn a_limit_the_executor_cannot_hold_refuses_the_run() {
     assert!(results(&h).is_empty());
     assert_ne!(h.sub(one).state, State::Landed);
 }
+
+/// satisfies: 15, 55
+#[test]
+fn a_required_check_the_run_left_without_a_result_is_no_pass() {
+    let h = Harness::bolt();
+    h.w().skips("b:test");
+    h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert!(results(&h).iter().all(|r| r.task != "b:test"));
+    match &h.w().told()[0].told {
+        Told::Failed { failed, .. } => assert_eq!(failed, &vec!["b:test".to_string()]),
+        other => panic!("told {other:?}"),
+    }
+}

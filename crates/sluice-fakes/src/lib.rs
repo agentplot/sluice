@@ -92,6 +92,7 @@ struct Inner {
     fail_rules: Vec<(String, Predicate)>,
     flaky: BTreeMap<String, VecDeque<Outcome>>,
     hang: BTreeSet<String>,
+    skip: BTreeSet<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     hold: bool,
@@ -366,6 +367,11 @@ impl World {
         self.0.borrow_mut().hang.insert(task.into());
     }
 
+    /// Runs leave `task` without a result, as a runner that skips it.
+    pub fn skips(&self, task: &str) {
+        self.0.borrow_mut().skip.insert(task.into());
+    }
+
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
@@ -468,6 +474,7 @@ impl World {
                 memory: None,
                 network: None,
             },
+            missing: Vec::new(),
             timed_out: false,
         };
         for t in wanted {
@@ -480,6 +487,10 @@ impl World {
                 if !changed {
                     continue;
                 }
+            }
+            if inner.skip.contains(&t.name) {
+                report.missing.push(t.name.clone());
+                continue;
             }
             if inner.hang.contains(&t.name) && request.limit.is_some() {
                 report.timed_out = true;
