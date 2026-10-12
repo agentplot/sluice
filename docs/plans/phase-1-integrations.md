@@ -107,7 +107,8 @@ Patterns to copy from flywheel-next, `crates/flywheel-store-git/src/`:
 | common dir | `git.rs:140,192`, `repo.common_dir()` |
 | the git command beside gix | `git.rs:72-108` `Repo::run`: `Command::new("git")` with `GIT_AUTHOR_*`/`GIT_COMMITTER_*` pinned and `GIT_CONFIG_NOSYSTEM=1`; used only where gix has no equivalent (`git.rs:1-9`) |
 
-The gix 0.87.1 API, checked in the registry source:
+The gix 0.87.1 API, checked in the registry source. The profile is
+built on gix 0.89.0, where these names hold except the errors (below):
 
 | item | file:line |
 |---|---|
@@ -195,13 +196,16 @@ d86635e bolt/x@{1}: commit: other
 candidate commit, not its tree: pass the candidate's id there (the
 experiment used the tree only because it had no candidate commit).
 
-`move_to` maps the errors to the seam's values:
+`move_to` maps the errors to the seam's values. From gix 0.89 (gix-ref
+0.69) a refusal is a `gix::Error` (`gix_error`) carrying the cause; the
+profile (`crates/sluice/src/profiles/local_refs.rs`) recovers it as
+below, and the acceptance tests hold it to these values:
 
-| gix error | meaning | `move_to` returns |
+| refusal | meaning | `move_to` returns |
 |---|---|---|
-| `FileTransactionPrepare(ReferenceOutOfDate { actual, .. })` | the branch is elsewhere | `Ok(Moved::Elsewhere(Some(actual)))` (24, core.5: reported, never retried blind) |
-| `FileTransactionPrepare(MustExist { .. })` | the branch was deleted | `Ok(Moved::Elsewhere(None))` |
-| `FileTransactionPrepare(LockAcquire { .. })` | git or another gix holds `<ref>.lock` | `Err`: transient; the step fails and the next one tries again |
+| `e.downcast_any_ref::<gix::refs::file::transaction::prepare::ReferenceOutOfDate>()` with `actual` | the branch is elsewhere | `Ok(Moved::Elsewhere(Some(actual)))` (24, core.5: reported, never retried blind) |
+| `e.classify().is_not_found()` | the branch was deleted | `Ok(Moved::Elsewhere(None))` |
+| anything else, as `<ref>.lock` held by git or another gix | transient | `Err`: the step fails and the next one tries again |
 
 Lock interplay, measured: with `refs/heads/bolt/x.lock` present gix
 retried for about 0.73 s and failed with `LockAcquire { source:
