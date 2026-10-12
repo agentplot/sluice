@@ -575,7 +575,11 @@ worktree's HEAD moves with the ref but its index and files do not, so
 move under a clean worktree on `bolt/x` with one untracked file:
 `D  t.txt`, `?? local.txt`. `git read-tree -m -u <old> HEAD` in that
 worktree (the two-way merge `git checkout` does) brought it level and
-kept the untracked file. Who runs it is an open question.
+kept the untracked file. sluice does not run it: the worktree is not a
+place sluice made (core.16). The conductor runs it when its bolt's branch
+moves, which crew learns from the submission's state. crew is to move to
+a design where no worktree has a bolt's branch checked out, and the
+hazard goes with it.
 
 ### Acceptance tests
 
@@ -1100,18 +1104,33 @@ long wait. Before signalling a group found in `pgid` with no supervisor
 holding `lock`, check that a member started after `request.json` was
 written (`ps -o lstart= -g <pgid>`), or skip it.
 
-`capacity()` (71): the host's bound minus the number of `.runs/*` whose
-`lock` is held. The bound is a host setting, not the policy's
-(`SLUICE_HOST_RUNS`, or `[host] runs` in `~/.config/sluice/config.toml`);
-default a quarter of the CPUs, never fewer than one. `capacity` is a
-hint: two steps of different branches can both read room for one more.
-The bound is enforced where a run starts: `start` takes
-`<common>/sluice/.runs.lock`, counts the held `lock`s, and refuses past
-the bound, so the step leaves that candidate formed and starts it in a
-later round. That refusal is a value the core acts on, so `Tests::start`
-returns it beside the handle (pass 2 changes the seam and the fakes'
-host limit to match). Each moon run gets `--concurrency` of the CPUs
-divided by the bound, so runs at the bound never oversubscribe the host.
+**The host's bound (71).** A host runs at most `B` runs at once, across
+every repository and branch on it. `B` is the host's, never a policy's:
+`[host] runs` in `$XDG_CONFIG_HOME/sluice/config.toml` (default
+`~/.config`), else the CPUs sluice may use divided by four, never fewer
+than one. "The CPUs sluice may use" is
+`std::thread::available_parallelism()`, which on Linux honours the
+process's CPU affinity and its cgroup quota, so a container or a CI
+runner limited to four CPUs reads four, not the machine's sixty-four.
+
+The bound is a semaphore of slot files, one per run allowed:
+`$XDG_STATE_HOME/sluice/slots/0.lock` to `<B-1>.lock` (default
+`~/.local/state`), outside any repository so one bound covers them all.
+`start` tries each slot with `File::try_lock` and hands the first it
+gets to the supervisor, which holds it for the run's whole life; the
+kernel releases it when the supervisor exits or dies, so a crash never
+leaks a slot and nothing has to be counted or cleaned. When every slot
+is held, `start` returns `Full`, a value the core acts on: the candidate
+stays formed and starts in a later round. So `Tests::start` returns
+`Started(handle)` or `Full` (pass 2 changes the seam and the fakes' host
+limit to match), and `capacity()` is the number of slots free now, a
+hint for how many to try.
+
+Each run is told its share of the host: the runner is given
+`available_parallelism() / B` threads: moon's `--concurrency`, and
+`SLUICE_JOBS` in a `command` runner's environment for the command to
+pass on, so `B` runs at
+once use the CPUs sluice may use and no more.
 
 **Environment for the command.** `env_clear()`, then `PATH`, `HOME`,
 `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`/`LC_*`, `TERM` from sluice's
@@ -1238,7 +1257,10 @@ switch, exit 0, JSON on stdout, progress on stderr:
   `pre-*` block and a failure aborts; **`post-*` run detached**
   (`post-start` logged about 2 s after `switch` returned), logged under
   `.git/wt/logs/<branch>-<hash>/project/post-start/`. Only `pre-start`
-  is done before tests start. crew has neither today.
+  is done before tests start, and sluice waits for nothing more: what a
+  check needs is in a `pre-start` hook or a dependency of the check (a
+  moon task it depends on), as the walkthrough tells repositories. crew
+  has neither today.
 - **Without `--yes`**, an unapproved project hook makes switch exit 1
   with nothing created:
 
@@ -1494,7 +1516,7 @@ withdraw` and `sluice status`; pass 1's CLI does not have them as
 |---|---|---|
 | head | `git -C <worktree> rev-parse HEAD` (or gix) | |
 | branch (`from.worktree`, as the walkthrough's `"worktree": "unit/batch-review"`) | `git symbolic-ref -q --short HEAD` | detached: exit 1, no output (`--abbrev-ref HEAD` prints `HEAD`): refuse, exit 2, `submit from a branch: <worktree> is detached` |
-| agent (`from.agent`) | `SLUICE_AGENT` from the environment; else the branch name | crew sets `CREW_AGENT` (e.g. `crw-1-unit-1`) and `CREW_LABEL` in every role's environment (`crew/plugin/bin/crew-role:18`, restored by `plugin/hooks/session-start:40-55`); core.1 forbids naming crew here, so crew's role environment exports `SLUICE_AGENT` (see *Open questions*) |
+| agent (`from.agent`) | `SLUICE_AGENT` from the environment; else the branch name | crew sets `CREW_AGENT` (e.g. `crw-1-unit-1`) and `CREW_LABEL` in every role's environment (`crew/plugin/bin/crew-role:18`, restored by `plugin/hooks/session-start:40-55`); core.1 forbids naming crew here, so crew's role environment exports `SLUICE_AGENT=$CREW_AGENT` |
 | dirty (2) | `git -C <worktree> status --porcelain=v1 -z --untracked-files=all` | below |
 
 The dirty check, raw bytes (`od -c`, trimmed):
@@ -1973,45 +1995,3 @@ rigs run it.
 1. `moon run ':#check-fast'` runs in under a minute on a warm cache and needs no tool beyond cargo.
 2. `moon run ':#check-tools'` with git, moon or worktrunk missing fails naming the tool, never passes by skipping.
 3. Every conformance test that does not need a fake-only fault passes over the real rig.
-
----
-
-## Open questions for the operator
-
-1. **Setup a checkout needs before its tests.** When sluice makes a
-   checkout with worktrunk, the repository's worktrunk hooks run in it.
-   `pre-start` hooks finish before `wt switch` returns; `post-start`
-   hooks run in the background, so the tests can start while one is
-   still copying a file or installing something, and fail for that
-   reason alone. Recommendation: sluice does not wait for `post-start`,
-   and the walkthrough tells repositories that whatever a check needs is
-   either in a `pre-start` hook or a dependency of the check itself (a
-   moon task it depends on). crew has no such hooks today, so nothing
-   changes for it.
-
-2. **A bolt branch checked out in a conductor's worktree.** In crew, the
-   conductor's worktree has the bolt's branch checked out. When sluice
-   lands work on that branch it moves the branch, but the files in the
-   conductor's worktree stay where they were. `git status` there then
-   shows the landed work as if the conductor had deleted it, staged, and
-   a careless `git commit -a` would undo the landing. Someone has to
-   bring the worktree up to date (`git read-tree -m -u <old> HEAD`, which
-   keeps untracked files). Choices:
-   - sluice does it after each landing. Simple for crew, but sluice would
-     be changing a worktree it did not make, which rule core.16 forbids.
-   - the conductor does it when told its bolt's branch moved.
-   - a branch sluice lands on is never checked out: the conductor works
-     on its own branch or a detached HEAD, and `sluice submit` refuses a
-     target branch that is checked out anywhere.
-
-   Recommendation: the third. It removes the hazard rather than repairing
-   it, and keeps sluice out of worktrees it did not make.
-
-3. **The variable that names the agent.** Each submission records which
-   agent sent it, shown in `sluice status` and used to tell that agent
-   the outcome. `wt-submit` reads it from `SLUICE_AGENT`, and uses the
-   branch name when that is unset. crew already gives every agent a name
-   in `CREW_AGENT` (for example `crw-1-unit-1`), but sluice's code may not
-   name crew (rule core.1). So crew's role setup would also export
-   `SLUICE_AGENT=$CREW_AGENT`, a one-line change in crew. Agree the name
-   `SLUICE_AGENT`?
