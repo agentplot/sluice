@@ -195,3 +195,23 @@ fn a_command_that_cannot_start_fails_with_its_reason() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A place's name, `sluice/try/<branch>/<n>`, is one run directory.
+#[test]
+fn a_place_name_with_slashes_is_one_run() {
+    let dir = Scratch::new("runs-slash");
+    let r = runs(dir.path());
+    let name = "sluice/try/bolt/x/1";
+    r.start(name, &request(dir.path(), "exit 0", None)).unwrap();
+    assert!(matches!(wait(&r, name), RunState::Finished(e) if e.passed()));
+    assert_eq!(
+        r.dir(name).file_name().unwrap(),
+        "sluice%2Ftry%2Fbolt%2Fx%2F1"
+    );
+    assert_eq!(
+        r.dir(name).parent().unwrap(),
+        dir.path().join("sluice/.runs")
+    );
+    r.remove(name).unwrap();
+    assert!(!r.dir(name).exists());
+}

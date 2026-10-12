@@ -2,9 +2,9 @@
 //! this crate that may name a tool (rule core.1).
 //!
 //! The real profiles are pass 2's (`docs/plans/phase-1-integrations.md`).
-//! The branch is bound to [`local_refs`], the records to [`local_files`]
-//! and the check to [`checks`]; a seam whose profile is not built yet is
-//! bound to
+//! The branch is bound to [`local_refs`], the records to [`local_files`],
+//! the check to [`checks`] and the place to [`places`]; a seam whose
+//! profile is not built yet is bound to
 //! [`Unbuilt`], which refuses every call by naming that profile, so the
 //! CLI's arguments, output and exits are whole and only those seams are
 //! missing.
@@ -13,12 +13,13 @@ pub mod checks;
 pub mod local_files;
 pub mod local_refs;
 pub mod moon;
+pub mod places;
 pub mod worktrunk;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
-use sluice_seams::{Checkout, Driver, Notification, Place, Rev, Session};
+use sluice_seams::{Driver, Notification, Session};
 
 use crate::instance::Instance;
 
@@ -41,7 +42,7 @@ impl Unbuilt {
 /// The profiles the walkthrough's setup names, for the repository holding
 /// a directory.
 pub struct Bound {
-    pub checkout: Unbuilt,
+    pub checkout: places::Places,
     pub tests: checks::Checks,
     pub branch: local_refs::LocalRefs,
     pub driver: Unbuilt,
@@ -61,10 +62,10 @@ impl Bound {
         let common = branch.common_dir()?;
         let state = local_files::LocalFiles::new(&common);
         Ok(Bound {
-            checkout: Unbuilt {
-                seam: "place",
-                profile: "worktrunk",
-            },
+            checkout: places::Places::new(
+                &common,
+                crate::runs::Runs::new(&common, program.clone()),
+            ),
             tests: checks::Checks::new(&common, program, instance),
             branch,
             driver: Unbuilt {
@@ -83,15 +84,6 @@ impl Bound {
             driver: &self.driver,
             state: &self.state,
         }
-    }
-}
-
-impl Checkout for Unbuilt {
-    fn materialize(&self, _: &str, _: &Rev) -> Result<Place> {
-        self.refuse()
-    }
-    fn release(&self, _: &str) -> Result<()> {
-        self.refuse()
     }
 }
 

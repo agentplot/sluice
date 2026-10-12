@@ -11,7 +11,7 @@
 //! [`Runs::state`] reads what it wrote.
 //!
 //! ```text
-//! <common>/sluice/.runs/<place>/
+//! <common>/sluice/.runs/<place, flat>/
 //!   request.json   what to run; written before the supervisor starts
 //!   lock           held by the supervisor for its whole life; its pid
 //!   pgid           the command's process group, once it is spawned
@@ -111,16 +111,13 @@ impl Runs {
 
     /// The run directory of the place `name`.
     pub fn dir(&self, name: &str) -> PathBuf {
-        self.root.join(name)
+        self.root.join(flat_name(name))
     }
 
     /// Start `request` in a new run directory for the place `name`, under
     /// a supervisor in a session of its own, so a terminal's Ctrl-C or
     /// hang-up never reaches the run. Returns without waiting for it.
     pub fn start(&self, name: &str, request: &Request) -> Result<()> {
-        if name.is_empty() || name.contains('/') || name.starts_with('.') {
-            bail!("{name:?} cannot name a run");
-        }
         let dir = self.dir(name);
         if dir.exists() {
             if self.supervised(&dir)? {
@@ -355,6 +352,18 @@ pub fn end_group(pgid: i32, grace: Duration, reap: &mut dyn FnMut() -> bool) {
     let until = Instant::now() + Duration::from_secs(5);
     while alive(reap) && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A place's name as one directory name: `/` and `%` written `%2F` and
+/// `%25`, so `sluice/try/bolt/x/1` is one directory and no two names
+/// share one.
+pub fn flat_name(name: &str) -> String {
+    assert!(!name.is_empty(), "a place has a name");
+    let flat = name.replace('%', "%25").replace('/', "%2F");
+    match flat.strip_prefix('.') {
+        Some(rest) => format!("%2E{rest}"),
+        None => flat,
     }
 }
 

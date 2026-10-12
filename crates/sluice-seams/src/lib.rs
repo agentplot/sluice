@@ -70,8 +70,9 @@ pub struct Place {
 
 pub trait Checkout {
     /// 33: a place holding exactly `rev`, with the environment the
-    /// repository declares, named `name`.
-    fn materialize(&self, name: &str, rev: &Rev) -> Result<Place>;
+    /// repository declares, named `name`, made as the policy's
+    /// `[checkout]` table says.
+    fn materialize(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<Place>;
 
     /// 34: the place's removal, with everything started in it ended. The
     /// core calls this only with names it chose (rule core.16); releasing

@@ -285,7 +285,10 @@ impl Sluice<'_> {
         let rules = self.gate(branch, &base)?;
         for c in starting {
             let name = c.place.clone().expect("a starting candidate has a place");
-            let place = self.seams.checkout.materialize(&name, &c.revision)?;
+            let place = self
+                .seams
+                .checkout
+                .materialize(&name, &c.revision, &policy.checkout)?;
             let since = (line.doc.verified && c.on == base).then(|| c.on.clone());
             let run = self.seams.tests.start(&RunRequest {
                 place,

@@ -8,9 +8,9 @@ tasks:
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The profiles against real tools (git, moon): the check-tools tier.
+  # The profiles against real tools (git, moon, wt): the check-tools tier.
   tools:
-    command: 'cargo test -p sluice --features tools --test local_refs --test moon'
+    command: 'cargo test -p sluice --features tools --test local_refs --test moon --test places'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-tools]
     options: {runFromWorkspaceRoot: true}

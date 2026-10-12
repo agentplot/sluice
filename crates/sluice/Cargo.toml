@@ -33,6 +33,10 @@ toml.workspace = true
 name = "moon"
 path = "tests/profiles/moon.rs"
 
+[[test]]
+name = "places"
+path = "tests/profiles/places.rs"
+
 [features]
 # The acceptance tests that need a real tool (git), the check-tools tier.
 tools = []

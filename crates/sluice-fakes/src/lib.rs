@@ -17,8 +17,8 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Notification,
-    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source,
-    State, Submitter, TaskResult, Tests, Written,
+    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Settings, Snapshot,
+    Source, State, Submitter, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -825,7 +825,7 @@ impl Tests for FakeTests {
 }
 
 impl Checkout for FakeCheckout {
-    fn materialize(&self, name: &str, rev: &Rev) -> Result<Place> {
+    fn materialize(&self, name: &str, rev: &Rev, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
         // 32: two places on one host never collide.
         if inner.places.contains_key(name) || inner.worktrees.contains_key(name) {
