@@ -23,7 +23,7 @@ C.6 put entries and verdicts under the common git directory in "the record form 
 
 ## Decision outcome
 
-Option 2. JSON is what a general reader expects and needs no tool beyond what every language has. Records live under `<common-git-dir>/sluice/<line>/`, are written by rename so a reader never sees half a record, and are local to the host; what outlives them is a landing's trailers (ADR 0006). Policy is `.config/sluice.toml`, one table per pattern of branch names, reviewed like code and read from the branch's current revision, never from a candidate or a place (56). A submission that changes the policy is judged by the policy it would replace.
+Option 2. JSON is what a general reader expects and needs no tool beyond what every language has. Records live under `<common-git-dir>/sluice/<branch>/`, are written by rename so a reader never sees half a record, and are local to the host; what outlives them is a landing's trailers (ADR 0006). Policy is `.config/sluice.toml`, one table per pattern of branch names, reviewed like code and read from the branch's current revision, never from a candidate or a place (56). A submission that changes the policy is judged by the policy it would replace.
 
 The default for a bolt's branch tests every candidate with a window of one to four, trusting the local cache and the sessions' open runs, and reads a flaky key as passed. The default for the shared branch tests deepest first and trusts only confined executors, so until one exists the shared branch's gate reads missing and nothing lands there through sluice.
 
