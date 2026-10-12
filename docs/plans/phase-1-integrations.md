@@ -16,7 +16,7 @@ rules and does not restate them.
 | git | 2.54.0 | `/etc/profiles/per-user/chuck/bin/git` | also `/usr/bin/git` 2.50.1 (Apple Git-155), which some tools use: see *Branch protection* |
 | gix | 0.89.0 on crates.io; the APIs below were read in 0.87.1 (gix-ref 0.67.1, gix-actor 0.42.0) | `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` | depend on 0.89 and re-check the calls section 1 names |
 | moon in sluice's devenv | 2.6.1 | `/nix/store/1vc28y8m628iwc0z2qz4yll877i45r0m-moon_cli-2.6.1/bin/moon` | moonrepo's release build, pinned in `devenv.nix`; `devenv shell -- moon --version` |
-| proto in sluice's devenv | 0.63.1 | `devenv.nix`, as moon | moonrepo's toolchain manager; moon runs the shell's tools, never proto's (`MOON_TOOLCHAIN_FORCE_GLOBALS`) |
+| proto in sluice's devenv | 0.63.1 | `devenv.nix`, as moon | moonrepo's toolchain manager: installs and runs the application toolchain `.prototools` pins (Rust 1.98.1, through rustup), which `.moon/toolchains.yml` reads; `PROTO_HOME` and `MOON_HOME` are the repository's (`<common>/proto`, `<common>/moon-home`) |
 | moon on `PATH` | 1.41.7 | `~/.bun/bin/moon` | **cannot run crew**: no task tags, no `moon exec` |
 | moon in crew's devenv | 2.5.3 | `/nix/store/xn5qbl6xwpb2d9hlchsjzacx6qkgcrml-moon-2.5.3/bin/moon` | what crew's `tests/suite` runs; below the profile's floor until crew moves to 2.6 |
 | worktrunk | v0.80.0 | `/etc/profiles/per-user/chuck/bin/wt` | `wt` in zsh is a function wrapping the binary; call `command wt` or the path |
@@ -909,14 +909,25 @@ MOON_PROJECT_ID, MOON_PROJECT_ROOT, MOON_PROJECT_SNAPSHOT,
 MOON_PROJECT_SOURCE, MOON_TARGET, MOON_TASK_HASH, MOON_TASK_ID,
 MOON_TASK_RETRY_ATTEMPT, MOON_TASK_RETRY_TOTAL, MOON_THEME, MOON_VERSION,
 MOON_WORKING_DIR, MOON_WORKSPACE_ROOT` (captured on 2.5.3 and again on
-2.6.1, where `MOON_TOOLCHAIN_FORCE_GLOBALS` from the shell also passes
-through), and reads `MOON_*` as
+2.6.1), and reads `MOON_*` as
 options (`MOON_BASE`, `MOON_HEAD`, `MOON_AFFECTED`, `MOON_FORCE`,
 `MOON_CACHE`, `MOON_ON_FAILURE`, `MOON_CONCURRENCY`, …). A sluice started
 from inside a moon task (a test of sluice, a waiting `wt submit` run by a
 task) would hand those on. Clear every inherited `MOON_*` and set only
 the ones sluice means, as crew's `tests/suite:62-66` does. crew's devenv
 sets `MOON_TOOLCHAIN_FORCE_GLOBALS=true`; that comes with the shell.
+
+moon also puts the tools of its homes ahead of everything on a task's
+`PATH`: `$MOON_HOME/bin` (default `~/.moon/bin`), `$PROTO_HOME/shims`
+and `$PROTO_HOME/bin` (default `~/.proto`). Captured on 2.6.1: a task's
+`PATH` began `~/.cargo/bin`, the pinned rustup toolchain, proto's own
+directory, `~/.proto/shims`, `~/.proto/bin`, `~/.moon/bin`, and only
+then the shell's. With the user's own installs there (moon 2.4.6 in
+`~/.proto/bin`, 1.41.8 in `~/.moon/bin`), every moon a task ran was one
+of those, not the shell's 2.6.1. A repository's shell that wants its
+tools to win sets both homes to its own; sluice's sets
+`PROTO_HOME=<common>/proto` and `MOON_HOME=<common>/moon-home`, shared
+by its worktrees.
 
 ### Archive places
 

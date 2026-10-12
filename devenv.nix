@@ -6,8 +6,6 @@
 }:
 
 let
-  rust = config.languages.rust.toolchain;
-
   # moonrepo's own release builds: nixpkgs trails moon by a minor version or
   # more, and sluice runs its own merge queue on the newest moon. Linux takes
   # the static musl build, so no loader needs patching.
@@ -77,19 +75,36 @@ let
     };
   };
 
-  # The lint gate. Its own PATH carries the devenv toolchain, because a git
-  # hook runs outside any shell a session opened.
+  # The application toolchain .prototools pins, on PATH: what the shell
+  # activates, and what a git hook, which runs outside any shell a session
+  # opened, activates for itself. proto's home is this repository's, in the
+  # git common dir so every worktree shares it: moon puts $PROTO_HOME/bin on
+  # every task's PATH, and the user's own proto installs (an older moon
+  # among them) must never shadow the system tools above. Only this
+  # repository's pins are read (no global .prototools).
+  activate = ''
+    PROTO_HOME="$(${lib.getExe pkgs.git} rev-parse --path-format=absolute --git-common-dir)/proto"
+    export PROTO_HOME
+    eval "$(${proto}/bin/proto activate bash --export --no-bin --config-mode upwards 2>/dev/null)"
+  '';
+
+  # The lint gate.
   lint = pkgs.writeShellApplication {
     name = "lint";
-    runtimeInputs = [
-      rust.cargo
-      rust.clippy
-      rust.rustc
-      pkgs.git
-    ];
+    runtimeInputs = [ pkgs.git ];
     text = ''
       cd "$(git rev-parse --show-toplevel)"
+      ${activate}
       cargo clippy --workspace --all-targets -- -D warnings
+    '';
+  };
+
+  # treefmt's rustfmt: the pinned toolchain's.
+  rustfmt = pkgs.writeShellApplication {
+    name = "rustfmt";
+    text = ''
+      ${activate}
+      exec rustfmt "$@"
     '';
   };
 
@@ -123,10 +138,10 @@ let
 
 in
 {
-  # The toolchain is this file's, pinned by devenv.lock: every cargo and moon
-  # command in this repository runs inside `devenv shell`.
-  languages.rust.enable = true;
-
+  # The system tools are this file's, pinned by devenv.lock; the application
+  # toolchain (Rust) is .prototools', installed by `moon setup` or `proto
+  # install` and activated here. Every cargo and moon command in this
+  # repository runs inside `devenv shell`.
   packages = [
     pkgs.git
     pkgs.jq
@@ -137,8 +152,7 @@ in
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
   # in one worktree replay in another. The rest of .moon/cache records the
-  # checkout's absolute paths and stays its own. moon runs the shell's tools,
-  # never proto's.
+  # checkout's absolute paths and stays its own.
   enterShell = ''
     if _moon_common="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
       _moon_cache="${config.devenv.root}/.moon/cache"
@@ -150,13 +164,17 @@ in
       fi
     fi
     unset _moon_common _moon_cache
-    export MOON_TOOLCHAIN_FORCE_GLOBALS=true
+    # moon puts $MOON_HOME/bin on every task's PATH too: this repository's,
+    # beside proto's, so no moon of the user's runs in a task.
+    MOON_HOME="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir)/moon-home"
+    export MOON_HOME
+    ${activate}
   '';
 
   treefmt.enable = true;
   treefmt.config = {
     imports = [ ./treefmt.nix ];
-    programs.rustfmt.package = rust.rustfmt;
+    programs.rustfmt.package = rustfmt;
   };
 
   # `devenv shell -- cargo-tests`: every crate's cargo tests and the
