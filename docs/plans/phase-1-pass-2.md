@@ -36,8 +36,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; the self-probe below to rerun; Linux to come |
-| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | next |
-| 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | |
+| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
+| 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | next |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -45,29 +45,13 @@ needed.
 
 ## What each next piece owes the seams
 
-- **10, sluice's own tiers.**
-  - A `root` moon project at the workspace root (`moon.yml` beside
-    `.moon/`, listed in `.moon/workspace.yml`) with `format` (`treefmt
-    --fail-on-change`) and `lint` (`cargo clippy --workspace --all-targets
-    -- -D warnings`), both tagged `check-fast`: a candidate is held to what
-    the commit hooks hold a commit to. Their inputs name everything they
-    read; `lint` is cacheable, `format` too.
-  - `check-e2e`: a task running `e2e/e2e.sh <scratch dir> sluice` with the
-    built `sluice` and `wt-submit` first on `PATH`; `cache: false` unless
-    its inputs can be named whole. Tag `check-e2e` only.
-  - The conformance suite over the real profiles: split the conformance
-    harness into a `Rig` trait (what every scenario needs: a branch to
-    land on, sessions with heads, a submit, rounds, the records) and
-    fake-only faults (crashes, interference, lost runs) kept on the fake
-    rig. A real rig builds a scratch repository with git-worktree places
-    and the `command` runner, or moon on a scratch workspace; the
-    scenarios that need no fault run on both, in `check-tools`.
 - **The self-probe.** `scratchpad/self-probe.sh` (in this session's
   scratchpad; Claude Code's safety check will not run a sourced script
   holding `rm`, so the operator runs it with `!`) runs sluice's fast tier
   the profile's way under the bare Seatbelt fence; its worktree is at
-  `34640ae`. It last failed on `/bin/bash` 3.2, since fixed; it is to be
-  rerun and pass (`fenced run: exit 0`, `Tasks: 6 completed`).
+  `3afc3d6` and follows the moon runner's order (`proto install`, `moon
+  --version`, `moon setup`, then the fenced run); it is to be rerun and
+  pass (`fenced run: exit 0`, `Tasks: 6 completed`).
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
   - **The build cache.** flywheel-next carries `target/` into each new
@@ -97,6 +81,11 @@ needed.
     (`devenv.nix`, `devenv.lock`, `devenv.yaml`, `.prototools`), under the
     common dir, with the place's own paths written in at use; or find
     whether devenv can share its evaluation cache across roots.
+
+- **The conformance scenarios with faults** (crashes, interference,
+  lost and held runs) stay on the fakes. Each shared scenario names what
+  differs on a real rig where timing matters: a run cut short once the
+  candidate ahead fails, a busy round taken again.
 
 - **The policy** gains `trust` per branch (section 4, *What a branch
   trusts*), read by the verdict from each result's recorded executor

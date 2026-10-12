@@ -1840,53 +1840,62 @@ required = ["#check-fast", "#check-tools", "#check-e2e"]
 batch = true
 ```
 
-The cargo test tasks carry `check-fast` today. Pass 2 adds:
+The tasks:
 
-- a workspace-level moon project (`root`, source `.`) with `format`
-  (`cargo fmt --all -- --check`) and `lint` (clippy), tagged
-  `check-fast`, so the gate holds what the commit hook holds;
-- a `tools` task per profile crate or module, tagged `check-tools`,
-  running that section's acceptance tests (`cargo test -p <crate>
-  --features tools`, or `#[ignore]`d tests run with `--ignored`, so a
-  plain `cargo test` stays fast and needs no tool);
-- an `e2e` task tagged `check-e2e`, `cache: false` for the crew variant,
-  since it reads a repository outside this tree.
+- each crate's cargo tests, and the citations check, tagged
+  `check-fast` (and `cargo-test`);
+- the workspace's own project (`root`, source `.`, `moon.yml` at the
+  top): `format` (`treefmt --ci`: every formatter `treefmt.nix`
+  configures, failing on any change and keeping no cache outside the
+  tree) and `lint` (`cargo clippy --workspace --all-targets -- -D
+  warnings`), tagged `check-fast`, so the gate holds a candidate to what
+  the commit hooks hold a commit to;
+- `cli:tools`, tagged `check-tools`: the acceptance tests that need a
+  real tool (`cargo test -p sluice --features tools --test …`), the
+  conformance scenarios on the real profiles among them;
+- `cli:e2e`, tagged `check-e2e`, never replayed: `e2e/check.sh` builds
+  `sluice` and `wt-submit`, puts them first on `PATH`, and runs `e2e.sh
+  <scratch> sluice` once with git-worktree places and once with
+  worktrunk's (about 1 m 50 s). The scratch repositories are removed when
+  both pass and kept, their path printed, when one fails.
 
 `cargo-tests` stays the fast tier and runs before every `wt merge`;
-`checks-all` (`moon run ':#check-fast' ':#check-tools'`) is what a person
-runs before landing a profile change, and the end-to-end tier runs by
-hand or nightly until sluice gates `main`.
+`moon run ':#check-fast' ':#check-tools' ':#check-e2e'` is what a person
+runs before landing a profile change, until sluice gates `main`.
 
 ### The conformance suite over the real profiles
 
 The statement asks for "the profiles of Part C, each passing the suite"
-(section 12). Today the suite's `Harness` builds a `sluice_fakes::World`
-and its tests script it directly (`h.w().fails_with(…)`,
-`h.w().crash(…)`). Pass 2 splits that in two:
+(section 12). Scenarios run on a **`Rig`**, a trait in
+`sluice-conformance`: what every binding can do. It makes a session's
+place with work on the branch's tip, or on another head, or with files
+beyond its commits; makes a named check fail when a path holds given
+content; steps and settles the branch; and reads the branch, its commits
+and trees, the records, the results log, and what the core did through
+the seams (runs requested and started, places made and released, moves,
+what each session was told).
 
-- **`Rig`**, a trait in `sluice-conformance`, holds what every binding
-  can do: make a session's place with given files, read the branch's tip
-  and tree, move the branch by hand, make a named check fail when a path
-  holds given content, read the records' files, read what each session
-  was told. The fakes implement it over `World`; the real rig
-  implements it over a scratch repository in a temp dir, with the local
-  refs branch, local files records, git-worktree places, the `command`
-  runner and a driver that appends every notification to a file.
-- **What only the fakes can stage** stays on `World`: a crash between
-  two writes, a held or lost run, an interfering write. A test that
-  needs one says so (`fn crash_after_move(h: &Harness<FakeRig>)`) and
-  runs over the fakes alone.
-
-The real rig scripts checks through the tree, as real repositories do:
-the `command` runner runs a script that fails a named check when a path
-holds the content `fails_with` named, so the same test sees the same
-verdicts over both rigs. Hangs and holds become a check that sleeps
-past the limit or waits for a file the test writes.
-
-Every test is generic over the rig, and `tests/*.rs` instantiates it
-twice: `mod fakes` (tier fast) and `mod real` behind the `tools` feature
-(tier tools). The citations check counts a clause as cited once, whichever
-rigs run it.
+- **The fakes' rig** is `Harness`, over `sluice_fakes::World`. What only
+  the fakes can stage stays on `World` (a crash between two writes, a
+  held or lost run, an interfering write, a host limit), and the tests
+  that need one run on the fakes alone.
+- **The real rig** (`crates/sluice/tests/profiles/conformance.rs`, in
+  `cli:tools`) binds the real profiles to a scratch repository holding a
+  moon workspace of three projects, each with a `test` task tagged
+  `gate`: local refs, local files, git-worktree places and the moon
+  runner under the supervisor. Each task runs a script that fails when a
+  rule the test wrote names it and a path holds the rule's content, so
+  both rigs give the same verdicts. It wraps the place, check, branch
+  and driver profiles to record what the core asked of them, and names
+  each session's agent as `SLUICE_AGENT` would (the tests share one
+  process's environment).
+- **`sluice_conformance::shared`** holds the twenty scenarios that need
+  no fault, each written once over any rig. The fake tests in
+  `sluice-conformance/tests/` call them and carry the `satisfies:`
+  citations; the real rig runs each one too. Where timing differs, the
+  scenario allows both: on real tools a run whose candidate ahead has
+  already failed may be ended before it reports, and a round may find
+  the branch's lock busy and be taken again, as `sluice run` does.
 
 ### Acceptance tests
 
