@@ -29,7 +29,7 @@ fails names the one submission that broke it and tells only that agent.
    `docs/adr/0001` to `0010`. The rules bind every diff.
 
 The statement's vocabulary is for design (line, entry, place, candidate,
-culprit, lane, seam). Everything a user sees, config keys, CLI output,
+culprit, seam). Everything a user sees, config keys, CLI output,
 state file fields, error messages, uses the walkthrough's words: branch,
 submission, checkout, combination, blame. Code may use either; be
 consistent within a module.
@@ -44,8 +44,8 @@ integration will work, so pass 2 can be split among several agents.
 In scope:
 
 - A Rust workspace (edition 2021, like flywheel-next) with at least:
-  - `sluice-core`: the domain types, the policy, the step function, lanes,
-    forming order, attribution, landing choice, window. Pure: no I/O but
+  - `sluice-core`: the domain types, the policy, the step function, the
+    chain's order, attribution, landing choice, window. Pure: no I/O but
     through the seam traits.
   - `sluice-seams`: one trait per seam, exactly five: checkout (the place:
     materialize, release), tests (the check: affected, run), branch (the
@@ -89,9 +89,8 @@ S11, S16, plus:
 
 - a resubmission withdraws the earlier submission (67);
 - priority never displaces a combination under test (6);
-- disjoint projects land independently and in either order (8, S6);
-- an unknown-projects submission joins every lane, which divide again after
-  it leaves (9);
+- unrelated work is tested in one chain and not tested again when the
+  submission ahead lands (8, S6);
 - batch mode: the longest passes and all land on its result; the longest
   fails and the shorter ones are tested to find the culprit (14, S9, 23);
 - a timeout is recorded as timed out and read as failed (66);

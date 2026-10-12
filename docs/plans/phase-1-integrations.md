@@ -29,8 +29,8 @@ The moon profile's floor is **moon 2.5**; nothing in it uses 2.6.
 
 The seam traits are those of `crates/sluice-seams/src/lib.rs` as of pass
 1's commit `1fcbe46`: `Checkout` (`materialize`, `release`), `Tests`
-(`affected`, `start`, `progress`, `capacity`), `Branch` (`read`,
-`read_file`, `form`, `commit`, `move_to`), `Driver` (`session`,
+(`start`, `progress`, `capacity`), `Branch` (`read`, `read_file`,
+`form`, `commit`, `contains`, `move_to`), `Driver` (`session`,
 `notify`) and `State` (`lock`, `read`, `write`, `branches`,
 `allocate_id`, `results`, `record_results`). A profile implements one
 trait and nothing of the core (core.2). Each section names the methods it
@@ -580,9 +580,9 @@ In a scratch repository with a policy protecting `bolt/*`, a worktree on
 
 ## 3. moon: which checks a change affects, and what a run reports
 
-**Implements** `Tests::affected` and the moon half of `Tests::start` /
-`Tests::progress` (what to run, and reading the result); the process
-handling is section 4's. **Bears on** 8, 9, 15, 16, 19, 36 to 38, 69, 70;
+**Implements** the moon half of `Tests::start` / `Tests::progress` (what
+to run, and reading the result); the process handling is section 4's.
+**Bears on** 15, 16, 19, 36 to 38, 69, 70;
 core.7, core.9, core.10; ADR 0004.
 
 Verified on moon 2.5.3 (crew's devenv) in a throwaway clone of crew and
@@ -608,10 +608,10 @@ Map a required `#<tag>` to `--tags <tag>` for queries and to the
 explicit targets those return for `moon exec`; a required
 `<project>:<task>` is itself a target.
 
-### `affected(line, head)` (36, 8, 9)
+### Which checks a range affects (36)
 
 ```
-MOON_BASE=<merge-base(line, head)> MOON_HEAD=<head> moon query affected --downstream deep </dev/null
+MOON_BASE=<base> MOON_HEAD=<head> moon query affected --downstream deep </dev/null
 ```
 
 `query tasks` and `query affected` have no `--base`/`--head` flags in
@@ -624,10 +624,7 @@ scratch workspace after a commit changing `alpha/value.txt`:
 
 (that is the `tasks` map; the output also has a `projects` map, where
 `beta` shows `{"upstream":["alpha"]}`). Without `--downstream deep` only
-`alpha:test` is listed. Return `Affected::Parts` of the `projects` map's
-keys: lanes are of projects (8). Return `Affected::Unknown` (9) when the
-query fails, or when the changed files include moon's own configuration
-(`.moon/**`, any `moon.yml`), since the project graph itself changed.
+`alpha:test` is listed.
 
 Changed files alone:
 
@@ -649,12 +646,8 @@ Range semantics, captured in the crew clone with one commit touching
 
 Base and head may be any commits in the object store; the working tree
 need not be at head. But **the project and task graph is read from the
-working tree the query runs in**, not from head. So `affected` must run
-in a checkout of `head`. The core calls it before any candidate place
-exists; use one long-lived detached worktree per repository,
-`<common>/sluice/.places/probe`, moved with `git checkout --detach -f
-<head>` under the repository lock (`.lock`), or materialize a throwaway
-place through the checkout profile's helper.
+working tree the query runs in**, not from head, so the query runs in
+the candidate's place, which holds the candidate.
 
 Task dependents come only through task `deps`. With project
 `dependsOn: ['alpha']` and no task dep, `beta` appears under `projects`
@@ -666,12 +659,15 @@ In the candidate's place:
 
 ```
 MOON_BASE=<since> MOON_HEAD=<candidate> moon query tasks --tags <tag> --affected --downstream deep </dev/null | jq -r '.tasks[][] | .target'
-moon query tasks --tags <tag> </dev/null                       # when since is None: every required check (70)
+moon query tasks --tags <tag> </dev/null                       # when since is None, or moon's configuration changed: every required check (70)
 moon exec <target>… --on-failure continue </dev/null
 ```
 
 `RunRequest.since` is the line's revision when it is covered by a
-verdict and `None` otherwise (70; pass 1's Q12). Pass the explicit
+verdict and `None` otherwise (70; pass 1's Q12). When the changed files
+between `since` and the candidate include moon's own configuration
+(`.moon/**`, any `moon.yml`), the project graph itself changed: run
+every required check. Pass the explicit
 targets to `moon exec`:
 
 - `moon exec ':#suite' --affected --base B --head H --downstream deep`
@@ -822,8 +818,10 @@ In a `git archive` export (no `.git`): `moon exec ':#suite'` runs (2
 passed); `moon exec --affected --base HEAD~1 --head HEAD` **silently ran
 everything**, exit 0; `moon query tasks --affected` failed (`Process git
 failed: exit code 128 … fatal: not a git repository`). With the archive
-method, compute the targets in the probe worktree (above) and run the
-explicit list in the archive.
+method, compute the targets in a probe worktree, one long-lived
+detached worktree per repository at `<common>/sluice/.places/probe`,
+moved with `git checkout --detach -f <candidate>` under the repository
+lock (`.lock`), and run the explicit list in the archive.
 
 ### moon 1.41.7 (on `PATH`)
 
@@ -840,7 +838,7 @@ should refuse moon below 2.5 by name (`moon --version` → `moon 2.5.3`).
 On a scratch workspace like the end-to-end one (two projects, `beta`'s
 `test` depending on `alpha:test`), with moon ≥ 2.5:
 
-1. `affected` of a change to `alpha/value.txt` is `{alpha, beta}`; to `beta/notes.md` is `{beta}`; to `.moon/workspace.yml` is `Unknown`.
+1. The targets run for a change to `alpha/value.txt` are `alpha:test` and `beta:test`; to `beta/notes.md`, `beta:test`; to `.moon/workspace.yml`, every tagged task.
 2. A run of an unaffected candidate starts nothing and reports a pass with no tasks.
 3. First run: both tasks `Ran`, with hashes; second run in the same place: both `Replayed`, same hashes (16, 38, core.9).
 4. A failing task: `Fail` with its hash; its dependent has no result (missing, not pass).

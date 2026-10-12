@@ -1,53 +1,20 @@
 # Phase 1: questions the build met
 
-Things the statement and the walkthrough don't settle. Open questions
-come first, then the rulings made on 2026-10-11, then choices made in the
-build that stand unless overruled. Clause numbers are at the end of each,
-for reference only.
+Things the statement and the walkthrough don't settle: the rulings made
+on 2026-10-11, then choices made in the build that stand unless
+overruled. Clause numbers are at the end of each, for reference only.
 
 In the examples, A, B and C are three agents' submissions to one bolt
 branch, in that order.
 
 ---
 
-## Open
-
-### Lanes: keep them, or one queue per branch?
-
-Today sluice splits a branch's queue into lanes: submissions whose
-projects don't overlap (A touches `api/`, B touches `web/`) are tested
-apart, as "branch + A" and "branch + B", and can land in either order.
-
-What lanes buy:
-- B never waits for a slow A to finish before it can land;
-- a failure in A doesn't make B test again.
-
-What they cost:
-- one branch still has one tip, so whenever A lands, B's test was against
-  a tip that is gone and B is tested again anyway (moon's cache makes
-  that mostly replays);
-- a submission whose projects are unknown has to join every lane, which
-  merges lanes and throws away tests already running (the two questions
-  that were D2 and D3);
-- a moon "affected projects" query per submission, every time the branch
-  moves;
-- more of the core to get right.
-
-With one queue per branch, every submission is tested on top of
-everything ahead of it, the walkthrough's "A, A+B, A+B+C" and nothing
-else. Recommendation: one queue per branch. Lanes are in the statement
-(clauses 8, 9 and scenario S6), so dropping them is a statement change
-first.
-
-If lanes stay: let a test already running finish when lanes merge or the
-branch moves, rather than kill it.
-
-*(clauses 6, 8, 9, 24; S6)*
-
----
-
 ## Ruled
 
+- **One queue per branch.** Every submission is tested on top of every
+  submission ahead of it, A, A+B, A+B+C, and lands in that order. A
+  submission is never tested apart from the ones ahead, so a test is
+  never thrown away because the queue regrouped. *(clauses 8, 10; S6)*
 - **Who runs sluice's rounds.** A waiting `wt submit` runs rounds; the
   submit operation itself only adds to the queue. Rule core.4 reworded;
   ADR 0011. *(clause 1)*
