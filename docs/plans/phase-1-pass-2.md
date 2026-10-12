@@ -50,8 +50,9 @@ needed.
   holding `rm`, so the operator runs it with `!`) runs sluice's fast tier
   the profile's way under the bare Seatbelt fence; its worktree is at
   `3afc3d6` and follows the moon runner's order (`proto install`, `moon
-  --version`, `moon setup`, then the fenced run); it is to be rerun and
-  pass (`fenced run: exit 0`, `Tasks: 6 completed`).
+  --version`, `moon setup`, then the fenced run, its fence allowing
+  localhost); moved to this branch's head, it is to be rerun and pass
+  (`fenced run: exit 0`, no task failed).
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
   - **The build cache.** flywheel-next carries `target/` into each new
@@ -115,6 +116,16 @@ needed.
   `needs-localhost` or `needs-network`; a task with neither needs none.
   `moon query tasks --tags needs-localhost` finds them, and a task needing
   more than its tier's policy allows is split so the rest run with less.
+  Of sluice's own tasks only `cli:sandbox` needs localhost; none needs
+  more.
+- The tests of the `sandbox` executor start a sandbox themselves, which
+  macOS refuses inside another one. They are the task `cli:sandbox` (every
+  test whose name holds `sandbox`, skipped by `cli:test` and
+  `cli:tools`), tagged `starts-a-sandbox` and `cargo-test` and no tier, so
+  no branch checked under the sandbox requires them; the `wt merge`
+  pre-merge hook runs them, outside any sandbox. Until the `container`
+  executor exists, a change to the sandbox code is gated by that hook
+  alone.
 - Policy defaults: `parallel = 4`, `batch = false`, `flaky = "fail"`,
   `timeout = "1h"` (`phase-1-questions.md`).
 - devenv holds the system tools, proto 0.63.1 (moonrepo's release build)

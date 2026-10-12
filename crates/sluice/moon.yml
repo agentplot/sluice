@@ -3,17 +3,27 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 dependsOn: [seams, core, fakes]
 
 tasks:
+  # Everything but the tests that start a sandbox (`sandbox` task).
   test:
-    command: 'cargo test -p sluice'
+    command: 'cargo test -p sluice -- --skip sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
   # The profiles against real tools (git, moon, wt), and the conformance
   # scenarios that need no fault on them: the check-tools tier.
   tools:
-    command: 'cargo test -p sluice --features tools --test local_refs --test moon --test places --test worktrunk --test protect --test conformance'
+    command: 'cargo test -p sluice --features tools --test local_refs --test moon --test places --test worktrunk --test protect --test conformance -- --skip sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/crates/sluice-conformance/src/**/*', '/crates/sluice-conformance/Cargo.toml', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-tools]
+    options: {runFromWorkspaceRoot: true}
+  # The tests of the sandbox executor start a sandbox themselves, which
+  # macOS refuses inside another one, so no branch checked under the
+  # sandbox requires them; the pre-merge hook runs them, outside any.
+  # Every test whose name holds `sandbox` is here and nowhere else.
+  sandbox:
+    command: 'cargo test -p sluice --features tools --test checks --test moon -- sandbox'
+    inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
+    tags: [cargo-test, starts-a-sandbox, needs-localhost]
     options: {runFromWorkspaceRoot: true}
   # S1 to S4 through wt submit on scratch repositories: the check-e2e tier.
   # It reads the tools it drives from outside the tree, so it never replays.
