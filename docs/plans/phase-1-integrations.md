@@ -1203,6 +1203,30 @@ session on the host can write the place; `open` never is. Containers
 run with `--init` so orphans are reaped and a group's end is seen
 (section 4's Linux facts).
 
+**What a branch trusts.** Which runs a gate accepts is the policy's
+(27), named by what the record says, never by what the policy asked
+for:
+
+```toml
+[branches.main]
+required = ["#check-fast", "#check-tools", "#check-e2e"]
+trust = ["confined"]            # the default for a shared branch (ADR 0007)
+
+# On one Mac, until runs are confined: main accepts sandboxed runs too.
+# trust = ["confined", "sandbox"]
+```
+
+`trust` lists `confined` or executor kinds (`open`, `sandbox`,
+`container`); a result counts when its record's `confined` is true and
+`confined` is listed, or its `kind` is listed. A bolt branch's default
+is `["open", "sandbox", "container"]`. Widening `main` to `sandbox` is
+how it lands through sluice on one Mac today: the records still say
+`confined: false`, so the day the agents are fenced off from sluice's
+places (or the runs move to a container), narrowing `trust` back to
+`confined` is one line and every earlier result reads for what it was.
+Like every key of the policy, `trust` is read from the branch's own
+revision, so a submission cannot widen the gate it is judged by (56).
+
 The supervisor wraps every kind: it spawns the executor's command line
 (`sandbox-exec …`, `bwrap …`, `docker run …`) as the group leader and
 ends the group at the time limit as above; a container is also removed
