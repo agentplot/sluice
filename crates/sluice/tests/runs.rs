@@ -161,7 +161,12 @@ fn a_run_has_its_own_environment_and_session() {
     let dir = Scratch::new("runs-env");
     std::env::set_var("SLUICE_TEST_LEAK", "leaked");
     let r = runs(dir.path());
-    let mut req = request(dir.path(), "env > seen; sleep 300", None);
+    // Renamed once written: the redirect makes the file before env runs.
+    let mut req = request(
+        dir.path(),
+        "env > seen.part && mv seen.part seen; sleep 300",
+        None,
+    );
     req.env.insert("SLUICE_TMP".into(), "/scratch".into());
     r.start("p1", &req).unwrap();
     let run = r.dir("p1");
