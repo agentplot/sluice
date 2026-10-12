@@ -1491,6 +1491,35 @@ remove:
 - `sluice/try/*` worktrees appear in every agent's `wt list` while they
   exist.
 
+### Warming a place
+
+A new place has none of the repository's build cache, so a task moon
+does not replay builds cold. Once the checkout exists, and before any
+`pre-start` hook, the place profile copies into it every entry that
+the candidate's `.worktreeinclude` lists *and* git ignores, from the
+repository's primary worktree: the worktree with the branch the common
+dir's `HEAD` names checked out (the main worktree of a normal clone; in a
+bare layout, the default branch's). A repository with no
+`.worktreeinclude`, or no primary worktree, gets no copy; a failed copy
+fails the place.
+
+- `worktrunk`: `command wt -C <place> step copy-ignored --require-include
+  --format=json </dev/null`. Verified on v0.80.0 with a detached place in
+  a bare layout: `{"entries":[{"kind":"dir","path":"target"}],"from":"<main
+  worktree>","outcome":"planned",…}` under `--dry-run`. Without
+  `--require-include` it copies every ignored entry.
+- `git-worktree`: the entries are those `git -C <primary> ls-files -o -i
+  --directory --exclude-from=<place>/.worktreeinclude` lists that are,
+  or lie under, an entry `git -C <primary> ls-files -o -i --directory
+  --exclude-standard` lists; each is copied with `cp -c -R` on macOS
+  (a clone, sharing blocks until written) and `cp -a --reflink=auto` on
+  Linux, an existing destination left as it is.
+
+What is copied never decides a verdict: cargo rebuilds what its
+fingerprints say changed, and moon's cache, which would make a replay
+of a run that never happened in the place, is never listed (sluice's own
+`.worktreeinclude` lists `target` only).
+
 ### `archive`
 
 ```
@@ -1526,6 +1555,7 @@ For each method, in a scratch repository:
 5. worktrunk: the candidate's `pre-start` hook has run when `materialize` returns, and neither the primary worktree's nor a session's uncommitted hooks, nor a `post-start` hook; a stale `sluice/try/<branch>/<n>` from a crash is cleaned and recreated.
 6. git-worktree: a `post-checkout` hook is not run.
 7. No session's worktree, and no branch but `sluice/try/<branch>/<n>`, is changed by either call (core.16, S11).
+8. Both worktree methods: an entry `.worktreeinclude` lists and git ignores is in the place when `materialize` returns, before `pre-start` ran; an entry only listed, or only ignored, is not; with no `.worktreeinclude`, nothing is copied.
 
 ---
 

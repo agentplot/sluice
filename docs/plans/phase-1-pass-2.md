@@ -47,33 +47,26 @@ needed.
 
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
-  - **The build cache.** flywheel-next carries `target/` into each new
-    worktree with worktrunk's `wt step copy-ignored` as a named
-    `[post-start]` hook, bounded by `.worktreeinclude` (an entry crosses
-    only if gitignored *and* listed): worktrunk clones where the
-    filesystem allows (16 GiB in 7 s for 36 MB of disk), and a build took
-    87 s instead of 134 s cold. Not more, because cargo's fingerprints
-    hold each workspace crate's absolute path, so the workspace's own
-    crates rebuild; the dependencies, the larger part, survive. Read
-    `flywheel-next/main/.config/wt.toml` and `.worktreeinclude` (and the
-    commits `084a5b20` to `ec7ab014`). For sluice: a place runs no `post-*`
-    hook (section 5), so the place profile runs `wt step copy-ignored`
-    itself after `pre-start`, for both methods (git-worktree has no
-    worktrunk hooks but the copy is worktrunk's command; or a plain
-    `cp -c` clone of `target/` from the main worktree). Measure cold and
-    warm under the sandbox. Check whether `CARGO_TARGET_DIR` or remapping
-    paths (`--remap-path-prefix`, `-Zbuild-dir`) keeps the workspace
-    crates too.
-  - **The toolchain's evaluation.** devenv caches its evaluation in the
-    worktree's own `.devenv/` (flywheel-next measured 219 MB, holding
-    absolute paths into that worktree, so it is not copied), and the nix
-    store already holds the built shell, so a new place re-evaluates but
-    rebuilds nothing. Measure `devenv print-dev-env` in a new place, again
-    in the same place, and in a second new place. If the cost is the
-    evaluation, keep the printed toolchain per revision of what it reads
-    (`devenv.nix`, `devenv.lock`, `devenv.yaml`, `.prototools`), under the
-    common dir, with the place's own paths written in at use; or find
-    whether devenv can share its evaluation cache across roots.
+  - **The build cache** (section 5, *Warming a place*): the place
+    profile copies into each new place, before its `pre-start` hooks, what
+    the repository's `.worktreeinclude` lists and git ignores, from its
+    primary worktree; worktrunk's `wt step copy-ignored` for that method,
+    git and a cloning `cp` for `git-worktree`. sluice's lists `target`
+    only. flywheel-next measured a build at 87 s warm against 134 s cold:
+    cargo's fingerprints hold each workspace crate's absolute path, so
+    those crates rebuild and the dependencies survive. Measure cold and
+    warm under the sandbox; check whether `CARGO_TARGET_DIR` or
+    remapping paths (`--remap-path-prefix`, `-Zbuild-dir`) keeps the
+    workspace crates too.
+  - **The toolchain's evaluation.** `devenv print-dev-env` in a new
+    place took 38 s to 315 s (under heavy load), and 0.1 s to 1.7 s again
+    in the same place; the nix store holds the built shell, so the cost
+    is the evaluation, cached in the place's own `.devenv/`. Two places'
+    printed toolchains differ only by the place's path and the order of
+    some lines. First find whether devenv can share its evaluation cache
+    across worktrees; failing that, design keeping the printed toolchain
+    per hash of the files it reads, under the common dir, with the
+    place's path written in at use.
 
 - **The conformance scenarios with faults** (crashes, interference,
   lost and held runs) stay on the fakes. Each shared scenario names what
