@@ -30,6 +30,11 @@ chrono = { version = "0.4", default-features = false, features = [
   "std",
 ] }
 clap = { version = "4", features = ["derive"] }
+nix = { version = "0.31", default-features = false, features = [
+  "signal",
+  "process",
+  "hostname",
+] }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

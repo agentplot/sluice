@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod profiles;
+pub mod runs;
 
 use std::io::Write;
 
@@ -85,6 +86,9 @@ pub enum Command {
         #[arg(long = "as", default_value = "operator")]
         by: String,
     },
+    /// Run one check run's command to its end; started by a step.
+    #[command(hide = true)]
+    Supervise { dir: std::path::PathBuf },
 }
 
 /// What a waiting command does between rounds.
@@ -241,6 +245,10 @@ pub fn run(
                 Ok(2)
             }
         },
+        Command::Supervise { dir } => {
+            runs::supervise(&dir)?;
+            Ok(0)
+        }
     }
 }
 
