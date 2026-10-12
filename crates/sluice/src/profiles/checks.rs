@@ -53,13 +53,15 @@ pub struct Context<'a> {
 impl Context<'_> {
     /// `argv` with the repository's toolchain set up: its script sourced,
     /// with anything it prints sent to stderr, so a command's stdout is
-    /// the command's alone.
+    /// the command's alone. The script is sourced by the `bash` on the
+    /// run's PATH: what toolchains print is written for a current bash
+    /// (devenv's uses bash 4's `;&`), and macOS's `/bin/bash` is 3.2.
     pub fn argv(&self, argv: &[&str]) -> Vec<String> {
         let argv = argv.iter().map(|s| s.to_string());
         match self.toolchain {
             None => argv.collect(),
             Some(script) => [
-                "/bin/bash".to_string(),
+                "bash".to_string(),
                 "-c".into(),
                 r#"source "$0" >&2; exec "$@""#.into(),
                 script.to_string_lossy().into_owned(),
