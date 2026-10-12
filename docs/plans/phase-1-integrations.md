@@ -41,7 +41,7 @@ refused the graph (`task_builder::dependency::run_in_ci_mismatch`).
 
 The seam traits are those of `crates/sluice-seams/src/lib.rs` as of pass
 1's commit `1fcbe46`: `Checkout` (`materialize`, `release`), `Tests`
-(`start`, `progress`, `capacity`), `Branch` (`read`, `read_file`,
+(`start`, `progress`, `bound`), `Branch` (`read`, `read_file`,
 `form`, `commit`, `contains`, `move_to`), `Driver` (`session`,
 `notify`) and `State` (`lock`, `read`, `write`, `branches`,
 `allocate_id`, `results`, `record_results`). A profile implements one
@@ -758,7 +758,7 @@ targets to `moon exec`:
   policy's `timeout` (66) is the whole run's and is section 4's to
   enforce, whatever the tasks declare.
 - `-c/--concurrency` (`MOON_CONCURRENCY`) caps moon's threads: the
-  instance's bound (71, `Tests::capacity`) counts runs, not moon
+  instance's bound (71, `Tests::bound`) counts runs, not moon
   threads, so set `-c` from the CPUs sluice may use divided by the
   bound (section 4).
 
@@ -868,9 +868,9 @@ failed task, `tests/suite:101-105`):
 `lastRun.json` is rewritten on a replay (only `lastRunTime` changes) and
 carries no replay flag, so the replay distinction is only in the report
 (core.9). Use `lastRun.json` only to cross-check a failure's hash and
-exit code, and copy `stdout.log`/`stderr.log` of failed tasks into the
-run directory before the place is released, for the culprit's session
-(20).
+exit code. A failed task's `stdout.log`/`stderr.log` stay in the place
+until it is released; what the culprit's session is shown of them (20)
+is the driver's (section 7).
 
 On 2.6.1 `lastRun.json` also carries `"outputGlobsHash"`, for example
 `{"exitCode":1,"hash":"65b28ff5…91f0","lastRunTime":1791811362337,"outputGlobsHash":"","target":"alpha:test"}`.
@@ -983,14 +983,16 @@ reuses it.
 
 ```
 <common>/sluice/.runs/<place>/
-  request.json    what to run: argv, cwd (the place), env, limit; written by start before the spawn
-  lock            held (flock) by the supervisor for its whole life
+  request.json    what to run: argv, cwd (the place), env, limit, grace, and the runner's meta; written by start before the spawn
+  lock            held (flock) by the supervisor for its whole life; holds its pid
   pgid            the command's process group id, written once it is spawned
   out.log         the command's stdout and stderr
-  result.json     {"exit": 0|n|null, "signal": null|n, "timed_out": bool, "started": …, "ended": …}; written last, by rename
-  runReport.json  moon's report, copied out of the place before result.json is written
-  tasks/<target>.{stdout,stderr}.log   a failed task's logs, copied out likewise
+  result.json     {"exit": 0|n|null, "signal": null|n, "timed_out": bool, "error"?: …, "started": …, "ended": …}; written last, by rename
 ```
+
+`progress` reads moon's report from the place
+(`<place>/.moon/cache/runReport.json`, removed by `start` before the
+run), which the core releases only after reading the run.
 
 `RunHandle` is the place name. Run directories are removed when the
 place is released, after the core has read the result.
@@ -1083,13 +1085,12 @@ are macOS's. Two differences the code must handle:
    so a server a task left running cannot fail the next candidate (32).
 5. On the deadline: the same TERM, grace, KILL, and `timed_out: true`
    (66).
-6. Copy `runReport.json` and failed tasks' logs out of the place, then
-   write `result.json` by rename (section 6's atomic write). Exit.
+6. Write `result.json` by rename (section 6's atomic write). Exit.
 
 `progress(handle)`:
 
 - `result.json` present → parse it and the report → `Finished(RunReport
-  { tasks, timed_out })`.
+  { tasks, executor, missing, timed_out })`.
 - absent, and `lock` is held (`File::try_lock()` gives `WouldBlock`) →
   `Running`.
 - absent, and `lock` is free → the supervisor died without a result: end
@@ -1100,14 +1101,14 @@ are macOS's. Two differences the code must handle:
 `.runs/<name>/pgid` exists and the group is alive, TERM, grace, KILL;
 then it removes the place (34, core.16). This is how the core's
 "ended and its place released" (pass 1's Q7) stops a run nobody will
-read. Put the group-ending code in a small library crate both profiles
-use (`sluice-procs`), not in either profile, so no profile calls another
-(core.2).
+read. The supervisor and the group-ending code are `crates/sluice/src/runs.rs`,
+outside every profile and naming no tool, so both profiles use it and
+no profile calls another (core.2).
 
-A recorded pgid can be reused after the group is gone and a reboot or
-long wait. Before signalling a group found in `pgid` with no supervisor
-holding `lock`, check that a member started after `request.json` was
-written (`ps -o lstart= -g <pgid>`), or skip it.
+A recorded pgid can be reused once its group is gone. A group is
+signalled from `pgid` only while no `result.json` says the supervisor
+ended it: when the supervisor died first (`Lost`), or by `release` of a
+run still in progress.
 
 **The instance's bound (71).** An instance of sluice starts at most `B`
 runs at once, whatever the windows of the branches it serves. `B` is the
@@ -1119,10 +1120,12 @@ Linux honours the process's CPU affinity and its cgroup quota, so a
 container or a CI runner limited to four CPUs reads four, not the
 machine's sixty-four.
 
-`capacity()` is `B` less the candidates under test (`starting` or
-`testing`) in the records of every branch the instance serves, read
-through the records seam: nothing is held in memory and nothing new is
-stored (core.14). A machine is bounded as a whole when one instance
+`Tests::bound()` is `B`. The core starts no more than `B` less the
+candidates under test (`starting` or `testing`) in the records of the
+branches the instance serves: the stepped branch for `sluice step` and a
+waiting `wt submit`, every branch with records for `sluice run`
+(`Serves`). Nothing is held in memory and nothing new is stored
+(core.14). A machine is bounded as a whole when one instance
 starts every run on it: one `sluice run` that every `wt submit
 --remote` submits to, on that machine or another. When each session's
 waiting `wt submit` runs its own rounds instead, each is an instance

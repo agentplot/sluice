@@ -30,7 +30,7 @@ Option 1 builds machinery to work around having no runner, and its opaque shell 
 
 ### Consequences
 
-- Clause 71 binds an instance: "An instance of sluice starts no more checks at once than its own bound." `Tests::capacity` is the bound less the candidates under test in the records of the branches the instance serves.
+- Clause 71 binds an instance: "An instance of sluice starts no more checks at once than its own bound." `Tests::bound` is the bound; the core starts no more than it less the candidates under test in the records of the branches the instance serves.
 - Clauses 83 and 84 add `execute` to the check seam: a run is held to the processors its instance gives it and the memory, network and writable paths its policy states; an executor that cannot enforce a limit refuses the run; every run records what was enforced.
 - The executor profiles are `open` (a process group), `sandbox` (Seatbelt on macOS, bubblewrap and Landlock on Linux, with memory and processor limits on Linux by cgroup) and `container`. The policy names one under `[executor]`.
 - `[tests] shell` only enters the repository's toolchain; sluice reads nothing from it.

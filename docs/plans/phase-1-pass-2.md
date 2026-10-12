@@ -29,9 +29,9 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 |---|---|---|---|
 | 1 | branch: gix and git (`profiles/local_refs.rs`) | §1 | **done**: 12 acceptance tests, `cli:tools` |
 | 2 | records: local files (`profiles/local_files.rs`) | §6 | **done**: 9 acceptance tests, fast tier |
-| 3 | the supervisor and the `open` executor; the instance's bound | §4 | next |
-| 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | |
-| 5 | checkouts: `git worktree` first, then worktrunk | §5 | |
+| 3 | the supervisor and the `open` executor; the instance's bound | §4 | **done**: `runs.rs` (6 tests), `profiles/checks.rs` with the `command` runner (8 tests), fast tier |
+| 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | **done**: `profiles/moon.rs`, 9 acceptance tests, `cli:tools` |
+| 5 | checkouts: `git worktree` first, then worktrunk | §5 | next |
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | |
@@ -44,23 +44,22 @@ needed.
 
 ## What each next piece owes the seams
 
-- **3, the supervisor and the executor (83, 84).** `Tests::start` takes
-  the limits a run is held to and the run's report says what the
-  executor enforced; every recorded result carries `executor` (`kind`,
-  `confined`, limits). `capacity()` is the instance's bound less the
-  candidates under test in the records of the branches it serves,
-  default a quarter of `available_parallelism()` (71; ADR 0012). When
-  83 and 84 have tests citing them, take them out of `phase_1()`'s
-  exclusions in `crates/sluice-conformance/src/lib.rs`.
-- **The policy** gains `[tests] shell`, `[executor] kind`, `network`,
-  `memory`, and `trust` per branch (section 4); `Policy::parse` refuses
-  unknown keys, so each is added with its parsing tests.
-- **5, checkouts.** `materialize` and `release` per section 5; worktrunk
+- **The policy** gains `trust` per branch (section 4, *What a branch
+  trusts*), read by the verdict from each result's recorded executor
+  (28, 29); `Policy::parse` refuses unknown keys, so it comes with its
+  parsing tests.
+- **5, checkouts.** `materialize` and `release` per section 5;
+  `release` removes the place's run first (`Runs::remove`); worktrunk
   with `--yes`, waiting only for `pre-start` hooks, removing its own
   `.git/wt/logs/sluice-try-*` after `wt remove`.
 - **6, the driver.** `session` reports the head, who submitted
   (`SLUICE_AGENT`, else the branch) and anything the worktree holds
-  beyond its commits; `notify` per section 7.
+  beyond its commits; `notify` per section 7, with what the culprit's
+  session is shown of its failed tasks' logs (20).
+- **8, end to end.** Section 4's acceptance tests 5 and 7 on real
+  places: a waiting `wt submit` stopped by Ctrl-C leaves its run going,
+  and one `sluice run` with `[runs] max = 2` holds three branches to two
+  runs.
 
 ## Decisions this pass builds on
 
