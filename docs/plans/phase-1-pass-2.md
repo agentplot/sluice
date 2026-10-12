@@ -60,14 +60,17 @@ needed.
     148 crates compiled), so it pays once the primary worktree builds with
     the compiler `.prototools` names.
   - **The toolchain's evaluation.** `devenv print-dev-env` in a new
-    place took 38 s to 315 s (under heavy load), and 0.1 s to 1.7 s again
-    in the same place; the nix store holds the built shell, so the cost
-    is the evaluation, cached in the place's own `.devenv/`. Two places'
-    printed toolchains differ only by the place's path and the order of
-    some lines. First find whether devenv can share its evaluation cache
-    across worktrees; failing that, design keeping the printed toolchain
-    per hash of the files it reads, under the common dir, with the
-    place's path written in at use.
+    place took 35 s to 315 s (under load averages of 200 to 470), and
+    0.1 s to 1.7 s again in the same place; the nix store holds the built
+    shell, so the cost is the evaluation. devenv 2.4 caches it in the
+    place's own `.devenv/nix-eval-cache.db`, keyed by the root: a copy of
+    another place's cache was not used (35 s, the new place's paths).
+    Its inputs are listed in `.devenv/input-paths.txt`: `devenv.nix`,
+    `devenv.lock`, `devenv.yaml`, `devenv.local.nix`, `.env`,
+    `treefmt.nix` (an import) and the user's `~/.config/nixpkgs/overlays`,
+    so no list a policy names by hand is safe to key a cache on. Two
+    places' printed toolchains differ only by the place's path and the
+    order of some lines.
 
 - **The conformance scenarios with faults** (crashes, interference,
   lost and held runs) stay on the fakes. Each shared scenario names what
