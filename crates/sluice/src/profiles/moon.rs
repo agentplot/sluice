@@ -270,6 +270,8 @@ fn read_report(report: &Value, targets: &[String], host: &str) -> Vec<TaskResult
             },
         });
     }
+    // In target order, whatever order moon ran them in.
+    out.sort_by(|a, b| a.task.cmp(&b.task));
     out
 }
 
