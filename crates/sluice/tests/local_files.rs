@@ -79,6 +79,37 @@ fn the_lock_is_one_holder_and_dies_with_it() {
     assert!(s.lock("bolt/x").unwrap().is_some());
 }
 
+/// A write outside a step waits for the step holding the lock, and takes
+/// it once that step lets go, whether it exits or dies.
+#[test]
+fn a_waiting_lock_is_taken_when_the_holder_lets_go() {
+    let dir = Scratch::new("wait-lock");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "hold_the_lock_until_killed", "--nocapture"])
+        .env("SLUICE_TEST_COMMON", dir.path())
+        .env("SLUICE_TEST_BRANCH", "bolt/x")
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !dir.path().join("held").exists() {
+        assert!(start.elapsed() < Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let path = dir.path().to_path_buf();
+    let waiter = std::thread::spawn(move || {
+        let s = LocalFiles::new(&path);
+        let _g = s.wait_lock("bolt/x").unwrap();
+        let at = s.read("bolt/x").unwrap().version;
+        s.write("bolt/x", at, changes(&[("branch.json", "{}\n")], &[]))
+            .unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!waiter.is_finished(), "took a lock another process holds");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(waiter.join().unwrap(), Written::Written(1));
+}
+
 /// 2, 62, 58: two writes from one version; one is written, one refused.
 #[test]
 fn two_writes_from_one_version() {

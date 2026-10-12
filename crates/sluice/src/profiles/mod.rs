@@ -1,13 +1,9 @@
 //! Binding each seam to a profile (52; ADR 0003). The only directory of
 //! this crate that may name a tool (rule core.1).
 //!
-//! The real profiles are pass 2's (`docs/plans/phase-1-integrations.md`).
-//! The branch is bound to [`local_refs`], the records to [`local_files`],
-//! the check to [`checks`] and the place to [`places`]; a seam whose
-//! profile is not built yet is bound to
-//! [`Unbuilt`], which refuses every call by naming that profile, so the
-//! CLI's arguments, output and exits are whole and only those seams are
-//! missing.
+//! The profiles are `docs/plans/phase-1-integrations.md`'s: the branch is
+//! bound to [`local_refs`], the records to [`local_files`], the check to
+//! [`checks`], the place to [`places`] and the driver to [`worktrunk`].
 
 pub mod checks;
 pub mod local_files;
@@ -18,26 +14,9 @@ pub mod worktrunk;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
-use sluice_seams::{Driver, Notification, Session};
+use anyhow::Result;
 
 use crate::instance::Instance;
-
-/// A seam whose profile is not built yet.
-pub struct Unbuilt {
-    pub seam: &'static str,
-    pub profile: &'static str,
-}
-
-impl Unbuilt {
-    fn refuse<T>(&self) -> Result<T> {
-        bail!(
-            "the {} profile of the {} seam is built in pass 2 (docs/plans/phase-1-integrations.md)",
-            self.profile,
-            self.seam
-        )
-    }
-}
 
 /// The profiles the walkthrough's setup names, for the repository holding
 /// a directory.
@@ -45,7 +24,7 @@ pub struct Bound {
     pub checkout: places::Places,
     pub tests: checks::Checks,
     pub branch: local_refs::LocalRefs,
-    pub driver: Unbuilt,
+    pub driver: worktrunk::Worktrunk,
     pub state: local_files::LocalFiles,
 }
 
@@ -68,10 +47,7 @@ impl Bound {
             ),
             tests: checks::Checks::new(&common, program, instance),
             branch,
-            driver: Unbuilt {
-                seam: "driver",
-                profile: "worktrunk",
-            },
+            driver: worktrunk::Worktrunk,
             state,
         })
     }
@@ -84,14 +60,5 @@ impl Bound {
             driver: &self.driver,
             state: &self.state,
         }
-    }
-}
-
-impl Driver for Unbuilt {
-    fn session(&self, _: &str) -> Result<Session> {
-        self.refuse()
-    }
-    fn notify(&self, _: &Notification) -> Result<()> {
-        self.refuse()
     }
 }

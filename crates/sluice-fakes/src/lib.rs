@@ -568,6 +568,7 @@ impl World {
                     worktree: worktree.into(),
                 },
                 dirty: Vec::new(),
+                detached: false,
             },
         );
     }
@@ -911,6 +912,12 @@ impl State for FakeState {
         })))
     }
 
+    fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
+        // One thread: a held lock would never be let go.
+        self.lock(branch)?
+            .ok_or_else(|| anyhow!("{branch}'s lock is held, and nothing here lets it go"))
+    }
+
     fn read(&self, branch: &str) -> Result<Snapshot> {
         let inner = self.0 .0.borrow();
         Ok(match inner.lines.get(branch) {
@@ -938,6 +945,10 @@ impl State for FakeState {
             inner.interfere -= 1;
         }
         let line = inner.lines.entry(branch.into()).or_default();
+        // As the real records: a write needs the branch's lock.
+        if !line.locked {
+            bail!("writing {branch}'s records without holding its lock");
+        }
         if interfere {
             line.version += 1;
         }

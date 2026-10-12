@@ -99,6 +99,18 @@ impl LocalFiles {
     }
 
     /// Finish a write a crash left part done (steps 3 to 5).
+    /// The branch's lock, taken: finish a write a crash left part done and
+    /// mark the branch held by this process.
+    fn locked<'a>(&'a self, branch: &str, dir: &Path, file: File) -> Result<Box<dyn Guard + 'a>> {
+        self.finish_pending(dir)?;
+        self.held.borrow_mut().insert(branch.to_string());
+        Ok(Box::new(BranchGuard {
+            files: self,
+            branch: branch.to_string(),
+            _lock: file,
+        }))
+    }
+
     fn finish_pending(&self, dir: &Path) -> Result<()> {
         let path = dir.join(PENDING);
         let bytes = match std::fs::read(&path) {
@@ -242,13 +254,14 @@ impl State for LocalFiles {
                 return Err(e).with_context(|| format!("locking {branch}"))
             }
         }
-        self.finish_pending(&dir)?;
-        self.held.borrow_mut().insert(branch.to_string());
-        Ok(Some(Box::new(BranchGuard {
-            files: self,
-            branch: branch.to_string(),
-            _lock: file,
-        })))
+        Ok(Some(self.locked(branch, &dir, file)?))
+    }
+
+    fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
+        let dir = self.dir(branch)?;
+        let file = open_lock(&dir.join(LOCK))?;
+        file.lock().with_context(|| format!("locking {branch}"))?;
+        self.locked(branch, &dir, file)
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {

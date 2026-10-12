@@ -294,6 +294,9 @@ pub struct Session {
     /// Everything the place holds beyond its commits (2): a submission
     /// from a place holding anything here is refused.
     pub dirty: Vec<String>,
+    /// The place is on no branch, so it names no session's work (3): a
+    /// submission from it is refused.
+    pub detached: bool,
 }
 
 /// One entry contested in a conflict, with what it submitted (65).
@@ -390,6 +393,11 @@ pub trait Guard {}
 pub trait State {
     /// The branch's lock, or `None` when another step holds it.
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>>;
+
+    /// The branch's lock, once whatever holds it lets go: for a write
+    /// outside a step (a submission, an amendment, a withdrawal), which
+    /// waits out a round rather than leave.
+    fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>>;
 
     /// 61: the branch's records, and the version they were read at.
     fn read(&self, branch: &str) -> Result<Snapshot>;

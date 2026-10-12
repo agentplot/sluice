@@ -25,6 +25,10 @@ fn main() {
             std::process::exit(3);
         }
     };
+    if let Err(e) = sluice::stop_on_interrupt() {
+        eprintln!("sluice: {e:#}");
+        std::process::exit(3);
+    }
     let mut out = std::io::stdout();
     match run(
         cli,

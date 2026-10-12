@@ -13,9 +13,10 @@ const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 
 struct Rounds(Cell<usize>);
 
 impl Pause for Rounds {
-    fn pause(&self) {
+    fn pause(&self) -> bool {
         self.0.set(self.0.get() + 1);
         assert!(self.0.get() < 50, "waited too long");
+        true
     }
 }
 

@@ -10,6 +10,7 @@ pub mod profiles;
 pub mod runs;
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -94,16 +95,48 @@ pub enum Command {
 
 /// What a waiting command does between rounds.
 pub trait Pause {
-    fn pause(&self);
+    /// Wait for the next round; `false` when the wait was stopped.
+    fn pause(&self) -> bool;
+}
+
+/// Set by Ctrl-C once [`stop_on_interrupt`] is in force.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn interrupted(_: nix::libc::c_int) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// Ctrl-C ends a wait and nothing else: the submission stays queued (5)
+/// and its run, in a session of its own, goes on.
+pub fn stop_on_interrupt() -> Result<()> {
+    use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+    let action = SigAction::new(
+        SigHandler::Handler(interrupted),
+        SaFlags::empty(),
+        SigSet::empty(),
+    );
+    // SAFETY: the handler only stores to an atomic.
+    unsafe { sigaction(Signal::SIGINT, &action) }?;
+    Ok(())
 }
 
 pub struct Sleep(pub std::time::Duration);
 
 impl Pause for Sleep {
-    fn pause(&self) {
-        std::thread::sleep(self.0);
+    fn pause(&self) -> bool {
+        let until = std::time::Instant::now() + self.0;
+        while std::time::Instant::now() < until {
+            if INTERRUPTED.load(Ordering::SeqCst) {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        !INTERRUPTED.load(Ordering::SeqCst)
     }
 }
+
+/// The exit of a wait stopped by Ctrl-C.
+pub const STOPPED: i32 = 130;
 
 fn requester(by: &str) -> Requester {
     match by {
@@ -172,7 +205,9 @@ pub fn run(
                 if rounds.is_some_and(|r| n >= r) {
                     return Ok(0);
                 }
-                pause.pause();
+                if !pause.pause() {
+                    return Ok(STOPPED);
+                }
             }
         }
         Command::Status { target, json } => match target.parse::<u64>() {
@@ -279,6 +314,9 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
             s.push_str("\ncommit or remove them and submit again");
             s
         }
+        SubmitRefusal::Detached => {
+            format!("refused: submit from a branch: {worktree} is detached")
+        }
         SubmitRefusal::NoBranch => format!("refused: no branch {branch}"),
         SubmitRefusal::NotManaged => {
             format!("refused: no [branches] table in .config/sluice.toml on {branch} names it")
@@ -372,8 +410,18 @@ fn submit(
         return Ok(0);
     }
     // Keep the queue moving while waiting (walkthrough section 6).
+    let still_queued = |out: &mut dyn Write| -> Result<i32> {
+        writeln!(out, "still queued: sluice status {id}")?;
+        Ok(STOPPED)
+    };
     let sub = loop {
-        s.step(&req.branch)?;
+        if let Err(e) = s.step(&req.branch) {
+            // Ctrl-C reaches the tools a round runs in the foreground.
+            if INTERRUPTED.load(Ordering::SeqCst) {
+                return still_queued(out);
+            }
+            return Err(e);
+        }
         let sub = s.state(id)?.expect("a submission just made");
         if matches!(
             sub.state,
@@ -381,7 +429,9 @@ fn submit(
         ) {
             break sub;
         }
-        pause.pause();
+        if !pause.pause() {
+            return still_queued(out);
+        }
     };
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;

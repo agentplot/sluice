@@ -34,6 +34,8 @@ pub struct Accepted {
 pub enum SubmitRefusal {
     /// 2: the place holds more than its commits.
     Dirty(Vec<String>),
+    /// 3: the place is on no branch.
+    Detached,
     NoBranch,
     /// No `[branches]` table at the branch's revision names it (56).
     NotManaged,
@@ -113,6 +115,9 @@ impl Sluice<'_> {
     /// more.
     pub fn submit(&self, req: &SubmitRequest) -> Result<Result<Accepted, SubmitRefusal>> {
         let session = self.seams.driver.session(&req.worktree)?;
+        if session.detached {
+            return Ok(Err(SubmitRefusal::Detached));
+        }
         if !session.dirty.is_empty() {
             return Ok(Err(SubmitRefusal::Dirty(session.dirty)));
         }
@@ -134,6 +139,7 @@ impl Sluice<'_> {
         }
         let id = self.seams.state.allocate_id()?;
         let now = self.now();
+        let _lock = self.seams.state.wait_lock(&req.branch)?;
         let accepted = self.update(&req.branch, |l| {
             let mine: Vec<u64> = l
                 .subs
@@ -215,6 +221,9 @@ impl Sluice<'_> {
         after: &[u64],
     ) -> Result<Result<Forecast, SubmitRefusal>> {
         let session = self.seams.driver.session(worktree)?;
+        if session.detached {
+            return Ok(Err(SubmitRefusal::Detached));
+        }
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(Err(SubmitRefusal::NoBranch));
         };
@@ -299,6 +308,7 @@ impl Sluice<'_> {
             return Ok(Err(AmendRefusal::NoSuchSubmission));
         };
         let now = self.now();
+        let _lock = self.seams.state.wait_lock(&branch)?;
         self.update(&branch, |l| {
             let s = l.sub(id)?.clone();
             if !by.may_change(&s) {
@@ -347,6 +357,7 @@ impl Sluice<'_> {
             return Ok(Err(WithdrawRefusal::NoSuchSubmission));
         };
         let now = self.now();
+        let _lock = self.seams.state.wait_lock(&branch)?;
         self.update(&branch, |l| {
             let s = l.sub(id)?.clone();
             if !by.may_change(&s) {
