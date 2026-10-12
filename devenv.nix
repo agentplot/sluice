@@ -6,9 +6,8 @@
 }:
 
 let
-  # moonrepo's own release builds: nixpkgs trails moon by a minor version or
-  # more, and sluice runs its own merge queue on the newest moon. Linux takes
-  # the static musl build, so no loader needs patching.
+  # moonrepo's own release builds: nixpkgs trails proto by a minor version
+  # or more. Linux takes the static musl build, so no loader needs patching.
   fromRelease =
     {
       name,
@@ -43,22 +42,6 @@ let
       '';
     };
 
-  moon = fromRelease {
-    name = "moon_cli";
-    repo = "moon";
-    version = "2.6.1";
-    bins = [
-      "moon"
-      "moonx"
-    ];
-    hashes = {
-      aarch64-apple-darwin = "2922ce70277cc6f3750106fa9ebd1e25ed890ec8cdba4570148ff8701a5bea53";
-      x86_64-apple-darwin = "ef715c5fa43985de841049c319c52e9307a233a8634c08b6729e7b224592dc8e";
-      aarch64-unknown-linux-musl = "b1fb67933231c9c565ea4375b54f0f9645112d76ede767a6040c5142bf7c0310";
-      x86_64-unknown-linux-musl = "200314608ee89d1deecc7cd0bbd523d4dffa64ffbb365989f003f3a8d91c9080";
-    };
-  };
-
   proto = fromRelease {
     name = "proto_cli";
     repo = "proto";
@@ -82,9 +65,12 @@ let
   # every task's PATH, and the user's own proto installs (an older moon
   # among them) must never shadow the system tools above. Only this
   # repository's pins are read (no global .prototools).
-  activate = ''
+  protoHome = ''
     PROTO_HOME="$(${lib.getExe pkgs.git} rev-parse --path-format=absolute --git-common-dir)/proto"
     export PROTO_HOME
+  '';
+  activate = ''
+    ${protoHome}
     eval "$(${proto}/bin/proto activate bash --export --no-bin --config-mode upwards 2>/dev/null)"
   '';
 
@@ -139,13 +125,12 @@ let
 in
 {
   # The system tools are this file's, pinned by devenv.lock; the application
-  # toolchain (Rust) is .prototools', installed by `moon setup` or `proto
-  # install` and activated here. Every cargo and moon command in this
+  # tools (moon, Rust) are .prototools', installed by `proto install` on
+  # entering the shell and activated here. Every cargo and moon command in this
   # repository runs inside `devenv shell`.
   packages = [
     pkgs.git
     pkgs.jq
-    moon
     proto
   ];
 
@@ -168,6 +153,10 @@ in
     # beside proto's, so no moon of the user's runs in a task.
     MOON_HOME="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir)/moon-home"
     export MOON_HOME
+    # What .prototools pins, installed if missing. Where it cannot be (no
+    # network, or a run held to its place), what is installed is used.
+    ${protoHome}
+    ${proto}/bin/proto install --config-mode upwards >/dev/null 2>&1 || true
     ${activate}
   '';
 

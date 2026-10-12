@@ -1,4 +1,6 @@
-# The application toolchain: moon installs and runs it through proto
-# (.moon/toolchains.yml reads this pin), and the devenv shell activates it.
-# The system tools, moon and proto among them, are devenv.nix's.
+# The application tools, installed by proto and activated by the devenv
+# shell: moon itself, and the toolchain moon runs tasks with
+# (.moon/toolchains.yml reads the rust pin). The system tools, proto among
+# them, are devenv.nix's.
+moon = "2.6.1"
 rust = "1.98.1"

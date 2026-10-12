@@ -235,12 +235,22 @@ fn toolchain(
 }
 
 /// The command's environment: what a check may need of sluice's own
-/// (paths, the user, the locale, the terminal), the place's paths, and
-/// nothing that names another place or tool (35): no `GIT_*`, `MOON_*`,
-/// `DEVENV_*` or `DIRENV_*`.
+/// (paths, the user, the locale, the terminal, and the tool homes `PATH`
+/// points into), the place's paths, and nothing that names another place
+/// or tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
 fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
-    const KEEP: [&str; 8] = [
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM",
+    const KEEP: [&str; 10] = [
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "LANG",
+        "TERM",
+        // A proto shim on PATH resolves its tool under its home.
+        "PROTO_HOME",
+        "MOON_HOME",
     ];
     let mut env: BTreeMap<String, String> = std::env::vars()
         .filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_"))

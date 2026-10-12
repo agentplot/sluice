@@ -15,8 +15,8 @@ rules and does not restate them.
 |---|---|---|---|
 | git | 2.54.0 | `/etc/profiles/per-user/chuck/bin/git` | also `/usr/bin/git` 2.50.1 (Apple Git-155), which some tools use: see *Branch protection* |
 | gix | 0.89.0 on crates.io; the APIs below were read in 0.87.1 (gix-ref 0.67.1, gix-actor 0.42.0) | `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` | depend on 0.89 and re-check the calls section 1 names |
-| moon in sluice's devenv | 2.6.1 | `/nix/store/1vc28y8m628iwc0z2qz4yll877i45r0m-moon_cli-2.6.1/bin/moon` | moonrepo's release build, pinned in `devenv.nix`; `devenv shell -- moon --version` |
-| proto in sluice's devenv | 0.63.1 | `devenv.nix`, as moon | moonrepo's toolchain manager: installs and runs the application toolchain `.prototools` pins (Rust 1.98.1, through rustup), which `.moon/toolchains.yml` reads; `PROTO_HOME` and `MOON_HOME` are the repository's (`<common>/proto`, `<common>/moon-home`) |
+| moon in sluice's shell | 2.6.1 | `<common>/proto/tools/moon/2.6.1/moon` | pinned in `.prototools`, installed by proto on entering the devenv shell; `devenv shell -- moon --version` |
+| proto in sluice's devenv | 0.63.1 | `devenv.nix`, moonrepo's release build | moonrepo's toolchain manager, the one application tool devenv holds: installs and runs the application toolchain `.prototools` pins (Rust 1.98.1, through rustup), which `.moon/toolchains.yml` reads; `PROTO_HOME` and `MOON_HOME` are the repository's (`<common>/proto`, `<common>/moon-home`) |
 | moon on `PATH` | 1.41.7 | `~/.bun/bin/moon` | **cannot run crew**: no task tags, no `moon exec` |
 | moon in crew's devenv | 2.5.3 | `/nix/store/xn5qbl6xwpb2d9hlchsjzacx6qkgcrml-moon-2.5.3/bin/moon` | what crew's `tests/suite` runs; below the profile's floor until crew moves to 2.6 |
 | worktrunk | v0.80.0 | `/etc/profiles/per-user/chuck/bin/wt` | `wt` in zsh is a function wrapping the binary; call `command wt` or the path |
@@ -1153,8 +1153,11 @@ Each run is told its share: the runner is given
 pass on, so `B` runs at once use the CPUs sluice may use and no more.
 
 **Environment for the command.** `env_clear()`, then `PATH`, `HOME`,
-`USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`/`LC_*`, `TERM` from sluice's
-own environment; `SLUICE_CHECKOUT=<place path>`, `SLUICE_TMP=<common>/sluice/.tmp/<place>`
+`USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`/`LC_*`, `TERM`, and the tool
+homes `PATH` points into, `PROTO_HOME` and `MOON_HOME` (a proto shim on
+`PATH` resolves its tool under its home: without it, a shim in a moon
+task fell back to `~/.proto` and the user's global pin, moon 1.41.7),
+from sluice's own environment; `SLUICE_CHECKOUT=<place path>`, `SLUICE_TMP=<common>/sluice/.tmp/<place>`
 (made empty by `materialize`); nothing of `MOON_*`, `GIT_*`
 (`GIT_DIR`/`GIT_WORK_TREE` from a hook would point git at the wrong
 repository), `DEVENV_*` or `DIRENV_*` (a waiting `wt submit` runs in a
