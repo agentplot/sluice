@@ -35,7 +35,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
-| 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; the self-probe below to rerun; Linux to come |
+| 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
 | 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | next |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | |
@@ -45,14 +45,6 @@ needed.
 
 ## What each next piece owes the seams
 
-- **The self-probe.** `scratchpad/self-probe.sh` (in this session's
-  scratchpad; Claude Code's safety check will not run a sourced script
-  holding `rm`, so the operator runs it with `!`) runs sluice's fast tier
-  the profile's way under the bare Seatbelt fence; its worktree is at
-  `3afc3d6` and follows the moon runner's order (`proto install`, `moon
-  --version`, `moon setup`, then the fenced run, its fence allowing
-  localhost); moved to this branch's head, it is to be rerun and pass
-  (`fenced run: exit 0`, no task failed).
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
   - **The build cache.** flywheel-next carries `target/` into each new
