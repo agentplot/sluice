@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
-use sluice_seams::{Limits, Setting, Settings};
+use sluice_seams::{Limits, Network, Setting, Settings};
 
 /// Where the policy lives in a branch's tree.
 pub const POLICY_PATH: &str = ".config/sluice.toml";
@@ -82,7 +82,7 @@ struct FileForm {
 struct ExecutorForm {
     kind: Option<String>,
     memory: Option<String>,
-    network: Option<bool>,
+    network: Option<Network>,
 }
 
 #[derive(Deserialize)]
@@ -344,9 +344,16 @@ batch = true
             Limits {
                 executor: Some("sandbox".into()),
                 memory: Some(8 << 30),
-                network: Some(false),
+                network: Some(Network::Denied),
             }
         );
+        let network = |v: &str| {
+            Policy::parse(&format!("[executor]\nnetwork = {v}\n")).map(|p| p.limits.network)
+        };
+        assert_eq!(network("true").unwrap(), Some(Network::Allowed));
+        assert_eq!(network("\"localhost\"").unwrap(), Some(Network::Localhost));
+        assert!(network("\"lan\"").is_err());
+        assert!(network("1").is_err());
         assert!(Policy::parse("[executor]\ncpus = 2\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"lots\"\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"8\"\n").is_err());

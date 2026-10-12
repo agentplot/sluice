@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings, Source, Tests,
+    Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings, Source,
+    Tests,
 };
 use support::Repo;
 
@@ -212,13 +213,15 @@ fn the_open_executor_refuses_what_it_cannot_hold() {
         },
         "memory",
     );
-    refused(
-        Limits {
-            network: Some(false),
-            ..Limits::default()
-        },
-        "network",
-    );
+    for network in [Network::Denied, Network::Localhost] {
+        refused(
+            Limits {
+                network: Some(network),
+                ..Limits::default()
+            },
+            "network",
+        );
+    }
     refused(
         Limits {
             executor: Some("container".into()),
@@ -236,7 +239,7 @@ fn the_open_executor_refuses_what_it_cannot_hold() {
     );
     // A network the policy allows needs no holding.
     let mut req = request(&repo, "p2", command("true"));
-    req.limits.network = Some(true);
+    req.limits.network = Some(Network::Allowed);
     assert_eq!(finish(&c, &req).tasks[0].outcome, Outcome::Pass);
 }
 
@@ -269,7 +272,7 @@ fn the_sandbox_holds_writes_and_the_network() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let c = checks(&repo);
-    let sandboxed = |name: &str, cmd: &str, network: Option<bool>| {
+    let sandboxed = |name: &str, cmd: &str, network: Option<Network>| {
         let mut req = request(&repo, name, command(cmd));
         req.limits = Limits {
             executor: Some("sandbox".into()),
@@ -281,12 +284,12 @@ fn the_sandbox_holds_writes_and_the_network() {
     let inside = sandboxed(
         "p1",
         "touch \"$SLUICE_CHECKOUT/in\" \"$SLUICE_TMP/in\" \"$TMPDIR/t\"",
-        Some(false),
+        Some(Network::Denied),
     );
     assert_eq!(inside.tasks[0].outcome, Outcome::Pass);
     assert_eq!(inside.executor.kind, "sandbox");
     assert!(!inside.executor.confined);
-    assert_eq!(inside.executor.network, Some(false));
+    assert_eq!(inside.executor.network, Some(Network::Denied));
 
     let escape = format!("touch {}/escaped", outside.display());
     assert_eq!(
@@ -297,11 +300,25 @@ fn the_sandbox_holds_writes_and_the_network() {
 
     let connect = format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}");
     assert_eq!(
-        sandboxed("p3", &connect, Some(false)).tasks[0].outcome,
+        sandboxed("p3", &connect, Some(Network::Denied)).tasks[0].outcome,
         Outcome::Fail
     );
     let open = sandboxed("p4", &connect, None);
     assert_eq!(open.tasks[0].outcome, Outcome::Pass);
     assert_eq!(open.executor.network, None);
+
+    // Localhost only: a server on localhost is reached; any other address
+    // is refused by the sandbox, not merely unanswered.
+    let local = sandboxed("p5", &connect, Some(Network::Localhost));
+    assert_eq!(local.tasks[0].outcome, Outcome::Pass);
+    assert_eq!(local.executor.network, Some(Network::Localhost));
+    // Passes only when the connection is refused as not permitted.
+    let elsewhere = "/usr/bin/perl -MIO::Socket::INET -e \
+        'IO::Socket::INET->new(PeerAddr => \"192.0.2.1:9\", Timeout => 1) and exit 2; \
+         exit($! =~ /not permitted/ ? 0 : 1)'";
+    assert_eq!(
+        sandboxed("p6", elsewhere, Some(Network::Localhost)).tasks[0].outcome,
+        Outcome::Pass
+    );
     drop(listener);
 }

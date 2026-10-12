@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Outcome, Place, Progress, Rev, RunReport, RunRequest, Setting, Settings, Source, Tests,
+    Limits, Network, Outcome, Place, Progress, Rev, RunReport, RunRequest, Setting, Settings,
+    Source, Tests,
 };
 use support::Repo;
 
@@ -355,7 +356,7 @@ fn a_sandboxed_run_reads_as_an_open_one() {
     let mut req = request(&repo, "p1", &["#check-fast"], None);
     req.limits = Limits {
         executor: Some("sandbox".into()),
-        network: Some(false),
+        network: Some(Network::Denied),
         memory: None,
     };
     let first = finish(&c, &req);
@@ -367,7 +368,7 @@ fn a_sandboxed_run_reads_as_an_open_one() {
         ]
     );
     assert_eq!(first.executor.kind, "sandbox");
-    assert_eq!(first.executor.network, Some(false));
+    assert_eq!(first.executor.network, Some(Network::Denied));
     req.place.name = "p2".into();
     let second = finish(&c, &req);
     assert!(tasks(&second).iter().all(|t| t.2), "{:?}", tasks(&second));

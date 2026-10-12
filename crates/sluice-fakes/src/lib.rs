@@ -16,9 +16,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Notification,
-    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Settings, Snapshot,
-    Source, State, Submitter, TaskResult, Tests, Written,
+    Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Network,
+    Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
+    Settings, Snapshot, Source, State, Submitter, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -777,7 +777,10 @@ impl Tests for FakeTests {
         if request.limits.memory.is_some() {
             bail!("the open executor cannot hold a memory limit");
         }
-        if request.limits.network == Some(false) {
+        if matches!(
+            request.limits.network,
+            Some(Network::Denied | Network::Localhost)
+        ) {
             bail!("the open executor cannot keep a run off the network");
         }
         if std::mem::take(&mut inner.crash_start) {

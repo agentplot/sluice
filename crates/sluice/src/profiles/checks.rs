@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Enforced, Limits, Outcome, Progress, RunHandle, RunReport, RunRequest, Setting, Settings,
-    Source, TaskResult, Tests,
+    Enforced, Limits, Network, Outcome, Progress, RunHandle, RunReport, RunRequest, Setting,
+    Settings, Source, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -146,8 +146,8 @@ fn choose(limits: &Limits) -> Result<Kind> {
                     "[executor] memory = {m} bytes: the open executor cannot hold a memory limit"
                 );
             }
-            if limits.network == Some(false) {
-                bail!("[executor] network = false: the open executor cannot keep a run off the network");
+            if let Some(n @ (Network::Denied | Network::Localhost)) = limits.network {
+                bail!("[executor] network = {n:?}: the open executor cannot hold a run's network");
             }
         }
         Kind::Sandbox => {
@@ -164,8 +164,10 @@ fn choose(limits: &Limits) -> Result<Kind> {
 
 /// A Seatbelt profile: everything a user may do, but writes only to
 /// `writable`, files named in `stamps`, and the terminal and null devices;
-/// with `offline`, no network, local sockets included.
-fn seatbelt(writable: &[PathBuf], stamps: &[&str], offline: bool) -> String {
+/// the network as `network` says: `Denied`, none, local sockets included;
+/// `Localhost`, listening and connecting on localhost only, by address or
+/// by name, and no other connection (name lookups included).
+fn seatbelt(writable: &[PathBuf], stamps: &[&str], network: Option<Network>) -> String {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let mut p =
         String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
@@ -179,8 +181,14 @@ fn seatbelt(writable: &[PathBuf], stamps: &[&str], offline: bool) -> String {
         p.push_str(&format!("  (regex #\"/{}$\")\n", regex_escape(s)));
     }
     p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
-    if offline {
-        p.push_str("(deny network*)\n");
+    match network {
+        Some(Network::Denied) => p.push_str("(deny network*)\n"),
+        Some(Network::Localhost) => p.push_str(
+            "(deny network*)\n\
+             (allow network-bind network-inbound (local ip \"localhost:*\"))\n\
+             (allow network-outbound (remote ip \"localhost:*\"))\n",
+        ),
+        Some(Network::Allowed) | None => {}
     }
     p
 }
@@ -330,14 +338,14 @@ impl Tests for Checks {
             },
             Kind::Sandbox => {
                 let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-                let offline = request.limits.network == Some(false);
+                let network = request.limits.network;
                 let profile = dir.join("sandbox.sb");
                 std::fs::write(
                     &profile,
                     seatbelt(
                         &[canon(&request.place.path), canon(&request.place.tmp)],
                         &plan.stamps,
-                        offline,
+                        network,
                     ),
                 )?;
                 argv.splice(
@@ -354,7 +362,7 @@ impl Tests for Checks {
                     confined: false,
                     processors,
                     memory: None,
-                    network: offline.then_some(false),
+                    network: network.filter(|n| *n != Network::Allowed),
                 }
             }
         };

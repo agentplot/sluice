@@ -97,6 +97,44 @@ pub enum Setting {
 /// the core (52).
 pub type Settings = BTreeMap<String, Setting>;
 
+/// 83: how far a run may reach over the network, as a branch's policy
+/// states it (`[executor] network = false | "localhost" | true`) and as an
+/// executor held it. Read from `false` and `true` as well as by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    /// No connection at all, local sockets included.
+    Denied,
+    /// Only localhost (127.0.0.1 and ::1): a check may start a server
+    /// there and reach it, and reach nothing else.
+    Localhost,
+    /// Anywhere.
+    Allowed,
+}
+
+impl<'de> Deserialize<'de> for Network {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Form {
+            Flag(bool),
+            Word(String),
+        }
+        match Form::deserialize(d)? {
+            Form::Flag(false) => Ok(Network::Denied),
+            Form::Flag(true) => Ok(Network::Allowed),
+            Form::Word(w) => match w.as_str() {
+                "denied" => Ok(Network::Denied),
+                "localhost" => Ok(Network::Localhost),
+                "allowed" => Ok(Network::Allowed),
+                _ => Err(serde::de::Error::custom(format!(
+                    "network = {w:?}: one of false, \"localhost\" or true"
+                ))),
+            },
+        }
+    }
+}
+
 /// 83: what a run may use and reach, as the branch's policy states it.
 /// The processors each run is given are the instance's, not the policy's,
 /// so they are the check seam's own (71).
@@ -107,8 +145,8 @@ pub struct Limits {
     pub executor: Option<String>,
     /// The most memory the run may use, in bytes.
     pub memory: Option<u64>,
-    /// Whether the run may reach the network; `None` states nothing.
-    pub network: Option<bool>,
+    /// How far the run may reach over the network; `None` states nothing.
+    pub network: Option<Network>,
 }
 
 /// 83, 84: what an executor held a run to, recorded with every result it
@@ -124,8 +162,10 @@ pub struct Enforced {
     pub processors: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<u64>,
+    /// The network the executor held the run to; `None` when it held it
+    /// to nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<bool>,
+    pub network: Option<Network>,
 }
 
 /// What the core asks the check seam to run on one candidate (37).
