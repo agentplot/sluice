@@ -80,7 +80,7 @@ fn submit_fails_and_names_the_combination() {
         "crw-1-unit-1",
         &[("plugin/lib/plan.py", Some("touched"))],
     );
-    // In #1's lane: both touch the plugin.
+    // Behind #1, so tested on top of it.
     work(
         &f,
         "unit/batch-review",

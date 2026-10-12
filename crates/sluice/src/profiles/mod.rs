@@ -11,8 +11,8 @@ pub mod worktrunk;
 
 use anyhow::{bail, Result};
 use sluice_seams::{
-    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification,
-    Place, Progress, Rev, RunHandle, RunRequest, Session, Snapshot, State, Tests, Written,
+    Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification, Place,
+    Progress, Rev, RunHandle, RunRequest, Session, Snapshot, State, Tests, Written,
 };
 
 /// A seam whose profile is not built yet.
@@ -90,9 +90,6 @@ impl Checkout for Unbuilt {
 }
 
 impl Tests for Unbuilt {
-    fn affected(&self, _: &Rev, _: &Rev) -> Result<Affected> {
-        self.refuse()
-    }
     fn start(&self, _: &RunRequest) -> Result<RunHandle> {
         self.refuse()
     }

@@ -129,69 +129,37 @@ fn priority_never_displaces_a_combination_under_test() {
 #[test]
 fn a_submission_waits_for_its_after_and_holds_no_one() {
     let h = Harness::bolt();
-    h.w().hold_runs(true);
-    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.w().fails_with("a:test", "a/lib", "broken");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
     let one = h.submit("unit/a");
-    // In another lane, after #1: neither landed nor ahead in its chain.
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Failed);
+
+    // After #1, which is neither landed nor ahead of it in the chain.
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
     let two = h.try_submit("unit/b", &[one], 0).unwrap().id;
-    h.work("unit/c", "agent-c", &[("b/more", Some("c"))]);
+    h.work("unit/c", "agent-c", &[("c/lib", Some("c2"))]);
     let three = h.submit("unit/c");
-    h.step();
-    assert_eq!(h.sub(two).state, State::Waiting);
-    // The one behind it in its lane is tested without it.
-    assert!(h.tested().contains(&vec![three]));
-
-    h.w().hold_runs(false);
-    h.w().complete_all();
     h.settle();
-    for id in [one, two, three] {
-        assert_eq!(h.sub(id).state, State::Landed, "#{id}");
-    }
-    let landed: Vec<Vec<u64>> = h
-        .events()
-        .into_iter()
-        .filter_map(|e| match e {
-            Event::Landed { ids, .. } => Some(ids),
-            _ => None,
-        })
-        .collect();
-    let pos = |id| landed.iter().position(|l| l.contains(&id)).unwrap();
-    assert!(pos(one) < pos(two));
+    assert_eq!(h.sub(two).state, State::Waiting);
+    // The one behind it is tested and lands without it.
+    assert!(h.tested().contains(&vec![three]));
+    assert_eq!(h.sub(three).state, State::Landed);
 }
 
-/// satisfies: 8, 36
+/// satisfies: 8, 10
 #[test]
-fn disjoint_parts_are_never_tested_together() {
+fn every_submission_is_tested_on_top_of_every_one_ahead() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
     h.work("unit/c", "agent-c", &[("a/more", Some("c"))]);
     let (one, two, three) = (h.submit("unit/a"), h.submit("unit/b"), h.submit("unit/c"));
     h.step();
-    assert_eq!(h.tested(), vec![vec![one], vec![one, three], vec![two]]);
-}
-
-/// satisfies: 9
-#[test]
-fn unknown_parts_join_every_lane_until_they_leave() {
-    let h = Harness::bolt();
-    h.w().hold_runs(true);
-    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
-    let u = h.work("unit/u", "agent-u", &[("c/lib", Some("c2"))]);
-    h.w().unknown_parts(&u);
-    let (one, two) = (h.submit("unit/a"), h.submit("unit/b"));
-    let unknown = h.submit("unit/u");
-    h.step();
-    // One lane: the unknown submission's combination holds both.
-    assert!(h.tested().contains(&vec![one, two, unknown]));
-    assert!(h.tested().contains(&vec![one, two]));
-
-    h.withdraw(unknown, Requester::Operator);
-    h.step();
-    // The lanes divide again: #2 is tested without #1.
-    assert!(h.tested().contains(&vec![two]));
+    assert_eq!(
+        h.tested(),
+        vec![vec![one], vec![one, two], vec![one, two, three]]
+    );
 }
 
 /// satisfies: 47b, 3, 6

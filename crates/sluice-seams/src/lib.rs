@@ -18,7 +18,7 @@
 //! a line found elsewhere, a records write refused) is a value, never an
 //! error, because the core acts on it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -82,14 +82,6 @@ pub trait Checkout {
 // ---------------------------------------------------------------------------
 // B.2 The check
 // ---------------------------------------------------------------------------
-
-/// The parts of the repository a head's work affects, every dependent
-/// part included (36, 8), or unknown (9).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Affected {
-    Parts(BTreeSet<String>),
-    Unknown,
-}
 
 /// What the core asks the check seam to run on one candidate (37).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,12 +149,9 @@ pub enum Progress {
 }
 
 pub trait Tests {
-    /// 36: the parts the work from where `head` left `line` to `head`
-    /// affects, dependents included.
-    fn affected(&self, line: &Rev, head: &Rev) -> Result<Affected>;
-
-    /// 37: start the affected required checks in a place, as one process
-    /// group under the time limit (32, 66; rule core.10).
+    /// 36, 37: start the required checks the candidate affects since
+    /// `request.since`, in a place, as one process group under the time
+    /// limit (32, 66; rule core.10).
     fn start(&self, request: &RunRequest) -> Result<RunHandle>;
 
     /// 37: a started run's progress; once finished, every check's key,

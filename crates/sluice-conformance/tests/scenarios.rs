@@ -10,7 +10,6 @@ fn s1_two_heads_pass_and_land_in_order() {
     let h = Harness::bolt();
     let base = h.tip();
     let a = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    // In A's lane, so B's candidate holds A.
     let b = h.work("unit/b", "agent-b", &[("a/notes", Some("from b"))]);
     let one = h.submit("unit/a");
     let two = h.submit("unit/b");
@@ -152,9 +151,9 @@ fn s4_the_first_fails_and_the_second_is_formed_again_without_it() {
     assert_eq!(h.w().moves().len(), 1);
 }
 
-/// satisfies: S6, 8
+/// satisfies: S6, 8, 10
 #[test]
-fn s6_disjoint_parts_land_independently_in_either_order() {
+fn s6_unrelated_work_is_tested_in_one_chain_and_not_again() {
     let h = Harness::bolt();
     h.w().hold_runs(true);
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
@@ -162,21 +161,23 @@ fn s6_disjoint_parts_land_independently_in_either_order() {
     let one = h.submit("unit/a");
     let two = h.submit("unit/b");
     h.step();
-    // Neither is tested with the other (8).
-    assert_eq!(h.tested(), vec![vec![one], vec![two]]);
+    // The second is tested on top of the first (8, 10).
+    assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
 
-    // The second finishes first and lands first.
+    // The second finishing first lands nothing: it lands after the first.
     let b_combination = h.sub(two).tested.unwrap().combination;
     h.w().complete(&b_combination);
     h.step();
     h.step();
-    assert_eq!(h.sub(two).state, State::Landed);
-    assert_ne!(h.sub(one).state, State::Landed);
+    assert!(h.w().moves().is_empty());
 
     h.w().hold_runs(false);
     h.w().complete_all();
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.sub(two).state, State::Landed);
+    // Not tested again when the first landed.
+    assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
     let tree = h.w().tree(&h.tip());
     assert_eq!(
         (tree["a/lib"].as_str(), tree["b/lib"].as_str()),

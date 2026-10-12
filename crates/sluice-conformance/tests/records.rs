@@ -68,7 +68,8 @@ fn every_record_written_is_the_real_format_and_names_its_schema() {
     let log: Vec<LogLine> = parse_lines(&files["log.jsonl"]).unwrap();
     assert!(!log.is_empty());
     let results: Vec<ResultLine> = parse_lines(h.w().results_log().as_bytes()).unwrap();
-    assert_eq!(results.len(), 3 + 3);
+    // #1 and #1 + #2, then #2 alone once #1 is blamed (21).
+    assert_eq!(results.len(), 3 + 3 + 3);
 }
 
 /// satisfies: 52, 27

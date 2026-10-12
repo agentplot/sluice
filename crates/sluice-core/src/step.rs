@@ -28,8 +28,8 @@ use crate::line::Line;
 use crate::order::{self, Entry};
 use crate::policy::Rules;
 use crate::records::{
-    AffectedRecord, Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord,
-    LandingIntent, OutboxItem, ResultKind, ResultLine, State, Tested, ToldRecord,
+    Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord, LandingIntent,
+    OutboxItem, ResultKind, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Sluice};
@@ -342,17 +342,16 @@ impl Sluice<'_> {
         line.doc.window = line.doc.window.clamp(1, rules.parallel);
 
         self.poll(&mut line, &rules, &now)?;
-        let chains = loop {
-            self.ask_affected(&mut line)?;
-            let (chains, removed) = self.arrange(&mut line, &rules, &now)?;
+        let chain = loop {
+            let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
             if !removed {
-                break chains;
+                break chain;
             }
         };
-        if !self.choose_landing(&mut line, &rules, &chains, &now)? {
-            self.choose_starts(&mut line, &rules, &chains, &now)?;
+        if !self.choose_landing(&mut line, &rules, &chain, &now)? {
+            self.choose_starts(&mut line, &rules, &chain, &now)?;
         }
-        derive_states(&mut line, &chains);
+        derive_states(&mut line, &chain);
         Ok(matches!(self.write(&line)?, Written::Written(_)))
     }
 
@@ -476,102 +475,68 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 8, 9, 36: ask the parts each queued submission's work affects,
-    /// once per revision of the branch.
-    fn ask_affected(&self, line: &mut Line) -> Result<()> {
-        let base = line.doc.base.clone().expect("decide reads the base first");
-        let ask: Vec<(u64, Rev)> = line
-            .subs
-            .values()
-            .filter(|s| !s.state.is_out() && s.state != State::Landing)
-            .filter(|s| s.affected.as_ref().map(|a| &a.on) != Some(&base))
-            .map(|s| (s.id, s.head.clone()))
-            .collect();
-        for (id, head) in ask {
-            let parts = match self.seams.tests.affected(&base, &head)? {
-                sluice_seams::Affected::Parts(p) => Some(p.into_iter().collect()),
-                sluice_seams::Affected::Unknown => None,
-            };
-            line.sub_mut(id).affected = Some(AffectedRecord {
-                on: base.clone(),
-                parts,
-            });
-        }
-        Ok(())
-    }
-
-    /// Order the queue into chains, form every candidate of every chain,
-    /// drop candidates no chain holds, and attribute failures. Returns
-    /// each chain's candidates, and whether a submission was removed, in
-    /// which case the chains are arranged again (12, 21).
-    fn arrange(
-        &self,
-        line: &mut Line,
-        rules: &Rules,
-        now: &str,
-    ) -> Result<(Vec<Vec<String>>, bool)> {
+    /// Order the queue into the branch's chain, form every candidate of
+    /// it, drop candidates it does not hold, and attribute failures.
+    /// Returns the chain's candidates, and whether a submission was
+    /// removed, in which case the chain is arranged again (8, 12, 21).
+    fn arrange(&self, line: &mut Line, rules: &Rules, now: &str) -> Result<(Vec<String>, bool)> {
         let base = line.doc.base.clone().expect("decide reads the base first");
         let ord = self.order(line, &base);
         let mut removed = false;
 
         // Form (10, 12): reuse a candidate formed on this revision with
         // exactly these submissions, form the rest.
-        let mut chains: Vec<Vec<String>> = Vec::new();
-        for chain in &ord.chains {
-            let mut prev = base.clone();
-            let mut prefix: Vec<u64> = Vec::new();
-            let mut ahead: Vec<(u64, Rev)> = Vec::new();
-            let mut ids: Vec<String> = Vec::new();
-            for &id in chain {
-                prefix.push(id);
-                if let Some(c) = line
-                    .doc
-                    .candidates
-                    .iter()
-                    .find(|c| c.on == base && c.submissions == prefix)
-                {
-                    prev = c.revision.clone();
-                    ids.push(c.id.clone());
-                    ahead.push((id, prev.clone()));
-                    continue;
-                }
-                let head = line.sub(id)?.head.clone();
-                match self.seams.branch.form(&prev, &head)? {
-                    Formed::Revision(rev) => {
-                        let cid = format!("c{}", line.doc.next_candidate);
-                        line.doc.next_candidate += 1;
-                        line.doc.candidates.push(Candidate {
-                            id: cid.clone(),
-                            on: base.clone(),
-                            submissions: prefix.clone(),
-                            revision: rev.clone(),
-                            state: CandidateState::Formed,
-                            place: None,
-                            run: None,
-                            failed: Vec::new(),
-                            every_check: false,
-                            ran: 0,
-                            replayed: 0,
-                        });
-                        prev = rev.clone();
-                        ids.push(cid);
-                        ahead.push((id, rev));
-                    }
-                    Formed::Conflict { paths } => {
-                        prefix.pop();
-                        let with = self.contested(line, &base, &ahead, &head)?;
-                        self.remove_conflict(line, id, paths, with, now);
-                        removed = true;
-                    }
-                }
+        let mut prev = base.clone();
+        let mut prefix: Vec<u64> = Vec::new();
+        let mut ahead: Vec<(u64, Rev)> = Vec::new();
+        let mut ids: Vec<String> = Vec::new();
+        for &id in &ord.chain {
+            prefix.push(id);
+            if let Some(c) = line
+                .doc
+                .candidates
+                .iter()
+                .find(|c| c.on == base && c.submissions == prefix)
+            {
+                prev = c.revision.clone();
+                ids.push(c.id.clone());
+                ahead.push((id, prev.clone()));
+                continue;
             }
-            if !ids.is_empty() {
-                chains.push(ids);
+            let head = line.sub(id)?.head.clone();
+            match self.seams.branch.form(&prev, &head)? {
+                Formed::Revision(rev) => {
+                    let cid = format!("c{}", line.doc.next_candidate);
+                    line.doc.next_candidate += 1;
+                    line.doc.candidates.push(Candidate {
+                        id: cid.clone(),
+                        on: base.clone(),
+                        submissions: prefix.clone(),
+                        revision: rev.clone(),
+                        state: CandidateState::Formed,
+                        place: None,
+                        run: None,
+                        failed: Vec::new(),
+                        every_check: false,
+                        ran: 0,
+                        replayed: 0,
+                    });
+                    prev = rev.clone();
+                    ids.push(cid);
+                    ahead.push((id, rev));
+                }
+                Formed::Conflict { paths } => {
+                    prefix.pop();
+                    let with = self.contested(line, &base, &ahead, &head)?;
+                    self.remove_conflict(line, id, paths, with, now);
+                    removed = true;
+                }
             }
         }
 
-        // Drop every candidate no chain holds: obsolete (10, 21, 24).
-        let held: BTreeSet<&String> = chains.iter().flatten().collect();
+        // Drop every candidate the chain does not hold: obsolete (10, 21,
+        // 24).
+        let held: BTreeSet<&String> = ids.iter().collect();
         let mut release = Vec::new();
         line.doc.candidates.retain(|c| {
             let keep = held.contains(&c.id);
@@ -584,20 +549,18 @@ impl Sluice<'_> {
 
         // Attribute (17, 18): the newest submission of the first failed
         // candidate, once every candidate ahead of it has a verdict.
-        for chain in &chains {
-            for cid in chain {
-                let c = line.candidate(cid).expect("a chain's candidate").clone();
-                if c.state == CandidateState::Passed {
-                    continue;
-                }
-                if c.state.failed() {
-                    self.blame(line, &c, rules, now);
-                    removed = true;
-                }
-                break;
+        for cid in &ids {
+            let c = line.candidate(cid).expect("a chain's candidate").clone();
+            if c.state == CandidateState::Passed {
+                continue;
             }
+            if c.state.failed() {
+                self.blame(line, &c, rules, now);
+                removed = true;
+            }
+            break;
         }
-        Ok((chains, removed))
+        Ok((ids, removed))
     }
 
     fn order(&self, line: &Line, base: &Rev) -> order::Order {
@@ -609,11 +572,6 @@ impl Sluice<'_> {
                 id: s.id,
                 priority: s.priority,
                 after: s.after.clone(),
-                parts: s
-                    .affected
-                    .as_ref()
-                    .and_then(|a| a.parts.as_ref())
-                    .map(|p| p.iter().cloned().collect()),
             })
             .collect();
         let ids: BTreeSet<u64> = eligible.iter().map(|e| e.id).collect();
@@ -742,25 +700,25 @@ impl Sluice<'_> {
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
     }
 
-    /// 22, 23: land the longest prefix of a chain whose verdicts allow it,
+    /// 22, 23: land the longest prefix of the chain whose verdicts allow it,
     /// one commit per submission, writing the intent before the branch
     /// moves (24). Returns whether a landing was chosen.
     fn choose_landing(
         &self,
         line: &mut Line,
         rules: &Rules,
-        chains: &[Vec<String>],
+        chain: &[String],
         now: &str,
     ) -> Result<bool> {
         let base = line.doc.base.clone().expect("decide reads the base first");
-        for chain in chains {
+        {
             let cands: Vec<Candidate> = chain
                 .iter()
                 .map(|id| line.candidate(id).expect("a chain's candidate").clone())
                 .collect();
             let n = landable(&cands, rules.batch);
             if n == 0 {
-                continue;
+                return Ok(false);
             }
             let deepest = &cands[n - 1];
             let mut parent = base.clone();
@@ -811,18 +769,17 @@ impl Sluice<'_> {
                 to: parent,
                 commits,
             });
-            return Ok(true);
+            Ok(true)
         }
-        Ok(false)
     }
 
-    /// 13, 14, 71: start candidates up to the window, counted across every
-    /// lane, and up to what the host takes.
+    /// 13, 14, 71: start candidates up to the window, and up to what the
+    /// host takes.
     fn choose_starts(
         &self,
         line: &mut Line,
         rules: &Rules,
-        chains: &[Vec<String>],
+        chain: &[String],
         now: &str,
     ) -> Result<()> {
         let running = line
@@ -831,16 +788,13 @@ impl Sluice<'_> {
             .iter()
             .filter(|c| c.state.under_test())
             .count();
-        let mut room = line.doc.window.saturating_sub(running);
-        if room == 0 {
+        let room = line.doc.window.saturating_sub(running);
+        if room == 0 || chain.is_empty() {
             return Ok(());
         }
-        room = room.min(self.seams.tests.capacity()?);
+        let room = room.min(self.seams.tests.capacity()?);
         let mut start: Vec<String> = Vec::new();
-        for chain in chains {
-            if room == 0 {
-                break;
-            }
+        {
             let cands: Vec<&Candidate> = chain
                 .iter()
                 .map(|id| line.candidate(id).expect("a chain's candidate"))
@@ -870,10 +824,7 @@ impl Sluice<'_> {
                     Vec::new()
                 }
             };
-            for id in pick.into_iter().take(room) {
-                start.push(id);
-                room -= 1;
-            }
+            start.extend(pick.into_iter().take(room));
         }
         let every_known = line.doc.verified;
         for id in start {
@@ -924,8 +875,8 @@ fn landable(cands: &[Candidate], batch: bool) -> usize {
     n
 }
 
-/// Each queued submission's state, read from the chains (26, 49).
-fn derive_states(line: &mut Line, chains: &[Vec<String>]) {
+/// Each queued submission's state, read from the chain (26, 49).
+fn derive_states(line: &mut Line, chain: &[String]) {
     let base = line.doc.base.clone();
     let mut under_test: BTreeSet<u64> = BTreeSet::new();
     let mut own: BTreeMap<u64, CandidateState> = BTreeMap::new();
@@ -938,9 +889,8 @@ fn derive_states(line: &mut Line, chains: &[Vec<String>]) {
         }
         own.insert(c.newest(), c.state);
     }
-    let in_chain: BTreeSet<u64> = chains
+    let in_chain: BTreeSet<u64> = chain
         .iter()
-        .flatten()
         .filter_map(|cid| line.candidate(cid).map(|c| c.newest()))
         .collect();
     for s in line.subs.values_mut() {

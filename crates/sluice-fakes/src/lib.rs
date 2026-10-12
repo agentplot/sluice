@@ -16,9 +16,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Affected, Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification,
-    Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source,
-    State, Submitter, TaskResult, Tests, Written,
+    Branch, Changes, Checkout, Driver, Formed, Guard, LandingCommit, Moved, Notification, Outcome,
+    Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session, Snapshot, Source, State,
+    Submitter, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -92,7 +92,6 @@ struct Inner {
     fail_rules: Vec<(String, Predicate)>,
     flaky: BTreeMap<String, VecDeque<Outcome>>,
     hang: BTreeSet<String>,
-    unknown: BTreeSet<Rev>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     hold: bool,
@@ -365,11 +364,6 @@ impl World {
     /// `task` runs past any time limit.
     pub fn hangs(&self, task: &str) {
         self.0.borrow_mut().hang.insert(task.into());
-    }
-
-    /// The parts `head`'s work affects are unknown.
-    pub fn unknown_parts(&self, head: &Rev) {
-        self.0.borrow_mut().unknown.insert(head.clone());
     }
 
     /// The next start finds its place made and stops before starting.
@@ -739,33 +733,6 @@ impl Branch for FakeBranch {
 }
 
 impl Tests for FakeTests {
-    fn affected(&self, line: &Rev, head: &Rev) -> Result<Affected> {
-        let inner = self.0 .0.borrow();
-        if inner.unknown.contains(head) {
-            return Ok(Affected::Unknown);
-        }
-        let base = World::merge_base(&inner, line, head);
-        let b = base
-            .as_ref()
-            .map(|r| inner.commits[r].tree.clone())
-            .unwrap_or_default();
-        let h = &inner.commits[head].tree;
-        let mut parts = BTreeSet::new();
-        for p in b.keys().chain(h.keys()) {
-            if b.get(p) == h.get(p) {
-                continue;
-            }
-            let part = inner
-                .tasks
-                .iter()
-                .find(|t| p.starts_with(&t.prefix))
-                .map(|t| t.prefix.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| p.split('/').next().unwrap_or(p).to_string());
-            parts.insert(part);
-        }
-        Ok(Affected::Parts(parts))
-    }
-
     fn start(&self, request: &RunRequest) -> Result<RunHandle> {
         let mut inner = self.0 .0.borrow_mut();
         let held = inner

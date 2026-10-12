@@ -111,14 +111,6 @@ pub struct ConflictRecord {
     pub with: Vec<Contested>,
 }
 
-/// The parts a submission's work affects, as last asked on `on` (8, 9).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AffectedRecord {
-    pub on: Rev,
-    /// `None` when unknown.
-    pub parts: Option<Vec<String>>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Withdrawal {
     pub by: String,
@@ -145,8 +137,6 @@ pub struct Submission {
     pub failed: Vec<FailedTask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict: Option<ConflictRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub affected: Option<AffectedRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

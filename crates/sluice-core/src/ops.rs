@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use sluice_seams::{Affected, Contested, Formed, Rev};
+use sluice_seams::{Contested, Formed, Rev};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -185,7 +185,6 @@ impl Sluice<'_> {
                     result: None,
                     failed: Vec::new(),
                     conflict: None,
-                    affected: None,
                     withdrawn: None,
                     told: None,
                     landed_as: None,
@@ -226,13 +225,7 @@ impl Sluice<'_> {
         let head = session.head;
 
         // The queue as the next step would order it, with the head at the
-        // back of its lane.
-        let parts = |rev: &Rev| -> Result<Option<BTreeSet<String>>> {
-            Ok(match self.seams.tests.affected(&tip, rev)? {
-                Affected::Parts(p) => Some(p),
-                Affected::Unknown => None,
-            })
-        };
+        // back.
         const PROBE: u64 = u64::MAX;
         let mut entries = Vec::new();
         for s in line.subs.values() {
@@ -242,22 +235,16 @@ impl Sluice<'_> {
             {
                 continue;
             }
-            let p = match &s.affected {
-                Some(a) if a.on == tip => a.parts.as_ref().map(|p| p.iter().cloned().collect()),
-                _ => parts(&s.head)?,
-            };
             entries.push(Entry {
                 id: s.id,
                 priority: s.priority,
                 after: s.after.clone(),
-                parts: p,
             });
         }
         entries.push(Entry {
             id: PROBE,
             priority: i64::MIN,
             after: Vec::new(),
-            parts: parts(&head)?,
         });
         let landed: BTreeSet<u64> = line
             .subs
@@ -273,14 +260,8 @@ impl Sluice<'_> {
             .map(|c| c.submissions.clone())
             .collect();
         let ord = order::order(&entries, &landed, &pinned);
-        let chain = ord
-            .chains
-            .iter()
-            .find(|c| c.contains(&PROBE))
-            .cloned()
-            .unwrap_or_else(|| vec![PROBE]);
-        // Its `after` entries are ahead of it whichever lane they are in.
-        let mut ahead_ids: Vec<u64> = chain.into_iter().filter(|i| *i != PROBE).collect();
+        // Its `after` entries are ahead of it, waiting or not.
+        let mut ahead_ids: Vec<u64> = ord.chain.into_iter().filter(|i| *i != PROBE).collect();
         for a in after {
             if !ahead_ids.contains(a) && line.subs.get(a).is_some_and(|s| !s.state.is_out()) {
                 ahead_ids.push(*a);

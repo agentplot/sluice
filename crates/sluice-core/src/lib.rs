@@ -1,4 +1,4 @@
-//! The core of sluice: the policy, the records, lanes and order, forming,
+//! The core of sluice: the policy, the records, the chain's order, forming,
 //! verdicts, attribution, the window and the landing, as one step
 //! function over a line's records (ADR 0005).
 //!
