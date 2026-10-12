@@ -82,8 +82,13 @@ impl Moon {
                 argv: None,
                 targets,
                 holds_processors: true,
+                stamps: Vec::new(),
             });
         }
+        // The workspace's toolchains, installed here, outside the executor,
+        // where a download and a write to the user's home are allowed: the
+        // run inside only uses them.
+        self.command(cx, &["setup"], &[])?;
         let jobs = cx.jobs.to_string();
         let mut argv: Vec<&str> = vec!["moon", "exec"];
         argv.extend(targets.iter().map(String::as_str));
@@ -92,6 +97,8 @@ impl Moon {
             argv: Some(cx.argv(&argv)),
             targets,
             holds_processors: true,
+            // proto stamps each toolchain it runs as used.
+            stamps: vec![".last-used"],
         })
     }
 

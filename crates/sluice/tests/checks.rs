@@ -156,26 +156,35 @@ fn a_command_sees_its_place_and_nothing_of_sluices() {
     }
 }
 
-/// `[tests] shell` is put before the command, opaque to sluice.
+/// `[tests] toolchain` runs before the run and what it prints is sourced
+/// before the command; anything else the script prints never reaches the
+/// command's output.
 #[test]
-fn a_command_runs_inside_the_repositorys_shell() {
-    let repo = Repo::new("checks-shell");
-    repo.write("enter", "#!/bin/sh\nexport ENTERED=yes\nexec \"$@\"\n");
-    repo.git(&["add", "enter"]);
-    repo.git(&["commit", "-q", "-m", "shell"]);
+fn a_command_runs_with_the_repositorys_toolchain() {
+    let repo = Repo::new("checks-toolchain");
+    repo.write(
+        "tools",
+        "#!/bin/sh\necho 'echo setting up'\necho 'export ENTERED=yes'\n",
+    );
+    repo.git(&["add", "tools"]);
+    repo.git(&["commit", "-q", "-m", "toolchain"]);
     std::fs::set_permissions(
-        repo.dir().join("enter"),
+        repo.dir().join("tools"),
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
     )
     .unwrap();
     let c = checks(&repo);
     let mut tests = command("test \"$ENTERED\" = yes");
     tests.insert(
-        "shell".into(),
-        Setting::List(vec![repo.dir().join("enter").to_string_lossy().into()]),
+        "toolchain".into(),
+        Setting::List(vec![repo.dir().join("tools").to_string_lossy().into()]),
     );
     let r = finish(&c, &request(&repo, "p1", tests));
     assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+    // A toolchain that fails refuses the run.
+    let mut tests = command("true");
+    tests.insert("toolchain".into(), Setting::List(vec!["false".into()]));
+    assert!(c.start(&request(&repo, "p2", tests)).is_err());
 }
 
 /// 83, 84: a limit the open executor cannot hold refuses the run before
@@ -208,10 +217,18 @@ fn the_open_executor_refuses_what_it_cannot_hold() {
     );
     refused(
         Limits {
-            executor: Some("sandbox".into()),
+            executor: Some("container".into()),
             ..Limits::default()
         },
-        "sandbox",
+        "container",
+    );
+    refused(
+        Limits {
+            executor: Some("sandbox".into()),
+            memory: Some(1 << 30),
+            ..Limits::default()
+        },
+        "memory",
     );
     // A network the policy allows needs no holding.
     let mut req = request(&repo, "p2", command("true"));
@@ -234,4 +251,53 @@ fn an_unknown_runner_is_refused() {
     assert!(c.start(&request(&repo, "p1", Settings::new())).is_err());
     let tests = Settings::from([("runner".into(), Setting::Text("make".into()))]);
     assert!(c.start(&request(&repo, "p2", tests)).is_err());
+}
+
+/// 83, 84: on macOS the sandbox holds a run to writing its place and
+/// scratch directory and, with `network = false`, to no connection; the
+/// record says sandbox, not confined, network held.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_holds_writes_and_the_network() {
+    let repo = Repo::new("checks-sandbox");
+    let outside = repo.dir().with_extension("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let c = checks(&repo);
+    let sandboxed = |name: &str, cmd: &str, network: Option<bool>| {
+        let mut req = request(&repo, name, command(cmd));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network,
+            memory: None,
+        };
+        finish(&c, &req)
+    };
+    let inside = sandboxed(
+        "p1",
+        "touch \"$SLUICE_CHECKOUT/in\" \"$SLUICE_TMP/in\" \"$TMPDIR/t\"",
+        Some(false),
+    );
+    assert_eq!(inside.tasks[0].outcome, Outcome::Pass);
+    assert_eq!(inside.executor.kind, "sandbox");
+    assert!(!inside.executor.confined);
+    assert_eq!(inside.executor.network, Some(false));
+
+    let escape = format!("touch {}/escaped", outside.display());
+    assert_eq!(
+        sandboxed("p2", &escape, None).tasks[0].outcome,
+        Outcome::Fail
+    );
+    assert!(!outside.join("escaped").exists());
+
+    let connect = format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}");
+    assert_eq!(
+        sandboxed("p3", &connect, Some(false)).tasks[0].outcome,
+        Outcome::Fail
+    );
+    let open = sandboxed("p4", &connect, None);
+    assert_eq!(open.tasks[0].outcome, Outcome::Pass);
+    assert_eq!(open.executor.network, None);
+    drop(listener);
 }

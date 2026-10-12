@@ -286,10 +286,11 @@ fn an_old_moon_is_refused() {
             format!("#!/bin/sh\necho moon {version}\n"),
         )
         .unwrap();
+        // A toolchain that puts this moon first.
         let enter = bin.join("enter");
         std::fs::write(
             &enter,
-            format!("#!/bin/sh\nPATH={}:$PATH exec \"$@\"\n", bin.display()),
+            format!("#!/bin/sh\necho 'export PATH={}:$PATH'\n", bin.display()),
         )
         .unwrap();
         for f in [bin.join("moon"), enter.clone()] {
@@ -298,7 +299,7 @@ fn an_old_moon_is_refused() {
         }
         let mut req = request(&repo, "p1", &["#check-fast"], None);
         req.tests.insert(
-            "shell".into(),
+            "toolchain".into(),
             Setting::List(vec![enter.to_string_lossy().into()]),
         );
         let err = checks(&repo).start(&req).unwrap_err();
@@ -342,4 +343,32 @@ fn helpers_are_not_results_and_allowed_failures_fail() {
     // The helper ran only as a helper: required by name, it has no result.
     assert_eq!(r.missing, ["alpha:serve"]);
     assert!(req.place.tmp.join("stopped").exists());
+}
+
+/// 83, 84: moon's run under the sandbox, kept off the network: the tasks
+/// run and replay as in the open, and the record says sandbox.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandboxed_run_reads_as_an_open_one() {
+    let repo = workspace("moon-sandbox");
+    let c = checks(&repo);
+    let mut req = request(&repo, "p1", &["#check-fast"], None);
+    req.limits = Limits {
+        executor: Some("sandbox".into()),
+        network: Some(false),
+        memory: None,
+    };
+    let first = finish(&c, &req);
+    assert_eq!(
+        tasks(&first),
+        [
+            ("alpha:test".into(), Outcome::Pass, false),
+            ("beta:test".into(), Outcome::Pass, false)
+        ]
+    );
+    assert_eq!(first.executor.kind, "sandbox");
+    assert_eq!(first.executor.network, Some(false));
+    req.place.name = "p2".into();
+    let second = finish(&c, &req);
+    assert!(tasks(&second).iter().all(|t| t.2), "{:?}", tasks(&second));
 }

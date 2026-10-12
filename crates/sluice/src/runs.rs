@@ -119,13 +119,8 @@ impl Runs {
     /// hang-up never reaches the run. Returns without waiting for it.
     pub fn start(&self, name: &str, request: &Request) -> Result<()> {
         let dir = self.dir(name);
-        if dir.exists() {
-            if self.supervised(&dir)? {
-                bail!("place {name} already has a run in progress");
-            }
-            self.end(name)?;
-            std::fs::remove_dir_all(&dir)
-                .with_context(|| format!("removing the old run {}", dir.display()))?;
+        if dir.join("request.json").exists() {
+            self.clear(name)?;
         }
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         write_atomic(&dir.join("request.json"), &serde_json::to_vec(request)?)?;
@@ -165,6 +160,31 @@ impl Runs {
         // does; after a step exits, by whatever adopts it.
         std::thread::spawn(move || child.wait());
         Ok(())
+    }
+
+    /// A new run directory for the place `name`, for what its profile
+    /// writes before the run starts (its toolchain, an executor's
+    /// profile); any earlier run of that place is ended and removed.
+    pub fn prepare(&self, name: &str) -> Result<PathBuf> {
+        self.clear(name)?;
+        let dir = self.dir(name);
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        Ok(dir)
+    }
+
+    /// End and remove an earlier run of the place `name`, refusing one a
+    /// supervisor still holds.
+    fn clear(&self, name: &str) -> Result<()> {
+        let dir = self.dir(name);
+        if !dir.exists() {
+            return Ok(());
+        }
+        if self.supervised(&dir)? {
+            bail!("place {name} already has a run in progress");
+        }
+        self.end(name)?;
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("removing the old run {}", dir.display()))
     }
 
     /// The run of the place `name`.
