@@ -14,16 +14,28 @@ rules and does not restate them.
 | tool | version | where | note |
 |---|---|---|---|
 | git | 2.54.0 | `/etc/profiles/per-user/chuck/bin/git` | also `/usr/bin/git` 2.50.1 (Apple Git-155), which some tools use: see *Branch protection* |
-| gix | 0.87.1 (gix-ref 0.67.1, gix-actor 0.42.0) | `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` | builds `--offline` |
+| gix | 0.89.0 on crates.io; the APIs below were read in 0.87.1 (gix-ref 0.67.1, gix-actor 0.42.0) | `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` | depend on 0.89 and re-check the calls section 1 names |
+| moon in sluice's devenv | 2.6.1 | `/nix/store/1vc28y8m628iwc0z2qz4yll877i45r0m-moon_cli-2.6.1/bin/moon` | moonrepo's release build, pinned in `devenv.nix`; `devenv shell -- moon --version` |
+| proto in sluice's devenv | 0.63.1 | `devenv.nix`, as moon | moonrepo's toolchain manager; moon runs the shell's tools, never proto's (`MOON_TOOLCHAIN_FORCE_GLOBALS`) |
 | moon on `PATH` | 1.41.7 | `~/.bun/bin/moon` | **cannot run crew**: no task tags, no `moon exec` |
-| moon in crew's devenv | 2.5.3 | `/nix/store/xn5qbl6xwpb2d9hlchsjzacx6qkgcrml-moon-2.5.3/bin/moon` | what crew's `tests/suite` runs; `devenv shell -- moon --version` |
+| moon in crew's devenv | 2.5.3 | `/nix/store/xn5qbl6xwpb2d9hlchsjzacx6qkgcrml-moon-2.5.3/bin/moon` | what crew's `tests/suite` runs; below the profile's floor until crew moves to 2.6 |
 | worktrunk | v0.80.0 | `/etc/profiles/per-user/chuck/bin/wt` | `wt` in zsh is a function wrapping the binary; call `command wt` or the path |
 | rustc | 1.98.1 | | `std::fs::File::lock`/`try_lock` are stable (1.89), so no lock crate is needed |
 
-The walkthrough's "moon 2.6 `wait` and `cleanup` dependencies" do not
-exist in 2.5.3: a task dependency there has only `args`, `cacheStrategy`,
-`env`, `optional` and `target` (2.5.3's `.moon/cache/schemas/project.json`).
-The moon profile's floor is **moon 2.5**; nothing in it uses 2.6.
+The moon profile's floor is **moon 2.6**. 2.6.0 added a task
+dependency's `type` (2.6.1's `.moon/cache/schemas/project.json`,
+`TaskDependencyConfig.type`): `required` (the default) runs before the
+task and must pass; `wait` runs before it, but the task waits only for
+the dependency to start, not to finish; `cleanup` runs after the task's
+command, even when it failed, but not when it was skipped or replayed.
+Verified in a scratch project whose `test` has a `wait` on a `serve`
+that writes a file and sleeps 2 s, and a `cleanup` on a `stop`: `test`
+read the file 0.5 s in, failed on purpose, and `stop` still ran. These
+are the walkthrough's "wait and cleanup dependencies": how a
+repository's checks bring up and take down what they need in the
+place (31), never sluice's. A dependency of either kind must be able to
+run where its task does: with `cache: false` and no `runInCI`, moon
+refused the graph (`task_builder::dependency::run_in_ci_mismatch`).
 
 ## Shared conventions
 
@@ -495,10 +507,9 @@ printf '%s\n' "$input" | "$d/reference-transaction.pre-sluice" "$@"
 Missing sluice fails open with a warning: failing closed would refuse
 every commit in every worktree of the repository.
 
-When it is installed is not settled by the CLI (see *Open questions*);
-the brief's commands are `submit`, `step`, `run`, `status`, `amend`,
-`withdraw`. Ensuring it idempotently at the start of `submit`, `step` and
-`run` costs one file read.
+`submit`, `step` and `run` ensure it at their start, idempotently, for one
+file read; nothing has to be run first. `sluice protect --remove` takes
+it out, and `sluice protect` puts it back.
 
 ### `sluice hook reference-transaction <state>`
 
@@ -541,8 +552,11 @@ use wt submit`, exit 1). A `git push` into a checked-out branch is
 refused first by git's own `receive.denyCurrentBranch`; into a branch
 not checked out, the hook refuses it in `git-receive-pack`.
 `git branch -D` of a checked-out branch is refused by git itself;
-deleting one that is not checked out reaches the hook as `new` = zero
-(see *Open questions*).
+deleting one that is not checked out reaches the hook as `new` = zero.
+The hook allows that delete only when sluice holds no submission to the
+branch that is queued, waiting, testing or landing; otherwise it refuses
+and names them, so a bolt is withdrawn or landed before its branch goes.
+The branch's records stay readable after the delete (26).
 
 **Logging the attempt (clause 1: "refused and reported").** The hook
 appends `{"at":…,"event":"refused","ref":"refs/heads/bolt/x","from":<cur>,"to":<new>,"by":"<parent command>"}`
@@ -586,28 +600,79 @@ to run, and reading the result); the process handling is section 4's.
 **Bears on** 15, 16, 19, 36 to 38, 69, 70;
 core.7, core.9, core.10; ADR 0004.
 
-Verified on moon 2.5.3 (crew's devenv) in a throwaway clone of crew and
-in a two-project scratch workspace; differences on 1.41.7 are noted.
+Verified on moon 2.6.1 (sluice's devenv) in sluice's own workspace and
+in a two-project scratch workspace (`alpha:test`, and `beta:test`
+depending on it, both tagged `check-fast`). The crew captures below
+(the run report's shapes, the replays) were made on 2.5.3 in a
+throwaway clone of crew; the scratch workspace reproduced each shape on
+2.6.1. Differences on 1.41.7 are noted.
 
-### Targets
+### Targets: a branch requires checks by tier
 
-The policy's `required = ["#suite"]` is a tag. In 2.5.3 a bare tag is
-not a target:
+A repository tags each check with its tier, and a branch's policy names
+the tiers it requires. sluice's own workspace is the example. Its
+checks fall into three tiers, by what they need and how long they take:
+
+| tag | the checks | needs | takes |
+|---|---|---|---|
+| `check-fast` | every crate's cargo tests over the fakes; the citations check | cargo | seconds |
+| `check-tools` | each profile against real git, moon and worktrunk on scratch repositories; the conformance suite over the real profiles | the devenv toolchain | tens of seconds |
+| `check-e2e` | `e2e.sh` (section 8): a whole repository driven through `wt submit` | the toolchain and worktrunk | minutes |
+
+Each task carries its tier's tag in its `moon.yml`:
+
+```yaml
+tasks:
+  test:
+    command: 'cargo test -p sluice-core'
+    tags: [cargo-test, check-fast]
+```
+
+and the policy gates each branch on the tiers its work must pass:
+
+```toml
+[branches."bolt/*"]          # a bolt's units: the fast tier, landing in seconds
+required = ["#check-fast"]
+
+[branches.main]              # the shared branch: every tier
+required = ["#check-fast", "#check-tools", "#check-e2e"]
+batch = true
+```
+
+A required `#<tag>` is resolved to targets with a query, in the
+candidate's place (captured in sluice's workspace; only `check-fast`
+has tasks so far):
 
 ```
-error: invalid value '#suite' for '[TARGETS]...': Invalid target #suite, tags are not supported for default project targets.
+$ moon query tasks --tags check-fast </dev/null | jq -c '[.tasks[][] | .target]'
+["cli:test","conformance:citations","conformance:test","core:test","fakes:test","seams:test"]
+$ moon query tasks --tags check-tools </dev/null | jq -c '[.tasks[][] | .target]'
+[]
 ```
 
-| form | selects (2.5.3) |
+The union of every required tag's targets, plus each required
+`<project>:<task>` (itself a target), is what the run passes to `moon
+exec` (*The run*, below). A required tag with no tasks contributes
+nothing; the gate is read over the checks it requires (15), so a tier
+with no tasks yet cannot hold a branch back, and a tier that gains tasks
+gates from the revision that adds them (56).
+
+A bare tag is not a target on the command line:
+
+```
+$ moon exec '#check-fast'
+error: invalid value '#check-fast' for '[TARGETS]...': Invalid target #check-fast, tags are not supported for default project targets.
+```
+
+| form | selects (2.6.1) |
 |---|---|
-| `:#suite` | every project's tasks tagged `suite` |
-| `tests:#suite` | one project's (what crew's `tests/suite` passes) |
-| `#suite:test` | projects tagged `suite`; found nothing (moon 1.x's only form: project tags) |
-| `moon query tasks --tags suite` | the tagged tasks, as JSON |
+| `:#check-fast` | every project's tasks tagged `check-fast` |
+| `alpha:#check-fast` | one project's |
+| `#check-fast:test` | projects tagged `check-fast`; finds nothing (`No tasks found`, exit 1): moon 1.x's form, for project tags |
+| `moon query tasks --tags check-fast` | the tagged tasks, as JSON |
 
-Map a required `#<tag>` to `--tags <tag>` for queries and to the
-explicit targets those return for `moon exec`; a required
-`<project>:<task>` is itself a target.
+crew today gates on one tag, `#suite`, over its 59 test files; it reads
+as a single tier in this scheme.
 
 ### Which checks a range affects (36)
 
@@ -615,35 +680,36 @@ explicit targets those return for `moon exec`; a required
 MOON_BASE=<base> MOON_HEAD=<head> moon query affected --downstream deep </dev/null
 ```
 
-`query tasks` and `query affected` have no `--base`/`--head` flags in
-2.5.3; they take them from `MOON_BASE`/`MOON_HEAD`. Captured in the
+`query tasks` and `query affected` still have no `--base`/`--head` flags
+in 2.6.1; they take them from `MOON_BASE`/`MOON_HEAD`. Captured in the
 scratch workspace after a commit changing `alpha/value.txt`:
 
 ```json
-{"alpha:test":{"files":["alpha/value.txt"],"other":false},"beta:test":{"upstream":["alpha:test"],"other":false}}
+{"tasks":{"alpha:test":{"files":["alpha/value.txt"],"other":false},"beta:test":{"upstream":["alpha:test"],"other":false}},"projects":{"alpha":{"files":["alpha/value.txt"],"tasks":["alpha:test"],"other":false},"beta":{"upstream":["alpha"],"other":false}}}
 ```
 
-(that is the `tasks` map; the output also has a `projects` map, where
-`beta` shows `{"upstream":["alpha"]}`). Without `--downstream deep` only
-`alpha:test` is listed.
+Without `--downstream deep` only `alpha:test` (and `alpha`) is listed.
 
 Changed files alone:
 
 ```
-$ moon query changed-files --base 039512544726 --head dbfeab44debb
-{"files":["tests/t-docs.sh"],"options":{"base":"0395…","defaultBranch":false,"head":"dbfe…","local":true,"status":[],"stdin":false},"shallow":false}
+$ moon query changed-files --base 21f97fc7bf4d --head 9955da1b1b2a
+{"files":["alpha/value.txt"],"options":{"base":"21f9…","defaultBranch":false,"head":"9955…","local":true,"status":[],"stdin":false},"shallow":false}
 ```
 
-Range semantics, captured in the crew clone with one commit touching
-`tests/t-docs.sh`:
+Range semantics, `moon query tasks --tags check-fast --affected
+--downstream deep` in the scratch workspace (2.6.1), and in the crew
+clone (2.5.3) for `--affected remote` and a docs-only range:
 
 | query | tasks |
 |---|---|
-| `MOON_BASE`/`MOON_HEAD` set to that range | `["t-docs"]` |
+| `MOON_BASE`/`MOON_HEAD` set to a range changing `alpha/value.txt` | `["alpha:test","beta:test"]` |
+| set to a range changing `beta/notes.md` | `["beta:test"]` |
+| set to a range changing `.moon/workspace.yml` | `["alpha:test","beta:test"]`: every task, since `.moon/*.yml` is an input of every task |
 | bare `--affected`, clean tree | `[]` (compares uncommitted changes) |
-| `--affected remote` | `["t-docs"]` (merge-base with `origin/main`) |
+| `--affected remote` | crew: `["t-docs"]` (merge-base with `origin/main`) |
 | base = head | `[]` |
-| a docs-only range | `[]` |
+| a docs-only range | crew: `[]` |
 
 Base and head may be any commits in the object store; the working tree
 need not be at head. But **the project and task graph is read from the
@@ -671,33 +737,42 @@ between `since` and the candidate include moon's own configuration
 every required check. Pass the explicit
 targets to `moon exec`:
 
-- `moon exec ':#suite' --affected --base B --head H --downstream deep`
-  ran only `alpha:test` although `context.affected` listed `beta:test`;
-  it needs `-g`/`--include-relations` as well. The explicit list avoids
-  the trap, and the set run is then exactly the set sluice recorded as
+- `moon exec ':#check-fast' --affected --base B --head H --downstream
+  deep` ran only `RunTask(alpha:test)` although the report's
+  `context.affected` listed `beta:test` (2.6.1, as on 2.5.3); with
+  `-g`/`--include-relations` it ran both. The explicit list avoids the
+  trap, and the set run is then exactly the set sluice recorded as
   affected.
 - `--on-failure` defaults to `bail`; `continue` runs every selected task.
 - `moon ci` writes `.moon/cache/ciReport.json`, not `runReport.json`, and
   its downstream defaults to none. Use `exec`.
+- A task's own `timeout` option (seconds) cancels that task; the
+  policy's `timeout` (66) is the whole run's and is section 4's to
+  enforce, whatever the tasks declare.
 - `-c/--concurrency` (`MOON_CONCURRENCY`) caps moon's threads: the
   host's bound (71, `Tests::capacity`) counts runs, not moon threads, so
   set `-c` from the host's cores divided by `capacity`.
 
 An empty target list is a pass with nothing run; do not call moon.
 
-Exit codes: 0 when every task passed or replayed; 1 when any failed
-(`Tasks: 1 completed (1 cached), 1 failed`). With nothing affected,
-`moon exec --affected` exits 0, prints `No tasks affected by changed
-files. Unable to execute action pipeline.` and **writes no
-`runReport.json`**. Never read the exit code as the verdict; read the
-report.
+Exit codes (2.6.1): 0 when every task passed or replayed; 1 when any
+failed (`Tasks: 1 failed, 1 skipped`). With nothing affected, `moon exec
+--affected` exits 0, prints `No tasks affected by changed files. Unable
+to execute action pipeline.` and **writes no `runReport.json`**. Never
+read the exit code as the verdict; read the report.
 
 ### The run report: `<place>/.moon/cache/runReport.json`
 
 Top-level keys `actions, comparisonEstimate, context, duration, status`
-(`status: "completed"`). `actions[]` holds non-task actions too
-(`SyncWorkspace`, `SyncProject(tests)`); a task's has `label:
-"RunTask(<target>)"` and `node.params.target`. From crew's real runs:
+(`status: "completed"`), the same on 2.6.1. `actions[]` holds non-task
+actions too (`SyncWorkspace`, `SyncProject(alpha)`); a task's has
+`label: "RunTask(<target>)"` and `node.params.target`. A `wait`
+dependency runs as `RunPersistentTask(<target>)`; it is the check's
+helper, not a check, so the profile reads `RunTask(` actions only, and a
+required target that appears only as `RunPersistentTask` is missing.
+2.6.1 adds `allowFailure` and `expectFailure` to each action. From
+crew's real runs (2.5.3; the scratch workspace gave the same operations
+and statuses on 2.6.1):
 
 A task that ran and passed (first run; 181 s):
 
@@ -731,7 +806,16 @@ A failing task (an `exit 1` added to `tests/t-docs.sh`):
 ```
 
 No archive is made for a failure, and running it again fails again rather
-than replaying (ADR 0004 holds on 2.5.3).
+than replaying (ADR 0004 holds on 2.5.3 and 2.6.1).
+
+A task's own failure options do not change what sluice reads: `status`
+is moon's verdict on the task, and the gate is the policy's (27). On
+2.6.1, a task with `allowFailure: true` that exits 1 reads `"status":
+"failed"`, `"allowFailure": true`: a Fail, though moon's pipeline goes
+on. A task with `expectFailure: true` (new in 2.6.0: "fail the entire
+action pipeline if it passes … never cached") that exits 1 reads
+`"status": "passed"` with `task-execution` `exitCode` 1: a Pass, never
+replayed.
 
 A dependent of a failed task, in the scratch workspace's S4 candidate:
 `[{"t":"alpha:test","s":"failed"},{"t":"beta:test","s":"skipped"}]`. In
@@ -779,9 +863,14 @@ exit code, and copy `stdout.log`/`stderr.log` of failed tasks into the
 run directory before the place is released, for the culprit's session
 (20).
 
-Elsewhere in the cache: `.moon/cache/hashes/<hash>.json` is the hash
-manifest (inputs, command, args, env); `.moon/cache/outputs/<hash>.tar.gz`
-holds archives, passes only.
+On 2.6.1 `lastRun.json` also carries `"outputGlobsHash"`, for example
+`{"exitCode":1,"hash":"65b28ff5…91f0","lastRunTime":1791811362337,"outputGlobsHash":"","target":"alpha:test"}`.
+
+Elsewhere in the cache: `.moon/cache/outputs/<hash>.tar.gz` holds
+archives, passes only. The hash manifest (inputs, command, args, env,
+deps) was `.moon/cache/hashes/<hash>.json` on 2.5.3; on 2.6.1 `hashes/`
+stays empty and the manifests are content-addressed JSON under
+`.moon/cache/blobs/<2 hex>/<hash>`. The profile reads neither.
 
 ### Replays across places
 
@@ -797,7 +886,8 @@ checkout of crew gets no help from hooks: crew's `.config/wt.toml` has
 only `[pre-merge]` and `[post-merge]`.
 
 So the moon profile must be able to run moon under the repository's
-shell. The policy has no key for that (see *Open questions*).
+shell: the policy's `[tests] shell` (section 4, *The shell a run
+happens in*).
 
 ### Environment
 
@@ -805,7 +895,9 @@ moon hands its tasks `MOON_CACHE_DIR, MOON_CACHE, MOON_LOG,
 MOON_PROJECT_ID, MOON_PROJECT_ROOT, MOON_PROJECT_SNAPSHOT,
 MOON_PROJECT_SOURCE, MOON_TARGET, MOON_TASK_HASH, MOON_TASK_ID,
 MOON_TASK_RETRY_ATTEMPT, MOON_TASK_RETRY_TOTAL, MOON_THEME, MOON_VERSION,
-MOON_WORKING_DIR, MOON_WORKSPACE_ROOT` (captured), and reads `MOON_*` as
+MOON_WORKING_DIR, MOON_WORKSPACE_ROOT` (captured on 2.5.3 and again on
+2.6.1, where `MOON_TOOLCHAIN_FORCE_GLOBALS` from the shell also passes
+through), and reads `MOON_*` as
 options (`MOON_BASE`, `MOON_HEAD`, `MOON_AFFECTED`, `MOON_FORCE`,
 `MOON_CACHE`, `MOON_ON_FAILURE`, `MOON_CONCURRENCY`, …). A sluice started
 from inside a moon task (a test of sluice, a waiting `wt submit` run by a
@@ -815,10 +907,11 @@ sets `MOON_TOOLCHAIN_FORCE_GLOBALS=true`; that comes with the shell.
 
 ### Archive places
 
-In a `git archive` export (no `.git`): `moon exec ':#suite'` runs (2
-passed); `moon exec --affected --base HEAD~1 --head HEAD` **silently ran
-everything**, exit 0; `moon query tasks --affected` failed (`Process git
-failed: exit code 128 … fatal: not a git repository`). With the archive
+In a `git archive` export (no `.git`), on 2.5.3 and again on 2.6.1:
+`moon exec ':#check-fast'` runs (2 completed); `moon exec --affected
+--base HEAD~1 --head HEAD` **silently ran everything**, exit 0; `moon
+query tasks --affected` failed (`Process git failed: exit code 128 …
+fatal: not a git repository`). With the archive
 method, compute the targets in a probe worktree, one long-lived
 detached worktree per repository at `<common>/sluice/.places/probe`,
 moved with `git checkout --detach -f <candidate>` under the repository
@@ -827,17 +920,19 @@ lock (`.lock`), and run the explicit list in the archive.
 ### moon 1.41.7 (on `PATH`)
 
 No task `tags` (`tasks.test.tags: unknown field 'tags'`; tags are
-project-level and targeted `#suite:test`), no `moon exec` (use `moon
+project-level and targeted `#<tag>:test`), no `moon exec` (use `moon
 run`), no `--base/--head` on `run`, `vcs.manager` where 2.x has
 `vcs.client`, `query touched-files` where 2.x has `changed-files`, no
 `query affected`, and `query tasks` needs `--json`. The report's shape is
 the same, with `context.touchedFiles` for `changedFiles`. The profile
-should refuse moon below 2.5 by name (`moon --version` → `moon 2.5.3`).
+refuses moon below 2.6 by name (`moon --version` → `moon 2.6.1`): 2.5
+runs the queries and reports above, but a repository whose checks use
+`wait` or `cleanup` dependencies fails to load on it.
 
 ### Acceptance tests
 
 On a scratch workspace like the end-to-end one (two projects, `beta`'s
-`test` depending on `alpha:test`), with moon ≥ 2.5:
+`test` depending on `alpha:test`), with moon ≥ 2.6:
 
 1. The targets run for a change to `alpha/value.txt` are `alpha:test` and `beta:test`; to `beta/notes.md`, `beta:test`; to `.moon/workspace.yml`, every tagged task.
 2. A run of an unaffected candidate starts nothing and reports a pass with no tasks.
@@ -845,7 +940,10 @@ On a scratch workspace like the end-to-end one (two projects, `beta`'s
 4. A failing task: `Fail` with its hash; its dependent has no result (missing, not pass).
 5. A `since: None` request runs every tagged task (70).
 6. With `MOON_FORCE=1` and `MOON_BASE=nonsense` in sluice's own environment, the run is unaffected (env cleared).
-7. moon 1.41.7 on `PATH` is refused with its version named.
+7. moon 1.41.7 and moon 2.5.3 on `PATH` are refused with their versions named.
+8. Two required tags, `#check-fast` and `#check-tools`, run the union of their targets; a tag with no tasks adds none.
+9. A check with a `wait` dependency on a helper and a `cleanup` dependency: the helper's `RunPersistentTask` is not read as a result, and the check's own outcome is.
+10. A task with `allowFailure: true` that fails is a Fail.
 
 ---
 
@@ -866,6 +964,14 @@ supervise <run dir>`, that outlives the step, runs the command, enforces
 the time limit, ends the group and writes the result; `progress` reads
 what it wrote.
 
+It is built with the moon profile, the first runner, not after it. moon
+does none of the four things: it does not outlive the step for it, it
+has no time limit of its own over a whole run, it leaves a server a task
+started running after it exits, and its exit code is not where its
+results are. The supervisor is `sluice` itself under another subcommand,
+about two hundred lines over `std` and `nix`, and every later runner
+reuses it.
+
 ```
 <common>/sluice/.runs/<place>/
   request.json    what to run: argv, cwd (the place), env, limit; written by start before the spawn
@@ -880,7 +986,22 @@ what it wrote.
 `RunHandle` is the place name. Run directories are removed when the
 place is released, after the core has read the result.
 
-### Facts, verified with a Rust probe (nix 0.31, rustc 1.98.1, macOS)
+### Facts, verified with a Rust probe (nix 0.31, macOS and Linux)
+
+Run on macOS (rustc 1.98.1) and on Linux 7.2 in containers on arm64 and
+x86_64 (rustc 1.99.0, nix 0.31.3), with the same results; the captures
+are macOS's. Two differences the code must handle:
+
+- **A zombie is still a member.** A leader that exited but was not reaped
+  keeps `killpg(pgid, None)` returning `Ok`. The supervisor `wait`s its
+  own leader before reading `ESRCH` as "group gone"; orphans reparented
+  to PID 1 are reaped by init, except in a container with no init that
+  reaps (run checks in containers with `--init`).
+- **Listing members.** `/proc/<pid>/stat` is Linux's alone and `ps` is
+  not in every image; the code tests liveness with `killpg(pgid, None)`
+  and never lists members. Detaching uses `setsid()` in `pre_exec`, not
+  the `setsid` command, which macOS lacks and which on Linux forks only
+  for a group leader.
 
 - `std::os::unix::process::CommandExt::process_group(0)` (stable since
   1.64) puts the child in a new group whose id is its pid. A grandchild
@@ -980,8 +1101,17 @@ holding `lock`, check that a member started after `request.json` was
 written (`ps -o lstart= -g <pgid>`), or skip it.
 
 `capacity()` (71): the host's bound minus the number of `.runs/*` whose
-`lock` is held. The bound is a host setting, not the policy's; default
-to the number of CPUs divided by two.
+`lock` is held. The bound is a host setting, not the policy's
+(`SLUICE_HOST_RUNS`, or `[host] runs` in `~/.config/sluice/config.toml`);
+default a quarter of the CPUs, never fewer than one. `capacity` is a
+hint: two steps of different branches can both read room for one more.
+The bound is enforced where a run starts: `start` takes
+`<common>/sluice/.runs.lock`, counts the held `lock`s, and refuses past
+the bound, so the step leaves that candidate formed and starts it in a
+later round. That refusal is a value the core acts on, so `Tests::start`
+returns it beside the handle (pass 2 changes the seam and the fakes'
+host limit to match). Each moon run gets `--concurrency` of the CPUs
+divided by the bound, so runs at the bound never oversubscribe the host.
 
 **Environment for the command.** `env_clear()`, then `PATH`, `HOME`,
 `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`/`LC_*`, `TERM` from sluice's
@@ -990,7 +1120,31 @@ own environment; `SLUICE_CHECKOUT=<place path>`, `SLUICE_TMP=<common>/sluice/.tm
 (`GIT_DIR`/`GIT_WORK_TREE` from a hook would point git at the wrong
 repository), `DEVENV_*` or `DIRENV_*` (a waiting `wt submit` runs in a
 session's shell, and that session's place must not leak into the
-candidate's, 35). The `[tests] runner = "command"` profile runs
+candidate's, 35).
+
+**The shell a run happens in.** A repository's tools often exist only
+inside a shell it declares: crew's moon and replay cache only inside
+`devenv shell`. The policy says what every run is wrapped in:
+
+```toml
+[tests]
+shell = ["devenv", "shell", "--"]
+```
+
+The supervisor runs `shell + argv`, with the place as cwd, so the shell
+sets the tools up and the command runs inside it. The environment above
+is what goes into the shell; what the shell adds is the repository's.
+`shell` is sluice's own concept, not devenv's: the same key takes
+`["docker", "run", "--rm", "-v", "{place}:/w", "-w", "/w", "<image>"]`
+or an `ssh` prefix, which is how runs on another host start (C.1
+container). `{place}` and `{tmp}` are substituted; nothing else is.
+Read from the branch's revision like the rest of the policy (56). When
+sluice itself already runs inside the repository's shell, as an app
+does under a manifest that declares one, the key is left out: the run
+keeps that shell's `PATH` and, as above, nothing that names a session's
+place (35).
+
+The `[tests] runner = "command"` profile runs
 `sh -c <command>` in the place under the same supervisor, one task named
 by the command, never replayed (C.2 script).
 
@@ -1095,8 +1249,12 @@ switch, exit 0, JSON on stdout, progress on stderr:
   ```
 
   `--yes` runs them unapproved and writes nothing to
-  `~/.config/worktrunk/approvals.toml`. crew's `wt.toml` tells agents
-  never to pass `--yes` (see *Open questions*).
+  `~/.config/worktrunk/approvals.toml`. sluice passes `--yes`: its
+  checkouts are worktrunk's like any other, so the repository's hooks
+  run in them, and nobody can approve hooks in a directory sluice makes
+  and removes on its own. The hooks come from the candidate's tree, the
+  same trust as the checks sluice already runs there. (crew's rule that
+  agents never pass `--yes` is about sessions, not sluice.)
 - Existing branch: exit 1, `✗ Branch sluice/try/2 already exists`.
   Existing directory: exit 1, `✗ Directory already exists: …`
   (`--clobber` moves it to `<path>.bak.<timestamp>` and leaves that
@@ -1122,7 +1280,9 @@ remove:
   the background from the primary worktree.
 - Left behind: no directory, no `.git/worktrees/<name>`, no branch; but
   `.git/wt/logs/commands.jsonl` (a line per hook),
-  `.git/wt/logs/sluice-try-<n>-<hash>/` per checkout (never pruned) and
+  `.git/wt/logs/sluice-try-<n>-<hash>/` per checkout (never pruned by
+  worktrunk, so `release` removes that checkout's log directory after
+  `wt remove` succeeds) and
   `.git/wt/cache/{merge-tree-conflicts,merge-add-probe,is-ancestor,diff-stats}/*.json`.
 - `sluice/try/*` worktrees appear in every agent's `wt list` while they
   exist.
@@ -1207,7 +1367,9 @@ directories holding a `version` file.
 ### The lock (ADR 0005, core.14)
 
 `std::fs::File::{lock, try_lock, unlock}` are stable since Rust 1.89;
-on macOS they are `flock(2)` (the binary links `_flock`). No crate
+on macOS and Linux alike they are `flock(2)` (the same std code for
+both; Linux's `/proc/locks` shows `FLOCK`), released by the kernel when
+the holder dies. No crate
 (`fs4`, `fs2`, `rustix`) is needed. `try_lock` returns `Result<(), std::fs::TryLockError>` with
 `WouldBlock` and `Error(io::Error)`. Measured with a std-only probe:
 
@@ -1240,8 +1402,11 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
 }
 ```
 
-Verified on macOS APFS: `File::open(dir)?.sync_all()` succeeds; on
-macOS `sync_all` is `fcntl(F_FULLFSYNC)`, slow but durable. The temp file
+Verified on macOS APFS and on Linux overlayfs, tmpfs and a FUSE host
+share: `File::open(dir)?.sync_all()` succeeds on each. `sync_all` is
+`fcntl(F_FULLFSYNC)` on macOS, slow but durable, and `fsync` on Linux.
+Some Linux network and FUSE filesystems answer a directory fsync with
+`EINVAL`; treat that as "not supported", not as a failed write. The temp file
 is in the same directory so the rename is atomic. (`name` with a `/`, as
 `submissions/12.json`, uses that subdirectory as `dir`.)
 
@@ -1404,12 +1569,15 @@ outcome (`sluice`). `E2E_REPO=crew` runs the same against a throwaway
 clone of crew, with every moon and sluice call inside crew's devenv
 shell.
 
-Verified: `fixture` passes on the scratch repository (moon 2.5.3, bash
-3.2) and on the crew clone (through `devenv shell --`); the `sluice` half
-is written against the walkthrough's CLI and waits for pass 2.
+Verified: `fixture` passes on the scratch repository (moon 2.5.3 and
+moon 2.6.1, bash 3.2) and on the crew clone (through `devenv shell --`,
+crew's moon 2.5.3); the `sluice` half is written against the
+walkthrough's CLI and waits for pass 2. The fixture itself needs only
+moon 2.5, so it keeps that floor while crew runs 2.5.3; the `sluice`
+half needs the profile's 2.6.
 
 ```
-$ MOON=/nix/store/xn5qbl6x…-moon-2.5.3/bin/moon /bin/bash e2e.sh /tmp/…/run3 fixture
+$ MOON=/nix/store/1vc28y8m…-moon_cli-2.6.1/bin/moon /bin/bash e2e.sh /tmp/…/run4 fixture
 ok    S1 a: pass [{"t":"alpha:test","s":"passed"},{"t":"beta:test","s":"passed"}]
 ok    S1 a+b: pass [{"t":"alpha:test","s":"passed"},{"t":"beta:test","s":"passed"}]
 ok    S2 a+c forms: conflict alpha/notes.md
@@ -1730,39 +1898,120 @@ exit $FAILED
 
 ---
 
+## 9. sluice's own checks, by tier
+
+sluice gates its own branches with the tiers below, as moon tags a
+branch's policy requires, once pass 2's profiles can land them. Each
+tier is slower than the one before and needs more of the host.
+
+| tier | tag | what | needs | time |
+|---|---|---|---|---|
+| fast | `check-fast` | the cargo tests: units, the conformance suite over the fakes, the CLI over the fakes; the citations check; `cargo fmt --check`; clippy `-D warnings` | cargo | seconds |
+| tools | `check-tools` | each section's acceptance tests on scratch repositories; the conformance suite over the real profiles (below) | git, moon, worktrunk, a writable temp dir | tens of seconds |
+| end to end | `check-e2e` | `e2e.sh sluice` on the scratch workspace; `E2E_REPO=crew` against a clone of crew | the above, and crew's devenv for the crew variant | minutes; crew cold is 8 m 48 s, replayed about a second |
+
+```toml
+# sluice's own .config/sluice.toml, once sluice lands sluice
+[branches."bolt/*"]
+required = ["#check-fast"]
+
+[branches.main]
+required = ["#check-fast", "#check-tools", "#check-e2e"]
+batch = true
+```
+
+The cargo test tasks carry `check-fast` today. Pass 2 adds:
+
+- a workspace-level moon project (`root`, source `.`) with `format`
+  (`cargo fmt --all -- --check`) and `lint` (clippy), tagged
+  `check-fast`, so the gate holds what the commit hook holds;
+- a `tools` task per profile crate or module, tagged `check-tools`,
+  running that section's acceptance tests (`cargo test -p <crate>
+  --features tools`, or `#[ignore]`d tests run with `--ignored`, so a
+  plain `cargo test` stays fast and needs no tool);
+- an `e2e` task tagged `check-e2e`, `cache: false` for the crew variant,
+  since it reads a repository outside this tree.
+
+`cargo-tests` stays the fast tier and runs before every `wt merge`;
+`checks-all` (`moon run ':#check-fast' ':#check-tools'`) is what a person
+runs before landing a profile change, and the end-to-end tier runs by
+hand or nightly until sluice gates `main`.
+
+### The conformance suite over the real profiles
+
+The statement asks for "the profiles of Part C, each passing the suite"
+(section 12). Today the suite's `Harness` builds a `sluice_fakes::World`
+and its tests script it directly (`h.w().fails_with(…)`,
+`h.w().crash(…)`). Pass 2 splits that in two:
+
+- **`Rig`**, a trait in `sluice-conformance`, holds what every binding
+  can do: make a session's place with given files, read the branch's tip
+  and tree, move the branch by hand, make a named check fail when a path
+  holds given content, read the records' files, read what each session
+  was told. The fakes implement it over `World`; the real rig
+  implements it over a scratch repository in a temp dir, with the local
+  refs branch, local files records, git-worktree places, the `command`
+  runner and a driver that appends every notification to a file.
+- **What only the fakes can stage** stays on `World`: a crash between
+  two writes, a held or lost run, an interfering write. A test that
+  needs one says so (`fn crash_after_move(h: &Harness<FakeRig>)`) and
+  runs over the fakes alone.
+
+The real rig scripts checks through the tree, as real repositories do:
+the `command` runner runs a script that fails a named check when a path
+holds the content `fails_with` named, so the same test sees the same
+verdicts over both rigs. Hangs and holds become a check that sleeps
+past the limit or waits for a file the test writes.
+
+Every test is generic over the rig, and `tests/*.rs` instantiates it
+twice: `mod fakes` (tier fast) and `mod real` behind the `tools` feature
+(tier tools). The citations check counts a clause as cited once, whichever
+rigs run it.
+
+### Acceptance tests
+
+1. `moon run ':#check-fast'` runs in under a minute on a warm cache and needs no tool beyond cargo.
+2. `moon run ':#check-tools'` with git, moon or worktrunk missing fails naming the tool, never passes by skipping.
+3. Every conformance test that does not need a fake-only fault passes over the real rig.
+
+---
+
 ## Open questions for the operator
 
-1. **moon under the repository's shell.** crew's moon (2.5.3) and its
-   shared replay cache exist only inside `devenv shell`. The policy has no
-   key to say "run the checks inside this". Add `[tests] shell =
-   ["devenv", "shell", "--"]` (a prefix for every moon call), or require
-   sluice itself to be run inside the shell (then the checks inherit a
-   session's environment, which section 4 strips)?
-2. **`wt switch --yes`.** Pass it (unapproved project hooks run in
-   sluice's checkouts, against crew's stated rule for agents), or require
-   a one-time `wt config approvals add` and fail until it is done?
-3. **worktrunk setup before tests.** Only `pre-start` hooks are done when
-   `wt switch` returns; `post-start` runs detached. Should the
-   walkthrough tell repositories to put checkout setup in `pre-start`?
-   crew has none, so its "same post-create hooks" claim is empty today.
-4. **Deleting a protected branch.** crew deletes a bolt's branch when
-   the bolt is done. Should the hook allow a delete only when the branch
-   has no queued or testing submissions, always, or never?
-5. **A branch checked out in a worktree.** crew's bolt branches are
-   checked out in their conductors' worktrees, and a landing leaves that
-   worktree's index behind (section 2). Who brings it level (`git
-   read-tree -m -u <old> HEAD`): sluice after a landing (it would touch
-   a place it did not make, core.16), the conductor, or nobody because a
-   branch should not be checked out?
-6. **When the protection hook is installed.** No command in pass 1's CLI
-   installs it. Ensure it on every `submit`/`step`/`run`, or add `sluice
-   protect` (and `--remove`)?
-7. **`SLUICE_AGENT`.** crew's role environment would export
-   `SLUICE_AGENT=$CREW_AGENT`; that is a change to crew. Agree the name?
-8. **`.git/wt/logs/sluice-try-*`.** worktrunk never prunes them; one
-   directory per checkout. Should the worktrunk profile remove its own
-   after `wt remove`?
-9. **The walkthrough's moon 2.6.** The installed moon is 2.5.3 and has no
-   `wait`/`cleanup` dependencies. Keep the walkthrough's sentence (it is
-   about the repository's tests, not sluice) and note the version, or
-   change it?
+1. **Setup a checkout needs before its tests.** When sluice makes a
+   checkout with worktrunk, the repository's worktrunk hooks run in it.
+   `pre-start` hooks finish before `wt switch` returns; `post-start`
+   hooks run in the background, so the tests can start while one is
+   still copying a file or installing something, and fail for that
+   reason alone. Recommendation: sluice does not wait for `post-start`,
+   and the walkthrough tells repositories that whatever a check needs is
+   either in a `pre-start` hook or a dependency of the check itself (a
+   moon task it depends on). crew has no such hooks today, so nothing
+   changes for it.
+
+2. **A bolt branch checked out in a conductor's worktree.** In crew, the
+   conductor's worktree has the bolt's branch checked out. When sluice
+   lands work on that branch it moves the branch, but the files in the
+   conductor's worktree stay where they were. `git status` there then
+   shows the landed work as if the conductor had deleted it, staged, and
+   a careless `git commit -a` would undo the landing. Someone has to
+   bring the worktree up to date (`git read-tree -m -u <old> HEAD`, which
+   keeps untracked files). Choices:
+   - sluice does it after each landing. Simple for crew, but sluice would
+     be changing a worktree it did not make, which rule core.16 forbids.
+   - the conductor does it when told its bolt's branch moved.
+   - a branch sluice lands on is never checked out: the conductor works
+     on its own branch or a detached HEAD, and `sluice submit` refuses a
+     target branch that is checked out anywhere.
+
+   Recommendation: the third. It removes the hazard rather than repairing
+   it, and keeps sluice out of worktrees it did not make.
+
+3. **The variable that names the agent.** Each submission records which
+   agent sent it, shown in `sluice status` and used to tell that agent
+   the outcome. `wt-submit` reads it from `SLUICE_AGENT`, and uses the
+   branch name when that is unset. crew already gives every agent a name
+   in `CREW_AGENT` (for example `crw-1-unit-1`), but sluice's code may not
+   name crew (rule core.1). So crew's role setup would also export
+   `SLUICE_AGENT=$CREW_AGENT`, a one-line change in crew. Agree the name
+   `SLUICE_AGENT`?
