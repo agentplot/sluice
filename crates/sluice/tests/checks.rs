@@ -164,7 +164,7 @@ fn a_command_runs_with_the_repositorys_toolchain() {
     let repo = Repo::new("checks-toolchain");
     repo.write(
         "tools",
-        // bash 4's case fall-through, as devenv's script has: sourced by a
+        // bash 4's case fall-through, as real toolchains print: sourced by a
         // bash 3 it stops the script before the export.
         "#!/bin/sh\necho 'echo setting up'\n\
          echo 'case x in x) true ;& y) true ;; esac'\n\
