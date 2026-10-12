@@ -210,7 +210,8 @@ in
   # shares: each worktree's shell would point every commit at its own
   # config. A plain `prek install` writes no path, and prek reads the
   # config at the top of the worktree the commit is in, which devenv links
-  # there. Remove this once devenv installs without the absolute path.
+  # there. Remove this once devenv installs without the absolute path
+  # (cachix/devenv#3270).
   tasks."devenv:git-hooks:install".exec = lib.mkForce ''
     set -euo pipefail
     hook="$(${lib.getExe pkgs.git} rev-parse --path-format=absolute --git-path hooks)/pre-commit"
