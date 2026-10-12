@@ -6,6 +6,13 @@
 //! The project and task graph is read from the place, which holds the
 //! candidate; every moon command gets the run's environment, so nothing of
 //! `MOON_*` in sluice's own reaches it, and stdin from `/dev/null`.
+//!
+//! Before any moon command, outside the executor: when the place has a
+//! `.prototools` (the file listing the exact version of each tool the
+//! repository uses, moon among them), `proto install` installs those
+//! versions, with the repository's toolchain sourced so proto is on the
+//! path. moon cannot run until it is installed, and nothing is installed
+//! inside the executor.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -32,6 +39,7 @@ impl Moon {
     pub fn plan(&self, cx: &Context) -> Result<Plan> {
         let request = cx.request;
         let place = &request.place.path;
+        self.install(cx)?;
         self.check_version(cx)?;
 
         let tasks = self.tasks(cx, &[])?;
@@ -122,10 +130,23 @@ impl Moon {
         Ok(read_report(&report, targets, host))
     }
 
+    /// The tool versions the place's `.prototools` lists, installed. Only
+    /// the repository's own file is read, not the user's global one.
+    fn install(&self, cx: &Context) -> Result<()> {
+        if cx.request.place.path.join(".prototools").exists() {
+            self.run(cx, &["proto", "install", "--config-mode", "upwards"], &[])?;
+        }
+        Ok(())
+    }
+
     fn command(&self, cx: &Context, args: &[&str], env: &[(&str, &str)]) -> Result<Vec<u8>> {
         let mut argv = vec!["moon"];
         argv.extend(args);
-        let argv = cx.argv(&argv);
+        self.run(cx, &argv, env)
+    }
+
+    fn run(&self, cx: &Context, argv: &[&str], env: &[(&str, &str)]) -> Result<Vec<u8>> {
+        let argv = cx.argv(argv);
         let out = Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(&cx.request.place.path)
