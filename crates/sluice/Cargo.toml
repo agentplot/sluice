@@ -41,12 +41,17 @@ path = "tests/profiles/places.rs"
 name = "worktrunk"
 path = "tests/profiles/worktrunk.rs"
 
+[[test]]
+name = "conformance"
+path = "tests/profiles/conformance.rs"
+
 [features]
 # The acceptance tests that need a real tool (git), the check-tools tier.
 tools = []
 
 [dev-dependencies]
 sluice-fakes = { path = "../sluice-fakes" }
+sluice-conformance = { path = "../sluice-conformance" }
 
 [lib]
 doctest = false
