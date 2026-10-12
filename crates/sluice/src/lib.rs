@@ -491,11 +491,22 @@ fn submit(
         }
         State::Failed => {
             let t = sub.tested.clone().expect("a blamed submission was tested");
-            let tasks: Vec<&str> = sub.failed.iter().map(|f| f.task.as_str()).collect();
+            // A check with no key was left without a result (15): not run,
+            // most often behind a check that failed.
+            let tasks = |ran: bool| -> Vec<&str> {
+                sub.failed
+                    .iter()
+                    .filter(|f| f.hash.is_empty() != ran)
+                    .map(|f| f.task.as_str())
+                    .collect()
+            };
             if sub.result.as_deref() == Some("timed out") {
                 writeln!(out, "timed out")?;
-            } else {
-                writeln!(out, "failed: {}", tasks.join(", "))?;
+            } else if !tasks(true).is_empty() {
+                writeln!(out, "failed: {}", tasks(true).join(", "))?;
+            }
+            if !tasks(false).is_empty() {
+                writeln!(out, "not run: {}", tasks(false).join(", "))?;
             }
             writeln!(
                 out,

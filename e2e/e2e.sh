@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# sluice end to end: S1 to S4 of the statement, for real, on a scratch repository or a throwaway clone of crew.
+#
+#   e2e.sh <new dir> fixture   build the repository, then prove each scenario's fixture with git and moon alone:
+#                              the candidates sluice must form, which conflict, which pass and which fail
+#   e2e.sh <new dir> sluice    build the repository, then drive S1 to S4 through wt submit and sluice, and check
+#
+#   E2E_REPO=scratch (default)  a new repository: a moon workspace of two projects, beta depending on alpha
+#   E2E_REPO=crew               a clone of crew (E2E_CREW=<repo>, default ~/Code/github_afterthought/crew/crew.git),
+#                               every moon and sluice call made inside crew's devenv shell
+#   E2E_CHECKOUT=git-worktree (default) | worktrunk | archive    the policy's [checkout] method
+#   MOON=<path>                 the moon to use for the scratch repository (>= 2.5)
+#
+# Needs git >= 2.54 and jq; moon >= 2.5 (crew: devenv); in sluice mode, sluice and wt-submit on PATH.
+# Written for bash 3.2.
+set -euo pipefail
+
+ROOT=${1:?usage: e2e.sh <new dir> fixture|sluice}
+MODE=${2:?usage: e2e.sh <new dir> fixture|sluice}
+VARIANT=${E2E_REPO:-scratch}
+CHECKOUT=${E2E_CHECKOUT:-git-worktree}
+MOON=${MOON:-moon}
+
+die() {
+  echo "e2e: $*" >&2
+  exit 1
+}
+need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
+need git
+need jq
+[ "$MODE" = sluice ] && {
+  need sluice
+  need wt-submit
+}
+[ -e "$ROOT" ] && die "$ROOT exists; give a new directory"
+mkdir -p "$ROOT/places"
+ROOT=$(cd "$ROOT" && pwd -P)
+REPO=$ROOT/repo
+# moon's own variables never leak in from a caller's shell: moon reads MOON_* as options.
+for v in $(env | sed -n 's/^\(MOON_[A-Z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@localhost GIT_COMMITTER_NAME=e2e GIT_COMMITTER_EMAIL=e2e@localhost
+
+# inenv <dir> <command...>: run a command in a directory, inside crew's devenv shell for the crew variant.
+inenv() {
+  local dir=$1
+  shift
+  if [ "$VARIANT" = crew ]; then (cd "$dir" && devenv shell -- "$@"); else (cd "$dir" && "$@"); fi
+}
+
+policy() { # the walkthrough's policy for bolt branches, with this run's checkout method
+  cat <<EOF
+[tests]
+runner = "moon"
+
+[checkout]
+method = "$CHECKOUT"
+
+[branches."bolt/*"]
+required = ["#suite"]
+parallel = 4
+batch = false
+flaky = "fail"
+timeout = "20m"
+EOF
+}
+
+# --- the repository ------------------------------------------------------------------------------------------------
+if [ "$VARIANT" = scratch ]; then
+  need "$MOON"
+  git init -q -b main "$REPO"
+  cd "$REPO"
+  mkdir -p .moon .config alpha beta
+  cat >.moon/workspace.yml <<'EOF'
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+projects:
+  alpha: 'alpha'
+  beta: 'beta'
+vcs:
+  client: 'git'
+  defaultBranch: 'main'
+telemetry: false
+EOF
+  cat >alpha/moon.yml <<'EOF'
+$schema: 'https://moonrepo.dev/schemas/project.json'
+tasks:
+  test:
+    command: 'sh test.sh'
+    inputs: ['test.sh', 'value.txt', 'notes.md']
+    tags: [suite]
+EOF
+  cat >alpha/test.sh <<'EOF'
+#!/bin/sh
+grep -qx ok value.txt || { echo "alpha: value.txt is $(cat value.txt)"; exit 1; }
+echo "alpha ok"
+EOF
+  cat >beta/moon.yml <<'EOF'
+$schema: 'https://moonrepo.dev/schemas/project.json'
+dependsOn: ['alpha']
+tasks:
+  test:
+    command: 'sh test.sh'
+    inputs: ['test.sh', 'value.txt', 'notes.md', '/alpha/value.txt']
+    deps: ['alpha:test']
+    tags: [suite]
+EOF
+  cat >beta/test.sh <<'EOF'
+#!/bin/sh
+grep -qx ok value.txt || { echo "beta: value.txt is $(cat value.txt)"; exit 1; }
+grep -qx ok ../alpha/value.txt || { echo "beta: alpha's value.txt is $(cat ../alpha/value.txt)"; exit 1; }
+echo "beta ok"
+EOF
+  for p in alpha beta; do
+    echo ok >$p/value.txt
+    printf '%s notes\n\nnothing yet\n' $p >$p/notes.md
+  done
+  echo '.moon/cache/' >.gitignore
+  policy >.config/sluice.toml
+  git add -A
+  git commit -qm "two moon projects, a test each tagged suite, and sluice's policy"
+  # What each scenario edits: a file both a and c write (S2), and a test each of a (S4) and b (S3) breaks.
+  A_FILE=alpha/notes.md A_LINE=3 B_FILE=beta/notes.md B_LINE=3
+  B_BREAKS=beta/value.txt B_FAILS=beta:test A_BREAKS=alpha/value.txt A_FAILS=alpha:test
+  BROKEN=broken
+else
+  git clone -q --no-local "${E2E_CREW:-$HOME/Code/github_afterthought/crew/crew.git}" "$REPO"
+  cd "$REPO"
+  git switch -q main 2>/dev/null || git switch -q -c main origin/main
+  mkdir -p .config
+  policy >.config/sluice.toml
+  git add .config/sluice.toml
+  git commit -qm "sluice's policy for bolt branches"
+  # crew: a comment line of two tests; a test broken by an exit before it sources lib.sh.
+  A_FILE=tests/t-docs.sh A_LINE=1 B_FILE=tests/t-after.sh B_LINE=1
+  B_BREAKS=tests/t-after.sh B_FAILS=tests:t-after A_BREAKS=tests/t-docs.sh A_FAILS=tests:t-docs
+  BROKEN='exit 1 # e2e: fails on purpose'
+fi
+case $(inenv "$REPO" "$MOON" --version) in
+"moon 2."[5-9]* | "moon 2."[1-9][0-9]* | "moon "[3-9]*) ;;
+*) die "needs moon >= 2.5, found $(inenv "$REPO" "$MOON" --version)" ;;
+esac
+# Every scenario's branch exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
+for s in s1 s2 s3 s4; do git branch "bolt/$s" main; done
+
+# --- three sessions' places, each on a fresh unit branch per scenario ----------------------------------------------
+place() { # place <session> <scenario>: the session's worktree on unit/<session>-<scenario>, off bolt/<scenario>
+  local dir=$ROOT/places/$1
+  [ -d "$dir" ] || git -C "$REPO" worktree add -q --detach "$dir" main
+  git -C "$dir" switch -q -c "unit/$1-$2" "bolt/$2"
+}
+at() { git -C "$ROOT/places/$1" switch -q "unit/$1-$2"; } # at <session> <scenario>: the place back on that branch
+edit() {                                                  # edit <session> <path> <line number> <text>: that line replaced, as one commit in the session's place
+  local f=$ROOT/places/$1/$2
+  awk -v n="$3" -v l="$4" 'NR==n{print l; next} {print}' "$f" >"$f.e2e" && cat "$f.e2e" >"$f" && rm "$f.e2e"
+  git -C "$ROOT/places/$1" commit -qam "$1: $2"
+}
+breaks() { # breaks <session> <path>: the test reading that file made to fail, as one commit
+  local f=$ROOT/places/$1/$2
+  if [ "$VARIANT" = scratch ]; then echo "$BROKEN" >"$f"; else
+    awk -v l="$BROKEN" 'NR==2{print l} {print}' "$f" >"$f.e2e" && cat "$f.e2e" >"$f" && rm "$f.e2e"
+  fi
+  git -C "$ROOT/places/$1" commit -qam "$1: breaks $2"
+}
+
+# S1: a and b touch different files; both pass and land in order.
+place a s1
+edit a "$A_FILE" "$A_LINE" "# a was here"
+place b s1
+edit b "$B_FILE" "$B_LINE" "# b was here"
+# S2: a and c write the same line of one file; c conflicts with a.
+place a s2
+edit a "$A_FILE" "$A_LINE" "# a says one thing"
+place c s2
+edit c "$A_FILE" "$A_LINE" "# c says another"
+# S3: a passes; b breaks a test, which fails in b's candidate.
+place a s3
+edit a "$A_FILE" "$A_LINE" "# a was here"
+place b s3
+breaks b "$B_BREAKS"
+# S4: a breaks a test; b passes once formed without a.
+place a s4
+breaks a "$A_BREAKS"
+place b s4
+edit b "$B_FILE" "$B_LINE" "# b was here"
+
+FAILED=0
+expect() { # expect <what> <actual> <glob>
+  # shellcheck disable=SC2254 # the expectation is a glob on purpose
+  case $2 in $3) echo "ok    $1: $2" ;; *)
+    echo "FAIL  $1: $2 (expected $3)"
+    FAILED=1
+    ;;
+  esac
+}
+
+# --- fixture: what sluice must find, shown with git and moon alone -------------------------------------------------
+# form <onto> <head>: the candidate commit, or "conflict <paths>" (ADR 0009: git merge-tree decides).
+form() {
+  local out=$ROOT/merge-tree.out rc=0
+  git -C "$REPO" merge-tree --write-tree -z --name-only --no-messages "$1" "$2" >"$out" || rc=$?
+  case $rc in
+  0) git -C "$REPO" commit-tree "$(tr -d '\0' <"$out")" -p "$1" -p "$2" -m "sluice candidate" ;;
+  # a shell variable cannot hold NUL, so the -z output is read from the file: the tree, then one path per
+  # field up to the empty field that ends the conflicted-file section
+  1) echo "conflict $(tr '\0' '\n' <"$out" | sed -n '2,$p' | sed '/^$/q' | tr '\n' ' ')" ;;
+  *) die "merge-tree exited $rc" ;;
+  esac
+}
+# verdict <branch> <candidate>: the candidate's affected #suite tasks run in a detached checkout; pass or fail
+verdict() {
+  local dir=$ROOT/check-$2 targets rc=0
+  git -C "$REPO" worktree add -q --detach "$dir" "$2"
+  targets=$(inenv "$dir" env MOON_BASE="$1" MOON_HEAD="$2" "$MOON" query tasks --tags suite --affected --downstream deep \
+    </dev/null | jq -r '.tasks[][] | .target')
+  if [ -z "$targets" ]; then echo "pass (nothing affected)"; else
+    # shellcheck disable=SC2086
+    inenv "$dir" "$MOON" exec $targets --on-failure continue </dev/null >"$dir.log" 2>&1 || rc=$?
+    report=$(jq -c '[.actions[] | select(.label | startswith("RunTask(")) | {t: .node.params.target, s: .status}]' \
+      "$dir/.moon/cache/runReport.json")
+    if [ $rc -eq 0 ]; then echo "pass $report"; else echo "fail $report"; fi
+  fi
+  git -C "$REPO" worktree remove --force "$dir"
+}
+
+if [ "$MODE" = fixture ]; then
+  r() { git -C "$REPO" rev-parse "$1"; }
+  L=$(r bolt/s1)
+  C1=$(form "$L" "$(r unit/a-s1)")
+  C2=$(form "$C1" "$(r unit/b-s1)")
+  expect "S1 a" "$(verdict "$L" "$C1")" "pass*"
+  expect "S1 a+b" "$(verdict "$L" "$C2")" "pass*"
+  L=$(r bolt/s2)
+  C1=$(form "$L" "$(r unit/a-s2)")
+  expect "S2 a+c forms" "$(form "$C1" "$(r unit/c-s2)")" "conflict $A_FILE*"
+  expect "S2 a" "$(verdict "$L" "$C1")" "pass*"
+  L=$(r bolt/s3)
+  C1=$(form "$L" "$(r unit/a-s3)")
+  C2=$(form "$C1" "$(r unit/b-s3)")
+  expect "S3 a" "$(verdict "$L" "$C1")" "pass*"
+  expect "S3 a+b" "$(verdict "$L" "$C2")" "fail*$B_FAILS\",\"s\":\"failed*"
+  L=$(r bolt/s4)
+  C1=$(form "$L" "$(r unit/a-s4)")
+  expect "S4 a" "$(verdict "$L" "$C1")" "fail*$A_FAILS\",\"s\":\"failed*"
+  expect "S4 b formed again without a" "$(verdict "$L" "$(form "$L" "$(r unit/b-s4)")")" "pass*"
+  exit $FAILED
+fi
+
+# --- sluice: S1 to S4 for real -------------------------------------------------------------------------------------
+COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
+submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would
+  local who=$1 s=$2
+  shift 2
+  at "$who" "$s"
+  SLUICE_AGENT="e2e-$who" inenv "$ROOT/places/$who" wt-submit "bolt/$s" "$@"
+}
+id_of() { submit "$1" "$2" --no-wait --json | jq -r .id; }
+status() { inenv "$REPO" sluice status "$@" --json; }
+settle() { # settle <scenario>: rounds until nothing on the branch is queued or under test, for at most an hour
+  local i=0
+  while status "bolt/$1" | jq -e '[.submissions[] | select(.state == "queued" or .state == "testing")] | length > 0' >/dev/null; do
+    inenv "$REPO" sluice step "bolt/$1" >/dev/null
+    i=$((i + 1))
+    [ $i -lt 720 ] || die "bolt/$1 did not settle"
+    sleep 5
+  done
+}
+landed() { git -C "$REPO" log --reverse --first-parent --format='%(trailers:key=Sluice-Submission,valueonly)' "main..bolt/$1" | sed '/^$/d' | tr '\n' ' '; }
+
+# S1: two sessions submit to one bolt branch; both candidates pass; both land, in order; neither ran a merge.
+A=$(id_of a s1)
+out=$(submit b s1) && rc=0 || rc=$?
+expect "S1 b's exit" "$rc" 0
+expect "S1 b's last line" "$(printf '%s\n' "$out" | tail -1)" "passed · landed as *"
+expect "S1 a" "$(status "$A" | jq -r .state)" landed
+expect "S1 landing order" "$(landed s1)" "$A $((A + 1)) "
+# Newest first: b's landing, then a's; each with its session's head as its second parent.
+heads="$(git -C "$REPO" rev-parse unit/b-s1) $(git -C "$REPO" rev-parse unit/a-s1)"
+for c in $(git -C "$REPO" rev-list --first-parent main..bolt/s1); do
+  expect "S1 $c author" "$(git -C "$REPO" log -1 --format='%an <%ae>' "$c")" "sluice <sluice@localhost>"
+  expect "S1 $c second parent" "$(git -C "$REPO" rev-parse "$c^2")" "${heads%% *}"
+  heads=${heads#* }
+done
+expect "S1 moves refused by the hook" "$(grep -c '"event":"protected"' "$COMMON/sluice/bolt/s1/log.jsonl" || true)" 0
+
+# S2: the second head conflicts with the first; told the paths before any check runs; the first lands.
+A=$(id_of a s2)
+out=$(submit c s2 --check) && rc=0 || rc=$?
+expect "S2 c's forecast exit" "$rc" 2
+expect "S2 c's forecast" "$out" "would conflict: $A_FILE with #$A (e2e-a, unit/a-s2)"
+out=$(submit c s2) && rc=0 || rc=$?
+expect "S2 c's exit" "$rc" 2
+expect "S2 c's conflict" "$(printf '%s\n' "$out" | sed -n 2p)" "conflict: $A_FILE"
+C=$(status bolt/s2 | jq -r '[.submissions[] | select(.from.agent == "e2e-c")][0].id')
+expect "S2 c was never tested" "$(status "$C" | jq -r '.tested // "none"')" none
+settle s2
+expect "S2 a" "$(status "$A" | jq -r .state)" landed
+
+# S3: the first passes and the second fails; the second's session is told the failing checks; the first landed.
+A=$(id_of a s3)
+out=$(submit b s3) && rc=0 || rc=$?
+expect "S3 b's exit" "$rc" 1
+expect "S3 b's failure" "$(printf '%s\n' "$out" | grep '^failed:')" "failed: $B_FAILS"
+expect "S3 a" "$(status "$A" | jq -r .state)" landed
+expect "S3 a's result" "$(status "$A" | jq -r .result)" passed
+expect "S3 one blame" "$(grep -c '"event":"blamed"' "$COMMON/sluice/bolt/s3/log.jsonl")" 1
+
+# S4: the first fails and its session is told; the second is formed again without it, passes, and lands first.
+A=$(id_of a s4)
+B=$(id_of b s4)
+settle s4
+expect "S4 a" "$(status "$A" | jq -r .state)" failed
+expect "S4 a's failure" "$(status "$A" | jq -r '.failed[] | select(.hash) | .task')" "$A_FAILS"
+expect "S4 b" "$(status "$B" | jq -r .state)" landed
+expect "S4 only b landed" "$(landed s4)" "$B "
+expect "S4 b tested without a" "$(status "$B" | jq -c .tested.submissions)" "\[$B\]"
+expect "S4 none of a's work on the branch" "$(git -C "$REPO" grep -c -F "$BROKEN" bolt/s4 -- "$A_BREAKS" || echo 0)" 0
+
+# S11 in passing: sluice left every session's place alone.
+for w in a b c; do expect "place $w kept" "$(git -C "$ROOT/places/$w" rev-parse --is-inside-work-tree)" true; done
+exit $FAILED
