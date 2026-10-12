@@ -1244,6 +1244,30 @@ ends the group at the time limit as above; a container is also removed
 by name (`docker rm -f sluice-<place>`), since its processes live in the
 engine, not in the group.
 
+#### What sluice's own checks need under Seatbelt
+
+Probed on macOS with sluice's fast tier, `devenv shell -- moon exec
+':#check-fast' --force`, in a detached worktree, under `sandbox-exec`
+with `(allow default)`, `(deny file-write*)` except the place and
+`SLUICE_TMP` (and `/dev/null`, `/dev/tty*`, `/dev/fd/*`), and `(deny
+network*)`, with `TMPDIR` set to `SLUICE_TMP`. Each denial in turn:
+
+| denied | by | needed |
+|---|---|---|
+| `/tmp/devenv-<hash>` | devenv's runtime directory, whatever `TMPDIR` says | yes: devenv will not start |
+| `~/.cache/nix/fetcher-locks/*.lock` | nix evaluating the shell | yes |
+| connecting to `/nix/var/nix/daemon-socket/socket` | nix, through the daemon | yes: a unix socket, denied by `network*` |
+| a GC root symlink | devenv | no: a warning |
+| `~/Library/Caches/treefmt/…` | the shell's `treefmt` enter task | no: that task fails, the shell still enters |
+| `<common>/moon-outputs/*.tar.gz` (the place's `.moon/cache/outputs` links there) | moon archiving a passed task | no: a warning, the task still passes, and nothing a sandboxed run made reaches the shared cache |
+
+With the first three allowed, all six tasks ran and passed (cargo
+built in the place's `target/`; nothing under `~/.cargo` was written).
+So a repository whose toolchain is a devenv shell needs, beyond the
+place and `SLUICE_TMP`, two paths to write and one unix socket to reach;
+which ones is the repository's, so the policy states them (83: "the
+paths it may write that the branch's policy states").
+
 #### Acceptance tests
 
 1. `sandbox` on macOS and on Linux: a write outside the place and `SLUICE_TMP` fails inside the run; with `network = false`, a connection fails (83).
