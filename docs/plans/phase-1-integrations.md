@@ -1434,8 +1434,8 @@ Notes for whoever runs the `sluice` half:
 
 - Every branch is created before sluice protects `bolt/*`.
 - On a branch with no verdict yet, the first candidate runs every
-  required check (70). For crew that is the whole suite, 59 tasks, 8 m
-  48 s on this host from cold; with crew's shared outputs it replays
+  required check (70). For crew that is the whole suite, 59 tasks,
+  8 m 48 s on this host from cold; with crew's shared outputs it replays
   whatever any worktree of the clone already passed.
 - The `sluice` half assumes `sluice status <id|branch> --json` shapes:
   a submission as walkthrough section 7, a branch as `{"submissions":
