@@ -1,6 +1,6 @@
 //! The core of sluice: the policy, the records, the chain's order, forming,
 //! verdicts, attribution, the window and the landing, as one step
-//! function over a line's records (ADR 0005).
+//! function over a branch's records (ADR 0005).
 //!
 //! The core does no I/O but through the five seams of `sluice-seams`
 //! (rule core.2), names no tool (rule core.1), and holds nothing between
@@ -87,7 +87,7 @@ impl<'a> Sluice<'a> {
         self.seams.state.write(&line.branch, line.version, changes)
     }
 
-    /// Read, change and write a line's records, reading again when the
+    /// Read, change and write a branch's records, reading again when the
     /// write is refused (62). `f` must be safe to apply to a fresh read.
     fn update<T>(&self, branch: &str, mut f: impl FnMut(&mut Line) -> Result<T>) -> Result<T> {
         for _ in 0..WRITE_TRIES {
@@ -100,7 +100,7 @@ impl<'a> Sluice<'a> {
         bail!("{branch}'s records kept moving under {WRITE_TRIES} writes")
     }
 
-    /// 56: the policy, read from a revision of the line.
+    /// 56: the policy, read from a revision of the branch.
     pub fn policy_at(&self, rev: &Rev) -> Result<Option<Policy>> {
         match self.seams.branch.read_file(rev, POLICY_PATH)? {
             None => Ok(None),
@@ -128,7 +128,7 @@ impl<'a> Sluice<'a> {
         parse_lines(&self.seams.state.results()?)
     }
 
-    /// The line that holds submission `id`.
+    /// The branch that holds submission `id`.
     pub fn find(&self, id: u64) -> Result<Option<String>> {
         for b in self.seams.state.branches()? {
             if self.read_line(&b)?.subs.contains_key(&id) {

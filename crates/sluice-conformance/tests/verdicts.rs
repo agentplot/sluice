@@ -60,7 +60,7 @@ fn a_key_that_holds_a_pass_is_read_from_it_on_any_line_and_recorded_as_a_replay(
     assert_eq!(h.sub(one).state, State::Landed);
     let ran = h.w().observed().len();
 
-    // The same work on another line: every key already holds a pass.
+    // The same work on another branch: every key already holds a pass.
     let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
     h.w().session("unit/y", "agent-y", &head);
     let s = h.sluice();
@@ -104,9 +104,9 @@ fn a_revision_with_no_verdict_affects_every_required_check() {
     h.settle();
 
     let since: Vec<bool> = h.w().requests().iter().map(|r| r.since.is_some()).collect();
-    // A new line, then a line sluice landed, then a line moved by hand.
+    // A new branch, then a branch sluice landed, then a branch moved by hand.
     assert_eq!(since, vec![false, true, false]);
-    // Only the affected check ran on the landed line.
+    // Only the affected check ran on the landed branch.
     let b_run: Vec<_> = h
         .events()
         .into_iter()
@@ -189,7 +189,7 @@ fn the_window_shrinks_on_a_failure_grows_on_passes_and_the_host_bounds_it() {
         h.submit(&format!("unit/{n}"));
     }
     h.step();
-    // Four at once, the policy's bound, across the line.
+    // Four at once, the policy's bound, across the branch.
     assert_eq!(h.w().live_runs(), 4);
     h.w().complete_all();
     h.step();
@@ -201,7 +201,7 @@ fn the_window_shrinks_on_a_failure_grows_on_passes_and_the_host_bounds_it() {
     h.step();
     assert_eq!(window(), 4);
 
-    // A host bound of one holds every line to one run at a time (71).
+    // A host bound of one holds every branch to one run at a time (71).
     let h = Harness::bolt();
     h.w().host_limit(1);
     h.w().hold_runs(true);
@@ -239,7 +239,7 @@ fn a_run_whose_executor_stopped_has_no_outcome_and_runs_again() {
 /// satisfies: 55, 70, 56
 #[test]
 fn a_landed_change_to_the_gate_runs_every_check_it_now_requires() {
-    // The line requires a:test only; b:test fails on the line as it is.
+    // The branch requires a:test only; b:test fails on the branch as it is.
     let narrow = policy(false, "fail", 4).replace("[\"#gate\"]", "[\"a:test\"]");
     let wide = policy(false, "fail", 4).replace("[\"#gate\"]", "[\"a:test\", \"b:test\"]");
     let h = Harness::new(&narrow);

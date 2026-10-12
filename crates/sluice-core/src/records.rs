@@ -1,14 +1,14 @@
 //! The records' real format (53; walkthrough section 7; ADR 0007).
 //!
-//! A line's records are a directory of files:
+//! A branch's records are a directory of files:
 //!
 //! - `branch.json`: the queue's own state, one document;
 //! - `submissions/<id>.json`: one document per submission;
 //! - `log.jsonl`: every submission, run, result, blame and landing, one
 //!   event per line, appended and never rewritten (16).
 //!
-//! and beside every line, one `results.jsonl` for the repository: every
-//! check's outcome under its key, for any line's gate to read (69).
+//! and beside every branch, one `results.jsonl` for the repository: every
+//! check's outcome under its key, for any branch's gate to read (69).
 //!
 //! Every JSON document names its schema. A log's lines keep the
 //! walkthrough's shape, with no schema of their own: `branch.json` names

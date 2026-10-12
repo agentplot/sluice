@@ -1,4 +1,4 @@
-//! A line's records, parsed from a snapshot and written back as changes
+//! A branch's records, parsed from a snapshot and written back as changes
 //! (61, 62; rule core.14).
 
 use std::collections::BTreeMap;

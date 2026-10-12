@@ -20,7 +20,7 @@ pub struct Verdict {
 ///
 /// A check reads as its key reads across every recorded result (69): a
 /// pass only passes, a fail only fails, and both read as the policy's
-/// `flaky` says, the same for every candidate of the line (19). A run
+/// `flaky` says, the same for every candidate of the branch (19). A run
 /// that hit its time limit reads as failed (66).
 pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict {
     let mut failed = Vec::new();

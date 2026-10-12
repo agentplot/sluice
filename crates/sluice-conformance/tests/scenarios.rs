@@ -1,4 +1,4 @@
-//! The statement's scenarios (section 11), for a bolt's line on one host.
+//! The statement's scenarios (section 11), for a bolt's branch on one host.
 
 use sluice_conformance::{policy, Crash, Harness, BRANCH};
 use sluice_core::records::{Event, State};
@@ -22,7 +22,7 @@ fn s1_two_heads_pass_and_land_in_order() {
 
     assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(h.sub(two).state, State::Landed);
-    // Each tested exactly as it would land: the line, then A, then B (10).
+    // Each tested exactly as it would land: the branch, then A, then B (10).
     assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
     // One commit per submission, in order, the head as second parent (23).
     let history = h.w().first_parents(BRANCH);
@@ -141,13 +141,13 @@ fn s4_the_first_fails_and_the_second_is_formed_again_without_it() {
     assert_eq!(h.w().told_to("agent-a")[0].told.word(), "failed");
     let landed = h.sub(two);
     assert_eq!(landed.state, State::Landed);
-    // Tested again as the line and B alone (10, 21).
+    // Tested again as the branch and B alone (10, 21).
     assert_eq!(landed.tested.as_ref().unwrap().submissions, vec![two]);
     assert!(h.tested().contains(&vec![two]));
     let tree = h.w().tree(&h.tip());
     assert_eq!(tree["a/lib"], "a1");
     assert_eq!(tree["a/more"], "b");
-    // B lands first: the line's first landing is B's.
+    // B lands first: the branch's first landing is B's.
     assert_eq!(h.w().moves().len(), 1);
 }
 
@@ -221,7 +221,7 @@ fn s8_a_hand_move_refuses_the_landing_and_forms_again() {
     let one = h.submit("unit/a");
     h.step();
     // The verdict is read and the landing written; the step stops
-    // before the move, and someone moves the line by hand.
+    // before the move, and someone moves the branch by hand.
     h.w().crash(Crash::BeforeMove);
     assert!(h.sluice().step(BRANCH).is_err());
     let expected = h.tip();
@@ -332,7 +332,7 @@ fn s11_a_landing_names_its_verdict_and_leaves_the_session_place() {
              Sluice-Result: passed (3 run, 0 replayed)\n"
         )
     );
-    // The line had no verdict, so every required check ran (70).
+    // The branch had no verdict, so every required check ran (70).
     // The landed tree is the tested tree (I1).
     assert_eq!(h.w().tree(&landed), h.w().tree(&tested));
     // sluice released its own place and never the session's (25).
@@ -359,7 +359,7 @@ fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
     );
     let id = h.submit("unit/a");
     h.settle();
-    // Judged by the policy on the line, so it fails and does not land.
+    // Judged by the policy on the branch, so it fails and does not land.
     assert_eq!(h.sub(id).state, State::Failed);
     assert_eq!(h.w().requests()[0].required, vec!["#gate".to_string()]);
 }

@@ -592,7 +592,7 @@ impl World {
         self.0.borrow_mut().interfere += 1;
     }
 
-    /// A line's record file as written.
+    /// A branch's record file as written.
     pub fn file(&self, branch: &str, path: &str) -> Option<String> {
         self.0
             .borrow()
@@ -602,7 +602,7 @@ impl World {
             .map(|b| String::from_utf8(b.clone()).expect("records are text"))
     }
 
-    /// Every file of a line's records, as written.
+    /// Every file of a branch's records, as written.
     pub fn files(&self, branch: &str) -> BTreeMap<String, Vec<u8>> {
         self.0
             .borrow()

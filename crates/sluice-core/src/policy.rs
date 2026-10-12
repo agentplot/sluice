@@ -1,10 +1,10 @@
-//! The policy: `.config/sluice.toml`, read from the line's current
+//! The policy: `.config/sluice.toml`, read from the branch's current
 //! revision (56, 27; ADR 0007; rule core.15).
 //!
 //! The core gives `[tests]` and `[checkout]` no meaning: they name the
 //! profiles that bind the check and place seams, which the binary chooses
 //! (52; rule core.1). The core reads only the `[branches]` tables, the
-//! gate of each line.
+//! gate of each branch.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -12,14 +12,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
-/// Where the policy lives in a line's tree.
+/// Where the policy lives in a branch's tree.
 pub const POLICY_PATH: &str = ".config/sluice.toml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub tests: Profile,
     pub checkout: Profile,
-    /// Patterns of line names and their gates, in the order written.
+    /// Patterns of branch names and their gates, in the order written.
     pub branches: Vec<(String, Rules)>,
 }
 
@@ -37,7 +37,7 @@ pub enum Flaky {
     Fail,
 }
 
-/// One line's gate (27).
+/// One branch's gate (27).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
     pub required: Vec<String>,
@@ -135,7 +135,7 @@ impl Policy {
 
     /// The gate for `branch`: an exact name before any pattern, then the
     /// pattern with the most literal characters. `None` when no table
-    /// names the line, which is then not sluice's to land on.
+    /// names the branch, which is then not sluice's to land on.
     pub fn rules_for(&self, branch: &str) -> Result<Option<&Rules>> {
         if let Some((_, r)) = self.branches.iter().find(|(p, _)| p == branch) {
             return Ok(Some(r));

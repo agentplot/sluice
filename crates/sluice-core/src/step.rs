@@ -1,7 +1,7 @@
-//! The step function: one round of a line's work (ADR 0005; walkthrough
+//! The step function: one round of a branch's work (ADR 0005; walkthrough
 //! section 6).
 //!
-//! A step takes the line's lock, then:
+//! A step takes the branch's lock, then:
 //!
 //! 1. **recover**: finishes what the records say was decided and not
 //!    confirmed done (59; rule core.14): a place decided and maybe not
@@ -36,7 +36,7 @@ use crate::{verdict, Sluice};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Another step holds the line's lock (rule core.14).
+    /// Another step holds the branch's lock (rule core.14).
     Busy,
     /// The records were written between this step's read and its write;
     /// nothing was done (62).
@@ -146,12 +146,12 @@ impl Sluice<'_> {
                     .move_to(branch, &intent.from, &intent.to)?
             }
             // Moved, then moved again before the landing was recorded: it
-            // is in the line's history all the same.
+            // is in the branch's history all the same.
             Some(f) if self.seams.branch.contains(f, &intent.to)? => Moved::Moved,
             _ => Moved::Elsewhere(found.clone()),
         };
         let now = self.now();
-        // 55, 70: a landing that changes the gate leaves the line covered
+        // 55, 70: a landing that changes the gate leaves the branch covered
         // by no verdict under the gate it now carries.
         let same_gate = matches!(moved, Moved::Moved)
             && self.rules_at(branch, &intent.from)? == self.rules_at(branch, &intent.to)?;
@@ -320,7 +320,7 @@ impl Sluice<'_> {
             bail!("{branch} does not exist");
         };
         if line.doc.base.as_ref() != Some(&tip) {
-            // Moved by something other than this line's landing (S8), or
+            // Moved by something other than this branch's landing (S8), or
             // never read: every candidate is formed again on it (10, 24).
             if let Some(old) = line.doc.base.clone() {
                 line.log(
@@ -335,7 +335,7 @@ impl Sluice<'_> {
             line.doc.verified = false;
         }
         let rules = self.gate(branch, &tip)?;
-        // A new line starts at its widest window (13).
+        // A new branch starts at its widest window (13).
         if line.doc.window == 0 {
             line.doc.window = rules.parallel;
         }

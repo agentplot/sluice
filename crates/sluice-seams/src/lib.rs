@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | the place | [`Checkout`] | B.1, 33 to 35 |
 //! | the check | [`Tests`] | B.2, 36 to 38 |
-//! | the line | [`Branch`] | B.4, 42 to 46 |
+//! | the branch | [`Branch`] | B.4, 42 to 46 |
 //! | the driver | [`Driver`] | B.5, 47 to 51 |
 //! | the records | [`State`] | B.7, 61 to 63 |
 //!
@@ -15,7 +15,7 @@
 //!
 //! Errors are `anyhow::Error`: a seam that cannot do what it was asked
 //! fails the step that asked. A refusal the statement names (a conflict,
-//! a line found elsewhere, a records write refused) is a value, never an
+//! a branch found elsewhere, a records write refused) is a value, never an
 //! error, because the core acts on it.
 
 use std::collections::BTreeMap;
@@ -26,7 +26,7 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// A git revision, as the line seam names it.
+/// A git revision, as the branch seam names it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Rev(pub String);
@@ -89,13 +89,13 @@ pub struct RunRequest {
     pub place: Place,
     /// The candidate revision the place holds.
     pub revision: Rev,
-    /// The checks the line's gate requires, as the policy names them.
+    /// The checks the branch's gate requires, as the policy names them.
     pub required: Vec<String>,
-    /// The line's revision the candidate's affected checks are taken
+    /// The branch's revision the candidate's affected checks are taken
     /// against; `None` when that revision is covered by no verdict, so
     /// every required check is affected (70).
     pub since: Option<Rev>,
-    /// The time limit the line's policy states (66).
+    /// The time limit the branch's policy states (66).
     pub limit: Option<Duration>,
 }
 
@@ -159,12 +159,12 @@ pub trait Tests {
     fn progress(&self, run: &RunHandle) -> Result<Progress>;
 
     /// 71: how many more runs this host takes now, whatever the windows
-    /// of the lines it serves.
+    /// of the branches it serves.
     fn capacity(&self) -> Result<usize>;
 }
 
 // ---------------------------------------------------------------------------
-// B.4 The line
+// B.4 The branch
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,16 +191,16 @@ pub struct LandingCommit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Moved {
     Moved,
-    /// 45: refused, the line was elsewhere.
+    /// 45: refused, the branch was elsewhere.
     Elsewhere(Option<Rev>),
 }
 
 pub trait Branch {
-    /// 42: the line's current revision, or `None` when it does not exist.
+    /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
 
     /// 56: a file of a revision's tree, for the policy read from the
-    /// line's revision.
+    /// branch's revision.
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>>;
 
     /// 43: `head` merged onto `onto`, or the conflict.
@@ -210,10 +210,10 @@ pub trait Branch {
     fn commit(&self, commit: &LandingCommit) -> Result<Rev>;
 
     /// Whether `rev` is `tip` or in its history: a landing found under a
-    /// line moved again since (24).
+    /// branch moved again since (24).
     fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool>;
 
-    /// 45, 46: move the line from exactly `expected` to `to`, all or
+    /// 45, 46: move the branch from exactly `expected` to `to`, all or
     /// nothing.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved>;
 }
@@ -297,8 +297,8 @@ pub trait Driver {
 // B.7 The records
 // ---------------------------------------------------------------------------
 
-/// A line's records as last written, and the version they were read at
-/// (61). Files are named by path relative to the line's record directory;
+/// A branch's records as last written, and the version they were read at
+/// (61). Files are named by path relative to the branch's record directory;
 /// their bytes are the records' real format (53).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
@@ -327,20 +327,20 @@ pub enum Written {
     Refused,
 }
 
-/// The line's lock, held until dropped (ADR 0005; rule core.14).
+/// The branch's lock, held until dropped (ADR 0005; rule core.14).
 pub trait Guard {}
 
 pub trait State {
-    /// The line's lock, or `None` when another step holds it.
+    /// The branch's lock, or `None` when another step holds it.
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>>;
 
-    /// 61: the line's records, and the version they were read at.
+    /// 61: the branch's records, and the version they were read at.
     fn read(&self, branch: &str) -> Result<Snapshot>;
 
     /// 62, 63: write all or nothing, only from the version read.
     fn write(&self, branch: &str, read_at: u64, changes: Changes) -> Result<Written>;
 
-    /// Every line with records.
+    /// Every branch with records.
     fn branches(&self) -> Result<Vec<String>>;
 
     /// The next submission id, numbered in order across the repository.

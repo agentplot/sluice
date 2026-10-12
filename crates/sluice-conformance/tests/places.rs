@@ -84,7 +84,7 @@ fn places_of_two_lines_on_one_host_never_collide() {
     s.step(other).unwrap();
     s.step(other).unwrap();
     h.step();
-    // Both runs live in their own places; neither line ended the other's.
+    // Both runs live in their own places; neither branch ended the other's.
     assert_eq!(h.w().live_places().len(), 2);
     assert_eq!(h.w().live_runs(), 2);
     assert!(h.w().released_places().is_empty());
