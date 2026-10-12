@@ -158,7 +158,7 @@ pub trait Tests {
     /// outcome, executor and whether it was replayed.
     fn progress(&self, run: &RunHandle) -> Result<Progress>;
 
-    /// 71: how many more runs this host takes now, whatever the windows
+    /// 71: how many more runs this instance starts now, whatever the windows
     /// of the branches it serves.
     fn capacity(&self) -> Result<usize>;
 }

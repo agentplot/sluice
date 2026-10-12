@@ -21,14 +21,20 @@ branch, in that order.
 - **Policy defaults are conservative.** A key a `[branches]` table leaves
   out reads: `parallel = 4`, `batch = false`, `flaky = "fail"`,
   `timeout = "1h"`. *(clauses 27, 66)*
-- **The machine's test cap.** `parallel` stays per branch. Each machine
-  also caps the runs it holds at once, across every branch: default a
-  quarter of its cores, never fewer than one, overridable per machine,
-  not in the policy file. The cap is enforced where a run starts, which
-  refuses past it; sluice's `capacity` call is a hint. Each run's task
-  runner is told its share of the cores, so the machine is never
-  oversubscribed. Pass 2's test-runner and moon profiles build this.
+- **The test cap.** `parallel` stays per branch. Whoever starts the
+  tests caps how many run at once across every branch it serves:
+  default a quarter of the CPUs it may use, never fewer than one,
+  overridable in sluice's own config, not in the policy file. A whole
+  machine is capped by running one `sluice run` that every `wt submit
+  --remote` submits to. Each run is told its share of the CPUs. ADR 0012.
   *(clause 71)*
+- **Sandboxes and resource limits.** The policy's `[executor]` says how a
+  branch's runs are held: open, a kernel sandbox (Seatbelt on macOS,
+  bubblewrap and Landlock on Linux) or a container, with the memory and
+  network they may use. A limit the executor cannot enforce refuses the
+  run, and every run records what was enforced, so a gate that trusts
+  only confined runs reads it from the record. ADR 0012.
+  *(clauses 29, 83, 84)*
 - **A landing moved over by hand before it was recorded** still counts:
   the branch seam answers "is this commit in the branch's history?", and
   a landing found there is recorded as landed. *(clause 24)*

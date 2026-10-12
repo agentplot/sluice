@@ -754,8 +754,9 @@ targets to `moon exec`:
   policy's `timeout` (66) is the whole run's and is section 4's to
   enforce, whatever the tasks declare.
 - `-c/--concurrency` (`MOON_CONCURRENCY`) caps moon's threads: the
-  host's bound (71, `Tests::capacity`) counts runs, not moon threads, so
-  set `-c` from the host's cores divided by `capacity`.
+  instance's bound (71, `Tests::capacity`) counts runs, not moon
+  threads, so set `-c` from the CPUs sluice may use divided by the
+  bound (section 4).
 
 An empty target list is a pass with nothing run; do not call moon.
 
@@ -1104,33 +1105,30 @@ long wait. Before signalling a group found in `pgid` with no supervisor
 holding `lock`, check that a member started after `request.json` was
 written (`ps -o lstart= -g <pgid>`), or skip it.
 
-**The host's bound (71).** A host runs at most `B` runs at once, across
-every repository and branch on it. `B` is the host's, never a policy's:
-`[host] runs` in `$XDG_CONFIG_HOME/sluice/config.toml` (default
-`~/.config`), else the CPUs sluice may use divided by four, never fewer
-than one. "The CPUs sluice may use" is
-`std::thread::available_parallelism()`, which on Linux honours the
-process's CPU affinity and its cgroup quota, so a container or a CI
-runner limited to four CPUs reads four, not the machine's sixty-four.
+**The instance's bound (71).** An instance of sluice starts at most `B`
+runs at once, whatever the windows of the branches it serves. `B` is the
+instance's, never a policy's: `[runs] max` in
+`$XDG_CONFIG_HOME/sluice/config.toml` (default `~/.config`), else the
+CPUs sluice may use divided by four, never fewer than one. "The CPUs
+sluice may use" is `std::thread::available_parallelism()`, which on
+Linux honours the process's CPU affinity and its cgroup quota, so a
+container or a CI runner limited to four CPUs reads four, not the
+machine's sixty-four.
 
-The bound is a semaphore of slot files, one per run allowed:
-`$XDG_STATE_HOME/sluice/slots/0.lock` to `<B-1>.lock` (default
-`~/.local/state`), outside any repository so one bound covers them all.
-`start` tries each slot with `File::try_lock` and hands the first it
-gets to the supervisor, which holds it for the run's whole life; the
-kernel releases it when the supervisor exits or dies, so a crash never
-leaks a slot and nothing has to be counted or cleaned. When every slot
-is held, `start` returns `Full`, a value the core acts on: the candidate
-stays formed and starts in a later round. So `Tests::start` returns
-`Started(handle)` or `Full` (pass 2 changes the seam and the fakes' host
-limit to match), and `capacity()` is the number of slots free now, a
-hint for how many to try.
+`capacity()` is `B` less the candidates under test (`starting` or
+`testing`) in the records of every branch the instance serves, read
+through the records seam: nothing is held in memory and nothing new is
+stored (core.14). A machine is bounded as a whole when one instance
+starts every run on it: one `sluice run` that every `wt submit
+--remote` submits to, on that machine or another. When each session's
+waiting `wt submit` runs its own rounds instead, each is an instance
+with its own bound, and the windows of the branches are the only limit
+between them (71 says no more).
 
-Each run is told its share of the host: the runner is given
-`available_parallelism() / B` threads: moon's `--concurrency`, and
+Each run is told its share: the runner is given
+`available_parallelism() / B` threads, moon's `--concurrency` and
 `SLUICE_JOBS` in a `command` runner's environment for the command to
-pass on, so `B` runs at
-once use the CPUs sluice may use and no more.
+pass on, so `B` runs at once use the CPUs sluice may use and no more.
 
 **Environment for the command.** `env_clear()`, then `PATH`, `HOME`,
 `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`/`LC_*`, `TERM` from sluice's
@@ -1143,25 +1141,22 @@ candidate's, 35).
 
 **The shell a run happens in.** A repository's tools often exist only
 inside a shell it declares: crew's moon and replay cache only inside
-`devenv shell`. The policy says what every run is wrapped in:
+`devenv shell`. The policy names it:
 
 ```toml
 [tests]
 shell = ["devenv", "shell", "--"]
 ```
 
-The supervisor runs `shell + argv`, with the place as cwd, so the shell
-sets the tools up and the command runs inside it. The environment above
-is what goes into the shell; what the shell adds is the repository's.
-`shell` is sluice's own concept, not devenv's: the same key takes
-`["docker", "run", "--rm", "-v", "{place}:/w", "-w", "/w", "<image>"]`
-or an `ssh` prefix, which is how runs on another host start (C.1
-container). `{place}` and `{tmp}` are substituted; nothing else is.
-Read from the branch's revision like the rest of the policy (56). When
-sluice itself already runs inside the repository's shell, as an app
-does under a manifest that declares one, the key is left out: the run
-keeps that shell's `PATH` and, as above, nothing that names a session's
-place (35).
+The executor runs `shell + argv` in the place, so the shell sets the
+tools up and the command runs inside it. The environment above is what
+goes into the shell; what the shell adds is the repository's. The shell
+only enters the toolchain: sluice treats it as opaque and reads no
+confinement or limit from it, which is the executor's (below). Read from
+the branch's revision like the rest of the policy (56). When sluice
+itself already runs inside the repository's shell, as an app does under
+a manifest that declares one, the key is left out: the run keeps that
+shell's `PATH` and, as above, nothing that names a session's place (35).
 
 The `[tests] runner = "command"` profile runs
 `sh -c <command>` in the place under the same supervisor, one task named
@@ -1175,7 +1170,51 @@ by the command, never replayed (C.2 script).
 4. `release` of a place with a run in progress: the group is ended before the place is removed (34).
 5. A waiting `wt submit` killed with Ctrl-C (SIGINT to its foreground group): the run continues and a later `step` reads its result.
 6. The command sees `SLUICE_CHECKOUT`, `SLUICE_TMP` and none of `MOON_*`, `GIT_DIR`, `DEVENV_ROOT` set in sluice's environment.
-7. `capacity` falls by one per running supervisor (71).
+7. With `[runs] max = 2` and three branches each with a window of four, one `sluice run` has at most two runs under test at once across all three, and each moon run is given half the CPUs (71).
+
+### The executor (83, 84)
+
+The executor is how a run is held to its limits and whether it is
+confined. It is part of the check seam: `Tests::start` takes the limits
+and the run's report says what the executor enforced, recorded with each
+result (16). The policy states what a branch's runs may use and reach:
+
+```toml
+[executor]
+kind = "sandbox"          # "open" | "sandbox" | "container"
+network = false
+memory = "8G"
+# processors come from the instance: available_parallelism() / B
+```
+
+| kind | how | enforces |
+|---|---|---|
+| `open` | the supervisor above: a process group in the place | the processors, through the runner's threads; nothing else; never confined |
+| `sandbox` | the command under the host's kernel sandbox, as Anthropic's sandbox-runtime and Codex's sandbox do: Seatbelt (`sandbox-exec` with a generated profile) on macOS, bubblewrap with Landlock on Linux; writes allowed only to the place and `SLUICE_TMP`, the network only as the policy says | paths and network on both; memory and processors only on Linux, by starting the run in a cgroup (`systemd-run --user --scope -p MemoryMax= -p CPUQuota=`) |
+| `container` | the place mounted into a new container (`docker run --rm --init --cpus --memory --network none -v <place>:<place> -w <place> <image>`), the image the repository declares | processors, memory, paths and network |
+
+A limit the policy states that the executor cannot enforce refuses the
+run (84): a `memory` limit under `sandbox` on macOS is refused with the
+reason, never run without it. Every run's record carries `executor`
+(`kind`, `confined`, and each limit held), so a gate that trusts only
+confined runs (29) reads it from the record and never from the policy.
+`confined` is true only for `container`, and for `sandbox` when no
+session on the host can write the place; `open` never is. Containers
+run with `--init` so orphans are reaped and a group's end is seen
+(section 4's Linux facts).
+
+The supervisor wraps every kind: it spawns the executor's command line
+(`sandbox-exec …`, `bwrap …`, `docker run …`) as the group leader and
+ends the group at the time limit as above; a container is also removed
+by name (`docker rm -f sluice-<place>`), since its processes live in the
+engine, not in the group.
+
+#### Acceptance tests
+
+1. `sandbox` on macOS and on Linux: a write outside the place and `SLUICE_TMP` fails inside the run; with `network = false`, a connection fails (83).
+2. `sandbox` with `memory = "1G"` on macOS: the run is refused, naming the limit; on Linux, a run that allocates past it is killed and read as failed (84).
+3. `container`: a run over its time limit is ended and its container removed; nothing of it is left in `docker ps -a`.
+4. Every recorded run carries the executor's `kind`, `confined` and limits; an `open` run is never read as confined (29, 84).
 
 ---
 

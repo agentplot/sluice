@@ -177,10 +177,14 @@ impl Statement {
             .collect()
     }
 
-    /// Part A and B but several hosts (57 to 63) and trust (28, 29).
+    /// Part A and B but several hosts (57 to 63), trust (28, 29) and the
+    /// executors that enforce a run's limits (83, 84), which come with
+    /// pass 2's profiles.
     pub fn phase_1(&self) -> BTreeSet<String> {
-        let out_of_phase: BTreeSet<String> =
-            (57..=63).chain([28, 29]).map(|n| n.to_string()).collect();
+        let out_of_phase: BTreeSet<String> = (57..=63)
+            .chain([28, 29, 83, 84])
+            .map(|n| n.to_string())
+            .collect();
         self.part_a
             .iter()
             .chain(&self.part_b)
