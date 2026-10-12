@@ -29,7 +29,7 @@ use sluice::profiles::worktrunk::Worktrunk;
 use sluice::profiles::Bound;
 use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
-use sluice_core::{Seams, Sluice, SystemClock};
+use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
     Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
     RunHandle, RunRequest, Session, Settings, Tests,
@@ -307,6 +307,21 @@ impl Rig for Real {
             },
             &SystemClock,
         )
+    }
+
+    /// One round, taken again while the branch's lock is busy, as `sluice
+    /// run` and a waiting submit do: tests share one process, and a child
+    /// another test is starting holds a copy of every open file, the lock
+    /// included, until it runs its program.
+    fn step(&self) -> Step {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            let step = self.sluice().step(BRANCH).expect("a step runs");
+            if step != Step::Busy || Instant::now() >= until {
+                return step;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn work(&self, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) -> Rev {

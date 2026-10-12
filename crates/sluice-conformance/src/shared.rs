@@ -273,10 +273,12 @@ pub fn every_submission_is_tested_on_top_of_every_one_ahead(h: &impl Rig) {
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
     h.work("unit/c", "agent-c", &[("a/more", Some("c"))]);
     let (one, two, three) = (h.submit("unit/a"), h.submit("unit/b"), h.submit("unit/c"));
-    h.step();
+    let stepped = h.step();
     assert_eq!(
         h.tested(),
-        vec![vec![one], vec![one, two], vec![one, two, three]]
+        vec![vec![one], vec![one, two], vec![one, two, three]],
+        "{stepped:?}: {:#?}",
+        h.events()
     );
     h.settle();
 }
