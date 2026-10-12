@@ -1,6 +1,6 @@
 //! Submission and order: A.1 and A.2, and the driver's operations.
 
-use sluice_conformance::{Harness, BRANCH};
+use sluice_conformance::{Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::{AmendRefusal, Requester, SubmitRefusal, WithdrawRefusal};
 

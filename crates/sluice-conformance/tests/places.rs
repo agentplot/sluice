@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use sluice_conformance::{Harness, BRANCH};
+use sluice_conformance::{Harness, Rig, BRANCH};
 use sluice_core::records::State;
 
 /// satisfies: 25, 31, 32, 33, 34, 35

@@ -1,6 +1,6 @@
 //! Landing, conflicts, crashes and notifications: A.3, A.5, B.4, B.5.
 
-use sluice_conformance::{policy, Crash, Harness, BRANCH};
+use sluice_conformance::{policy, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::Step;
 use sluice_seams::Told;

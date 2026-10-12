@@ -4,6 +4,13 @@
 //! Every scenario under `tests/` is a `#[test]` whose doc comment holds
 //! one `satisfies:` line naming the clauses and scenarios of the
 //! statement it exercises (rule core.12). [`citations`] reads them.
+//!
+//! A scenario runs on a [`Rig`]: what every scenario needs of a world, a
+//! branch to land on, sessions with work, and what sluice did. The
+//! [`Harness`] is the rig over the fakes, which also inject faults
+//! (crashes, interference, lost runs, held runs) through its [`World`].
+//! The scenarios that need no fault are in [`shared`], and run on the
+//! fakes here and on the real profiles in the `sluice` crate's tests.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -13,14 +20,17 @@ use sluice_core::line::Line;
 use sluice_core::records::{Event, LogLine, Submission};
 use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
-use sluice_seams::Rev;
+use sluice_seams::{Notification, Rev};
 
 pub use sluice_fakes::{Crash, World};
+
+pub mod shared;
 
 /// The branch every scenario lands on, unless it says otherwise.
 pub const BRANCH: &str = "bolt/x";
 
-/// A bolt's gate, with the walkthrough's keys.
+/// A bolt's gate, with the walkthrough's keys. A rig over real profiles
+/// names its own runner and checkout method in place of `fake`.
 pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
     format!(
         "[tests]\nrunner = \"fake\"\n\n[checkout]\nmethod = \"fake\"\n\n\
@@ -29,13 +39,138 @@ pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
     )
 }
 
+/// What a scenario needs of a world: `bolt/x` holding three projects,
+/// `a/`, `b/` and `c/`, each with one check `<project>:test` tagged
+/// `gate` that the project's files affect, under a policy.
+pub trait Rig {
+    /// A sluice over the rig's seams. Making a new one is starting sluice
+    /// again: it holds nothing between calls but what the records hold.
+    fn sluice(&self) -> Sluice<'_>;
+
+    /// A session `agent` in place `worktree`, with work on the branch's
+    /// current revision; returns the session's head.
+    fn work(&self, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) -> Rev;
+
+    /// What a submission from the place `worktree` names it by.
+    fn place(&self, worktree: &str) -> String;
+
+    /// `task` fails on any candidate whose `path` holds `content`.
+    fn fails_with(&self, task: &str, path: &str, content: &str);
+
+    /// Step until the branch's work is done.
+    fn settle(&self);
+
+    /// Every outcome delivered to `agent`'s sessions, in order.
+    fn told_to(&self, agent: &str) -> Vec<Notification>;
+
+    /// The revisions runs were started on, in order.
+    fn started(&self) -> Vec<Rev>;
+
+    /// The places made, and those not yet released.
+    fn made_places(&self) -> Vec<String>;
+    fn live_places(&self) -> Vec<String>;
+
+    /// A commit's parents, and its message.
+    fn parents(&self, rev: &Rev) -> Vec<Rev>;
+    fn message(&self, rev: &Rev) -> String;
+
+    /// The branch's first-parent history, newest first.
+    fn first_parents(&self) -> Vec<Rev> {
+        let mut out = Vec::new();
+        let mut at = Some(self.tip());
+        while let Some(r) = at {
+            at = self.parents(&r).first().cloned();
+            out.push(r);
+        }
+        out
+    }
+
+    /// A file of a revision's tree.
+    fn file(&self, rev: &Rev, path: &str) -> Option<String> {
+        let s = self.sluice();
+        s.seams()
+            .branch
+            .read_file(rev, path)
+            .expect("the file reads")
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    fn tip(&self) -> Rev {
+        let s = self.sluice();
+        s.seams()
+            .branch
+            .read(BRANCH)
+            .expect("the branch reads")
+            .expect("the branch exists")
+    }
+
+    fn try_submit(
+        &self,
+        worktree: &str,
+        after: &[u64],
+        priority: i64,
+    ) -> Result<Accepted, SubmitRefusal> {
+        self.sluice()
+            .submit(&SubmitRequest {
+                worktree: self.place(worktree),
+                branch: BRANCH.into(),
+                after: after.to_vec(),
+                priority,
+            })
+            .expect("submit runs")
+    }
+
+    fn submit(&self, worktree: &str) -> u64 {
+        self.try_submit(worktree, &[], 0).expect("accepted").id
+    }
+
+    fn step(&self) -> Step {
+        self.sluice().step(BRANCH).expect("a step runs")
+    }
+
+    fn sub(&self, id: u64) -> Submission {
+        self.sluice()
+            .state(id)
+            .expect("state reads")
+            .unwrap_or_else(|| panic!("no submission {id}"))
+    }
+
+    fn log(&self) -> Vec<LogLine> {
+        let s = self.sluice();
+        let snap = s.seams().state.read(BRANCH).expect("records read");
+        Line::read_log(&snap).expect("the log parses")
+    }
+
+    fn events(&self) -> Vec<Event> {
+        self.log().into_iter().map(|l| l.event).collect()
+    }
+
+    /// The combinations runs were started on, as lists of submissions.
+    fn tested(&self) -> Vec<Vec<u64>> {
+        self.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Testing { submissions, .. } => Some(submissions),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn withdraw(&self, id: u64, by: Requester) {
+        self.sluice()
+            .withdraw(id, &by)
+            .expect("withdraw runs")
+            .expect("withdrawn");
+    }
+}
+
+/// The rig over the fakes.
 pub struct Harness {
     pub f: Fakes,
 }
 
 impl Harness {
-    /// `bolt/x` with three projects, `a/`, `b/` and `c/`, each with one
-    /// check tagged `gate`, under the given policy.
+    /// The three projects under the given policy.
     pub fn new(policy: &str) -> Harness {
         let f = Fakes::new();
         f.world.init(
@@ -62,49 +197,29 @@ impl Harness {
     pub fn w(&self) -> &World {
         &self.f.world
     }
+}
 
-    pub fn sluice(&self) -> Sluice<'_> {
+impl Rig for Harness {
+    fn sluice(&self) -> Sluice<'_> {
         self.f.sluice()
     }
 
-    pub fn tip(&self) -> Rev {
-        self.w().tip(BRANCH)
-    }
-
-    /// A session `agent` in place `worktree`, with work on the branch's
-    /// current revision.
-    pub fn work(&self, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) -> Rev {
+    fn work(&self, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) -> Rev {
         let head = self.w().work(&self.tip(), changes);
         self.w().session(worktree, agent, &head);
         head
     }
 
-    pub fn try_submit(
-        &self,
-        worktree: &str,
-        after: &[u64],
-        priority: i64,
-    ) -> Result<Accepted, SubmitRefusal> {
-        self.sluice()
-            .submit(&SubmitRequest {
-                worktree: worktree.into(),
-                branch: BRANCH.into(),
-                after: after.to_vec(),
-                priority,
-            })
-            .expect("submit runs")
+    fn place(&self, worktree: &str) -> String {
+        worktree.into()
     }
 
-    pub fn submit(&self, worktree: &str) -> u64 {
-        self.try_submit(worktree, &[], 0).expect("accepted").id
-    }
-
-    pub fn step(&self) -> Step {
-        self.sluice().step(BRANCH).expect("a step runs")
+    fn fails_with(&self, task: &str, path: &str, content: &str) {
+        self.w().fails_with(task, path, content);
     }
 
     /// Step until a step changes nothing.
-    pub fn settle(&self) {
+    fn settle(&self) {
         for _ in 0..64 {
             let v = self.w().version(BRANCH);
             let told = self.w().told().len();
@@ -120,38 +235,32 @@ impl Harness {
         panic!("{BRANCH} never settled");
     }
 
-    pub fn sub(&self, id: u64) -> Submission {
-        self.sluice()
-            .state(id)
-            .expect("state reads")
-            .unwrap_or_else(|| panic!("no submission {id}"))
+    fn told_to(&self, agent: &str) -> Vec<Notification> {
+        self.w().told_to(agent)
     }
 
-    pub fn log(&self) -> Vec<LogLine> {
-        let snap = sluice_seams::State::read(&self.f.state, BRANCH).expect("records read");
-        Line::read_log(&snap).expect("the log parses")
+    fn started(&self) -> Vec<Rev> {
+        self.w().started()
     }
 
-    pub fn events(&self) -> Vec<Event> {
-        self.log().into_iter().map(|l| l.event).collect()
+    fn made_places(&self) -> Vec<String> {
+        self.w().made_places()
     }
 
-    /// The combinations runs were started on, as lists of submissions.
-    pub fn tested(&self) -> Vec<Vec<u64>> {
-        self.events()
-            .into_iter()
-            .filter_map(|e| match e {
-                Event::Testing { submissions, .. } => Some(submissions),
-                _ => None,
-            })
-            .collect()
+    fn live_places(&self) -> Vec<String> {
+        self.w().live_places()
     }
 
-    pub fn withdraw(&self, id: u64, by: Requester) {
-        self.sluice()
-            .withdraw(id, &by)
-            .expect("withdraw runs")
-            .expect("withdrawn");
+    fn parents(&self, rev: &Rev) -> Vec<Rev> {
+        self.w().parents(rev)
+    }
+
+    fn message(&self, rev: &Rev) -> String {
+        self.w().message(rev)
+    }
+
+    fn first_parents(&self) -> Vec<Rev> {
+        self.w().first_parents(BRANCH)
     }
 }
 

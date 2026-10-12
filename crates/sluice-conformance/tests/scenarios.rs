@@ -1,156 +1,34 @@
 //! The statement's scenarios (section 11), for a bolt's branch on one host.
 
-use sluice_conformance::{policy, Crash, Harness, BRANCH};
+use sluice_conformance::{policy, shared, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
-use sluice_seams::{Outcome, Told};
+use sluice_seams::Outcome;
 
 /// satisfies: S1, 1, 10, 11, 22, 23, 33, 34, 37, 42, 43, 44, 45, 47, 50
 #[test]
 fn s1_two_heads_pass_and_land_in_order() {
-    let h = Harness::bolt();
-    let base = h.tip();
-    let a = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    let b = h.work("unit/b", "agent-b", &[("a/notes", Some("from b"))]);
-    let one = h.submit("unit/a");
-    let two = h.submit("unit/b");
-
-    // Submitting moves nothing and runs nothing (1).
-    assert_eq!(h.tip(), base);
-    assert!(h.w().started().is_empty());
-
-    h.settle();
-
-    assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(two).state, State::Landed);
-    // Each tested exactly as it would land: the branch, then A, then B (10).
-    assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
-    // One commit per submission, in order, the head as second parent (23).
-    let history = h.w().first_parents(BRANCH);
-    let (k2, k1) = (&history[0], &history[1]);
-    assert_eq!(history[2], base);
-    assert_eq!(h.w().parents(k1), vec![base.clone(), a]);
-    assert_eq!(h.w().parents(k2), vec![k1.clone(), b]);
-    assert!(h
-        .w()
-        .message(k1)
-        .starts_with(&format!("Land #{one}: unit/a\n")));
-    // Each session learns its own landing, and only its own (50).
-    let ta = h.w().told_to("agent-a");
-    assert_eq!(ta.len(), 1);
-    assert_eq!(
-        ta[0].told,
-        Told::Landed {
-            landed_as: k1.clone()
-        }
-    );
-    assert_eq!(h.w().told_to("agent-b")[0].submission, two);
-    // Every place made was released (33, 34).
-    assert_eq!(h.w().made_places().len(), 2);
-    assert!(h.w().live_places().is_empty());
+    shared::s1_two_heads_pass_and_land_in_order(&Harness::bolt());
 }
 
 /// satisfies: S2, 12, 43, 65, 20, 50
 #[test]
 fn s2_a_conflict_is_told_before_any_check_runs() {
-    let h = Harness::bolt();
-    h.work("unit/a", "agent-a", &[("a/lib", Some("from a"))]);
-    h.work("unit/b", "agent-b", &[("a/lib", Some("from b"))]);
-    let one = h.submit("unit/a");
-    let two = h.submit("unit/b");
-
-    h.step();
-    // Told at forming, before any run on a combination holding it.
-    let told = h.w().told_to("agent-b");
-    assert_eq!(told.len(), 1);
-    match &told[0].told {
-        Told::Conflict { paths, with } => {
-            assert_eq!(paths, &vec!["a/lib".to_string()]);
-            assert_eq!(with.len(), 1);
-            assert_eq!(with[0].id, one);
-            assert_eq!(with[0].from.worktree, "unit/a");
-        }
-        other => panic!("told {other:?}"),
-    }
-    assert!(h.tested().iter().all(|c| !c.contains(&two)));
-    assert_eq!(h.sub(two).state, State::Conflict);
-
-    h.settle();
-    assert_eq!(h.sub(one).state, State::Landed);
-    assert!(h
-        .w()
-        .told_to("agent-a")
-        .iter()
-        .all(|n| n.told.word() == "landed"));
+    shared::s2_a_conflict_is_told_before_any_check_runs(&Harness::bolt());
 }
 
 /// satisfies: S3, 16, 17, 18, 20, 22
 #[test]
 fn s3_the_second_fails_and_only_its_session_hears() {
-    let h = Harness::bolt();
-    h.w().fails_with("a:test", "a/bad", "yes");
-    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
-    h.work("unit/b", "agent-b", &[("a/bad", Some("yes"))]);
-    h.work("unit/c", "agent-c", &[("c/lib", Some("c2"))]);
-    let one = h.submit("unit/a");
-    let two = h.submit("unit/b");
-    let three = h.submit("unit/c");
-
-    h.settle();
-
-    assert_eq!(h.sub(one).state, State::Landed);
-    let failed = h.sub(two);
-    assert_eq!(failed.state, State::Failed);
-    assert_eq!(failed.failed[0].task, "a:test");
-    let told = h.w().told_to("agent-b");
-    assert_eq!(told.len(), 1);
-    match &told[0].told {
-        Told::Failed {
-            failed,
-            submissions,
-            ..
-        } => {
-            assert_eq!(failed, &vec!["a:test".to_string()]);
-            assert_eq!(submissions, &vec![one, two]);
-        }
-        other => panic!("told {other:?}"),
-    }
-    // No other session hears of the failure (20).
-    for agent in ["agent-a", "agent-c"] {
-        assert!(h
-            .w()
-            .told_to(agent)
-            .iter()
-            .all(|n| n.told.word() == "landed"));
-    }
-    assert_eq!(h.sub(three).state, State::Landed);
+    shared::s3_the_second_fails_and_only_its_session_hears(&Harness::bolt());
 }
 
 /// satisfies: S4, 10, 11, 17, 21, 22
 #[test]
 fn s4_the_first_fails_and_the_second_is_formed_again_without_it() {
-    let h = Harness::bolt();
-    h.w().fails_with("a:test", "a/lib", "broken");
-    h.work("unit/a", "agent-a", &[("a/lib", Some("broken"))]);
-    h.work("unit/b", "agent-b", &[("a/more", Some("b"))]);
-    let one = h.submit("unit/a");
-    let two = h.submit("unit/b");
-
-    h.settle();
-
-    assert_eq!(h.sub(one).state, State::Failed);
-    assert_eq!(h.w().told_to("agent-a")[0].told.word(), "failed");
-    let landed = h.sub(two);
-    assert_eq!(landed.state, State::Landed);
-    // Tested again as the branch and B alone (10, 21).
-    assert_eq!(landed.tested.as_ref().unwrap().submissions, vec![two]);
-    assert!(h.tested().contains(&vec![two]));
-    let tree = h.w().tree(&h.tip());
-    assert_eq!(tree["a/lib"], "a1");
-    assert_eq!(tree["a/more"], "b");
-    // B lands first: the branch's first landing is B's.
-    assert_eq!(h.w().moves().len(), 1);
+    shared::s4_the_first_fails_and_the_second_is_formed_again_without_it(&Harness::bolt());
 }
 
+/// satisfies: S6, 8, 10
 /// satisfies: S6, 8, 10
 #[test]
 fn s6_unrelated_work_is_tested_in_one_chain_and_not_again() {

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use sluice_conformance::{Harness, BRANCH};
+use sluice_conformance::{Harness, Rig, BRANCH};
 use sluice_core::line::Line;
 use sluice_core::records::{
     parse_lines, BranchDoc, LogLine, ResultLine, State, Submission, BRANCH_SCHEMA,

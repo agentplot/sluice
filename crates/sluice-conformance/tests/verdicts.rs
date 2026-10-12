@@ -1,6 +1,6 @@
 //! Verdicts, attribution and the window: A.3 and A.4.
 
-use sluice_conformance::{policy, Harness, BRANCH};
+use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultKind, ResultLine, State};
 use sluice_seams::{Outcome, Told};
 
