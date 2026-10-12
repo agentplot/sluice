@@ -14,12 +14,12 @@ Sources: `agentplot/blueprints:design/sluice/requirements.md` Part B and Part C,
 
 ## Context and problem statement
 
-The queue has to materialize a candidate, run the repository's checks on it, bring up what those checks need (an emulator with ports), move a line, and be driven by whoever submits. Each of those is done today by a different tool: git archive or a worktree, moon, devenv's process manager with ports from the worktree tool's templates, local refs or a push, and worktrunk, crew or flywheel. How tightly may the queue know those tools?
+The queue has to materialize a candidate, run the repository's checks on it, bring up what those checks need (an emulator with ports), move a branch, and be driven by whoever submits. Each of those is done today by a different tool: git archive or a worktree, moon, devenv's process manager with ports from the worktree tool's templates, local refs or a push, and worktrunk, crew or flywheel. How tightly may the queue know those tools?
 
 ## Considered options
 
 1. A worktrunk-native queue: hooks, template variables and `hash_port` throughout.
-2. A core that knows git only, with five seams (place, check, service, line, driver), each reached through one interface and bound by a profile.
+2. A core that knows git only, with five seams (place, check, service, branch, driver), each reached through one interface and bound by a profile.
 3. A moon plugin or a flywheel domain machine with the queue inside it.
 
 ## Decision outcome

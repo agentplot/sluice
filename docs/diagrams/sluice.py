@@ -105,13 +105,13 @@ def status(cls, a, b):
     return cls
 
 
-row(0, "row", [("line + A", "")],
+row(0, "row", [("branch + A", "")],
     [("testing…", "m", status("r1a", 22, 36)), ("passed", "ok", status("r1b", 36, 56)),
      ("landed", "ok", status("r1c", 56, 96))], "bar1")
-row(1, "row2", [("line + A + B", "")],
+row(1, "row2", [("branch + A + B", "")],
     [("testing…", "m", status("r2a", 22, 32)), ("failed: pkg-x:test", "bad", status("r2b", 32, 56)),
      ("B removed: culprit", "bad", status("r2c", 56, 96))], "bar2")
-row(2, "row", [("line + A + B + C", status("l3a", 0, 60)), ("line + A + C", status("l3b", 62, 96))],
+row(2, "row", [("branch + A + B + C", status("l3a", 0, 60)), ("branch + A + C", status("l3b", 62, 96))],
     [("testing…", "m", status("r3a", 22, 42)), ("discarded: B is ahead", "m", status("r3b", 42, 62)),
      ("re-formed · 9 of 11 replay", "m", status("r3c", 62, 70)), ("passed", "ok", status("r3d", 70, 80)),
      ("landed", "ok", status("r3e", 80, 96))], "bar3")
@@ -146,7 +146,7 @@ kf("k-notify", [(0, "stroke-dashoffset:80;opacity:0"), (44, "stroke-dashoffset:8
                 (100, "stroke-dashoffset:80;opacity:0")])
 anim("notify", "k-notify")
 
-# the line ---------------------------------------------------------------------
+# the branch ---------------------------------------------------------------------
 LX = 760
 add(f'<line class="edge" x1="{LX}" y1="340" x2="{LX}" y2="322"/>')
 add(f'<line class="edge eA" x1="{LX}" y1="312" x2="{LX}" y2="260"/>')
@@ -175,7 +175,7 @@ add(f'<text class="m xs" x="664" y="370">revision the candidate was formed on</t
 caps = [("1", "Agents submit their work.", "None of them merges.", 2, 18),
         ("2", "Each candidate is tested", "exactly as it would land.", 18, 42),
         ("3", "A failure has one culprit,", "and only its agent is told.", 42, 56),
-        ("4", "The line moves only", "to what passed.", 56, 92)]
+        ("4", "The branch moves only", "to what passed.", 56, 92)]
 for i, (n, l1, l2, a, b) in enumerate(caps):
     x = 20 + i * 218
     anim(f"cap{n}", show(f"k-cap{n}", a, b, lo=.35))
@@ -212,7 +212,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 
 head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
 <title id="ttl">sluice: a merge queue for agents in worktrees</title>
-<desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates line plus A, line plus A plus B, and line plus A plus B plus C, and tests them at once. Line plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the line without B, mostly replays from the cache, passes and lands. The line moves only to what passed.</desc>
+<desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates branch plus A, branch plus A plus B, and branch plus A plus B plus C, and tests them at once. Branch plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the branch without B, mostly replays from the cache, passes and lands. The branch moves only to what passed.</desc>
 <style>{STYLE}{"".join(css)}</style>
 <rect class="bg" width="900" height="446" rx="10"/>
 <text class="h" x="20" y="32">sluice</text>
