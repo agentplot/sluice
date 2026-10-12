@@ -38,10 +38,10 @@ implements.
 
 Everything sluice keeps lives under `<common>/sluice/`, where `<common>`
 is the repository's git common directory (*State on disk* says how to
-find it). A line's records are `<common>/sluice/<branch>/`. What belongs
-to the repository rather than a line is named with a leading dot, because
-no component of a git ref name may start with `.` (`git check-ref-format`),
-so no branch's directory can ever collide with it:
+find it). A branch's records are `<common>/sluice/<branch>/`. What
+belongs to the repository rather than a branch is named with a leading
+dot, because no component of a git ref name may start with `.` (`git
+check-ref-format`), so no branch's directory can ever collide with it:
 
 ```
 <common>/sluice/
@@ -50,7 +50,7 @@ so no branch's directory can ever collide with it:
   .runs/<place>/             one check run: supervisor lock, pgid, result.json, runReport.json, moon.log
   .places/<place>/           git-worktree checkouts
   .tmp/<place>/              SLUICE_TMP of each checkout
-  bolt/concurrent-units/     a line's records (State on disk)
+  bolt/concurrent-units/     a branch's records (State on disk)
 ```
 
 `<place>` is the name the core chooses for a place (`Checkout::materialize`
@@ -112,14 +112,14 @@ The gix 0.87.1 API, checked in the registry source:
 | `gix::actor::Signature { name, email, time }`; `.to_ref(&mut gix::date::parse::TimeBuf::default())` | `gix-actor-0.42.0/src/lib.rs:85, 106` |
 
 Use `MustExistAndMatch` for a move. `ExistingMustMatch` also passes when
-the ref is absent, so a deleted line would be recreated. Do not use
+the ref is absent, so a deleted branch would be recreated. Do not use
 `commit_as`/`commit`: they also update a reference with
 `ExistingMustMatch(parent0)` (`object.rs:419-427`). Write the object, then
 move the ref as its own step: the landing intent is written between the
 two (24).
 
-This program, built against gix 0.87.1, wrote a landing and moved a line
-twice from the same expected value:
+This program, built against gix 0.87.1, wrote a landing and moved a
+branch twice from the same expected value:
 
 ```rust
 // usage: land <repo> <line-ref> <head> <tree> <expected-old>
@@ -187,8 +187,8 @@ experiment used the tree only because it had no candidate commit).
 
 | gix error | meaning | `move_to` returns |
 |---|---|---|
-| `FileTransactionPrepare(ReferenceOutOfDate { actual, .. })` | the line is elsewhere | `Ok(Moved::Elsewhere(Some(actual)))` (24, core.5: reported, never retried blind) |
-| `FileTransactionPrepare(MustExist { .. })` | the line was deleted | `Ok(Moved::Elsewhere(None))` |
+| `FileTransactionPrepare(ReferenceOutOfDate { actual, .. })` | the branch is elsewhere | `Ok(Moved::Elsewhere(Some(actual)))` (24, core.5: reported, never retried blind) |
+| `FileTransactionPrepare(MustExist { .. })` | the branch was deleted | `Ok(Moved::Elsewhere(None))` |
 | `FileTransactionPrepare(LockAcquire { .. })` | git or another gix holds `<ref>.lock` | `Err`: transient; the step fails and the next one tries again |
 
 Lock interplay, measured: with `refs/heads/bolt/x.lock` present gix
@@ -351,19 +351,19 @@ Commits are the reference; use them.
 
 A candidate commit is not the landing commit. The landing (`commit`)
 writes, per entry, a commit whose tree is the candidate's tree
-(`tree_of`), whose parents are the line's revision before it and the
+(`tree_of`), whose parents are the branch's revision before it and the
 entry's head, and whose message is the walkthrough's section 8 (23, ADR
 0006). Its first parent is the previous landing, not the candidate.
 Candidate commits stay unreferenced (the worktrunk checkout's
 `sluice/try/<branch>/<n>` branch holds one while it exists); nothing reads them
 after the landing but `Sluice-Tested`.
 
-**Forecast (64, 65).** The same `form` over the line and the entries
+**Forecast (64, 65).** The same `form` over the branch and the entries
 ahead, with no records written; it is the core's, through this seam.
 
 **`read_file` (56, core.15).** `repo.find_object(rev)?.peel_to_tree()?`
 then `tree.lookup_entry_by_path(path)` and the blob's data, from the
-line's revision only. Never read a file from a worktree.
+branch's revision only. Never read a file from a worktree.
 
 ### Acceptance tests
 
@@ -375,10 +375,10 @@ Against a scratch repository made in a temp dir by the test:
 4. `form` on a chain of three, and the third conflicting only with the first (65's "every entry ahead up to the one at which the conflict appeared" is the core's; the seam returns the paths).
 5. `form` with a missing object and with unrelated histories returns `Err`, not a conflict.
 6. `commit`: `git cat-file -p` shows both parents, author and committer `sluice <sluice@localhost>`; `git interpret-trailers --parse` gives the `Sluice-*` lines; the tree is `tree_of`'s.
-7. `move_to` from the right revision moves the line and writes a reflog entry; from a stale one returns `Elsewhere(Some(actual))` and leaves the line; on a deleted line returns `Elsewhere(None)`; with `<ref>.lock` present returns `Err` (S8; 24, 45, 46).
+7. `move_to` from the right revision moves the branch and writes a reflog entry; from a stale one returns `Elsewhere(Some(actual))` and leaves the branch; on a deleted branch returns `Elsewhere(None)`; with `<ref>.lock` present returns `Err` (S8; 24, 45, 46).
 8. Two threads `move_to` from one expected revision: exactly one moves (46).
 9. A `reference-transaction` hook that refuses everything does not stop `move_to` (gix runs no hooks).
-10. `read_file` reads the policy from the line's revision while a worktree holds a different version of it (56, S12).
+10. `read_file` reads the policy from the branch's revision while a worktree holds a different version of it (56, S12).
 
 ---
 
@@ -397,10 +397,10 @@ merge"); core.4.
   `prepared` aborts the transaction (`git help githooks`).
 - **Decide in `prepared`, never in `preparing`.** In `preparing`,
   symbolic refs are not resolved: a `git merge` or `git commit` on a
-  checked-out line arrives as `HEAD`, and only in `prepared` as
-  `refs/heads/bolt/x`. A hook that refused in `preparing` let `git merge`,
-  `git commit` and `git reset --hard` move the line. Captured, from `git
-  reset --hard` in a worktree on `bolt/x`:
+  checked-out branch arrives as `HEAD`, and only in `prepared` as
+  `refs/heads/bolt/x`. A hook that refused in `preparing` let `git
+  merge`, `git commit` and `git reset --hard` move the branch. Captured,
+  from `git reset --hard` in a worktree on `bolt/x`:
 
   ```
   preparing  4fc2eb0… 4fc2eb0… HEAD
@@ -427,7 +427,7 @@ merge"); core.4.
   clause 1's "refused and reported" on one host; the forge's rules are the
   boundary on a remote (C.4 pushed refs).
 - A refused `git merge`, `git commit` or `git reset --hard` has already
-  changed the worktree and index before the ref transaction: the line
+  changed the worktree and index before the ref transaction: the branch
   does not move, but the worktree holding it is left with the merge
   staged (and `MERGE_HEAD`), the commit's changes staged, or the reset's
   files changed. Captured after a refused fast-forward `git merge
@@ -451,7 +451,7 @@ hook from hookdir
 
 It worked with an existing `.git/hooks/reference-transaction` and with
 `core.hooksPath` set: both ran, sluice's refused. **But git 2.53.0 and
-Apple's git 2.50.1 ignore config hooks and moved the protected line
+Apple's git 2.50.1 ignore config hooks and moved the protected branch
 (exit 0)**, and `/usr/bin/git` is 2.50.1 on this host, used by Xcode and
 anything with a plain `PATH`. So the file hook is the one to install. The
 same `/usr/bin/git update-ref refs/heads/bolt/x main` against the file
@@ -514,7 +514,7 @@ the brief's commands are `submit`, `step`, `run`, `status`, `amend`,
    with the core's matcher (pass 1's `policy.rs`). No match: allow.
 4. A match: print `error: <b> is protected by sluice; use wt submit` and
    a second line, `the worktree may hold the attempted change: git merge
-   --abort or git reset --hard`; append the attempt to the line's log;
+   --abort or git reset --hard`; append the attempt to the branch's log;
    exit 1.
 
 Captured with a shell stand-in for steps 1 to 4:
@@ -537,37 +537,38 @@ Caught, each refused with the same two lines and exit 128: `git merge`
 branch -f`, `git branch -m bolt/x bolt/y`, `git fetch . a:bolt/x`, and
 `wt merge bolt/x` (worktrunk printed `✗ Can't push to local bolt/x
 branch` / `Failed to update ref: error: bolt/x is protected by sluice;
-use wt submit`, exit 1). A `git push` into a checked-out line is refused
-first by git's own `receive.denyCurrentBranch`; into a line not checked
-out, the hook refuses it in `git-receive-pack`. `git branch -D` of a
-checked-out line is refused by git itself; deleting one that is not
-checked out reaches the hook as `new` = zero (see *Open questions*).
+use wt submit`, exit 1). A `git push` into a checked-out branch is
+refused first by git's own `receive.denyCurrentBranch`; into a branch
+not checked out, the hook refuses it in `git-receive-pack`.
+`git branch -D` of a checked-out branch is refused by git itself;
+deleting one that is not checked out reaches the hook as `new` = zero
+(see *Open questions*).
 
 **Logging the attempt (clause 1: "refused and reported").** The hook
 appends `{"at":…,"event":"refused","ref":"refs/heads/bolt/x","from":<cur>,"to":<new>,"by":"<parent command>"}`
-to the line's `log.jsonl` through the file store (section 6), taking the
-line's lock with a bounded wait (one second) and bumping the version, so
-the event is a record like any other. The parent command is `ps -o
-command= -p <ppid>` (captured: `git merge unit/touches`, `git
+to the branch's `log.jsonl` through the file store (section 6), taking
+the branch's lock with a bounded wait (one second) and bumping the
+version, so the event is a record like any other. The parent command is
+`ps -o command= -p <ppid>` (captured: `git merge unit/touches`, `git
 -c … reset -q --hard …`, `git-receive-pack /…/repo/.`). If the lock is not
 had in time, the refusal stands and only the stderr line is lost.
 
-**A line checked out in a worktree.** crew's bolt lines are checked out
-in their conductors' worktrees (`crew/bolts/<name>` holds
-`bolt/<name>`). When sluice moves such a line through gix, that worktree's
-HEAD moves with the ref but its index and files do not, so `git status`
-there shows the landing reversed, staged. Captured after a move under a
-clean worktree on `bolt/x` with one untracked file: `D  t.txt`, `?? local.txt`.
-`git read-tree -m -u <old> HEAD` in that worktree (the two-way merge
-`git checkout` does) brought it level and kept the untracked file. Who
-runs it is an open question.
+**A branch checked out in a worktree.** crew's bolt branches are checked
+out in their conductors' worktrees (`crew/bolts/<name>` holds
+`bolt/<name>`). When sluice moves such a branch through gix, that
+worktree's HEAD moves with the ref but its index and files do not, so
+`git status` there shows the landing reversed, staged. Captured after a
+move under a clean worktree on `bolt/x` with one untracked file:
+`D  t.txt`, `?? local.txt`. `git read-tree -m -u <old> HEAD` in that
+worktree (the two-way merge `git checkout` does) brought it level and
+kept the untracked file. Who runs it is an open question.
 
 ### Acceptance tests
 
 In a scratch repository with a policy protecting `bolt/*`, a worktree on
 `bolt/x`, and the hook installed by the installer:
 
-1. Each command in the "caught" list is refused with exit 128 (wt: 1), the line unmoved, one `refused` event in the log.
+1. Each command in the "caught" list is refused with exit 128 (wt: 1), the branch unmoved, one `refused` event in the log.
 2. `git worktree add ../w bolt/x`, `git reset --hard` with no target, `git branch bolt/new` (creation) and commits on `unit/*` are allowed.
 3. A pre-existing `reference-transaction` hook still runs, with the same stdin, and its refusal still refuses.
 4. `/usr/bin/git` (Apple git 2.50) is refused too.
@@ -663,7 +664,7 @@ moon query tasks --tags <tag> </dev/null                       # when since is N
 moon exec <target>… --on-failure continue </dev/null
 ```
 
-`RunRequest.since` is the line's revision when it is covered by a
+`RunRequest.since` is the branch's revision when it is covered by a
 verdict and `None` otherwise (70; pass 1's Q12). When the changed files
 between `since` and the candidate include moon's own configuration
 (`.moon/**`, any `moon.yml`), the project graph itself changed: run
@@ -1178,9 +1179,10 @@ gix's `repo.common_dir()` canonicalized (section 1). It is the same
 directory from every worktree of the repository, so every place on the
 host reads the same records (26, core.11).
 
-A line's records are `<common>/sluice/<branch>/`, the branch name's `/`
-nesting directories, as `docs/examples/state/bolt/concurrent-units/`. Files,
-by pass 1's `records.rs`:
+A branch's records are `<common>/sluice/<branch>/`, the branch name's
+`/` nesting directories, as
+`docs/examples/state/bolt/concurrent-units/`. Files, by pass 1's
+`records.rs`:
 
 ```
 <common>/sluice/bolt/concurrent-units/
@@ -1188,19 +1190,19 @@ by pass 1's `records.rs`:
   branch.json          the queue's own state (pass 1's Q18)
   submissions/<id>.json
   log.jsonl
-  lock                 the line's lock (never deleted)
+  lock                 the branch's lock (never deleted)
   .pending.json        a write in progress (below); absent between writes
 <common>/sluice/results.jsonl   the repository's results log (69)
 <common>/sluice/.next-id        the next submission id, repository-wide (pass 1's Q5)
 <common>/sluice/.lock           guards .next-id and the probe worktree
 ```
 
-Two lines cannot have colliding directories while both exist (git
+Two branches cannot have colliding directories while both exist (git
 forbids `bolt` and `bolt/x` as branches at once), but records outlive
-their branch. `write` refuses a line whose directory path passes through
-another line's (an ancestor directory holding a `version` file) and one
-whose name is `results.jsonl`; `branches()` lists the directories
-holding a `version` file.
+their branch. `write` refuses a branch whose directory path passes
+through another branch's (an ancestor directory holding a `version`
+file) and one whose name is `results.jsonl`; `branches()` lists the
+directories holding a `version` file.
 
 ### The lock (ADR 0005, core.14)
 
@@ -1245,7 +1247,7 @@ is in the same directory so the rename is atomic. (`name` with a `/`, as
 
 A `write(branch, read_at, changes)` touches several files (`put`:
 `branch.json`, `submissions/<id>.json`; `append`: `log.jsonl`) and must be
-all or nothing (63). Under the line's lock:
+all or nothing (63). Under the branch's lock:
 
 1. Read `version`; if it is not `read_at`, return `Written::Refused`
    (62).
@@ -1270,9 +1272,9 @@ caller that did not take it gets an error, not a write.
 plus one atomically, return the read value.
 
 `results` reads `results.jsonl`; `record_results` appends whole lines
-under `.lock` (pass 1's Q14: written before the line's write that carries
-the verdict, never appended twice: skip a line already present for the
-same run).
+under `.lock` (pass 1's Q14: written before the branch's write that
+carries the verdict, never appended twice: skip a line already present
+for the same run).
 
 ### Acceptance tests
 
@@ -1395,11 +1397,12 @@ is a later driver profile's (core.1: no multiplexer named here).
 ## 8. End to end
 
 One script, `e2e.sh`, builds a repository with a moon workspace, a
-`bolt/*` policy, a line per scenario and three sessions' worktrees, and
-then either proves the fixture with git and moon alone (`fixture`) or
-drives S1 to S4 through `wt submit` and `sluice` and checks the outcome
-(`sluice`). `E2E_REPO=crew` runs the same against a throwaway clone of
-crew, with every moon and sluice call inside crew's devenv shell.
+`bolt/*` policy, a branch per scenario and three sessions' worktrees,
+and then either proves the fixture with git and moon alone (`fixture`)
+or drives S1 to S4 through `wt submit` and `sluice` and checks the
+outcome (`sluice`). `E2E_REPO=crew` runs the same against a throwaway
+clone of crew, with every moon and sluice call inside crew's devenv
+shell.
 
 Verified: `fixture` passes on the scratch repository (moon 2.5.3, bash
 3.2) and on the crew clone (through `devenv shell --`); the `sluice` half
@@ -1429,11 +1432,11 @@ ok    S4 b formed again without a: pass [{"t":"tests:t-after","s":"cached"}]
 
 Notes for whoever runs the `sluice` half:
 
-- Every line is created before sluice protects `bolt/*`.
-- On a line with no verdict yet, the first candidate runs every required
-  check (70). For crew that is the whole suite, 59 tasks, 8 m 48 s on
-  this host from cold; with crew's shared outputs it replays whatever
-  any worktree of the clone already passed.
+- Every branch is created before sluice protects `bolt/*`.
+- On a branch with no verdict yet, the first candidate runs every
+  required check (70). For crew that is the whole suite, 59 tasks, 8 m
+  48 s on this host from cold; with crew's shared outputs it replays
+  whatever any worktree of the clone already passed.
 - The `sluice` half assumes `sluice status <id|branch> --json` shapes:
   a submission as walkthrough section 7, a branch as `{"submissions":
   [...]}`. Adjust `status`/`settle` to what pass 1's `status_json`
@@ -1571,7 +1574,7 @@ case $(inenv "$REPO" "$MOON" --version) in
   "moon 2."[5-9]*|"moon 2."[1-9][0-9]*|"moon "[3-9]*) ;;
   *) die "needs moon >= 2.5, found $(inenv "$REPO" "$MOON" --version)" ;;
 esac
-# Every scenario's line exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
+# Every scenario's branch exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
 for s in s1 s2 s3 s4; do git branch "bolt/$s" main; done
 
 # --- three sessions' places, each on a fresh unit branch per scenario ----------------------------------------------
@@ -1624,7 +1627,7 @@ form() {
     *) die "merge-tree exited $rc" ;;
   esac
 }
-# verdict <line> <candidate>: the candidate's affected #suite tasks run in a detached checkout; pass or fail
+# verdict <branch> <candidate>: the candidate's affected #suite tasks run in a detached checkout; pass or fail
 verdict() {
   local dir=$ROOT/check-$2 targets rc=0
   git -C "$REPO" worktree add -q --detach "$dir" "$2"
@@ -1666,7 +1669,7 @@ submit() { # submit <session> <scenario> [flags...]: wt submit from the session'
 }
 id_of() { submit "$1" "$2" --no-wait --json | jq -r .id; }
 status() { inenv "$REPO" sluice status "$@" --json; }
-settle() { # settle <scenario>: rounds until nothing on the line is queued or under test, for at most an hour
+settle() { # settle <scenario>: rounds until nothing on the branch is queued or under test, for at most an hour
   local i=0
   while status "bolt/$1" | jq -e '[.submissions[] | select(.state == "queued" or .state == "testing")] | length > 0' >/dev/null; do
     inenv "$REPO" sluice step "bolt/$1" >/dev/null
@@ -1675,7 +1678,7 @@ settle() { # settle <scenario>: rounds until nothing on the line is queued or un
 }
 landed() { git -C "$REPO" log --reverse --first-parent --format='%(trailers:key=Sluice-Submission,valueonly)' "main..bolt/$1" | sed '/^$/d' | tr '\n' ' '; }
 
-# S1: two sessions submit to one bolt line; both candidates pass; both land, in order; neither ran a merge.
+# S1: two sessions submit to one bolt branch; both candidates pass; both land, in order; neither ran a merge.
 A=$(id_of a s1)
 out=$(submit b s1) && rc=0 || rc=$?
 expect "S1 b's exit" "$rc" 0
@@ -1718,7 +1721,7 @@ expect "S4 a's failure" "$(status "$A" | jq -r '.failed[].task')" "$A_FAILS"
 expect "S4 b" "$(status "$B" | jq -r .state)" landed
 expect "S4 only b landed" "$(landed s4)" "$B "
 expect "S4 b tested without a" "$(status "$B" | jq -c .tested.submissions)" "[$B]"
-expect "S4 none of a's work on the line" "$(git -C "$REPO" grep -c -F "$BROKEN" bolt/s4 -- "$A_BREAKS" || echo 0)" 0
+expect "S4 none of a's work on the branch" "$(git -C "$REPO" grep -c -F "$BROKEN" bolt/s4 -- "$A_BREAKS" || echo 0)" 0
 
 # S11 in passing: sluice left every session's place alone.
 for w in a b c; do expect "place $w kept" "$(git -C "$ROOT/places/$w" rev-parse --is-inside-work-tree)" true; done
@@ -1742,15 +1745,15 @@ exit $FAILED
    `wt switch` returns; `post-start` runs detached. Should the
    walkthrough tell repositories to put checkout setup in `pre-start`?
    crew has none, so its "same post-create hooks" claim is empty today.
-4. **Deleting a protected line.** crew deletes a bolt's branch when the
-   bolt is done. Should the hook allow a delete only when the line has no
-   queued or testing submissions, always, or never?
-5. **A line checked out in a worktree.** crew's bolt lines are checked out
-   in their conductors' worktrees, and a landing leaves that worktree's
-   index behind (section 2). Who brings it level (`git read-tree -m -u
-   <old> HEAD`): sluice after a landing (it would touch a place it did not
-   make, core.16), the conductor, or nobody because a line should not be
-   checked out?
+4. **Deleting a protected branch.** crew deletes a bolt's branch when
+   the bolt is done. Should the hook allow a delete only when the branch
+   has no queued or testing submissions, always, or never?
+5. **A branch checked out in a worktree.** crew's bolt branches are
+   checked out in their conductors' worktrees, and a landing leaves that
+   worktree's index behind (section 2). Who brings it level (`git
+   read-tree -m -u <old> HEAD`): sluice after a landing (it would touch
+   a place it did not make, core.16), the conductor, or nobody because a
+   branch should not be checked out?
 6. **When the protection hook is installed.** No command in pass 1's CLI
    installs it. Ensure it on every `submit`/`step`/`run`, or add `sluice
    protect` (and `--remove`)?

@@ -28,7 +28,7 @@ fails names the one submission that broke it and tells only that agent.
 4. `CLAUDE.md`, `docs/architecture/core.md` (rules core.1 to core.16) and
    `docs/adr/0001` to `0010`. The rules bind every diff.
 
-The statement's vocabulary is for design (line, entry, place, candidate,
+The statement's vocabulary is for design (entry, place, candidate,
 culprit, seam). Everything a user sees, config keys, CLI output,
 state file fields, error messages, uses the walkthrough's words: branch,
 submission, checkout, combination, blame. Code may use either; be
@@ -49,7 +49,7 @@ In scope:
     through the seam traits.
   - `sluice-seams`: one trait per seam, exactly five: checkout (the place:
     materialize, release), tests (the check: affected, run), branch (the
-    line: read, form, commit, move), driver-facing operations (submit,
+    branch: read, form, commit, move), driver-facing operations (submit,
     check/forecast, withdraw, amend, state, notify), and state (the records:
     read with a version, write conditional on it). Rule core.2: a profile
     implements a trait and nothing of the core.
@@ -73,7 +73,7 @@ In scope:
   format), so pass 2's file store only writes them to disk.
 
 Out of scope for this pass: real git, gix, moon, worktrunk, process
-groups, the protection hook, several machines, the shared line's trust
+groups, the protection hook, several machines, the shared branch's trust
 rules beyond `required` and `flaky`.
 
 ## The conformance suite

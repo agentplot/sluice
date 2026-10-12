@@ -14,11 +14,11 @@ Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 1; `docs/ex
 
 ## Context and problem statement
 
-The walkthrough has a waiting `wt submit` keep the queue moving: every few seconds it runs one round of sluice's work, and a round can land. Rule core.4 said no code path reachable from a submission writes a line's ref, which read strictly forbids that. Is a round run by an agent's waiting command the agent landing its own work?
+The walkthrough has a waiting `wt submit` keep the queue moving: every few seconds it runs one round of sluice's work, and a round can land. Rule core.4 said no code path reachable from a submission writes a branch's ref, which read strictly forbids that. Is a round run by an agent's waiting command the agent landing its own work?
 
 ## Considered options
 
-1. The rule binds the submit operation: submit only adds to the queue, and a waiting driver runs the same round `sluice step` runs, under the line's lock.
+1. The rule binds the submit operation: submit only adds to the queue, and a waiting driver runs the same round `sluice step` runs, under the branch's lock.
 2. A waiting driver only reads; `sluice run` or a driver's own loop must be running for the queue to move.
 
 ## Decision outcome

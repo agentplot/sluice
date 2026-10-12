@@ -14,7 +14,7 @@ Sources: `docs/examples/README.md`; `agentplot/blueprints:design/sluice/requirem
 
 ## Context and problem statement
 
-The statement gave sluice a service seam that brought up what a candidate's checks need from the repository's declaration, an operator's word that admitted a submission to a line requiring one, and a submit gate of hooks run in the session's place before a submission was accepted. Reviewing what setting sluice up looks like, each read as sluice doing someone else's job. Which of them does a merge queue own?
+The statement gave sluice a service seam that brought up what a candidate's checks need from the repository's declaration, an operator's word that admitted a submission to a branch requiring one, and a submit gate of hooks run in the session's place before a submission was accepted. Reviewing what setting sluice up looks like, each read as sluice doing someone else's job. Which of them does a merge queue own?
 
 ## Considered options
 

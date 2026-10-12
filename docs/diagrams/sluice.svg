@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
 <title id="ttl">sluice: a merge queue for agents in worktrees</title>
-<desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates line plus A, line plus A plus B, and line plus A plus B plus C, and tests them at once. Line plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the line without B, mostly replays from the cache, passes and lands. The line moves only to what passed.</desc>
+<desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates branch plus A, branch plus A plus B, and branch plus A plus B plus C, and tests them at once. Branch plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the branch without B, mostly replays from the cache, passes and lands. The branch moves only to what passed.</desc>
 <style>
 :root{--bg:#f6f7f8;--panel:#ffffff;--fg:#1d2329;--muted:#5b6670;--rule:#d6dbe0;
 --accent:#1b6d8a;--soft:#e3eef3;--ok:#2e7d4f;--bad:#c0392b;--ink:#ffffff}
@@ -33,7 +33,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 <rect class="queue" x="268" y="44" width="380" height="306" rx="8"/>
 <text class="hd" x="282" y="62">SLUICE · QUEUE OF bolt/pay</text>
 <text class="m xs" x="296" y="88">entries</text>
-<text class="hd" x="664" y="62">THE LINE</text>
+<text class="hd" x="664" y="62">THE BRANCH</text>
 <rect class="box sbA" x="20" y="80" width="200" height="72" rx="6"/>
 <text class="t b" x="34" y="104">agent A</text>
 <text class="m sm" x="34" y="122">worktree unit/auth</text>
@@ -57,7 +57,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 <g class="cC"><rect class="chip chiprC" x="440" y="72" width="30" height="22" rx="4"/><text class="chipt" x="455" y="87" text-anchor="middle">C</text></g>
 <g class="row">
 <rect class="cand" x="282" y="112" width="352" height="62" rx="6"/>
-<text class="t mono " x="296" y="136">line + A</text>
+<text class="t mono " x="296" y="136">branch + A</text>
 <text class="xs m r1a" x="620" y="136" text-anchor="end">testing…</text>
 <text class="xs ok r1b" x="620" y="136" text-anchor="end">passed</text>
 <text class="xs ok r1c" x="620" y="136" text-anchor="end">landed</text>
@@ -66,7 +66,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 </g>
 <g class="row2">
 <rect class="cand" x="282" y="192" width="352" height="62" rx="6"/>
-<text class="t mono " x="296" y="216">line + A + B</text>
+<text class="t mono " x="296" y="216">branch + A + B</text>
 <text class="xs m r2a" x="620" y="216" text-anchor="end">testing…</text>
 <text class="xs bad r2b" x="620" y="216" text-anchor="end">failed: pkg-x:test</text>
 <text class="xs bad r2c" x="620" y="216" text-anchor="end">B removed: culprit</text>
@@ -76,8 +76,8 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 </g>
 <g class="row">
 <rect class="cand" x="282" y="272" width="352" height="62" rx="6"/>
-<text class="t mono l3a" x="296" y="296">line + A + B + C</text>
-<text class="t mono l3b" x="296" y="296">line + A + C</text>
+<text class="t mono l3a" x="296" y="296">branch + A + B + C</text>
+<text class="t mono l3b" x="296" y="296">branch + A + C</text>
 <text class="xs m r3a" x="620" y="296" text-anchor="end">testing…</text>
 <text class="xs m r3b" x="620" y="296" text-anchor="end">discarded: B is ahead</text>
 <text class="xs m r3c" x="620" y="296" text-anchor="end">re-formed · 9 of 11 replay</text>
@@ -100,5 +100,5 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 <g class="cap cap1"><circle class="badge" cx="32" cy="412" r="11"/><text class="badget" x="32" y="416" text-anchor="middle">1</text><text class="t sm" x="50" y="408">Agents submit their work.</text><text class="t sm" x="50" y="425">None of them merges.</text></g>
 <g class="cap cap2"><circle class="badge" cx="250" cy="412" r="11"/><text class="badget" x="250" y="416" text-anchor="middle">2</text><text class="t sm" x="268" y="408">Each candidate is tested</text><text class="t sm" x="268" y="425">exactly as it would land.</text></g>
 <g class="cap cap3"><circle class="badge" cx="468" cy="412" r="11"/><text class="badget" x="468" y="416" text-anchor="middle">3</text><text class="t sm" x="486" y="408">A failure has one culprit,</text><text class="t sm" x="486" y="425">and only its agent is told.</text></g>
-<g class="cap cap4"><circle class="badge" cx="686" cy="412" r="11"/><text class="badget" x="686" y="416" text-anchor="middle">4</text><text class="t sm" x="704" y="408">The line moves only</text><text class="t sm" x="704" y="425">to what passed.</text></g>
+<g class="cap cap4"><circle class="badge" cx="686" cy="412" r="11"/><text class="badget" x="686" y="416" text-anchor="middle">4</text><text class="t sm" x="704" y="408">The branch moves only</text><text class="t sm" x="704" y="425">to what passed.</text></g>
 </svg>

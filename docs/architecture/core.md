@@ -16,11 +16,11 @@ part exists.
 - **[core.2]** Every seam of Part B is reached through exactly one interface, and a profile implements that interface and nothing of the core.
 - **[core.3]** A seam with a single profile has an ADR saying why one is enough.
 
-### Lines and landings
+### Branches and landings
 
-- **[core.4]** No code path reachable from the submit operation writes a line's ref; a round of sluice's work may be run by any process, a waiting driver included.
-- **[core.5]** A line is moved only with the expected old revision, and a move whose expectation fails is reported, never retried blind.
-- **[core.6]** A candidate is formed from the line's revision and the entries ahead of it, in order, and from nothing else.
+- **[core.4]** No code path reachable from the submit operation writes a branch's ref; a round of sluice's work may be run by any process, a waiting driver included.
+- **[core.5]** A branch is moved only with the expected old revision, and a move whose expectation fails is reported, never retried blind.
+- **[core.6]** A candidate is formed from the branch's revision and the entries ahead of it, in order, and from nothing else.
 - **[core.17]** A candidate whose entries ahead land exactly as they were tested is the same candidate on the revision they land as: its tree, its runs and its verdict stand, and it is named as that revision extended by the entries still ahead of it.
 
 ### Verdicts and attribution
@@ -32,9 +32,9 @@ part exists.
 ### Places
 
 - **[core.10]** The core starts no service and binds no port; the checks it runs are one process group, ended with their place or their time limit.
-- **[core.11]** Every record a reader may need is readable with no sluice process running, from every host that submits to its line.
-- **[core.14]** Nothing the core decides is held between steps outside the records, and no two steps act on one line at once.
-- **[core.15]** A line's gate is read from the line's current revision, never from a candidate or a place.
+- **[core.11]** Every record a reader may need is readable with no sluice process running, from every host that submits to its branch.
+- **[core.14]** Nothing the core decides is held between steps outside the records, and no two steps act on one branch at once.
+- **[core.15]** A branch's gate is read from the branch's current revision, never from a candidate or a place.
 - **[core.16]** The core releases only places it made, and never a session's.
 
 ### Design and records
@@ -49,14 +49,14 @@ part exists.
 - **core.3** Rules out: a seam whose only profile is undocumented as such. Source: ADR 0003.
 - **core.4** Rules out: `update-ref`, `push`, a merge or a fast-forward in the submit operation or anything it calls; a round that behaves differently because a driver ran it. Not ruled out: a waiting `wt submit` running rounds between reads of its submission's state. Source: clause 1; ADRs 0002, 0005, 0011.
 - **core.5** Rules out: `update-ref` without an old value; a landing loop that re-reads and retries on refusal without re-forming the chain. Source: clauses 24, 45, 46.
-- **core.6** Rules out: a candidate formed from a cached revision of the line; a candidate including an entry removed as culprit or conflict, or an entry behind it. Source: clauses 8, 10, 12, 21.
-- **core.17** Rules out: testing a candidate again because the entries ahead of it landed as tested; telling a culprit, or recording, a combination by a revision the line has left when the line has since landed the entries ahead of it. Holds because a landing commit carries the tested candidate's tree (23): the line after the landing and the candidate before it hold the same tree. Source: clauses 10, 20, 23; answers to the reconstruction, 12; ADR 0006.
+- **core.6** Rules out: a candidate formed from a cached revision of the branch; a candidate including an entry removed as culprit or conflict, or an entry behind it. Source: clauses 8, 10, 12, 21.
+- **core.17** Rules out: testing a candidate again because the entries ahead of it landed as tested; telling a culprit, or recording, a combination by a revision the branch has left when the branch has since landed the entries ahead of it. Holds because a landing commit carries the tested candidate's tree (23): the branch after the landing and the candidate before it hold the same tree. Source: clauses 10, 20, 23; answers to the reconstruction, 12; ADR 0006.
 - **core.7** Rules out: reading a verdict from the task runner's cache alone; discarding a failed run's record; writing a record after the verdict. Source: clauses 16, 18; ADR 0004.
 - **core.8** Rules out: attributing from a batch with no intermediate verdicts; attributing while a candidate ahead is still running; telling two sessions of one failure. Source: clauses 17, 18, 20.
 - **core.9** Rules out: counting a cache hit as an executor's observation. Source: clause 16, 38; ADR 0004.
 - **core.10** Rules out: starting an emulator, a server or a process manager from the core; computing a port; a check's process group left running after its run or its place. Source: clauses 31, 32, 66; ADR 0010.
 - **core.11** Rules out: state held only in a running process's memory; a database only a server reads, except through the records seam's server profile; records reached other than through the records seam. Source: clauses 26, 51, 61 to 63; C.6; ADR 0008.
-- **core.14** Rules out: a decision kept in a loop's memory and not in the records; a step that proceeds without the line's lock; behavior that differs between `sluice run` and `sluice step`. Source: clauses 26, 51, S10; ADR 0005.
+- **core.14** Rules out: a decision kept in a loop's memory and not in the records; a step that proceeds without the branch's lock; behavior that differs between `sluice run` and `sluice step`. Source: clauses 26, 51, S10; ADR 0005.
 - **core.15** Rules out: reading policy from a candidate's tree or a session's place; a submission whose change to the policy relaxes its own gate. Source: clauses 27, 56; ADR 0007.
 - **core.16** Rules out: removing or cleaning a session's worktree on landing; a candidate place left behind after its verdict is read. Source: clauses 25, 34.
 - **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
