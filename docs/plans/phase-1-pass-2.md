@@ -37,7 +37,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
-| 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | next |
+| 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | **build cache done**: `profiles/places.rs`, acceptance test 8; the toolchain's evaluation next |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -47,17 +47,18 @@ needed.
 
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
-  - **The build cache** (section 5, *Warming a place*): the place
+  - **The build cache** (section 5, *Warming a place*), done: the place
     profile copies into each new place, before its `pre-start` hooks, what
     git ignores and `.worktreeinclude` lists in the repository's primary
-    worktree, from there; worktrunk's `wt step copy-ignored` for that method,
-    git and a cloning `cp` for `git-worktree`. sluice's lists `target`
-    only. flywheel-next measured a build at 87 s warm against 134 s cold:
-    cargo's fingerprints hold each workspace crate's absolute path, so
-    those crates rebuild and the dependencies survive. Measure cold and
-    warm under the sandbox; check whether `CARGO_TARGET_DIR` or
-    remapping paths (`--remap-path-prefix`, `-Zbuild-dir`) keeps the
-    workspace crates too.
+    worktree, from there; worktrunk's `wt step copy-ignored` for that
+    method, git and a cloning `cp` for `git-worktree`. sluice's lists
+    `target` only. Measured on sluice's tests (`cargo test --no-run
+    --features tools`, under a load average near 400): cold, cargo took
+    162 s; with a copied cache built by the same compiler (915 MB cloned
+    in 8 s), 0.6 s and nothing compiled, the workspace's own crates
+    included. A cache built by another compiler saves little (85 s, 112 of
+    148 crates compiled), so it pays once the primary worktree builds with
+    the compiler `.prototools` names.
   - **The toolchain's evaluation.** `devenv print-dev-env` in a new
     place took 38 s to 315 s (under heavy load), and 0.1 s to 1.7 s again
     in the same place; the nix store holds the built shell, so the cost
