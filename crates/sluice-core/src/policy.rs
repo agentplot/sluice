@@ -80,9 +80,9 @@ impl Rules {
 }
 
 impl Default for Rules {
-    /// What a table leaves out, always the conservative reading: every
-    /// candidate, a window of one to four, a flaky key read as failed, an
-    /// hour per candidate, only confined runs trusted.
+    /// What a table leaves out: every candidate, a window of one to four,
+    /// a flaky key read as failed, an hour per candidate, and every run
+    /// sluice starts trusted, no replay (ADR 0015).
     fn default() -> Self {
         Rules {
             required: Vec::new(),
@@ -90,7 +90,7 @@ impl Default for Rules {
             batch: false,
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
-            trust: vec!["confined".into()],
+            trust: vec!["open".into(), "sandbox".into(), "container".into()],
         }
     }
 }
@@ -404,7 +404,7 @@ batch = true
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
-        assert_eq!(main.trust, ["confined"]);
+        assert_eq!(main.trust, ["open", "sandbox", "container"]);
     }
 
     /// sluice's own policy reads, and gates as section 9 says: bolt
@@ -454,9 +454,14 @@ batch = true
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
         assert!(bolt.trusts("cache") && bolt.trusts_run("open", false));
         assert!(!bolt.satisfiable_by("sandbox"));
-        let strict = Policy::parse("[branches.main]\n").unwrap();
-        let strict = strict.rules_for("main").unwrap().unwrap();
-        assert!(!strict.satisfiable_by("sandbox") && strict.satisfiable_by("container"));
+        // ADR 0015: a table without `trust` takes every run sluice starts,
+        // and no replay.
+        let default = Policy::parse("[branches.main]\n").unwrap();
+        let default = default.rules_for("main").unwrap().unwrap();
+        assert!(["open", "sandbox", "container"]
+            .iter()
+            .all(|k| default.satisfiable_by(k) && default.trusts_run(k, false)));
+        assert!(!default.trusts("cache"));
         assert!(Policy::parse("[branches.main]\ntrust = [\"anyone\"]\n").is_err());
     }
 

@@ -100,8 +100,6 @@ method = "git-worktree"
 
 [branches.main]
 parallel = 4                # candidates under test at once
-trust = ["open"]            # by default only a confined run counts:
-                            # [executor] kind = "sandbox" on macOS
 ```
 
 sluice reads this file from the branch itself, never from a submission,

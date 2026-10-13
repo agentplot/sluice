@@ -2,8 +2,9 @@
 //! `docs/plans/phase-1-integrations.md` (71; ADR 0012). Three branches,
 //! each with room for four candidates, are served by one `sluice run`
 //! with `[runs] max = 2`; the check counts the runs alive as it starts
-//! and the processors it was given. Needs git, so it is in the
-//! check-tools tier.
+//! and the processors it was given. The policy names no `trust`, so the
+//! default lands what the open executor passed (ADR 0015). Needs git, so
+//! it is in the check-tools tier.
 
 #![cfg(feature = "tools")]
 
@@ -19,8 +20,7 @@ const BRANCHES: [&str; 3] = ["bolt/a", "bolt/b", "bolt/c"];
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
 [checkout]\nmethod = \"git-worktree\"\n\n\
-[branches.\"bolt/*\"]\nparallel = 4\ntimeout = \"1m\"\n\
-trust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
+[branches.\"bolt/*\"]\nparallel = 4\ntimeout = \"1m\"\n";
 
 /// Each run marks itself alive in `alive/`, writes how many runs were
 /// alive as it started and the `SLUICE_JOBS` it was given, holds long
