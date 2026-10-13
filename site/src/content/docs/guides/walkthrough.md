@@ -6,9 +6,11 @@ sidebar:
 ---
 
 What a developer or an agent sees when sluice is added to a repository on
-one machine. The repository already runs its tests with moon, works in
-worktrunk worktrees, and builds bolts from units. Everything here runs
-today on one machine; sluice lands its own `main` this way.
+one machine. The repository runs its tests with moon, and its agents each
+work in a git worktree of their own. Everything here runs today on one
+machine; sluice lands its own `main` this way. If the agents work in
+worktrunk, read this page first and then
+[sluice with worktrunk](/sluice/guides/worktrunk/).
 
 ## What sluice does, in one paragraph
 
@@ -26,10 +28,9 @@ code that passed.
 nix profile install github:agentplot/sluice
 ```
 
-That installs two executables: `sluice`, and `wt-submit`. worktrunk runs
-any `wt-<name>` on your `PATH` as `wt <name>`, so `wt submit` works with
-no configuration. (`cargo install --git https://github.com/agentplot/sluice
-sluice` does the same without nix.)
+That installs `sluice`, and beside it `wt-submit`, which matters only to
+a team on [worktrunk](/sluice/guides/worktrunk/). (`cargo install --git
+https://github.com/agentplot/sluice sluice` does the same without nix.)
 
 ## 2. The config: `.config/sluice.toml`
 
@@ -78,8 +79,9 @@ that matter most:
 **`[tests]`** says how tests run: with moon, so only the tasks a
 combination affects run and unchanged ones replay their earlier result,
 or as one command. Which tasks must pass is not here: it is set per
-branch, because that is the point. A bolt's branch lands units many times
-a day and wants a fast gate; `main` lands whole bolts and can demand more.
+branch, because that is the point. A branch like `bolt/*` here lands
+small changes many times a day and wants a fast gate; `main` lands whole
+features and can demand more.
 
 **`[checkout]`** says where a combination is tested: in a clean checkout
 of its own, apart from every agent's worktree, with nothing running in it
@@ -121,29 +123,28 @@ What sluice does owe the tests, and nothing more:
 
 Anything that escapes the process group (a docker container, a detached
 daemon) is the repository's to clean up, through moon's `cleanup`
-dependencies, devenv, testcontainers' reaper, or a worktrunk
-`post-remove` hook.
+dependencies, devenv, or testcontainers' reaper.
 
-## 3. What changes in the repository's other config
+## 3. What changes for the agents
 
-A repository that gated `wt merge` with a pre-merge hook running the
-suite, and verified after landing with a post-merge hook, drops both.
-sluice runs the suite on the exact combination that will land, which is
-what the pre-merge hook was approximating, and nothing lands untested, so
-there is nothing to verify after. Agents still run their tests while they
-work; they never merge.
-
-The agent's merge step changes from
+Agents stop merging. Whatever step merged a finished branch into its
+target, a `git merge` in a script, a tool's merge command, a hook around
+either, becomes one command, run in the agent's worktree with its work
+committed:
 
 ```sh
-wt merge bolt/concurrent-units --no-squash --no-remove
+sluice submit bolt/concurrent-units
 ```
 
-to
+A hook that ran the suite before merging goes: sluice runs the suite on
+the exact combination that will land, which is what that hook was
+approximating. A check after landing goes too, since nothing lands
+untested. Agents still run their tests while they work; they never
+merge.
 
-```sh
-wt submit bolt/concurrent-units
-```
+A team on worktrunk makes the same change, from `wt merge` to
+`wt submit`; [sluice with worktrunk](/sluice/guides/worktrunk/) has the
+details.
 
 ## 4. Branch protection
 
@@ -167,30 +168,28 @@ identity the only one allowed to push.
 
 Whatever submits work to sluice and gets the outcome back is a
 **driver**: it is the front door agents and tools use, and it decides
-nothing about the queue. worktrunk is the driver here because agents
-already live in `wt` worktrees and used to finish with `wt merge`;
-`wt submit` takes its place. The alternatives are plain `sluice submit`
-from any shell, or a tool's own merge stage, all calling the same
-`sluice submit` underneath.
+nothing about the queue. `sluice submit` from any shell is the plain
+driver, and the one here. A tool's own merge stage, or worktrunk's
+`wt submit`, calls the same `sluice submit` underneath.
 
 ```console
-$ wt submit bolt/concurrent-units
+$ sluice submit bolt/concurrent-units
 submission 12 to bolt/concurrent-units · nothing queued ahead
 testing bolt/concurrent-units + #12 · 2 tasks to run, 31 replayed
 passed · landed as b7d2e94
 ```
 
-`wt submit` waits for the outcome and exits with it: 0 landed, 1 failed,
-2 conflict. `--no-wait` returns at once, and `sluice status 12` reads it
-later. Once its submission lands, `wt submit` removes the agent's
-worktree and its branch, as `wt merge` did, following worktrunk's
-`[merge] remove`; `--no-remove` keeps them.
+`sluice submit` waits for the outcome and exits with it: 0 landed, 1
+failed, 2 conflict. `--no-wait` returns at once, and `sluice status 12`
+reads it later. The agent's worktree and branch stay as they were:
+removing them after a landing is a driver's business, and the plain
+driver leaves it to the agent.
 
 The agent in `unit/batch-review` submitted two minutes later, so its
 combination includes #12:
 
 ```console
-$ wt submit bolt/concurrent-units
+$ sluice submit bolt/concurrent-units
 submission 13 to bolt/concurrent-units · 1 queued ahead (#12)
 testing bolt/concurrent-units + #12 + #13 · 4 tasks to run, 29 replayed
 failed: tests:t-batch-cards
@@ -203,7 +202,7 @@ fix it in your worktree and submit again
 A conflict is found before any test runs:
 
 ```console
-$ wt submit bolt/concurrent-units
+$ sluice submit bolt/concurrent-units
 submission 14 to bolt/concurrent-units · 1 queued ahead (#12)
 conflict: plugin/lib/plan.py
   conflicts with #12 (crw-1-unit-1, unit/touches)
@@ -213,13 +212,13 @@ merge or rebase onto bolt/concurrent-units in your worktree and submit again
 And before submitting, an agent can ask whether its work would conflict:
 
 ```console
-$ wt submit --check bolt/concurrent-units
+$ sluice submit --check bolt/concurrent-units
 would conflict: plugin/lib/plan.py with #12 (crw-1-unit-1, unit/touches)
 ```
 
 ## 6. What keeps the queue moving
 
-`wt submit` keeps the queue moving itself while it waits: every few
+`sluice submit` keeps the queue moving itself while it waits: every few
 seconds it runs one round of sluice's work and checks whether its own
 submission is decided. A round is: read the queue, start tests if there
 is room, read finished tests, blame a failure, land what passed, write
@@ -261,9 +260,9 @@ The files, the submission record and the log's events are in the
 ## 8. What a landing looks like in history
 
 One merge commit per submission: first parent the branch, second parent
-the agent's head, so the agent's commits stay in history and `wt list`
-shows its worktree as merged. What was tested rides along as trailers,
-which outlive the state files:
+the agent's head, so the agent's commits stay in history and git counts
+its branch as merged. What was tested rides along as trailers, which
+outlive the state files:
 
 ```console
 $ git log -1 bolt/concurrent-units
