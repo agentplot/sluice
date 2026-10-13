@@ -177,8 +177,9 @@ through.
 reach the run), an executor (`"open"`, `"sandbox"`, `"container"`), and
 `"cache"` for a result moon replayed instead of ran. Without `"cache"`, every
 required test runs every time, since the cache holds whatever any shell ran.
-A branch without `trust` accepts only confined runs; one whose executor can
-never satisfy it starts nothing and says why.
+A branch without `trust` accepts every run sluice starts (`"open"`,
+`"sandbox"`, `"container"`) and no replay; one whose executor can never
+satisfy it starts nothing and says why.
 
 There is no key for operator approval: that is the caller's business, and
 crew or flywheel submits only once the work is approved.
