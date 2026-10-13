@@ -26,6 +26,7 @@ fn request(place: &Path, script: &str, limit: Option<u64>) -> Request {
         limit,
         grace: 1,
         meta: serde_json::Value::Null,
+        release: None,
     }
 }
 
@@ -219,4 +220,27 @@ fn a_place_name_with_slashes_is_one_run() {
     );
     r.remove(name).unwrap();
     assert!(!r.dir(name).exists());
+}
+
+/// ADR 0016: removing a run runs its release command once, after its
+/// group has ended, with the run's place and environment; a release that
+/// fails is an error, and the next removal runs it again.
+#[test]
+fn removing_a_run_runs_its_release_once() {
+    let place = Scratch::new("runs-release");
+    let runs = runs(place.path());
+    let mut req = request(place.path(), "true", None);
+    req.release = Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "echo released >> log; test -f ok".into(),
+    ]);
+    runs.start("p1", &req).unwrap();
+    assert!(matches!(wait(&runs, "p1"), RunState::Finished(_)));
+    assert!(runs.remove("p1").is_err(), "the release failed");
+    std::fs::write(place.path().join("ok"), "").unwrap();
+    runs.remove("p1").unwrap();
+    runs.remove("p1").unwrap();
+    let log = std::fs::read_to_string(place.path().join("log")).unwrap();
+    assert_eq!(log, "released\nreleased\n");
 }

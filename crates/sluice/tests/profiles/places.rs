@@ -160,6 +160,7 @@ fn releasing_a_place_ends_its_run() {
             limit: None,
             grace: 1,
             meta: serde_json::Value::Null,
+            release: None,
         },
     )
     .unwrap();
@@ -303,4 +304,83 @@ fn a_place_holds_the_caches_its_policy_declares() {
         .collect();
     kept.sort();
     assert_eq!(kept, ["three\n", "two\n"]);
+}
+
+fn ported(names: &[&str], from: &str) -> Settings {
+    let mut s = method("git-worktree");
+    s.insert(
+        "ports".into(),
+        Setting::List(names.iter().map(|n| n.to_string()).collect()),
+    );
+    s.insert("ports_from".into(), Setting::Text(from.into()));
+    s
+}
+
+fn port(place: &Place, name: &str) -> u16 {
+    place.env[name].parse().unwrap()
+}
+
+/// 31: two places alive at once hold two slots: the same position in
+/// each block for a name, no port shared, and a short name each; a slot
+/// is free again once its place is released.
+#[test]
+fn places_alive_at_once_hold_their_own_ports() {
+    let (repo, rev) = scratch("places-ports");
+    let slots = support::Scratch::new("places-slots");
+    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let settings = ported(&["web", "api-server"], "41000");
+    let a = p.materialize("sluice/try/a/1", &rev, &settings).unwrap();
+    let b = p.materialize("sluice/try/b/1", &rev, &settings).unwrap();
+    assert_eq!(port(&a, "SLUICE_PORT_WEB"), 41000);
+    assert_eq!(port(&a, "SLUICE_PORT_API_SERVER"), 41001);
+    assert_eq!(port(&b, "SLUICE_PORT_WEB"), 41002);
+    assert_eq!(port(&b, "SLUICE_PORT_API_SERVER"), 41003);
+    assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
+    assert!(a.env["SLUICE_PLACE"].starts_with("sluice-"));
+
+    p.release("sluice/try/a/1", false).unwrap();
+    let c = p.materialize("sluice/try/c/1", &rev, &settings).unwrap();
+    assert_eq!(port(&c, "SLUICE_PORT_WEB"), 41000, "a's slot is free again");
+    p.release("sluice/try/b/1", false).unwrap();
+    p.release("sluice/try/c/1", false).unwrap();
+    let held: Vec<_> = std::fs::read_dir(slots.path())
+        .unwrap()
+        .filter(|e| {
+            !e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        })
+        .collect();
+    assert!(held.is_empty());
+}
+
+/// 31: a slot one of whose ports something else holds is passed over.
+#[test]
+fn a_slot_with_a_port_in_use_is_passed_over() {
+    let (repo, rev) = scratch("places-busy");
+    let slots = support::Scratch::new("places-busy-slots");
+    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let _held = std::net::TcpListener::bind(("127.0.0.1", 41101)).unwrap();
+    let a = p
+        .materialize(NAME, &rev, &ported(&["web", "api"], "41100"))
+        .unwrap();
+    assert_eq!(port(&a, "SLUICE_PORT_WEB"), 41102);
+    p.release(NAME, false).unwrap();
+}
+
+/// A place's ports are names a check can be given: refused otherwise.
+#[test]
+fn ports_with_bad_names_are_refused() {
+    let (repo, rev) = scratch("places-bad-ports");
+    let slots = support::Scratch::new("places-bad-slots");
+    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    for (names, from) in [
+        (&["a b"][..], "41200"),
+        (&["web", "WEB"][..], "41200"),
+        (&["web"][..], "80"),
+    ] {
+        assert!(p.materialize(NAME, &rev, &ported(names, from)).is_err());
+    }
 }

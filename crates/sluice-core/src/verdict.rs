@@ -107,6 +107,7 @@ mod tests {
             processors: None,
             memory: None,
             network: None,
+            docker: false,
         }
     }
 

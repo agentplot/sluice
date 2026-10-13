@@ -11,13 +11,28 @@
 //! candidate passed saves them as it is released (35; section 5,
 //! *Caches*).
 //!
+//! A place holds a slot of ports when `[checkout] ports` names any (31;
+//! ADR 0016): slot `n` is the block from `ports_from + n × names`, one
+//! port per name in the order written, `ports_from` 20000 by default,
+//! above worktrunk's `hash_port` range. Slots are held on the host, not
+//! per repository, under `$XDG_STATE_HOME/sluice/slots/<n>` (else
+//! `~/.local/state`), each naming the record of the place that holds it;
+//! a slot whose record is gone is free again. A slot is taken only when
+//! no port of its block is in use. The place gives its checks
+//! `SLUICE_PLACE`, a short name unique to it, and `SLUICE_PORT_<NAME>`
+//! for each name.
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
 //! is derived from the place's name, never searched for (rule core.16).
 
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -35,6 +50,140 @@ struct Made {
     /// The caches it may hold, keyed for its candidate (35).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     caches: Vec<Cache>,
+    /// The slot of ports it holds on the host (31).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slot: Option<u32>,
+}
+
+/// The ports `[checkout] ports` names, from `ports_from`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Ports {
+    names: Vec<String>,
+    from: u32,
+}
+
+/// Where a slot of ports begins by default: above `hash_port`'s 10000 to
+/// 19999, below every system's ephemeral range.
+const PORTS_FROM: u32 = 20000;
+
+impl Ports {
+    fn read(checkout: &Settings) -> Result<Option<Ports>> {
+        let names = match checkout.get("ports") {
+            None => return Ok(None),
+            Some(Setting::List(xs)) if xs.is_empty() => return Ok(None),
+            Some(Setting::List(xs)) => xs.clone(),
+            Some(_) => bail!("[checkout] ports must be a list of names"),
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for n in &names {
+            if n.is_empty()
+                || !n
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                bail!("[checkout] ports: {n:?} must be letters, digits, '-' and '_'");
+            }
+            if !seen.insert(env_name(n)) {
+                bail!("[checkout] ports names {} twice", env_name(n));
+            }
+        }
+        let from = match checkout.get("ports_from") {
+            None => PORTS_FROM,
+            Some(Setting::Text(t)) => match t.parse::<u32>() {
+                Ok(n) if (1024..65536).contains(&n) => n,
+                _ => bail!("[checkout] ports_from = {t}: a port from 1024 to 65535"),
+            },
+            Some(_) => bail!("[checkout] ports_from must be a number"),
+        };
+        Ok(Some(Ports { names, from }))
+    }
+
+    /// The first port of slot `n`, if its block fits under 65536.
+    fn first(&self, n: u32) -> Option<u16> {
+        let first = self.from as u64 + n as u64 * self.names.len() as u64;
+        (first + self.names.len() as u64 <= 65536).then_some(first as u16)
+    }
+}
+
+/// `SLUICE_PORT_<NAME>`: the name upper-cased, `-` written `_`.
+fn env_name(name: &str) -> String {
+    format!(
+        "SLUICE_PORT_{}",
+        name.to_ascii_uppercase().replace('-', "_")
+    )
+}
+
+/// Whether nothing listens on `port` and it can be bound.
+fn port_free(port: u16) -> bool {
+    let local = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok()
+        && TcpStream::connect_timeout(&local, Duration::from_millis(100)).is_err()
+}
+
+/// The host's slots of ports, shared by every repository.
+fn slots_dir() -> Result<PathBuf> {
+    let state = match std::env::var_os("XDG_STATE_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?)
+            .join(".local")
+            .join("state"),
+    };
+    Ok(state.join("sluice").join("slots"))
+}
+
+/// The host's slots, locked while held.
+fn lock_slots(dir: &Path) -> Result<File> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let lock = File::create(dir.join(".lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+/// Hold the first slot no live place holds and whose every port is free,
+/// for the place whose record is `record`.
+fn hold_slot(dir: &Path, ports: &Ports, record: &Path) -> Result<u32> {
+    let _lock = lock_slots(dir)?;
+    for n in 0u32.. {
+        let Some(first) = ports.first(n) else {
+            bail!(
+                "no slot of {} ports from {} is free on this host",
+                ports.names.len(),
+                ports.from
+            );
+        };
+        let path = dir.join(n.to_string());
+        match std::fs::read(&path) {
+            Ok(holder) => {
+                let holder = PathBuf::from(String::from_utf8_lossy(&holder).trim());
+                if holder != record && holder.exists() {
+                    continue;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        if !(0..ports.names.len() as u16).all(|i| port_free(first + i)) {
+            continue;
+        }
+        std::fs::write(&path, record.to_string_lossy().as_bytes())?;
+        return Ok(n);
+    }
+    unreachable!("the slots run out before u32 does")
+}
+
+/// Let go of slot `n`, if the place whose record is `record` holds it.
+fn free_slot(dir: &Path, n: u32, record: &Path) -> Result<()> {
+    let _lock = lock_slots(dir)?;
+    let path = dir.join(n.to_string());
+    match std::fs::read(&path) {
+        Ok(holder) if Path::new(String::from_utf8_lossy(&holder).trim()) == record => {
+            std::fs::remove_file(&path)?;
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// A cache `[[checkout.cache]]` declares, keyed for one candidate:
@@ -55,6 +204,8 @@ const KEPT: usize = 2;
 pub struct Places {
     common: PathBuf,
     runs: Runs,
+    /// Where the host's slots of ports are held; the default when `None`.
+    slots: Option<PathBuf>,
 }
 
 impl Places {
@@ -62,6 +213,20 @@ impl Places {
         Places {
             common: common.to_path_buf(),
             runs,
+            slots: None,
+        }
+    }
+
+    /// Hold slots of ports in `dir` rather than the host's own.
+    pub fn with_slots(mut self, dir: PathBuf) -> Self {
+        self.slots = Some(dir);
+        self
+    }
+
+    fn slots(&self) -> Result<PathBuf> {
+        match &self.slots {
+            Some(d) => Ok(d.clone()),
+            None => slots_dir(),
         }
     }
 
@@ -395,44 +560,55 @@ impl Checkout for Places {
             );
         }
         let caches = self.caches(rev, checkout)?;
+        let ports = Ports::read(checkout)?;
         // A place of this name left by a step that stopped part way.
         if self.read_record(name)?.is_some() {
             self.release(name, false)?;
         }
-        self.write_record(
-            name,
-            &Made {
-                method: method.clone(),
-                path: None,
-                caches: caches.clone(),
-            },
-        )?;
+        let record = self.record(name);
+        let mut made = Made {
+            method,
+            path: None,
+            caches,
+            slot: None,
+        };
+        self.write_record(name, &made)?;
+        let mut env = BTreeMap::from([(
+            "SLUICE_PLACE".to_string(),
+            format!("sluice-{}", &self.hash(&record.to_string_lossy())?[..10]),
+        )]);
+        if let Some(ports) = &ports {
+            let n = hold_slot(&self.slots()?, ports, &record)?;
+            made.slot = Some(n);
+            self.write_record(name, &made)?;
+            let first = ports.first(n).expect("a held slot fits");
+            for (i, p) in ports.names.iter().enumerate() {
+                env.insert(env_name(p), (first + i as u16).to_string());
+            }
+        }
         let tmp = self.tmp(name);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
         std::fs::create_dir_all(&tmp)?;
         let path = self.make_worktree(name, rev)?;
-        self.restore(&caches, &path)?;
-        self.write_record(
-            name,
-            &Made {
-                method,
-                path: Some(path.clone()),
-                caches,
-            },
-        )?;
+        self.restore(&made.caches, &path)?;
+        made.path = Some(path.clone());
+        self.write_record(name, &made)?;
         Ok(Place {
             name: name.into(),
             path,
             tmp,
+            env,
         })
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
-        // 34: everything started in it ends first.
+        // 34: everything started in it ends first, its release command
+        // included (ADR 0016).
         self.runs.remove(name)?;
-        if let Some(made) = self.read_record(name)? {
+        let made = self.read_record(name)?;
+        if let Some(made) = &made {
             // 35: a passed candidate's place saves what it built.
             if passed {
                 if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
@@ -451,6 +627,9 @@ impl Checkout for Places {
         let tmp = self.tmp(name);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
+        }
+        if let Some(n) = made.and_then(|m| m.slot) {
+            free_slot(&self.slots()?, n, &self.record(name))?;
         }
         match std::fs::remove_file(self.record(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),

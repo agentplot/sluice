@@ -122,6 +122,7 @@ struct ExecutorForm {
     kind: Option<String>,
     memory: Option<String>,
     network: Option<Network>,
+    docker: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +149,7 @@ impl Policy {
                 Some(m) => Some(parse_size(m).context("[executor] memory")?),
             },
             network: form.executor.network,
+            docker: form.executor.docker.unwrap_or(false),
         };
         let mut branches = Vec::new();
         for (pattern, r) in form.branches {
@@ -249,13 +251,15 @@ impl Policy {
     }
 }
 
-/// A profile's table: each value a string, a list of strings, or an
-/// array of tables whose values are strings or lists of strings.
+/// A profile's table: each value a string, a number, a list of strings,
+/// or an array of tables whose values are strings or lists of strings.
 fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Settings> {
     let mut out = Settings::new();
     for (k, v) in table {
         let setting = match v {
             toml::Value::String(s) => Setting::Text(s),
+            // A number is its digits; the profile that reads it parses them.
+            toml::Value::Integer(n) => Setting::Text(n.to_string()),
             toml::Value::Array(xs) if !xs.is_empty() && xs.iter().all(|x| x.is_table()) => {
                 Setting::Tables(
                     xs.into_iter()
@@ -264,6 +268,9 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
                                 unreachable!("every entry is a table")
                             };
                             let t: BTreeMap<String, toml::Value> = t.into_iter().collect();
+                            if let Some((n, v)) = t.iter().find(|(_, v)| v.is_integer()) {
+                                bail!("{section} [[{k}]] {n} must be a string or a list of strings, not {v}");
+                            }
                             let inner = settings(t, &format!("{section} [[{k}]]"))?;
                             if inner.values().any(|s| matches!(s, Setting::Tables(_))) {
                                 bail!("{section} [[{k}]] holds strings and lists of strings only");
@@ -282,7 +289,7 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
                     .collect::<Result<_>>()?,
             ),
             other => bail!(
-                "{section} {k} must be a string, a list of strings or an array of tables, not {other}"
+                "{section} {k} must be a string, a number, a list of strings or an array of tables, not {other}"
             ),
         };
         out.insert(k, setting);
@@ -513,6 +520,7 @@ batch = true
                 executor: Some("sandbox".into()),
                 memory: Some(8 << 30),
                 network: Some(Network::Denied),
+                docker: false,
             }
         );
         let network = |v: &str| {
@@ -522,11 +530,23 @@ batch = true
         assert_eq!(network("\"localhost\"").unwrap(), Some(Network::Localhost));
         assert!(network("\"lan\"").is_err());
         assert!(network("1").is_err());
+        assert!(
+            Policy::parse("[executor]\ndocker = true\n")
+                .unwrap()
+                .limits
+                .docker
+        );
         assert!(Policy::parse("[executor]\ncpus = 2\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"lots\"\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"8\"\n").is_err());
         assert!(Policy::parse("[tests]\nshell = [1]\n").is_err());
-        assert!(Policy::parse("[tests]\njobs = 2\n").is_err());
+        assert!(Policy::parse("[tests]\njobs = true\n").is_err());
+        assert_eq!(
+            Policy::parse("[checkout]\nports_from = 20000\n")
+                .unwrap()
+                .checkout["ports_from"],
+            Setting::Text("20000".into())
+        );
     }
 
     #[test]

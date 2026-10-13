@@ -88,6 +88,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
             name: name.into(),
             path: repo.dir().to_path_buf(),
             tmp,
+            env: Default::default(),
         },
         revision: Rev::new(repo.rev("HEAD")),
         required: required.iter().map(|s| s.to_string()).collect(),
@@ -391,6 +392,7 @@ fn a_sandboxed_run_reads_as_an_open_one() {
         executor: Some("sandbox".into()),
         network: Some(Network::Denied),
         memory: None,
+        docker: false,
     };
     let first = finish(&c, &req);
     assert_eq!(

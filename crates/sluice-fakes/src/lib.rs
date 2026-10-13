@@ -476,6 +476,7 @@ impl World {
                 processors: None,
                 memory: None,
                 network: None,
+                docker: false,
             },
             missing: Vec::new(),
             timed_out: false,
@@ -868,6 +869,7 @@ impl Checkout for FakeCheckout {
             name: name.into(),
             path: format!("/fake/places/{name}").into(),
             tmp: format!("/fake/tmp/{name}").into(),
+            env: Default::default(),
         })
     }
 
