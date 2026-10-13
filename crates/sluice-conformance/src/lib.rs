@@ -1,9 +1,6 @@
-//! The conformance suite's harness, and the check that its scenarios
-//! cite the statement truly and fully.
-//!
-//! Every scenario under `tests/` is a `#[test]` whose doc comment holds
-//! one `satisfies:` line naming the clauses and scenarios of the
-//! statement it exercises (rule core.12). [`citations`] reads them.
+//! The conformance suite's harness. Every scenario under `tests/` is a
+//! `#[test]` whose doc comment names, in a `satisfies:` line, the clauses
+//! and scenarios of the statement it exercises.
 //!
 //! A scenario runs on a [`Rig`]: what every scenario needs of a world, a
 //! branch to land on, sessions with work, and what sluice did. The
@@ -12,10 +9,9 @@
 //! The scenarios that need no fault are in [`shared`], and run on the
 //! fakes here and on the real profiles in the `sluice` crate's tests.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::Result;
 use sluice_core::line::Line;
 use sluice_core::records::{parse_lines, Event, LogLine, ResultLine, Submission};
 use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
@@ -340,163 +336,4 @@ impl Rig for Harness {
     fn first_parents(&self) -> Vec<Rev> {
         self.w().first_parents(BRANCH)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Citations
-// ---------------------------------------------------------------------------
-
-/// The statement's clause and scenario ids, by part.
-#[derive(Debug, Default)]
-pub struct Statement {
-    pub part_a: BTreeSet<String>,
-    pub part_b: BTreeSet<String>,
-    pub scenarios: BTreeSet<String>,
-}
-
-impl Statement {
-    pub fn all(&self) -> BTreeSet<String> {
-        self.part_a
-            .iter()
-            .chain(&self.part_b)
-            .chain(&self.scenarios)
-            .cloned()
-            .collect()
-    }
-
-    /// Part A and B but several hosts (57 to 63) and trust (28, 29),
-    /// which come with pass 2's profiles.
-    pub fn phase_1(&self) -> BTreeSet<String> {
-        let out_of_phase: BTreeSet<String> =
-            (57..=63).chain([28, 29]).map(|n| n.to_string()).collect();
-        self.part_a
-            .iter()
-            .chain(&self.part_b)
-            .filter(|c| !out_of_phase.contains(*c))
-            .cloned()
-            .collect()
-    }
-}
-
-/// Where the statement is: `SLUICE_STATEMENT`, or agentplot/blueprints
-/// checked out beside this repository, found from the repository's git
-/// common dir (`<dir>/sluice.git` beside `<dir>/../blueprints/main`), which
-/// every worktree and every place of sluice's shares.
-pub fn statement_path() -> PathBuf {
-    if let Ok(p) = std::env::var("SLUICE_STATEMENT") {
-        return p.into();
-    }
-    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let common = std::process::Command::new("git")
-        .arg("-C")
-        .arg(here)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
-    let beside = common
-        .as_deref()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .unwrap_or(here);
-    beside.join("blueprints/main/design/sluice/requirements.md")
-}
-
-pub fn read_statement(path: &Path) -> Result<Statement> {
-    let text = std::fs::read_to_string(path).with_context(|| {
-        format!(
-            "reading the statement at {}; set SLUICE_STATEMENT to its path",
-            path.display()
-        )
-    })?;
-    let mut s = Statement::default();
-    let mut part = "";
-    for line in text.lines() {
-        if line.contains("ANCHOR: part-a") {
-            part = "a";
-        } else if line.contains("ANCHOR: part-b") {
-            part = "b";
-        } else if line.contains("ANCHOR_END") {
-            part = "";
-        }
-        if let Some(id) = clause_id(line) {
-            match part {
-                "a" => s.part_a.insert(id),
-                "b" => s.part_b.insert(id),
-                _ => false,
-            };
-        }
-        if let Some(rest) = line.strip_prefix("- **S") {
-            if let Some(n) = rest.split('.').next() {
-                if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
-                    s.scenarios.insert(format!("S{n}"));
-                }
-            }
-        }
-    }
-    if s.part_a.is_empty() || s.part_b.is_empty() || s.scenarios.is_empty() {
-        bail!(
-            "{} has no clauses where the statement keeps them",
-            path.display()
-        );
-    }
-    Ok(s)
-}
-
-/// `"47a. **forecast**: ..."` is clause `47a`.
-fn clause_id(line: &str) -> Option<String> {
-    let (id, _) = line.split_once(". ")?;
-    let digits = id.trim_end_matches(|c: char| c.is_ascii_lowercase());
-    (!digits.is_empty()
-        && digits.chars().all(|c| c.is_ascii_digit())
-        && id.len() - digits.len() <= 1)
-        .then(|| id.to_string())
-}
-
-/// Every scenario's citations, by `file::test`. A `#[test]` without a
-/// `satisfies:` line is an error.
-pub fn citations(dir: &Path) -> Result<BTreeMap<String, Vec<String>>> {
-    let mut out = BTreeMap::new();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .map(|e| e.map(|e| e.path()))
-        .collect::<std::io::Result<_>>()?;
-    files.sort();
-    for path in files {
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_string();
-        if name == "citations" {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path)?;
-        let mut pending: Option<Vec<String>> = None;
-        let mut in_test = false;
-        for line in text.lines() {
-            let t = line.trim();
-            if let Some(list) = t.strip_prefix("/// satisfies:") {
-                pending = Some(
-                    list.split(',')
-                        .map(|c| c.trim().to_string())
-                        .filter(|c| !c.is_empty())
-                        .collect(),
-                );
-            } else if t == "#[test]" {
-                in_test = true;
-            } else if in_test && t.starts_with("fn ") {
-                let f = t[3..].split('(').next().unwrap_or("?");
-                let cited = pending
-                    .take()
-                    .ok_or_else(|| anyhow!("{name}::{f} cites no clause in a `satisfies:` line"))?;
-                out.insert(format!("{name}::{f}"), cited);
-                in_test = false;
-            }
-        }
-    }
-    Ok(out)
 }

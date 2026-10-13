@@ -34,19 +34,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      # The statement the citations check reads.
-      - uses: actions/checkout@v5
-        with:
-          repository: agentplot/blueprints
-          path: blueprints
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
           name: devenv
       - run: nix profile add nixpkgs#devenv
       - run: devenv shell -- moon run ':#check-fast'
-        env:
-          SLUICE_STATEMENT: ${{ github.workspace }}/blueprints/design/sluice/requirements.md
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

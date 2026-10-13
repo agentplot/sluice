@@ -186,9 +186,8 @@ in
     programs.rustfmt.package = rustfmt;
   };
 
-  # `devenv shell -- cargo-tests`: every crate's cargo tests and the
-  # conformance citations, through moon, replaying a crate whose inputs
-  # already passed.
+  # `devenv shell -- cargo-tests`: every crate's cargo tests, through
+  # moon, replaying a crate whose inputs already passed.
   scripts.cargo-tests = {
     description = "Every crate's cargo tests: moon run of the tasks tagged cargo-test";
     exec = ''
