@@ -28,7 +28,7 @@ the pull request flow they already have.
 - **Two workflows, written by `sluice init github`.** `check.yml` runs
   the tests of one combination on the systems the policy names.
   `step.yml` runs one round of the queue.
-- **The policy file**, the same `.config/sluice.toml` a laptop reads. A
+- **The policy file**, the same `.config/sluice.toml` a laptop reads.
   An agent's machine gates a bolt's branch; the App gates `main` through the
   same file on GitHub.
 
