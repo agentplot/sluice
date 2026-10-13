@@ -190,7 +190,12 @@ in
     worktrunk
     vale
     pkgs.bun
+    # The stack acceptance test's browser test (ADR 0016): Playwright and
+    # the one browser it drives, from Nix, read-only for the sandbox.
+    pkgs.playwright-test
   ];
+
+  env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
