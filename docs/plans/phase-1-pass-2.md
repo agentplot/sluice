@@ -42,7 +42,10 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
 | 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
 | 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
-| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | next |
+| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **flake, CI and push done**: `flake.nix`, `.github/workflows/ci.yml`, `main` and blueprints pushed; next: CI green, then the repository public on the operator's word |
+| 17 | the rules checks out of the test tiers | | open: the operator's ruling |
+| 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
+| 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -109,14 +112,61 @@ needed.
   runs `wt remove` on its own worktree as `wt merge` does, following
   worktrunk's `[merge] remove` setting, with `--no-remove`; the branch
   goes too, `main` holding it.
-- **16, publishing.** A root `flake.nix` with `packages.default` (sluice
-  and `wt-submit` from `Cargo.lock`), so `nix profile install
-  github:agentplot/sluice` installs it on macOS and Linux; a GHA workflow
-  on push runs `nix build` and the fast tier on macOS and Linux runners,
-  and on a tag publishes binaries to a GitHub release. Before the
-  repository is made public, its whole history is checked for secrets and
-  anything commercial (core.13); making it public is confirmed with the
-  operator first.
+- **16, publishing.** A root `flake.nix` builds `sluice` and `wt-submit`
+  with the Rust `.prototools` names (rust-overlay), so `nix profile
+  install github:agentplot/sluice` installs it on macOS and Linux; the
+  GHA workflow builds the flake on both, runs the fast tier in the devenv
+  shell with agentplot/blueprints checked out for the statement
+  (`SLUICE_STATEMENT`), and on a `v*` tag publishes each platform's
+  binaries to a release. The history was checked (gitleaks, all
+  commits: no leaks; no customer, pricing or employer named). Making the
+  repository public is confirmed with the operator first, telling them
+  the commits carry their email and the docs absolute paths under their
+  home. After each landing, the `main` worktree is brought level with
+  `git read-tree -m -u <old> <new>`: sluice moves `main` under the
+  worktree that has it checked out.
+- **17, the rules checks.** `conformance:citations` reads the statement
+  and every crate's source to enforce core.12 (every cited clause exists,
+  every phase-1 clause is cited) and core.1 (no tool named outside a
+  profile). They are checks of this repository's rules, not of sluice,
+  and sit among the cargo tests only because that was cheapest. Open: move
+  them to a `rules` task tagged `check-fast` but not `cargo-test`, or out
+  of the gate to the commit hook, or drop them; the operator rules.
+- **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
+  v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
+  `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
+  `OTEL_EXPORTER_OTLP_*` variables for endpoint, protocol (`http/protobuf`
+  by default, or `grpc`) and headers.
+  - Spans: a round per branch, and under it forming each candidate,
+    starting and polling its run, reading its verdict, blaming a
+    culprit, landing; attributes: branch, submission ids, candidate
+    revision, executor kind and confined, outcome, tasks run and
+    replayed. Metrics: queue depth, submit-to-landed time, a candidate's
+    wait and test time, passes and fails, culprits, the replay ratio, the
+    build cache's hits.
+  - Moon inside a run joins the trace: with sluice's telemetry on, the
+    moon runner passes `MOON_OTEL=1`, the `OTEL_*` variables and a W3C
+    `TRACEPARENT` into the run's environment (checked first: whether moon
+    honours `TRACEPARENT`; if not, the runs are linked by attributes).
+  - Telemetry decides nothing: the records stay the only truth (core.11,
+    core.14). A connection to a collector binds no port (core.10). A
+    short `sluice step` flushes before it exits. The core emits `tracing`
+    spans and names no backend; the binary sets up the exporter. An ADR
+    (0014) records it.
+- **19, Datadog.** No environment sends OTLP to Datadog yet. Each gets a
+  Datadog Agent with its OTLP receiver (`DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT`,
+  port 4318 on localhost), the API key in the agent's configuration or
+  the CI's secrets, never in a repository:
+  - **GHA**: the agent as a service container for the jobs; moon's
+    `MOON_OTEL` and sluice's `SLUICE_OTEL` set in the workflow, the
+    service names `sluice-ci` and `moon`.
+  - **The fleet's hosts** running crew and sluice: the agent on each
+    host; sluice's runs reach it on localhost, which the sandbox allows
+    (`network = "localhost"`), so no network policy changes.
+  - **Switchboard**: as the fleet's hosts.
+  - **A remote sluice**, later: the same agent beside it.
+  The agents' setup belongs to those environments' own repositories
+  (crew, flywheel, Switchboard); sluice documents the variables.
 - **8, end to end.** Section 4's acceptance test 7 on real places: one
   `sluice run` with `[runs] max = 2` holds three branches to two runs.
 
