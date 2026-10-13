@@ -35,3 +35,4 @@ Option 2 still has sluice managing processes it cannot see into.
 - The statement's service seam (B.3, clauses 39 to 41) and C.3 are withdrawn; clause 4 and S5 are withdrawn; 31 and 27 are rewritten; 66 is added. The seams are five.
 - ADR 0003's service seam and its declared-services profile, and ADR 0002's word admitting a submission, are superseded here.
 - Rule core.10 is rewritten.
+- ADR 0016 supersedes "on ports they pick": sluice gives a place its ports, and releases what its checks hand off.
