@@ -1,0 +1,17 @@
+extends: existence
+message: "'%s' is a metaphor standing in for a reason; give the reason, or use the plain word."
+level: suggestion
+ignorecase: true
+tokens:
+  - load[- ]bearing
+  - first[- ]class
+  - source of truth
+  - single pane of glass
+  - north star
+  - blessed path
+  - pit of success
+  - paved road
+  - golden path
+  - guard ?rails?
+  - under the hood
+  - battle[- ]tested

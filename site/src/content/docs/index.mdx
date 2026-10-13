@@ -1,0 +1,135 @@
+---
+title: sluice
+description: A merge queue for agents working in parallel worktrees.
+template: splash
+hero:
+  tagline: A merge queue for agents working in parallel worktrees. Agents submit. sluice tests each submission exactly as it would land, names the one that broke the build, and moves the branch only to code that passed.
+  image:
+    light: ../../assets/mark-light.svg
+    dark: ../../assets/mark-dark.svg
+    alt: sluice
+  actions:
+    - text: Walkthrough
+      link: /sluice/guides/walkthrough/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/agentplot/sluice
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why
+
+Run ten coding agents in ten worktrees and each one's tests pass on its
+own. Merge them and the branch breaks, because nobody tested the
+combination. Let the agents merge for themselves and they race, rebase
+over each other's work, and can't tell whose change broke the build.
+
+sluice takes merging away from the agents. Each one finishes its work and
+**submits** it. sluice queues the submissions, tests each one **on top of
+everything queued ahead of it**, and lands it only if that exact
+combination passes.
+
+<CardGrid>
+  <Card title="Tested as it lands" icon="approve-check">
+    A combination is the branch, plus every submission ahead, plus this
+    one, checked out fresh in its own worktree. The commit that lands
+    carries exactly the tree that passed.
+  </Card>
+  <Card title="One culprit, one message" icon="comment">
+    When a combination fails, sluice works out the one submission at fault
+    and tells only that agent, with the failing tasks and their logs.
+    Everyone else's work keeps moving.
+  </Card>
+  <Card title="The branch only moves to green" icon="seti:git">
+    A git hook refuses every update to a protected branch except sluice's,
+    and sluice moves it only from the revision it tested on.
+  </Card>
+  <Card title="No daemon" icon="setting">
+    sluice starts no services. A waiting `sluice submit` drives the queue
+    while it waits; `sluice run`, or `sluice step` from cron, does the same
+    for a host. Every decision is written to plain files before it is acted
+    on, so a crash at any point resumes from the files.
+  </Card>
+</CardGrid>
+
+## Install
+
+```sh
+nix profile install github:agentplot/sluice
+```
+
+Other ways: a release binary for macOS on Apple silicon and Linux on
+x86-64 and ARM, `cargo install --locked --git https://github.com/agentplot/sluice sluice`
+with Rust 1.98 or later, or the flake as an input. Each installs two
+executables: `sluice`, and `wt-submit`, which
+[worktrunk](https://github.com/max-sixty/worktrunk) runs as `wt submit`.
+
+```sh
+curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
+  | tar -xz -C ~/.local/bin sluice wt-submit
+```
+
+## Quick start
+
+**1. Say what gates the branch.** Commit `.config/sluice.toml`:
+
+```toml
+[tests]
+runner = "command"          # or "moon", to run only what a change affects
+command = "make test"
+
+[checkout]
+method = "git-worktree"
+
+[branches.main]
+parallel = 4                # combinations under test at once
+```
+
+sluice reads this file from the branch itself, never from a submission,
+so no submission can loosen the rules it is judged by.
+
+**2. Protect the branch**, once per repository:
+
+```sh
+sluice protect
+```
+
+**3. Submit** from an agent's worktree, with its work committed:
+
+```sh
+sluice submit main          # or: wt submit main
+```
+
+It waits, and says what happened:
+
+```
+submission 3 to main · 1 queued ahead (#2)
+testing main + #2 + #3 · 4 tasks to run, 2 replayed
+passed · landed as 9f2c1e4
+```
+
+or, when this submission broke the combination:
+
+```
+failed: tests:t-cards
+  on main + #2 + #3 (5b81d07)
+  #2 passed on its own, so the failure is from this submission
+  log of tests:t-cards: /…/sluice/.logs/main/c4/tests:t-cards.log
+fix it in your worktree and submit again
+```
+
+The exit code says the same:
+
+| exit | meaning |
+|---|---|
+| `0` | landed |
+| `1` | failed |
+| `2` | a conflict or a refusal |
+| `130` | stopped with Ctrl-C; the submission stays queued |
+
+A complete setup, with moon, a sandbox, a build cache and two tiers of
+branches, is the [walkthrough](/sluice/guides/walkthrough/). The whole
+configuration is in the [reference](/sluice/reference/configuration/).

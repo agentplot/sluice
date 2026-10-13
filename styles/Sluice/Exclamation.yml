@@ -1,0 +1,6 @@
+extends: existence
+message: "No exclamation marks; let the sentence carry the weight."
+level: warning
+nonword: true
+tokens:
+  - '\w!(?:\s|$)'

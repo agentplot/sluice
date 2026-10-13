@@ -141,6 +141,40 @@ let
     '';
   };
 
+  # Vale checks the documentation site's prose (.vale.ini, styles/Sluice).
+  # From its own release: nixpkgs trails it. Bump the version and the four
+  # hashes from the release's checksums file.
+  valeVersion = "3.24.0";
+  valeAssets = {
+    aarch64-darwin = {
+      os = "macOS_arm64";
+      sha256 = "87b513f26499f6657c15cf7175ba5b058a7c1ff2bb2d4e07265db2dd43451e44";
+    };
+    x86_64-darwin = {
+      os = "macOS_64-bit";
+      sha256 = "eeb39e86f1daac27cc2a77fef3af1824d50559bdc22329fb25fb921c80c79472";
+    };
+    aarch64-linux = {
+      os = "Linux_arm64";
+      sha256 = "104cbd349279e50c4cb40adb70adf345d93cc4a3a0191f9e68bdccb97086b582";
+    };
+    x86_64-linux = {
+      os = "Linux_64-bit";
+      sha256 = "867534ddb678abca7f214bc4706ead0922bd5252ffe8035fc227013f66c8b214";
+    };
+  };
+  valeAsset = valeAssets.${pkgs.stdenv.hostPlatform.system};
+  vale = pkgs.stdenvNoCC.mkDerivation {
+    pname = "vale";
+    version = valeVersion;
+    src = pkgs.fetchurl {
+      url = "https://github.com/errata-ai/vale/releases/download/v${valeVersion}/vale_${valeVersion}_${valeAsset.os}.tar.gz";
+      inherit (valeAsset) sha256;
+    };
+    sourceRoot = ".";
+    installPhase = "install -Dm755 vale $out/bin/vale";
+  };
+
 in
 {
   # The system tools are this file's, pinned by devenv.lock; the application
@@ -154,6 +188,8 @@ in
     pkgs.git-cliff
     proto
     worktrunk
+    vale
+    pkgs.bun
   ];
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common
@@ -245,6 +281,14 @@ in
   scripts.disk = {
     description = "What target/ and the disk have grown to";
     exec = ''exec ${disk}/bin/disk "$@"'';
+  };
+  scripts.prose = {
+    description = "The documentation site's prose, checked by Vale (.vale.ini)";
+    exec = ''
+      set -euo pipefail
+      cd "$(git rev-parse --show-toplevel)"
+      vale --glob='!**/decisions/**' site/src/content/docs "$@"
+    '';
   };
 
   # The floor under every commit, installed into the common hooks directory

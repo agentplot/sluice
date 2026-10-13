@@ -1,0 +1,27 @@
+# The words a user sees, where the statement's design words would leak in.
+extends: substitution
+message: "Use '%s' instead of '%s': the pages use the words a user sees."
+level: warning
+ignorecase: false
+swap:
+  'the line': 'the branch'
+  'a line': 'a branch'
+  'an entry': 'a submission'
+  'the entry': 'the submission'
+  'entries': 'submissions'
+  'a place': 'a checkout'
+  'the place': 'the checkout'
+  'places': 'checkouts'
+  'a candidate': 'a combination'
+  'the candidate': 'the combination'
+  'candidates': 'combinations'
+  'the culprit': 'the blamed submission'
+  'a verdict': 'a result'
+  'the verdict': 'the result'
+  'verdicts': 'results'
+  'the window': 'parallel'
+  'deepest[- ]first': 'batch'
+  'the records': 'the state'
+  'work tree': 'worktree'
+  'work-tree': 'worktree'
+  'merge queue bot': 'merge queue'

@@ -1,0 +1,7 @@
+extends: existence
+message: "An em dash joins two thoughts; give each its own sentence, or use a comma."
+level: suggestion
+nonword: true
+tokens:
+  - '—'
+  - ' -- '

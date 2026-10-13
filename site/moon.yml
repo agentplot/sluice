@@ -1,0 +1,17 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The documentation site. Its prose is checked in the fast tier; its build
+# is the Pages workflow's and is not part of any gate.
+language: 'typescript'
+layer: 'application'
+
+tasks:
+  prose:
+    command: 'vale --glob=!**/decisions/** src/content/docs'
+    inputs: ['src/content/docs/**/*', '/.vale.ini', '/styles/**/*']
+    tags: [check-fast]
+  build:
+    command: 'bun run build'
+    inputs: ['**/*', '/docs/adr/*.md']
+    outputs: ['dist']
+    options: {cache: false}

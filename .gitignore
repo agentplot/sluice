@@ -5,3 +5,9 @@ devenv.local.nix
 .pre-commit-config.yaml
 .moon/cache/
 /result
+
+# The documentation site (site/README.md)
+/site/node_modules/
+/site/dist/
+/site/.astro/
+/site/src/content/docs/decisions/
