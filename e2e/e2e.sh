@@ -245,11 +245,12 @@ fi
 
 # --- sluice: S1 to S4 for real -------------------------------------------------------------------------------------
 COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
-submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would
+submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would; the
+  #        place is kept on landing, since each session's place serves every scenario
   local who=$1 s=$2
   shift 2
   at "$who" "$s"
-  SLUICE_AGENT="e2e-$who" inenv "$ROOT/places/$who" wt-submit "bolt/$s" "$@"
+  SLUICE_AGENT="e2e-$who" inenv "$ROOT/places/$who" wt-submit "bolt/$s" --no-remove "$@"
 }
 id_of() { submit "$1" "$2" --no-wait --json | jq -r .id; }
 status() { inenv "$REPO" sluice status "$@" --json; }

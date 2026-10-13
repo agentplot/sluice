@@ -1667,6 +1667,18 @@ refused: unit/touches holds changes that are not committed
 commit or remove them and submit again
 ```
 
+### Removing a landed session's worktree (C.4)
+
+`wt-submit` runs `sluice submit` and, when a waiting submission lands
+(exit 0), removes its own worktree as `wt merge` does: `wt -C <worktree>
+remove --foreground`, its branch going too once merged into the default
+branch. It follows the user's worktrunk `[merge] remove` (true when
+unset, read from `wt config show --format json`); `wt submit
+--no-remove` keeps the worktree, and `--no-wait` or `--check` never
+removes. A removal that fails (an unapproved `pre-remove` hook, say) is
+reported and the exit stays the landing's. The core never touches a
+session's worktree (core.16).
+
 ### Waiting, `--no-wait`, `--check`
 
 As pass 1 built it: a waiting submit loops `step(branch)` then reads its

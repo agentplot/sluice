@@ -41,8 +41,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml` on `main`; this row landed on `main` through `wt submit`, gated on all three tiers in the sandbox |
 | 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
 | 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
-| 15 | the driver removes a landed session's worktree | §7 | next |
-| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | |
+| 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
+| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | next |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.

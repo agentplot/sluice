@@ -136,10 +136,16 @@ fn wt_submit_lands_or_fails_by_its_exit() {
     let out = s.wt_submit(&a, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(text(&out).contains("landed"), "{}", text(&out));
-    let landed = s.tip();
     assert_eq!(s.repo.git(&["show", "bolt/x:a.txt"]), "a");
-    // Its session's worktree is left alone (25, S11).
-    assert!(a.join("a.txt").exists());
+    // C.4: the driver removes the landed session's worktree, as `wt
+    // merge` does; the core never does (25, S11).
+    assert!(!a.exists(), "{}", text(&out));
+    // Told not to, it is kept.
+    let k = s.session("k", &[("k.txt", "k\n")]);
+    let out = s.wt_submit(&k, &["--no-remove"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(k.join("k.txt").exists());
+    let landed = s.tip();
 
     let b = s.session("b", &[("broken", "x\n")]);
     let out = s.wt_submit(&b, &[]);
