@@ -75,10 +75,14 @@ needed.
   differs on a real rig where timing matters: a run cut short once the
   candidate ahead fails, a busy round taken again.
 
-- **The policy** gains `trust` per branch (section 4, *What a branch
-  trusts*), read by the verdict from each result's recorded executor
-  (28, 29); `Policy::parse` refuses unknown keys, so it comes with its
-  parsing tests.
+- **12, `trust`** (section 4, *What a branch trusts*): per branch,
+  `confined`, executor kinds and `cache`; a replay counts only under
+  `cache`, and without it the runner is asked for none; a table without
+  `trust` trusts only `confined`; a gate the executor can never satisfy
+  stops the step before any run. Then sluice's own `.config/sluice.toml`
+  (section 9) lands on `main` by `wt merge`, since a branch's gate is
+  read from the branch (core.15) and `main` has none yet; after that,
+  sluice lands sluice.
 - **The culprit's session** is shown its failed tasks' logs (20), which
   stay in the place until it is released.
 - **8, end to end.** Section 4's acceptance test 7 on real places: one

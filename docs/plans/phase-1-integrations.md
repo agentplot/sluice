@@ -1272,29 +1272,43 @@ session on the host can write the place; `open` never is. Containers
 run with `--init` so orphans are reaped and a group's end is seen
 (section 4's Linux facts).
 
-**What a branch trusts.** Which runs a gate accepts is the policy's
-(27), named by what the record says, never by what the policy asked
+**What a branch trusts.** Which results a gate accepts is the policy's
+(27, 28), named by what the record says, never by what the policy asked
 for:
 
 ```toml
-[branches.main]
-required = ["#check-fast", "#check-tools", "#check-e2e"]
-trust = ["confined"]            # the default for a shared branch (ADR 0007)
+[branches."bolt/*"]
+trust = ["open", "sandbox", "container", "cache"]
 
+[branches.main]
 # On one Mac, until runs are confined: main accepts sandboxed runs too.
-# trust = ["confined", "sandbox"]
+trust = ["confined", "sandbox"]
 ```
 
-`trust` lists `confined` or executor kinds (`open`, `sandbox`,
-`container`); a result counts when its record's `confined` is true and
-`confined` is listed, or its `kind` is listed. A bolt branch's default
-is `["open", "sandbox", "container"]`. Widening `main` to `sandbox` is
-how it lands through sluice on one Mac today: the records still say
-`confined: false`, so the day the agents are fenced off from sluice's
-places (or the runs move to a container), narrowing `trust` back to
-`confined` is one line and every earlier result reads for what it was.
-Like every key of the policy, `trust` is read from the branch's own
-revision, so a submission cannot widen the gate it is judged by (56).
+`trust` lists `confined`, executor kinds (`open`, `sandbox`,
+`container`) and `cache`. A ran result counts when its record's
+`confined` is true and `confined` is listed, or its `kind` is listed. A
+replay has no executor of its own (16, 38): the task runner's cache
+holds whatever any run wrote to it, a person's open shell included, so
+a replay counts only when `cache` is listed (ADR 0004: a bolt's gate
+takes the local cache, the shared branch's only what a trusted executor
+ran). A gate without `cache` asks the runner for no replays
+(`RunRequest.replay = false`; moon's `--force`), and a replay a runner
+gives anyway satisfies nothing. A result that does not count is left out
+of the key's reading entirely (28): a check with no counted result reads
+as missing. A table without `trust` trusts only `confined`, the
+conservative reading.
+
+A gate the branch's executor can never satisfy is refused before any run
+starts: `[executor] kind = "sandbox"` under `trust = ["confined"]`
+stops the branch's step with that reason, and nothing is started,
+attributed or landed (29). Widening `main` to `sandbox` is how it lands
+through sluice on one Mac today: the records still say `confined:
+false`, so the day the agents are fenced off from sluice's places (or the
+runs move to a container), narrowing `trust` back to `confined` is one
+line and every earlier result reads for what it was. Like every key of
+the policy, `trust` is read from the branch's own revision, so a
+submission cannot widen the gate it is judged by (56).
 
 The supervisor wraps every kind: it spawns the executor's command line
 (`sandbox-exec …`, `bwrap …`, `docker run …`) as the group leader and
@@ -1884,14 +1898,32 @@ tier is slower than the one before and needs more of the host.
 | tools | `check-tools` | each section's acceptance tests on scratch repositories; the conformance suite over the real profiles (below) | git, moon, worktrunk, a writable temp dir | tens of seconds |
 | end to end | `check-e2e` | `e2e.sh sluice` on the scratch workspace; `E2E_REPO=crew` against a clone of crew | the above, and crew's devenv for the crew variant | minutes; crew cold is 8 m 48 s, replayed about a second |
 
+sluice's own `.config/sluice.toml`:
+
 ```toml
-# sluice's own .config/sluice.toml, once sluice lands sluice
+[tests]
+runner = "moon"
+toolchain = ["devenv", "print-dev-env"]
+
+[checkout]
+method = "git-worktree"
+
+[[checkout.cache]]
+key = ["Cargo.lock", ".prototools"]
+paths = ["target"]
+
+[executor]
+kind = "sandbox"
+network = "localhost"
+
 [branches."bolt/*"]
 required = ["#check-fast"]
+trust = ["open", "sandbox", "container", "cache"]
 
 [branches.main]
 required = ["#check-fast", "#check-tools", "#check-e2e"]
 batch = true
+trust = ["confined", "sandbox"]
 ```
 
 The tasks:
