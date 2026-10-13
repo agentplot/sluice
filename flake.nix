@@ -1,7 +1,9 @@
 # sluice as a nix package, for `nix profile install github:agentplot/sluice`
 # and for the GHA build. The development shell is devenv's (devenv.nix);
 # this flake only builds and installs. Rust is the version .prototools
-# names, so the release is built by the compiler the checks ran with.
+# names, so the release is built by the compiler the checks ran with. The
+# version is the release tag's: CI builds with `SLUICE_VERSION=<version>
+# nix build --impure`; any other build is 0.0.0, Cargo.toml's.
 {
   description = "sluice: a merge queue for agents in worktrees";
 
@@ -39,6 +41,8 @@
         );
       rustVersion = (builtins.fromTOML (builtins.readFile ./.prototools)).rust;
       workspace = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package;
+      released = builtins.getEnv "SLUICE_VERSION";
+      version = if released != "" then released else workspace.version;
     in
     {
       packages = forAll (
@@ -54,7 +58,8 @@
           # `sluice` and `wt-submit`, which worktrunk runs as `wt submit`.
           default = platform.buildRustPackage {
             pname = "sluice";
-            inherit (workspace) version;
+            inherit version;
+            env.SLUICE_VERSION = version;
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [
