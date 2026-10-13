@@ -217,21 +217,30 @@ needed.
   for outside services, API and dev servers, then Playwright against
   them, for every candidate under test at once. Switchboard is the case
   it is built for. What sluice owes the checks:
-  - Ports, assigned by sluice. The policy names the ports a candidate's
-    stack uses; sluice gives each name a port per candidate, the same
-    every time for that name and never one another live candidate holds,
-    checks each is free before the run, and exports them with a short
-    name per candidate, `SLUICE_PLACE`, that the checks name their
-    containers, deployments and addresses from. Separate systems find
-    each other by these numbers, not by discovery. This replaces the
-    part of ADR 0010 and core.10 that kept ports out of sluice, through
-    the statement first (core.12) and a new ADR.
-  - A release command, named by the policy, that sluice runs with the
-    same environment whenever it releases a candidate's place: after a
+  - Ports, assigned by sluice. `[checkout] ports` names the ports a
+    candidate's stack uses. The place seam gives each place a slot, held
+    on the host across repositories and checked free before the place is
+    handed over, and each name a fixed position in the slot's block:
+    `port = ports_from + slot × names + position`, `ports_from` 20000 by
+    default, above worktrunk's `hash_port` range. The place carries
+    `SLUICE_PLACE` and `SLUICE_PORT_<NAME>` into its runs, and the checks
+    name their containers, deployments and addresses from them.
+    Separate systems find each other by these numbers, not by discovery.
+    This replaces the part of ADR 0010 and core.10 that kept ports out
+    of sluice, through the statement first (core.12) and a new ADR.
+  - A release command, `[tests] release`, run by the check seam in the
+    place under the same executor, limits and environment as the
+    checks, whenever the core releases a candidate's place: after a
     pass, a failure, a time limit, or a run found dead by a later round.
     It removes what the checks started outside the run's process group,
     containers above all, which a check's own cleanup cannot do once
-    sluice has killed it.
+    sluice has killed it. The core ends a place's run, release command
+    included, before the place seam removes the place.
+  - `[executor] docker = true` lets a sandboxed run reach the container
+    daemon's socket. Such a run is recorded as not confined: a container
+    it starts can mount any path, so the sandbox no longer holds it. The
+    daemon pulls images itself, so a run's own network stays as the
+    policy states.
   - The tools from the repository's toolchain: the container client and
     Playwright with its browsers from its devenv shell; the container
     daemon is the host's. The sandbox lets a run reach the daemon's
