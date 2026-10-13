@@ -46,6 +46,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
+| 20 | semantic releases with git-cliff | | designed below; the operator to rule on git-cliff's other features |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -128,6 +129,19 @@ needed.
 - **17, no tests of the repository's documents.** sluice's tests test
   sluice. A check that reads the statement or the source to enforce
   core.1 or core.12 is not one: those rules are kept by review.
+- **20, semantic releases**, with git-cliff. On each push to `main`, CI
+  asks `git cliff --bumped-version` for the next version from the
+  conventional commits since the last `v*` tag (the agents' own commits,
+  reached through the landing merges; `chore(land)` and other `chore`,
+  `docs` and `test` commits alone release nothing). With a new version, it
+  builds the flake for aarch64-darwin, x86_64-linux and aarch64-linux with
+  that version, tags the commit, and publishes a GitHub release with the
+  binaries and git-cliff's notes for the range. Nothing is committed back
+  to `main`, which only sluice moves: the version lives in the tag, and
+  the flake and `sluice --version` take it from there, `Cargo.toml`
+  staying at `0.0.0`. release-please and semantic-release were set aside:
+  the first merges a release pull request on GitHub, outside sluice; the
+  second needs Node for what git-cliff does alone.
 - **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
   v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
   `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
