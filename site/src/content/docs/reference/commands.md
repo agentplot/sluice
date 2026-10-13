@@ -22,7 +22,8 @@ sidebar:
 on the `PATH` as `wt <name>`. It is a driver: it calls `sluice submit`
 for the worktree it is run in, waits, and on landing removes the
 worktree and its branch as `wt merge` did, following worktrunk's
-`[merge] remove`. `--no-remove` keeps them.
+`[merge] remove`. `--no-remove` keeps them. [sluice with
+worktrunk](/sluice/guides/worktrunk/) has the move from `wt merge`.
 
 ```console
 $ wt submit bolt/concurrent-units
