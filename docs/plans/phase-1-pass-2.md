@@ -136,12 +136,12 @@ needed.
   `docs` and `test` commits alone release nothing). With a new version, it
   builds the flake for aarch64-darwin, x86_64-linux and aarch64-linux with
   that version, tags the commit, and publishes a GitHub release with the
-  binaries and git-cliff's notes for the range. Nothing is committed back
+  binaries, named `sluice-<system>.tar.gz` so the README's
+  `releases/latest/download/` links hold, and git-cliff's notes for the
+  range. Nothing is committed back
   to `main`, which only sluice moves: the version lives in the tag, and
   the flake and `sluice --version` take it from there, `Cargo.toml`
-  staying at `0.0.0`. release-please and semantic-release were set aside:
-  the first merges a release pull request on GitHub, outside sluice; the
-  second needs Node for what git-cliff does alone.
+  staying at `0.0.0`.
 - **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
   v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
   `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard

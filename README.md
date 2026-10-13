@@ -18,14 +18,43 @@ This repository holds the code, the rules a change here must keep
 
 ## Install
 
+Each way installs two executables: `sluice`, and `wt-submit`, which
+worktrunk runs as `wt submit`.
+
+**With nix**, from the flake:
+
 ```sh
-nix profile install github:agentplot/sluice
+nix profile install github:agentplot/sluice   # into your profile
+nix run github:agentplot/sluice -- --help      # once, without installing
 ```
 
-That installs `sluice` and `wt-submit`, which worktrunk runs as `wt
-submit`. Release binaries for macOS and Linux are on the releases page.
-Then `sluice protect` in a repository whose `.config/sluice.toml` names
-its branches, and `wt submit <branch>` from a session's worktree.
+or as a flake input, for NixOS, home-manager or a devenv shell:
+
+```nix
+inputs.sluice.url = "github:agentplot/sluice";
+# then: inputs.sluice.packages.${system}.default
+```
+
+**A release binary**, for macOS on Apple silicon and Linux on x86-64 and
+ARM, from the [releases](https://github.com/agentplot/sluice/releases):
+
+```sh
+curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
+  | tar -xz -C ~/.local/bin sluice wt-submit
+```
+
+**With cargo**, from the repository (Rust 1.98 or later):
+
+```sh
+cargo install --locked --git https://github.com/agentplot/sluice sluice
+```
+
+**From a checkout**, to work on sluice: `devenv shell`, then `cargo build`.
+Its tiers are `moon run ':#check-fast' ':#check-tools' ':#check-e2e'`.
+
+Then, in a repository whose `.config/sluice.toml` names its branches,
+`sluice protect`, and `wt submit <branch>` from a session's worktree. The
+setup is walked through in [docs/examples/](docs/examples/README.md).
 
 One queue design, two instances:
 
