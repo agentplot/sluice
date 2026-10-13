@@ -18,7 +18,7 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Network,
     Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
-    Settings, Snapshot, Source, State, Submitter, TaskResult, Tests, Written,
+    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -105,6 +105,8 @@ struct Inner {
     made: Vec<String>,
     released: Vec<String>,
     saved: Vec<String>,
+    // the records' kept logs, by where
+    logs: BTreeMap<String, String>,
     // the driver
     worktrees: BTreeMap<String, Session>,
     told: Vec<Notification>,
@@ -556,6 +558,11 @@ impl World {
         self.0.borrow().released.clone()
     }
 
+    /// A kept log's text, by where the records seam said it is (20).
+    pub fn kept_log(&self, at: &str) -> Option<String> {
+        self.0.borrow().logs.get(at).cloned()
+    }
+
     /// The released places whose candidate passed, so whose caches were
     /// saved (35).
     pub fn saved_places(&self) -> Vec<String> {
@@ -833,6 +840,16 @@ impl Tests for FakeTests {
     fn bound(&self) -> Result<usize> {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
+
+    fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
+        Ok(tasks
+            .iter()
+            .map(|t| TaskLog {
+                task: t.clone(),
+                text: format!("{t} failed in {}\n", run.0),
+            })
+            .collect())
+    }
 }
 
 impl Checkout for FakeCheckout {
@@ -1007,6 +1024,21 @@ impl State for FakeState {
     fn record_results(&self, lines: &[u8]) -> Result<()> {
         self.0 .0.borrow_mut().results.extend(lines);
         Ok(())
+    }
+
+    fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>> {
+        let mut inner = self.0 .0.borrow_mut();
+        Ok(logs
+            .iter()
+            .map(|l| {
+                let at = format!("logs/{branch}/{candidate}/{}.log", l.task);
+                inner.logs.insert(at.clone(), l.text.clone());
+                TaskLog {
+                    task: l.task.clone(),
+                    text: at,
+                }
+            })
+            .collect())
     }
 }
 

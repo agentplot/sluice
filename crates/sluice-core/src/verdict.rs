@@ -66,6 +66,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             failed.push(FailedTask {
                 task: t.task.clone(),
                 hash: t.hash.clone(),
+                log: None,
             });
         }
     }
@@ -74,6 +75,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
         failed.push(FailedTask {
             task: task.clone(),
             hash: String::new(),
+            log: None,
         });
     }
     Verdict {

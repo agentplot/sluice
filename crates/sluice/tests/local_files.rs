@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use sluice::profiles::local_files::LocalFiles;
 use sluice_fakes::Fakes;
-use sluice_seams::{Changes, State, Written};
+use sluice_seams::{Changes, State, TaskLog, Written, KEPT_LOGS};
 use support::Scratch;
 
 fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
@@ -111,6 +111,45 @@ fn a_waiting_lock_is_taken_when_the_holder_lets_go() {
 }
 
 /// 2, 62, 58: two writes from one version; one is written, one refused.
+/// 20, 26: a failed candidate's task outputs are kept beside the branch's
+/// records, never among them, readable as files; only the last
+/// `KEPT_LOGS` candidates of a branch keep theirs.
+#[test]
+fn logs_are_kept_beside_the_records_and_only_the_last_ones() {
+    let dir = Scratch::new("logs");
+    let s = LocalFiles::new(dir.path());
+    let log = |task: &str, text: &str| TaskLog {
+        task: task.into(),
+        text: text.into(),
+    };
+    let first = s
+        .keep_logs(
+            "bolt/x",
+            "c1",
+            &[log("a:test", "one\n"), log("b:test", "two\n")],
+        )
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&first[0].text).unwrap(), "one\n");
+    assert_eq!(std::fs::read_to_string(&first[1].text).unwrap(), "two\n");
+    {
+        let _g = s.lock("bolt/x").unwrap().unwrap();
+        s.write("bolt/x", 0, changes(&[("branch.json", "{}\n")], &[]))
+            .unwrap();
+    }
+    assert_eq!(s.read("bolt/x").unwrap().files.len(), 1);
+    assert_eq!(s.branches().unwrap(), ["bolt/x"]);
+    for n in 2..=KEPT_LOGS + 1 {
+        std::thread::sleep(Duration::from_millis(15));
+        s.keep_logs("bolt/x", &format!("c{n}"), &[log("a:test", "x\n")])
+            .unwrap();
+    }
+    assert!(!std::path::Path::new(&first[0].text).exists());
+    let kept = std::fs::read_dir(dir.path().join("sluice/.logs/bolt/x"))
+        .unwrap()
+        .count();
+    assert_eq!(kept, KEPT_LOGS);
+}
+
 #[test]
 fn two_writes_from_one_version() {
     let dir = Scratch::new("version");

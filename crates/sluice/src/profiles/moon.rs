@@ -114,6 +114,27 @@ impl Moon {
         })
     }
 
+    /// What a task printed, as moon keeps it in the place:
+    /// `.moon/cache/states/<project>/<task>/{stdout,stderr}.log`. `None`
+    /// when moon kept neither, as for a task it never ran.
+    pub fn log(&self, place: &Path, target: &str) -> Option<Vec<u8>> {
+        let (project, task) = target.split_once(':')?;
+        let dir = place.join(".moon/cache/states").join(project).join(task);
+        let mut text = Vec::new();
+        for stream in ["stdout", "stderr"] {
+            if let Ok(b) = std::fs::read(dir.join(format!("{stream}.log"))) {
+                if !b.is_empty() {
+                    text.extend(format!("--- {stream} ---\n").into_bytes());
+                    text.extend(b);
+                    if !text.ends_with(b"\n") {
+                        text.push(b'\n');
+                    }
+                }
+            }
+        }
+        (!text.is_empty()).then_some(text)
+    }
+
     /// Each required target's result from moon's run report: a task that
     /// ran, `Ran` with its outcome; one answered from the cache,
     /// `Replayed`; anything else, no result (15, 16, 38; rule core.9).

@@ -1495,6 +1495,20 @@ through another branch's (an ancestor directory holding a `version`
 file) and one whose name is `results.jsonl`; `branches()` lists the
 directories holding a `version` file.
 
+
+### Failed tasks' logs (20)
+
+`State::keep_logs(branch, candidate, logs)` writes each failed task's
+output to `<common>/sluice/.logs/<branch>/<candidate>/<task>.log` (task
+names flattened as place names are) and answers each file's path. It sits
+beside the branch's records, never among them: `read` walks the branch's
+directory whole on every step, and a log is read only by whoever asks.
+Only the last 20 candidates of a branch keep theirs (`KEPT_LOGS`), by the
+directories' times. The check seam gives the text (`Tests::logs`): for
+moon, `<place>/.moon/cache/states/<project>/<task>/{stdout,stderr}.log`;
+for a task moon kept nothing of, and for the `command` runner, the run's
+own `out.log`; the last 64 KiB of either (`LOG_LIMIT`).
+
 ### The lock (ADR 0005, core.14)
 
 `std::fs::File::{lock, try_lock, unlock}` are stable since Rust 1.89;

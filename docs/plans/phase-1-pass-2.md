@@ -39,8 +39,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh`, `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
 | 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 7, `cli:tools` |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml` on `main`; this row landed on `main` through `wt submit`, gated on all three tiers in the sandbox |
-| 13 | the culprit's failed tasks' logs | §4, §6 | next |
-| 14 | a conventional landing subject: `[landing] subject` | §1 | |
+| 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
+| 14 | a conventional landing subject: `[landing] subject` | §1 | next |
 | 15 | the driver removes a landed session's worktree | §7 | |
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | |
 
@@ -93,8 +93,10 @@ needed.
   `.moon/cache/states/<project>/<task>/{stdout,stderr}.log`; the `command`
   runner returns what it captured) and writes it through the records seam
   before the place is released, at
-  `<common>/sluice/<branch>/logs/<candidate>/<task>.log`: the last 64 KiB
-  of each, the last 20 failed candidates per branch kept (core.11). The
+  `<common>/sluice/.logs/<branch>/<candidate>/<task>.log`, beside the
+  branch's records since a step reads every record of its branch: the
+  last 64 KiB of each, the last 20 failed candidates per branch kept
+  (core.11). The
   culprit's session is told each log's path with the failing checks and
   the candidate (20); `wt submit` prints them and `sluice status <id>`
   lists them; no other session is told.

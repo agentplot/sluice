@@ -80,6 +80,9 @@ pub trait Rig {
     /// Every outcome delivered to `agent`'s sessions, in order.
     fn told_to(&self, agent: &str) -> Vec<Notification>;
 
+    /// A failed task's output, read where the records seam said it is kept.
+    fn kept_log(&self, at: &str) -> Option<String>;
+
     /// The revisions runs were started on, in order.
     fn started(&self) -> Vec<Rev>;
 
@@ -246,6 +249,10 @@ impl Harness {
 impl Rig for Harness {
     fn sluice(&self) -> Sluice<'_> {
         self.f.sluice()
+    }
+
+    fn kept_log(&self, at: &str) -> Option<String> {
+        self.w().kept_log(at)
     }
 
     fn work(&self, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) -> Rev {

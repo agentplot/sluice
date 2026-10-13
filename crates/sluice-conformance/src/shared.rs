@@ -103,12 +103,19 @@ pub fn s3_the_second_fails_and_only_its_session_hears(h: &impl Rig) {
     assert_eq!(told.len(), 1);
     match &told[0].told {
         Told::Failed {
-            failed,
+            failed: tasks,
             submissions,
+            logs,
             ..
         } => {
-            assert_eq!(failed, &vec!["a:test".to_string()]);
+            assert_eq!(tasks, &vec!["a:test".to_string()]);
             assert_eq!(submissions, &vec![one, two]);
+            // 20: told where the failed task's output is kept, readable
+            // with no sluice running, and so is its record.
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0].task, "a:test");
+            assert_eq!(failed.failed[0].log.as_deref(), Some(logs[0].text.as_str()));
+            assert!(!h.kept_log(&logs[0].text).unwrap_or_default().is_empty());
         }
         other => panic!("told {other:?}"),
     }
