@@ -929,17 +929,14 @@ tools to win sets both homes to its own; sluice's sets
 `PROTO_HOME=<common>/proto` and `MOON_HOME=<common>/moon-home`, shared
 by its worktrees.
 
-### Archive places
+### Without git metadata
 
 In a `git archive` export (no `.git`), on 2.5.3 and again on 2.6.1:
 `moon exec ':#check-fast'` runs (2 completed); `moon exec --affected
 --base HEAD~1 --head HEAD` **silently ran everything**, exit 0; `moon
 query tasks --affected` failed (`Process git failed: exit code 128 …
-fatal: not a git repository`). With the archive
-method, compute the targets in a probe worktree, one long-lived
-detached worktree per repository at `<common>/sluice/.places/probe`,
-moved with `git checkout --detach -f <candidate>` under the repository
-lock (`.lock`), and run the explicit list in the archive.
+fatal: not a git repository`). One reason a place is a git worktree
+(ADR 0013).
 
 ### moon 1.41.7 (on `PATH`)
 
@@ -1443,30 +1440,6 @@ in (915 MB in 8 s), 0.6 s and nothing compiled, the workspace's own crates
 included. A `target/` built by another compiler saved little (85 s, 112
 of 148 crates compiled), so `.prototools`, which names the compiler, is
 in the key.
-
-### `archive` (in C.1, not built)
-
-```
-mkdir -p $TMPDIR/sluice/<repo id>/<name> && git -C <common> archive <candidate> | tar -x -C $TMPDIR/sluice/<repo id>/<name>
-rm -rf $TMPDIR/sluice/<repo id>/<name>        # release, after the run's group is ended
-```
-
-- No `.git`, no submodules, and **it honours `export-ignore` and
-  `export-subst`**: a file marked `export-ignore` was absent. So the
-  archive is not exactly the candidate's tree (33, 35). The exact tree
-  with no git metadata:
-
-  ```
-  GIT_INDEX_FILE=<tmp>/index git read-tree <candidate> && GIT_INDEX_FILE=<tmp>/index git checkout-index -a -f --prefix=<dir>/
-  ```
-  (the trailing `/` is required; verified to include the ignored file).
-  Use that, and call the method "archive" still.
-- Not under the common dir: moon walks up looking for a VCS root, and
-  one found above the place would be the repository's. `<repo id>` is a
-  hash of the canonical common dir, so two repositories' places never
-  collide (32).
-- moon's `--affected` does not work without `.git` (section 3): targets
-  come from the probe worktree.
 
 ### Acceptance tests
 

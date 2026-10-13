@@ -23,13 +23,13 @@ ADR 0009 made the checkout method the one git setting, with worktrunk, plain git
 
 ## Decision outcome
 
-Option 2. A worktrunk place gave three things. Its `pre-start` hooks are the candidate's own code run with the user's full permissions, outside the executor that every check runs under, so a sandboxed gate would be bypassed by the setup it trusts least. Its warming is the policy's cache now, keyed by content and saved only from a passed candidate, where worktrunk's copies whatever the primary worktree holds. Its path, beside the user's worktrees, puts a place on whatever disk the user's template names, so saving a cache becomes a copy rather than a rename, and its `sluice/try/…` branch shows in every session's `wt list`. What a check needs before it runs is the toolchain step and the check's own dependencies, both run as a CI job runs its setup steps. Archive stays in the statement and unbuilt: moon's affected query needs git metadata, and a worktree already holds exactly the candidate.
+Option 2. A worktrunk place gave three things. Its `pre-start` hooks are the candidate's own code run with the user's full permissions, outside the executor that every check runs under, so a sandboxed gate would be bypassed by the setup it trusts least. Its warming is the policy's cache now, keyed by content and saved only from a passed candidate, where worktrunk's copies whatever the primary worktree holds. Its path, beside the user's worktrees, puts a place on whatever disk the user's template names, so saving a cache becomes a copy rather than a rename, and its `sluice/try/…` branch shows in every session's `wt list`. What a check needs before it runs is the toolchain step and the check's own dependencies, both run as a CI job runs its setup steps. Archive, designed and never built, is dropped too: a place with no git metadata would keep a run off the repository, which the executor already does, while the task runner's affected query needs that metadata and saving a cache from a place outside the repository's directory becomes a copy.
 
 The place seam keeps its interface (ADR 0003) with this one profile, which rule core.3 requires an ADR for: this is it. A container place, should one be needed, is the container executor's, not a second checkout.
 
 ### Consequences
 
-- C.1 of the statement no longer names worktrunk, which is the driver alone (C.4); of its profiles only the git worktree is built.
+- C.1 of the statement names the git worktree and the container; worktrunk is the driver alone (C.4).
 - `[checkout] method` takes `"git-worktree"`, and refuses anything else with the reason.
 - `.worktreeinclude` and `wt step copy-ignored` remain the repository's own, for worktrees people make; no place reads them.
 - Supersedes ADR 0009's checkout setting; its branch operations stand.
