@@ -138,22 +138,26 @@ in
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
   # in one worktree replay in another. The rest of .moon/cache records the
-  # checkout's absolute paths and stays its own.
+  # checkout's absolute paths and stays its own. The worktree is found when
+  # the shell is entered, never written in at evaluation: a printed
+  # toolchain is the same from any directory, so sluice can keep one per
+  # hash of its inputs.
   enterShell = ''
-    if _moon_common="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
-      _moon_cache="${config.devenv.root}/.moon/cache"
+    if _moon_root="$(git rev-parse --show-toplevel 2>/dev/null)" &&
+      _moon_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+      _moon_cache="$_moon_root/.moon/cache"
       [ -L "$_moon_cache" ] && rm -f "$_moon_cache"
       mkdir -p "$_moon_common/moon-outputs" "$_moon_cache"
       if [ ! -L "$_moon_cache/outputs" ]; then
         rm -rf "$_moon_cache/outputs"
         ln -s "$_moon_common/moon-outputs" "$_moon_cache/outputs"
       fi
+      # moon puts $MOON_HOME/bin on every task's PATH too: this repository's,
+      # beside proto's, so no moon of the user's runs in a task.
+      MOON_HOME="$_moon_common/moon-home"
+      export MOON_HOME
     fi
-    unset _moon_common _moon_cache
-    # moon puts $MOON_HOME/bin on every task's PATH too: this repository's,
-    # beside proto's, so no moon of the user's runs in a task.
-    MOON_HOME="$(git -C "${config.devenv.root}" rev-parse --path-format=absolute --git-common-dir)/moon-home"
-    export MOON_HOME
+    unset _moon_root _moon_common _moon_cache
     # Only activates: sluice sources this inside its executor, where
     # nothing may be installed.
     ${activate}
@@ -175,6 +179,10 @@ in
   treefmt.enable = true;
   treefmt.config = {
     imports = [ ./treefmt.nix ];
+    # The tree is found from where treefmt runs, by this file, rather than
+    # devenv's evaluated root written into the wrapper: with that, a
+    # wrapper evaluated elsewhere checks the other tree.
+    projectRootFile = "devenv.nix";
     programs.rustfmt.package = rustfmt;
   };
 
@@ -185,7 +193,7 @@ in
     description = "Every crate's cargo tests: moon run of the tasks tagged cargo-test";
     exec = ''
       set -euo pipefail
-      cd ${config.devenv.root}
+      cd "$(git rev-parse --show-toplevel)"
       moon run ':#cargo-test' "$@" </dev/null
     '';
   };
@@ -196,7 +204,7 @@ in
     description = "The cargo tests of what changed since main: moon run --affected";
     exec = ''
       set -euo pipefail
-      cd ${config.devenv.root}
+      cd "$(git rev-parse --show-toplevel)"
       moon run ':#cargo-test' --affected --downstream deep "$@" </dev/null
     '';
   };

@@ -86,15 +86,21 @@ needed.
       wrong. A toolchain holding its root is wrong elsewhere, not just
       slow: with a toolchain printed for another directory, `treefmt
       --ci` checked that directory and passed a misformatted file.
-    - **sluice's own toolchain, made the same from any directory**, at its
-      source: devenv's `treefmt` wrapper holds `--tree-root <root>`;
-      sluice's scripts (`cargo-tests`, `cargo-tests-affected`, the lint
-      and disk scripts) `cd` to the evaluated root; the moon lines in
-      `enterShell` name it; devenv sets `DEVENV_ROOT`, `DEVENV_STATE`,
-      `DEVENV_DOTFILE` and `PREK_HOME` from it. sluice's own find the root
-      when they run (`git rev-parse --show-toplevel`); `treefmt` and
-      devenv's variables go upstream to devenv, with a setting in
-      `devenv.nix` until they land.
+    - **sluice's own toolchain, the same from any directory**, done at its
+      source: its scripts and the moon lines in `enterShell` find the
+      worktree with `git rev-parse` when they run, and `treefmt` finds its
+      tree by `devenv.nix` (`treefmt.config.projectRootFile`, devenv's own
+      setting for this; without it the wrapper holds `--tree-root
+      <root>`). A toolchain printed elsewhere now fails a misformatted
+      file, as one printed in the place does.
+    - **What still differs is devenv's own**, from two directories holding
+      only the inputs (18 s and 13 s to print): `DEVENV_ROOT`,
+      `DEVENV_STATE`, `DEVENV_DOTFILE`, `PREK_HOME`, the `.devenv/run`
+      link and the direnv test name the directory; `DEVENV_RUNTIME`
+      (`/tmp/devenv-<hash of the root>`) differs; `DEVENV_TASK_FILE`
+      differs because its `devenv:files` tasks hold the root; and
+      `NIX_CFLAGS_COMPILE`'s `-frandom-seed` follows the environment's
+      store path. No check reads any of them.
 
 - **The conformance scenarios with faults** (crashes, interference,
   lost and held runs) stay on the fakes. Each shared scenario names what
