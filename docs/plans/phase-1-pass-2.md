@@ -213,27 +213,43 @@ needed.
   most, reaches two, and gives each half the processors.
 
 - **22, a full stack per candidate.** A repository's checks bring up
-  everything a browser test needs (ADR 0010): a container stack on a
-  port, an API server and a dev server, then Playwright against them, for
-  every candidate under test at once. What sluice owes them:
-  - A short name per candidate, stable for the candidate's life and
-    unique among the places alive, that the checks derive their ports and
-    their container project's name from. sluice computes no port
-    (core.10); the checks hash the name, or bind any free port and write
-    it under `SLUICE_TMP`.
-  - Containers ended with the place. The run's process group reaches the
-    servers but not a container, which the container daemon owns; a
-    container left behind holds its port and fails the next candidate,
-    blamed on the wrong submission (32). A check labels what it starts
-    with the candidate's name, and releasing the place removes what
-    carries that label, after a time limit as much as a pass.
-  - The sandbox lets a run reach the container daemon's socket and the
-    browser's cache, and the policy says whether a run may pull images.
-  - The acceptance test, in the tools tier: a fixture of a container on
-    a port, a server, and a browser test against it; two candidates under
-    test at once neither collide nor share a container; both land; a
-    candidate ended by its time limit leaves no container and no
-    process.
+  everything a browser test needs: a container stack on a port, stand-ins
+  for outside services, API and dev servers, then Playwright against
+  them, for every candidate under test at once. Switchboard is the case
+  it is built for. What sluice owes the checks:
+  - Ports, assigned by sluice. The policy names the ports a candidate's
+    stack uses; sluice gives each name a port per candidate, the same
+    every time for that name and never one another live candidate holds,
+    checks each is free before the run, and exports them with a short
+    name per candidate, `SLUICE_PLACE`, that the checks name their
+    containers, deployments and addresses from. Separate systems find
+    each other by these numbers, not by discovery. This replaces the
+    part of ADR 0010 and core.10 that kept ports out of sluice, through
+    the statement first (core.12) and a new ADR.
+  - A release command, named by the policy, that sluice runs with the
+    same environment whenever it releases a candidate's place: after a
+    pass, a failure, a time limit, or a run found dead by a later round.
+    It removes what the checks started outside the run's process group,
+    containers above all, which a check's own cleanup cannot do once
+    sluice has killed it.
+  - The tools from the repository's toolchain: the container client and
+    Playwright with its browsers from its devenv shell; the container
+    daemon is the host's. The sandbox lets a run reach the daemon's
+    socket, and the policy says whether a run may reach the network
+    beyond localhost.
+  - moon runs the checks and devenv brings up the stack: a moon task
+    that depends on one bringing the stack up and waiting until each
+    service answers, with devenv's processes and their readiness probes
+    doing the starting.
+  - Earthly is not used: it is unmaintained, reports only an exit code,
+    and moves every check into privileged containers outside devenv and
+    the sandbox.
+  - The acceptance test, in the tools tier, with Docker and Playwright
+    on every host that runs it, CI's Linux job included: a fixture of a
+    container on a port, a server, and a browser test against them; two
+    candidates under test at once neither collide nor share a container;
+    both land; a candidate ended by its time limit leaves no container
+    and no process.
 - **23, `main` kept in step with the shared remote.** The branch's
   pushed-refs profile (C.4): fetch before a round reads the branch, form
   on the remote's revision, land with a push leased on the revision
