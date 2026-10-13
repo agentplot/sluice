@@ -6,8 +6,9 @@
 }:
 
 let
-  # moonrepo's own release builds: nixpkgs trails proto by a minor version
-  # or more. Linux takes the static musl build, so no loader needs patching.
+  # A tool's own release builds: nixpkgs trails proto and worktrunk by
+  # minor versions or more. Linux takes the static musl build, so no loader
+  # needs patching.
   fromRelease =
     {
       name,
@@ -31,7 +32,7 @@ let
       pname = name;
       inherit version;
       src = pkgs.fetchurl {
-        url = "https://github.com/moonrepo/${repo}/releases/download/v${version}/${name}-${target}.tar.xz";
+        url = "https://github.com/${repo}/releases/download/v${version}/${name}-${target}.tar.xz";
         sha256 = hashes.${target};
       };
       sourceRoot = "${name}-${target}";
@@ -44,7 +45,7 @@ let
 
   proto = fromRelease {
     name = "proto_cli";
-    repo = "proto";
+    repo = "moonrepo/proto";
     version = "0.63.1";
     bins = [
       "proto"
@@ -55,6 +56,24 @@ let
       x86_64-apple-darwin = "aaaff78c7125de1b765f00177f35da75ee16fb1363e07632ace27213ff5d893b";
       aarch64-unknown-linux-musl = "111f5b6a38d3979ebafbc095c8d91ef69c99d1f018addb3582179d4ab91b3441";
       x86_64-unknown-linux-musl = "8596b98ccd833d1203e71931ba25e866d3239f9d3859c922a035a7b830f29d17";
+    };
+  };
+
+  # worktrunk, which the tools tier and e2e drive: the version they are
+  # tested against, here and in CI.
+  worktrunk = fromRelease {
+    name = "worktrunk";
+    repo = "max-sixty/worktrunk";
+    version = "0.80.0";
+    bins = [
+      "wt"
+      "git-wt"
+    ];
+    hashes = {
+      aarch64-apple-darwin = "8a2bb053c4bc80dea7d9ce6c221ff038d10a3d2dca2dc8f60d1b1a094fa783a9";
+      x86_64-apple-darwin = "aa898aa301617abaf91cb3078de4c8c11444a061016dc8f6dd80aa17cc1c46be";
+      aarch64-unknown-linux-musl = "347b260c1b044a53a7720b33181d7c66dcde945efbd605d784e5b6a5616c17e9";
+      x86_64-unknown-linux-musl = "532ce3ed5eecb1be274c925b5887f61671e2434a4ca2561b9a8ac9379dbba199";
     };
   };
 
@@ -134,6 +153,7 @@ in
     pkgs.jq
     pkgs.git-cliff
     proto
+    worktrunk
   ];
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common
