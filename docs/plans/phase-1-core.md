@@ -138,8 +138,7 @@ be a task one agent can take alone.
 - **The CLI and `wt-submit`.** Waiting, exit codes (0 landed, 1 failed, 2
   conflict), `--no-wait`, `--check`, the dirty-worktree refusal (2).
 - **End to end.** A scratch repository script that sets up a bolt branch,
-  three worktrees and a moon workspace, and drives S1 to S4 for real; then
-  the same against a throwaway clone of crew.
+  three worktrees and a moon workspace, and drives S1 to S4 for real.
 
 ## Working rules
 
