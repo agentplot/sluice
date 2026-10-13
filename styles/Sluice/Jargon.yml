@@ -1,0 +1,9 @@
+extends: existence
+message: "'%s' is structural jargon with no definition; use the plain word (path, tier, threshold, boundary) or define it in the glossary."
+level: warning
+ignorecase: true
+tokens:
+  - '\blanes?\b'
+  - '\brungs?\b'
+  - '\bspines?\b'
+  - '\bthe bar\b'

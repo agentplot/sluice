@@ -16,6 +16,7 @@ projects:
   fakes: 'crates/sluice-fakes'
   conformance: 'crates/sluice-conformance'
   cli: 'crates/sluice'
+  site: 'site'
   root: '.'
 
 # --affected compares against the merge-base with main.

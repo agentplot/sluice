@@ -1,0 +1,18 @@
+extends: existence
+message: "'%s' narrates the designing; a chapter states the design."
+level: warning
+ignorecase: true
+tokens:
+  - we chose
+  - we decided
+  - we opted
+  - we considered
+  - we believe
+  - we think
+  - this is intentional
+  - intentionally
+  - the rationale
+  - the design here
+  - in this design
+  - as discussed
+  - the thinking is

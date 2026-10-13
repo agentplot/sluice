@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every table and key of .config/sluice.toml, the host's config, and the environment.
+description: Every table and key of the policy file, the host's own config, and the environment.
 sidebar:
   order: 1
 ---
@@ -138,7 +138,7 @@ Whether to test every combination or only the longest.
 | value | sluice tests | good for |
 |---|---|---|
 | `false` | every combination: `+A`, `+A+B`, `+A+B+C` | small, fast tests; a failure is pinned to one submission at once |
-| `true` | only the longest, `+A+B+C`; if it passes, all three land together; if it fails, the shorter ones are tested to find which submission broke it | slow tests, where running fewer combinations matters more than finding the culprit quickly |
+| `true` | only the longest, `+A+B+C`; if it passes, all three land together; if it fails, the shorter ones are tested to find which submission broke it | slow tests, where running fewer combinations matters more than naming the blamed submission quickly |
 
 ### `flaky`
 

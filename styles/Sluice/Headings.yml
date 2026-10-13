@@ -1,0 +1,22 @@
+extends: capitalization
+message: "Headings use sentence case: '%s'."
+level: warning
+scope: heading
+match: $sentence
+exceptions:
+  - JSON
+  - TOML
+  - SSH
+  - OTLP
+  - GitHub
+  - GitHub Actions
+  - GitHub Pages
+  - Nix
+  - macOS
+  - Linux
+  - moon
+  - sluice
+  - worktrunk
+  - devenv
+  - Seatbelt
+  - ADR

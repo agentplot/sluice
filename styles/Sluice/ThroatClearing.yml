@@ -1,0 +1,15 @@
+extends: existence
+message: "'%s' clears the throat; start with the point."
+level: suggestion
+ignorecase: true
+tokens:
+  - of course
+  - obviously
+  - clearly
+  - as mentioned
+  - as noted
+  - as stated
+  - as described
+  - needless to say
+  - it goes without saying
+  - in other words

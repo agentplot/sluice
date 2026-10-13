@@ -1,0 +1,16 @@
+extends: existence
+message: "'%s' sells the design; describe it."
+level: warning
+ignorecase: true
+tokens:
+  - elegant(?:ly)?
+  - cleanly
+  - graceful(?:ly)?
+  - nicely
+  - beautiful(?:ly)?
+  - naturally
+  - seamless(?:ly)?
+  - effortless(?:ly)?
+  - powerful
+  - robust
+  - trivial(?:ly)?

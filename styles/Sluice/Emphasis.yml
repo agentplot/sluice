@@ -1,0 +1,18 @@
+extends: existence
+message: "'%s' asks the reader to care; give the reason instead."
+level: warning
+ignorecase: true
+tokens:
+  - critical(?:ly)?
+  - crucial(?:ly)?
+  - essential(?:ly)?
+  - fundamental(?:ly)?
+  - key insight
+  - the important thing
+  - it is worth noting
+  - it's worth noting
+  - worth noting
+  - note that
+  - importantly
+  - notably
+  - significantly

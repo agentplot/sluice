@@ -1,0 +1,6 @@
+extends: existence
+message: "State the point directly instead of 'it is not X, it is Y'."
+level: warning
+ignorecase: true
+raw:
+  - '\b(?:it''s|it is|this is|that''s|that is) not [^.;]{1,60}[,;] (?:it''s|it is|this is|but)\b'

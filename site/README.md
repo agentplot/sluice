@@ -12,6 +12,12 @@ bun run dev            # http://localhost:4321/sluice/
 bun run build          # dist/, with every internal link checked
 ```
 
+The prose is checked by [Vale](https://vale.sh) from the repository root,
+with the rules in `styles/Sluice` and the settings in `.vale.ini`:
+`devenv shell -- prose`, or `moon run site:prose`, which the fast tier
+runs. The generated `decisions/` pages are left out, since a decision
+record says what was weighed.
+
 ## Where the pages live
 
 `src/content/docs/`, one Markdown file per page, with the sidebar built

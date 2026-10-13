@@ -1,0 +1,17 @@
+extends: existence
+message: "'%s' hedges; say what holds, or say what is unknown."
+level: warning
+ignorecase: true
+tokens:
+  - seems?
+  - appears? to
+  - tends? to
+  - generally
+  - typically
+  - somewhat
+  - fairly
+  - relatively
+  - arguably
+  - more or less
+  - sort of
+  - kind of
