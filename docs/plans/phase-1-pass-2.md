@@ -60,17 +60,41 @@ needed.
     148 crates compiled), so it pays once the primary worktree builds with
     the compiler `.prototools` names.
   - **The toolchain's evaluation.** `devenv print-dev-env` in a new
-    place took 35 s to 315 s (under load averages of 200 to 470), and
-    0.1 s to 1.7 s again in the same place; the nix store holds the built
-    shell, so the cost is the evaluation. devenv 2.4 caches it in the
-    place's own `.devenv/nix-eval-cache.db`, keyed by the root: a copy of
-    another place's cache was not used (35 s, the new place's paths).
-    Its inputs are listed in `.devenv/input-paths.txt`: `devenv.nix`,
-    `devenv.lock`, `devenv.yaml`, `devenv.local.nix`, `.env`,
-    `treefmt.nix` (an import) and the user's `~/.config/nixpkgs/overlays`,
-    so no list a policy names by hand is safe to key a cache on. Two
-    places' printed toolchains differ only by the place's path and the
-    order of some lines.
+    place takes 23 s at normal load (35 s to 315 s under load averages of
+    200 to 470), and 0.1 s again in the same place: the cost is
+    evaluating nixpkgs. devenv 2.4 caches it in the place's own
+    `.devenv/nix-eval-cache.db`, keyed by the root (a copied cache was not
+    used; `DEVENV_DOTFILE` does not move it). Its inputs are listed in
+    `.devenv/input-paths.txt`: `devenv.nix`, `devenv.lock`,
+    `devenv.yaml`, `devenv.local.nix`, `.env`, `treefmt.nix` (an import)
+    and the user's `~/.config/nixpkgs/overlays`.
+    - **A printed toolchain per key**, the way an image is built once per
+      layer: a toolchain profile keys the printed toolchain by a hash of
+      the repository's identity and the content of every file devenv
+      recorded as an input (paths inside the root relative to it). On a
+      hit the place sources the stored toolchain and nothing is
+      evaluated; on a miss it is printed in
+      `<common>/sluice/toolchains/<key>/`, a directory holding only those
+      inputs, under a lock per key (a second run wanting the same key
+      waits and takes it; different keys print in parallel), and stored.
+      Checks never run there: places only read the stored toolchain.
+    - **Kept only if it is the same from any directory.** On a miss it is
+      printed in two such directories and kept only if both printings are
+      identical; anything that writes the directory's path into the
+      toolchain, in the script or in a tool in the store, makes them
+      differ. Otherwise the place prints its own, as now: slower, never
+      wrong. A toolchain holding its root is wrong elsewhere, not just
+      slow: with a toolchain printed for another directory, `treefmt
+      --ci` checked that directory and passed a misformatted file.
+    - **sluice's own toolchain, made the same from any directory**, at its
+      source: devenv's `treefmt` wrapper holds `--tree-root <root>`;
+      sluice's scripts (`cargo-tests`, `cargo-tests-affected`, the lint
+      and disk scripts) `cd` to the evaluated root; the moon lines in
+      `enterShell` name it; devenv sets `DEVENV_ROOT`, `DEVENV_STATE`,
+      `DEVENV_DOTFILE` and `PREK_HOME` from it. sluice's own find the root
+      when they run (`git rev-parse --show-toplevel`); `treefmt` and
+      devenv's variables go upstream to devenv, with a setting in
+      `devenv.nix` until they land.
 
 - **The conformance scenarios with faults** (crashes, interference,
   lost and held runs) stay on the fakes. Each shared scenario names what
