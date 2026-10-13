@@ -30,11 +30,35 @@ chrono = { version = "0.4", default-features = false, features = [
   "serde",
   "std",
 ] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 nix = { version = "0.31", default-features = false, features = [
   "signal",
   "process",
   "hostname",
+] }
+# Telemetry (ADR 0014): the core emits tracing spans and events; the
+# binary exports them over OTLP/HTTP when asked to.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "registry",
+  "std",
+] }
+tracing-opentelemetry = { version = "0.34", default-features = false, features = [
+  "metrics",
+] }
+opentelemetry = { version = "0.33", default-features = false, features = [
+  "trace",
+  "metrics",
+] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
+  "trace",
+  "metrics",
+] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+  "trace",
+  "metrics",
+  "http-proto",
+  "reqwest-blocking-client",
 ] }
 
 [workspace.lints.clippy]

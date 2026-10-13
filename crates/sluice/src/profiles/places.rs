@@ -247,14 +247,26 @@ impl Places {
     fn restore(&self, caches: &[Cache], place: &Path) -> Result<()> {
         for cache in caches {
             let exact = self.bucket(cache).join(&cache.key);
-            let from = if exact.is_dir() {
-                exact
+            let (from, hit) = if exact.is_dir() {
+                (exact, "key")
             } else {
                 match self.saved(cache)?.into_iter().next() {
-                    Some(p) => p,
-                    None => continue,
+                    Some(p) => (p, "last"),
+                    None => {
+                        tracing::info!(
+                            monotonic_counter.sluice.cache.restored = 1u64,
+                            sluice.cache = %cache.bucket,
+                            sluice.hit = "none",
+                        );
+                        continue;
+                    }
                 }
             };
+            tracing::info!(
+                monotonic_counter.sluice.cache.restored = 1u64,
+                sluice.cache = %cache.bucket,
+                sluice.hit = hit,
+            );
             for p in &cache.paths {
                 let (src, dst) = (from.join(p), place.join(p));
                 if src.symlink_metadata().is_err() || dst.symlink_metadata().is_ok() {

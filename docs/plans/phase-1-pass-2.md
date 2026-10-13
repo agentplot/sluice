@@ -44,7 +44,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, agentplot/sluice public |
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
-| 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
+| 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
@@ -182,27 +182,30 @@ needed.
   (`git read-tree -m -u <old> main`), then `git push origin main`. After
   a landing that changes sluice, `cargo install --path crates/sluice
   --locked` in the `main` worktree and `sluice protect` upgrade the guard.
-- **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
-  v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
-  `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
-  `OTEL_EXPORTER_OTLP_*` variables for endpoint, protocol (`http/protobuf`
-  by default, or `grpc`) and headers.
-  - Spans: a round per branch, and under it forming each candidate,
-    starting and polling its run, reading its verdict, blaming a
-    culprit, landing; attributes: branch, submission ids, candidate
-    revision, executor kind and confined, outcome, tasks run and
-    replayed. Metrics: queue depth, submit-to-landed time, a candidate's
-    wait and test time, passes and fails, culprits, the replay ratio, the
-    build cache's hits.
-  - Moon inside a run joins the trace: with sluice's telemetry on, the
-    moon runner passes `MOON_OTEL=1`, the `OTEL_*` variables and a W3C
-    `TRACEPARENT` into the run's environment (checked first: whether moon
-    honours `TRACEPARENT`; if not, the runs are linked by attributes).
+- **18, OpenTelemetry** (ADR 0014), as moon does it (`moon --otel`):
+  opt-in with `--otel` / `SLUICE_OTEL` (`1`, `true`, `yes`, `on`), the
+  service `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
+  `OTEL_EXPORTER_OTLP_*` variables for endpoint, headers and timeout.
+  OTLP over HTTP, protobuf.
+  - Spans: `sluice.round` per branch, under it `sluice.recover`,
+    `sluice.decide` and `sluice.perform`, and under those `sluice.form`,
+    `sluice.start`, `sluice.verdict`, `sluice.blame` and `sluice.land`;
+    attributes: branch, submissions, candidate revision, executor and
+    confined, outcome, tasks run and replayed. Metrics: queue depth and
+    window, verdicts by outcome, tasks run and replayed, culprits,
+    conflicts, landings and refused landings, submit-to-landed time, a
+    candidate's time under test, the build cache's restores by hit.
+  - Moon inside a run: moon 2.6.1 reads no parent trace (`TRACEPARENT` is
+    ignored), so its spans are tied to the round by attributes. With
+    telemetry on, a run's environment gets sluice's `OTEL_*`, moon gets
+    `--otel`, and `OTEL_RESOURCE_ATTRIBUTES` carries `sluice.trace_id`,
+    `sluice.span_id`, `sluice.place` and `sluice.revision`; `TRACEPARENT`
+    names the start span, for a tool that reads it.
   - Telemetry decides nothing: the records stay the only truth (core.11,
     core.14). A connection to a collector binds no port (core.10). A
     short `sluice step` flushes before it exits. The core emits `tracing`
-    spans and names no backend; the binary sets up the exporter. An ADR
-    (0014) records it.
+    spans and events and names no backend; the binary sets up the
+    exporter.
 - **19, Datadog.** No environment sends OTLP to Datadog yet. Each gets a
   Datadog Agent with its OTLP receiver (`DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT`,
   port 4318 on localhost), the API key in the agent's configuration or
