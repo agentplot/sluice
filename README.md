@@ -1,181 +1,225 @@
+<div align="center">
+
 # sluice
 
-A merge queue for agents in worktrees. A session builds in its place and
-submits its head; sluice orders what was submitted, tests each candidate
-exactly as it would land, names the one submission at fault when a
-candidate fails, and moves the branch only to a revision that passed.
+**A merge queue for agents working in parallel worktrees.**
 
-![sluice: agents submit and never merge; each candidate is tested as it would land; a failure names one culprit and tells only its agent; the branch moves only to what passed](docs/diagrams/sluice.svg)
+Agents submit. sluice tests each submission exactly as it would land,<br>
+names the one that broke the build, and moves the branch only to code that passed.
 
-It runs on one machine today, macOS first, and lands its own changes:
-`main` here moves only through sluice, gated on every tier in a sandbox
-(`.config/sluice.toml`). The design is a statement of invariants in
-[agentplot/blueprints](https://github.com/agentplot/blueprints) under
-`design/sluice/requirements.md`, with its book under `books/sluice/`.
-This repository holds the code, the rules a change here must keep
-(`docs/architecture/core.md`) and the decisions behind them
-(`docs/adr/`).
+[![ci](https://github.com/agentplot/sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/agentplot/sluice/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/agentplot/sluice?sort=semver)](https://github.com/agentplot/sluice/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+</div>
+
+<p align="center">
+  <img src="docs/diagrams/sluice.svg" alt="Agents submit and never merge; each candidate is tested as it would land; a failure names one culprit and tells only its agent; the branch moves only to what passed" width="820">
+</p>
+
+## Why
+
+Run ten coding agents in ten worktrees and each one's tests pass on its
+own. Merge them and the branch breaks, because nobody tested the
+combination. Let the agents merge for themselves and they race, rebase
+over each other's work, and can't tell whose change broke the build.
+
+sluice takes merging away from the agents. Each one finishes its work and
+**submits** it. sluice queues the submissions, tests each one **on top of
+everything queued ahead of it**, and lands it only if that exact
+combination passes.
+
+- **Tested as it lands.** A candidate is the branch, plus every
+  submission ahead, plus this one, checked out fresh in its own worktree.
+  The commit that lands carries exactly the tree that passed.
+- **One culprit, one message.** When a combination fails, sluice works
+  out the one submission at fault and tells only that agent, with the
+  failing tasks and their logs. Everyone else's work keeps moving.
+- **The branch only moves to green.** A git hook refuses every update to
+  a protected branch except sluice's, and sluice moves it only from the
+  revision it tested on.
+- **Parallel, and frugal.** Several candidates are tested at once, each
+  starting from the build cache its policy declares. With
+  [moon](https://moonrepo.dev), only the tasks a change affects run, and
+  a branch can accept results moon already has.
+- **Confined checks.** A run can be held in a sandbox: it writes only its
+  own worktree and reaches only the network its branch allows.
+- **No daemon.** sluice starts no services. A waiting `sluice submit`
+  drives the queue while it waits; `sluice run`, or `sluice step` from
+  cron, does the same for a host. Every decision is written to plain
+  files before it is acted on, so a crash at any point resumes cleanly.
 
 ## Install
 
-Each way installs two executables: `sluice`, and `wt-submit`, which
-worktrunk runs as `wt submit`.
-
-**With nix**, from the flake:
-
 ```sh
-nix profile install github:agentplot/sluice   # into your profile
-nix run github:agentplot/sluice -- --help      # once, without installing
+nix profile install github:agentplot/sluice
 ```
 
-or as a flake input, for NixOS, home-manager or a devenv shell:
-
-```nix
-inputs.sluice.url = "github:agentplot/sluice";
-# then: inputs.sluice.packages.${system}.default
-```
+<details>
+<summary>Other ways: a release binary, cargo, a flake input</summary>
 
 **A release binary**, for macOS on Apple silicon and Linux on x86-64 and
-ARM, from the [releases](https://github.com/agentplot/sluice/releases):
+ARM:
 
 ```sh
 curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-aarch64-darwin.tar.gz \
   | tar -xz -C ~/.local/bin sluice wt-submit
 ```
 
-**With cargo**, from the repository (Rust 1.98 or later):
+Linux: `sluice-x86_64-linux.tar.gz` or `sluice-aarch64-linux.tar.gz`.
+
+**With cargo** (Rust 1.98 or later):
 
 ```sh
 cargo install --locked --git https://github.com/agentplot/sluice sluice
 ```
 
-**From a checkout**, to work on sluice: `devenv shell`, then `cargo build`.
-Its tiers are `moon run ':#check-fast' ':#check-tools' ':#check-e2e'`.
-Commits are conventional, which a commit-msg hook checks: each push to
-`main` with a `feat`, a `fix` or another released change is tagged and
-released, its version and notes worked out by git-cliff (`cliff.toml`).
-`release-preview` shows the next release before anything lands.
+**As a flake input**, for NixOS, home-manager or a devenv shell:
 
+```nix
+inputs.sluice.url = "github:agentplot/sluice";
+# then: inputs.sluice.packages.${system}.default
+```
 
-## Usage
+</details>
 
-A repository names the branches sluice keeps and the checks that gate
-them in `.config/sluice.toml`, read from each branch's own revision. The
-smallest one runs one command in a fresh worktree of each candidate:
+Each installs two executables: `sluice`, and `wt-submit`, which
+[worktrunk](https://github.com/max-sixty/worktrunk) runs as `wt submit`.
+
+## Quick start
+
+**1. Say what gates the branch.** Commit `.config/sluice.toml`:
 
 ```toml
 [tests]
-runner = "command"          # or "moon", which runs the tasks a gate names
+runner = "command"          # or "moon", to run only what a change affects
 command = "make test"
 
 [checkout]
 method = "git-worktree"
 
-[branches."bolt/*"]
+[branches.main]
 parallel = 4                # candidates under test at once
-# with runner = "moon": required = ["#check-fast"], tasks or tags
+trust = ["open"]            # by default only a confined run counts:
+                            # [executor] kind = "sandbox" on macOS
 ```
 
-Commit it to the branches it names, then, once per repository:
+sluice reads this file from the branch itself, never from a submission,
+so no submission can loosen the rules it is judged by.
+
+**2. Protect the branch**, once per repository:
 
 ```sh
-sluice protect    # a git hook refuses any update to those branches but sluice's
+sluice protect
 ```
 
-From a session's worktree, with its work committed:
+**3. Submit** from an agent's worktree, with its work committed:
 
 ```sh
-wt submit bolt/x          # through worktrunk, or the same as:
-sluice submit bolt/x      # queue this worktree's head and wait
+sluice submit main          # or: wt submit main
 ```
 
-It waits, running sluice's rounds while it does, and prints what
-happened:
+It waits, and says what happened:
 
 ```
-submission 3 to bolt/x · 1 queued ahead (#2)
-testing bolt/x + #2 + #3 · 4 tasks to run, 2 replayed
+submission 3 to main · 1 queued ahead (#2)
+testing main + #2 + #3 · 4 tasks to run, 2 replayed
 passed · landed as 9f2c1e4
 ```
 
-or, when the combination fails and this submission is the cause:
+or, when this submission broke the combination:
 
 ```
 failed: tests:t-cards
-  on bolt/x + #2 + #3 (5b81d07)
+  on main + #2 + #3 (5b81d07)
   #2 passed on its own, so the failure is from this submission
-  log of tests:t-cards: /…/sluice/.logs/bolt/x/c4/tests:t-cards.log
+  log of tests:t-cards: /…/sluice/.logs/main/c4/tests:t-cards.log
 fix it in your worktree and submit again
 ```
 
-The exit says the same: 0 landed, 1 failed, 2 a conflict or a refusal,
-130 stopped by Ctrl-C (the submission stays queued), 3 an error.
+The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
+refusal, `130` stopped with Ctrl-C (the submission stays queued).
 
-| Command | What it does |
+A complete setup, with moon, a sandbox, a build cache and two tiers of
+branches, is walked through in [docs/examples](docs/examples/README.md).
+
+## Commands
+
+| Command | |
 |---|---|
-| `sluice submit <branch>` | Queue this worktree's head and wait. `--no-wait` returns once queued, `--check` only says whether it would conflict, `--after 2,5` lands it after those, `--json` prints the record. |
-| `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` is one submission. |
-| `sluice step <branch>` | One round of the branch's work, then exit: for cron, CI or a hook. |
-| `sluice run` | Rounds for every branch with a queue until stopped, holding the host to its bound of runs. |
-| `sluice amend <id>` | Change a queued submission's `--after` or `--priority`, until it is under test. |
+| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome. `--no-wait` returns once queued; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
+| `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. |
+| `sluice run` | Work every branch's queue until stopped. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
+| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
 | `sluice withdraw <id>` | Take a submission out of the queue. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
 
-A session names itself with `SLUICE_AGENT`; sluice tells only that
-session about its own submission. How many runs a host has under test at
-once is the host's, in `~/.config/sluice/config.toml`:
+An agent names itself with `SLUICE_AGENT`. How many runs a host tests at
+once is the host's own setting, in `~/.config/sluice/config.toml`:
 
 ```toml
 [runs]
-max = 2    # default: a quarter of the processors; each run gets an equal share
+max = 2    # default: a quarter of the processors, shared equally between runs
 ```
 
-With `SLUICE_OTEL=1`, sluice exports traces and metrics over OTLP/HTTP to
-where the `OTEL_EXPORTER_OTLP_*` variables say (by default
-`localhost:4318`), and the checks moon runs for it export beside them
-([ADR 0014](docs/adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md)).
-`nix run nixpkgs#otel-tui` shows them in a terminal.
+## Telemetry
 
-A whole repository's setup, with moon, a sandbox, a build cache and two
-tiers of branches, is walked through in
-[docs/examples/](docs/examples/README.md).
+With `SLUICE_OTEL=1`, sluice sends traces and metrics over OTLP to
+`localhost:4318`: a trace per round, with each candidate's forming,
+testing, verdict and landing, and metrics for queue depth, time to land,
+failures and cache use. moon's traces from inside each run carry the
+round's trace id. Nothing reads them back: the queue never depends on
+its telemetry.
 
-## Design
-
-One queue design, two instances:
-
-```
-   units' places  --submit-->  [queue of the bolt branch]   --lands-->  bolt branch
-   bolt branches  --submit-->  [queue of the shared branch] --lands-->  shared branch
+```sh
+nix run nixpkgs#otel-tui    # watch it in a terminal
 ```
 
-The core knows git and five seams: a place, a check, a branch, a driver
-and the records. Each is bound by a profile: a git worktree or a
-container for the place; moon or a command for the check, run open or in
-the host's sandbox; local refs or refs pushed to the forge for the
-branch; `wt submit`, crew, flywheel or a remote submit for the driver;
-local files, refs on the shared remote or a central server for the
-records. sluice starts no services: a repository's tests bring up what
-they need. What setting it up looks like is in
-[docs/examples/](docs/examples/README.md).
+Setting up a host to receive it: [docs/telemetry.md](docs/telemetry.md).
 
-## Many hosts
+## Platforms
 
-Sessions on many hosts may submit to one branch, a bolt's branch as much
-as the shared branch. Two deployments are designed and neither is built
-yet: peers, where sluice runs on every host and they coordinate through
-records on the shared remote, and a central server, which takes the
-queue and the execution off every other host. Both are choices of
-profiles over one core.
+| | macOS | Linux |
+|---|---|---|
+| The queue, worktrees, checks, branch protection | ✓ | ✓ |
+| Release binaries | Apple silicon | x86-64, ARM |
+| Sandboxed checks | ✓ Seatbelt | planned: bubblewrap, Landlock |
 
-## Built
+Each host runs its own queue today. Several hosts sharing one branch's
+queue, as peers coordinating through the git remote or through a central
+server, is designed and not yet built.
 
-The bolt and shared branches' queues on one host: the core and its
-conformance suite, a git worktree per candidate with the build cache its
-policy declares, the moon and command checks under the open or sandbox
-executor (Seatbelt on macOS), local refs and records, branch protection,
-and `wt submit`, which waits, exits with the outcome, and removes the
-session's worktree once it lands. The plan and its status are in
-`docs/plans/phase-1-pass-2.md`.
+## How it is built
 
-MIT licensed.
+A small core that knows git, and five seams it reaches everything else
+through: where a candidate is checked out, how its checks run, how the
+branch moves, how agents submit, and where the records live. Each seam
+is bound by a profile, so one core works with moon or a plain command, a
+sandbox or none, local refs or a forge.
+
+The design is a statement of invariants in
+[agentplot/blueprints](https://github.com/agentplot/blueprints)
+(`design/sluice/requirements.md`). This repository cites its clauses by
+number, keeps the rules a change must respect in
+[docs/architecture](docs/architecture/core.md), and records each decision
+in [docs/adr](docs/adr).
+
+sluice lands its own changes: `main` here moves only through sluice,
+gated on every test tier in a sandbox.
+
+## Development
+
+```sh
+devenv shell
+moon run ':#check-fast' ':#check-tools' ':#check-e2e'
+```
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org),
+checked by a commit hook. Each push to `main` with a feature, a fix or a
+docs change is tagged and released, with notes by
+[git-cliff](https://git-cliff.org); `release-preview` shows the next one.
+
+## License
+
+[MIT](LICENSE)
