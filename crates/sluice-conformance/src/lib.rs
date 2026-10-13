@@ -372,13 +372,28 @@ impl Statement {
 }
 
 /// Where the statement is: `SLUICE_STATEMENT`, or agentplot/blueprints
-/// checked out beside this repository.
+/// checked out beside this repository, found from the repository's git
+/// common dir (`<dir>/sluice.git` beside `<dir>/../blueprints/main`), which
+/// every worktree and every place of sluice's shares.
 pub fn statement_path() -> PathBuf {
     if let Ok(p) = std::env::var("SLUICE_STATEMENT") {
         return p.into();
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../../blueprints/main/design/sluice/requirements.md")
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let common = std::process::Command::new("git")
+        .arg("-C")
+        .arg(here)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+    let beside = common
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .unwrap_or(here);
+    beside.join("blueprints/main/design/sluice/requirements.md")
 }
 
 pub fn read_statement(path: &Path) -> Result<Statement> {
