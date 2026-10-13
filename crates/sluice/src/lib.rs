@@ -528,6 +528,15 @@ fn submit(
                     hashes(&ahead)
                 )?,
             }
+            // 20: where what each failed task printed is kept.
+            for f in sub.failed.iter().filter(|f| f.log.is_some()) {
+                writeln!(
+                    out,
+                    "  log of {}: {}",
+                    f.task,
+                    f.log.as_deref().unwrap_or("")
+                )?;
+            }
             writeln!(out, "fix it in your worktree and submit again")?;
         }
         State::Conflict => {

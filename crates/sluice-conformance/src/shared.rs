@@ -35,7 +35,9 @@ pub fn s1_two_heads_pass_and_land_in_order(h: &impl Rig) {
     assert_eq!(history[2], base);
     assert_eq!(h.parents(k1), vec![base.clone(), a]);
     assert_eq!(h.parents(k2), vec![k1.clone(), b]);
-    assert!(h.message(k1).starts_with(&format!("Land #{one}: unit/a\n")));
+    assert!(h
+        .message(k1)
+        .starts_with(&format!("chore(land): #{one} unit/a\n")));
     // Each session learns its own landing, and only its own (50).
     let ta = h.told_to("agent-a");
     assert_eq!(ta.len(), 1);
@@ -103,12 +105,19 @@ pub fn s3_the_second_fails_and_only_its_session_hears(h: &impl Rig) {
     assert_eq!(told.len(), 1);
     match &told[0].told {
         Told::Failed {
-            failed,
+            failed: tasks,
             submissions,
+            logs,
             ..
         } => {
-            assert_eq!(failed, &vec!["a:test".to_string()]);
+            assert_eq!(tasks, &vec!["a:test".to_string()]);
             assert_eq!(submissions, &vec![one, two]);
+            // 20: told where the failed task's output is kept, readable
+            // with no sluice running, and so is its record.
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0].task, "a:test");
+            assert_eq!(failed.failed[0].log.as_deref(), Some(logs[0].text.as_str()));
+            assert!(!h.kept_log(&logs[0].text).unwrap_or_default().is_empty());
         }
         other => panic!("told {other:?}"),
     }
@@ -191,7 +200,7 @@ pub fn s11_a_landing_names_its_verdict_and_leaves_the_session_place(h: &impl Rig
     assert_eq!(
         h.message(&landed),
         format!(
-            "Land #{id}: unit/touches\n\nSluice-Submission: {id}\n\
+            "chore(land): #{id} unit/touches\n\nSluice-Submission: {id}\n\
              Sluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tested}\n\
              Sluice-Result: passed (3 run, 0 replayed)\n"
         )

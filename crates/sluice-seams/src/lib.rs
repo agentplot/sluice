@@ -265,6 +265,32 @@ pub trait Tests {
     /// the windows of the branches it serves. The core counts the runs
     /// under test from the records.
     fn bound(&self) -> Result<usize>;
+
+    /// 20: what each of `tasks` printed in a finished run, while its place
+    /// still exists: the run's own output for a task with none of its
+    /// own. Only the end of a long output is kept.
+    fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>>;
+}
+
+/// What one task printed in a run, or where it is kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskLog {
+    pub task: String,
+    /// The output itself, from the check seam; where it is kept, from the
+    /// records seam.
+    pub text: String,
+}
+
+/// How many failed candidates of a branch keep their logs.
+pub const KEPT_LOGS: usize = 20;
+
+/// The most of one task's output kept: its end.
+pub const LOG_LIMIT: usize = 64 * 1024;
+
+/// The end of `bytes`, at most `LOG_LIMIT` of them, as text.
+pub fn log_tail(bytes: &[u8]) -> String {
+    let start = bytes.len().saturating_sub(LOG_LIMIT);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +389,8 @@ pub enum Told {
         combination: Rev,
         submissions: Vec<u64>,
         timed_out: bool,
+        /// Where each failed task's output is kept (20).
+        logs: Vec<TaskLog>,
     },
     Conflict {
         paths: Vec<String>,
@@ -463,4 +491,9 @@ pub trait State {
 
     /// 69: append to the repository's results log.
     fn record_results(&self, lines: &[u8]) -> Result<()>;
+
+    /// 20: keep a failed candidate's task outputs, readable with no sluice
+    /// running (26); the answer says where each is. Only the last
+    /// `KEPT_LOGS` candidates of a branch keep theirs.
+    fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>>;
 }

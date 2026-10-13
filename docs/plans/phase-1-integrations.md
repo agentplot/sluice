@@ -147,7 +147,7 @@ fn main() {
     let expected = gix::ObjectId::from_hex(a[5].as_bytes()).expect("expected");
     let who = gix::actor::Signature { name: "sluice".into(), email: "sluice@localhost".into(),
         time: gix::date::Time { seconds: 1_791_710_521, offset: 0 } };
-    let message = format!("Land #12: unit/touches\n\nSluice-Submission: 12\nSluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tree}\nSluice-Result: passed (2 run, 31 replayed)\n");
+    let message = format!("chore(land): #12 unit/touches\n\nSluice-Submission: 12\nSluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tree}\nSluice-Result: passed (2 run, 31 replayed)\n");
     let commit = gix::objs::Commit { tree, parents: [line, head].into_iter().collect(),
         author: who.clone(), committer: who.clone(), encoding: None, message: message.into(), extra_headers: vec![] };
     let landed = repo.write_object(&commit).expect("write").detach();
@@ -179,7 +179,7 @@ parent 317b4376c789dcdfc393131585987e9343de1cdd
 author sluice <sluice@localhost> 1791710521 +0000
 committer sluice <sluice@localhost> 1791710521 +0000
 
-Land #12: unit/touches
+chore(land): #12 unit/touches
 
 Sluice-Submission: 12
 Sluice-From: crw-1-unit-1 (unit/touches)
@@ -1495,6 +1495,20 @@ through another branch's (an ancestor directory holding a `version`
 file) and one whose name is `results.jsonl`; `branches()` lists the
 directories holding a `version` file.
 
+
+### Failed tasks' logs (20)
+
+`State::keep_logs(branch, candidate, logs)` writes each failed task's
+output to `<common>/sluice/.logs/<branch>/<candidate>/<task>.log` (task
+names flattened as place names are) and answers each file's path. It sits
+beside the branch's records, never among them: `read` walks the branch's
+directory whole on every step, and a log is read only by whoever asks.
+Only the last 20 candidates of a branch keep theirs (`KEPT_LOGS`), by the
+directories' times. The check seam gives the text (`Tests::logs`): for
+moon, `<place>/.moon/cache/states/<project>/<task>/{stdout,stderr}.log`;
+for a task moon kept nothing of, and for the `command` runner, the run's
+own `out.log`; the last 64 KiB of either (`LOG_LIMIT`).
+
 ### The lock (ADR 0005, core.14)
 
 `std::fs::File::{lock, try_lock, unlock}` are stable since Rust 1.89;
@@ -1652,6 +1666,18 @@ refused: unit/touches holds changes that are not committed
   ?? sub/new.txt
 commit or remove them and submit again
 ```
+
+### Removing a landed session's worktree (C.4)
+
+`wt-submit` runs `sluice submit` and, when a waiting submission lands
+(exit 0), removes its own worktree as `wt merge` does: `wt -C <worktree>
+remove --foreground`, its branch going too once merged into the default
+branch. It follows the user's worktrunk `[merge] remove` (true when
+unset, read from `wt config show --format json`); `wt submit
+--no-remove` keeps the worktree, and `--no-wait` or `--check` never
+removes. A removal that fails (an unapproved `pre-remove` hook, say) is
+reported and the exit stays the landing's. The core never touches a
+session's worktree (core.16).
 
 ### Waiting, `--no-wait`, `--check`
 

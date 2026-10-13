@@ -109,7 +109,16 @@ fn submit_fails_and_names_the_combination() {
         lines[4],
         "  #1 passed on its own, so the failure is from this submission"
     );
-    assert_eq!(lines[5], "fix it in your worktree and submit again");
+    // 20: where the failed task's output is kept, and what it holds.
+    let at = lines[5]
+        .strip_prefix("  log of tests:t-batch-cards: ")
+        .unwrap_or_else(|| panic!("{}", lines[5]));
+    assert!(f
+        .world
+        .kept_log(at)
+        .unwrap()
+        .contains("tests:t-batch-cards failed"));
+    assert_eq!(lines[6], "fix it in your worktree and submit again");
 }
 
 #[test]

@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Network, Outcome, Place, Progress, Rev, RunReport, RunRequest, Setting, Settings,
-    Source, Tests,
+    Limits, Network, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Setting,
+    Settings, Source, Tests,
 };
 use support::Repo;
 
@@ -100,11 +100,15 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
 }
 
 fn finish(c: &Checks, req: &RunRequest) -> RunReport {
+    finish_run(c, req).1
+}
+
+fn finish_run(c: &Checks, req: &RunRequest) -> (RunHandle, RunReport) {
     let run = c.start(req).unwrap();
     let until = Instant::now() + Duration::from_secs(120);
     loop {
         match c.progress(&run).unwrap() {
-            Progress::Finished(r) => return r,
+            Progress::Finished(r) => return (run, r),
             Progress::Lost => panic!("lost"),
             Progress::Running => {}
         }
@@ -231,10 +235,17 @@ fn a_failure_and_its_dependent() {
     let repo = workspace("moon-fail");
     let c = checks(&repo);
     change(&repo, &[("alpha/value.txt", "broken\n")]);
-    let r = finish(&c, &request(&repo, "p1", &["#check-fast"], None));
+    let (run, r) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
     assert_eq!(tasks(&r), [("alpha:test".into(), Outcome::Fail, false)]);
     assert_eq!(r.tasks[0].hash.len(), 64);
     assert_eq!(r.missing, ["beta:test"]);
+    // 20: what the failed task printed, as moon kept it; the dependent
+    // moon never ran has the run's own output.
+    let logs = c
+        .logs(&run, &["alpha:test".into(), "beta:test".into()])
+        .unwrap();
+    assert!(logs[0].text.contains("alpha: broken"), "{}", logs[0].text);
+    assert!(!logs[1].text.is_empty());
 }
 
 /// 70: with no verified revision every required task runs; two tags run

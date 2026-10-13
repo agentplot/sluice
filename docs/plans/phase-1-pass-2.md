@@ -39,6 +39,10 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh`, `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
 | 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 7, `cli:tools` |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml` on `main`; this row landed on `main` through `wt submit`, gated on all three tiers in the sandbox |
+| 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
+| 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
+| 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
+| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | next |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -83,13 +87,47 @@ needed.
   (section 9) lands on `main` by `wt merge`, since a branch's gate is
   read from the branch (core.15) and `main` has none yet; after that,
   sluice lands sluice.
-- **The culprit's session** is shown its failed tasks' logs (20), which
-  stay in the place until it is released.
+- **13, the culprit's failed tasks' logs.** When a run finishes with
+  failures, the core asks the check seam for each failed task's output
+  (`Tests::logs(run, tasks)`; moon 2.6 keeps it in the place at
+  `.moon/cache/states/<project>/<task>/{stdout,stderr}.log`; the `command`
+  runner returns what it captured) and writes it through the records seam
+  before the place is released, at
+  `<common>/sluice/.logs/<branch>/<candidate>/<task>.log`, beside the
+  branch's records since a step reads every record of its branch: the
+  last 64 KiB of each, the last 20 failed candidates per branch kept
+  (core.11). The
+  culprit's session is told each log's path with the failing checks and
+  the candidate (20); `wt submit` prints them and `sluice status <id>`
+  lists them; no other session is told.
+- **14, the landing subject** is the policy's, conventional by default:
+  `[landing] subject = "chore(land): #{id} {from}"`, with `{id}` (the
+  submission), `{from}` (the session's branch), `{agent}` and `{to}` (the
+  branch landed on); the `Sluice-*` trailers are unchanged.
+- **15, removing a landed session's worktree** is the driver's (C.4;
+  core.16 keeps the core off it): `wt-submit`, when its submission lands,
+  runs `wt remove` on its own worktree as `wt merge` does, following
+  worktrunk's `[merge] remove` setting, with `--no-remove`; the branch
+  goes too, `main` holding it.
+- **16, publishing.** A root `flake.nix` with `packages.default` (sluice
+  and `wt-submit` from `Cargo.lock`), so `nix profile install
+  github:agentplot/sluice` installs it on macOS and Linux; a GHA workflow
+  on push runs `nix build` and the fast tier on macOS and Linux runners,
+  and on a tag publishes binaries to a GitHub release. Before the
+  repository is made public, its whole history is checked for secrets and
+  anything commercial (core.13); making it public is confirmed with the
+  operator first.
 - **8, end to end.** Section 4's acceptance test 7 on real places: one
   `sluice run` with `[runs] max = 2` holds three branches to two runs.
 
 ## Decisions this pass builds on
 
+- The branch protection hook calls an installed sluice at a stable path
+  (`~/.cargo/bin/sluice` now, the nix profile's once published), never
+  one built from a candidate: a submission never changes the guard it is
+  judged by (as core.15 keeps it from its gate). A new sluice guards
+  `main` once it is installed, a step of its own; the candidate's code is
+  tested by its checks, the e2e tier building sluice from the tree.
 - One chain per branch; lanes are gone (statement clauses 8 to 10, S6).
 - A waiting `wt submit` runs sluice's rounds on one machine; with
   `--remote` it only submits (ADR 0011; the many-hosts proposal).

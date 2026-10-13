@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
     Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunRequest, Source,
-    Written,
+    TaskLog, Written,
 };
 
 use crate::line::Line;
@@ -466,6 +466,19 @@ impl Sluice<'_> {
                     if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {
                         v.passed = false;
                     }
+                    // 20: what the failed tasks printed, kept while the
+                    // place still holds it.
+                    if !v.passed && !v.failed.is_empty() {
+                        let tasks: Vec<String> = v.failed.iter().map(|f| f.task.clone()).collect();
+                        let logs = self.seams.tests.logs(&run, &tasks)?;
+                        let kept = self.seams.state.keep_logs(&line.branch, &c.id, &logs)?;
+                        for f in &mut v.failed {
+                            f.log = kept
+                                .iter()
+                                .find(|k| k.task == f.task)
+                                .map(|k| k.text.clone());
+                        }
+                    }
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
                     x.state = if v.passed {
                         CandidateState::Passed
@@ -721,6 +734,16 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
                 submissions: c.submissions.clone(),
                 timed_out: c.state == CandidateState::TimedOut,
+                logs: c
+                    .failed
+                    .iter()
+                    .filter_map(|f| {
+                        f.log.clone().map(|at| TaskLog {
+                            task: f.task.clone(),
+                            text: at,
+                        })
+                    })
+                    .collect(),
             },
         });
         line.doc.window = (line.doc.window / 2).clamp(1, rules.parallel);
@@ -747,6 +770,10 @@ impl Sluice<'_> {
                 return Ok(false);
             }
             let deepest = &cands[n - 1];
+            let subject = self
+                .policy_at(&base)?
+                .map(|p| p.landing_subject)
+                .unwrap_or_else(|| crate::policy::LANDING_SUBJECT.into());
             let mut parent = base.clone();
             let mut commits = Vec::new();
             for c in &cands[..n] {
@@ -762,7 +789,7 @@ impl Sluice<'_> {
                     tree_of: c.revision.clone(),
                     parent: parent.clone(),
                     head: sub.head.clone(),
-                    message: landing_message(&sub, verdict),
+                    message: landing_message(&subject, &line.branch, &sub, verdict),
                 })?;
                 let s = line.sub_mut(sub.id);
                 s.state = State::Landing;

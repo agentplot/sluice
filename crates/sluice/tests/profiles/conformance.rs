@@ -32,7 +32,7 @@ use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
     Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
-    RunHandle, RunRequest, Session, Settings, Tests,
+    RunHandle, RunRequest, Session, Settings, TaskLog, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -94,6 +94,10 @@ impl Tests for RecordedChecks {
 
     fn bound(&self) -> Result<usize> {
         self.inner.bound()
+    }
+
+    fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
+        self.inner.logs(run, tasks)
     }
 }
 
@@ -296,6 +300,10 @@ impl Real {
 }
 
 impl Rig for Real {
+    fn kept_log(&self, at: &str) -> Option<String> {
+        std::fs::read_to_string(at).ok()
+    }
+
     fn sluice(&self) -> Sluice<'_> {
         Sluice::new(
             Seams {

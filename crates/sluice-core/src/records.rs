@@ -15,7 +15,7 @@
 //! the log's (`log`). See `docs/plans/phase-1-questions.md`.
 
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Contested, Enforced, Outcome, Rev, RunHandle, Submitter, Told};
+use sluice_seams::{Contested, Enforced, Outcome, Rev, RunHandle, Submitter, TaskLog, Told};
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
 pub const BRANCH_SCHEMA: &str = "sluice/branch@1";
@@ -105,6 +105,9 @@ pub struct FailedTask {
     /// Empty for a required check the run left without a result (15).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hash: String,
+    /// Where what it printed is kept (20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +270,8 @@ pub enum ToldRecord {
         submissions: Vec<u64>,
         #[serde(default)]
         timed_out: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        logs: Vec<TaskLog>,
     },
     Conflict {
         paths: Vec<String>,
@@ -283,11 +288,13 @@ impl ToldRecord {
                 combination,
                 submissions,
                 timed_out,
+                logs,
             } => Told::Failed {
                 failed,
                 combination,
                 submissions,
                 timed_out,
+                logs,
             },
             ToldRecord::Conflict { paths, with } => Told::Conflict { paths, with },
         }

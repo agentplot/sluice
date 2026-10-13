@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Enforced, Limits, Network, Outcome, Progress, RunHandle, RunReport, RunRequest, Setting,
-    Settings, Source, TaskResult, Tests,
+    log_tail, Enforced, Limits, Network, Outcome, Progress, RunHandle, RunReport, RunRequest,
+    Setting, Settings, Source, TaskLog, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -420,6 +420,25 @@ impl Tests for Checks {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.instance.bound)
+    }
+
+    fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
+        let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
+            .with_context(|| format!("reading run {}", run.0))?;
+        let out = std::fs::read(self.runs.dir(&run.0).join("out.log")).unwrap_or_default();
+        Ok(tasks
+            .iter()
+            .map(|task| {
+                let own = match meta.runner.as_str() {
+                    "moon" => Moon.log(&meta.place, task),
+                    _ => None,
+                };
+                TaskLog {
+                    task: task.clone(),
+                    text: log_tail(own.as_deref().unwrap_or(&out)),
+                }
+            })
+            .collect())
     }
 }
 

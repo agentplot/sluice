@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Changes, Guard, Snapshot, State, Written};
+use sluice_seams::{Changes, Guard, Snapshot, State, TaskLog, Written, KEPT_LOGS};
+
+use crate::runs::flat_name;
 
 const VERSION: &str = "version";
 const LOCK: &str = "lock";
@@ -379,6 +381,39 @@ impl State for LocalFiles {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e).context("reading the results log"),
         }
+    }
+
+    fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>> {
+        // Beside the branch's records, never among them: a step reads every
+        // record of its branch, and a log is read only by whoever asks.
+        self.dir(branch)?;
+        let dir = self.root.join(".logs").join(branch);
+        let here = dir.join(flat_name(candidate));
+        std::fs::create_dir_all(&here).with_context(|| format!("creating {}", here.display()))?;
+        let mut kept = Vec::new();
+        for l in logs {
+            let name = format!("{}.log", flat_name(&l.task));
+            write_atomic(&here, &name, l.text.as_bytes())?;
+            kept.push(TaskLog {
+                task: l.task.clone(),
+                text: here.join(&name).display().to_string(),
+            });
+        }
+        // Only the last KEPT_LOGS candidates keep theirs.
+        let mut all = Vec::new();
+        for e in std::fs::read_dir(&dir)? {
+            let e = e?;
+            if e.file_type()?.is_dir() {
+                all.push((e.metadata()?.modified()?, e.path()));
+            }
+        }
+        all.sort_by_key(|a| std::cmp::Reverse(a.0));
+        for (_, old) in all.into_iter().skip(KEPT_LOGS) {
+            if old != here {
+                std::fs::remove_dir_all(old)?;
+            }
+        }
+        Ok(kept)
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
