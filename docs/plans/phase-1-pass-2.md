@@ -34,7 +34,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 5 | checkouts: a detached `git worktree` (ADR 0013) | §5 | **done**: `profiles/places.rs`, acceptance tests, `cli:tools` |
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
-| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace: `e2e/e2e.sh`; crew once it is on moon 2.6 |
+| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace: `e2e/e2e.sh`, and acceptance test 7 of section 4 (`tests/instance.rs`); crew once it is on moon 2.6, set up outside this repository |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh`, `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
 | 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 7, `cli:tools` |
@@ -45,7 +45,6 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, agentplot/sluice public |
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
-| 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 
@@ -206,22 +205,10 @@ needed.
     short `sluice step` flushes before it exits. The core emits `tracing`
     spans and events and names no backend; the binary sets up the
     exporter.
-- **19, Datadog.** No environment sends OTLP to Datadog yet. Each gets a
-  Datadog Agent with its OTLP receiver (`DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT`,
-  port 4318 on localhost), the API key in the agent's configuration or
-  the CI's secrets, never in a repository:
-  - **GHA**: the agent as a service container for the jobs; moon's
-    `MOON_OTEL` and sluice's `SLUICE_OTEL` set in the workflow, the
-    service names `sluice-ci` and `moon`.
-  - **The fleet's hosts** running crew and sluice: the agent on each
-    host; sluice's runs reach it on localhost, which the sandbox allows
-    (`network = "localhost"`), so no network policy changes.
-  - **Switchboard**: as the fleet's hosts.
-  - **A remote sluice**, later: the same agent beside it.
-  The agents' setup belongs to those environments' own repositories
-  (crew, flywheel, Switchboard); sluice documents the variables.
-- **8, end to end.** Section 4's acceptance test 7 on real places: one
-  `sluice run` with `[runs] max = 2` holds three branches to two runs.
+- **8, end to end.** Section 4's acceptance test 7 on real places
+  (`tests/instance.rs`, `cli:tools`): one `sluice run` with `[runs] max =
+  2` serving three branches of window four has two runs under test at
+  most, reaches two, and gives each half the processors.
 
 ## Decisions this pass builds on
 
@@ -296,6 +283,13 @@ needed.
   (ADR 0009; section 1).
 
 ## Outside this repository
+
+- **Where sluice's telemetry goes**, set up by each host's own
+  repository from the brief in `docs/telemetry.md`: a receiver on
+  `localhost:4318` and `SLUICE_OTEL=1` where sluice runs. The Mac Studio:
+  otel-tui or otel-desktop-viewer. crew's EC2 host: the Datadog Agent.
+  swancloud and its crews: a viewer first, a hosted backend later through
+  a collector on each host. GHA sends nothing.
 
 - **crew:** export `SLUICE_AGENT=$CREW_AGENT` in its role environment;
   the conductor brings its worktree level when its bolt's branch moves;
