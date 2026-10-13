@@ -72,6 +72,7 @@ trust = ["confined", "sandbox"]
 | | `"command"` | Run one command; exit 0 passes. Every test runs every time. For a repository without moon. |
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. |
+| `release` | a command | Run when the checkout is removed, after the tests, however they ended, under the same executor and environment: removes what the tests handed to another process, e.g. `"docker rm -f $(docker ps -aq --filter label=sluice.place=$SLUICE_PLACE)"`. It must be safe to run twice. |
 
 Which tasks must pass is not here: it is set per branch, because that is
 the point. A bolt's branch lands units many times a day and wants a fast
@@ -94,6 +95,15 @@ combination passed saves its `paths` under its key. sluice's own caches
 two and a half minutes cold takes under a second warm. A cache only spares
 work: it never decides a result.
 
+**`ports`**: the ports a checkout's tests use, by name, e.g. `["ministack",
+"api", "console"]`. Each checkout gets a block of its own, held on the host
+across every repository and checked free first: `SLUICE_PORT_MINISTACK`,
+`SLUICE_PORT_API`, `SLUICE_PORT_CONSOLE`, in the order written, from
+`ports_from` (20000 by default) plus the checkout's slot times the number
+of names. No two checkouts alive share a port, and a name's port stays
+the same for the checkout's life, so separate systems find each other by
+these numbers.
+
 ### `[executor]`: what the tests may touch
 
 | key | values | meaning |
@@ -102,6 +112,7 @@ work: it never decides a result.
 | | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
+| `docker` | `true`, `false` | Whether the tests may reach the container engine's socket. A container may mount any path, so a run that could reach it is recorded as not confined. The engine pulls images itself, whatever `network` says. |
 
 Every result records which executor ran it and what it held.
 
@@ -113,19 +124,20 @@ default is the conventional `chore(land): #{id} {from}`.
 
 ### Services the tests need
 
-sluice starts no services. If the tests need a database or a dev server, the
-test command brings it up and tears it down, the way every CI system and
-merge queue leaves it to the job: a moon task that depends on a server task
-(moon 2.6's `wait` and `cleanup` dependencies), `devenv test` with its
-processes and per-instance ports, testcontainers, Playwright's `webServer`,
-a pytest fixture. Ports come from the tool: a free port picked at start, or
-port 0.
+sluice starts no services. If the tests need a database, an emulator or a
+dev server, the tests bring it up, the way every CI system and merge queue
+leaves it to the job: a moon task the tests depend on that starts devenv's
+processes and waits until each answers, testcontainers, Playwright's
+`webServer`, a pytest fixture. sluice gives them the ports to use.
 
-What sluice does owe the tests, and nothing more:
+What sluice owes the tests, and nothing more:
 
 - a clean checkout of exactly the combination under test;
 - `SLUICE_CHECKOUT` and `SLUICE_TMP` in the environment: where the checkout
   is, and a scratch directory of its own;
+- `SLUICE_PLACE`, a short name of the checkout's own, for its containers,
+  deployments and addresses, and a `SLUICE_PORT_<NAME>` for each port
+  `[checkout] ports` names;
 - a time limit per branch, and a run that hits it recorded as timed out,
   not failed;
 - the test command run in its own process group, which sluice kills when the
@@ -133,10 +145,9 @@ What sluice does owe the tests, and nothing more:
   running can never break the next combination and get the wrong submission
   blamed.
 
-Anything that escapes the process group (a docker container, a detached
-daemon) is the repository's to clean up, through moon's `cleanup`
-dependencies, devenv, testcontainers' reaper, or a worktrunk `post-remove`
-hook.
+- `[tests] release` run whenever the checkout is removed, for what escapes
+  the process group (a container, a detached process manager), including
+  after a time limit, when the tests' own cleanup never runs.
 
 ### `[branches."<pattern>"]`: rules per target branch
 
