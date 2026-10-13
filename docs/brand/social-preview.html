@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- The repository's social preview, 1280 × 640. Rendered with:
+     chrome --headless=new --user-data-dir="$(mktemp -d)" --hide-scrollbars \
+       --window-size=1280,640 --virtual-time-budget=5000 \
+       --screenshot="$PWD/social-preview.png" "file://$PWD/social-preview.html"
+     Upload the PNG in the repository's Settings, Social preview. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>sluice social preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; width: 1280px; height: 640px; background: #0E1116; }
+  body { box-sizing: border-box; padding: 88px 96px; display: flex; flex-direction: column; justify-content: space-between; color: #F2F1EC; font-family: 'IBM Plex Sans', sans-serif; }
+  .lockup { display: flex; align-items: center; gap: 28px; }
+  .lockup img { width: 140px; height: 110px; }
+  .name { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 96px; letter-spacing: -0.02em; }
+  .tagline { font-size: 44px; line-height: 1.3; max-width: 980px; color: #C9CBD2; }
+  .url { font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 28px; color: #8C92A0; }
+</style>
+</head>
+<body>
+  <div class="lockup"><img src="sluice-mark-dark.svg" alt=""><span class="name">sluice</span></div>
+  <div class="tagline">A merge queue for agents<br>working in parallel worktrees.</div>
+  <div class="url">github.com/agentplot/sluice</div>
+</body>
+</html>

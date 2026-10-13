@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/sluice-mark-dark.svg">
+  <img src="docs/brand/sluice-mark-light.svg" alt="" width="112" height="88">
+</picture>
+
 # sluice
 
 **A merge queue for agents working in parallel worktrees.**
