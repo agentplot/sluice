@@ -1,5 +1,7 @@
 extends: occurrence
 message: "Sentences over 35 words are hard to follow; split it."
+description: "A long sentence is allowed when its subject and verb are its character and action; most long sentences are not. The limit is a prompt to look, not a ban."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
 level: suggestion
 scope: sentence
 max: 35

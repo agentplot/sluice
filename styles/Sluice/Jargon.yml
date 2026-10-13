@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' is structural jargon with no definition; use the plain word (path, tier, threshold, boundary) or define it in the glossary."
+description: "Plain English does not drop specialist terms; it defines them once. A structural metaphor that no glossary defines is a private word, and the reader who did not coin it is the one the book is for."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#3-plain-english-is-for-experts-too
 level: warning
 ignorecase: true
 tokens:

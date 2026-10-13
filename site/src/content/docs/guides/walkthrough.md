@@ -131,7 +131,7 @@ suite, and verified after landing with a post-merge hook, drops both.
 sluice runs the suite on the exact combination that will land, which is
 what the pre-merge hook was approximating, and nothing lands untested, so
 there is nothing to verify after. Agents still run their tests while they
-work; they just never merge.
+work; they never merge.
 
 The agent's merge step changes from
 
@@ -158,7 +158,7 @@ error: bolt/concurrent-units is protected by sluice; submit the change to sluice
 ```
 
 The hook calls the installed `sluice`, never one built from a submission,
-so no submission changes the guard it is judged by.
+so no submission changes the guard that judges it.
 
 On a forge, the same is the forge's branch protection, with sluice's
 identity the only one allowed to push.

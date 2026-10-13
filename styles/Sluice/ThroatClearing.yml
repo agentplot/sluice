@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' clears the throat; start with the point."
+description: "A phrase that precedes the point delays it. Microsoft's first tip and Williams's emphasis lesson agree: lead with what matters and end on it."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#4-what-the-documentation-guides-contribute
 level: suggestion
 ignorecase: true
 tokens:

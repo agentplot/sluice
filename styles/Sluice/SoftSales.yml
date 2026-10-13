@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' sells the design; describe it."
+description: "An adjective that praises the design tells a builder nothing to build from. What the design does, said plainly, is the praise."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 ignorecase: true
 tokens:

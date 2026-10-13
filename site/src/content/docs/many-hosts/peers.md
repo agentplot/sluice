@@ -85,7 +85,7 @@ branch is ordered with every other, whichever host made it.
 ## The lead
 
 At most one host advances a branch at any moment: it forms the
-combinations, decides what to test, and lands. There is no lock. A host
+combinations, decides what to test, and lands. No lock exists. A host
 keeps a branch only by writing its queue, which it does every round.
 Other hosts read the queue, see it changing, and leave it alone.
 
@@ -95,7 +95,7 @@ it. From then on the former lead's next push is refused, because the ref
 moved under it, and it writes nothing more for that branch. A host that
 was merely slow loses the same way as one that died, which is why the
 two never need telling apart, and no clock on any host needs to agree
-with another: the lease is measured by the taker's own observation of
+with another: the taker measures the lease by its own observation of
 the ref.
 
 Even the worst case is safe. A landing is itself a push to the real

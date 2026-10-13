@@ -56,7 +56,7 @@ only one run at a time for a branch.
   `sluice run` and `sluice step` do the same for a host when no agent is
   waiting.
 - **On a fleet**, passed `--remote`, a submit only submits and waits, and
-  every round is run by a `sluice run`: one on a shared host that every
+  a `sluice run` runs every round: one on a shared host that every
   submission goes to ([ADR 0012](/sluice/decisions/0012/)), or one on
   each host under the [many-hosts design](/sluice/many-hosts/overview/).
   There is no third mode.

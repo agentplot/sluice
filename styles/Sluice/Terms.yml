@@ -1,6 +1,7 @@
 # The words a user sees, where the statement's design words would leak in.
 extends: substitution
 message: "Use '%s' instead of '%s': the pages use the words a user sees."
+description: "The pages use the words a user sees in sluice's own output. The statement's design words are for the statement and the rules page, which maps them."
 level: warning
 ignorecase: false
 swap:

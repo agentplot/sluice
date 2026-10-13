@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' narrates the designing; a chapter states the design."
+description: "A page states what sluice does. The weighing that led there is a decision record's, which the generated decisions pages carry; a page that narrates it holds two documents at once."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 ignorecase: true
 tokens:

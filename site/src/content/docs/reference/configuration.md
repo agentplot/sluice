@@ -162,7 +162,7 @@ shell ran. A branch without `trust` accepts every run sluice starts
 ([ADR 0015](/sluice/decisions/0015/)); one whose executor can never
 satisfy it starts nothing and says why.
 
-There is no key for operator approval: that is the caller's business, and
+No key covers operator approval: that is the caller's business, and
 a tool submits only once the work is approved.
 
 ## The host's config: `~/.config/sluice/config.toml`

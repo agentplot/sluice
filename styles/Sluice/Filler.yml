@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' adds nothing; cut it."
+description: "Williams's concision lesson and Microsoft's 'be brief': a word that can leave without changing the meaning should leave."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#4-what-the-documentation-guides-contribute
 level: suggestion
 ignorecase: true
 tokens:

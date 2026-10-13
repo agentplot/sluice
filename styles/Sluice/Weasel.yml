@@ -1,0 +1,20 @@
+extends: existence
+message: "'%s' weakens the claim; say how much, or drop it."
+description: "Taken from write-good's Weasel list, trimmed of words a design uses precisely. A weasel word makes a claim without committing to it; a chapter commits."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#5-the-linters-word-lists
+level: suggestion
+ignorecase: true
+tokens:
+  - completely
+  - exceedingly
+  - extremely
+  - huge
+  - interestingly
+  - largely
+  - mostly
+  - remarkably
+  - substantially
+  - surprisingly
+  - tiny
+  - usually
+  - vast
