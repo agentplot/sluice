@@ -627,7 +627,7 @@ checks fall into three tiers, by what they need and how long they take:
 
 | tag | the checks | needs | takes |
 |---|---|---|---|
-| `check-fast` | every crate's cargo tests over the fakes; the citations check | cargo | seconds |
+| `check-fast` | every crate's cargo tests over the fakes | cargo | seconds |
 | `check-tools` | each profile against real git, moon and worktrunk on scratch repositories; the conformance suite over the real profiles | the devenv toolchain | tens of seconds |
 | `check-e2e` | `e2e.sh` (section 8): a whole repository driven through `wt submit` | the toolchain and worktrunk | minutes |
 
@@ -657,7 +657,7 @@ has tasks so far):
 
 ```
 $ moon query tasks --tags check-fast </dev/null | jq -c '[.tasks[][] | .target]'
-["cli:test","conformance:citations","conformance:test","core:test","fakes:test","seams:test"]
+["cli:test","conformance:test","core:test","fakes:test","seams:test"]
 $ moon query tasks --tags check-tools </dev/null | jq -c '[.tasks[][] | .target]'
 []
 ```
@@ -1788,7 +1788,7 @@ tier is slower than the one before and needs more of the host.
 
 | tier | tag | what | needs | time |
 |---|---|---|---|---|
-| fast | `check-fast` | the cargo tests: units, the conformance suite over the fakes, the CLI over the fakes; the citations check; `cargo fmt --check`; clippy `-D warnings` | cargo | seconds |
+| fast | `check-fast` | the cargo tests: units, the conformance suite over the fakes, the CLI over the fakes; `cargo fmt --check`; clippy `-D warnings` | cargo | seconds |
 | tools | `check-tools` | each section's acceptance tests on scratch repositories; the conformance suite over the real profiles (below) | git, moon, worktrunk, a writable temp dir | tens of seconds |
 | end to end | `check-e2e` | `e2e.sh sluice` on the scratch workspace; `E2E_REPO=crew` against a clone of crew | the above, and crew's devenv for the crew variant | minutes; crew cold is 8 m 48 s, replayed about a second |
 
@@ -1822,7 +1822,7 @@ trust = ["confined", "sandbox"]
 
 The tasks:
 
-- each crate's cargo tests, and the citations check, tagged
+- each crate's cargo tests, tagged
   `check-fast` (and `cargo-test`);
 - the workspace's own project (`root`, source `.`, `moon.yml` at the
   top): `format` (`treefmt --ci`: every formatter `treefmt.nix`

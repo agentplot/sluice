@@ -4,13 +4,7 @@ dependsOn: [seams, core, fakes]
 
 tasks:
   test:
-    command: 'cargo test -p sluice-conformance -- --skip every_citation --skip no_tool_is_named'
+    command: 'cargo test -p sluice-conformance'
     inputs: ['/crates/sluice-conformance/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/docs/examples/state/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The citations read the statement in agentplot/blueprints, outside this
-  # tree, and the rule core.1 check reads every crate: never replayed.
-  citations:
-    command: 'cargo test -p sluice-conformance --test citations'
-    tags: [cargo-test, check-fast]
-    options: {runFromWorkspaceRoot: true, cache: false}

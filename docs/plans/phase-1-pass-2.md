@@ -43,7 +43,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
 | 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **flake, CI and push done**: `flake.nix`, `.github/workflows/ci.yml`, `main` and blueprints pushed; next: CI green, then the repository public on the operator's word |
-| 17 | the rules checks out of the test tiers | | open: the operator's ruling |
+| 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 
@@ -125,13 +125,9 @@ needed.
   home. After each landing, the `main` worktree is brought level with
   `git read-tree -m -u <old> <new>`: sluice moves `main` under the
   worktree that has it checked out.
-- **17, the rules checks.** `conformance:citations` reads the statement
-  and every crate's source to enforce core.12 (every cited clause exists,
-  every phase-1 clause is cited) and core.1 (no tool named outside a
-  profile). They are checks of this repository's rules, not of sluice,
-  and sit among the cargo tests only because that was cheapest. Open: move
-  them to a `rules` task tagged `check-fast` but not `cargo-test`, or out
-  of the gate to the commit hook, or drop them; the operator rules.
+- **17, no tests of the repository's documents.** sluice's tests test
+  sluice. A check that reads the statement or the source to enforce
+  core.1 or core.12 is not one: those rules are kept by review.
 - **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
   v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
   `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
