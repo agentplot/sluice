@@ -98,7 +98,13 @@ impl Moon {
         // run inside only uses them.
         self.command(cx, &["setup"], &[])?;
         let jobs = cx.jobs.to_string();
-        let mut argv: Vec<&str> = vec!["moon", "exec"];
+        let mut argv: Vec<&str> = vec!["moon"];
+        // ADR 0014: moon exports beside sluice; it reads no parent trace,
+        // so the run's resource attributes tie its spans to the round.
+        if crate::telemetry::on() {
+            argv.push("--otel");
+        }
+        argv.push("exec");
         argv.extend(targets.iter().map(String::as_str));
         argv.extend(["--on-failure", "continue", "--concurrency", &jobs]);
         // A gate that does not trust the cache gets no replay (28).

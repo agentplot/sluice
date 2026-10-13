@@ -15,6 +15,10 @@
 //!
 //! A crash anywhere leaves records from which the next step finishes the
 //! work correctly (24, 51, S10).
+//!
+//! Each round is a `tracing` span, with its parts beneath it, and what a
+//! reader counts is a `tracing` event: the binary exports them when asked
+//! to (ADR 0014). Nothing here reads them back: the records alone decide.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,6 +27,7 @@ use sluice_seams::{
     Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunRequest, Source,
     TaskLog, Written,
 };
+use tracing::{info, info_span};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -47,14 +52,19 @@ pub enum Step {
 impl Sluice<'_> {
     /// One round of `branch`'s work.
     pub fn step(&self, branch: &str) -> Result<Step> {
+        let round = info_span!("sluice.round", sluice.branch = branch, sluice.step = "");
+        let _round = round.enter();
         let Some(_lock) = self.seams.state.lock(branch)? else {
+            round.record("sluice.step", "busy");
             return Ok(Step::Busy);
         };
-        self.recover(branch)?;
-        if !self.decide(branch)? {
+        info_span!("sluice.recover").in_scope(|| self.recover(branch))?;
+        if !info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
+            round.record("sluice.step", "contended");
             return Ok(Step::Contended);
         }
-        self.perform(branch)?;
+        info_span!("sluice.perform").in_scope(|| self.perform(branch))?;
+        round.record("sluice.step", "stepped");
         Ok(Step::Stepped)
     }
 
@@ -136,9 +146,19 @@ impl Sluice<'_> {
     /// was formed on; a branch found elsewhere refuses the landing, which
     /// is reported and never retried (rule core.5).
     fn perform_landing(&self, branch: &str) -> Result<()> {
-        let Some(intent) = self.read_line(branch)?.doc.landing else {
+        let line = self.read_line(branch)?;
+        let Some(intent) = line.doc.landing.clone() else {
             return Ok(());
         };
+        let span = info_span!(
+            "sluice.land",
+            sluice.branch = branch,
+            sluice.submissions = ?intent.ids,
+            sluice.from = %intent.from,
+            sluice.to = %intent.to,
+            sluice.outcome = "",
+        );
+        let _span = span.enter();
         let found = self.seams.branch.read(branch)?;
         let moved = match &found {
             // Moved by a step that stopped before recording it.
@@ -159,77 +179,106 @@ impl Sluice<'_> {
         let same_gate = matches!(moved, Moved::Moved)
             && self.rules_at(branch, &intent.from)? == self.rules_at(branch, &intent.to)?;
         match moved {
-            Moved::Moved => self.update(branch, |l| {
-                if l.doc.landing.as_ref() != Some(&intent) {
-                    return Ok(());
-                }
-                l.doc.landing = None;
-                for c in &intent.commits {
-                    let s = l.sub_mut(c.id);
-                    s.state = State::Landed;
-                    s.landed_as = Some(c.commit.clone());
-                    let item = OutboxItem {
-                        id: format!("{}:landed", c.id),
-                        submission: c.id,
-                        told: ToldRecord::Landed {
-                            landed_as: c.commit.clone(),
+            Moved::Moved => {
+                let confirmed = self.update(branch, |l| {
+                    if l.doc.landing.as_ref() != Some(&intent) {
+                        return Ok(false);
+                    }
+                    l.doc.landing = None;
+                    for c in &intent.commits {
+                        let s = l.sub_mut(c.id);
+                        s.state = State::Landed;
+                        s.landed_as = Some(c.commit.clone());
+                        let item = OutboxItem {
+                            id: format!("{}:landed", c.id),
+                            submission: c.id,
+                            told: ToldRecord::Landed {
+                                landed_as: c.commit.clone(),
+                            },
+                        };
+                        l.doc.outbox.push(item);
+                    }
+                    l.log(
+                        &now,
+                        Event::Landed {
+                            ids: intent.ids.clone(),
+                            to: intent.to.clone(),
                         },
-                    };
-                    l.doc.outbox.push(item);
-                }
-                l.log(
-                    &now,
-                    Event::Landed {
-                        ids: intent.ids.clone(),
-                        to: intent.to.clone(),
-                    },
-                );
-                // The candidates behind what landed hold exactly the tree
-                // they held: they now extend the new revision (10). One
-                // that landed whole while under test, on a deeper
-                // candidate's verdict, has its place released (25).
-                let mut release = Vec::new();
-                l.doc.candidates.retain_mut(|c| {
-                    if c.on == intent.from && c.submissions.starts_with(&intent.ids) {
-                        c.submissions.drain(..intent.ids.len());
-                        c.on = intent.to.clone();
-                        if c.submissions.is_empty() {
-                            if c.state.under_test() {
-                                release.extend(c.place.clone());
+                    );
+                    // The candidates behind what landed hold exactly the tree
+                    // they held: they now extend the new revision (10). One
+                    // that landed whole while under test, on a deeper
+                    // candidate's verdict, has its place released (25).
+                    let mut release = Vec::new();
+                    l.doc.candidates.retain_mut(|c| {
+                        if c.on == intent.from && c.submissions.starts_with(&intent.ids) {
+                            c.submissions.drain(..intent.ids.len());
+                            c.on = intent.to.clone();
+                            if c.submissions.is_empty() {
+                                if c.state.under_test() {
+                                    release.extend(c.place.clone());
+                                }
+                                return false;
                             }
-                            return false;
+                        }
+                        true
+                    });
+                    l.doc.release.extend(release);
+                    l.doc.base = Some(intent.to.clone());
+                    l.doc.verified = same_gate;
+                    Ok(true)
+                })?;
+                span.record("sluice.outcome", "landed");
+                if confirmed {
+                    for id in &intent.ids {
+                        let waited = line
+                            .subs
+                            .get(id)
+                            .and_then(|s| seconds_between(&s.submitted, &now));
+                        info!(
+                            monotonic_counter.sluice.landed = 1u64,
+                            sluice.branch = branch,
+                        );
+                        if let Some(secs) = waited {
+                            info!(
+                                histogram.sluice.submission.landed_after = secs,
+                                sluice.branch = branch,
+                            );
                         }
                     }
-                    true
-                });
-                l.doc.release.extend(release);
-                l.doc.base = Some(intent.to.clone());
-                l.doc.verified = same_gate;
+                }
                 Ok(())
-            }),
-            Moved::Elsewhere(found) => self.update(branch, |l| {
-                if l.doc.landing.as_ref() != Some(&intent) {
-                    return Ok(());
-                }
-                l.doc.landing = None;
-                for id in &intent.ids {
-                    let s = l.sub_mut(*id);
-                    if s.state == State::Landing {
-                        s.state = State::Queued;
-                        s.tested = None;
-                        s.result = None;
-                    }
-                }
-                l.log(
-                    &now,
-                    Event::Refused {
-                        ids: intent.ids.clone(),
-                        expected: intent.from.clone(),
-                        found: found.clone(),
-                    },
+            }
+            Moved::Elsewhere(found) => {
+                span.record("sluice.outcome", "refused");
+                info!(
+                    monotonic_counter.sluice.refused = 1u64,
+                    sluice.branch = branch
                 );
-                Ok(())
-            }),
+                self.update(branch, |l| {
+                    if l.doc.landing.as_ref() != Some(&intent) {
+                        return Ok(());
+                    }
+                    l.doc.landing = None;
+                    for id in &intent.ids {
+                        let s = l.sub_mut(*id);
+                        if s.state == State::Landing {
+                            s.state = State::Queued;
+                            s.tested = None;
+                            s.result = None;
+                        }
+                    }
+                    l.log(
+                        &now,
+                        Event::Refused {
+                            ids: intent.ids.clone(),
+                            expected: intent.from.clone(),
+                            found: found.clone(),
+                        },
+                    );
+                    Ok(())
+                })
+            }
         }
     }
 
@@ -295,6 +344,14 @@ impl Sluice<'_> {
             );
         }
         for c in starting {
+            let _span = info_span!(
+                "sluice.start",
+                sluice.branch = branch,
+                sluice.candidate = %c.revision,
+                sluice.submissions = ?c.submissions,
+                sluice.executor = kind,
+            )
+            .entered();
             let name = c.place.clone().expect("a starting candidate has a place");
             let place = self
                 .seams
@@ -372,7 +429,16 @@ impl Sluice<'_> {
             self.choose_starts(&mut line, &rules, &chain, &now)?;
         }
         derive_states(&mut line, &chain);
-        Ok(matches!(self.write(&line)?, Written::Written(_)))
+        let queued = line.subs.values().filter(|s| !s.state.is_out()).count() as u64;
+        let written = matches!(self.write(&line)?, Written::Written(_));
+        if written {
+            info!(gauge.sluice.queue.depth = queued, sluice.branch = branch);
+            info!(
+                gauge.sluice.window = line.doc.window as u64,
+                sluice.branch = branch
+            );
+        }
+        Ok(written)
     }
 
     /// Read every run that finished: record each check, pass and fail
@@ -406,6 +472,18 @@ impl Sluice<'_> {
                     );
                 }
                 Progress::Finished(report) => {
+                    let span = info_span!(
+                        "sluice.verdict",
+                        sluice.branch = %line.branch,
+                        sluice.candidate = %c.revision,
+                        sluice.submissions = ?c.submissions,
+                        sluice.executor = %report.executor.kind,
+                        sluice.confined = report.executor.confined,
+                        sluice.outcome = "",
+                        sluice.ran = 0u64,
+                        sluice.replayed = 0u64,
+                    );
+                    let _span = span.enter();
                     let mut results = self.results()?;
                     let mut fresh = Vec::new();
                     for t in &report.tasks {
@@ -479,6 +557,8 @@ impl Sluice<'_> {
                                 .map(|k| k.text.clone());
                         }
                     }
+                    let branch = line.branch.clone();
+                    let branch = branch.as_str();
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
                     x.state = if v.passed {
                         CandidateState::Passed
@@ -491,6 +571,31 @@ impl Sluice<'_> {
                     x.ran = v.ran;
                     x.replayed = v.replayed;
                     let word = x.result_word().to_string();
+                    span.record("sluice.outcome", word.as_str());
+                    span.record("sluice.ran", v.ran as u64);
+                    span.record("sluice.replayed", v.replayed as u64);
+                    info!(
+                        monotonic_counter.sluice.verdicts = 1u64,
+                        sluice.branch = branch,
+                        sluice.outcome = word.as_str(),
+                    );
+                    info!(
+                        monotonic_counter.sluice.tasks.ran = v.ran as u64,
+                        sluice.branch = branch
+                    );
+                    info!(
+                        monotonic_counter.sluice.tasks.replayed = v.replayed as u64,
+                        sluice.branch = branch,
+                    );
+                    if tracing::enabled!(tracing::Level::INFO) {
+                        if let Some(secs) = self.tested_for(branch, &c.revision, now)? {
+                            info!(
+                                histogram.sluice.candidate.tested_for = secs,
+                                sluice.branch = branch,
+                                sluice.outcome = word.as_str(),
+                            );
+                        }
+                    }
                     if let Some(p) = x.place.clone() {
                         if v.passed {
                             line.doc.passed.push(p.clone());
@@ -543,6 +648,7 @@ impl Sluice<'_> {
                 continue;
             }
             let head = line.sub(id)?.head.clone();
+            let _span = info_span!("sluice.form", sluice.submission = id).entered();
             match self.seams.branch.form(&prev, &head)? {
                 Formed::Revision(rev) => {
                     let cid = format!("c{}", line.doc.next_candidate);
@@ -685,6 +791,7 @@ impl Sluice<'_> {
         with: Vec<Contested>,
         now: &str,
     ) {
+        info!(monotonic_counter.sluice.conflicts = 1u64, sluice.branch = %line.branch);
         let s = line.sub_mut(id);
         s.state = State::Conflict;
         s.conflict = Some(ConflictRecord {
@@ -710,6 +817,14 @@ impl Sluice<'_> {
     /// candidate, tell its session alone, and test fewer at once.
     fn blame(&self, line: &mut Line, c: &Candidate, rules: &Rules, now: &str) {
         let id = c.newest();
+        let _span = info_span!(
+            "sluice.blame",
+            sluice.branch = %line.branch,
+            sluice.submission = id,
+            sluice.candidate = %c.revision,
+        )
+        .entered();
+        info!(monotonic_counter.sluice.culprits = 1u64, sluice.branch = %line.branch);
         let s = line.sub_mut(id);
         s.state = State::Failed;
         s.tested = Some(Tested {
@@ -930,6 +1045,27 @@ impl Sluice<'_> {
         }
         Ok(())
     }
+}
+
+impl Sluice<'_> {
+    /// How long a candidate was under test: from the log's last `Testing`
+    /// of it to `now`.
+    fn tested_for(&self, branch: &str, revision: &Rev, now: &str) -> Result<Option<f64>> {
+        let snap = self.seams.state.read(branch)?;
+        let log = Line::read_log(&snap)?;
+        Ok(log
+            .iter()
+            .rev()
+            .find(|l| matches!(&l.event, Event::Testing { combination, .. } if combination == revision))
+            .and_then(|l| seconds_between(&l.at, now)))
+    }
+}
+
+/// Seconds from one record time to another.
+fn seconds_between(from: &str, to: &str) -> Option<f64> {
+    let from = chrono::DateTime::parse_from_rfc3339(from).ok()?;
+    let to = chrono::DateTime::parse_from_rfc3339(to).ok()?;
+    Some((to - from).num_milliseconds() as f64 / 1000.0)
 }
 
 /// How many candidates from the front of a chain may land (22): those

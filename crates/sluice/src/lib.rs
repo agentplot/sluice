@@ -9,6 +9,7 @@ pub mod instance;
 pub mod profiles;
 pub mod protect;
 pub mod runs;
+pub mod telemetry;
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,6 +44,24 @@ pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+    /// Export traces and metrics over OTLP/HTTP, to where the
+    /// OTEL_EXPORTER_OTLP_* variables say.
+    /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
+    #[arg(
+        long,
+        global = true,
+        env = "SLUICE_OTEL",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub otel: bool,
+    /// The service the telemetry is reported as.
+    #[arg(
+        long,
+        global = true,
+        env = "SLUICE_OTEL_SERVICE_NAME",
+        default_value = "sluice"
+    )]
+    pub otel_service_name: String,
 }
 
 #[derive(Subcommand, Debug)]

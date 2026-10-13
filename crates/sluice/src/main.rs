@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use sluice::profiles::Bound;
+use sluice::telemetry::Telemetry;
 use sluice::{run, Cli, Command, Sleep};
 use sluice_core::SystemClock;
 
@@ -51,18 +52,34 @@ fn main() {
         eprintln!("sluice: {e:#}");
         std::process::exit(3);
     }
+    // ADR 0014: telemetry that cannot start is reported and left off.
+    let telemetry = if cli.otel {
+        match Telemetry::start(&cli.otel_service_name) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("sluice: warning: telemetry off: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut out = std::io::stdout();
-    match run(
+    let code = match run(
         cli,
         bound.seams(),
         &SystemClock,
         &Sleep(Duration::from_secs(3)),
         &mut out,
     ) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => code,
         Err(e) => {
             eprintln!("sluice: {e:#}");
-            std::process::exit(3);
+            3
         }
+    };
+    if let Some(t) = telemetry {
+        t.finish();
     }
+    std::process::exit(code);
 }

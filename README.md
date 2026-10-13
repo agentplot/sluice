@@ -56,6 +56,10 @@ Commits are conventional, which a commit-msg hook checks: each push to
 released, its version and notes worked out by git-cliff (`cliff.toml`).
 `release-preview` shows the next release before anything lands.
 
+With `SLUICE_OTEL=1`, sluice exports traces and metrics over OTLP/HTTP to
+where the `OTEL_EXPORTER_OTLP_*` variables say, and the checks moon runs
+for it export beside them ([ADR 0014](docs/adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md)).
+
 Then, in a repository whose `.config/sluice.toml` names its branches,
 `sluice protect`, and `wt submit <branch>` from a session's worktree. The
 setup is walked through in [docs/examples/](docs/examples/README.md).

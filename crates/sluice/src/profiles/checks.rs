@@ -297,6 +297,11 @@ impl Tests for Checks {
         let kind = choose(&request.limits)?;
         let jobs = self.instance.jobs();
         let mut env = environment(request, jobs);
+        // ADR 0014: what the checks export is found beside the round.
+        env.extend(crate::telemetry::run_env(&[
+            ("sluice.place", &request.place.name),
+            ("sluice.revision", request.revision.as_str()),
+        ]));
         if kind == Kind::Sandbox {
             env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
         }
