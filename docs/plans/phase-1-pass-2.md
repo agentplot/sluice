@@ -47,6 +47,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
+| 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | building: the `linux` job, worktrunk pinned in the devenv shell |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -164,6 +165,17 @@ needed.
   - Not configured: git-cliff's GitHub remote (pull requests, authors,
     first-time contributors), since sluice's commits come through no pull
     request; path filters, since sluice releases one product.
+- **21, CI's tiers.** sluice's gate for `main` runs every tier before a
+  landing, on the macOS host it lands from, so CI does not repeat them
+  there. It runs what that host cannot: the flake's build and the fast
+  tier on Linux and macOS, and a `linux` job with `#check-tools` and
+  `#check-e2e`. The sandbox tests stay the host's (Seatbelt). worktrunk is
+  pinned in the devenv shell (0.80.0, its release build), so the tools
+  tier and e2e drive one version here and in CI. The fast and `linux`
+  jobs keep `target/` and cargo's registry in GitHub's cache, keyed by
+  `Cargo.lock` and `.prototools`; moon's own cache is not kept, since it
+  holds which tasks passed, not the compiled code, and nearly every push
+  changes a task's inputs.
 - **Landing on `main`.** `main` moves only through sluice: from
   `phase-2-git-state`, `SLUICE_AGENT=claude PATH="$HOME/.cargo/bin:$PATH"
   wt submit main --no-remove`, then the `main` worktree brought level

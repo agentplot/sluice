@@ -1,7 +1,8 @@
 # sluice on GitHub: the flake builds on macOS and Linux, the fast tier runs
-# in the devenv shell a session uses, and each push to main that git-cliff
-# finds a new version in is released (cliff.toml). sluice's own gate is
-# sluice (.config/sluice.toml); this is the public build.
+# in the devenv shell a session uses, the deeper tiers run on Linux, and
+# each push to main that git-cliff finds a new version in is released
+# (cliff.toml). sluice's own gate is sluice (.config/sluice.toml); this is
+# the public build.
 name: ci
 
 on:
@@ -38,7 +39,37 @@ jobs:
         with:
           name: devenv
       - run: nix profile add nixpkgs#devenv
+      - uses: actions/cache@v4
+        with:
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: fast-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.prototools') }}
+          restore-keys: fast-${{ runner.os }}-
       - run: devenv shell -- moon run ':#check-fast'
+
+  # The tiers sluice's own gate runs on the macOS host it lands from, here
+  # on Linux: the profiles against real git, moon and worktrunk, and e2e.
+  # The sandbox tests are the host's (Seatbelt) and are not run.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile add nixpkgs#devenv
+      - uses: actions/cache@v4
+        with:
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-${{ hashFiles('Cargo.lock', '.prototools') }}
+          restore-keys: linux-
+      - run: devenv shell -- moon run ':#check-tools' ':#check-e2e'
 
   # The commits since the last release are conventional (.versionrc): a
   # session can skip the commit-msg hook, and git-cliff releases from them.
@@ -77,7 +108,7 @@ jobs:
 
   binaries:
     if: needs.version.outputs.tag != ''
-    needs: [version, build, fast, conventional]
+    needs: [version, build, fast, linux, conventional]
     strategy:
       matrix:
         include:
