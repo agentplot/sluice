@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' is a metaphor standing in for a reason; give the reason, or use the plain word."
+description: "A metaphor used as justification replaces the reason a thing exists with a picture of it. The reason is what a builder needs."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: suggestion
 ignorecase: true
 tokens:

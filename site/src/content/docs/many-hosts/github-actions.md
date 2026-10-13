@@ -29,7 +29,7 @@ the pull request flow they already have.
   the tests of one combination on the systems the policy names.
   `step.yml` runs one round of the queue.
 - **The policy file**, the same `.config/sluice.toml` a laptop reads. A
-  bolt's branch is gated on the agent's machine; `main` is gated by the
+  An agent's machine gates a bolt's branch; the App gates `main` through the
   same file on GitHub.
 
 ## The pull request flow
@@ -173,7 +173,7 @@ the systems the fleet has no host for.
 ## To verify before promising it
 
 - Push events do not fire for refs outside `refs/heads` and `refs/tags`,
-  so the stepper is driven by dispatch and `workflow_run`, never by
+  so dispatch and `workflow_run` drive the stepper, never
   pushes to the state ref.
 - Whether a ruleset can grant bypass to the Actions token, or only to an
   App's. If only an App's, the App is required rather than merely nicer.

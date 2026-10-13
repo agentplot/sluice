@@ -1,0 +1,8 @@
+extends: existence
+message: "'%s' opens the sentence with no subject; name who does what."
+description: "Williams: a clear sentence has a character as its subject. 'There is' and 'there are' put a dummy in the subject's seat. Microsoft names them as weak writing to revise."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
+level: suggestion
+ignorecase: true
+raw:
+  - '(?:^|[.;:] )[Tt]here (?:is|are|was|were|will be|has been|have been)\b'

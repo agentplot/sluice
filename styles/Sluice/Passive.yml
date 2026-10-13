@@ -1,0 +1,8 @@
+extends: existence
+message: "'%s' is passive; name the actor as the subject."
+description: "Williams: the passive hides the character, and a design book is about who does what. Allowed when the actor is unknown or does not matter, which is why this is a suggestion."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
+level: suggestion
+ignorecase: true
+raw:
+  - '\b(?:is|are|was|were|be|been|being) (?:[a-z]+ly )?(?:[a-z]+ed|[a-z]+en|built|done|found|held|kept|known|made|read|run|sent|set|told|written) by\b'

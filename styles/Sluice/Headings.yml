@@ -1,5 +1,7 @@
 extends: capitalization
 message: "Headings use sentence case: '%s'."
+description: "Sentence case, as Google and Microsoft both set it, so a heading reads as a sentence and a proper noun stands out."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#4-what-the-documentation-guides-contribute
 level: warning
 scope: heading
 match: $sentence

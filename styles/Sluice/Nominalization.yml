@@ -1,0 +1,9 @@
+extends: existence
+message: "'%s' hides the action in a noun; make it the verb."
+description: "Williams's nominalization test: when the action is a noun ('the formation of a candidate'), the subject is an abstraction and the verb is empty. Turn it back into a verb ('sluice forms a candidate')."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#2-clarity-characters-as-subjects-actions-as-verbs
+level: suggestion
+ignorecase: true
+raw:
+  - '\bthe (?:formation|creation|execution|implementation|verification|validation|evaluation|configuration|determination|resolution|allocation|submission|completion|initiation|termination|provision|utilization|performance) of\b'
+  - '\b(?:make|makes|made|perform|performs|performed|conduct|conducts|conducted|carry out|carries out|carried out) (?:a|an|the) (?:decision|determination|assessment|evaluation|verification|comparison|analysis|check|review|implementation|allocation|selection)\b'

@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' is hype; say what it does instead."
+description: "Marketing words describe no mechanism. A design book is read by someone who will build the mechanism."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 ignorecase: true
 tokens:

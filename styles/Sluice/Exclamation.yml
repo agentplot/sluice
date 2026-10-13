@@ -1,5 +1,7 @@
 extends: existence
 message: "No exclamation marks; let the sentence carry the weight."
+description: "An exclamation mark asks for a reaction. The design earns one or does not."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 nonword: true
 tokens:

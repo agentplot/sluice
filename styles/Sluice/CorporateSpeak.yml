@@ -1,0 +1,28 @@
+extends: existence
+message: "'%s' is corporate speak; say the plain thing."
+description: "Taken whole from proselint. These phrases replace a statement with a gesture at one."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#5-the-linters-word-lists
+level: warning
+ignorecase: true
+tokens:
+  - at the end of the day
+  - back to the drawing board
+  - hit the ground running
+  - get the ball rolling
+  - low-hanging fruit
+  - thrown under the bus
+  - think outside the box
+  - touch base
+  - no brainer
+  - par for the course
+  - bang for your buck
+  - move the goal post
+  - apples to apples
+  - win-win
+  - circle back
+  - all hands on deck
+  - take this offline
+  - drill-down
+  - elephant in the room
+  - on my plate
+  - synergy

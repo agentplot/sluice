@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' hedges; say what holds, or say what is unknown."
+description: "A chapter states the design. Where the answer is known, a hedge asks the reader to trust less than the writer knows; where it is not known, the open questions page is the place, not a softened sentence."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 ignorecase: true
 tokens:

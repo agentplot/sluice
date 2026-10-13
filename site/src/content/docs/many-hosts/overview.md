@@ -45,10 +45,10 @@ The operator fixed four things before the design was written:
 
 ## One machine or a fleet
 
-There is no hybrid. A deployment is one machine, where the waiting
+A deployment is one of two shapes, with no hybrid: one machine, where the waiting
 `sluice submit` runs the rounds itself and nothing else need be running,
-or it is a fleet, where every round is run by a `sluice run` the
-operator started and a submit only submits and waits.
+or a fleet, where a `sluice run` the operator started runs every
+round and a submit only submits and waits.
 
 `wt submit` assumes one machine unless passed `--remote`, which is what a
 fleet's hosts pass. A submit on a fleet never takes a branch, because it

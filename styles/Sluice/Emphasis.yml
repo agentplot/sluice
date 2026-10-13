@@ -1,5 +1,7 @@
 extends: existence
 message: "'%s' asks the reader to care; give the reason instead."
+description: "Words that mark a sentence as important carry no information. The reason the thing matters does, and it belongs in the sentence in place of the marker."
+link: https://github.com/agentplot/blueprints/blob/main/books/research/2026-10-13-voice-and-style.md#6-what-a-chapter-never-does-and-where-it-came-from
 level: warning
 ignorecase: true
 tokens:
