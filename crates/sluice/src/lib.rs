@@ -27,8 +27,19 @@ pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
 
+/// The release's version, from its tag (SLUICE_VERSION at build time);
+/// a build from a checkout is 0.0.0.
+pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser, Debug)]
-#[command(name = "sluice", about = "A merge queue for agents in worktrees.")]
+#[command(
+    name = "sluice",
+    version = VERSION,
+    about = "A merge queue for agents in worktrees."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

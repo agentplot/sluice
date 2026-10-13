@@ -51,6 +51,10 @@ cargo install --locked --git https://github.com/agentplot/sluice sluice
 
 **From a checkout**, to work on sluice: `devenv shell`, then `cargo build`.
 Its tiers are `moon run ':#check-fast' ':#check-tools' ':#check-e2e'`.
+Commits are conventional, which a commit-msg hook checks: each push to
+`main` with a `feat`, a `fix` or another released change is tagged and
+released, its version and notes worked out by git-cliff (`cliff.toml`).
+`release-preview` shows the next release before anything lands.
 
 Then, in a repository whose `.config/sluice.toml` names its branches,
 `sluice protect`, and `wt submit <branch>` from a session's worktree. The

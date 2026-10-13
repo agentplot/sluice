@@ -1,13 +1,12 @@
 # sluice on GitHub: the flake builds on macOS and Linux, the fast tier runs
-# in the devenv shell a session uses, and a tag publishes each platform's
-# binaries to a release. sluice's own gate is sluice (.config/sluice.toml);
-# this is the public build.
+# in the devenv shell a session uses, and each push to main that git-cliff
+# finds a new version in is released (cliff.toml). sluice's own gate is
+# sluice (.config/sluice.toml); this is the public build.
 name: ci
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -41,11 +40,44 @@ jobs:
       - run: nix profile add nixpkgs#devenv
       - run: devenv shell -- moon run ':#check-fast'
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, fast]
-    permissions:
-      contents: write
+  # The commits since the last release are conventional (.versionrc): a
+  # session can skip the commit-msg hook, and git-cliff releases from them.
+  # Merge commits are not checked.
+  conventional:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - run: |
+          last="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          nix shell --inputs-from . nixpkgs#convco -c convco check ${last:+"$last..HEAD"}
+
+  # The next version from the commits since the last v* tag; empty when
+  # it is already tagged.
+  version:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - id: next
+        run: |
+          tag="$(nix shell --inputs-from . nixpkgs#git-cliff -c git-cliff --bumped-version)"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag is already released"
+          else
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+  binaries:
+    if: needs.version.outputs.tag != ''
+    needs: [version, build, fast, conventional]
     strategy:
       matrix:
         include:
@@ -59,8 +91,37 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-      - run: nix build .#default
-      - run: tar -czf "sluice-${GITHUB_REF_NAME}-${{ matrix.system }}.tar.gz" -C result/bin sluice wt-submit
-      - uses: softprops/action-gh-release@v2
+      - run: SLUICE_VERSION="${TAG#v}" nix build --impure .#default --print-build-logs
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+      - run: ./result/bin/sluice --version
+      - run: tar -czf "sluice-${{ matrix.system }}.tar.gz" -C result/bin sluice wt-submit
+      - uses: actions/upload-artifact@v4
         with:
-          files: sluice-*.tar.gz
+          name: sluice-${{ matrix.system }}
+          path: sluice-${{ matrix.system }}.tar.gz
+
+  # Tags the pushed commit and publishes the binaries with git-cliff's
+  # notes for the range. Nothing is committed back to main.
+  release:
+    needs: [version, binaries]
+    runs-on: ubuntu-latest
+    concurrency: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: |
+          nix shell --inputs-from . nixpkgs#git-cliff -c \
+            git-cliff --unreleased --tag "$TAG" --strip all > notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --notes-file notes.md sluice-*.tar.gz
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}

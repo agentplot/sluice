@@ -1,0 +1,3 @@
+# convco: what a conventional commit is here. A scope may name several
+# parts of the tree, "docs(adr, architecture): ...".
+scopeRegex: "^[[:alnum:]]+(?:[-_/][[:alnum:]]+)*(?:, ?[[:alnum:]]+(?:[-_/][[:alnum:]]+)*)*$"

@@ -46,7 +46,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
-| 20 | semantic releases with git-cliff | | next: `cliff.toml`, the release jobs, the version from the tag, the commit-msg hook |
+| 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -153,9 +153,14 @@ needed.
     notes, and `git cliff` prints the whole history's.
   - **`release-preview`**, a devenv script: `git cliff --unreleased
     --bump`, the next version and its notes before anything lands.
-  - **Conventional commits enforced**: a commit-msg hook among the prek
-    hooks refuses a message that is not one, and CI checks the commits it
-    releases, since a session can skip a hook.
+  - **Conventional commits enforced**: convco's commit-msg hook among the
+    prek hooks refuses a message that is not one, and CI checks the
+    commits since the last release, since a session can skip a hook;
+    `.versionrc` lets a scope name several parts of the tree, `docs(adr,
+    architecture)`. Merge commits are not checked.
+  - **Which pushes release**: any with a released change; a `docs` or
+    `refactor` change bumps the patch, as `fix` does. A push of only
+    `chore`, `test`, `ci` or `build` commits releases nothing.
   - Not configured: git-cliff's GitHub remote (pull requests, authors,
     first-time contributors), since sluice's commits come through no pull
     request; path filters, since sluice releases one product.

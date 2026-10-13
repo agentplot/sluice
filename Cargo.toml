@@ -9,7 +9,8 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# The released version is the tag's, given to the build as SLUICE_VERSION.
+version = "0.0.0"
 edition = "2021"
 license = "MIT"
 
