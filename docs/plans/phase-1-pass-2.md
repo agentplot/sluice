@@ -352,6 +352,14 @@ needed.
   the conductor brings its worktree level when its bolt's branch moves;
   move to a design where no worktree has a bolt's branch checked out;
   move its devenv to moon 2.6.
+- **Switchboard:** key its stack on sluice's place rather than its
+  branch: every port from `SLUICE_PORT_*` instead of `hash_port`; the
+  emulator's container name and label, `SWB_INTEGRATION_DEPLOYMENT`, the
+  Portless names and the CodeBuild scratch directory from
+  `SLUICE_PLACE`; the stand-ins never killing whatever holds a port. Its
+  policy names the ports, `[tests] release` as its teardown
+  (`ministack-teardown`, then `infra/ministack/down.sh`), `docker =
+  true`, and `network = true` for the suites that reach Frontegg.
 - **flywheel-next:** the git hook install fix is on its
   `fix-git-hooks-install` branch (`db9f1dae`), to land with `wt merge`.
 - **devenv:** cachix/devenv#3270. When it is fixed, remove the
