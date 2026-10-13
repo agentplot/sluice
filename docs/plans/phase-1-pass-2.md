@@ -47,7 +47,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
-| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | next |
+| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
 | 23 | `main` kept in step with the shared remote | C.4 | to design: whether every push goes through sluice |
 
 The `container` executor comes after the goal; on one Mac it is not
