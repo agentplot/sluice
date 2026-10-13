@@ -42,10 +42,11 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
 | 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
 | 15 | the driver removes a landed session's worktree | §7 | **done**: `wt-submit` with `Submit::parse`, `--no-remove` |
-| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **flake, CI and push done**: `flake.nix`, `.github/workflows/ci.yml`, `main` and blueprints pushed; next: CI green, then the repository public on the operator's word |
+| 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, agentplot/sluice public |
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
+| 20 | semantic releases with git-cliff | | next: `cliff.toml`, the release jobs, the version from the tag, the commit-msg hook |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -128,6 +129,42 @@ needed.
 - **17, no tests of the repository's documents.** sluice's tests test
   sluice. A check that reads the statement or the source to enforce
   core.1 or core.12 is not one: those rules are kept by review.
+- **20, semantic releases**, with git-cliff. On each push to `main`, CI
+  asks `git cliff --bumped-version` for the next version from the
+  conventional commits since the last `v*` tag (the agents' own commits,
+  reached through the landing merges). With a new version, it builds the
+  flake for aarch64-darwin, x86_64-linux and aarch64-linux with that
+  version, tags the commit, and publishes a GitHub release with the
+  binaries, named `sluice-<system>.tar.gz` so the README's
+  `releases/latest/download/` links hold, and git-cliff's notes for the
+  range. Nothing is committed back to `main`, which only sluice moves: the
+  version lives in the tag, the flake and `sluice --version` take it from
+  there (`SLUICE_VERSION` at build time, `Cargo.toml` staying at `0.0.0`).
+  - **`cliff.toml`**: groups Features, Fixes, Performance, Refactors and
+    Documentation, with Breaking changes first; `chore(land)` landing
+    commits and other `chore` commits skipped, `Co-Authored-By` lines
+    stripped; each entry linked to its commit on GitHub, `#<n>` to its
+    issue; only `v*` tags counted.
+  - **`[bump]`**: `feat` bumps the minor, a breaking change the major,
+    and below 1.0 a breaking change the minor; the first release
+    `v0.1.0`.
+  - **No `CHANGELOG.md` in the repository**: committing one would mean
+    landing it after each release; each release carries its range's
+    notes, and `git cliff` prints the whole history's.
+  - **`release-preview`**, a devenv script: `git cliff --unreleased
+    --bump`, the next version and its notes before anything lands.
+  - **Conventional commits enforced**: a commit-msg hook among the prek
+    hooks refuses a message that is not one, and CI checks the commits it
+    releases, since a session can skip a hook.
+  - Not configured: git-cliff's GitHub remote (pull requests, authors,
+    first-time contributors), since sluice's commits come through no pull
+    request; path filters, since sluice releases one product.
+- **Landing on `main`.** `main` moves only through sluice: from
+  `phase-2-git-state`, `SLUICE_AGENT=claude PATH="$HOME/.cargo/bin:$PATH"
+  wt submit main --no-remove`, then the `main` worktree brought level
+  (`git read-tree -m -u <old> main`), then `git push origin main`. After
+  a landing that changes sluice, `cargo install --path crates/sluice
+  --locked` in the `main` worktree and `sluice protect` upgrade the guard.
 - **18, OpenTelemetry**, as moon does it (`moon --otel`, v2.5; metrics
   v2.6): opt-in with `--otel` / `SLUICE_OTEL`, the service
   `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
