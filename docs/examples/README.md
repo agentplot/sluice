@@ -2,8 +2,8 @@
 
 What a developer or an agent sees when sluice is added to a repository on one
 machine. The repository is crew itself: it already runs its tests with moon,
-works in worktrunk worktrees, and builds bolts from units. Nothing here is
-built yet; this is the target.
+works in worktrunk worktrees, and builds bolts from units. Everything here
+runs today on one machine; sluice lands its own `main` this way.
 
 ## What sluice does, in one paragraph
 
@@ -17,12 +17,13 @@ ever merges, and the target branch only ever moves to code that passed.
 ## 1. Install
 
 ```sh
-cargo install sluice
+nix profile install github:agentplot/sluice
 ```
 
 That installs two executables: `sluice`, and `wt-submit`. worktrunk runs any
 `wt-<name>` on your `PATH` as `wt <name>`, so `wt submit` works with no
-configuration.
+configuration. (`cargo install --git https://github.com/agentplot/sluice
+sluice` does the same without nix.)
 
 ## 2. The config: `.config/sluice.toml`
 
@@ -32,9 +33,21 @@ submission, so a submission cannot loosen the rules it is tested under.
 ```toml
 [tests]
 runner = "moon"
+toolchain = ["devenv", "print-dev-env"]
 
 [checkout]
-method = "worktrunk"
+method = "git-worktree"
+
+[[checkout.cache]]
+key = ["Cargo.lock", ".prototools"]
+paths = ["target"]
+
+[executor]
+kind = "sandbox"
+network = "localhost"
+
+[landing]
+subject = "chore(land): #{id} {from}"
 
 [branches."bolt/*"]
 required = ["#suite"]
@@ -42,11 +55,13 @@ parallel = 4
 batch = false
 flaky = "fail"
 timeout = "20m"
+trust = ["open", "sandbox", "container", "cache"]
 
 [branches.main]
 required = ["#suite", "#live"]
 parallel = 2
 batch = true
+trust = ["confined", "sandbox"]
 ```
 
 ### `[tests]`: how tests run
@@ -56,6 +71,7 @@ batch = true
 | `runner` | `"moon"` | Run moon tasks. sluice asks moon which tasks the combination affects and runs only those; a task whose inputs did not change replays its earlier result instead of running. |
 | | `"command"` | Run one command; exit 0 passes. Every test runs every time. For a repository without moon. |
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
+| `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. |
 
 Which tasks must pass is not here: it is set per branch, because that is
 the point. A bolt's branch lands units many times a day and wants a fast
@@ -63,16 +79,37 @@ gate; `main` lands whole bolts and can demand more.
 
 ### `[checkout]`: where a combination is tested
 
-sluice needs a clean copy of the code to test each combination in, apart from
-every agent's worktree.
+sluice tests each combination in a clean checkout of its own, apart from
+every agent's worktree: `git worktree add --detach` at the combination,
+`git worktree remove` when its result is read. Nothing runs in it but the
+tests: no git or worktrunk hooks. Whatever a test needs before it runs goes
+in the toolchain or in a moon task the test depends on.
 
-| `method` | what it does | choose it when |
+**`[[checkout.cache]]`**: what a new checkout may start with, the way a CI
+job restores `actions/cache`. `key` names the files whose content keys the
+cache; `paths` the ignored paths it holds. A checkout starts with the cache
+of its combination's key, or else the one saved last; a checkout whose
+combination passed saves its `paths` under its key. sluice's own caches
+`target` keyed by `Cargo.lock` and `.prototools`: a test build that takes
+two and a half minutes cold takes under a second warm. A cache only spares
+work: it never decides a result.
+
+### `[executor]`: what the tests may touch
+
+| key | values | meaning |
 |---|---|---|
-| `"worktrunk"` | `wt switch --create sluice/try/<branch>/<n> --base <combination> --no-cd`, then `wt remove` when done | the default where the repository uses worktrunk: the combination's own `pre-start` hooks run in the checkout, and its remove hooks clean it up. Tests start once the `pre-start` hooks are done; `post-start` hooks are not run, so whatever a check needs goes in a `pre-start` hook or a dependency of the check |
-| `"git-worktree"` | `git worktree add --detach` at the combination, `git worktree remove` when done | no worktrunk; nothing is run in the checkout but the tests |
-| `"archive"` | `git archive` of the combination into a temp directory | the tests must not see git metadata |
+| `kind` | `"open"` | The tests run as a process group, with nothing held back. |
+| | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
+| `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
+| `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
 
-A container method comes later, with running on several machines.
+Every result records which executor ran it and what it held.
+
+### `[landing]`
+
+`subject` is the first line of a landing commit: `{id}` the submission,
+`{from}` the agent's branch, `{agent}`, `{to}` the branch landed on. The
+default is the conventional `chore(land): #{id} {from}`.
 
 ### Services the tests need
 
@@ -136,13 +173,15 @@ through.
 **`timeout`**: how long one combination's tests may run, for example
 `"20m"`. A run that hits it is recorded as timed out.
 
-### What is not in phase 1
+**`trust`**: which results satisfy this branch: `"confined"` (no agent could
+reach the run), an executor (`"open"`, `"sandbox"`, `"container"`), and
+`"cache"` for a result moon replayed instead of ran. Without `"cache"`, every
+required test runs every time, since the cache holds whatever any shell ran.
+A branch without `trust` accepts only confined runs; one whose executor can
+never satisfy it starts nothing and says why.
 
-There are no keys for which machines' test runs to trust, and none for
-operator approval. On one machine, sluice runs every test itself, so there is
-nothing to decide about trust; that comes with several machines. Approval is
-the caller's business: crew or flywheel submits only once the work is
-approved.
+There is no key for operator approval: that is the caller's business, and
+crew or flywheel submits only once the work is approved.
 
 ## 3. What changes in crew's other config
 
@@ -168,13 +207,17 @@ wt submit bolt/concurrent-units
 ## 4. Branch protection
 
 Every branch with a `[branches]` section is protected: only sluice moves
-it. On one machine sluice installs a git `reference-transaction` hook
-that refuses any other update and logs the attempt:
+it. `sluice protect` (and every `submit`, `step` and `run`) installs a git
+`reference-transaction` hook that refuses any other update and logs the
+attempt:
 
 ```console
 $ git merge unit/touches        # on bolt/concurrent-units
-error: bolt/concurrent-units is protected by sluice; use wt submit
+error: bolt/concurrent-units is protected by sluice; submit the change to sluice instead
 ```
+
+The hook calls the installed `sluice`, never one built from a submission, so
+no submission changes the guard it is judged by.
 
 On a forge, the same is the forge's branch protection, with sluice's
 identity the only one allowed to push.
@@ -197,6 +240,9 @@ passed · landed as b7d2e94
 
 `wt submit` waits for the outcome and exits with it: 0 landed, 1 failed, 2
 conflict. `--no-wait` returns at once, and `sluice status 12` reads it later.
+Once its submission lands, `wt submit` removes the agent's worktree and its
+branch, as `wt merge` did, following worktrunk's `[merge] remove`;
+`--no-remove` keeps them.
 
 The agent in `unit/batch-review` submitted two minutes later, so its
 combination includes #12:
@@ -208,6 +254,7 @@ testing bolt/concurrent-units + #12 + #13 · 4 tasks to run, 29 replayed
 failed: tests:t-batch-cards
   on bolt/concurrent-units + #12 + #13 (e20a6f9)
   #12 passed on its own, so the failure is from this submission
+  log of tests:t-batch-cards: .git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log
 fix it in your worktree and submit again
 ```
 
@@ -259,6 +306,11 @@ with plain tools whether or not sluice is running:
   submissions/12.json
   submissions/13.json
   log.jsonl            every submission, test run, result, blame and landing, in order
+.git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
+                       what each failed test printed, for the last 20 failed combinations
+.git/sluice/caches/    the [[checkout.cache]] entries, the last two keys of each
+.git/sluice/results.jsonl
+                       every test result of the repository, with its executor
 ```
 
 A submission:
@@ -277,7 +329,8 @@ A submission:
   "state": "failed",
   "tested": { "combination": "e20a6f9b48", "on": "c41e8f2d90", "submissions": [12, 13] },
   "result": "failed",
-  "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21" } ],
+  "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
+               "log": ".git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log" } ],
   "told": "2026-10-11T09:21:55Z"
 }
 ```
