@@ -213,6 +213,9 @@ gated on every test tier in a sandbox.
 
 ## Development
 
+Developer documentation: https://agentplot.github.io/sluice (source in
+`site/`, published by `.github/workflows/pages.yml`).
+
 ```sh
 devenv shell
 moon run ':#check-fast' ':#check-tools' ':#check-e2e'

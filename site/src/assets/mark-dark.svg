@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 16 112 88" width="112" height="88" role="img" aria-label="sluice">
+  <title>sluice</title>
+  <g fill="none" stroke="#F2F1EC" stroke-width="6" stroke-linecap="round">
+    <path d="M18 28 C 40 28, 44 60, 64 60"/>
+    <path d="M18 60 L 64 60"/>
+    <path d="M18 92 C 40 92, 44 60, 64 60"/>
+  </g>
+  <g fill="#F2F1EC">
+    <circle cx="18" cy="28" r="8"/>
+    <circle cx="18" cy="60" r="8"/>
+    <circle cx="18" cy="92" r="8"/>
+  </g>
+  <path d="M64 60 L 80 60" fill="none" stroke="#45C27A" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="96" cy="60" r="18" fill="#45C27A"/>
+  <path d="M87 60 L 93 66 L 105 54" fill="none" stroke="#0E1116" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
