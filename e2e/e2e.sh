@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# sluice end to end: S1 to S4 of the statement, for real, on a scratch repository or a throwaway clone of crew.
+# sluice end to end: S1 to S4 of the statement, for real, on a scratch repository: a moon workspace of two
+# projects, beta depending on alpha.
 #
 #   e2e.sh <new dir> fixture   build the repository, then prove each scenario's fixture with git and moon alone:
 #                              the candidates sluice must form, which conflict, which pass and which fail
 #   e2e.sh <new dir> sluice    build the repository, then drive S1 to S4 through wt submit and sluice, and check
 #
-#   E2E_REPO=scratch (default)  a new repository: a moon workspace of two projects, beta depending on alpha
-#   E2E_REPO=crew               a clone of crew (E2E_CREW=<repo>, default ~/Code/github_afterthought/crew/crew.git),
-#                               every moon and sluice call made inside crew's devenv shell
-#   MOON=<path>                 the moon to use for the scratch repository (>= 2.5)
+#   MOON=<path>                the moon to use (>= 2.5)
 #
-# Needs git >= 2.54 and jq; moon >= 2.5 (crew: devenv); in sluice mode, sluice and wt-submit on PATH.
+# Needs git >= 2.54 and jq; moon >= 2.5; in sluice mode, sluice and wt-submit on PATH.
 # Written for bash 3.2.
 set -euo pipefail
 
 ROOT=${1:?usage: e2e.sh <new dir> fixture|sluice}
 MODE=${2:?usage: e2e.sh <new dir> fixture|sluice}
-VARIANT=${E2E_REPO:-scratch}
 MOON=${MOON:-moon}
 
 die() {
@@ -38,11 +35,11 @@ REPO=$ROOT/repo
 for v in $(env | sed -n 's/^\(MOON_[A-Z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@localhost GIT_COMMITTER_NAME=e2e GIT_COMMITTER_EMAIL=e2e@localhost
 
-# inenv <dir> <command...>: run a command in a directory, inside crew's devenv shell for the crew variant.
-inenv() {
+# indir <dir> <command...>: run a command in a directory.
+indir() {
   local dir=$1
   shift
-  if [ "$VARIANT" = crew ]; then (cd "$dir" && devenv shell -- "$@"); else (cd "$dir" && "$@"); fi
+  (cd "$dir" && "$@")
 }
 
 policy() { # the walkthrough's policy for bolt branches
@@ -64,12 +61,11 @@ EOF
 }
 
 # --- the repository ------------------------------------------------------------------------------------------------
-if [ "$VARIANT" = scratch ]; then
-  need "$MOON"
-  git init -q -b main "$REPO"
-  cd "$REPO"
-  mkdir -p .moon .config alpha beta
-  cat >.moon/workspace.yml <<'EOF'
+need "$MOON"
+git init -q -b main "$REPO"
+cd "$REPO"
+mkdir -p .moon .config alpha beta
+cat >.moon/workspace.yml <<'EOF'
 $schema: 'https://moonrepo.dev/schemas/workspace.json'
 projects:
   alpha: 'alpha'
@@ -79,7 +75,7 @@ vcs:
   defaultBranch: 'main'
 telemetry: false
 EOF
-  cat >alpha/moon.yml <<'EOF'
+cat >alpha/moon.yml <<'EOF'
 $schema: 'https://moonrepo.dev/schemas/project.json'
 tasks:
   test:
@@ -87,12 +83,12 @@ tasks:
     inputs: ['test.sh', 'value.txt', 'notes.md']
     tags: [suite]
 EOF
-  cat >alpha/test.sh <<'EOF'
+cat >alpha/test.sh <<'EOF'
 #!/bin/sh
 grep -qx ok value.txt || { echo "alpha: value.txt is $(cat value.txt)"; exit 1; }
 echo "alpha ok"
 EOF
-  cat >beta/moon.yml <<'EOF'
+cat >beta/moon.yml <<'EOF'
 $schema: 'https://moonrepo.dev/schemas/project.json'
 dependsOn: ['alpha']
 tasks:
@@ -102,40 +98,27 @@ tasks:
     deps: ['alpha:test']
     tags: [suite]
 EOF
-  cat >beta/test.sh <<'EOF'
+cat >beta/test.sh <<'EOF'
 #!/bin/sh
 grep -qx ok value.txt || { echo "beta: value.txt is $(cat value.txt)"; exit 1; }
 grep -qx ok ../alpha/value.txt || { echo "beta: alpha's value.txt is $(cat ../alpha/value.txt)"; exit 1; }
 echo "beta ok"
 EOF
-  for p in alpha beta; do
-    echo ok >$p/value.txt
-    printf '%s notes\n\nnothing yet\n' $p >$p/notes.md
-  done
-  echo '.moon/cache/' >.gitignore
-  policy >.config/sluice.toml
-  git add -A
-  git commit -qm "two moon projects, a test each tagged suite, and sluice's policy"
-  # What each scenario edits: a file both a and c write (S2), and a test each of a (S4) and b (S3) breaks.
-  A_FILE=alpha/notes.md A_LINE=3 B_FILE=beta/notes.md B_LINE=3
-  B_BREAKS=beta/value.txt B_FAILS=beta:test A_BREAKS=alpha/value.txt A_FAILS=alpha:test
-  BROKEN=broken
-else
-  git clone -q --no-local "${E2E_CREW:-$HOME/Code/github_afterthought/crew/crew.git}" "$REPO"
-  cd "$REPO"
-  git switch -q main 2>/dev/null || git switch -q -c main origin/main
-  mkdir -p .config
-  policy >.config/sluice.toml
-  git add .config/sluice.toml
-  git commit -qm "sluice's policy for bolt branches"
-  # crew: a comment line of two tests; a test broken by an exit before it sources lib.sh.
-  A_FILE=tests/t-docs.sh A_LINE=1 B_FILE=tests/t-after.sh B_LINE=1
-  B_BREAKS=tests/t-after.sh B_FAILS=tests:t-after A_BREAKS=tests/t-docs.sh A_FAILS=tests:t-docs
-  BROKEN='exit 1 # e2e: fails on purpose'
-fi
-case $(inenv "$REPO" "$MOON" --version) in
+for p in alpha beta; do
+  echo ok >$p/value.txt
+  printf '%s notes\n\nnothing yet\n' $p >$p/notes.md
+done
+echo '.moon/cache/' >.gitignore
+policy >.config/sluice.toml
+git add -A
+git commit -qm "two moon projects, a test each tagged suite, and sluice's policy"
+# What each scenario edits: a file both a and c write (S2), and a test each of a (S4) and b (S3) breaks.
+A_FILE=alpha/notes.md A_LINE=3 B_FILE=beta/notes.md B_LINE=3
+B_BREAKS=beta/value.txt B_FAILS=beta:test A_BREAKS=alpha/value.txt A_FAILS=alpha:test
+BROKEN=broken
+case $(indir "$REPO" "$MOON" --version) in
 "moon 2."[5-9]* | "moon 2."[1-9][0-9]* | "moon "[3-9]*) ;;
-*) die "needs moon >= 2.5, found $(inenv "$REPO" "$MOON" --version)" ;;
+*) die "needs moon >= 2.5, found $(indir "$REPO" "$MOON" --version)" ;;
 esac
 # Every scenario's branch exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
 for s in s1 s2 s3 s4; do git branch "bolt/$s" main; done
@@ -154,9 +137,7 @@ edit() {                                                  # edit <session> <path
 }
 breaks() { # breaks <session> <path>: the test reading that file made to fail, as one commit
   local f=$ROOT/places/$1/$2
-  if [ "$VARIANT" = scratch ]; then echo "$BROKEN" >"$f"; else
-    awk -v l="$BROKEN" 'NR==2{print l} {print}' "$f" >"$f.e2e" && cat "$f.e2e" >"$f" && rm "$f.e2e"
-  fi
+  echo "$BROKEN" >"$f"
   git -C "$ROOT/places/$1" commit -qam "$1: breaks $2"
 }
 
@@ -208,11 +189,11 @@ form() {
 verdict() {
   local dir=$ROOT/check-$2 targets rc=0
   git -C "$REPO" worktree add -q --detach "$dir" "$2"
-  targets=$(inenv "$dir" env MOON_BASE="$1" MOON_HEAD="$2" "$MOON" query tasks --tags suite --affected --downstream deep \
+  targets=$(indir "$dir" env MOON_BASE="$1" MOON_HEAD="$2" "$MOON" query tasks --tags suite --affected --downstream deep \
     </dev/null | jq -r '.tasks[][] | .target')
   if [ -z "$targets" ]; then echo "pass (nothing affected)"; else
     # shellcheck disable=SC2086
-    inenv "$dir" "$MOON" exec $targets --on-failure continue </dev/null >"$dir.log" 2>&1 || rc=$?
+    indir "$dir" "$MOON" exec $targets --on-failure continue </dev/null >"$dir.log" 2>&1 || rc=$?
     report=$(jq -c '[.actions[] | select(.label | startswith("RunTask(")) | {t: .node.params.target, s: .status}]' \
       "$dir/.moon/cache/runReport.json")
     if [ $rc -eq 0 ]; then echo "pass $report"; else echo "fail $report"; fi
@@ -250,14 +231,14 @@ submit() { # submit <session> <scenario> [flags...]: wt submit from the session'
   local who=$1 s=$2
   shift 2
   at "$who" "$s"
-  SLUICE_AGENT="e2e-$who" inenv "$ROOT/places/$who" wt-submit "bolt/$s" --no-remove "$@"
+  SLUICE_AGENT="e2e-$who" indir "$ROOT/places/$who" wt-submit "bolt/$s" --no-remove "$@"
 }
 id_of() { submit "$1" "$2" --no-wait --json | jq -r .id; }
-status() { inenv "$REPO" sluice status "$@" --json; }
+status() { indir "$REPO" sluice status "$@" --json; }
 settle() { # settle <scenario>: rounds until nothing on the branch is queued or under test, for at most an hour
   local i=0
   while status "bolt/$1" | jq -e '[.submissions[] | select(.state == "queued" or .state == "testing")] | length > 0' >/dev/null; do
-    inenv "$REPO" sluice step "bolt/$1" >/dev/null
+    indir "$REPO" sluice step "bolt/$1" >/dev/null
     i=$((i + 1))
     [ $i -lt 720 ] || die "bolt/$1 did not settle"
     sleep 5

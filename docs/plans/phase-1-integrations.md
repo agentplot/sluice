@@ -1727,15 +1727,13 @@ One script, `e2e.sh`, builds a repository with a moon workspace, a
 `bolt/*` policy, a branch per scenario and three sessions' worktrees,
 and then either proves the fixture with git and moon alone (`fixture`)
 or drives S1 to S4 through `wt submit` and `sluice` and checks the
-outcome (`sluice`). `E2E_REPO=crew` runs the same against a throwaway
-clone of crew, with every moon and sluice call inside crew's devenv
-shell.
+outcome (`sluice`). Whether another repository works with sluice is
+proved in that repository, when it adopts sluice; this script builds
+only its own scratch repository.
 
 Verified: `fixture` passes on the scratch repository (moon 2.5.3 and
-moon 2.6.1, bash 3.2) and on the crew clone (through `devenv shell --`,
-crew's moon 2.5.3). The fixture itself needs only moon 2.5, so it keeps
-that floor while crew runs 2.5.3; the `sluice` half needs the profile's
-2.6.
+moon 2.6.1, bash 3.2). The fixture itself needs only moon 2.5; the
+`sluice` half needs the profile's 2.6.
 
 ```
 $ MOON=/nix/store/1vc28y8m…-moon_cli-2.6.1/bin/moon /bin/bash e2e.sh /tmp/…/run4 fixture
@@ -1747,22 +1745,11 @@ ok    S3 a: pass [{"t":"alpha:test","s":"passed"},{"t":"beta:test","s":"passed"}
 ok    S3 a+b: fail [{"t":"alpha:test","s":"passed"},{"t":"beta:test","s":"failed"}]
 ok    S4 a: fail [{"t":"alpha:test","s":"failed"},{"t":"beta:test","s":"skipped"}]
 ok    S4 b formed again without a: pass [{"t":"alpha:test","s":"passed"},{"t":"beta:test","s":"passed"}]
-
-$ E2E_REPO=crew /bin/bash e2e.sh /tmp/…/crew1 fixture
-ok    S1 a: pass [{"t":"tests:t-docs","s":"passed"}]
-ok    S1 a+b: pass [{"t":"tests:t-docs","s":"cached"},{"t":"tests:t-after","s":"passed"}]
-ok    S2 a+c forms: conflict tests/t-docs.sh
-ok    S2 a: pass [{"t":"tests:t-docs","s":"passed"}]
-ok    S3 a: pass [{"t":"tests:t-docs","s":"cached"}]
-ok    S3 a+b: fail [{"t":"tests:t-docs","s":"cached"},{"t":"tests:t-after","s":"failed"}]
-ok    S4 a: fail [{"t":"tests:t-docs","s":"failed"}]
-ok    S4 b formed again without a: pass [{"t":"tests:t-after","s":"cached"}]
 ```
 
 The script is `e2e/e2e.sh`. Its `sluice` half passes on the scratch
-repository with git-worktree places and with worktrunk places (moon
-2.6.1, every check `ok`, exit
-0): S1 lands both in order, each landing's second parent the session's
+repository with git-worktree places (moon 2.6.1, every check `ok`,
+exit 0): S1 lands both in order, each landing's second parent the session's
 head; S2 tells the conflict before any check and lands the first; S3
 blames the second alone; S4 fails the first, re-forms the second without
 it and lands it.
@@ -1771,12 +1758,7 @@ Notes for whoever runs it:
 
 - Every branch is created before sluice protects `bolt/*`.
 - On a branch with no verdict yet, the first candidate runs every
-  required check (70). For crew that is the whole suite, 59 tasks,
-  8 m 48 s on this host from cold; with crew's shared outputs it replays
-  whatever any worktree of the clone already passed.
-- `E2E_REPO=crew` needs crew on moon 2.6, the moon profile's floor.
-- crew's tests need `openspec` on `PATH` (`tests/run`), as every host
-  has it.
+  required check (70).
 
 ---
 
@@ -1790,7 +1772,7 @@ tier is slower than the one before and needs more of the host.
 |---|---|---|---|---|
 | fast | `check-fast` | the cargo tests: units, the conformance suite over the fakes, the CLI over the fakes; `cargo fmt --check`; clippy `-D warnings` | cargo | seconds |
 | tools | `check-tools` | each section's acceptance tests on scratch repositories; the conformance suite over the real profiles (below) | git, moon, worktrunk, a writable temp dir | tens of seconds |
-| end to end | `check-e2e` | `e2e.sh sluice` on the scratch workspace; `E2E_REPO=crew` against a clone of crew | the above, and crew's devenv for the crew variant | minutes; crew cold is 8 m 48 s, replayed about a second |
+| end to end | `check-e2e` | `e2e.sh sluice` on the scratch workspace | the above | minutes |
 
 sluice's own `.config/sluice.toml`:
 
