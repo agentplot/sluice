@@ -37,7 +37,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
-| 11 | warm places: the build cache and the toolchain's evaluation carried into a new place | §5, §4 | **build cache done**: `profiles/places.rs`, acceptance test 8; the toolchain's evaluation next |
+| 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | next: `release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 8 |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -47,60 +47,28 @@ needed.
 
 - **11, warm places.** Every candidate gets a new place, so when moon does
   not replay a task, it pays a cold build and a fresh devenv evaluation.
-  - **The build cache** (section 5, *Warming a place*), done: the place
-    profile copies into each new place, before its `pre-start` hooks, what
-    git ignores and `.worktreeinclude` lists in the repository's primary
-    worktree, from there; worktrunk's `wt step copy-ignored` for that
-    method, git and a cloning `cp` for `git-worktree`. sluice's lists
-    `target` only. Measured on sluice's tests (`cargo test --no-run
-    --features tools`, under a load average near 400): cold, cargo took
-    162 s; with a copied cache built by the same compiler (915 MB cloned
-    in 8 s), 0.6 s and nothing compiled, the workspace's own crates
-    included. A cache built by another compiler saves little (85 s, 112 of
-    148 crates compiled), so it pays once the primary worktree builds with
-    the compiler `.prototools` names.
-  - **The toolchain's evaluation.** `devenv print-dev-env` in a new
-    place takes 23 s at normal load (35 s to 315 s under load averages of
-    200 to 470), and 0.1 s again in the same place: the cost is
-    evaluating nixpkgs. devenv 2.4 caches it in the place's own
-    `.devenv/nix-eval-cache.db`, keyed by the root (a copied cache was not
-    used; `DEVENV_DOTFILE` does not move it). Its inputs are listed in
-    `.devenv/input-paths.txt`: `devenv.nix`, `devenv.lock`,
-    `devenv.yaml`, `devenv.local.nix`, `.env`, `treefmt.nix` (an import)
-    and the user's `~/.config/nixpkgs/overlays`.
-    - **A printed toolchain per key**, the way an image is built once per
-      layer: a toolchain profile keys the printed toolchain by a hash of
-      the repository's identity and the content of every file devenv
-      recorded as an input (paths inside the root relative to it). On a
-      hit the place sources the stored toolchain and nothing is
-      evaluated; on a miss it is printed in
-      `<common>/sluice/toolchains/<key>/`, a directory holding only those
-      inputs, under a lock per key (a second run wanting the same key
-      waits and takes it; different keys print in parallel), and stored.
-      Checks never run there: places only read the stored toolchain.
-    - **Kept only if it is the same from any directory.** On a miss it is
-      printed in two such directories and kept only if both printings are
-      identical; anything that writes the directory's path into the
-      toolchain, in the script or in a tool in the store, makes them
-      differ. Otherwise the place prints its own, as now: slower, never
-      wrong. A toolchain holding its root is wrong elsewhere, not just
-      slow: with a toolchain printed for another directory, `treefmt
-      --ci` checked that directory and passed a misformatted file.
-    - **sluice's own toolchain, the same from any directory**, done at its
-      source: its scripts and the moon lines in `enterShell` find the
-      worktree with `git rev-parse` when they run, and `treefmt` finds its
-      tree by `devenv.nix` (`treefmt.config.projectRootFile`, devenv's own
-      setting for this; without it the wrapper holds `--tree-root
-      <root>`). A toolchain printed elsewhere now fails a misformatted
-      file, as one printed in the place does.
-    - **What still differs is devenv's own**, from two directories holding
-      only the inputs (18 s and 13 s to print): `DEVENV_ROOT`,
-      `DEVENV_STATE`, `DEVENV_DOTFILE`, `PREK_HOME`, the `.devenv/run`
-      link and the direnv test name the directory; `DEVENV_RUNTIME`
-      (`/tmp/devenv-<hash of the root>`) differs; `DEVENV_TASK_FILE`
-      differs because its `devenv:files` tasks hold the root; and
-      `NIX_CFLAGS_COMPILE`'s `-frandom-seed` follows the environment's
-      store path. No check reads any of them.
+  sluice thinks of it as CI does: the executor is the runner, a
+  `container` image the custom runner, the toolchain and `proto install`
+  the setup steps, and `[[checkout.cache]]` the `actions/cache` step
+  (section 5, *Caches*).
+  - **The build cache**: `[[checkout.cache]]`, restored into a place
+    before its hooks and saved from a passed one, keyed by the content of
+    the files it names; sluice's own declares `target`, keyed by
+    `Cargo.lock` and `.prototools`. A place never takes anything from
+    another worktree: `.worktreeinclude` is worktrunk's, read by the `wt
+    step copy-ignored` that sluice's `wt.toml` runs at `post-start` for
+    the worktrees people make.
+  - **The toolchain's evaluation is paid per place**, as a CI job pays
+    it: `devenv print-dev-env` takes 23 s in a new place at normal load
+    and 0.1 s again in the same place, the cost evaluating nixpkgs, and
+    devenv keys its evaluation cache by the root. A repository that wants
+    it gone brings a container image, or keeps its devenv in a pure flake
+    (`devenv.root` fixed, `nix print-dev-env path:./nix`: the same shell
+    from any directory, 9 s; devenv's processes, tasks and own evaluation
+    cache are lost). sluice's toolchain finds its worktree when entered,
+    never at evaluation (`devenv.nix`: `git rev-parse` in its scripts and
+    `enterShell`, `treefmt.config.projectRootFile`), so a toolchain
+    printed elsewhere never checks another tree.
 
 - **The conformance scenarios with faults** (crashes, interference,
   lost and held runs) stay on the fakes. Each shared scenario names what
@@ -125,6 +93,11 @@ needed.
   its limits and reports what it enforced (ADR 0012; clauses 71, 83, 84).
 - A branch's gate trusts runs by confinement or executor kind (section
   4); records never claim confinement a run lacked.
+- A place holds the candidate and the caches its branch's policy declares
+  (`[[checkout.cache]]`), each keyed by the content of named files,
+  restored before any hook and saved only from a passed candidate's
+  place (35, as changed in the statement for this). The toolchain's
+  evaluation is not cached: it is paid per place, as a CI job pays it.
 - A branch's policy says how much network a run may reach (83, 84):
   `[executor] network = false` (none), `"localhost"` (only 127.0.0.1 and
   ::1, so tests can start servers there and reach them), or `true`

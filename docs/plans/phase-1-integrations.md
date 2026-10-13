@@ -1491,40 +1491,49 @@ remove:
 - `sluice/try/*` worktrees appear in every agent's `wt list` while they
   exist.
 
-### Warming a place
+### Caches (35)
 
-A new place has none of the repository's build cache, so a task moon
-does not replay builds cold. Once the checkout exists, and before any
-`pre-start` hook, the place profile copies into it every entry that
-git ignores and the `.worktreeinclude` lists, both read in the
-repository's primary worktree: a normal clone's main worktree, whatever
-it has checked out, or in a bare layout the worktree with the branch the
-common dir's `HEAD` names. It is worktrunk's rule: with a
-different `.worktreeinclude` in the place, `wt step copy-ignored` still
-followed the primary's. A primary with no `.worktreeinclude`, or no
-primary worktree, gives no copy; a failed copy fails the place. Copying
-runs nothing, so taking the list from the primary's working copy leaves
-what runs in the place the candidate's (35).
+A new place builds cold. A branch's policy declares the caches a place
+may hold beyond the candidate, the way a CI job declares `actions/cache`:
 
-- `worktrunk`: `command wt -C <place> step copy-ignored --require-include
-  --format=json </dev/null`. Verified on v0.80.0 with a detached place in
-  a bare layout: `{"entries":[{"kind":"dir","path":"target"}],"from":"<main
-  worktree>","outcome":"planned",…}` under `--dry-run`; a real copy
-  reports `"reflinked"` per file cloned. With no `.worktreeinclude` it
-  exits 0 with `"entries":[]` and `"reason":"require-include-no-worktreeinclude"`;
-  without `--require-include` it copies every ignored entry.
-- `git-worktree`: the entries are those `git -C <primary> ls-files -o -i
-  --directory --exclude-from=<primary>/.worktreeinclude` lists that are,
-  or lie under, an entry `git -C <primary> ls-files -o -i --directory
-  --exclude-standard` lists; each is copied with `/bin/cp -c -p -R` on
-  macOS (a clone, sharing blocks until written; by path, since a
-  toolchain's GNU `cp` may come first on `PATH` and has no `-c`) and `cp -a --reflink=auto` on
-  Linux, an existing destination left as it is.
+```toml
+[[checkout.cache]]
+key = ["Cargo.lock", ".prototools"]   # files whose content keys the cache
+paths = ["target"]                    # ignored paths it restores and saves
+```
 
-What is copied never decides a verdict: cargo rebuilds what its
-fingerprints say changed, and moon's cache, which would make a replay
-of a run that never happened in the place, is never listed (sluice's own
-`.worktreeinclude` lists `target` only).
+- **Key.** A hash of the declared `paths` and the content of each `key`
+  file in the candidate's tree (a missing file hashes as missing). The
+  common dir already scopes it to the repository.
+- **Where.** `<common>/sluice/caches/<hash of paths>/<key>/`, each saved
+  whole or not at all (written beside, then renamed).
+- **Restore**, in `materialize`, once the checkout exists and before any
+  `pre-start` hook: the cache with the candidate's key, or else the one
+  of those `paths` saved last (as `actions/cache`'s restore keys), cloned
+  into the place: `/bin/cp -c -p -R` on macOS (blocks shared until
+  written, times kept, which cargo's fingerprints read; by path, since
+  a toolchain's GNU `cp` may come first on `PATH` and has no `-c`), `cp
+  -a --reflink=auto` on Linux. None yet: the place starts cold.
+- **Save**, in `release` of a place whose candidate passed, before the
+  checkout is removed: the declared `paths` move out of the place into a
+  new cache of the candidate's key, unless that key is saved already (a
+  saved cache never changes). A failed, dropped or recovered place saves
+  nothing. The last two keys of each cache are kept; older ones go.
+- **Never a verdict.** Restoring runs nothing, and a cache only spares
+  work its tool redoes when the cache is stale: cargo rebuilds what its
+  fingerprints say changed. A cache of something that would turn a run
+  into a replay, such as moon's `.moon/cache`, is never declared.
+
+The seam: `Checkout::release(name, passed)`, the core passing whether
+the place's candidate passed (the verdict it read, never a run's own
+report).
+
+Measured on sluice's tests (`cargo test --no-run --features tools`):
+cold, cargo took 162 s; with `target/` built by the same compiler cloned
+in (915 MB in 8 s), 0.6 s and nothing compiled, the workspace's own crates
+included. A `target/` built by another compiler saved little (85 s, 112
+of 148 crates compiled), so `.prototools`, which names the compiler, is
+in the key.
 
 ### `archive`
 
@@ -1561,7 +1570,7 @@ For each method, in a scratch repository:
 5. worktrunk: the candidate's `pre-start` hook has run when `materialize` returns, and neither the primary worktree's nor a session's uncommitted hooks, nor a `post-start` hook; a stale `sluice/try/<branch>/<n>` from a crash is cleaned and recreated.
 6. git-worktree: a `post-checkout` hook is not run.
 7. No session's worktree, and no branch but `sluice/try/<branch>/<n>`, is changed by either call (core.16, S11).
-8. Both worktree methods: an entry `.worktreeinclude` lists and git ignores is in the place when `materialize` returns, before `pre-start` ran; an entry only listed, or only ignored, is not; with no `.worktreeinclude`, nothing is copied.
+8. Both worktree methods, with a `[[checkout.cache]]`: the first place starts with none of its `paths`; released as passed, its `paths` are saved and the next place with the same key holds them, with their times, before `pre-start` ran; released as failed, nothing is saved; a place whose key differs takes the cache saved last; a third key removes the first.
 
 ---
 
