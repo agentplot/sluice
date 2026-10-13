@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="sluice">
+  <title>sluice</title>
+  <rect width="120" height="120" rx="26" fill="#0E1116"/>
+  <g fill="none" stroke="#F2F1EC" stroke-width="10" stroke-linecap="round">
+    <path d="M24 34 C 44 34, 46 60, 62 60"/>
+    <path d="M24 86 C 44 86, 46 60, 62 60"/>
+  </g>
+  <g fill="#F2F1EC">
+    <circle cx="24" cy="34" r="11"/>
+    <circle cx="24" cy="86" r="11"/>
+  </g>
+  <circle cx="84" cy="60" r="22" fill="#45C27A"/>
+  <path d="M74 60 L 81 67 L 95 53" fill="none" stroke="#0E1116" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
