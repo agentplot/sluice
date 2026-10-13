@@ -47,6 +47,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
+| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | next |
+| 23 | `main` kept in step with the shared remote | C.4 | to design: whether every push goes through sluice |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -209,6 +211,36 @@ needed.
   (`tests/instance.rs`, `cli:tools`): one `sluice run` with `[runs] max =
   2` serving three branches of window four has two runs under test at
   most, reaches two, and gives each half the processors.
+
+- **22, a full stack per candidate.** A repository's checks bring up
+  everything a browser test needs (ADR 0010): a container stack on a
+  port, an API server and a dev server, then Playwright against them, for
+  every candidate under test at once. What sluice owes them:
+  - A short name per candidate, stable for the candidate's life and
+    unique among the places alive, that the checks derive their ports and
+    their container project's name from. sluice computes no port
+    (core.10); the checks hash the name, or bind any free port and write
+    it under `SLUICE_TMP`.
+  - Containers ended with the place. The run's process group reaches the
+    servers but not a container, which the container daemon owns; a
+    container left behind holds its port and fails the next candidate,
+    blamed on the wrong submission (32). A check labels what it starts
+    with the candidate's name, and releasing the place removes what
+    carries that label, after a time limit as much as a pass.
+  - The sandbox lets a run reach the container daemon's socket and the
+    browser's cache, and the policy says whether a run may pull images.
+  - The acceptance test, in the tools tier: a fixture of a container on
+    a port, a server, and a browser test against it; two candidates under
+    test at once neither collide nor share a container; both land; a
+    candidate ended by its time limit leaves no container and no
+    process.
+- **23, `main` kept in step with the shared remote.** The branch's
+  pushed-refs profile (C.4): fetch before a round reads the branch, form
+  on the remote's revision, land with a push leased on the revision
+  read, the forge's rules letting only sluice's identity move the branch.
+  To settle first: whether every push to `main` goes through sluice, as
+  C.4 has it, or the forge stays open to direct pushes and pull requests,
+  which sluice would then take as the branch moving under its queue.
 
 ## Decisions this pass builds on
 
