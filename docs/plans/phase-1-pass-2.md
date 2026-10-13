@@ -38,7 +38,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
 | 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
 | 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 8 on both methods, `cli:tools` |
-| 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | next |
+| 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **`trust` and the policy done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml`; next: the policy on `main` by `wt merge`, then sluice landing sluice |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.

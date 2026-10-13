@@ -1,0 +1,32 @@
+# sluice's gate for its own branches (docs/plans/phase-1-integrations.md,
+# section 9). Read from each branch's own revision (core.15).
+
+[tests]
+runner = "moon"
+# Printed outside the executor and sourced inside it (section 4).
+toolchain = ["devenv", "print-dev-env"]
+
+[checkout]
+method = "git-worktree"
+
+# A place starts from the build of the last candidate that passed with the
+# same lock file and compiler (35; section 5, Caches).
+[[checkout.cache]]
+key = ["Cargo.lock", ".prototools"]
+paths = ["target"]
+
+[executor]
+kind = "sandbox"
+# The integration tests listen on localhost; nothing reaches further.
+network = "localhost"
+
+[branches."bolt/*"]
+required = ["#check-fast"]
+trust = ["open", "sandbox", "container", "cache"]
+
+# On one Mac, until runs are confined, main accepts sandboxed runs too; it
+# never takes a replay, since the cache holds what open shells ran.
+[branches.main]
+required = ["#check-fast", "#check-tools", "#check-e2e"]
+batch = true
+trust = ["confined", "sandbox"]

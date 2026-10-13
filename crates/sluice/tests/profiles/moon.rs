@@ -95,6 +95,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
         limit: Some(Duration::from_secs(120)),
         limits: Limits::default(),
         tests: moon(),
+        replay: true,
     }
 }
 
@@ -200,6 +201,27 @@ fn a_second_run_replays_under_the_same_keys() {
     assert!(keys(&first).iter().all(|h| h.len() == 64));
     assert_eq!(first.executor.kind, "open");
     assert_eq!(first.executor.processors, Some(4));
+}
+
+/// 28: a request that may not replay runs every task again, under the
+/// same keys, though each key holds a pass.
+#[test]
+fn a_run_without_replay_runs_every_task() {
+    let repo = workspace("moon-no-replay");
+    let c = checks(&repo);
+    let first = finish(&c, &request(&repo, "p1", &["#check-fast"], None));
+    let mut req = request(&repo, "p2", &["#check-fast"], None);
+    req.replay = false;
+    let second = finish(&c, &req);
+    assert_eq!(
+        tasks(&second),
+        [
+            ("alpha:test".into(), Outcome::Pass, false),
+            ("beta:test".into(), Outcome::Pass, false)
+        ]
+    );
+    let keys = |r: &RunReport| r.tasks.iter().map(|t| t.hash.clone()).collect::<Vec<_>>();
+    assert_eq!(keys(&first), keys(&second));
 }
 
 /// 15, 16: a failing task is a fail under its key; its dependent, never

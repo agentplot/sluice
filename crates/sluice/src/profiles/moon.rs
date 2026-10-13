@@ -101,6 +101,10 @@ impl Moon {
         let mut argv: Vec<&str> = vec!["moon", "exec"];
         argv.extend(targets.iter().map(String::as_str));
         argv.extend(["--on-failure", "continue", "--concurrency", &jobs]);
+        // A gate that does not trust the cache gets no replay (28).
+        if !request.replay {
+            argv.push("--force");
+        }
         Ok(Plan {
             argv: Some(cx.argv(&argv)),
             targets,

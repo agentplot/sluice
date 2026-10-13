@@ -47,12 +47,36 @@ pub struct Rules {
     pub flaky: Flaky,
     /// How long one candidate's checks may run (66).
     pub timeout: Option<Duration>,
+    /// Which results satisfy the gate (27 to 29): `confined`, executor
+    /// kinds, and `cache` for replays.
+    pub trust: Vec<String>,
+}
+
+/// What `trust` may list.
+const TRUSTS: [&str; 5] = ["confined", "open", "sandbox", "container", "cache"];
+
+impl Rules {
+    /// 28: whether a ran result's executor satisfies the gate.
+    pub fn trusts_run(&self, kind: &str, confined: bool) -> bool {
+        self.trust.iter().any(|t| t == kind) || (confined && self.trusts("confined"))
+    }
+
+    /// Whether `trust` lists `what`.
+    pub fn trusts(&self, what: &str) -> bool {
+        self.trust.iter().any(|t| t == what)
+    }
+
+    /// 29: whether a run of the executor `kind` can ever satisfy the gate:
+    /// only a container is confined today.
+    pub fn satisfiable_by(&self, kind: &str) -> bool {
+        self.trusts(kind) || (kind == "container" && self.trusts("confined"))
+    }
 }
 
 impl Default for Rules {
     /// What a table leaves out, always the conservative reading: every
     /// candidate, a window of one to four, a flaky key read as failed, an
-    /// hour per candidate.
+    /// hour per candidate, only confined runs trusted.
     fn default() -> Self {
         Rules {
             required: Vec::new(),
@@ -60,6 +84,7 @@ impl Default for Rules {
             batch: false,
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
+            trust: vec!["confined".into()],
         }
     }
 }
@@ -94,6 +119,7 @@ struct RulesForm {
     batch: Option<bool>,
     flaky: Option<String>,
     timeout: Option<String>,
+    trust: Option<Vec<String>>,
 }
 
 impl Policy {
@@ -132,6 +158,13 @@ impl Policy {
                         .with_context(|| format!("[branches.\"{pattern}\"] timeout"))?,
                 ),
             };
+            let trust = r.trust.unwrap_or(d.trust);
+            if let Some(t) = trust.iter().find(|t| !TRUSTS.contains(&t.as_str())) {
+                bail!(
+                    "[branches.\"{pattern}\"] trust lists {t:?}; it may list {}",
+                    TRUSTS.join(", ")
+                );
+            }
             branches.push((
                 pattern,
                 Rules {
@@ -140,6 +173,7 @@ impl Policy {
                     batch: r.batch.unwrap_or(d.batch),
                     flaky,
                     timeout,
+                    trust,
                 },
             ));
         }
@@ -337,6 +371,49 @@ batch = true
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
+        assert_eq!(main.trust, ["confined"]);
+    }
+
+    /// sluice's own policy reads, and gates as section 9 says: bolt
+    /// branches on the fast tier from any run or the cache, `main` on
+    /// every tier from sandboxed or confined runs only, deepest first.
+    #[test]
+    fn sluices_own_policy_reads() {
+        let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
+        assert_eq!(p.limits.executor.as_deref(), Some("sandbox"));
+        assert_eq!(p.limits.network, Some(Network::Localhost));
+        assert!(matches!(&p.checkout["cache"], Setting::Tables(t) if t.len() == 1));
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert_eq!(bolt.required, ["#check-fast"]);
+        assert!(bolt.satisfiable_by("sandbox") && bolt.trusts("cache"));
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
+        assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
+        assert!(p.rules_for("unit/x").unwrap().is_none());
+    }
+
+    /// 27 to 29: a gate names the results it trusts.
+    #[test]
+    fn reads_what_a_gate_trusts() {
+        let p = Policy::parse(
+            "[branches.main]\ntrust = [\"confined\", \"sandbox\"]\n\
+             [branches.\"bolt/*\"]\ntrust = [\"open\", \"cache\"]\n",
+        )
+        .unwrap();
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert!(main.trusts_run("sandbox", false));
+        assert!(main.trusts_run("container", true));
+        assert!(!main.trusts_run("open", false));
+        assert!(!main.trusts("cache"));
+        assert!(main.satisfiable_by("sandbox"));
+        assert!(!main.satisfiable_by("open"));
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert!(bolt.trusts("cache") && bolt.trusts_run("open", false));
+        assert!(!bolt.satisfiable_by("sandbox"));
+        let strict = Policy::parse("[branches.main]\n").unwrap();
+        let strict = strict.rules_for("main").unwrap().unwrap();
+        assert!(!strict.satisfiable_by("sandbox") && strict.satisfiable_by("container"));
+        assert!(Policy::parse("[branches.main]\ntrust = [\"anyone\"]\n").is_err());
     }
 
     /// 35: the caches a place may hold reach the place's profile as an

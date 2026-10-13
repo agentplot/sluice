@@ -8,7 +8,7 @@ use sluice_fakes::Fakes;
 
 const BRANCH: &str = "bolt/concurrent-units";
 
-const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\n";
+const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
 
 struct Rounds(Cell<usize>);
 

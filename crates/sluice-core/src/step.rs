@@ -286,6 +286,14 @@ impl Sluice<'_> {
             .policy_at(&base)?
             .ok_or_else(|| anyhow!("{branch}'s revision {base} has no {POLICY_PATH}"))?;
         let rules = self.gate(branch, &base)?;
+        // 29: a gate no run of this executor can satisfy starts nothing.
+        let kind = policy.limits.executor.as_deref().unwrap_or("open");
+        if !rules.satisfiable_by(kind) {
+            bail!(
+                "{branch}'s gate trusts {:?}, which no run of [executor] kind = {kind:?} satisfies",
+                rules.trust
+            );
+        }
         for c in starting {
             let name = c.place.clone().expect("a starting candidate has a place");
             let place = self
@@ -301,6 +309,7 @@ impl Sluice<'_> {
                 limit: rules.timeout,
                 limits: policy.limits.clone(),
                 tests: policy.tests.clone(),
+                replay: rules.trusts("cache"),
             })?;
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
@@ -451,7 +460,7 @@ impl Sluice<'_> {
                         self.seams.state.record_results(&bytes)?;
                         results.extend(fresh);
                     }
-                    let mut v = verdict::read(&report, &results, rules.flaky);
+                    let mut v = verdict::read(&report, &results, rules);
                     // 70, 55: a revision with no verdict runs every required
                     // check; a report holding none of them is no pass.
                     if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {

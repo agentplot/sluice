@@ -19,7 +19,7 @@ use support::Repo;
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
 [checkout]\nmethod = \"git-worktree\"\n\n\
-[branches.\"bolt/*\"]\ntimeout = \"1m\"\n";
+[branches.\"bolt/*\"]\ntimeout = \"1m\"\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
 
 /// The check: fails while a file named `broken` exists, after `SLOW`
 /// seconds.

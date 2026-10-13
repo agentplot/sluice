@@ -15,7 +15,7 @@ use sluice_seams::{Branch, Moved, Rev};
 use support::Repo;
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
-[checkout]\nmethod = \"git-worktree\"\n\n[branches.\"bolt/*\"]\n";
+[checkout]\nmethod = \"git-worktree\"\n\n[branches.\"bolt/*\"]\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
 
 fn sluice() -> &'static str {
     env!("CARGO_BIN_EXE_sluice")

@@ -319,3 +319,77 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
         other => panic!("told {other:?}"),
     }
 }
+
+/// satisfies: 27, 29
+#[test]
+fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {
+    let strict = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
+        "trust = [\"confined\"]",
+    );
+    let h = Harness::new(&strict);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let id = h.submit("unit/a");
+    let tip = h.w().tip(BRANCH);
+    for _ in 0..3 {
+        let err = h.sluice().step(BRANCH).unwrap_err().to_string();
+        assert!(err.contains("trusts"), "{err}");
+    }
+    // Nothing ran, nobody was blamed, nothing landed.
+    assert!(h.w().requests().is_empty());
+    assert!(h.w().observed().is_empty());
+    assert!(!matches!(h.sub(id).state, State::Failed | State::Landed));
+    assert_eq!(h.w().tip(BRANCH), tip);
+}
+
+/// satisfies: 28, 16, 38
+#[test]
+fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
+    let h = Harness::bolt();
+    let other = "bolt/y";
+    let no_cache = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
+        "trust = [\"open\"]",
+    );
+    h.w().init(
+        other,
+        &[
+            (".config/sluice.toml", &no_cache),
+            ("a/lib", "a1"),
+            ("b/lib", "b1"),
+            ("c/lib", "c1"),
+        ],
+    );
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    let ran = h.w().observed().len();
+
+    // The same work on a branch whose gate does not trust the cache: every
+    // key holds a pass, and each check runs again all the same.
+    let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
+    h.w().session("unit/y", "agent-y", &head);
+    let s = h.sluice();
+    let two = s
+        .submit(&sluice_core::SubmitRequest {
+            worktree: "unit/y".into(),
+            branch: other.into(),
+            after: vec![],
+            priority: 0,
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+    for _ in 0..6 {
+        s.step(other).unwrap();
+    }
+    assert_eq!(h.sub(two).state, State::Landed);
+    assert!(h.w().requests().iter().any(|r| !r.replay));
+    assert_eq!(h.w().observed().len(), ran + 3);
+    let r = results(&h);
+    assert!(r
+        .iter()
+        .filter(|l| l.branch == other)
+        .all(|l| l.kind == ResultKind::Ran));
+}

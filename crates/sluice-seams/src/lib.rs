@@ -191,6 +191,9 @@ pub struct RunRequest {
     pub limits: Limits,
     /// The policy's `[tests]` table: which runner, and its settings.
     pub tests: Settings,
+    /// Whether a result may be answered from the task runner's cache: only
+    /// when the branch's gate trusts the cache (28; ADR 0004).
+    pub replay: bool,
 }
 
 /// A run in progress, as the check seam names it. The core keeps it in

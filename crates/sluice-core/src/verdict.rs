@@ -1,9 +1,9 @@
 //! Reading a gate over a run's recorded results (15, 16, 19, 66, 69).
 
-use sluice_seams::{Outcome, RunReport, Source};
+use sluice_seams::{Enforced, Outcome, RunReport, Source};
 
-use crate::policy::Flaky;
-use crate::records::{FailedTask, ResultLine};
+use crate::policy::{Flaky, Rules};
+use crate::records::{FailedTask, ResultKind, ResultLine};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
@@ -23,7 +23,16 @@ pub struct Verdict {
 /// `flaky` says, the same for every candidate of the branch (19). A run
 /// that hit its time limit reads as failed (66), and so does one that left
 /// a required check without a result (15).
-pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict {
+///
+/// Only results the gate trusts are read (28): a ran result by its
+/// recorded executor, a replay only when the gate trusts the cache. A
+/// check left with no trusted result reads as missing.
+pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
+    let flaky = rules.flaky;
+    let counts = |kind: &ResultKind, executor: Option<&Enforced>| match kind {
+        ResultKind::Ran => executor.is_some_and(|e| rules.trusts_run(&e.kind, e.confined)),
+        ResultKind::Replayed => rules.trusts("cache"),
+    };
     let mut failed = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
     for t in &report.tasks {
@@ -31,11 +40,16 @@ pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict
             Source::Ran { .. } => ran += 1,
             Source::Replayed { .. } => replayed += 1,
         }
+        let this = match t.source {
+            Source::Ran { .. } => counts(&ResultKind::Ran, Some(&report.executor)),
+            Source::Replayed { .. } => counts(&ResultKind::Replayed, None),
+        };
         let key = results
             .iter()
             .filter(|r| r.task == t.task && r.hash == t.hash)
+            .filter(|r| counts(&r.kind, r.executor.as_ref()))
             .map(|r| r.outcome)
-            .chain(std::iter::once(t.outcome));
+            .chain(this.then_some(t.outcome));
         let (mut pass, mut fail) = (false, false);
         for o in key {
             match o {
@@ -68,5 +82,91 @@ pub fn read(report: &RunReport, results: &[ResultLine], flaky: Flaky) -> Verdict
         failed,
         ran,
         replayed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::records::RESULT_SCHEMA;
+    use sluice_seams::TaskResult;
+
+    fn rules(trust: &[&str]) -> Rules {
+        Rules {
+            trust: trust.iter().map(|t| t.to_string()).collect(),
+            ..Rules::default()
+        }
+    }
+
+    fn enforced(kind: &str, confined: bool) -> Enforced {
+        Enforced {
+            kind: kind.into(),
+            confined,
+            processors: None,
+            memory: None,
+            network: None,
+        }
+    }
+
+    fn report(source: Source, executor: Enforced) -> RunReport {
+        RunReport {
+            tasks: vec![TaskResult {
+                task: "a:test".into(),
+                hash: "h".into(),
+                outcome: Outcome::Pass,
+                source,
+            }],
+            missing: Vec::new(),
+            timed_out: false,
+            executor,
+        }
+    }
+
+    fn recorded(kind: ResultKind, executor: Option<Enforced>, outcome: Outcome) -> ResultLine {
+        ResultLine {
+            schema: RESULT_SCHEMA.into(),
+            at: "t".into(),
+            kind,
+            task: "a:test".into(),
+            hash: "h".into(),
+            outcome,
+            host: None,
+            executor,
+            branch: "main".into(),
+            combination: sluice_seams::Rev::new("c"),
+        }
+    }
+
+    /// 28: a result from an executor the gate does not trust never
+    /// satisfies it; a replay counts only when the gate trusts the cache.
+    #[test]
+    fn only_trusted_results_are_read() {
+        let ran = |kind| report(Source::Ran { host: "h".into() }, enforced(kind, false));
+        assert!(read(&ran("sandbox"), &[], &rules(&["sandbox"])).passed);
+        assert!(!read(&ran("open"), &[], &rules(&["confined", "sandbox"])).passed);
+        assert!(read(&ran("container"), &[], &rules(&["container"])).passed);
+
+        let replay = report(
+            Source::Replayed { from_run_at: None },
+            enforced("open", false),
+        );
+        assert!(read(&replay, &[], &rules(&["open", "cache"])).passed);
+        assert!(!read(&replay, &[], &rules(&["open"])).passed);
+
+        // An untrusted fail at the key is not read either.
+        let open_fail = recorded(
+            ResultKind::Ran,
+            Some(enforced("open", false)),
+            Outcome::Fail,
+        );
+        assert!(
+            read(
+                &ran("sandbox"),
+                std::slice::from_ref(&open_fail),
+                &rules(&["sandbox"])
+            )
+            .passed
+        );
+        assert!(!read(&ran("sandbox"), &[open_fail], &rules(&["sandbox", "open"])).passed);
     }
 }

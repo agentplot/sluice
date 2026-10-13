@@ -500,7 +500,7 @@ impl World {
             let hash = Self::task_hash(&t, &tree);
             let key = (t.name.clone(), hash.clone());
             let scripted = inner.flaky.get_mut(&t.name).and_then(|q| q.pop_front());
-            if scripted.is_none() {
+            if scripted.is_none() && request.replay {
                 if let Some(at) = inner.cache.get(&key) {
                     report.tasks.push(TaskResult {
                         task: t.name.clone(),
