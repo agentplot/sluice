@@ -35,7 +35,9 @@ pub fn s1_two_heads_pass_and_land_in_order(h: &impl Rig) {
     assert_eq!(history[2], base);
     assert_eq!(h.parents(k1), vec![base.clone(), a]);
     assert_eq!(h.parents(k2), vec![k1.clone(), b]);
-    assert!(h.message(k1).starts_with(&format!("Land #{one}: unit/a\n")));
+    assert!(h
+        .message(k1)
+        .starts_with(&format!("chore(land): #{one} unit/a\n")));
     // Each session learns its own landing, and only its own (50).
     let ta = h.told_to("agent-a");
     assert_eq!(ta.len(), 1);
@@ -198,7 +200,7 @@ pub fn s11_a_landing_names_its_verdict_and_leaves_the_session_place(h: &impl Rig
     assert_eq!(
         h.message(&landed),
         format!(
-            "Land #{id}: unit/touches\n\nSluice-Submission: {id}\n\
+            "chore(land): #{id} unit/touches\n\nSluice-Submission: {id}\n\
              Sluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tested}\n\
              Sluice-Result: passed (3 run, 0 replayed)\n"
         )

@@ -770,6 +770,10 @@ impl Sluice<'_> {
                 return Ok(false);
             }
             let deepest = &cands[n - 1];
+            let subject = self
+                .policy_at(&base)?
+                .map(|p| p.landing_subject)
+                .unwrap_or_else(|| crate::policy::LANDING_SUBJECT.into());
             let mut parent = base.clone();
             let mut commits = Vec::new();
             for c in &cands[..n] {
@@ -785,7 +789,7 @@ impl Sluice<'_> {
                     tree_of: c.revision.clone(),
                     parent: parent.clone(),
                     head: sub.head.clone(),
-                    message: landing_message(&sub, verdict),
+                    message: landing_message(&subject, &line.branch, &sub, verdict),
                 })?;
                 let s = line.sub_mut(sub.id);
                 s.state = State::Landing;

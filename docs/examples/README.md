@@ -315,7 +315,7 @@ commit b7d2e94f03
 Merge: c41e8f2 3f9c2e1
 Author: sluice <sluice@localhost>
 
-    Land #12: unit/touches
+    chore(land): #12 unit/touches
 
     Sluice-Submission: 12
     Sluice-From: crw-1-unit-1 (unit/touches)

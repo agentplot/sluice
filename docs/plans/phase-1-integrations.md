@@ -147,7 +147,7 @@ fn main() {
     let expected = gix::ObjectId::from_hex(a[5].as_bytes()).expect("expected");
     let who = gix::actor::Signature { name: "sluice".into(), email: "sluice@localhost".into(),
         time: gix::date::Time { seconds: 1_791_710_521, offset: 0 } };
-    let message = format!("Land #12: unit/touches\n\nSluice-Submission: 12\nSluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tree}\nSluice-Result: passed (2 run, 31 replayed)\n");
+    let message = format!("chore(land): #12 unit/touches\n\nSluice-Submission: 12\nSluice-From: crw-1-unit-1 (unit/touches)\nSluice-Tested: {tree}\nSluice-Result: passed (2 run, 31 replayed)\n");
     let commit = gix::objs::Commit { tree, parents: [line, head].into_iter().collect(),
         author: who.clone(), committer: who.clone(), encoding: None, message: message.into(), extra_headers: vec![] };
     let landed = repo.write_object(&commit).expect("write").detach();
@@ -179,7 +179,7 @@ parent 317b4376c789dcdfc393131585987e9343de1cdd
 author sluice <sluice@localhost> 1791710521 +0000
 committer sluice <sluice@localhost> 1791710521 +0000
 
-Land #12: unit/touches
+chore(land): #12 unit/touches
 
 Sluice-Submission: 12
 Sluice-From: crw-1-unit-1 (unit/touches)

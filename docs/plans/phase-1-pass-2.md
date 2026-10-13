@@ -40,8 +40,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 7, `cli:tools` |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml` on `main`; this row landed on `main` through `wt submit`, gated on all three tiers in the sandbox |
 | 13 | the culprit's failed tasks' logs | §4, §6 | **done**: `Tests::logs`, `State::keep_logs`, the candidate's `failed[].log`, `Told::Failed.logs`; `wt submit` prints each path |
-| 14 | a conventional landing subject: `[landing] subject` | §1 | next |
-| 15 | the driver removes a landed session's worktree | §7 | |
+| 14 | a conventional landing subject: `[landing] subject` | §1 | **done**: `Policy::landing_subject`, `text::landing_message` |
+| 15 | the driver removes a landed session's worktree | §7 | next |
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -101,8 +101,9 @@ needed.
   the candidate (20); `wt submit` prints them and `sluice status <id>`
   lists them; no other session is told.
 - **14, the landing subject** is the policy's, conventional by default:
-  `[landing] subject = "chore(land): #{id} {branch}"`, with `{id}`,
-  `{branch}` and `{agent}`; the `Sluice-*` trailers are unchanged.
+  `[landing] subject = "chore(land): #{id} {from}"`, with `{id}` (the
+  submission), `{from}` (the session's branch), `{agent}` and `{to}` (the
+  branch landed on); the `Sluice-*` trailers are unchanged.
 - **15, removing a landed session's worktree** is the driver's (C.4;
   core.16 keeps the core off it): `wt-submit`, when its submission lands,
   runs `wt remove` on its own worktree as `wt merge` does, following

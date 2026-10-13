@@ -27,7 +27,13 @@ pub struct Policy {
     pub limits: Limits,
     /// Patterns of branch names and their gates, in the order written.
     pub branches: Vec<(String, Rules)>,
+    /// `[landing] subject`: a landing commit's first line, with `{id}`,
+    /// `{from}`, `{agent}` and `{to}` filled in (23).
+    pub landing_subject: String,
 }
+
+/// A conventional commit's subject by default.
+pub const LANDING_SUBJECT: &str = "chore(land): #{id} {from}";
 
 /// How a flaky key reads (19).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +106,14 @@ struct FileForm {
     executor: ExecutorForm,
     #[serde(default)]
     branches: BTreeMap<String, RulesForm>,
+    #[serde(default)]
+    landing: LandingForm,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LandingForm {
+    subject: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -177,11 +191,30 @@ impl Policy {
                 },
             ));
         }
+        let landing_subject = form
+            .landing
+            .subject
+            .unwrap_or_else(|| LANDING_SUBJECT.into());
+        let mut rest = landing_subject.as_str();
+        while let Some(i) = rest.find('{') {
+            let close = rest[i..]
+                .find('}')
+                .ok_or_else(|| anyhow!("[landing] subject {landing_subject:?} leaves a {{ open"))?;
+            let name = &rest[i + 1..i + close];
+            if !["id", "from", "agent", "to"].contains(&name) {
+                bail!("[landing] subject names {{{name}}}; it may name {{id}}, {{from}}, {{agent}} and {{to}}");
+            }
+            rest = &rest[i + close + 1..];
+        }
+        if landing_subject.trim().is_empty() || landing_subject.contains('\n') {
+            bail!("[landing] subject must be one line");
+        }
         Ok(Policy {
             tests,
             checkout,
             limits,
             branches,
+            landing_subject,
         })
     }
 
@@ -390,6 +423,17 @@ batch = true
         assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
         assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
         assert!(p.rules_for("unit/x").unwrap().is_none());
+    }
+
+    /// 23: a landing commit's subject is the policy's, conventional by
+    /// default.
+    #[test]
+    fn reads_the_landing_subject() {
+        assert_eq!(Policy::parse("").unwrap().landing_subject, LANDING_SUBJECT);
+        let p = Policy::parse("[landing]\nsubject = \"land: #{id} from {agent}\"\n").unwrap();
+        assert_eq!(p.landing_subject, "land: #{id} from {agent}");
+        assert!(Policy::parse("[landing]\nsubject = \"#{nope}\"\n").is_err());
+        assert!(Policy::parse("[landing]\nsubject = \"#{id\"\n").is_err());
     }
 
     /// 27 to 29: a gate names the results it trusts.
