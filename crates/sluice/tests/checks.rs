@@ -230,13 +230,19 @@ fn the_open_executor_refuses_what_it_cannot_hold() {
         },
         "container",
     );
+    // On macOS the sandbox cannot hold memory; where it is not built yet,
+    // it refuses the run for that.
     refused(
         Limits {
             executor: Some("sandbox".into()),
             memory: Some(1 << 30),
             ..Limits::default()
         },
-        "memory",
+        if cfg!(target_os = "macos") {
+            "memory"
+        } else {
+            "not built"
+        },
     );
     // A network the policy allows needs no holding.
     let mut req = request(&repo, "p2", command("true"));
