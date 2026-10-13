@@ -8,8 +8,15 @@
 //!   nothing;
 //! - `"sandbox"`: on macOS, Seatbelt (`sandbox-exec`) with writes allowed
 //!   only to the place, its scratch directory and what the runner names,
-//!   and the network only as the policy says. Not confined: a session on
+//!   and the network only as the policy says; with `[executor] docker =
+//!   true`, the container engine's socket too. Not confined: a session on
 //!   the host can still write the place.
+//!
+//! `[tests] release`, when set, is the release command (ADR 0016): a list,
+//! the command first, or a string run by `sh -c`. It runs when the place
+//! is released, after the run, under the same executor, toolchain and
+//! environment, the place's ports included, and removes what the checks
+//! handed to another process, a container engine's containers above all.
 //!
 //! The policy's `[tests] runner` picks the runner, read from the branch's
 //! revision with the rest of `[tests]` (56):
@@ -167,8 +174,23 @@ fn choose(limits: &Limits) -> Result<Kind> {
 /// the network as `network` says: `Denied`, none, local sockets included;
 /// `Localhost`, listening and connecting on localhost only, by address or
 /// by name, and no other connection (name lookups included).
-fn seatbelt(writable: &[PathBuf], stamps: &[&str], network: Option<Network>) -> String {
+fn seatbelt(
+    writable: &[PathBuf],
+    stamps: &[&str],
+    network: Option<Network>,
+    sockets: &[PathBuf],
+    user_tmp: Option<&Path>,
+) -> String {
     let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    // Where Chromium keeps the socket that makes it one instance per
+    // profile: the user's own temporary directory, whatever `TMPDIR` says,
+    // so a browser test can start one.
+    let browser = user_tmp.map(|t| {
+        format!(
+            "(regex #\"^{}/\\.?(com\\.google\\.[Cc]hrome|org\\.chromium\\.[Cc]hromium)[.a-zA-Z]*\\.[A-Za-z0-9]+(/|$)\")",
+            regex_quote(&t.to_string_lossy())
+        )
+    });
     let mut p =
         String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
     for w in writable {
@@ -176,6 +198,9 @@ fn seatbelt(writable: &[PathBuf], stamps: &[&str], network: Option<Network>) -> 
             "  (subpath \"{}\")\n",
             quote(&w.to_string_lossy())
         ));
+    }
+    if let Some(b) = &browser {
+        p.push_str(&format!("  {b}\n"));
     }
     for s in stamps {
         p.push_str(&format!("  (regex #\"/{}$\")\n", regex_escape(s)));
@@ -190,7 +215,54 @@ fn seatbelt(writable: &[PathBuf], stamps: &[&str], network: Option<Network>) -> 
         ),
         Some(Network::Allowed) | None => {}
     }
+    // A local socket of the run's own, its browser's included, unless the
+    // run may have no connection at all.
+    if network != Some(Network::Denied) {
+        let mut own: Vec<String> = writable
+            .iter()
+            .map(|w| format!("(subpath \"{}\")", quote(&w.to_string_lossy())))
+            .collect();
+        own.extend(browser);
+        // One rule a path: a socket filter takes one path, not a list.
+        for o in own {
+            p.push_str(&format!(
+                "(allow network-bind network-inbound network-outbound (local unix-socket {o}))\n\
+                 (allow network-outbound (remote unix-socket {o}))\n"
+            ));
+        }
+    }
+    // ADR 0016: the container engine's socket, whatever the network.
+    for s in sockets {
+        p.push_str(&format!(
+            "(allow network-outbound (remote unix-socket (path-literal \"{}\")))\n",
+            quote(&s.to_string_lossy())
+        ));
+    }
     p
+}
+
+/// A path as a Seatbelt regular expression matching it literally.
+fn regex_quote(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_' {
+                vec![c]
+            } else {
+                vec!['\\', c]
+            }
+        })
+        .collect()
+}
+
+/// The user's own temporary directory on macOS, resolved, which some
+/// tools use whatever `TMPDIR` says.
+fn user_tmp() -> Option<PathBuf> {
+    let out = std::process::Command::new("/usr/bin/getconf")
+        .arg("DARWIN_USER_TEMP_DIR")
+        .output()
+        .ok()?;
+    let dir = String::from_utf8(out.stdout).ok()?;
+    std::fs::canonicalize(dir.trim()).ok()
 }
 
 fn regex_escape(s: &str) -> String {
@@ -274,7 +346,60 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
         request.place.tmp.to_string_lossy().into(),
     );
     env.insert("SLUICE_JOBS".into(), jobs.to_string());
+    // 31: the place's short name and its ports.
+    env.extend(request.place.env.clone());
+    // The container engine's client finds the engine as the user's does.
+    if request.limits.docker {
+        for k in ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"] {
+            if let Ok(v) = std::env::var(k) {
+                env.insert(k.into(), v);
+            }
+        }
+    }
     env
+}
+
+/// The container engine's sockets a run with `docker = true` may reach:
+/// `DOCKER_HOST`'s, and the usual places engines on macOS put theirs, by
+/// the path given and the path it resolves to.
+fn docker_sockets() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(p) = std::env::var("DOCKER_HOST")
+        .ok()
+        .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
+    {
+        paths.push(p);
+    }
+    paths.push("/var/run/docker.sock".into());
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for p in [
+            ".docker/run/docker.sock",
+            ".orbstack/run/docker.sock",
+            ".colima/default/docker.sock",
+        ] {
+            paths.push(home.join(p));
+        }
+    }
+    let mut all = Vec::new();
+    for p in paths {
+        if let Ok(real) = std::fs::canonicalize(&p) {
+            all.push(real);
+        }
+        all.push(p);
+    }
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// `[tests] release`: the command, or `None`.
+fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
+    match tests.get("release") {
+        None => Ok(None),
+        Some(Setting::Text(t)) => Ok(Some(vec!["/bin/sh".into(), "-c".into(), t.clone()])),
+        Some(Setting::List(xs)) if !xs.is_empty() => Ok(Some(xs.clone())),
+        Some(_) => bail!("[tests] release must be a string or a list, the command first"),
+    }
 }
 
 pub fn hostname() -> String {
@@ -333,6 +458,11 @@ impl Tests for Checks {
         };
         let processors = plan.holds_processors.then_some(jobs);
         let mut argv = plan.argv.unwrap_or_else(|| vec!["/usr/bin/true".into()]);
+        let mut release = release_argv(&request.tests)?.map(|r| {
+            let r: Vec<&str> = r.iter().map(String::as_str).collect();
+            cx.argv(&r)
+        });
+        let docker = request.limits.docker;
         let executor = match kind {
             Kind::Open => Enforced {
                 kind: "open".into(),
@@ -340,6 +470,7 @@ impl Tests for Checks {
                 processors,
                 memory: None,
                 network: None,
+                docker,
             },
             Kind::Sandbox => {
                 let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
@@ -351,23 +482,28 @@ impl Tests for Checks {
                         &[canon(&request.place.path), canon(&request.place.tmp)],
                         &plan.stamps,
                         network,
+                        &if docker { docker_sockets() } else { Vec::new() },
+                        user_tmp().as_deref(),
                     ),
                 )?;
-                argv.splice(
-                    0..0,
-                    [
-                        "/usr/bin/sandbox-exec".to_string(),
-                        "-f".into(),
-                        profile.to_string_lossy().into_owned(),
-                    ],
-                );
-                // A session on this host can still write the place.
+                let sandbox = [
+                    "/usr/bin/sandbox-exec".to_string(),
+                    "-f".into(),
+                    profile.to_string_lossy().into_owned(),
+                ];
+                argv.splice(0..0, sandbox.clone());
+                if let Some(r) = &mut release {
+                    r.splice(0..0, sandbox);
+                }
+                // A session on this host can still write the place; and a
+                // run that reaches the container engine is held by nothing.
                 Enforced {
                     kind: "sandbox".into(),
                     confined: false,
                     processors,
                     memory: None,
                     network: network.filter(|n| *n != Network::Allowed),
+                    docker,
                 }
             }
         };
@@ -389,6 +525,7 @@ impl Tests for Checks {
                 limit: request.limit.map(|d| d.as_secs().max(1)),
                 grace: 10,
                 meta: serde_json::to_value(&meta)?,
+                release,
             },
         )?;
         Ok(RunHandle(name.clone()))

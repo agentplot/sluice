@@ -47,6 +47,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
+| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
+| 23 | `main` kept in step with the shared remote | C.4 | to design: whether every push goes through sluice |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -210,6 +212,61 @@ needed.
   2` serving three branches of window four has two runs under test at
   most, reaches two, and gives each half the processors.
 
+- **22, a full stack per candidate.** A repository's checks bring up
+  everything a browser test needs: a container stack on a port, stand-ins
+  for outside services, API and dev servers, then Playwright against
+  them, for every candidate under test at once. Switchboard is the case
+  it is built for. What sluice owes the checks:
+  - Ports, assigned by sluice. `[checkout] ports` names the ports a
+    candidate's stack uses. The place seam gives each place a slot, held
+    on the host across repositories and checked free before the place is
+    handed over, and each name a fixed position in the slot's block:
+    `port = ports_from + slot × names + position`, `ports_from` 20000 by
+    default, above worktrunk's `hash_port` range. The place carries
+    `SLUICE_PLACE` and `SLUICE_PORT_<NAME>` into its runs, and the checks
+    name their containers, deployments and addresses from them.
+    Separate systems find each other by these numbers, not by discovery.
+    This replaces the part of ADR 0010 and core.10 that kept ports out
+    of sluice, through the statement first (core.12) and a new ADR.
+  - A release command, `[tests] release`, run by the check seam in the
+    place under the same executor, limits and environment as the
+    checks, whenever the core releases a candidate's place: after a
+    pass, a failure, a time limit, or a run found dead by a later round.
+    It removes what the checks started outside the run's process group,
+    containers above all, which a check's own cleanup cannot do once
+    sluice has killed it. The core ends a place's run, release command
+    included, before the place seam removes the place.
+  - `[executor] docker = true` lets a sandboxed run reach the container
+    daemon's socket. Such a run is recorded as not confined: a container
+    it starts can mount any path, so the sandbox no longer holds it. The
+    daemon pulls images itself, so a run's own network stays as the
+    policy states.
+  - The tools from the repository's toolchain: the container client and
+    Playwright with its browsers from its devenv shell; the container
+    daemon is the host's. The sandbox lets a run reach the daemon's
+    socket, and the policy says whether a run may reach the network
+    beyond localhost.
+  - moon runs the checks and devenv brings up the stack: a moon task
+    that depends on one bringing the stack up and waiting until each
+    service answers, with devenv's processes and their readiness probes
+    doing the starting.
+  - Earthly is not used: it is unmaintained, reports only an exit code,
+    and moves every check into privileged containers outside devenv and
+    the sandbox.
+  - The acceptance test, in the tools tier, with Docker and Playwright
+    on every host that runs it, CI's Linux job included: a fixture of a
+    container on a port, a server, and a browser test against them; two
+    candidates under test at once neither collide nor share a container;
+    both land; a candidate ended by its time limit leaves no container
+    and no process.
+- **23, `main` kept in step with the shared remote.** The branch's
+  pushed-refs profile (C.4): fetch before a round reads the branch, form
+  on the remote's revision, land with a push leased on the revision
+  read, the forge's rules letting only sluice's identity move the branch.
+  To settle first: whether every push to `main` goes through sluice, as
+  C.4 has it, or the forge stays open to direct pushes and pull requests,
+  which sluice would then take as the branch moving under its queue.
+
 ## Decisions this pass builds on
 
 - The branch protection hook calls an installed sluice at a stable path
@@ -295,6 +352,14 @@ needed.
   the conductor brings its worktree level when its bolt's branch moves;
   move to a design where no worktree has a bolt's branch checked out;
   move its devenv to moon 2.6.
+- **Switchboard:** key its stack on sluice's place rather than its
+  branch: every port from `SLUICE_PORT_*` instead of `hash_port`; the
+  emulator's container name and label, `SWB_INTEGRATION_DEPLOYMENT`, the
+  Portless names and the CodeBuild scratch directory from
+  `SLUICE_PLACE`; the stand-ins never killing whatever holds a port. Its
+  policy names the ports, `[tests] release` as its teardown
+  (`ministack-teardown`, then `infra/ministack/down.sh`), `docker =
+  true`, and `network = true` for the suites that reach Frontegg.
 - **flywheel-next:** the git hook install fix is on its
   `fix-git-hooks-install` branch (`db9f1dae`), to land with `wt merge`.
 - **devenv:** cachix/devenv#3270. When it is fixed, remove the

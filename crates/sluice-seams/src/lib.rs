@@ -66,6 +66,10 @@ pub struct Place {
     /// A scratch directory of the place's own, given to the checks as
     /// `SLUICE_TMP`.
     pub tmp: PathBuf,
+    /// 31: what the place gives its checks beyond its paths: its short
+    /// name, `SLUICE_PLACE`, and a `SLUICE_PORT_<NAME>` for each port the
+    /// policy names, held by no other place alive on the host.
+    pub env: BTreeMap<String, String>,
 }
 
 pub trait Checkout {
@@ -74,7 +78,8 @@ pub trait Checkout {
     /// `[checkout]` table says.
     fn materialize(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<Place>;
 
-    /// 34: the place's removal, with everything started in it ended. The
+    /// 34: the place's removal, with everything started in it ended, what
+    /// its checks handed to another process included (ADR 0016). The
     /// core calls this only with names it chose (rule core.16); releasing
     /// a name that was chosen but never materialized does nothing.
     /// `passed` says the place's candidate passed, by the verdict the core
@@ -151,6 +156,10 @@ pub struct Limits {
     pub memory: Option<u64>,
     /// How far the run may reach over the network; `None` states nothing.
     pub network: Option<Network>,
+    /// Whether the run may reach the host's container engine (ADR 0016).
+    /// A container it starts may mount any path, so such a run is never
+    /// confined.
+    pub docker: bool,
 }
 
 /// 83, 84: what an executor held a run to, recorded with every result it
@@ -170,6 +179,9 @@ pub struct Enforced {
     /// to nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<Network>,
+    /// The run could reach the host's container engine (ADR 0016).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub docker: bool,
 }
 
 /// What the core asks the check seam to run on one candidate (37).

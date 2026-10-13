@@ -17,7 +17,16 @@
 //!   pgid           the command's process group, once it is spawned
 //!   out.log        the command's stdout and stderr
 //!   result.json    how it ended; written last, by rename
+//!   release.log    the release command's stdout and stderr
+//!   released       the release command finished; written last
 //! ```
+//!
+//! A request may carry a release command (ADR 0016): what removes the
+//! things the run handed to another process to keep, which ending its
+//! group does not reach. It runs once the run's group has ended, as the
+//! run did, in a group of its own held to the run's time limit, before
+//! the run's directory is removed; a release that fails is an error, and
+//! is run again by the next removal.
 //!
 //! This module names no tool: the runners and executors in `profiles`
 //! say what to run, and the place seam's profiles end a place's run
@@ -55,6 +64,10 @@ pub struct Request {
     /// the supervisor does not read it.
     #[serde(default)]
     pub meta: serde_json::Value,
+    /// The release command, run with the same `cwd` and `env` once the
+    /// run has ended, when its place is released (ADR 0016).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<Vec<String>>,
 }
 
 fn default_grace() -> u64 {
@@ -183,6 +196,7 @@ impl Runs {
             bail!("place {name} already has a run in progress");
         }
         self.end(name)?;
+        self.release(&dir)?;
         std::fs::remove_dir_all(&dir)
             .with_context(|| format!("removing the old run {}", dir.display()))
     }
@@ -246,12 +260,68 @@ impl Runs {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        self.release(&dir)?;
         match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != ErrorKind::NotFound => {
                 Err(e).with_context(|| format!("removing {}", dir.display()))
             }
             _ => Ok(()),
         }
+    }
+
+    /// Run the release command of the run in `dir`, if it has one and it
+    /// has not finished yet, as one group held to the run's time limit.
+    fn release(&self, dir: &Path) -> Result<()> {
+        let done = dir.join("released");
+        if done.exists() || !dir.join("request.json").exists() {
+            return Ok(());
+        }
+        let request: Request = serde_json::from_slice(&std::fs::read(dir.join("request.json"))?)?;
+        let Some((program, args)) = request.release.as_deref().and_then(|a| a.split_first()) else {
+            return Ok(());
+        };
+        let log = dir.join("release.log");
+        let out = File::create(&log)?;
+        let mut child = Command::new(program)
+            .args(args)
+            .current_dir(&request.cwd)
+            .env_clear()
+            .envs(&request.env)
+            .stdin(Stdio::null())
+            .stdout(out.try_clone()?)
+            .stderr(out)
+            .process_group(0)
+            .spawn()
+            .with_context(|| format!("starting the release command {program}"))?;
+        let pgid = child.id() as i32;
+        let deadline = Instant::now() + Duration::from_secs(request.limit.unwrap_or(600));
+        let mut status = None;
+        while status.is_none() && Instant::now() < deadline {
+            status = child.try_wait()?;
+            if status.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        let mut reap = || {
+            if status.is_none() {
+                status = child.try_wait().ok().flatten();
+            }
+            status.is_some()
+        };
+        end_group(pgid, Duration::from_secs(request.grace), &mut reap);
+        let status = match status {
+            Some(s) => s,
+            None => child.wait()?,
+        };
+        if !status.success() {
+            let tail = log_end(&log);
+            bail!(
+                "the release command of {} ended {status}: {tail}",
+                request.cwd.display()
+            );
+        }
+        write_atomic(&done, b"")?;
+        Ok(())
     }
 
     /// Whether a supervisor holds the run's lock.
@@ -362,6 +432,13 @@ pub fn supervise(dir: &Path) -> Result<()> {
         started,
         ended: now(),
     })
+}
+
+/// The last lines of a log, for an error.
+fn log_end(path: &Path) -> String {
+    let text = std::fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(2000)..]).into_owned();
+    text.trim().to_string()
 }
 
 /// Ask the group `pgid` to end, give it `grace`, then kill what is left.

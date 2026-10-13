@@ -42,6 +42,7 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
             name: name.into(),
             path: repo.dir().to_path_buf(),
             tmp,
+            env: Default::default(),
         },
         revision: sluice_seams::Rev::new(repo.rev("HEAD")),
         required: vec![],
@@ -285,6 +286,7 @@ fn the_sandbox_holds_writes_and_the_network() {
             executor: Some("sandbox".into()),
             network,
             memory: None,
+            docker: false,
         };
         finish(&c, &req)
     };

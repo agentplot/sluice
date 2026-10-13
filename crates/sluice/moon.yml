@@ -9,8 +9,9 @@ tasks:
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The profiles against real tools (git, moon, wt), and the conformance
-  # scenarios that need no fault on them: the check-tools tier.
+  # The profiles against real tools (git, moon, wt, a container engine,
+  # Playwright), and the conformance scenarios that need no fault on them:
+  # the check-tools tier.
   tools:
     command: 'cargo test -p sluice --features tools --test instance --test local_refs --test moon --test places --test worktrunk --test protect --test conformance -- --skip sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/crates/sluice-conformance/src/**/*', '/crates/sluice-conformance/Cargo.toml', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
@@ -21,7 +22,7 @@ tasks:
   # sandbox requires them; the pre-merge hook runs them, outside any.
   # Every test whose name holds `sandbox` is here and nowhere else.
   sandbox:
-    command: 'cargo test -p sluice --features tools --test checks --test moon -- sandbox'
+    command: 'cargo test -p sluice --features tools --test checks --test moon --test stack -- sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [cargo-test, starts-a-sandbox, needs-localhost]
     options: {runFromWorkspaceRoot: true}

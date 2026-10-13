@@ -19,6 +19,8 @@ paths = ["target"]
 kind = "sandbox"
 # The integration tests listen on localhost; nothing reaches further.
 network = "localhost"
+# The stack test starts containers (ADR 0016).
+docker = true
 
 [branches."bolt/*"]
 required = ["#check-fast"]
