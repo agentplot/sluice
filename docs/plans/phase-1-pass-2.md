@@ -47,7 +47,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | designed below; the ADR and the build next |
 | 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
-| 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | building: the `linux` job, worktrunk pinned in the devenv shell |
+| 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
