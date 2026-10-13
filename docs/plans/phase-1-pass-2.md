@@ -45,7 +45,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 16 | publishing: a flake, GHA on macOS and Linux, releases, the repository public | | **done**: `flake.nix`, `.github/workflows/ci.yml` green on macOS and Linux, the README's install methods, agentplot/sluice public |
 | 17 | no tests of the repository's documents | | **done**: the citations and tool-name checks removed |
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
-| 19 | Datadog for sluice's environments: GHA, the fleet's hosts, Switchboard, later a remote sluice | | designed below |
+| 19 | where sluice's telemetry goes: a viewer on the Mac Studio first, Datadog on the EC2 host running crew, a hosted free tier later | | designed below |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 
@@ -206,20 +206,26 @@ needed.
     short `sluice step` flushes before it exits. The core emits `tracing`
     spans and events and names no backend; the binary sets up the
     exporter.
-- **19, Datadog.** No environment sends OTLP to Datadog yet. Each gets a
-  Datadog Agent with its OTLP receiver (`DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT`,
-  port 4318 on localhost), the API key in the agent's configuration or
-  the CI's secrets, never in a repository:
-  - **GHA**: the agent as a service container for the jobs; moon's
-    `MOON_OTEL` and sluice's `SLUICE_OTEL` set in the workflow, the
-    service names `sluice-ci` and `moon`.
-  - **The fleet's hosts** running crew and sluice: the agent on each
-    host; sluice's runs reach it on localhost, which the sandbox allows
-    (`network = "localhost"`), so no network policy changes.
-  - **Switchboard**: as the fleet's hosts.
-  - **A remote sluice**, later: the same agent beside it.
-  The agents' setup belongs to those environments' own repositories
-  (crew, flywheel, Switchboard); sluice documents the variables.
+- **19, where the telemetry goes.** sluice sends OTLP/HTTP to
+  `localhost:4318` (ADR 0014); what listens there is each host's choice,
+  set up outside this repository, and the backend can differ per host.
+  sluice's runs reach it on localhost, which the sandbox allows
+  (`network = "localhost"`).
+  - **The Mac Studio, first**: a local viewer, nothing kept once it is
+    closed. `nix run nixpkgs#otel-tui` (a terminal view) or `nix run
+    nixpkgs#otel-desktop-viewer` (a browser view), one at a time since
+    both listen on 4317 and 4318; then `SLUICE_OTEL=1` in the shell a
+    session submits from. Nothing listening costs a refused connection
+    and nothing else.
+  - **The EC2 host running crew**: the Datadog Agent with its OTLP
+    receiver on `localhost:4318`, the API key in the agent's
+    configuration; set up in crew's environment.
+  - **swancloud and the crews there**: no Datadog. A viewer to start; a
+    hosted service's free tier later (Grafana Cloud, Honeycomb, Axiom),
+    reached through a forwarder on each host (the OpenTelemetry
+    Collector or Grafana Alloy) that adds TLS and the key, since sluice
+    sends plain HTTP to the host.
+  - **GHA**: sends nothing yet.
 - **8, end to end.** Section 4's acceptance test 7 on real places: one
   `sluice run` with `[runs] max = 2` holds three branches to two runs.
 
