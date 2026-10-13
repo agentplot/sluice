@@ -31,13 +31,13 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 2 | records: local files (`profiles/local_files.rs`) | §6 | **done**: 9 acceptance tests, fast tier |
 | 3 | the supervisor and the `open` executor; the instance's bound | §4 | **done**: `runs.rs` (6 tests), `profiles/checks.rs` with the `command` runner (8 tests), fast tier |
 | 4 | moon: targets for required tags, `moon exec`, the run report on 2.6.1 | §3 | **done**: `profiles/moon.rs`, 9 acceptance tests, `cli:tools` |
-| 5 | checkouts: `git worktree` first, then worktrunk | §5 | **done**: `profiles/places.rs`, 7 acceptance tests, `cli:tools` |
+| 5 | checkouts: a detached `git worktree` (ADR 0013) | §5 | **done**: `profiles/places.rs`, acceptance tests, `cli:tools` |
 | 6 | the driver: `wt-submit` through worktrunk, `SLUICE_AGENT` | §7 | **done**: `profiles/worktrunk/`, 9 tests through `wt submit`, `cli:tools` |
 | 7 | branch protection: the `reference-transaction` hook, installed by `submit`/`step`/`run`; `sluice protect --remove` | §2 | **done**: `protect.rs`, 9 acceptance tests, `cli:tools` |
-| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace, both place methods: `e2e/e2e.sh`; crew once it is on moon 2.6 |
+| 8 | end to end: `e2e.sh` on the scratch workspace, then crew | §8 | **done** on the scratch workspace: `e2e/e2e.sh`; crew once it is on moon 2.6 |
 | 9 | the `sandbox` executor (Seatbelt on macOS, bubblewrap and Landlock on Linux); `[tests] toolchain`; sluice's moon and Rust through proto | §4, *The executor* | **macOS done**: `profiles/checks.rs`, writes and network held, fast tier; sluice's own `#check-fast` passes the runner's way under a localhost-only fence (8 tasks); Linux to come |
-| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh` (both place methods), `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
-| 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 8 on both methods, `cli:tools` |
+| 10 | sluice's own tiers: a workspace `root` project with `format` and `lint` tagged `check-fast`; `e2e/e2e.sh` as `check-e2e`; the conformance suite over the real profiles (the `Rig` split) | §9 | **done**: `moon.yml`, `e2e/check.sh`, `sluice_conformance::shared` (20 scenarios on the fakes and on moon with git worktrees, `cli:tools`) |
+| 11 | warm places: `[[checkout.cache]]` (the build cache); the toolchain's evaluation paid per place | §5, §4 | **done**: `Checkout::release(name, passed)`, the cache in `profiles/places.rs`, acceptance test 7, `cli:tools` |
 | 12 | `trust` per branch, then sluice's own policy, and sluice landing sluice | §4, §9 | **`trust` and the policy done**: `Rules::trust`, the verdict reading only trusted results, `RunRequest.replay` (moon's `--force`), `.config/sluice.toml`; next: the policy on `main` by `wt merge`, then sluice landing sluice |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -97,6 +97,11 @@ needed.
   its limits and reports what it enforced (ADR 0012; clauses 71, 83, 84).
 - A branch's gate trusts runs by confinement or executor kind (section
   4); records never claim confinement a run lacked.
+- A place is a plain `git worktree` (ADR 0013; C.1 as changed in the
+  statement): nothing of the candidate's runs outside the executor, so
+  no hook; setup is the toolchain step and the checks' own
+  dependencies, the build cache `[[checkout.cache]]`. worktrunk stays
+  the driver (`wt submit`) and people's tool, never a place's.
 - A place holds the candidate and the caches its branch's policy declares
   (`[[checkout.cache]]`), each keyed by the content of named files,
   restored before any hook and saved only from a passed candidate's

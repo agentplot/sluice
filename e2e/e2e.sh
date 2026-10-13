@@ -8,7 +8,6 @@
 #   E2E_REPO=scratch (default)  a new repository: a moon workspace of two projects, beta depending on alpha
 #   E2E_REPO=crew               a clone of crew (E2E_CREW=<repo>, default ~/Code/github_afterthought/crew/crew.git),
 #                               every moon and sluice call made inside crew's devenv shell
-#   E2E_CHECKOUT=git-worktree (default) | worktrunk | archive    the policy's [checkout] method
 #   MOON=<path>                 the moon to use for the scratch repository (>= 2.5)
 #
 # Needs git >= 2.54 and jq; moon >= 2.5 (crew: devenv); in sluice mode, sluice and wt-submit on PATH.
@@ -18,7 +17,6 @@ set -euo pipefail
 ROOT=${1:?usage: e2e.sh <new dir> fixture|sluice}
 MODE=${2:?usage: e2e.sh <new dir> fixture|sluice}
 VARIANT=${E2E_REPO:-scratch}
-CHECKOUT=${E2E_CHECKOUT:-git-worktree}
 MOON=${MOON:-moon}
 
 die() {
@@ -47,13 +45,13 @@ inenv() {
   if [ "$VARIANT" = crew ]; then (cd "$dir" && devenv shell -- "$@"); else (cd "$dir" && "$@"); fi
 }
 
-policy() { # the walkthrough's policy for bolt branches, with this run's checkout method
+policy() { # the walkthrough's policy for bolt branches
   cat <<EOF
 [tests]
 runner = "moon"
 
 [checkout]
-method = "$CHECKOUT"
+method = "git-worktree"
 
 [branches."bolt/*"]
 required = ["#suite"]

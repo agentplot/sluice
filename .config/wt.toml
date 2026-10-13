@@ -10,5 +10,6 @@ cargo-tests = "devenv shell -- cargo-tests"
 disk = "devenv shell -- disk"
 
 # A new worktree takes the main worktree's build cache (.worktreeinclude).
+# Only worktrees people make: sluice's places run no worktrunk hook.
 [post-start]
 copy = "wt step copy-ignored"

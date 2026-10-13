@@ -1358,9 +1358,10 @@ paths it may write that the branch's policy states").
 ## 5. Checkouts
 
 **Implements** `Checkout::materialize(name, rev) -> Place { name, path,
-tmp }` and `Checkout::release(name)` in three profiles (C.1), selected by
-`[checkout] method`. **Bears on** 25, 32 to 35, S11; core.10, core.16;
-ADR 0009, ADR 0010.
+tmp }` and `Checkout::release(name, passed)` in one profile, a detached
+git worktree (C.1; ADR 0013); `[checkout] method = "git-worktree"` names
+it, and any other method is refused with the reason. **Bears on** 25, 32
+to 35, S11; core.3, core.10, core.16; ADR 0010, ADR 0013.
 
 `materialize` makes `<common>/sluice/.tmp/<name>/` empty and returns it
 as `tmp`; `SLUICE_TMP` lives outside the checkout so the checkout stays
@@ -1400,111 +1401,6 @@ git -C <common> worktree remove --force <common>/sluice/.places/<name>
   `.git/sluice/places/try-1` gave `git rev-parse --show-toplevel` = that
   path, `moon exec ':#suite'` ran 2 tasks, and the affected query worked.
 
-### `worktrunk`
-
-```
-command wt -C <common> switch --create sluice/try/<branch>/<n> --base <candidate> --no-cd --no-hooks --format=json </dev/null
-command wt -C <place> hook pre-start --yes </dev/null
-command wt -C <place> remove -D --force --foreground --yes --format=json sluice/try/<branch>/<n> </dev/null
-```
-
-(`sluice/try/<branch>/<n>` is the place name; `-C` is a global flag;
-call the binary, not the zsh function, which only adds `cd` handling.
-`-C <common>` works for a normal clone and for crew's bare layout.)
-
-**Whose hooks.** worktrunk reads a project's hooks from the working copy
-of the worktree it runs in, uncommitted edits included, not from the
-tree it checks out. Verified on v0.80.0: with different `pre-start`
-hooks committed in the candidate, uncommitted in the primary worktree
-and uncommitted in a session's worktree, `wt -C <primary> switch
---create … --base <candidate>` ran the primary's, `wt -C <session> …`
-the session's, and `wt -C <common> …` none (`✗ Cannot determine project
-config location — no worktree found`). So the place is made from the
-common dir with `--no-hooks`, and its `pre-start` hooks are run from
-inside it, where the working copy is the candidate: a session never
-decides what runs in sluice's place (35). `wt remove` run from inside
-the place runs the candidate's `pre-remove` (verified). The `post-start`
-and `post-switch` hooks, which worktrunk runs detached, are not run:
-nothing started in a place may outlive it (32).
-
-switch, exit 0, JSON on stdout, progress on stderr:
-
-```
-{"action":"created","branch":"sluice/try/2","path":"/…/wt/proj.sluice-try-2","created_branch":true,"base_branch":"4d819b0cfa180e7b72329bf94033ba70b2ae7f78"}
-◎ Running pre-start project hook @ …/proj.sluice-try-2
-✓ Created branch sluice/try/2 from 4d819b0… and worktree @ …/proj.sluice-try-2
-◎ Running post-start: project @ …/proj.sluice-try-2
-```
-
-- `--base` takes a raw commit on no branch; the branch `sluice/try/<branch>/<n>`
-  is created. It is not protected (no policy names it), so the hook
-  allows it.
-- **Read the path from the JSON** (the last JSON document on stdout,
-  after anything a hook printed there); never compute it. The user's
-  worktree-path template (`~/.config/worktrunk/config.toml`) puts it at
-  `<parent>/<repo>.sluice-try-<n>` for a normal clone and `crew/sluice-try-<n>`
-  beside the agents' worktrees for crew's bare layout. `wt list
-  --format=json` also has it (`items[].worktree.path`) but is slower and
-  writes merge-state caches.
-- Hooks in v0.80: `pre-switch post-switch pre-start post-start
-  pre-commit post-commit pre-merge post-merge pre-remove post-remove`.
-  `pre-*` block and a failure aborts; **`post-*` run detached**
-  (`post-start` logged about 2 s after `switch` returned), logged under
-  `.git/wt/logs/<branch>-<hash>/project/post-start/`. Only `pre-start`
-  is done before tests start, and sluice waits for nothing more: what a
-  check needs is in a `pre-start` hook or a dependency of the check (a
-  moon task it depends on), as the walkthrough tells repositories. crew
-  has neither today.
-- **Without `--yes`**, an unapproved project hook makes `wt hook` and switch exit 1
-  with nothing created:
-
-  ```
-  ▲ proj needs approval to execute 2 commands: …
-  ✗ Cannot prompt for approval in non-interactive environment
-  ↳ To skip prompts in CI/CD, add --yes; to pre-approve commands, run wt config approvals add --yes
-  ```
-
-  `--yes` runs them unapproved and writes nothing to
-  `~/.config/worktrunk/approvals.toml`. sluice passes `--yes` to `wt hook
-  pre-start` and `wt remove`: nobody can approve hooks in a directory
-  sluice makes and removes on its own, and run from inside the place
-  the hooks are the candidate's, the same trust as the checks sluice
-  already runs there. (crew's rule that
-  agents never pass `--yes` is about sessions, not sluice.)
-- Existing branch: exit 1, `✗ Branch sluice/try/2 already exists`.
-  Existing directory: exit 1, `✗ Directory already exists: …`
-  (`--clobber` moves it to `<path>.bak.<timestamp>` and leaves that
-  behind). What made each place is recorded at
-  `<common>/sluice/.places/<name>.json` before it is made, so after a
-  crash `materialize` of a name with a record releases it first, and
-  `release` needs no policy.
-
-remove:
-
-- `-D` deletes the branch even though unmerged (without it the result was
-  `"branch_outcome":"retained_unmerged"` and the branch stayed); `--force`
-  removes a dirty worktree (without it: `✗ Cannot remove worktree:
-  sluice/try/1 has uncommitted changes`); **`--foreground` is required**:
-  by default `wt remove` renames the directory into
-  `.git/wt/trash/<dir>-<epoch>` and deletes it in the background, and here
-  the trash was never deleted (the deleter died with the calling process's
-  group, the likely cause). `--reap` (experimental) kills processes whose
-  cwd is in the worktree; it does not replace ending the group.
-- JSON: `[{"branch":"sluice/try/1","branch_checked_out_at":null,"branch_outcome":"deleted","kind":"worktree","path":"…/proj.sluice-try-1"}]`.
-  Anything but `deleted` is a failed release. A branch with no worktree
-  gives `{"kind":"branch_only","pruned":false,"branch_outcome":"deleted"}`
-  after `○ No worktree found for branch sluice/try/1`.
-- `pre-remove` runs in the worktree and blocks; `post-remove` runs in
-  the background from the primary worktree.
-- Left behind: no directory, no `.git/worktrees/<name>`, no branch; but
-  `.git/wt/logs/commands.jsonl` (a line per hook),
-  `.git/wt/logs/sluice-try-<n>-<hash>/` per checkout (never pruned by
-  worktrunk, so `release` removes that checkout's log directory after
-  `wt remove` succeeds) and
-  `.git/wt/cache/{merge-tree-conflicts,merge-add-probe,is-ancestor,diff-stats}/*.json`.
-- `sluice/try/*` worktrees appear in every agent's `wt list` while they
-  exist.
-
 ### Caches (35)
 
 A new place builds cold. A branch's policy declares the caches a place
@@ -1521,8 +1417,7 @@ paths = ["target"]                    # ignored paths it restores and saves
   common dir already scopes it to the repository.
 - **Where.** `<common>/sluice/caches/<hash of paths>/<key>/`, each saved
   whole or not at all (written beside, then renamed).
-- **Restore**, in `materialize`, once the checkout exists and before any
-  `pre-start` hook: the cache with the candidate's key, or else the one
+- **Restore**, in `materialize`, once the checkout exists: the cache with the candidate's key, or else the one
   of those `paths` saved last (as `actions/cache`'s restore keys), cloned
   into the place: `/bin/cp -c -p -R` on macOS (blocks shared until
   written, times kept, which cargo's fingerprints read; by path, since
@@ -1549,7 +1444,7 @@ included. A `target/` built by another compiler saved little (85 s, 112
 of 148 crates compiled), so `.prototools`, which names the compiler, is
 in the key.
 
-### `archive`
+### `archive` (in C.1, not built)
 
 ```
 mkdir -p $TMPDIR/sluice/<repo id>/<name> && git -C <common> archive <candidate> | tar -x -C $TMPDIR/sluice/<repo id>/<name>
@@ -1575,16 +1470,16 @@ rm -rf $TMPDIR/sluice/<repo id>/<name>        # release, after the run's group i
 
 ### Acceptance tests
 
-For each method, in a scratch repository:
+In a scratch repository:
 
-1. `materialize` gives a place whose tree equals the candidate's (`git diff --stat <candidate>` empty for the worktree methods; a file-by-file compare for archive, including an `export-ignore` file).
+1. `materialize` gives a place whose tree equals the candidate's (`git diff --stat <candidate>` empty).
 2. `tmp` exists, is empty and is outside the checkout.
 3. `release` removes everything listed as left behind, and a second `release` succeeds.
 4. `release` of a name that never existed succeeds and touches nothing else.
-5. worktrunk: the candidate's `pre-start` hook has run when `materialize` returns, and neither the primary worktree's nor a session's uncommitted hooks, nor a `post-start` hook; a stale `sluice/try/<branch>/<n>` from a crash is cleaned and recreated.
-6. git-worktree: a `post-checkout` hook is not run.
-7. No session's worktree, and no branch but `sluice/try/<branch>/<n>`, is changed by either call (core.16, S11).
-8. Both worktree methods, with a `[[checkout.cache]]`: the first place starts with none of its `paths`; released as passed, its `paths` are saved and the next place with the same key holds them, with their times, before `pre-start` ran; released as failed, nothing is saved; a place whose key differs takes the cache saved last; a third key removes the first.
+5. A `post-checkout` hook is not run, and a place left by a crash is cleaned and made again.
+6. No session's worktree, and no branch, is changed by either call (core.16, S11).
+7. With a `[[checkout.cache]]`: the first place starts with none of its `paths`; released as passed, its `paths` are saved and the next place with the same key holds them, with their times; released as failed, nothing is saved; a place whose key differs takes the cache saved last; a third key removes the first.
+8. A method other than `"git-worktree"` is refused, naming the one there is.
 
 ---
 
@@ -1941,9 +1836,8 @@ The tasks:
   conformance scenarios on the real profiles among them;
 - `cli:e2e`, tagged `check-e2e`, never replayed: `e2e/check.sh` builds
   `sluice` and `wt-submit`, puts them first on `PATH`, and runs `e2e.sh
-  <scratch> sluice` once with git-worktree places and once with
-  worktrunk's (about 1 m 50 s). The scratch repositories are removed when
-  both pass and kept, their path printed, when one fails.
+  <scratch> sluice`. The scratch repository is removed when it passes
+  and kept, its path printed, when it fails.
 
 `cargo-tests` stays the fast tier and runs before every `wt merge`;
 `moon run ':#check-fast' ':#check-tools' ':#check-e2e'` is what a person

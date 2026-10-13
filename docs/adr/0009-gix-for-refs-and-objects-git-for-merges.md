@@ -37,3 +37,4 @@ Option 1 offers a choice whose only visible effect would be differences in behav
 - sluice requires the `git` command, 2.38 or later for `merge-tree --write-tree`, whatever the checkout method.
 - C.1 of the statement names three checkout profiles: worktrunk, git worktree and archive.
 - core.1 still holds: `wt` is named only in the worktrunk checkout and driver profiles.
+- The checkout setting is superseded by ADR 0013: a place is a plain git worktree.
