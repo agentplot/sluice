@@ -327,6 +327,10 @@ pub struct BranchDoc {
     /// Places decided released and not yet confirmed (25).
     #[serde(default)]
     pub release: Vec<String>,
+    /// Of `release`, the places whose candidate passed: their declared
+    /// caches are saved as they are released (35).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passed: Vec<String>,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
 }
@@ -345,6 +349,7 @@ impl BranchDoc {
             candidates: Vec::new(),
             landing: None,
             release: Vec::new(),
+            passed: Vec::new(),
             outbox: Vec::new(),
         }
     }

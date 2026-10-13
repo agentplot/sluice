@@ -74,7 +74,7 @@ impl Sluice<'_> {
             .filter_map(|c| c.place.clone().map(|p| (c.id.clone(), p)))
             .collect();
         for (cand, place) in stale {
-            self.seams.checkout.release(&place)?;
+            self.seams.checkout.release(&place, false)?;
             let now = self.now();
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
@@ -110,10 +110,13 @@ impl Sluice<'_> {
     /// 25, 34: release the places of candidates whose verdict was read or
     /// that were dropped; only places sluice made (rule core.16).
     fn perform_releases(&self, branch: &str) -> Result<()> {
-        for place in self.read_line(branch)?.doc.release {
-            self.seams.checkout.release(&place)?;
+        let doc = self.read_line(branch)?.doc;
+        for place in doc.release {
+            let passed = doc.passed.contains(&place);
+            self.seams.checkout.release(&place, passed)?;
             let now = self.now();
             self.update(branch, |l| {
+                l.doc.passed.retain(|p| *p != place);
                 if let Some(n) = l.doc.release.iter().position(|p| *p == place) {
                     l.doc.release.remove(n);
                     l.log(
@@ -467,6 +470,9 @@ impl Sluice<'_> {
                     x.replayed = v.replayed;
                     let word = x.result_word().to_string();
                     if let Some(p) = x.place.clone() {
+                        if v.passed {
+                            line.doc.passed.push(p.clone());
+                        }
                         line.doc.release.push(p);
                     }
                     line.log(

@@ -104,6 +104,7 @@ struct Inner {
     places: BTreeMap<String, Rev>,
     made: Vec<String>,
     released: Vec<String>,
+    saved: Vec<String>,
     // the driver
     worktrees: BTreeMap<String, Session>,
     told: Vec<Notification>,
@@ -555,6 +556,12 @@ impl World {
         self.0.borrow().released.clone()
     }
 
+    /// The released places whose candidate passed, so whose caches were
+    /// saved (35).
+    pub fn saved_places(&self) -> Vec<String> {
+        self.0.borrow().saved.clone()
+    }
+
     // -- the driver --------------------------------------------------------
 
     /// A session's place holding `head`.
@@ -847,7 +854,7 @@ impl Checkout for FakeCheckout {
         })
     }
 
-    fn release(&self, name: &str) -> Result<()> {
+    fn release(&self, name: &str, passed: bool) -> Result<()> {
         let mut inner = self.0 .0.borrow_mut();
         // Rule core.16: never a session's place.
         assert!(
@@ -856,6 +863,9 @@ impl Checkout for FakeCheckout {
         );
         if inner.places.remove(name).is_some() {
             inner.released.push(name.into());
+            if passed {
+                inner.saved.push(name.into());
+            }
             // 34: everything started in it is ended.
             for r in inner.runs.iter_mut() {
                 if r.request.place.name == name && r.report.is_none() {

@@ -15,9 +15,10 @@
 //!   nothing started in a place may outlive it (32).
 //!
 //! Once the checkout exists, and before any `pre-start` hook, the place
-//! takes the build cache: every entry git ignores and `.worktreeinclude`
-//! lists in the repository's primary worktree is copied from there
-//! (section 5, *Warming a place*).
+//! takes the caches `[[checkout.cache]]` declares, each keyed by the
+//! content of the files it names in the candidate; a place whose
+//! candidate passed saves them as it is released (35; section 5,
+//! *Caches*).
 //!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
@@ -40,7 +41,25 @@ struct Made {
     /// The checkout, once it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
+    /// The caches it may hold, keyed for its candidate (35).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    caches: Vec<Cache>,
 }
+
+/// A cache `[[checkout.cache]]` declares, keyed for one candidate:
+/// `<common>/sluice/caches/<bucket>/<key>/` holds its `paths`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Cache {
+    paths: Vec<String>,
+    /// A hash of `paths`: every key of this cache is under it.
+    bucket: String,
+    /// A hash of `paths` and the content of each key file in the
+    /// candidate's tree.
+    key: String,
+}
+
+/// How many keys of each cache are kept.
+const KEPT: usize = 2;
 
 pub struct Places {
     common: PathBuf,
@@ -107,21 +126,6 @@ impl Places {
             .context("running git")
     }
 
-    /// `git` in a worktree, with nothing of a caller's repository.
-    fn git_in(&self, dir: &Path, args: &[&str]) -> Result<Output> {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .stdin(Stdio::null())
-            .output()
-            .context("running git")
-    }
-
     /// `wt` run in `dir`, the binary itself and never a shell function.
     fn wt(&self, dir: &Path, args: &[&str]) -> Result<Output> {
         Command::new("wt")
@@ -168,135 +172,171 @@ impl Places {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        self.copy_ignored(&path)?;
         Ok(path)
     }
 
-    /// The primary worktree: a normal clone's main worktree, or in a bare
-    /// layout the one with the branch the common dir's `HEAD` names;
-    /// worktrunk's rule.
-    fn primary(&self) -> Result<Option<PathBuf>> {
-        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
+    /// The caches `[[checkout.cache]]` declares, keyed for `rev`.
+    fn caches(&self, rev: &Rev, checkout: &Settings) -> Result<Vec<Cache>> {
+        let tables = match checkout.get("cache") {
+            None => return Ok(Vec::new()),
+            Some(Setting::Tables(t)) => t,
+            Some(_) => bail!("[[checkout.cache]] must be an array of tables"),
+        };
+        let mut out = Vec::new();
+        for t in tables {
+            let list = |k: &str| -> Result<Vec<String>> {
+                match t.get(k) {
+                    Some(Setting::List(xs)) if !xs.is_empty() => Ok(xs.clone()),
+                    _ => bail!("[[checkout.cache]] {k} must be a list of paths"),
+                }
+            };
+            if let Some(k) = t.keys().find(|k| !matches!(k.as_str(), "key" | "paths")) {
+                bail!("[[checkout.cache]] has no setting {k:?}: key, paths");
+            }
+            let (keys, paths) = (list("key")?, list("paths")?);
+            for p in keys.iter().chain(&paths) {
+                let path = Path::new(p);
+                if path.is_absolute()
+                    || path
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    bail!("[[checkout.cache]] {p:?} must be a path inside the checkout");
+                }
+            }
+            let bucket = self.hash(&format!("paths\0{}", paths.join("\0")))?;
+            let mut text = format!("{bucket}\n");
+            for k in &keys {
+                let out = self.git(&[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{}:{k}", rev.as_str()),
+                ])?;
+                let blob = if out.status.success() {
+                    String::from_utf8_lossy(&out.stdout).trim().to_string()
+                } else {
+                    "missing".into()
+                };
+                text.push_str(&format!("{k}\0{blob}\n"));
+            }
+            out.push(Cache {
+                key: self.hash(&text)?,
+                paths,
+                bucket,
+            });
+        }
+        Ok(out)
+    }
+
+    /// git's hash of `text`: keys stay the same across sluice's builds.
+    fn hash(&self, text: &str) -> Result<String> {
+        use std::io::Write as _;
+        let mut child = Command::new("git")
+            .args(["hash-object", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("running git hash-object")?;
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(text.as_bytes())?;
+        let out = child.wait_with_output()?;
         if !out.status.success() {
             bail!(
-                "git worktree list: {}",
+                "git hash-object: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        // Records of fields, each record ended by an empty field.
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut worktrees: Vec<(PathBuf, bool, Option<&str>)> = Vec::new();
-        for field in text.split('\0') {
-            if let Some(p) = field.strip_prefix("worktree ") {
-                worktrees.push((PathBuf::from(p), false, None));
-            } else if let Some(w) = worktrees.last_mut() {
-                if field == "bare" {
-                    w.1 = true;
-                } else if let Some(b) = field.strip_prefix("branch ") {
-                    w.2 = Some(b);
-                }
-            }
-        }
-        match worktrees.first() {
-            None => Ok(None),
-            Some((p, false, _)) => Ok(Some(p.clone())),
-            Some((_, true, _)) => {
-                let head = self.git(&["symbolic-ref", "--quiet", "HEAD"])?;
-                if !head.status.success() {
-                    return Ok(None);
-                }
-                let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
-                Ok(worktrees
-                    .iter()
-                    .skip(1)
-                    .find(|w| w.2 == Some(head.as_str()))
-                    .map(|w| w.0.clone()))
-            }
-        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    /// The git-worktree method's warming: each entry the primary's git
-    /// ignores and its `.worktreeinclude` lists, cloned where the
-    /// filesystem allows; an entry already in the place is left alone.
-    fn copy_ignored(&self, place: &Path) -> Result<()> {
-        let Some(primary) = self.primary()? else {
-            return Ok(());
+    fn bucket(&self, cache: &Cache) -> PathBuf {
+        self.root().join("caches").join(&cache.bucket)
+    }
+
+    /// The saved keys of a cache, the last saved first.
+    fn saved(&self, cache: &Cache) -> Result<Vec<PathBuf>> {
+        let dir = self.bucket(cache);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
         };
-        let include = primary.join(".worktreeinclude");
-        if !include.is_file() || primary == place {
+        let mut saved = Vec::new();
+        for e in entries {
+            let e = e?;
+            if e.file_name().to_string_lossy().starts_with('.') || !e.file_type()?.is_dir() {
+                continue;
+            }
+            saved.push((e.metadata()?.modified()?, e.path()));
+        }
+        saved.sort_by_key(|s| std::cmp::Reverse(s.0));
+        Ok(saved.into_iter().map(|(_, p)| p).collect())
+    }
+
+    /// Each cache into the place: its candidate's key, or else the one
+    /// saved last; none yet leaves the place cold.
+    fn restore(&self, caches: &[Cache], place: &Path) -> Result<()> {
+        for cache in caches {
+            let exact = self.bucket(cache).join(&cache.key);
+            let from = if exact.is_dir() {
+                exact
+            } else {
+                match self.saved(cache)?.into_iter().next() {
+                    Some(p) => p,
+                    None => continue,
+                }
+            };
+            for p in &cache.paths {
+                let (src, dst) = (from.join(p), place.join(p));
+                if src.symlink_metadata().is_err() || dst.symlink_metadata().is_ok() {
+                    continue;
+                }
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                clone(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The place's `paths` moved into a new cache of its key, whole or not
+    /// at all; a saved key never changes. The last `KEPT` keys stay.
+    fn save(&self, cache: &Cache, place: &Path) -> Result<()> {
+        let dir = self.bucket(cache);
+        let dest = dir.join(&cache.key);
+        if dest.exists() {
             return Ok(());
         }
-        let list = |args: &[&str]| -> Result<Vec<String>> {
-            let out = self.git_in(&primary, args)?;
-            if !out.status.success() {
-                bail!(
-                    "git ls-files in {}: {}",
-                    primary.display(),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
-            Ok(String::from_utf8_lossy(&out.stdout)
-                .split('\0')
-                .filter(|e| !e.is_empty())
-                .map(|e| e.trim_end_matches('/').to_string())
-                .collect())
-        };
-        let include = include
-            .to_str()
-            .ok_or_else(|| anyhow!("{} is not UTF-8", include.display()))?;
-        let listed = list(&[
-            "ls-files",
-            "-z",
-            "-o",
-            "-i",
-            "--directory",
-            &format!("--exclude-from={include}"),
-        ])?;
-        let ignored = list(&[
-            "ls-files",
-            "-z",
-            "-o",
-            "-i",
-            "--directory",
-            "--exclude-standard",
-        ])?;
-        for entry in listed {
-            let under = |i: &String| entry == *i || entry.starts_with(&format!("{i}/"));
-            if !ignored.iter().any(under) {
+        let tmp = dir.join(format!(".{}.{}", cache.key, std::process::id()));
+        if tmp.exists() {
+            std::fs::remove_dir_all(&tmp)?;
+        }
+        std::fs::create_dir_all(&tmp)?;
+        for p in &cache.paths {
+            let (src, dst) = (place.join(p), tmp.join(p));
+            if src.symlink_metadata().is_err() {
                 continue;
             }
-            let to = place.join(&entry);
-            if to.symlink_metadata().is_ok() {
-                continue;
-            }
-            if let Some(parent) = to.parent() {
+            if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            // A clone shares blocks until written; times are kept, which
-            // cargo's fingerprints read. macOS's own `cp`, by path: a
-            // toolchain's GNU `cp` may come first on `PATH`.
-            let mut cp = if cfg!(target_os = "macos") {
-                let mut c = Command::new("/bin/cp");
-                c.args(["-c", "-p", "-R"]);
-                c
-            } else {
-                let mut c = Command::new("cp");
-                c.args(["-a", "--reflink=auto"]);
-                c
-            };
-            let out = cp
-                .arg(primary.join(&entry))
-                .arg(&to)
-                .stdin(Stdio::null())
-                .output()
-                .context("running cp")?;
-            if !out.status.success() {
-                bail!(
-                    "copying {entry} into {}: {}",
-                    place.display(),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
+            // Another filesystem (a worktrunk place may be on one) is copied.
+            if std::fs::rename(&src, &dst).is_err() {
+                clone(&src, &dst)?;
             }
+        }
+        if std::fs::rename(&tmp, &dest).is_err() {
+            // Saved meanwhile under the same key.
+            std::fs::remove_dir_all(&tmp)?;
+        }
+        for old in self.saved(cache)?.into_iter().skip(KEPT) {
+            std::fs::remove_dir_all(old)?;
         }
         Ok(())
     }
@@ -335,7 +375,7 @@ impl Places {
         Ok(out.stdout.split(|b| *b == 0).any(|f| f == want.as_bytes()))
     }
 
-    fn make_worktrunk(&self, name: &str, rev: &Rev) -> Result<PathBuf> {
+    fn make_worktrunk(&self, name: &str, rev: &Rev, caches: &[Cache]) -> Result<PathBuf> {
         // From the common dir, which every layout of a repository has and
         // which holds no working copy whose hooks could run.
         let out = self.wt(
@@ -370,20 +410,11 @@ impl Places {
             &Made {
                 method: "worktrunk".into(),
                 path: Some(path.clone()),
+                caches: caches.to_vec(),
             },
         )?;
-        // The build cache, before any hook: worktrunk's own copy, which
-        // reads the primary worktree's `.worktreeinclude`.
-        let out = self.wt(
-            &path,
-            &["step", "copy-ignored", "--require-include", "--format=json"],
-        )?;
-        if !out.status.success() {
-            bail!(
-                "wt step copy-ignored in {name}: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        // The caches, before any hook (35).
+        self.restore(caches, &path)?;
         // The candidate's own pre-start hooks, in the place: `--yes`, since
         // nobody can approve hooks in a place sluice makes and removes on
         // its own, and they come from the tree whose checks run there.
@@ -462,6 +493,36 @@ impl Places {
     }
 }
 
+/// A copy that shares blocks until written where the filesystem allows,
+/// keeping times, which cargo's fingerprints read. macOS's own `cp`, by
+/// path: a toolchain's GNU `cp` may come first on `PATH`.
+fn clone(src: &Path, dst: &Path) -> Result<()> {
+    let mut cp = if cfg!(target_os = "macos") {
+        let mut c = Command::new("/bin/cp");
+        c.args(["-c", "-p", "-R"]);
+        c
+    } else {
+        let mut c = Command::new("cp");
+        c.args(["-a", "--reflink=auto"]);
+        c
+    };
+    let out = cp
+        .arg(src)
+        .arg(dst)
+        .stdin(Stdio::null())
+        .output()
+        .context("running cp")?;
+    if !out.status.success() {
+        bail!(
+            "copying {} to {}: {}",
+            src.display(),
+            dst.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// The JSON document worktrunk writes last on stdout, after anything a
 /// hook printed there.
 fn last_json(stdout: &[u8]) -> Result<serde_json::Value> {
@@ -494,15 +555,17 @@ impl Checkout for Places {
                 "[checkout] method = {method:?}: one of \"git-worktree\", \"worktrunk\" (\"archive\" is not built yet)"
             );
         }
+        let caches = self.caches(rev, checkout)?;
         // A place of this name left by a step that stopped part way.
         if self.read_record(name)?.is_some() {
-            self.release(name)?;
+            self.release(name, false)?;
         }
         self.write_record(
             name,
             &Made {
                 method: method.clone(),
                 path: None,
+                caches: caches.clone(),
             },
         )?;
         let tmp = self.tmp(name);
@@ -511,14 +574,19 @@ impl Checkout for Places {
         }
         std::fs::create_dir_all(&tmp)?;
         let path = match method.as_str() {
-            "git-worktree" => self.make_worktree(name, rev)?,
-            _ => self.make_worktrunk(name, rev)?,
+            "git-worktree" => {
+                let path = self.make_worktree(name, rev)?;
+                self.restore(&caches, &path)?;
+                path
+            }
+            _ => self.make_worktrunk(name, rev, &caches)?,
         };
         self.write_record(
             name,
             &Made {
                 method,
                 path: Some(path.clone()),
+                caches,
             },
         )?;
         Ok(Place {
@@ -528,10 +596,18 @@ impl Checkout for Places {
         })
     }
 
-    fn release(&self, name: &str) -> Result<()> {
+    fn release(&self, name: &str, passed: bool) -> Result<()> {
         // 34: everything started in it ends first.
         self.runs.remove(name)?;
         if let Some(made) = self.read_record(name)? {
+            // 35: a passed candidate's place saves what it built.
+            if passed {
+                if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
+                    for cache in &made.caches {
+                        self.save(cache, path)?;
+                    }
+                }
+            }
             match made.method.as_str() {
                 "git-worktree" => self.remove_worktree(&self.worktree_path(name))?,
                 "worktrunk" => self.remove_worktrunk(name, made.path.as_deref())?,

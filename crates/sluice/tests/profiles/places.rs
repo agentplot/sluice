@@ -122,10 +122,10 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
     // The method runs nothing in the place: no post-checkout hook.
     assert!(!repo.dir().join(".git/post-checkout.log").exists());
 
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     left_behind(&repo, &place);
-    p.release(NAME).unwrap();
-    p.release("sluice/try/bolt/x/never").unwrap();
+    p.release(NAME, false).unwrap();
+    p.release("sluice/try/bolt/x/never", false).unwrap();
     assert_eq!(others(&repo), before);
 }
 
@@ -140,7 +140,7 @@ fn a_git_worktree_place_left_by_a_crash() {
     let again = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
     holds_the_candidate(&repo, &again, &rev);
     std::fs::remove_dir_all(&again.path).unwrap();
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     left_behind(&repo, &again);
 }
 
@@ -174,7 +174,7 @@ fn releasing_a_place_ends_its_run() {
         .trim()
         .parse()
         .unwrap();
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     assert_eq!(
         nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
         Err(nix::errno::Errno::ESRCH)
@@ -233,7 +233,7 @@ fn a_worktrunk_place_is_the_candidate_and_leaves_nothing() {
         NAME
     );
 
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     left_behind(&repo, &place);
     let logs = repo.dir().join(".git/wt/logs");
     if logs.exists() {
@@ -242,7 +242,7 @@ fn a_worktrunk_place_is_the_candidate_and_leaves_nothing() {
             assert!(!f.starts_with("sluice-try-bolt-x-1-"), "{f} left");
         }
     }
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     assert_eq!(others(&repo), before);
 }
 
@@ -256,7 +256,7 @@ fn a_worktrunk_place_left_by_a_crash() {
     std::fs::write(first.path.join("debris"), "x").unwrap();
     let again = p.materialize(NAME, &rev, &method("worktrunk")).unwrap();
     holds_the_candidate(&repo, &again, &rev);
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     left_behind(&repo, &again);
 }
 
@@ -292,61 +292,119 @@ fn a_worktrunk_place_runs_the_candidates_hooks_alone() {
     );
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert!(!place.path.join("post-start.ran").exists());
-    p.release(NAME).unwrap();
+    p.release(NAME, false).unwrap();
     left_behind(&repo, &place);
 }
 
-/// Section 5, *Warming a place*: both methods copy in what the primary
-/// worktree's git ignores and its `.worktreeinclude` lists, with its
-/// times, before any `pre-start` hook; nothing else, and nothing without a
-/// `.worktreeinclude`.
-#[test]
-fn a_place_takes_the_build_cache_worktreeinclude_lists() {
-    for m in ["git-worktree", "worktrunk"] {
-        let (repo, _) = scratch(&format!("places-warm-{m}"));
-        let rev = Rev::new(repo.branch(
-            "cand4",
-            "main",
-            &[
-                ("src/lib", Some("candidate\n")),
-                (".gitignore", Some("target\nonly-ignored\nsaw.ran\n")),
-                (
-                    ".config/wt.toml",
-                    Some("[pre-start]\nsaw = \"cat target/debug/a > saw.ran || echo none > saw.ran\"\n"),
+fn cached(m: &str) -> Settings {
+    let mut s = method(m);
+    s.insert(
+        "cache".into(),
+        Setting::Tables(vec![Settings::from([
+            ("key".into(), Setting::List(vec!["Cargo.lock".into()])),
+            ("paths".into(), Setting::List(vec!["target".into()])),
+        ])]),
+    );
+    s
+}
+
+/// A candidate off main with `Cargo.lock` as `lock`, and a pre-start
+/// hook recording whether `target/debug/a` was there when it ran.
+fn locked(repo: &Repo, lock: &str) -> Rev {
+    let rev = repo.branch(
+        "cand5",
+        "main",
+        &[
+            ("src/lib", Some("candidate\n")),
+            ("Cargo.lock", Some(lock)),
+            (".gitignore", Some("target\nsaw.ran\n")),
+            (
+                ".config/wt.toml",
+                Some(
+                    "[pre-start]\nsaw = \"cat target/debug/a > saw.ran || echo none > saw.ran\"\n",
                 ),
-            ],
-        ));
-        repo.git(&["branch", "-D", "cand4"]);
-        repo.write(".gitignore", "target\nonly-ignored\nsaw.ran\n");
-        repo.write(".worktreeinclude", "target\nonly-listed\n");
-        repo.write("target/debug/a", "built\n");
-        repo.write("only-ignored/f", "x\n");
-        repo.write("only-listed/f", "x\n");
-        let built = std::fs::metadata(repo.dir().join("target/debug/a"))
+            ),
+        ],
+    );
+    repo.git(&["branch", "-D", "cand5"]);
+    Rev::new(rev)
+}
+
+/// 35, section 5's acceptance test 8: a place starts cold; one released
+/// as passed saves its `target`, which the next place of that key holds,
+/// with its times, before its hooks ran; one released as failed saves
+/// nothing; another key takes the cache saved last; a third key removes
+/// the first.
+#[test]
+fn a_place_holds_the_caches_its_policy_declares() {
+    for m in ["git-worktree", "worktrunk"] {
+        let (repo, _) = scratch(&format!("places-cache-{m}"));
+        let p = places(&repo);
+        let one = locked(&repo, "one\n");
+        let saw = |place: &Place| {
+            if m == "worktrunk" {
+                std::fs::read_to_string(place.path.join("saw.ran")).unwrap()
+            } else {
+                std::fs::read_to_string(place.path.join("target/debug/a"))
+                    .unwrap_or_else(|_| "none\n".into())
+            }
+        };
+
+        // Cold, and failed: nothing saved.
+        let place = p.materialize(NAME, &one, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "none\n", "{m}");
+        std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
+        std::fs::write(place.path.join("target/debug/a"), "failed\n").unwrap();
+        p.release(NAME, false).unwrap();
+        let place = p.materialize(NAME, &one, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "none\n", "{m}");
+
+        // Passed: saved, and the next place of the key holds it.
+        std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
+        std::fs::write(place.path.join("target/debug/a"), "one\n").unwrap();
+        let built = std::fs::metadata(place.path.join("target/debug/a"))
             .unwrap()
             .modified()
             .unwrap();
-
-        let p = places(&repo);
-        let place = p.materialize(NAME, &rev, &method(m)).unwrap();
-        let a = place.path.join("target/debug/a");
-        assert_eq!(std::fs::read_to_string(&a).unwrap(), "built\n", "{m}");
-        assert_eq!(std::fs::metadata(&a).unwrap().modified().unwrap(), built);
-        assert!(!place.path.join("only-ignored").exists(), "{m}");
-        assert!(!place.path.join("only-listed").exists(), "{m}");
-        if m == "worktrunk" {
-            assert_eq!(
-                std::fs::read_to_string(place.path.join("saw.ran")).unwrap(),
-                "built\n"
-            );
-        }
-        holds_the_candidate(&repo, &place, &rev);
-        p.release(NAME).unwrap();
+        p.release(NAME, true).unwrap();
         left_behind(&repo, &place);
+        let place = p.materialize(NAME, &one, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "one\n", "{m}");
+        let a = place.path.join("target/debug/a");
+        assert_eq!(std::fs::metadata(&a).unwrap().modified().unwrap(), built);
+        holds_the_candidate(&repo, &place, &one);
+        p.release(NAME, false).unwrap();
 
-        std::fs::remove_file(repo.dir().join(".worktreeinclude")).unwrap();
-        let place = p.materialize(NAME, &rev, &method(m)).unwrap();
-        assert!(!place.path.join("target").exists(), "{m}");
-        p.release(NAME).unwrap();
+        // Another key: the cache saved last; saved under its own key.
+        let two = locked(&repo, "two\n");
+        let place = p.materialize(NAME, &two, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "one\n", "{m}");
+        std::fs::write(place.path.join("target/debug/a"), "two\n").unwrap();
+        p.release(NAME, true).unwrap();
+        let place = p.materialize(NAME, &one, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "one\n", "{m}: the first key's own");
+        p.release(NAME, false).unwrap();
+
+        // A third key: two kept, the first gone.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let three = locked(&repo, "three\n");
+        let place = p.materialize(NAME, &three, &cached(m)).unwrap();
+        assert_eq!(saw(&place), "two\n", "{m}");
+        std::fs::write(place.path.join("target/debug/a"), "three\n").unwrap();
+        p.release(NAME, true).unwrap();
+        let caches = repo.dir().join(".git/sluice/caches");
+        let bucket = std::fs::read_dir(&caches)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let kept: Vec<String> = std::fs::read_dir(&bucket)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path().join("target/debug/a")).unwrap())
+            .collect();
+        let mut kept = kept;
+        kept.sort();
+        assert_eq!(kept, ["three\n", "two\n"], "{m}");
     }
 }

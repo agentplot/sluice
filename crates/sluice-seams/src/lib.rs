@@ -77,7 +77,9 @@ pub trait Checkout {
     /// 34: the place's removal, with everything started in it ended. The
     /// core calls this only with names it chose (rule core.16); releasing
     /// a name that was chosen but never materialized does nothing.
-    fn release(&self, name: &str) -> Result<()>;
+    /// `passed` says the place's candidate passed, by the verdict the core
+    /// read: only such a place's declared caches are saved (35).
+    fn release(&self, name: &str, passed: bool) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,8 @@ pub trait Checkout {
 pub enum Setting {
     Text(String),
     List(Vec<String>),
+    /// An array of tables, such as `[[checkout.cache]]`.
+    Tables(Vec<Settings>),
 }
 
 /// A policy table as the core passes it to a profile: the profile's own

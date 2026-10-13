@@ -43,6 +43,13 @@ fn every_place_holds_its_candidate_and_is_released_with_everything_in_it() {
     for session in ["unit/1", "unit/2", "unit/3"] {
         assert!(!released.contains(session));
     }
+    // Only a place whose candidate passed saves its caches (35): the
+    // candidate holding the culprit failed, and the one dropped for it
+    // never had a verdict.
+    let saved: BTreeSet<_> = h.w().saved_places().into_iter().collect();
+    assert!(!saved.is_empty());
+    assert!(saved.is_subset(&released));
+    assert!(saved.len() < released.len(), "{saved:?} of {released:?}");
     // sluice chose no port and started nothing but the gate's checks
     // through the check seam (31): a run request carries a place and a
     // scratch directory, and nothing else of the host.

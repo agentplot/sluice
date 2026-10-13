@@ -182,12 +182,30 @@ impl Policy {
     }
 }
 
-/// A profile's table: each value a string or a list of strings.
+/// A profile's table: each value a string, a list of strings, or an
+/// array of tables whose values are strings or lists of strings.
 fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Settings> {
     let mut out = Settings::new();
     for (k, v) in table {
         let setting = match v {
             toml::Value::String(s) => Setting::Text(s),
+            toml::Value::Array(xs) if !xs.is_empty() && xs.iter().all(|x| x.is_table()) => {
+                Setting::Tables(
+                    xs.into_iter()
+                        .map(|x| {
+                            let toml::Value::Table(t) = x else {
+                                unreachable!("every entry is a table")
+                            };
+                            let t: BTreeMap<String, toml::Value> = t.into_iter().collect();
+                            let inner = settings(t, &format!("{section} [[{k}]]"))?;
+                            if inner.values().any(|s| matches!(s, Setting::Tables(_))) {
+                                bail!("{section} [[{k}]] holds strings and lists of strings only");
+                            }
+                            Ok(inner)
+                        })
+                        .collect::<Result<_>>()?,
+                )
+            }
             toml::Value::Array(xs) => Setting::List(
                 xs.into_iter()
                     .map(|x| match x {
@@ -196,7 +214,9 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
                     })
                     .collect::<Result<_>>()?,
             ),
-            other => bail!("{section} {k} must be a string or a list of strings, not {other}"),
+            other => bail!(
+                "{section} {k} must be a string, a list of strings or an array of tables, not {other}"
+            ),
         };
         out.insert(k, setting);
     }
@@ -317,6 +337,28 @@ batch = true
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
+    }
+
+    /// 35: the caches a place may hold reach the place's profile as an
+    /// array of tables, given no meaning here.
+    #[test]
+    fn reads_an_array_of_tables_for_a_profile() {
+        let p = Policy::parse(
+            "[checkout]\nmethod = \"git-worktree\"\n\
+             [[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            p.checkout["cache"],
+            Setting::Tables(vec![Settings::from([
+                ("key".into(), Setting::List(vec!["Cargo.lock".into()])),
+                ("paths".into(), Setting::List(vec!["target".into()])),
+            ])])
+        );
+        assert!(Policy::parse("[[checkout.cache]]\nkey = 1\n").is_err());
+        assert!(
+            Policy::parse("[[checkout.cache]]\n[[checkout.cache.inner]]\nx = \"y\"\n").is_err()
+        );
     }
 
     #[test]

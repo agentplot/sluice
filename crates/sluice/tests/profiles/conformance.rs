@@ -67,8 +67,8 @@ impl Checkout for RecordedPlaces {
         Ok(place)
     }
 
-    fn release(&self, name: &str) -> Result<()> {
-        self.inner.release(name)?;
+    fn release(&self, name: &str, passed: bool) -> Result<()> {
+        self.inner.release(name, passed)?;
         self.log.borrow_mut().released.push(name.into());
         Ok(())
     }

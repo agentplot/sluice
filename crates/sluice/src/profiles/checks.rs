@@ -209,7 +209,7 @@ fn text<'a>(settings: &'a Settings, key: &str) -> Result<Option<&'a str>> {
     match settings.get(key) {
         None => Ok(None),
         Some(Setting::Text(s)) => Ok(Some(s)),
-        Some(Setting::List(_)) => bail!("[tests] {key} must be a string"),
+        Some(_) => bail!("[tests] {key} must be a string"),
     }
 }
 
