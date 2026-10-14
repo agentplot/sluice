@@ -10,7 +10,7 @@ between runs, and leaves the worktree for its driver to remove.
 ### Requirement: A worktree holds its ports across runs
 
 On an agent's first `sluice exec` in a worktree, the worktree SHALL
-receive a port for each name the policy lists, from a slot held for it
+receive a port for each name the policy lists, from a block held for it
 on the host and checked free, and SHALL keep the same ports for every
 later run until it is released (31, 90). Two worktrees on one host SHALL
 never hold the same port.

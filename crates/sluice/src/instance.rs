@@ -15,8 +15,8 @@
 //! key = "~/.config/sluice/app.pem"
 //! ```
 //!
-//! `reserved` is how many of the bound's slots session runs never take,
-//! so submissions' runs start first (session-runs-1 clause 91).
+//! `reserved` keeps that many runs of the bound for submissions, which
+//! session runs never take, so submissions' runs start first (session-runs-1 clause 91).
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,8 @@ use serde::Deserialize;
 pub struct Instance {
     /// The most runs under test at once.
     pub bound: usize,
-    /// The slots of the bound that session runs never take (91).
+    /// The runs of the bound kept for submissions, which session runs never
+    /// take (91).
     pub reserved: usize,
     /// The processors sluice may use: the process's affinity and its
     /// cgroup's quota where the host has them.
@@ -95,7 +96,7 @@ impl Instance {
             Some(n) if n >= 0 && (n as usize) < bound => n as usize,
             Some(n) if n < 0 => bail!("[runs] reserved must be at least 0, not {n}"),
             Some(n) => bail!(
-                "[runs] reserved = {n} leaves no slot of [runs] max = {bound} for session runs: \
+                "[runs] reserved = {n} leaves no run of [runs] max = {bound} for session runs: \
                  it must be less than the bound"
             ),
         };

@@ -24,9 +24,9 @@ An agent working in its own worktree runs the repository's checks while it works
 
 ## Decision outcome
 
-Option 3. The place seam adopts the worktree: it makes nothing and writes nothing of it, holds a slot of ports for it from its first run until its release (the same ports on every run, never another worktree's), and keeps a scratch directory across its runs. A session run takes one slot of the host's bound for as long as it runs and never one of the `[runs] reserved` slots the host keeps for submissions' runs (91). It is a `RunRequest` like a candidate's, held to the branch's executor, limits and time limit, read from the branch's current revision (56). Each run has its own run directory, so nothing is released between runs, and what a run hands to another process stays up for the next (94).
+Option 3. The place seam adopts the worktree: it makes nothing and writes nothing of it, holds a block of ports for it from its first run until its release (the same ports on every run, never another worktree's), and keeps a scratch directory across its runs. A session run counts against the host's bound for as long as it runs and never takes one of the `[runs] reserved` runs the host keeps for submissions (91). It is a `RunRequest` like a candidate's, held to the branch's executor, limits and time limit, read from the branch's current revision (56). Each run has its own run directory, so nothing is released between runs, and what a run hands to another process stays up for the next (94).
 
-The count of session runs is the host's, never a branch's: records under `$XDG_STATE_HOME/sluice/sessions/` beside the port slots, with their own lock, live while a supervisor holds their run directory, and read by the core through the check seam beside the bound (`Tests::sessions`). Keeping them out of the records seam keeps a fact about one host off a shared remote or a server.
+The count of session runs is the host's, never a branch's: records under `$XDG_STATE_HOME/sluice/sessions/` beside the blocks of ports, with their own lock, live while a supervisor holds their run directory, and read by the core through the check seam beside the bound (`Tests::sessions`). Keeping them out of the records seam keeps a fact about one host off a shared remote or a server.
 
 A run of the checks in a worktree that holds exactly its head is recorded under its keys as an open, unconfined run, with its worktree (92, 84); one that passed saves the caches the policy declares as a passed candidate's place does (35), so a later submission replays it where the policy declares the cache (93). A dirty worktree, a command, and a run past its time limit record nothing.
 
@@ -38,6 +38,6 @@ Option 1 leaves the collisions and the stacks in place, and a removal hook knows
 
 - `sluice exec`, `sluice release` and `[runs] reserved` are new; `Checkout` gains `adopt`, `adopted`, `save_caches` and `release_session`, and `Tests` gains `sessions`.
 - Rule core.16 says who releases a session's place; rule core.10 admits a session's run under the executor; rule core.18 binds the count and the record.
-- A round and a `sluice exec` take different locks, so both may see the last slot: the host may run one over its bound at most. A later change may take the host's sessions lock in a round's start path too.
+- A round and a `sluice exec` take different locks, so both may see room for one more run: the host may run one over its bound at most. A later change may take the host's sessions lock in a round's start path too.
 - A worktree whose agent is gone holds its ports and its stack until something runs `sluice release`; whether that lapses is left open by the proposal.
 - `sluice exec --remote` (clause 96) waits on a remote submit.

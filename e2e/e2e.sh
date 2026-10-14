@@ -240,7 +240,7 @@ if [ "$MODE" = fixture ]; then
 fi
 
 # --- sluice: S1 to S4 for real -------------------------------------------------------------------------------------
-# The host's slots and session runs, kept with the scratch repository.
+# The host's blocks of ports and session runs, kept with the scratch repository.
 export XDG_STATE_HOME=$ROOT/state
 COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
 submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would; the
@@ -329,8 +329,8 @@ out=$(SLUICE_AGENT=e2e-d indir "$ROOT/places/d" wt-submit bolt/s27) && rc=0 || r
 expect "S27 d's exit" "$rc" 0
 expect "S27 released before removal" "$(released)" 1
 expect "S27 d's worktree removed" "$([ -d "$ROOT/places/d" ] && echo kept || echo removed)" removed
-held() { # held: how many slots of ports the host still holds
-  set -- "$XDG_STATE_HOME"/sluice/slots/*
+held() { # held: how many blocks of ports the host still holds
+  set -- "$XDG_STATE_HOME"/sluice/ports/*
   if [ -e "$1" ]; then echo $#; else echo 0; fi
 }
 expect "S27 d's ports free" "$(held)" 0

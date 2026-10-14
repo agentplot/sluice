@@ -99,8 +99,8 @@ work: it never decides a result.
 "api", "console"]`. Each checkout gets a block of its own, held on the host
 across every repository and checked free first: `SLUICE_PORT_MINISTACK`,
 `SLUICE_PORT_API`, `SLUICE_PORT_CONSOLE`, in the order written, from
-`ports_from` (20000 by default) plus the checkout's slot times the number
-of names. No two checkouts alive share a port, and a name's port stays
+`ports_from` (20000 by default) plus the number of the checkout's block
+times the number of names. No two checkouts alive share a port, and a name's port stays
 the same for the checkout's life, so separate systems find each other by
 these numbers.
 

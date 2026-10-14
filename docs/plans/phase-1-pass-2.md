@@ -220,10 +220,10 @@ needed.
   them, for every candidate under test at once.
   What sluice owes the checks:
   - Ports, assigned by sluice. `[checkout] ports` names the ports a
-    candidate's stack uses. The place seam gives each place a slot, held
-    on the host across repositories and checked free before the place is
-    handed over, and each name a fixed position in the slot's block:
-    `port = ports_from + slot × names + position`, `ports_from` 20000 by
+    candidate's stack uses. The place seam gives each place a block of ports,
+    held on the host across repositories and checked free before the
+    place is handed over, and each name a fixed position in the block:
+    `port = ports_from + block × names + position`, `ports_from` 20000 by
     default, above worktrunk's `hash_port` range. The place carries
     `SLUICE_PLACE` and `SLUICE_PORT_<NAME>` into its runs, and the checks
     name their containers, deployments and addresses from them.

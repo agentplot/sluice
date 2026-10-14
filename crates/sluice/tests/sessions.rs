@@ -1,5 +1,5 @@
 //! The host's session runs on a real filesystem (session-runs-1 clauses
-//! 89 to 91): records beside the host's port slots, live while a
+//! 89 to 91): records beside the host's blocks of ports, live while a
 //! supervisor holds their run directory, begun under the host's lock. It
 //! needs no tool, so it is in the fast tier.
 
@@ -73,7 +73,7 @@ fn a_session_run_is_written_read_and_ended() {
 }
 
 /// 89, core.14: a session run whose supervisor let go of its run
-/// directory holds no slot: it is never counted, and the next start
+/// directory no longer counts against the bound, and the next start
 /// drops its record.
 #[test]
 fn a_session_run_whose_supervisor_is_gone_is_dropped() {

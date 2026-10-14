@@ -332,7 +332,7 @@ pub trait Tests {
     fn bound(&self) -> Result<usize>;
 
     /// Session-runs-1 clause 89: how many session runs are running on this
-    /// host, each holding one slot of the bound. A session run is the
+    /// host, each counting against the bound. A session run is the
     /// host's, never a branch's, so the check seam counts it beside the
     /// bound and the records never hold it.
     fn sessions(&self) -> Result<usize>;

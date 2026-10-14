@@ -99,7 +99,7 @@ impl Sluice<'_> {
     }
 
     /// 89, 90: adopt the session's worktree and start its run there, of
-    /// the checks or of `command`. The caller holds a slot of the bound.
+    /// the checks or of `command`. The caller has counted the run against the bound.
     pub fn start_session(
         &self,
         plan: &SessionPlan,

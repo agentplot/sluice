@@ -21,8 +21,8 @@ sidebar:
 ## `sluice exec`
 
 An agent runs its tests while it works with `sluice exec`, in its own
-worktree. The run takes one slot of the host's bound for as long as it
-runs, waiting while none is free, and never one of the slots
+worktree. The run counts against the host's bound for as long as it runs,
+waiting while the bound is full, and never uses the part
 `[runs] reserved` keeps for submissions. It gets the worktree's ports,
 the same on every run, runs under the branch's executor, memory,
 network and time limit, and ends with its process group. The tests are

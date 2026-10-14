@@ -339,15 +339,15 @@ fn base() -> u16 {
     30000 + (std::process::id() % 900) as u16 * 20
 }
 
-/// 31: two places alive at once hold two slots: the same position in
-/// each block for a name, no port shared, and a short name each; a slot
-/// is free again once its place is released.
+/// 31: two places alive at once hold two blocks of ports: the same
+/// position in each block for a name, no port shared, and a short name
+/// each; a block is free again once its place is released.
 #[test]
 fn places_alive_at_once_hold_their_own_ports() {
     let _ports = ports_lock();
     let (repo, rev) = scratch("places-ports");
-    let slots = support::Scratch::new("places-slots");
-    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let blocks = support::Scratch::new("places-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let from = base();
     let settings = ported(&["web", "api-server"], &from.to_string());
     let a = p.materialize("sluice/try/a/1", &rev, &settings).unwrap();
@@ -361,10 +361,10 @@ fn places_alive_at_once_hold_their_own_ports() {
 
     p.release("sluice/try/a/1", false).unwrap();
     let c = p.materialize("sluice/try/c/1", &rev, &settings).unwrap();
-    assert_eq!(port(&c, "SLUICE_PORT_WEB"), from, "a's slot is free again");
+    assert_eq!(port(&c, "SLUICE_PORT_WEB"), from, "a's block is free again");
     p.release("sluice/try/b/1", false).unwrap();
     p.release("sluice/try/c/1", false).unwrap();
-    let held: Vec<_> = std::fs::read_dir(slots.path())
+    let held: Vec<_> = std::fs::read_dir(blocks.path())
         .unwrap()
         .filter(|e| {
             !e.as_ref()
@@ -377,13 +377,13 @@ fn places_alive_at_once_hold_their_own_ports() {
     assert!(held.is_empty());
 }
 
-/// 31: a slot one of whose ports something else holds is passed over.
+/// 31: a block one of whose ports something else holds is passed over.
 #[test]
-fn a_slot_with_a_port_in_use_is_passed_over() {
+fn a_block_with_a_port_in_use_is_passed_over() {
     let _ports = ports_lock();
     let (repo, rev) = scratch("places-busy");
-    let slots = support::Scratch::new("places-busy-slots");
-    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let blocks = support::Scratch::new("places-busy-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let from = base() + 10;
     let _held = std::net::TcpListener::bind(("127.0.0.1", from + 1)).unwrap();
     let a = p
@@ -397,8 +397,8 @@ fn a_slot_with_a_port_in_use_is_passed_over() {
 #[test]
 fn ports_with_bad_names_are_refused() {
     let (repo, rev) = scratch("places-bad-ports");
-    let slots = support::Scratch::new("places-bad-slots");
-    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let blocks = support::Scratch::new("places-bad-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     for (names, from) in [
         (&["a b"][..], "41200"),
         (&["web", "WEB"][..], "41200"),
@@ -440,8 +440,8 @@ fn another_session(repo: &Repo, name: &str) -> PathBuf {
 fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let _ports = ports_lock();
     let (repo, _) = scratch("places-adopt");
-    let slots = support::Scratch::new("places-adopt-slots");
-    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let blocks = support::Scratch::new("places-adopt-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let session = repo.dir().with_extension("session");
     let other = another_session(&repo, "other");
     let settings = ported(&["web", "db"], "41200");
@@ -470,7 +470,7 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let b = p
         .adopt(other.to_str().unwrap(), "bolt/x", &settings)
         .unwrap();
-    // Another slot's block: a port something else holds is passed over,
+    // Another block: a port something else holds is passed over,
     // so which block is the host's to say.
     let (aw, ad) = (port(&a, "SLUICE_PORT_WEB"), port(&a, "SLUICE_PORT_DB"));
     let (bw, bd) = (port(&b, "SLUICE_PORT_WEB"), port(&b, "SLUICE_PORT_DB"));
@@ -493,8 +493,8 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
 fn releasing_a_sessions_place_leaves_its_worktree() {
     let _ports = ports_lock();
     let (repo, _) = scratch("places-session-release");
-    let slots = support::Scratch::new("places-session-slots");
-    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let blocks = support::Scratch::new("places-session-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let session = repo.dir().with_extension("session");
     let settings = ported(&["web"], "41300");
     let (before, listed) = (others(&repo), worktrees(&repo));
@@ -615,10 +615,10 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
     use sluice_seams::{Limits, ReleasePolicy, Released};
     let _ports = ports_lock();
     let (repo, _) = scratch("places-release-now");
-    let slots = support::Scratch::new("places-release-now-slots");
+    let blocks = support::Scratch::new("places-release-now-blocks");
     let jobs = 2;
     let p = places(&repo)
-        .with_slots(slots.path().to_path_buf())
+        .with_blocks(blocks.path().to_path_buf())
         .with_release(Box::new(move |place, tests, limits, dir| {
             sluice::profiles::checks::release_request(place, tests, limits, jobs, dir)
         }));

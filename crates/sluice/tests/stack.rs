@@ -249,15 +249,15 @@ fn stacks(executor: &str) {
     // 66: the hung candidate was ended by its time limit.
     assert_eq!(s.states("hang/c"), ["failed"], "{}", text(&out));
     // 32, 34: nothing any of them started is left: no container, no
-    // server; and every slot of ports is free again.
+    // server; and every block of ports is free again.
     assert_eq!(leftovers(&id), (String::new(), String::new()));
-    let slots = s.state.path().join("sluice/slots");
-    let held: Vec<String> = std::fs::read_dir(&slots)
+    let blocks = s.state.path().join("sluice/ports");
+    let held: Vec<String> = std::fs::read_dir(&blocks)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| !n.starts_with('.'))
         .collect();
-    assert!(held.is_empty(), "slots still held: {held:?}");
+    assert!(held.is_empty(), "blocks of ports still held: {held:?}");
 }
 
 #[test]
@@ -322,9 +322,9 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     let head = Rev::new(repo.rev("unit/a"));
     let common = repo.dir().join(".git");
     let program = PathBuf::from(env!("CARGO_BIN_EXE_sluice"));
-    let slots = Scratch::new("stack-session-slots");
+    let blocks = Scratch::new("stack-session-blocks");
     let places = Places::new(&common, Runs::new(&common, program.clone()))
-        .with_slots(slots.path().to_path_buf());
+        .with_blocks(blocks.path().to_path_buf());
     let checks = Checks::new(
         &common,
         program,
@@ -403,12 +403,12 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     // standing.
     places.release(&first.name, false).unwrap();
     assert_eq!(leftovers(&id).0, "", "the release left a container");
-    let held: Vec<String> = std::fs::read_dir(slots.path())
+    let held: Vec<String> = std::fs::read_dir(blocks.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| !n.starts_with('.'))
         .collect();
-    assert!(held.is_empty(), "slots still held: {held:?}");
+    assert!(held.is_empty(), "blocks of ports still held: {held:?}");
     assert!(wt.join("check.sh").exists());
     assert!(repo
         .git(&["worktree", "list"])

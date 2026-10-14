@@ -126,7 +126,7 @@ fn a_command_gets_the_worktrees_environment_and_its_exit() {
     assert!(words[2].starts_with("sluice-"), "{one}");
     assert_eq!(one, two, "the same place and port on the second run");
     assert_eq!(s.results(), "", "a command records nothing");
-    assert!(s.sessions().is_empty(), "the slot was let go");
+    assert!(s.sessions().is_empty(), "the run is no longer counted");
 }
 
 /// 92: a clean worktree's run of the checks is recorded under its keys
