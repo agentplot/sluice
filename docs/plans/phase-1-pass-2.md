@@ -279,7 +279,11 @@ needed.
   ready to land, which sluice tests in combination and lands by pushing
   the branch (23); the forge then marks the request merged because its
   head is in the branch. sluice posts each pull request's state as a
-  check on its head. None of this needs a GitHub Action: sluice's checks
+  check on its head, and on a waiting one a forecast each round: whether
+  it would merge cleanly behind the queue, with no checks run. The
+  conditions are in sluice's policy for the branch, read from the
+  branch's revision (core.15), never from the forge's branch rules.
+  None of this needs a GitHub Action: sluice's checks
   run where sluice runs them. GitHub as the executor and the stepper is
   a separate deployment, designed apart from this.
 
