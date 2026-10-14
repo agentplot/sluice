@@ -10,7 +10,8 @@ never reaches sluice. The design is in agentplot/blueprints,
 `design/sluice/proposals/pull-requests-1.md` (the C.5 pull request
 driver, C.7 `pull_requests`, S21 to S24), and in the site guide
 `site/src/content/docs/guides/pull-requests.md`. It needs the branch to
-live on its remote, which the `main-on-github` change builds.
+live on its remote, which `main-on-github` builds, and sluice's own
+identity on GitHub, which `github-app` builds.
 
 ## What Changes
 
@@ -29,8 +30,8 @@ live on its remote, which the `main-on-github` change builds.
   forks are never submitted.
 - A new head on a submitted pull request withdraws its submission and it
   waits again; moved back to draft or closed, it is withdrawn.
-- sluice posts the pull request's state on its head as a commit status
-  named `sluice`: what it waits for and its forecast while waiting, then
+- sluice posts the pull request's state on its head as a check run
+  named `sluice`, as its GitHub App: what it waits for and its forecast while waiting, then
   queued, testing, failed, conflict or landed; it comments when a
   submission is blamed or conflicts. A blamed or conflicting pull
   request is submitted again only on a new head or after it is moved to
@@ -47,8 +48,6 @@ live on its remote, which the `main-on-github` change builds.
 Out of scope, each its own later change:
 - GitHub Actions as sluice's executor and stepper, with the queue kept
   in the repository (`many-hosts-2.md`, the forge as the pool).
-- A GitHub App as sluice's identity: sluice uses the operator's `gh`
-  login until the app exists.
 - Webhooks: rounds ask GitHub; sluice runs no listener.
 - Pull requests from forks, and checks run on pull requests that wait.
 
@@ -69,14 +68,17 @@ Out of scope, each its own later change:
 
 ## Impact
 
-- New `crates/sluice/src/profiles/github/` (core.1: the forge's name and
-  `gh` only there): the forge's API through `gh api`, the pull request
-  driver, behind a small interface with a fake for tests.
+- `crates/sluice/src/profiles/github/` (core.1: the forge named only
+  there): the forge's API as the app, with the token from `github-app`,
+  the pull request driver, behind a small interface with a fake for
+  tests.
 - The sluice crate's runner: an intake pass before each round of a
   branch with `pull_requests`; `sluice run` serves those branches even
   with no records yet.
 - `crates/sluice-core/src/policy.rs`: the `pull_requests` table.
-- Depends on `main-on-github` (the `remote` key and the pushed landing).
+- Depends on `main-on-github` (the `remote` key and the pushed landing)
+  and `github-app` (the token, and check runs, which only an app may
+  post).
 - `site/src/content/docs/reference/{configuration,commands,state}.md`,
   `site/src/content/docs/guides/pull-requests.md`, `docs/adr/`,
   `docs/plans/phase-1-pass-2.md` (piece 24's row).
