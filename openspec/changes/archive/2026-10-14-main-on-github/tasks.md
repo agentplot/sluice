@@ -33,7 +33,7 @@ core.17); `crates/sluice/src/profiles/local_refs.rs`; the landing in
 
 ## 5. sluice's own `main`
 
-- [ ] 5.1 After the code above lands on `main`, reinstall sluice (`devenv shell -- cargo install --path crates/sluice --locked` in the `main` worktree, then `~/.cargo/bin/sluice protect`), then add `remote = "origin"` to `[branches.main]` in `.config/sluice.toml` and land it. Verify `git log origin/main -1` equals `git log main -1` after the landing, with no hand push.
+- [x] 5.1 After the code above lands on `main`, reinstall sluice (`devenv shell -- cargo install --path crates/sluice --locked` in the `main` worktree, then `~/.cargo/bin/sluice protect`), then add `remote = "origin"` to `[branches.main]` in `.config/sluice.toml` and land it. Verify `git log origin/main -1` equals `git log main -1` after the landing, with no hand push.
 
 ## Workflow follow-up
 
