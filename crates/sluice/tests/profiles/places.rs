@@ -320,6 +320,13 @@ fn port(place: &Place, name: &str) -> u16 {
     place.env[name].parse().unwrap()
 }
 
+/// The first of twenty ports this test process uses, so two runs of these
+/// tests on one host, as two candidates under test at once are, ask for
+/// different ports.
+fn base() -> u16 {
+    30000 + (std::process::id() % 900) as u16 * 20
+}
+
 /// 31: two places alive at once hold two slots: the same position in
 /// each block for a name, no port shared, and a short name each; a slot
 /// is free again once its place is released.
@@ -328,19 +335,20 @@ fn places_alive_at_once_hold_their_own_ports() {
     let (repo, rev) = scratch("places-ports");
     let slots = support::Scratch::new("places-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
-    let settings = ported(&["web", "api-server"], "41000");
+    let from = base();
+    let settings = ported(&["web", "api-server"], &from.to_string());
     let a = p.materialize("sluice/try/a/1", &rev, &settings).unwrap();
     let b = p.materialize("sluice/try/b/1", &rev, &settings).unwrap();
-    assert_eq!(port(&a, "SLUICE_PORT_WEB"), 41000);
-    assert_eq!(port(&a, "SLUICE_PORT_API_SERVER"), 41001);
-    assert_eq!(port(&b, "SLUICE_PORT_WEB"), 41002);
-    assert_eq!(port(&b, "SLUICE_PORT_API_SERVER"), 41003);
+    assert_eq!(port(&a, "SLUICE_PORT_WEB"), from);
+    assert_eq!(port(&a, "SLUICE_PORT_API_SERVER"), from + 1);
+    assert_eq!(port(&b, "SLUICE_PORT_WEB"), from + 2);
+    assert_eq!(port(&b, "SLUICE_PORT_API_SERVER"), from + 3);
     assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
     assert!(a.env["SLUICE_PLACE"].starts_with("sluice-"));
 
     p.release("sluice/try/a/1", false).unwrap();
     let c = p.materialize("sluice/try/c/1", &rev, &settings).unwrap();
-    assert_eq!(port(&c, "SLUICE_PORT_WEB"), 41000, "a's slot is free again");
+    assert_eq!(port(&c, "SLUICE_PORT_WEB"), from, "a's slot is free again");
     p.release("sluice/try/b/1", false).unwrap();
     p.release("sluice/try/c/1", false).unwrap();
     let held: Vec<_> = std::fs::read_dir(slots.path())
@@ -362,11 +370,12 @@ fn a_slot_with_a_port_in_use_is_passed_over() {
     let (repo, rev) = scratch("places-busy");
     let slots = support::Scratch::new("places-busy-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
-    let _held = std::net::TcpListener::bind(("127.0.0.1", 41101)).unwrap();
+    let from = base() + 10;
+    let _held = std::net::TcpListener::bind(("127.0.0.1", from + 1)).unwrap();
     let a = p
-        .materialize(NAME, &rev, &ported(&["web", "api"], "41100"))
+        .materialize(NAME, &rev, &ported(&["web", "api"], &from.to_string()))
         .unwrap();
-    assert_eq!(port(&a, "SLUICE_PORT_WEB"), 41102);
+    assert_eq!(port(&a, "SLUICE_PORT_WEB"), from + 2);
     p.release(NAME, false).unwrap();
 }
 
