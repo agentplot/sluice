@@ -68,6 +68,7 @@ fn main() {
     let code = match run(
         cli,
         bound.seams(),
+        &bound,
         &SystemClock,
         &Sleep(Duration::from_secs(3)),
         &mut out,

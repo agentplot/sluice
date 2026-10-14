@@ -5,6 +5,7 @@
 //! runs over the fakes in tests and over the real profiles that
 //! [`profiles`] binds.
 
+pub mod exec;
 pub mod instance;
 pub mod profiles;
 pub mod protect;
@@ -120,6 +121,22 @@ pub enum Command {
         #[arg(long = "as", default_value = "operator")]
         by: String,
     },
+    /// Run the checks this worktree's head affects against a branch, or a
+    /// command after `--`, under the host's bound, the worktree's ports
+    /// and the branch's limits.
+    Exec {
+        /// The branch whose policy the run is held to.
+        branch: String,
+        /// The command to run instead of the checks.
+        #[arg(last = true)]
+        command: Vec<String>,
+        /// The worktree to run in.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
     Supervise { dir: std::path::PathBuf },
@@ -192,6 +209,7 @@ fn requester(by: &str) -> Requester {
 pub fn run(
     cli: Cli,
     seams: Seams<'_>,
+    host: &dyn exec::Host,
     clock: &dyn Clock,
     pause: &dyn Pause,
     out: &mut dyn Write,
@@ -323,6 +341,21 @@ pub fn run(
                 Ok(2)
             }
         },
+        Command::Exec {
+            branch,
+            command,
+            worktree,
+            json,
+        } => exec::Exec {
+            branch,
+            worktree,
+            command,
+            json,
+            host,
+            clock,
+            pause,
+        }
+        .run(&s, out),
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)

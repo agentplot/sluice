@@ -14,9 +14,10 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use sluice_core::line::Line;
 use sluice_core::records::{parse_lines, Event, LogLine, ResultLine, Submission};
+use sluice_core::session::Recorded;
 use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
-use sluice_seams::{Driver, Notification, Rev, RunRequest};
+use sluice_seams::{Driver, Notification, Progress, Rev, RunReport, RunRequest};
 
 pub use sluice_fakes::{Crash, World};
 
@@ -150,6 +151,40 @@ pub trait Rig {
 
     fn step(&self) -> Step {
         self.sluice().step(BRANCH).expect("a step runs")
+    }
+
+    /// Session-runs-1 clause 89: a session's run of its checks in its own
+    /// place, against the branch, to its end, and what it recorded. The
+    /// caller stands for the slot `sluice exec` would hold.
+    fn session_run(&self, worktree: &str) -> (RunReport, Recorded) {
+        let s = self.sluice();
+        let place = self.place(worktree);
+        let plan = s
+            .session_plan(BRANCH)
+            .expect("the plan reads")
+            .expect("the branch is managed");
+        let session = s.seams().driver.session(&place).expect("a session's place");
+        let started = s
+            .start_session(&plan, &place, &session.head, None)
+            .expect("the session run starts");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let report = loop {
+            match s.seams().tests.progress(&started.run).expect("progress") {
+                Progress::Running => {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "the session run never ended"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Progress::Finished(r) => break r,
+                Progress::Lost => panic!("the session run was lost"),
+            }
+        };
+        let recorded = s
+            .finish_session(&plan, &session, &place, false, &report)
+            .expect("the session run records");
+        (report, recorded)
     }
 
     fn sub(&self, id: u64) -> Submission {

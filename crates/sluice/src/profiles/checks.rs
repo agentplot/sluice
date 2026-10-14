@@ -143,6 +143,11 @@ impl Checks {
     pub fn runs(&self) -> &Runs {
         &self.runs
     }
+
+    /// The host's settings the profile was bound with.
+    pub fn instance(&self) -> &Instance {
+        &self.instance
+    }
 }
 
 /// The executors this host has.

@@ -65,3 +65,43 @@ impl Bound {
         }
     }
 }
+
+impl crate::exec::Host for Bound {
+    fn reserved(&self) -> usize {
+        self.tests.instance().reserved
+    }
+
+    fn worktree(&self, dir: &str) -> Result<String> {
+        let path = std::fs::canonicalize(dir)?;
+        path.to_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", path.display()))
+    }
+
+    fn lock_sessions(&self) -> Result<Box<dyn std::any::Any>> {
+        Ok(Box::new(self.tests.host_sessions()?.lock()?))
+    }
+
+    fn begin_session(
+        &self,
+        held: &dyn std::any::Any,
+        run: &crate::sessions::SessionRun,
+    ) -> Result<()> {
+        let held = held
+            .downcast_ref::<crate::sessions::SessionsLock>()
+            .ok_or_else(|| anyhow::anyhow!("the host's session runs are not locked"))?;
+        self.tests.host_sessions()?.begin(held, run)
+    }
+
+    fn end_session(&self, worktree: &str) -> Result<()> {
+        self.tests.host_sessions()?.end(worktree)
+    }
+
+    fn run_dir(&self, run: &sluice_seams::RunHandle) -> Option<PathBuf> {
+        Some(self.tests.runs().dir(&run.0))
+    }
+
+    fn end_run(&self, run: &sluice_seams::RunHandle) -> Result<()> {
+        self.tests.runs().end(&run.0)
+    }
+}

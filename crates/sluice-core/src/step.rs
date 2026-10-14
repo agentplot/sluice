@@ -34,7 +34,7 @@ use crate::order::{self, Entry};
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord, LandingIntent,
-    OutboxItem, ResultKind, ResultLine, State, Tested, ToldRecord,
+    OutboxItem, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice};
@@ -487,44 +487,30 @@ impl Sluice<'_> {
                     let mut results = self.results()?;
                     let mut fresh = Vec::new();
                     for t in &report.tasks {
-                        let (kind, host, executor, event) = match &t.source {
-                            Source::Ran { host } => (
-                                ResultKind::Ran,
-                                Some(host.clone()),
-                                Some(report.executor.clone()),
-                                Event::Ran {
-                                    combination: c.revision.clone(),
-                                    task: t.task.clone(),
-                                    hash: t.hash.clone(),
-                                    outcome: t.outcome,
-                                    host: host.clone(),
-                                },
-                            ),
-                            Source::Replayed { from_run_at } => (
-                                ResultKind::Replayed,
-                                None,
-                                None,
-                                Event::Replayed {
-                                    combination: c.revision.clone(),
-                                    task: t.task.clone(),
-                                    hash: t.hash.clone(),
-                                    outcome: t.outcome,
-                                    from_run_at: from_run_at.clone(),
-                                },
-                            ),
+                        let event = match &t.source {
+                            Source::Ran { host } => Event::Ran {
+                                combination: c.revision.clone(),
+                                task: t.task.clone(),
+                                hash: t.hash.clone(),
+                                outcome: t.outcome,
+                                host: host.clone(),
+                            },
+                            Source::Replayed { from_run_at } => Event::Replayed {
+                                combination: c.revision.clone(),
+                                task: t.task.clone(),
+                                hash: t.hash.clone(),
+                                outcome: t.outcome,
+                                from_run_at: from_run_at.clone(),
+                            },
                         };
-                        let r = ResultLine {
-                            schema: crate::records::RESULT_SCHEMA.into(),
-                            at: now.into(),
-                            kind,
-                            task: t.task.clone(),
-                            hash: t.hash.clone(),
-                            outcome: t.outcome,
-                            host,
-                            executor,
-                            branch: line.branch.clone(),
-                            combination: c.revision.clone(),
-                        };
+                        let r = ResultLine::of(
+                            now,
+                            t,
+                            &report.executor,
+                            &line.branch,
+                            &c.revision,
+                            None,
+                        );
                         if !results.iter().any(|x| x.same_as(&r)) {
                             fresh.push(r);
                         }

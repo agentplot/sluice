@@ -267,9 +267,10 @@ fn a_sessions_runs_are_released_once_and_only_together() {
 
     let second = runs.next_run(name).unwrap();
     assert_ne!(first, second);
-    let mut req = request(place.path(), "echo two >> ran; sleep 300", None);
+    let mut req = request(place.path(), "echo two >> ran; touch up; sleep 300", None);
     req.release = release;
     runs.start(&second, &req).unwrap();
+    wait_for(&place.path().join("up"));
     wait_for(&runs.dir(&second).join("pgid"));
     assert!(
         !place.path().join("log").exists(),

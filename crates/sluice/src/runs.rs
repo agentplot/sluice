@@ -596,6 +596,11 @@ pub fn flat_name(name: &str) -> String {
     }
 }
 
+/// How the run in `dir` ended, once its supervisor wrote it.
+pub fn ended(dir: &Path) -> Result<Option<Ended>> {
+    read_ended(dir)
+}
+
 fn read_ended(dir: &Path) -> Result<Option<Ended>> {
     match std::fs::read(dir.join("result.json")) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),

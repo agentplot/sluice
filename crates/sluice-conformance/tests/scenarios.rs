@@ -181,3 +181,65 @@ fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
 fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing() {
     shared::s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(&Harness::bolt());
 }
+
+/// satisfies: S26, 69, 92, 93, 16, 38
+#[test]
+fn s26_a_clean_session_run_is_replayed_by_its_submission() {
+    shared::s26_a_clean_session_run_is_replayed_by_its_submission(&Harness::bolt());
+}
+
+/// satisfies: S28, 92
+#[test]
+fn s28_a_dirty_session_run_records_nothing() {
+    shared::s28_a_dirty_session_run_records_nothing(&Harness::bolt());
+}
+
+/// satisfies: S25, 71, 89, 91
+#[test]
+fn s25_sessions_runs_wait_and_a_submissions_run_starts_first() {
+    // Four sessions on a host whose bound is two, two kept for
+    // submissions' runs by none: two run, two wait.
+    let h = Harness::bolt();
+    h.w().host_limit(2);
+    let s = h.sluice();
+    let mut running = 0;
+    for n in 0..4 {
+        if s.session_capacity(0).unwrap() > 0 {
+            h.w().session_run(&format!("/w/{n}"), true);
+            running += 1;
+        }
+    }
+    assert_eq!(running, 2);
+    // A submission arriving now waits only for the next free slot, and
+    // takes it before the third session.
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.step();
+    assert!(h.w().started().is_empty());
+    h.w().kill_session("/w/0");
+    h.step();
+    assert_eq!(
+        h.w().started().len(),
+        1,
+        "the submission's run took the slot"
+    );
+    assert_eq!(s.session_capacity(0).unwrap(), 0, "the third session waits");
+
+    // With one slot of four reserved, three sessions run and a submission
+    // still starts at once.
+    let h = Harness::bolt();
+    h.w().host_limit(4);
+    let s = h.sluice();
+    for n in 0..4 {
+        if s.session_capacity(1).unwrap() > 0 {
+            h.w().session_run(&format!("/w/{n}"), true);
+        }
+    }
+    assert_eq!(s.session_capacity(1).unwrap(), 0);
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.step();
+    assert_eq!(h.w().started().len(), 1);
+}

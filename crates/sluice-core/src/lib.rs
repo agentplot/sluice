@@ -11,6 +11,7 @@ pub mod ops;
 pub mod order;
 pub mod policy;
 pub mod records;
+pub mod session;
 pub mod step;
 pub mod text;
 pub mod verdict;

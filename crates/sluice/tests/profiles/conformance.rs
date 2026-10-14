@@ -534,4 +534,5 @@ scenarios! {
     deepest_first_the_longest_passes_and_all_land_on_its_verdict: batch();
     a_conflict_names_every_submission_it_is_contested_with: bolt();
     every_record_written_is_the_real_format_and_names_its_schema: bolt();
+    s28_a_dirty_session_run_records_nothing: bolt();
 }

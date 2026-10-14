@@ -332,6 +332,53 @@ fn session_runs_never_take_the_reserve() {
     assert_eq!(s.session_capacity(0).unwrap(), 1);
 }
 
+/// satisfies: 16, 38; session-runs-1 92
+#[test]
+fn a_session_run_records_what_it_ran_and_never_a_replay() {
+    use sluice_seams::{Enforced, Outcome, RunReport, Source, TaskResult};
+    let h = Harness::bolt();
+    let s = h.sluice();
+    let plan = s.session_plan(BRANCH).unwrap().unwrap();
+    let head = h.w().tip(BRANCH);
+    let task = |name: &str, source: Source| TaskResult {
+        task: name.into(),
+        hash: format!("{name}-hash"),
+        outcome: Outcome::Pass,
+        source,
+    };
+    let report = RunReport {
+        tasks: vec![
+            task(
+                "a:test",
+                Source::Ran {
+                    host: "here".into(),
+                },
+            ),
+            task("b:test", Source::Replayed { from_run_at: None }),
+        ],
+        executor: Enforced {
+            kind: "sandbox".into(),
+            confined: false,
+            processors: None,
+            memory: None,
+            network: None,
+            docker: false,
+        },
+        missing: vec![],
+        timed_out: false,
+    };
+    assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 1);
+    // The same run again is never recorded twice.
+    assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 0);
+    let r = results(&h);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].task, "a:test");
+    assert_eq!(r[0].kind, ResultKind::Ran);
+    let e = r[0].executor.as_ref().unwrap();
+    assert_eq!((e.kind.as_str(), e.confined), ("sandbox", false));
+    assert_eq!(r[0].worktree.as_deref(), Some("/w/a"));
+}
+
 /// satisfies: 84, 16
 #[test]
 fn every_observed_result_records_what_its_executor_enforced() {
