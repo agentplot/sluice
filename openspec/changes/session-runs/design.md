@@ -219,3 +219,27 @@ rollback needed beyond removing them.
 
 - Whether `sluice exec` should accept `--cached` to let moon replay and
   skip recording. Deferrable: adds a flag, changes no spec.
+
+## Notes from the build
+
+- Task 3.5, 93: S26 holds over the fakes and not on the real profiles.
+  A clean session run under moon records its results under the same keys
+  a candidate's run of the same inputs computes (checked: `a:test`'s hash
+  is identical in both), and the candidate's verdict reads them. But the
+  candidate's checks still run: a replay is moon answering from its
+  cache, and moon's cache lives in each workspace's `.moon/cache`, so a
+  candidate's place has none of what the session's worktree ran.
+  `[[checkout.cache]]` restores only what a passed candidate's place
+  saved. S26 therefore runs on the fakes alone, and S28 on both. Making
+  93 hold under moon needs a ruling: the session's worktree saving into
+  the declared caches when its run is recorded, a cache moon shares
+  across workspaces, or the verdict skipping a check whose key already
+  holds a trusted pass, which would need the key before the run.
+- Task 3.1, the session-run spec's first requirement: `sluice exec`
+  takes its branch as a required argument. The spec has it default to
+  "the branch the worktree's branch was taken from, as `sluice submit`
+  does", but `sluice submit <branch>` has no default: its branch is
+  required, and neither git nor the driver records which branch a
+  worktree's branch was taken from. A default needs a ruling on where it
+  comes from (the branch's upstream, worktrunk's default branch, or a
+  setting); until then 3.1 stays open on that point alone.
