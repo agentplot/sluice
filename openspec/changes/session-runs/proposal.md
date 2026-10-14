@@ -16,13 +16,13 @@ clauses 89 to 96; this change builds the one-host part of it.
 
 - `sluice exec <branch>`, run in an agent's worktree, runs the checks
   the worktree's head affects against the branch; `sluice exec --
-  <command>` runs any command. Either takes a slot under the host's run
+  <command>` runs any command. Either counts against the host's run
   bound for as long as it runs, receives the checkout's ports, runs under
   the policy's executor and limits, and ends with its process group (89).
 - An agent's worktree receives a port for each name the policy lists on
   its first run and keeps them until it is released (90).
-- The host's config gains `[runs] reserved`, how many of the bound's
-  slots agents' runs never take, so submissions' runs start first (91).
+- The host's config gains `[runs] reserved`, how much of the bound
+  agents' runs never use, so submissions' runs start first (91).
   Default 0.
 - A run of the checks in a worktree that holds exactly its head is
   recorded under its keys as an open run; a dirty worktree runs and

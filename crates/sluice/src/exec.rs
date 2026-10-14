@@ -1,5 +1,5 @@
 //! `sluice exec`: a session's own run of its checks, or of a command, in
-//! its worktree (session-runs-1 clauses 89 to 93). It takes a slot under
+//! its worktree (session-runs-1 clauses 89 to 93). It counts against
 //! the host's bound, the worktree's ports and the branch's executor and
 //! limits, and ends with its process group; a run of the checks in a
 //! clean worktree is recorded under its keys.
@@ -19,7 +19,7 @@ use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
 /// What `sluice exec` needs of the host beyond the seams: the reserve,
 /// the host's session runs and their lock, and a run's directory.
 pub trait Host {
-    /// The slots of the bound session runs never take (91).
+    /// The part of the bound session runs never use (91).
     fn reserved(&self) -> usize;
     /// `dir` as the worktree's canonical path, the key of its session runs.
     fn worktree(&self, dir: &str) -> Result<String>;
@@ -143,7 +143,7 @@ impl Exec<'_> {
             Some(c) => say(out, json, &format!("running {c}"))?,
         }
 
-        // 89, 91: one slot, held from the start to the end, never one the
+        // 89, 91: counted from the start to the end, never in the part the
         // reserve keeps for submissions' runs.
         let mut told_waiting = false;
         let (place, run) = loop {
@@ -173,7 +173,7 @@ impl Exec<'_> {
             }
             drop(guard);
             if !told_waiting {
-                say(out, json, "waiting for a slot")?;
+                say(out, json, "waiting: the host is at its bound")?;
                 told_waiting = true;
             }
             if !self.pause.pause() {

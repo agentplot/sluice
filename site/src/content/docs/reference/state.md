@@ -10,17 +10,58 @@ on, in the repository's git directory, never committed and never pushed,
 readable with plain tools whether or not sluice is running.
 
 ```
-.git/sluice/bolt/concurrent-units/
-  version              57: bumped on every write, so two rounds never both write
-  submissions/12.json
-  submissions/13.json
-  log.jsonl            every submission, test run, result, blame and landing, in order
-.git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
+.git/sluice/
+  results.jsonl        every test result of the repository, with its executor
+  .next-id             the next submission's id
+  .lock                held while an id is given or a branch's records are written
+  bolt/concurrent-units/
+    version            57: bumped on every write, so two rounds never both write
+    branch.json        the queue's own state, one document
+    submissions/12.json
+    submissions/13.json
+    log.jsonl          every submission, test run, result, blame and landing, in order
+    lock               held by a round of this branch
+  .logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-.git/sluice/caches/    the [[checkout.cache]] entries, the last two keys of each
-.git/sluice/results.jsonl
-                       every test result of the repository, with its executor
+  caches/<bucket>/<key>/
+                       the [[checkout.cache]] entries, the last two keys of each
+  .places/<checkout>.json
+                       a checkout's record: its kind, path, branch, ports, caches
+                       and the block of ports it holds on the host
+  .places/<checkout>/  a candidate's checkout, made for its run and removed after
+  .tmp/<checkout>/     the checkout's scratch, SLUICE_TMP; a worktree keeps its own across runs
+  .runs/<checkout>/    a candidate's run
+  .runs/<worktree>/<n>/
+                       each run an agent started in its worktree, numbered;
+                       release/ beside them is where sluice release runs
+  in each run directory:
+    request.json       what to run, where, with which environment and limits
+    lock               held by the run's supervisor for as long as the run is going
+    pgid               the run's process group, so the whole of it can be ended
+    out.log            what the run printed
+    result.json        how the run ended, once it has
+    release.log        what the release command printed
+    released           written once the release command has run
 ```
+
+What belongs to the host and not to any repository is kept under
+`$XDG_STATE_HOME/sluice` (default `~/.local/state/sluice`), shared by
+every repository on the host and never pushed:
+
+```
+~/.local/state/sluice/
+  ports/<n>            a block of ports, naming the checkout that holds it
+  sessions/.lock       held while a run is counted against the bound
+  sessions/<worktree>.json
+                       each run an agent has going in its worktree: the
+                       worktree, its branch, its process, when it started
+                       and where its output is
+```
+
+A block of ports is free again when the checkout named in it is gone.
+A file in `sessions/` counts against the bound for as long as its run
+is going. One whose run has ended holds nothing: the next run that
+starts removes it, and nothing counts it before then.
 
 ## A submission
 

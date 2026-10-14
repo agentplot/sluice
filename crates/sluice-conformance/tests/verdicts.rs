@@ -297,7 +297,7 @@ fn session_runs_hold_the_bound_under_either_instance() {
         s.step(BRANCH).unwrap();
         assert!(
             h.w().started().is_empty(),
-            "{serves:?}: started into a held slot"
+            "{serves:?}: started into a full bound"
         );
         // A session run whose process is gone holds nothing.
         h.w().kill_session("/work/a");

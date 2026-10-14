@@ -21,8 +21,8 @@ recorded as running on the host are fewer than the bound (71, 89).
 
 ### Requirement: The reserve
 
-`[runs] reserved = N` in the host's config SHALL keep N slots of the
-bound that session runs never take. Its default SHALL be 0. A value at
+`[runs] reserved = N` in the host's config SHALL keep N of the
+bound's runs for submissions, which session runs never use. Its default SHALL be 0. A value at
 or above the bound SHALL be refused with the reason (91).
 
 #### Scenario: Reserve refused
@@ -39,8 +39,8 @@ running, never in a branch's records, and a starter that finds a
 recorded run that has ended SHALL drop the record before counting
 (core.11, core.14).
 
-#### Scenario: A killed run frees its slot
+#### Scenario: A killed run no longer counts
 
 - **WHEN** a session run's process is killed with its record left behind
-- **THEN** the next `sluice exec` or round drops the record and the slot
-  is free
+- **THEN** the next `sluice exec` or round drops the record and the bound
+  has room again

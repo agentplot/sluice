@@ -20,11 +20,11 @@ ADR 0010 left a candidate's checks to bring up what they need, on ports they pic
 
 1. Nothing more: the checks pick ports and clean up after themselves.
 2. Ports from a hash of the candidate's name, and the checks clean up.
-3. Ports from a slot sluice holds for the place on the host, and a release command the policy names, run whenever sluice releases the place.
+3. Ports from a block sluice holds for the place on the host, and a release command the policy names, run whenever sluice releases the place.
 
 ## Decision outcome
 
-Option 3. `[checkout] ports` names the ports a candidate's stack uses. The place seam holds a slot for the place on the host, across repositories, with every port of the slot checked free, and gives each name a fixed position in the slot's block: `ports_from + slot × names + position`, `ports_from` 20000 by default, above `hash_port`'s range. The place carries `SLUICE_PLACE` and a `SLUICE_PORT_<NAME>` for each name into its runs. A slot is never held by two places at once, so two candidates never collide, where a hash can; a name's port is the same for the place's whole life.
+Option 3. `[checkout] ports` names the ports a candidate's stack uses. The place seam holds a block of ports for the place on the host, across repositories, with every port of the block checked free, and gives each name a fixed position in it: `ports_from + block × names + position`, `ports_from` 20000 by default, above `hash_port`'s range. The place carries `SLUICE_PLACE` and a `SLUICE_PORT_<NAME>` for each name into its runs. A block is never held by two places at once, so two candidates never collide, where a hash can; a name's port is the same for the place's whole life.
 
 `[tests] release` names a command the check seam runs in the place, under the same executor, limits and environment as the checks, whenever the core releases the place: after a pass, a failure, a time limit, or a run found dead by a later round. It removes what the checks started outside their process group. It runs under the executor because it is the candidate's own code, as worktrunk's hooks were when ADR 0013 refused them.
 

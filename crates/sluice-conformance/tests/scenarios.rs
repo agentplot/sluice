@@ -210,8 +210,8 @@ fn s25_sessions_runs_wait_and_a_submissions_run_starts_first() {
         }
     }
     assert_eq!(running, 2);
-    // A submission arriving now waits only for the next free slot, and
-    // takes it before the third session.
+    // A submission arriving now waits only until the bound has room, and
+    // takes that room before the third session.
     h.w().hold_runs(true);
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.submit("unit/a");
@@ -222,11 +222,11 @@ fn s25_sessions_runs_wait_and_a_submissions_run_starts_first() {
     assert_eq!(
         h.w().started().len(),
         1,
-        "the submission's run took the slot"
+        "the submission's run took the room"
     );
     assert_eq!(s.session_capacity(0).unwrap(), 0, "the third session waits");
 
-    // With one slot of four reserved, three sessions run and a submission
+    // With one run of four reserved, three sessions run and a submission
     // still starts at once.
     let h = Harness::bolt();
     h.w().host_limit(4);

@@ -957,7 +957,7 @@ impl Sluice<'_> {
     }
 
     /// Session-runs-1 clauses 89 and 91: how many session runs may start
-    /// now: the bound less `reserved`, the slots kept for submissions'
+    /// now: the bound less `reserved`, the part kept for submissions'
     /// runs, less the candidates under test on every branch and the
     /// session runs. A session run belongs to the host, not to a branch an
     /// instance serves, so every branch's runs count against it.

@@ -36,7 +36,7 @@ fn the_reserve_is_none_by_default() {
     );
 }
 
-/// 91: the host keeps `reserved` slots of its bound for submissions' runs.
+/// 91: the host keeps `reserved` runs of its bound for submissions' runs.
 #[test]
 fn the_reserve_is_read_beside_the_bound() {
     let i = read("[runs]\nmax = 4\nreserved = 1\n").unwrap();
@@ -48,13 +48,13 @@ fn the_reserve_is_read_beside_the_bound() {
 /// 91: a reserve at or above the bound leaves session runs nothing, and
 /// is refused with the setting named.
 #[test]
-fn a_reserve_that_leaves_no_slot_is_refused() {
+fn a_reserve_that_leaves_no_run_is_refused() {
     let e = read("[runs]\nmax = 2\nreserved = 2\n")
         .unwrap_err()
         .to_string();
     assert_eq!(
         e,
-        "[runs] reserved = 2 leaves no slot of [runs] max = 2 for session runs: \
+        "[runs] reserved = 2 leaves no run of [runs] max = 2 for session runs: \
          it must be less than the bound"
     );
     assert!(read("[runs]\nmax = 2\nreserved = 3\n").is_err());

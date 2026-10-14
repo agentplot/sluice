@@ -356,7 +356,7 @@ fn exec_outside_a_worktree_is_refused() {
 }
 
 /// 89: the checks the head affects against the branch run in the
-/// worktree's adopted place, take a slot only while they run, and the
+/// worktree's adopted place, count against the bound only while they run, and the
 /// exit is theirs.
 #[test]
 fn exec_runs_the_affected_checks_against_the_branch() {
@@ -379,7 +379,7 @@ fn exec_runs_the_affected_checks_against_the_branch() {
     assert_eq!(
         sluice_seams::Tests::sessions(&f.tests).unwrap(),
         0,
-        "the slot is let go"
+        "the run is no longer counted"
     );
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(
@@ -404,9 +404,9 @@ fn exec_runs_the_affected_checks_against_the_branch() {
     assert!(out.contains("failed: plugin:test\n"), "{out}");
 }
 
-/// 89, 71: with no slot free, exec waits, and starts when one frees.
+/// 89, 71: with the bound full, exec waits, and starts when a run ends.
 #[test]
-fn exec_waits_for_a_slot() {
+fn exec_waits_for_room() {
     let f = setup();
     f.world.host_limit(1);
     f.world.session_run("/w/other", true);
@@ -419,18 +419,18 @@ fn exec_waits_for_a_slot() {
     let world = f.world.clone();
     let pause = Then(Cell::new(0), move |n| {
         if n == 1 {
-            assert!(world.started().is_empty(), "started into a held slot");
+            assert!(world.started().is_empty(), "started into a full bound");
             world.kill_session("/w/other");
         }
         true
     });
     let (code, out) = exec_with(&f, 0, &pause, &[BRANCH, "--worktree", "unit/a"]);
     assert_eq!(code, LANDED, "{out}");
-    assert!(out.contains("waiting for a slot\n"), "{out}");
+    assert!(out.contains("waiting: the host is at its bound\n"), "{out}");
     assert_eq!(f.world.started().len(), 1);
 }
 
-/// 91: a session run never takes a slot the reserve keeps; stopped while
+/// 91: a session run never uses what the reserve keeps; stopped while
 /// waiting, nothing ran and nothing is recorded.
 #[test]
 fn exec_never_takes_the_reserve() {
@@ -447,12 +447,12 @@ fn exec_never_takes_the_reserve() {
     let (code, out) = exec_with(&f, 1, &pause, &[BRANCH, "--worktree", "unit/a"]);
     assert_eq!(code, sluice::STOPPED);
     assert!(
-        out.ends_with("waiting for a slot\nstopped: nothing ran\n"),
+        out.ends_with("waiting: the host is at its bound\nstopped: nothing ran\n"),
         "{out}"
     );
     assert!(f.world.started().is_empty());
     assert_eq!(f.world.results_log(), "");
-    // Without the reserve, the free slot is taken.
+    // Without the reserve, the room is taken.
     let (code, _) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
     assert_eq!(code, LANDED);
 }

@@ -11,22 +11,22 @@
 //! candidate passed saves them as it is released (35; section 5,
 //! *Caches*).
 //!
-//! A place holds a slot of ports when `[checkout] ports` names any (31;
-//! ADR 0016): slot `n` is the block from `ports_from + n × names`, one
-//! port per name in the order written, `ports_from` 20000 by default,
-//! above worktrunk's `hash_port` range. Slots are held on the host, not
-//! per repository, under `$XDG_STATE_HOME/sluice/slots/<n>` (else
+//! A place holds a block of ports when `[checkout] ports` names any (31;
+//! ADR 0016): block `n` runs from `ports_from + n × names`, one port per
+//! name in the order written, `ports_from` 20000 by default, above
+//! worktrunk's `hash_port` range. Blocks are held on the host, not per
+//! repository, under `$XDG_STATE_HOME/sluice/ports/<n>` (else
 //! `~/.local/state`), each naming the record of the place that holds it;
-//! a slot whose record is gone is free again. A slot is taken only when
-//! no port of its block is in use. The place gives its checks
+//! a block whose record is gone is free again. A block is taken only
+//! when none of its ports is in use. The place gives its checks
 //! `SLUICE_PLACE`, a short name unique to it, and `SLUICE_PORT_<NAME>`
 //! for each name.
 //!
 //! A session's own worktree is adopted, never made (session-runs-1
 //! clauses 90, 94, 95): its record, `kind: "session"`, names the worktree
-//! and its branch and holds its slot and its ports from its first run
+//! and its branch and holds its block of ports from its first run
 //! until `sluice release`, which ends its runs, runs the release command
-//! once, removes its scratch directory and lets its slot go, and never
+//! once, removes its scratch directory and lets its block go, and never
 //! removes the worktree.
 //!
 //! What made each place is recorded before the place is made, at
@@ -85,9 +85,9 @@ struct Made {
     /// The caches it may hold, keyed for its candidate (35).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     caches: Vec<Cache>,
-    /// The slot of ports it holds on the host (31).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    slot: Option<u32>,
+    /// The block of ports it holds on the host (31).
+    #[serde(default, alias = "slot", skip_serializing_if = "Option::is_none")]
+    block: Option<u32>,
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -97,7 +97,7 @@ struct Ports {
     from: u32,
 }
 
-/// Where a slot of ports begins by default: above `hash_port`'s 10000 to
+/// Where a block of ports begins by default: above `hash_port`'s 10000 to
 /// 19999, below every system's ephemeral range.
 const PORTS_FROM: u32 = 20000;
 
@@ -133,7 +133,7 @@ impl Ports {
         Ok(Some(Ports { names, from }))
     }
 
-    /// The first port of slot `n`, if its block fits under 65536.
+    /// The first port of block `n`, if it fits under 65536.
     fn first(&self, n: u32) -> Option<u16> {
         let first = self.from as u64 + n as u64 * self.names.len() as u64;
         (first + self.names.len() as u64 <= 65536).then_some(first as u16)
@@ -155,27 +155,27 @@ fn port_free(port: u16) -> bool {
         && TcpStream::connect_timeout(&local, Duration::from_millis(100)).is_err()
 }
 
-/// The host's slots of ports, shared by every repository.
-fn slots_dir() -> Result<PathBuf> {
-    Ok(crate::instance::state_dir()?.join("slots"))
+/// The host's blocks of ports, shared by every repository.
+fn blocks_dir() -> Result<PathBuf> {
+    Ok(crate::instance::state_dir()?.join("ports"))
 }
 
-/// The host's slots, locked while held.
-fn lock_slots(dir: &Path) -> Result<File> {
+/// The host's blocks, locked while held.
+fn lock_blocks(dir: &Path) -> Result<File> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let lock = File::create(dir.join(".lock"))?;
     lock.lock()?;
     Ok(lock)
 }
 
-/// Hold the first slot no live place holds and whose every port is free,
+/// Hold the first block no live place holds and whose every port is free,
 /// for the place whose record is `record`.
-fn hold_slot(dir: &Path, ports: &Ports, record: &Path) -> Result<u32> {
-    let _lock = lock_slots(dir)?;
+fn hold_block(dir: &Path, ports: &Ports, record: &Path) -> Result<u32> {
+    let _lock = lock_blocks(dir)?;
     for n in 0u32.. {
         let Some(first) = ports.first(n) else {
             bail!(
-                "no slot of {} ports from {} is free on this host",
+                "no block of {} ports from {} is free on this host",
                 ports.names.len(),
                 ports.from
             );
@@ -197,12 +197,12 @@ fn hold_slot(dir: &Path, ports: &Ports, record: &Path) -> Result<u32> {
         std::fs::write(&path, record.to_string_lossy().as_bytes())?;
         return Ok(n);
     }
-    unreachable!("the slots run out before u32 does")
+    unreachable!("the blocks run out before u32 does")
 }
 
-/// Let go of slot `n`, if the place whose record is `record` holds it.
-fn free_slot(dir: &Path, n: u32, record: &Path) -> Result<()> {
-    let _lock = lock_slots(dir)?;
+/// Let go of block `n`, if the place whose record is `record` holds it.
+fn free_block(dir: &Path, n: u32, record: &Path) -> Result<()> {
+    let _lock = lock_blocks(dir)?;
     let path = dir.join(n.to_string());
     match std::fs::read(&path) {
         Ok(holder) if Path::new(String::from_utf8_lossy(&holder).trim()) == record => {
@@ -233,8 +233,8 @@ const KEPT: usize = 2;
 pub struct Places {
     common: PathBuf,
     runs: Runs,
-    /// Where the host's slots of ports are held; the default when `None`.
-    slots: Option<PathBuf>,
+    /// Where the host's blocks of ports are held; the default when `None`.
+    blocks: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
 }
@@ -244,7 +244,7 @@ impl Places {
         Places {
             common: common.to_path_buf(),
             runs,
-            slots: None,
+            blocks: None,
             release: None,
         }
     }
@@ -289,14 +289,14 @@ impl Places {
     }
 
     /// Let go of what a place held beyond its checkout: its scratch
-    /// directory, its slot and its record.
-    fn let_go(&self, name: &str, slot: Option<u32>) -> Result<()> {
+    /// directory, its block of ports and its record.
+    fn let_go(&self, name: &str, block: Option<u32>) -> Result<()> {
         let tmp = self.tmp(name);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
-        if let Some(n) = slot {
-            free_slot(&self.slots()?, n, &self.record(name))?;
+        if let Some(n) = block {
+            free_block(&self.blocks()?, n, &self.record(name))?;
         }
         match std::fs::remove_file(self.record(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
@@ -304,16 +304,16 @@ impl Places {
         }
     }
 
-    /// Hold slots of ports in `dir` rather than the host's own.
-    pub fn with_slots(mut self, dir: PathBuf) -> Self {
-        self.slots = Some(dir);
+    /// Hold blocks of ports in `dir` rather than the host's own.
+    pub fn with_blocks(mut self, dir: PathBuf) -> Self {
+        self.blocks = Some(dir);
         self
     }
 
-    fn slots(&self) -> Result<PathBuf> {
-        match &self.slots {
+    fn blocks(&self) -> Result<PathBuf> {
+        match &self.blocks {
             Some(d) => Ok(d.clone()),
-            None => slots_dir(),
+            None => blocks_dir(),
         }
     }
 
@@ -661,7 +661,7 @@ impl Checkout for Places {
             ports: BTreeMap::new(),
             path: None,
             caches,
-            slot: None,
+            block: None,
         };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
@@ -669,10 +669,10 @@ impl Checkout for Places {
             format!("sluice-{}", &self.hash(&record.to_string_lossy())?[..10]),
         )]);
         if let Some(ports) = &ports {
-            let n = hold_slot(&self.slots()?, ports, &record)?;
-            made.slot = Some(n);
+            let n = hold_block(&self.blocks()?, ports, &record)?;
+            made.block = Some(n);
             self.write_record(name, &made)?;
-            let first = ports.first(n).expect("a held slot fits");
+            let first = ports.first(n).expect("a held block fits");
             for (i, p) in ports.names.iter().enumerate() {
                 env.insert(env_name(p), (first + i as u16).to_string());
             }
@@ -719,7 +719,7 @@ impl Checkout for Places {
                 }
             }
         }
-        self.let_go(name, made.and_then(|m| m.slot))
+        self.let_go(name, made.and_then(|m| m.block))
     }
 
     fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {
@@ -761,7 +761,7 @@ impl Checkout for Places {
             }
         };
         self.runs.remove_all_with(name, with)?;
-        self.let_go(name, made.slot)?;
+        self.let_go(name, made.block)?;
         Ok(released)
     }
 
@@ -794,16 +794,16 @@ impl Checkout for Places {
                     ports: BTreeMap::new(),
                     path: Some(path.clone()),
                     caches: Vec::new(),
-                    slot: None,
+                    block: None,
                 };
-                // Written before the slot is held, so a slot names a record
+                // Written before the block is held, so a block names a record
                 // that exists, and a stop between leaves a record release
                 // reads.
                 self.write_record(&name, &made)?;
                 if let Some(ports) = Ports::read(checkout)? {
-                    let n = hold_slot(&self.slots()?, &ports, &record)?;
-                    made.slot = Some(n);
-                    let first = ports.first(n).expect("a held slot fits");
+                    let n = hold_block(&self.blocks()?, &ports, &record)?;
+                    made.block = Some(n);
+                    let first = ports.first(n).expect("a held block fits");
                     for (i, p) in ports.names.iter().enumerate() {
                         made.ports
                             .insert(env_name(p), (first + i as u16).to_string());
