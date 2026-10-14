@@ -20,14 +20,7 @@ readable with plain tools whether or not sluice is running.
 .git/sluice/caches/    the [[checkout.cache]] entries, the last two keys of each
 .git/sluice/results.jsonl
                        every test result of the repository, with its executor
-.git/sluice/.sessions/<worktree>.json
-                       each run an agent has going in its worktree: the worktree,
-                       its branch, its process and when it started
 ```
-
-A run in `.sessions/` holds one slot of the host's bound for as long as
-its process lives. A file whose process is gone holds nothing: the next
-run that starts removes it, and nothing counts it before then.
 
 ## A submission
 

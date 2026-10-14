@@ -192,8 +192,7 @@ reserved = 1   # default: 0; slots an agent's own runs never take
 The bound is the instance's: sluice starts no more runs at once than it,
 counted from the state of every branch the instance serves
 ([ADR 0012](/sluice/decisions/0012/)). The runs an agent starts in its
-own worktree with `sluice exec` count against the same bound, read from
-the state like the rest.
+own worktree with `sluice exec` count against the same bound.
 
 `reserved` keeps that many slots of the bound for the runs of
 submissions: an agent's run in its worktree waits rather than take one,
@@ -201,6 +200,26 @@ and a submission's run starts in any free slot. With the default, 0,
 agents' runs may hold the whole bound. A `reserved` at or above `max`
 leaves agents no slot, and sluice refuses to start with the setting
 named.
+
+## The host's state: `~/.local/state/sluice/`
+
+What belongs to the host and not to any repository is kept under
+`$XDG_STATE_HOME/sluice` (default `~/.local/state/sluice`), shared by
+every repository on the host and never pushed:
+
+```
+~/.local/state/sluice/
+  slots/<n>               a block of ports, naming the checkout that holds it
+  sessions/.lock          held while a run takes a slot of the bound
+  sessions/<worktree>.json
+                          each run an agent has going in its worktree: the
+                          worktree, its branch, its process, when it started
+                          and where its output is
+```
+
+A file in `sessions/` holds one slot of the bound for as long as its
+run is going. One whose run has ended holds nothing: the next run that
+starts removes it, and nothing counts it before then.
 
 ## Environment
 
