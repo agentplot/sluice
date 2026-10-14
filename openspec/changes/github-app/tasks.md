@@ -34,7 +34,7 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 
 ## 6. Integration
 
-- [ ] 6.1 Run all tiers (`devenv shell -- moon run ':#check-fast' ':#check-tools' ':#check-e2e'`) and `moon run cli:sandbox`; verify all pass before submitting.
+- [x] 6.1 Run all tiers (`devenv shell -- moon run ':#check-fast' ':#check-tools' ':#check-e2e'`) and `moon run cli:sandbox`; verify all pass before submitting.
 
 ## Workflow follow-up
 
