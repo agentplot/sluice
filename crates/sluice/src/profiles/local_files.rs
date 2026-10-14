@@ -6,11 +6,12 @@
 //! ```text
 //! <common>/sluice/
 //!   results.jsonl  .next-id  .lock
+//!   .sessions/<flat worktree>.json
 //!   <branch>/  version  branch.json  submissions/<id>.json  log.jsonl
 //!              lock  .pending.json
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Changes, Guard, Snapshot, State, TaskLog, Written, KEPT_LOGS};
+use sluice_seams::{Changes, Guard, SessionRun, Snapshot, State, TaskLog, Written, KEPT_LOGS};
 
 use crate::runs::flat_name;
 
@@ -26,12 +27,16 @@ const VERSION: &str = "version";
 const LOCK: &str = "lock";
 const PENDING: &str = ".pending.json";
 const RESULTS: &str = "results.jsonl";
+/// Dot-named, so no branch's records can lie there.
+const SESSIONS: &str = ".sessions";
 
 pub struct LocalFiles {
     root: PathBuf,
     /// The branches whose lock this process holds through a live guard:
     /// `write` refuses any other.
     held: RefCell<BTreeSet<String>>,
+    /// This process holds the repository's lock through a live guard.
+    host_held: Cell<bool>,
 }
 
 /// A write in progress, written before any file it changes and removed
@@ -60,6 +65,31 @@ impl Drop for BranchGuard<'_> {
     }
 }
 
+struct HostGuard<'a> {
+    files: &'a LocalFiles,
+    _lock: File,
+}
+
+impl Guard for HostGuard<'_> {}
+
+impl Drop for HostGuard<'_> {
+    fn drop(&mut self) {
+        self.files.host_held.set(false);
+    }
+}
+
+/// Whether a process lives on this host: a signal it may not be sent is
+/// still a process.
+fn alive(pid: u32) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    pid > 0 && matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
+}
+
 impl LocalFiles {
     /// The records of the repository whose common git directory is
     /// `common`.
@@ -67,7 +97,55 @@ impl LocalFiles {
         LocalFiles {
             root: common.join("sluice"),
             held: RefCell::new(BTreeSet::new()),
+            host_held: Cell::new(false),
         }
+    }
+
+    /// The repository's lock, taken here unless a guard of this process
+    /// holds it: a second lock of the same file from one process would
+    /// wait on itself.
+    fn repository_lock(&self) -> Result<Option<File>> {
+        if self.host_held.get() {
+            return Ok(None);
+        }
+        let lock = open_lock(&self.root.join(".lock"))?;
+        lock.lock().context("locking the repository's records")?;
+        Ok(Some(lock))
+    }
+
+    fn session_path(&self, worktree: &str) -> PathBuf {
+        self.root
+            .join(SESSIONS)
+            .join(format!("{}.json", flat_name(worktree)))
+    }
+
+    /// Every session run recorded, live or not, with its file.
+    fn session_records(&self) -> Result<Vec<(PathBuf, SessionRun)>> {
+        let dir = self.root.join(SESSIONS);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.starts_with('.') || !name.ends_with(".json") {
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                // Ended between the listing and the read.
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+            };
+            let run: SessionRun = serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            out.push((path, run));
+        }
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        Ok(out)
     }
 
     fn dir(&self, branch: &str) -> Result<PathBuf> {
@@ -360,8 +438,7 @@ impl State for LocalFiles {
     }
 
     fn allocate_id(&self) -> Result<u64> {
-        let lock = open_lock(&self.root.join(".lock"))?;
-        lock.lock().context("locking the repository's records")?;
+        let _lock = self.repository_lock()?;
         let path = self.root.join(".next-id");
         let id = match std::fs::read_to_string(&path) {
             Ok(s) => s
@@ -417,8 +494,7 @@ impl State for LocalFiles {
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
-        let lock = open_lock(&self.root.join(".lock"))?;
-        lock.lock().context("locking the repository's records")?;
+        let _lock = self.repository_lock()?;
         let mut have = self.results()?;
         // A line a crash cut short is no record: it is dropped before
         // anything is appended after it.
@@ -457,5 +533,52 @@ impl State for LocalFiles {
         f.write_all(&add)?;
         f.sync_all()?;
         Ok(())
+    }
+
+    fn sessions(&self) -> Result<Vec<SessionRun>> {
+        Ok(self
+            .session_records()?
+            .into_iter()
+            .map(|(_, r)| r)
+            .filter(|r| alive(r.pid))
+            .collect())
+    }
+
+    fn lock_sessions<'a>(&'a self) -> Result<Box<dyn Guard + 'a>> {
+        let lock = open_lock(&self.root.join(".lock"))?;
+        lock.lock().context("locking the repository's records")?;
+        self.host_held.set(true);
+        Ok(Box::new(HostGuard {
+            files: self,
+            _lock: lock,
+        }))
+    }
+
+    fn begin_session(&self, run: &SessionRun) -> Result<()> {
+        let _lock = self.repository_lock()?;
+        for (path, old) in self.session_records()? {
+            if !alive(old.pid) {
+                match std::fs::remove_file(&path) {
+                    Err(e) if e.kind() != ErrorKind::NotFound => {
+                        return Err(e).with_context(|| format!("removing {}", path.display()))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let path = self.session_path(&run.worktree);
+        let dir = path.parent().expect("a session's file has a directory");
+        let name = path.file_name().and_then(|n| n.to_str()).expect("a name");
+        write_atomic(dir, name, &serde_json::to_vec_pretty(run)?)
+    }
+
+    fn end_session(&self, worktree: &str) -> Result<()> {
+        let _lock = self.repository_lock()?;
+        let path = self.session_path(worktree);
+        match std::fs::remove_file(&path) {
+            Ok(()) => sync_dir(path.parent().expect("a directory")),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("removing {}", path.display())),
+        }
     }
 }

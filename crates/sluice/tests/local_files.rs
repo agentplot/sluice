@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use sluice::profiles::local_files::LocalFiles;
 use sluice_fakes::Fakes;
-use sluice_seams::{Changes, State, TaskLog, Written, KEPT_LOGS};
+use sluice_seams::{Changes, SessionRun, State, TaskLog, Written, KEPT_LOGS};
 use support::Scratch;
 
 fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
@@ -329,4 +329,126 @@ fn results_append_once_and_whole() {
         s.results().unwrap(),
         b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n{\"run\":4}\n"
     );
+}
+
+fn session_run(worktree: &str, pid: u32) -> SessionRun {
+    SessionRun {
+        worktree: worktree.into(),
+        place: format!("session/{worktree}"),
+        branch: "bolt/x".into(),
+        pid,
+        started: "2026-10-14T09:00:00Z".into(),
+        run_dir: format!("/runs/{worktree}"),
+    }
+}
+
+/// A process that has exited: its pid names no process.
+fn gone_pid() -> u32 {
+    let mut child = Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// Session-runs-1 clause 89, core.11: a session run is a file a reader
+/// finds with no sluice process running, and its end removes it.
+#[test]
+fn a_session_run_is_written_read_and_ended() {
+    let dir = Scratch::new("sessions");
+    let s = LocalFiles::new(dir.path());
+    assert!(s.sessions().unwrap().is_empty());
+    let me = std::process::id();
+    let a = session_run("/work/a", me);
+    let b = session_run("/work/b", me);
+    s.begin_session(&a).unwrap();
+    s.begin_session(&b).unwrap();
+    assert_eq!(
+        LocalFiles::new(dir.path()).sessions().unwrap(),
+        vec![a.clone(), b.clone()]
+    );
+    let file = dir.path().join("sluice/.sessions/%2Fwork%2Fa.json");
+    let on_disk: SessionRun = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(on_disk, a);
+    s.end_session("/work/a").unwrap();
+    assert!(!file.exists());
+    assert_eq!(s.sessions().unwrap(), vec![b]);
+    // Ending one never recorded is nothing.
+    s.end_session("/work/none").unwrap();
+    // No branch's records are found among them.
+    assert!(s.branches().unwrap().is_empty());
+}
+
+/// 89, core.14: a session run whose process is gone holds no slot: it is
+/// never counted, and the next start drops its record.
+#[test]
+fn a_session_run_whose_process_is_gone_is_dropped() {
+    let dir = Scratch::new("sessions-dead");
+    let s = LocalFiles::new(dir.path());
+    s.begin_session(&session_run("/work/dead", gone_pid()))
+        .unwrap();
+    let dead = dir.path().join("sluice/.sessions/%2Fwork%2Fdead.json");
+    assert!(dead.exists());
+    assert!(s.sessions().unwrap().is_empty());
+    let live = session_run("/work/live", std::process::id());
+    s.begin_session(&live).unwrap();
+    assert!(!dead.exists(), "the dead run's record was dropped");
+    assert_eq!(s.sessions().unwrap(), vec![live]);
+}
+
+/// Held by a child process of this test binary until it is killed.
+#[test]
+fn hold_the_sessions_lock_until_killed() {
+    let Ok(common) = std::env::var("SLUICE_TEST_SESSIONS") else {
+        return;
+    };
+    let s = LocalFiles::new(std::path::Path::new(&common));
+    let _g = s.lock_sessions().unwrap();
+    std::fs::write(std::path::Path::new(&common).join("held"), "").unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// 89, 91: a starter that holds the repository's lock reads the count and
+/// writes its run before another can: a second starter waits, and the
+/// holder's own writes do not wait on itself.
+#[test]
+fn a_session_run_is_begun_under_the_repository_lock() {
+    let dir = Scratch::new("sessions-lock");
+    let s = LocalFiles::new(dir.path());
+    {
+        let _g = s.lock_sessions().unwrap();
+        s.begin_session(&session_run("/work/a", std::process::id()))
+            .unwrap();
+        s.record_results(b"{\"run\":1}\n").unwrap();
+        s.end_session("/work/a").unwrap();
+    }
+
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hold_the_sessions_lock_until_killed",
+            "--nocapture",
+        ])
+        .env("SLUICE_TEST_SESSIONS", dir.path())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !dir.path().join("held").exists() {
+        assert!(start.elapsed() < Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let path = dir.path().to_path_buf();
+    let waiter = std::thread::spawn(move || {
+        let s = LocalFiles::new(&path);
+        s.begin_session(&session_run("/work/b", std::process::id()))
+            .unwrap();
+        s.sessions().unwrap().len()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !waiter.is_finished(),
+        "began a session run under a lock another process holds"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(waiter.join().unwrap(), 1);
 }

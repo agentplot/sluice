@@ -242,6 +242,7 @@ impl Real {
             PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
             Instance {
                 bound: 4,
+                reserved: 0,
                 processors: 4,
             },
         )

@@ -282,6 +282,56 @@ fn an_instance_holds_the_branches_it_serves_to_its_bound() {
     assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 4);
 }
 
+/// satisfies: 71; session-runs-1 89
+#[test]
+fn session_runs_hold_the_bound_under_either_instance() {
+    for serves in [sluice_core::Serves::Stepped, sluice_core::Serves::Every] {
+        let h = Harness::bolt();
+        h.w().host_limit(2);
+        h.w().session_run("/work/a", true);
+        h.w().session_run("/work/b", true);
+        h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+        let one = h.submit("unit/a");
+        let s = h.sluice().serving(serves);
+        s.step(BRANCH).unwrap();
+        s.step(BRANCH).unwrap();
+        assert!(
+            h.w().started().is_empty(),
+            "{serves:?}: started into a held slot"
+        );
+        // A session run whose process is gone holds nothing.
+        h.w().kill_session("/work/a");
+        s.step(BRANCH).unwrap();
+        assert_eq!(h.w().started().len(), 1, "{serves:?}");
+        h.settle();
+        assert_eq!(h.sub(one).state, State::Landed);
+    }
+}
+
+/// satisfies: 71; session-runs-1 89, 91
+#[test]
+fn session_runs_never_take_the_reserve() {
+    let h = Harness::bolt();
+    h.w().host_limit(4);
+    let s = h.sluice();
+    assert_eq!(s.session_capacity(1).unwrap(), 3);
+    assert_eq!(s.session_capacity(0).unwrap(), 4);
+    for n in 0..3 {
+        h.w().session_run(&format!("/work/{n}"), true);
+    }
+    assert_eq!(s.session_capacity(1).unwrap(), 0);
+    // A submission's run still starts into the reserve.
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.step();
+    assert_eq!(h.w().live_runs(), 1);
+    // And a candidate under test on any branch counts against sessions.
+    h.w().kill_session("/work/0");
+    assert_eq!(s.session_capacity(1).unwrap(), 0);
+    assert_eq!(s.session_capacity(0).unwrap(), 1);
+}
+
 /// satisfies: 84, 16
 #[test]
 fn every_observed_result_records_what_its_executor_enforced() {

@@ -943,14 +943,17 @@ impl Sluice<'_> {
 
     /// 71: how many more runs this instance starts now: its bound less the
     /// candidates under test in the records of the branches it serves,
-    /// `line` as this step has it.
+    /// `line` as this step has it, and less the host's session runs
+    /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let mut under = line
-            .doc
-            .candidates
-            .iter()
-            .filter(|c| c.state.under_test())
-            .count();
+        let sessions = self.seams.state.sessions()?.len();
+        let mut under = sessions
+            + line
+                .doc
+                .candidates
+                .iter()
+                .filter(|c| c.state.under_test())
+                .count();
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
@@ -965,6 +968,30 @@ impl Sluice<'_> {
             }
         }
         Ok(self.seams.tests.bound()?.saturating_sub(under))
+    }
+
+    /// Session-runs-1 clauses 89 and 91: how many session runs may start
+    /// now: the bound less `reserved`, the slots kept for submissions'
+    /// runs, less the candidates under test on every branch and the
+    /// session runs. A session run belongs to the host, not to a branch an
+    /// instance serves, so every branch's runs count against it.
+    pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
+        let mut under = self.seams.state.sessions()?.len();
+        for b in self.seams.state.branches()? {
+            under += self
+                .read_line(&b)?
+                .doc
+                .candidates
+                .iter()
+                .filter(|c| c.state.under_test())
+                .count();
+        }
+        Ok(self
+            .seams
+            .tests
+            .bound()?
+            .saturating_sub(reserved)
+            .saturating_sub(under))
     }
 
     /// 13, 14, 71: start candidates up to the window, and up to what the
