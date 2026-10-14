@@ -55,6 +55,36 @@ impl Repo {
         self.scratch.path()
     }
 
+    /// A bare clone of this repository, added as its remote `origin`: a
+    /// remote to git as a forge is.
+    pub fn bare_origin(&self) -> Scratch {
+        let bare = Scratch::new("origin.git");
+        let at = bare.path().to_str().unwrap();
+        self.git(&["clone", "-q", "--bare", ".", at]);
+        self.git(&["remote", "add", "origin", at]);
+        self.git(&["fetch", "-q", "origin"]);
+        bare
+    }
+
+    /// A clone of `remote`, as another host's repository.
+    pub fn clone_of(remote: &Path, name: &str) -> Repo {
+        let repo = Repo {
+            scratch: Scratch::new(name),
+        };
+        repo.git(&["clone", "-q", remote.to_str().unwrap(), "."]);
+        repo
+    }
+
+    /// Commit `changes` on the branch checked out and push it to `origin`;
+    /// returns the new head.
+    pub fn push_change(&self, path: &str, content: &str) -> String {
+        self.write(path, content);
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", path]);
+        self.git(&["push", "-q", "origin", "HEAD:main"]);
+        self.rev("HEAD")
+    }
+
     /// Run git in the worktree; panics on failure, returns stdout trimmed.
     pub fn git(&self, args: &[&str]) -> String {
         let out = self.git_raw(args);

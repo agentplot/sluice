@@ -18,8 +18,8 @@ pushed refs, C.7 `remote`), and in the site guide
   remote = "origin"`. A branch with no `remote` stays a local branch,
   unchanged.
 - For such a branch, every round fetches it from the remote before
-  reading it, and forms every combination on the remote's revision; the
-  local branch is moved to match, so the local copy never lags.
+  reading it, and forms every combination on the remote's revision. The
+  local branch moves only when a landing's push is accepted (core.4).
 - A landing is a push of the landing commit to the remote's branch,
   leased on the revision the combination was formed on (24, 45, 46). Only
   once the remote accepts it does the local branch move and the

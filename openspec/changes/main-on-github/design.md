@@ -31,11 +31,16 @@ holds one `branch` for every branch an instance serves.
 **A pushed refs profile wraps local refs.** `PushedRefs` holds a
 `LocalRefs` and the remote's name. `form`, `commit`, `contains` and
 `read_file` delegate: forming and committing stay local refs (C.4).
-`read` runs `git fetch <remote> <branch>`, reads the fetched revision,
-moves the local branch to it with gix (no hook, as today), and returns
-it. `move_to` runs `git push <remote> <to>:refs/heads/<branch>
---force-with-lease=<branch>:<expected>`; on success it moves the local
-branch to `to` and returns `Moved`; on a lease refusal it fetches and
+`read` runs `git fetch`, which writes only the remote-tracking ref
+`refs/remotes/<remote>/<branch>`, and returns the fetched revision; it
+never moves the local branch, so the submit operation, which reads the
+branch, writes no branch's ref (core.4). The policy needs no local copy:
+`read_file` takes the fetched revision (56, core.15). `move_to` runs
+`git push <remote> <to>:refs/heads/<branch>
+--force-with-lease=<branch>:<expected>`; on success it sets the local
+branch to `to` with gix (no hook, as today), whatever it held before,
+since sluice owns it, and returns `Moved`. That is the landing, not
+submit. on a lease refusal it fetches and
 returns `Elsewhere(<fetched>)`; on any other failure it returns an
 error, which leaves the intent unsettled for the next step. The git
 command, not gix, does fetch and push: gix's push is not complete, and
@@ -50,15 +55,16 @@ crate implements `Branch`: for each call it finds the branch's
 `LocalRefs` when there is none. Methods that take no branch name
 (`form`, `commit`, `contains`, `read_file`) go to `LocalRefs`, since
 every object is local. The router reads `remote` from the policy on the
-local branch's revision, and the round's `read` then keeps the local
-branch equal to the remote's, so the next policy read sees what the
-remote holds (core.15).
+local branch's revision, which may lag the remote's; that is enough to
+pick the profile, and the gate itself is read from the fetched revision
+(core.15).
 
-**Fetch once per step.** A step calls `read` more than once. The
-profile fetches on the first `read` of a branch in its lifetime and
-reuses the fetched revision after, so a step makes one fetch per branch;
-`move_to` and an unsettled intent fetch again. A profile lives for one
-step, so nothing is held between steps (core.14).
+**Fetch on every read.** The profile keeps no fetched revision: a
+`sluice run` process steps many times with one set of profiles, so a
+revision kept would outlive its step (core.14). A step reads the branch
+once to decide and once more when it lands, which is the fetch an
+unsettled intent needs; a refused push fetches to report what the
+remote holds.
 
 **A failed fetch is an error of the round, not of a submission.**
 `read` returns the error; the step lands nothing and the runner reports

@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use sluice::instance::Instance;
+use sluice::profiles::branches::Branches;
 use sluice::profiles::checks::Checks;
 use sluice::profiles::local_files::LocalFiles;
-use sluice::profiles::local_refs::LocalRefs;
 use sluice::profiles::places::Places;
 use sluice::profiles::worktrunk::Worktrunk;
 use sluice::profiles::Bound;
@@ -103,7 +103,7 @@ impl Tests for RecordedChecks {
 
 /// The branch, with every move it made counted.
 struct RecordedRefs {
-    inner: LocalRefs,
+    inner: Branches,
     moves: RefCell<usize>,
 }
 
