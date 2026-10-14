@@ -47,7 +47,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 18 | OpenTelemetry from sluice, and moon's inside sluice's runs | | **done**: ADR 0014, `telemetry.rs`, the core's spans and metric events, `tests/telemetry.rs`; e2e exported to a local receiver, moon's traces carrying the round's `sluice.trace_id` |
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
-| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
+| 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); the repository's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this one |
 | 23 | `main` kept in step with the shared remote | C.4 | designing, with 24: built once 24's design is settled |
 | 24 | pull requests: one per submission, and one opened by hand submitted | C.5 | designing |
 
@@ -216,8 +216,8 @@ needed.
 - **22, a full stack per candidate.** A repository's checks bring up
   everything a browser test needs: a container stack on a port, stand-ins
   for outside services, API and dev servers, then Playwright against
-  them, for every candidate under test at once. Switchboard is the case
-  it is built for. What sluice owes the checks:
+  them, for every candidate under test at once.
+  What sluice owes the checks:
   - Ports, assigned by sluice. `[checkout] ports` names the ports a
     candidate's stack uses. The place seam gives each place a slot, held
     on the host across repositories and checked free before the place is
@@ -376,14 +376,13 @@ needed.
   the conductor brings its worktree level when its bolt's branch moves;
   move to a design where no worktree has a bolt's branch checked out;
   move its devenv to moon 2.6.
-- **Switchboard:** key its stack on sluice's place rather than its
-  branch: every port from `SLUICE_PORT_*` instead of `hash_port`; the
-  emulator's container name and label, `SWB_INTEGRATION_DEPLOYMENT`, the
-  Portless names and the CodeBuild scratch directory from
-  `SLUICE_PLACE`; the stand-ins never killing whatever holds a port. Its
-  policy names the ports, `[tests] release` as its teardown
-  (`ministack-teardown`, then `infra/ministack/down.sh`), `docker =
-  true`, and `network = true` for the suites that reach Frontegg.
+- **The repository with the stack:** key its stack on sluice's place
+  rather than its branch: every port from `SLUICE_PORT_*` instead of
+  `hash_port`; container names and labels, service names and scratch
+  directories from `SLUICE_PLACE`; the stand-ins never killing whatever
+  holds a port. Its policy names the ports, `[tests] release` as its
+  teardown, `docker = true`, and `network = true` for the suites that
+  reach an outside service.
 - **flywheel-next:** the git hook install fix is on its
   `fix-git-hooks-install` branch (`db9f1dae`), to land with `wt merge`.
 - **devenv:** cachix/devenv#3270. When it is fixed, remove the
