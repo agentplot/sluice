@@ -20,6 +20,10 @@ remote = "origin"
 required = ["#check-fast", "#check-tools"]
 ```
 
+sluice reads the policy from `main` as it stands before a landing, so
+the landing that adds `remote` lands on your machine only. Push `main`
+to GitHub by hand that once; sluice pushes every landing after it.
+
 With `remote` set, GitHub's copy of `main` is the real one:
 
 - **Every round fetches it first.** Whoever runs the round (a waiting
