@@ -48,7 +48,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 | 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
-| 23 | `main` kept in step with the shared remote | C.4 | designing |
+| 23 | `main` kept in step with the shared remote | C.4 | designing, with 24: built once 24's design is settled |
+| 24 | pull requests: one per submission, and one opened by hand submitted | C.5 | designing |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -269,6 +270,17 @@ needed.
   pull request moving it is an outside move, which sluice takes as the
   branch moving under its queue. Only the branch is pushed: on one
   machine the records stay local files.
+- **24, pull requests.** A pull request shows a submission and is not
+  the queue: the queue stays in sluice's records. `submit` pushes the
+  session's branch and opens or updates a pull request to the branch;
+  sluice posts the entry's state as a check on its head and comments
+  why when it is removed; the landing pushes the branch (23), and the
+  forge then marks the request merged because its head is in the
+  branch; a withdrawal closes it. A pull request opened by hand, outside
+  `submit`, is noticed by a round and submitted like any other. None of
+  this needs a GitHub Action: the checks run where sluice runs them.
+  GitHub as the executor and the stepper is a separate deployment,
+  designed apart from this.
 
 ## Decisions this pass builds on
 
