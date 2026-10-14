@@ -76,9 +76,19 @@ required: gate.required, since: Some(branch rev), limit: rules.timeout,
 limits: policy.executor, tests, replay: false}` and calls
 `Tests::start`. Run directories are `.runs/<session flat>/<n>`, a fresh
 `n` per run, because `Runs::clear` on a reused name runs the release
-command (94 forbids that between runs). `Runs::remove` for a session
-place iterates every `<n>` and runs the release command once, from a
-request built at release time from the place's branch policy.
+command (94 forbids that between runs). Releasing a session place ends
+every `<n>` and runs the release command once.
+
+The release command is the policy's (95), read from the branch's current
+revision (56), so a teardown fixed in the policy after the last run is
+the one that runs. `sluice release` reads the policy through the core
+(`Sluice::policy_at` of the place record's branch at its current
+revision) and passes its `[tests]` settings through the place seam,
+`Checkout::release_session(name, tests)`; the place profile builds the
+release request from them with the place's saved environment and ports
+(core.2: the profile reads no policy). Only when the branch can no
+longer be read does the release fall back to the command saved with the
+place's last run, and the output says so.
 
 `sluice exec -- <command>` uses the `command` runner path of `Checks`
 with the given argv and `required` empty, and marks the request
@@ -163,8 +173,9 @@ trusts only confined runs ignores it (29).
 ### D6. `sluice release` and the worktrunk driver
 
 `Command::Release{--worktree "."}` finds the session record by the
-worktree's canonical path, calls `Checkout::release(name, false)` and
-`Sessions::end(worktree)`, and exits 0 with "nothing to release" when no
+worktree's canonical path, reads the policy as D2 says, calls
+`Checkout::release_session(name, tests)` and `Sessions::end(worktree)`,
+and exits 0 with "nothing to release" when no
 record exists. `Command::Exec{--release}` runs release after the run
 ends. `wt-submit` runs `sluice release --worktree <wt>` before `wt
 remove`, and not under `--no-remove`, `--no-wait` or `--check`.
@@ -208,18 +219,3 @@ rollback needed beyond removing them.
 
 - Whether `sluice exec` should accept `--cached` to let moon replay and
   skip recording. Deferrable: adds a flag, changes no spec.
-
-## Notes from the build
-
-- Task 2.2, D2: the release command of a session's place is run from
-  its last run's `request.json`, not from a request built at release
-  time from the branch's policy. `Checkout::release(name, passed)`
-  carries no policy and the place profile reads none (core.2), while the
-  last run's request already holds the release command as that run's
-  policy stated it, with the executor's wrapping, the toolchain, the
-  worktree and the run's environment, ports included. A place that never
-  ran has started nothing, so it has nothing to release. Where the
-  branch's policy changed `[tests] release` after the last run, the old
-  command runs. Building it fresh would need the release path to pass
-  the policy's `[tests]` and limits through the seam, which group 4's
-  `sluice release` can do if wanted.
