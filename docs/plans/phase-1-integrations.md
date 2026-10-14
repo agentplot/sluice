@@ -1241,14 +1241,14 @@ result (16). The policy states what a branch's runs may use and reach:
 kind = "sandbox"          # "open" | "sandbox" | "container"
 network = "localhost"     # false: none | "localhost": only 127.0.0.1 and ::1 | true: any
 memory = "8G"
-# processors come from the instance: available_parallelism() / B
+# cores come from the instance: available_parallelism() / B
 ```
 
 | kind | how | enforces |
 |---|---|---|
-| `open` | the supervisor above: a process group in the place | the processors, through the runner's threads; nothing else; never confined |
-| `sandbox` | the command under the host's kernel sandbox, as Anthropic's sandbox-runtime and Codex's sandbox do: Seatbelt (`sandbox-exec` with a generated profile) on macOS, bubblewrap with Landlock on Linux; writes allowed only to the place and `SLUICE_TMP`, the network only as the policy says | paths and network on both; memory and processors only on Linux, by starting the run in a cgroup (`systemd-run --user --scope -p MemoryMax= -p CPUQuota=`) |
-| `container` | the place mounted into a new container (`docker run --rm --init --cpus --memory --network none -v <place>:<place> -w <place> <image>`), the image the repository declares | processors, memory, paths and network |
+| `open` | the supervisor above: a process group in the place | the cores, through the runner's threads; nothing else; never confined |
+| `sandbox` | the command under the host's kernel sandbox, as Anthropic's sandbox-runtime and Codex's sandbox do: Seatbelt (`sandbox-exec` with a generated profile) on macOS, bubblewrap with Landlock on Linux; writes allowed only to the place and `SLUICE_TMP`, the network only as the policy says | paths and network on both; memory and cores only on Linux, by starting the run in a cgroup (`systemd-run --user --scope -p MemoryMax= -p CPUQuota=`) |
+| `container` | the place mounted into a new container (`docker run --rm --init --cpus --memory --network none -v <place>:<place> -w <place> <image>`), the image the repository declares | cores, memory, paths and network |
 
 `network = "localhost"` is for checks that start a server and test
 against it: on macOS the sandbox lets the run listen and connect on

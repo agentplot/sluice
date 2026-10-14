@@ -2,7 +2,7 @@
 //! `docs/plans/phase-1-integrations.md` (71; ADR 0012). Three branches,
 //! each with room for four candidates, are served by one `sluice run`
 //! with `[runs] max = 2`; the check counts the runs alive as it starts
-//! and the processors it was given. The policy names no `trust`, so the
+//! and the cores it was given. The policy names no `trust`, so the
 //! default lands what the open executor passed (ADR 0015). That test
 //! needs git, so it is in the check-tools tier; the reading of the
 //! host's settings needs none.
@@ -41,7 +41,7 @@ fn the_reserve_is_none_by_default() {
 fn the_reserve_is_read_beside_the_bound() {
     let i = read("[runs]\nmax = 4\nreserved = 1\n").unwrap();
     assert_eq!((i.bound, i.reserved), (4, 1));
-    // Beside the default bound, a quarter of the processors.
+    // Beside the default bound, a quarter of the cores.
     assert_eq!(read("[runs]\nreserved = 3\n").unwrap().reserved, 3);
 }
 
@@ -153,7 +153,7 @@ mod bound {
 
     /// 71: with `[runs] max = 2`, one `sluice run` serving three branches
     /// with a window of four each has at most two runs under test at once,
-    /// reaches two, and gives each run half the processors.
+    /// reaches two, and gives each run half the cores.
     #[test]
     fn one_run_holds_three_branches_to_its_bound() {
         let repo = Repo::new("instance-bound");

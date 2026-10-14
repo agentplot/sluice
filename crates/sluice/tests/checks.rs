@@ -132,7 +132,7 @@ fn env_probe() {
 }
 
 /// 35: the command sees its place and scratch directory, its share of the
-/// processors, and nothing of sluice's own that names another place or
+/// cores, and nothing of sluice's own that names another place or
 /// tool.
 #[test]
 fn a_command_sees_its_place_and_nothing_of_sluices() {

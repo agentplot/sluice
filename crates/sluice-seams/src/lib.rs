@@ -198,7 +198,7 @@ impl<'de> Deserialize<'de> for Network {
 }
 
 /// 83: what a run may use and reach, as the branch's policy states it.
-/// The processors each run is given are the instance's, not the policy's,
+/// The cores each run is given are the instance's, not the policy's,
 /// so they are the check seam's own (71).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Limits {

@@ -95,7 +95,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
 
 /// Whether two runs were held to the same limits (83): the executor, and
 /// so the paths it held, the memory, the network and the container
-/// engine. The processors a run was given vary with the instance's load,
+/// engine. The cores a run was given vary with the instance's load,
 /// so they are not one of them.
 fn same_limits(a: &Enforced, b: &Enforced) -> bool {
     (&a.kind, a.confined, a.memory, a.network, a.docker)
@@ -205,7 +205,7 @@ mod tests {
 
     /// 19: a key's fail under one run's limits and its pass under
     /// another's are not flaky; under the same limits they are, whatever
-    /// processors each was given.
+    /// cores each was given.
     #[test]
     fn a_key_is_flaky_only_under_the_same_limits() {
         let docker = Enforced {

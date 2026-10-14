@@ -54,7 +54,7 @@ pub struct Context<'a> {
     pub env: &'a BTreeMap<String, String>,
     /// What `[tests] toolchain` printed, sourced before every command.
     pub toolchain: Option<&'a Path>,
-    /// The processors the run is given.
+    /// The cores the run is given.
     pub jobs: usize,
 }
 
@@ -88,7 +88,7 @@ pub struct Plan {
     pub argv: Option<Vec<String>>,
     /// The checks the run is to give a result for.
     pub targets: Vec<String>,
-    /// Whether the runner holds the run to `jobs` processors itself.
+    /// Whether the runner holds the run to `jobs` cores itself.
     pub holds_processors: bool,
     /// Names of files the runner's tools stamp wherever they are installed
     /// (proto's `.last-used`), which a sandbox lets the run write.

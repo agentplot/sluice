@@ -163,7 +163,7 @@ once is the host's own setting, in `~/.config/sluice/config.toml`:
 
 ```toml
 [runs]
-max = 2    # default: a quarter of the processors, shared equally between runs
+max = 2    # default: a quarter of the cores, shared equally between runs
 ```
 
 ## Telemetry

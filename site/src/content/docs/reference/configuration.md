@@ -189,7 +189,7 @@ host's own settings, not the repository's:
 
 ```toml
 [runs]
-max = 2        # default: a quarter of the processors, shared equally between runs
+max = 2        # default: a quarter of the cores
 reserved = 1   # default: 0; runs of the bound agents' own runs never use
 
 [forge]
@@ -197,17 +197,32 @@ app_id = 123456                  # the GitHub App sluice pushes as
 key = "~/.config/sluice/app.pem" # its private key on this host
 ```
 
-The bound is the instance's: sluice starts no more runs at once than it,
-counted from the state of every branch the instance serves
-([ADR 0012](/sluice/decisions/0012/)). The runs an agent starts in its
-own worktree with `sluice exec` count against the same bound.
+### `[runs]`
 
-`reserved` keeps that many runs of the bound for the runs of
+`max` is the host's bound: how many runs share the host's cores at once.
+It counts the runs of submissions and the runs agents start in their own
+worktrees with `sluice exec` together, from the state of every branch
+the instance serves ([ADR 0012](/sluice/decisions/0012/)). A run waits
+while the bound is full.
+
+The cores are the logical CPUs the host gives sluice. With no `max`,
+the bound is a quarter of them, and never less than one. Each run gets
+the cores divided by `max`, and never less than one: sluice hands that
+number to the run as `SLUICE_JOBS`, and to moon as `--concurrency`.
+
+`max` is the one setting for memory as well. Nothing but moon keeps to
+the share of cores, and an executor's `memory` limit holds the run's own
+processes, never the containers they ask a container engine for. A
+repository whose tests bring up a stack of containers sets `max` to how
+many of those stacks the host holds in memory at once, whatever its
+count of cores.
+
+`reserved` splits the bound. It keeps that many runs of the bound for
 submissions: an agent's run in its worktree waits rather than take one,
-and a submission's run starts whenever the bound has room. With the default, 0,
-agents' runs may hold the whole bound. A `reserved` at or above `max`
-leaves agents no run, and sluice refuses to start with the setting
-named. What the host records of its runs and ports is on the
+and a submission's run starts whenever the bound has room. With the
+default, 0, agents' runs may hold the whole bound. A `reserved` at or
+above `max` leaves agents no run, and sluice refuses to start with the
+setting named. What the host records of its runs and ports is on the
 [state page](/sluice/reference/state/).
 
 ### `[forge]`
@@ -235,6 +250,6 @@ says whether it is set up right.
 | `SLUICE_TMP` | sluice, for a run | A scratch directory of the run's own, for sockets, pid files and data directories, so parallel checkouts never collide. An agent's worktree keeps one across its runs. |
 | `SLUICE_PLACE` | sluice, for a run | A short name of the checkout's own, for labelling what the tests start, so the release command finds it. |
 | `SLUICE_PORT_<NAME>` | sluice, for a run | The port given for each name in `[checkout] ports`, upper-cased, `-` written `_`. |
-| `SLUICE_JOBS` | sluice, for a run | The processors the run may use: the host's share for each of `[runs] max` runs. |
+| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |
