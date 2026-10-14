@@ -162,6 +162,19 @@ shell ran. A branch without `trust` accepts every run sluice starts
 ([ADR 0015](/sluice/decisions/0015/)); one whose executor can never
 satisfy it starts nothing and says why.
 
+### `remote`
+
+The git remote the branch lives on, such as `"origin"`. Every round
+fetches the branch from it and tests on what the remote holds. A
+landing is a push that the remote takes only if its branch has not moved
+since the combination was formed. The local branch is then moved to
+match. A push the remote refuses because someone else pushed is
+reported, and the next round tests again on the new revision. Only the
+branch is pushed: the state stays on the host. A branch without
+`remote` is a local branch, and a `remote` the repository has no remote
+of that name for lands nothing and says so. The guide
+[sluice on GitHub](/sluice/guides/github/) sets one up.
+
 No key covers operator approval: that is the caller's business, and
 a tool submits only once the work is approved.
 

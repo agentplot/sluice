@@ -56,6 +56,9 @@ pub struct Rules {
     /// Which results satisfy the gate (27 to 29): `confined`, executor
     /// kinds, and `cache` for replays.
     pub trust: Vec<String>,
+    /// The git remote the branch lives on (C.4, C.7): read by fetch and
+    /// landed by a leased push. `None` for a local branch.
+    pub remote: Option<String>,
 }
 
 /// What `trust` may list.
@@ -91,6 +94,7 @@ impl Default for Rules {
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
+            remote: None,
         }
     }
 }
@@ -135,6 +139,7 @@ struct RulesForm {
     flaky: Option<String>,
     timeout: Option<String>,
     trust: Option<Vec<String>>,
+    remote: Option<String>,
 }
 
 impl Policy {
@@ -190,6 +195,7 @@ impl Policy {
                     flaky,
                     timeout,
                     trust,
+                    remote: r.remote,
                 },
             ));
         }
@@ -492,6 +498,20 @@ batch = true
         assert!(
             Policy::parse("[[checkout.cache]]\n[[checkout.cache.inner]]\nx = \"y\"\n").is_err()
         );
+    }
+
+    /// C.7: a branch may name the remote it lives on.
+    #[test]
+    fn reads_a_branchs_remote() {
+        let p =
+            Policy::parse("[branches.main]\nremote = \"origin\"\n[branches.\"bolt/*\"]\n").unwrap();
+        assert_eq!(
+            p.rules_for("main").unwrap().unwrap().remote.as_deref(),
+            Some("origin")
+        );
+        assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().remote, None);
+        assert!(Policy::parse("[branches.main]\nremote = 1\n").is_err());
+        assert!(Policy::parse("[branches.main]\nremote = [\"origin\"]\n").is_err());
     }
 
     #[test]

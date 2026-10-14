@@ -10,8 +10,8 @@ core.17); `crates/sluice/src/profiles/local_refs.rs`; the landing in
 
 ## 1. The policy key
 
-- [ ] 1.1 Add `remote` (a string) to `[branches."<pattern>"]` in `crates/sluice-core/src/policy.rs` and to `Rules`; a policy without it parses as before. Verify with unit tests in `policy.rs` for present, absent and wrong type.
-- [ ] 1.2 Document `remote` in `site/src/content/docs/reference/configuration.md` under `[branches."<pattern>"]`; verify `devenv shell -- moon run site:prose` passes.
+- [x] 1.1 Add `remote` (a string) to `[branches."<pattern>"]` in `crates/sluice-core/src/policy.rs` and to `Rules`; a policy without it parses as before. Verify with unit tests in `policy.rs` for present, absent and wrong type.
+- [x] 1.2 Document `remote` in `site/src/content/docs/reference/configuration.md` under `[branches."<pattern>"]`; verify `devenv shell -- moon run site:prose` passes.
 
 ## 2. The pushed refs profile
 
