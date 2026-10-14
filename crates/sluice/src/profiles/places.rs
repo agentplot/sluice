@@ -47,7 +47,7 @@ use sluice_seams::{
     Adopted, Checkout, Limits, Place, ReleasePolicy, Released, Rev, Setting, Settings,
 };
 
-use crate::runs::{flat_name, ReleaseWith, Request, Runs, SESSION};
+use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
 
 /// Builds a session's place's release command from the policy's `[tests]`
 /// and limits, under the executor its runs had, writing what the
@@ -329,11 +329,11 @@ impl Places {
 
     /// A `git-worktree` place's checkout.
     fn worktree_path(&self, name: &str) -> PathBuf {
-        self.root().join(".places").join(flat_name(name))
+        self.root().join(".places").join(dir_name(name))
     }
 
     fn tmp(&self, name: &str) -> PathBuf {
-        self.root().join(".tmp").join(flat_name(name))
+        self.root().join(".tmp").join(dir_name(name))
     }
 
     fn read_record(&self, name: &str) -> Result<Option<Made>> {

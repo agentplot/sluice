@@ -130,6 +130,11 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
     assert!(place
         .path
         .starts_with(repo.dir().join(".git/sluice/.places")));
+    // clang and other tools read every `%` of a temporary file's path as a
+    // random character, so the paths checks work in hold none.
+    for dir in [&place.path, &place.tmp] {
+        assert!(!dir.to_string_lossy().contains('%'), "{}", dir.display());
+    }
     // The method runs nothing in the place: no post-checkout hook.
     assert!(!repo.dir().join(".git/post-checkout.log").exists());
 
