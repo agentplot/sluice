@@ -1,0 +1,39 @@
+schema: spec-driven
+
+context: |
+  sluice is a merge queue for agents in git worktrees, written in Rust.
+  The design is the statement of invariants in agentplot/blueprints,
+  design/sluice/requirements.md (local:
+  ~/Code/github_agentplot/blueprints/main/design/sluice/requirements.md);
+  proposals awaiting the operator's ruling are under
+  design/sluice/proposals/ there. An artifact that rests on a clause cites
+  it by bare number, (71); one that rests on an unratified proposal names
+  the proposal file and the clause.
+
+  Rules that bind every diff are docs/architecture/core.md (core.1 to
+  core.17); decisions are docs/adr/ (MADR, numbered, adrs.toml). A change
+  that departs from a rule says which and why; a clause that no longer
+  holds is changed in the statement first, never worked around here.
+
+  Two vocabularies. Design words (entry, place, candidate, culprit,
+  verdict, seam, executor) are for specs, design and code. Everything a
+  user sees, config keys, CLI output, state files, error messages and the
+  site under site/src/content/docs, uses the user words: branch,
+  submission, checkout, combination, result, blamed, parallel, state. The
+  word for a git branch is branch, never line. Nothing commercial, no
+  product, pricing, tier or customer, appears in this repository
+  (core.13); a forge and a job service are the words.
+
+  Site pages are checked by Vale (styles/Sluice); clear every warning.
+  Commit by pathspec only: git add <paths>; git commit -m "<subject>" --
+  <paths>. Conventional Commits, scope the part of the tree touched.
+  main is protected: work on a worktree branch and land with
+  devenv shell -- wt submit main.
+
+rules:
+  proposal:
+    - State what is out of scope and which later change it waits on
+  specs:
+    - Requirements use the user words; a scenario is checkable by the conformance suite or an e2e test
+  tasks:
+    - Every task names its verification; site pages and ADRs land with the group that changes the behaviour they describe
