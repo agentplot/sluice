@@ -2,7 +2,7 @@
 //! only sluice's identity bypasses): a GitHub App whose key is on the
 //! host. A JWT signed with the key finds the app's installation on a
 //! repository and buys an installation token for it, which only sluice's
-//! own git calls are given (`docs/adr/0018`).
+//! own git calls are given (`docs/adr/0019`).
 
 pub mod app;
 pub mod check;

@@ -71,6 +71,7 @@ fn checks(repo: &Repo) -> Checks {
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
         Instance {
             bound: 2,
+            reserved: 0,
             processors: 8,
             forge: None,
         },

@@ -1,5 +1,5 @@
 ---
-number: 18
+number: 19
 title: sluice pushes as a GitHub App whose token reaches only its own git
 status: accepted
 date: 2026-10-14

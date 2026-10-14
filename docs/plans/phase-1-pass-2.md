@@ -49,7 +49,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 | 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); the repository's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this one |
 | 23 | `main` kept in step with the shared remote | C.4 | **done**: ADR 0017, `[branches] remote`, `profiles/pushed_refs.rs` and the router `profiles/branches.rs`; `tests/pushed_refs.rs` (6) and `tests/remote_branch.rs` (6), `cli:tools`; sluice's own `main` lands on `origin` with no hand push |
-| 23 | sluice's own identity on GitHub: a GitHub App, the ruleset's only bypass (`github-app`) | C.4 | **done**: ADR 0018, `[forge]` in the host config, `profiles/github/`, `identity.rs` and `sluice credential`, `sluice forge check`; `tests/profiles/forge.rs` against a fake of GitHub's API, `tests/pushed_refs.rs` through the helper; the app and the ruleset on GitHub are the operator's to make |
+| 23 | sluice's own identity on GitHub: a GitHub App, the ruleset's only bypass (`github-app`) | C.4 | **done**: ADR 0019, `[forge]` in the host config, `profiles/github/`, `identity.rs` and `sluice credential`, `sluice forge check`; `tests/profiles/forge.rs` against a fake of GitHub's API, `tests/pushed_refs.rs` through the helper; the app and the ruleset on GitHub are the operator's to make |
 | 24 | pull requests: one per submission, and one opened by hand submitted | C.5 | designing |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -282,7 +282,7 @@ needed.
   elsewhere refused and tested again, a push stopped before it was
   recorded, a push that never reached the remote, a failed fetch, and an
   unknown remote.
-  The app is built as ADR 0018 says: the host's `[forge]` names the app
+  The app is built as ADR 0019 says: the host's `[forge]` names the app
   and its key, a file only its owner may read; sluice buys an hour's
   installation token for the repository and gives it to its own fetch
   and push through `sluice credential`, a helper named on that git

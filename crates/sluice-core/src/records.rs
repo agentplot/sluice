@@ -497,9 +497,45 @@ pub struct ResultLine {
     pub executor: Option<Enforced>,
     pub branch: String,
     pub combination: Rev,
+    /// Session-runs-1 clause 92: the session's worktree a session run was
+    /// run in; `None` for a candidate's run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 impl ResultLine {
+    /// The record of one result of a run on `combination`, for `branch`:
+    /// a run with its host and executor, or a replay with neither (16,
+    /// 38, 84).
+    pub fn of(
+        at: &str,
+        task: &sluice_seams::TaskResult,
+        executor: &Enforced,
+        branch: &str,
+        combination: &Rev,
+        worktree: Option<&str>,
+    ) -> ResultLine {
+        let (kind, host, executor) = match &task.source {
+            sluice_seams::Source::Ran { host } => {
+                (ResultKind::Ran, Some(host.clone()), Some(executor.clone()))
+            }
+            sluice_seams::Source::Replayed { .. } => (ResultKind::Replayed, None, None),
+        };
+        ResultLine {
+            schema: RESULT_SCHEMA.into(),
+            at: at.into(),
+            kind,
+            task: task.task.clone(),
+            hash: task.hash.clone(),
+            outcome: task.outcome,
+            host,
+            executor,
+            branch: branch.into(),
+            combination: combination.clone(),
+            worktree: worktree.map(str::to_string),
+        }
+    }
+
     /// Two lines record one observation: a write repeated after a crash.
     pub fn same_as(&self, other: &ResultLine) -> bool {
         self.kind == other.kind

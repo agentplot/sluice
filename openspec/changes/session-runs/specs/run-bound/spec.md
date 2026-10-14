@@ -3,7 +3,7 @@
 ## Purpose
 
 Bounds how many runs a host starts at once across submissions' runs and
-agents' runs, counted from the records, with a reserve for submissions.
+agents' runs, counted from the host's state, with a reserve for submissions.
 
 ## ADDED Requirements
 
@@ -31,12 +31,13 @@ or above the bound SHALL be refused with the reason (91).
 - **THEN** `sluice exec` and `sluice run` refuse to start and name the
   setting
 
-### Requirement: The count lives in the records
+### Requirement: The count lives in the host's state
 
-A running session run SHALL be recorded on the host with its worktree,
-its process and its start, readable with no sluice process running, and
-a starter that finds a recorded run whose process is gone SHALL drop the
-record before counting (core.11, core.14).
+A running session run SHALL be recorded in the host's state with its
+worktree, its process and its start, readable with no sluice process
+running, never in a branch's records, and a starter that finds a
+recorded run that has ended SHALL drop the record before counting
+(core.11, core.14).
 
 #### Scenario: A killed run frees its slot
 

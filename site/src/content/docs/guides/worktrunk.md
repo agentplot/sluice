@@ -38,8 +38,19 @@ the suite on the exact combination that will land, which is what the
 hook was approximating. A `[post-merge]` hook that verified the landing
 goes too, since nothing lands untested. Every other hook stays. The
 `pre-start` and `post-start` hooks still set up each agent's worktree,
-and a `post-remove` hook still runs when `wt submit` removes one, which
-is where to clean up anything the agent's tests left running.
+and a `post-remove` hook still runs when `wt submit` removes one.
+
+**What the agent's tests leave running.** An agent that runs its tests
+with `sluice exec` gets ports of its own, and what those runs bring up,
+a stack of containers above all, stays between runs. Before worktrunk
+removes the worktree, `wt submit` runs `sluice release` in it: the
+policy's `[tests] release` command runs, every run's process group ends
+and the ports are free, so a `post-remove` hook finds nothing of the
+agent's runs left. Keep in `post-remove` only what is not a run's: a
+cache directory, a scratch database the agent made by hand. Under
+`--no-remove` the worktree is kept and not released; run
+`sluice release` when it is done with. On plain git, run
+`sluice release` in the worktree before `git worktree remove`.
 
 **The branch.** Every branch with a `[branches]` section in
 `.config/sluice.toml` is protected: `wt merge` into it is refused with

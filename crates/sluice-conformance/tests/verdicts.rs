@@ -282,6 +282,103 @@ fn an_instance_holds_the_branches_it_serves_to_its_bound() {
     assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 4);
 }
 
+/// satisfies: 71; session-runs-1 89
+#[test]
+fn session_runs_hold_the_bound_under_either_instance() {
+    for serves in [sluice_core::Serves::Stepped, sluice_core::Serves::Every] {
+        let h = Harness::bolt();
+        h.w().host_limit(2);
+        h.w().session_run("/work/a", true);
+        h.w().session_run("/work/b", true);
+        h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+        let one = h.submit("unit/a");
+        let s = h.sluice().serving(serves);
+        s.step(BRANCH).unwrap();
+        s.step(BRANCH).unwrap();
+        assert!(
+            h.w().started().is_empty(),
+            "{serves:?}: started into a held slot"
+        );
+        // A session run whose process is gone holds nothing.
+        h.w().kill_session("/work/a");
+        s.step(BRANCH).unwrap();
+        assert_eq!(h.w().started().len(), 1, "{serves:?}");
+        h.settle();
+        assert_eq!(h.sub(one).state, State::Landed);
+    }
+}
+
+/// satisfies: 71; session-runs-1 89, 91
+#[test]
+fn session_runs_never_take_the_reserve() {
+    let h = Harness::bolt();
+    h.w().host_limit(4);
+    let s = h.sluice();
+    assert_eq!(s.session_capacity(1).unwrap(), 3);
+    assert_eq!(s.session_capacity(0).unwrap(), 4);
+    for n in 0..3 {
+        h.w().session_run(&format!("/work/{n}"), true);
+    }
+    assert_eq!(s.session_capacity(1).unwrap(), 0);
+    // A submission's run still starts into the reserve.
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.step();
+    assert_eq!(h.w().live_runs(), 1);
+    // And a candidate under test on any branch counts against sessions.
+    h.w().kill_session("/work/0");
+    assert_eq!(s.session_capacity(1).unwrap(), 0);
+    assert_eq!(s.session_capacity(0).unwrap(), 1);
+}
+
+/// satisfies: 16, 38; session-runs-1 92
+#[test]
+fn a_session_run_records_what_it_ran_and_never_a_replay() {
+    use sluice_seams::{Enforced, Outcome, RunReport, Source, TaskResult};
+    let h = Harness::bolt();
+    let s = h.sluice();
+    let plan = s.session_plan(BRANCH).unwrap().unwrap();
+    let head = h.w().tip(BRANCH);
+    let task = |name: &str, source: Source| TaskResult {
+        task: name.into(),
+        hash: format!("{name}-hash"),
+        outcome: Outcome::Pass,
+        source,
+    };
+    let report = RunReport {
+        tasks: vec![
+            task(
+                "a:test",
+                Source::Ran {
+                    host: "here".into(),
+                },
+            ),
+            task("b:test", Source::Replayed { from_run_at: None }),
+        ],
+        executor: Enforced {
+            kind: "sandbox".into(),
+            confined: false,
+            processors: None,
+            memory: None,
+            network: None,
+            docker: false,
+        },
+        missing: vec![],
+        timed_out: false,
+    };
+    assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 1);
+    // The same run again is never recorded twice.
+    assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 0);
+    let r = results(&h);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].task, "a:test");
+    assert_eq!(r[0].kind, ResultKind::Ran);
+    let e = r[0].executor.as_ref().unwrap();
+    assert_eq!((e.kind.as_str(), e.confined), ("sandbox", false));
+    assert_eq!(r[0].worktree.as_deref(), Some("/w/a"));
+}
+
 /// satisfies: 84, 16
 #[test]
 fn every_observed_result_records_what_its_executor_enforced() {

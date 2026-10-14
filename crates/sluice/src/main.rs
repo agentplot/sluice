@@ -96,6 +96,7 @@ fn main() {
     let code = match run(
         cli,
         bound.seams(),
+        &bound,
         &bound.branch,
         &SystemClock,
         &Sleep(Duration::from_secs(3)),

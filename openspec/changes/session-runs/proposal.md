@@ -14,7 +14,7 @@ clauses 89 to 96; this change builds the one-host part of it.
 
 ## What Changes
 
-- `sluice exec [<branch>]`, run in an agent's worktree, runs the checks
+- `sluice exec <branch>`, run in an agent's worktree, runs the checks
   the worktree's head affects against the branch; `sluice exec --
   <command>` runs any command. Either takes a slot under the host's run
   bound for as long as it runs, receives the checkout's ports, runs under
@@ -59,7 +59,7 @@ against anything.
   directory and the ports, with the worktree left standing; and the
   worktrunk driver releasing before it removes.
 - `run-bound`: how many runs a host starts at once, counted from the
-  records across submissions' runs and agents' runs, with a reserve
+  host's state across submissions' runs and agents' runs, with a reserve
   submissions' runs alone may use.
 
 ### Modified Capabilities
@@ -74,8 +74,9 @@ against anything.
 - The check seam and the executor: a run started for a session, with
   the same limits and environment as a candidate's, and a record under
   its keys only when the worktree is clean at its head.
-- The records: session runs on the host, counted toward the bound, and
-  their check-run records in the repository's log.
+- The host's state (`$XDG_STATE_HOME/sluice/sessions/`): session runs,
+  counted toward the bound through the check seam. The records: their
+  check-run records in the repository's log.
 - The host config (`~/.config/sluice/config.toml`): `[runs] reserved`.
 - Docs: ADR, `docs/architecture/core.md` (core.10 and core.16 gain the
   session's worktree), the site's commands, configuration, state,

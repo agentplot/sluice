@@ -5,11 +5,13 @@
 //! runs over the fakes in tests and over the real profiles that
 //! [`profiles`] binds.
 
+pub mod exec;
 pub mod identity;
 pub mod instance;
 pub mod profiles;
 pub mod protect;
 pub mod runs;
+pub mod sessions;
 pub mod telemetry;
 
 use std::io::Write;
@@ -119,6 +121,32 @@ pub enum Command {
         /// Who asks: `planner`, `operator`, or a session's agent.
         #[arg(long = "as", default_value = "operator")]
         by: String,
+    },
+    /// Run the checks this worktree's head affects against a branch, or a
+    /// command after `--`, under the host's bound, the worktree's ports
+    /// and the branch's limits.
+    Exec {
+        /// The branch whose policy the run is held to.
+        branch: String,
+        /// The command to run instead of the checks.
+        #[arg(last = true)]
+        command: Vec<String>,
+        /// The worktree to run in.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
+        /// Release the worktree once the run ends.
+        #[arg(long)]
+        release: bool,
+    },
+    /// Release this worktree: run the policy's release command, end what
+    /// its runs left running, free its ports. The worktree stays.
+    Release {
+        /// The worktree to release.
+        #[arg(long, default_value = ".")]
+        worktree: String,
     },
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
@@ -231,6 +259,7 @@ fn requester(by: &str) -> Requester {
 pub fn run(
     cli: Cli,
     seams: Seams<'_>,
+    host: &dyn exec::Host,
     pushers: &dyn Pushers,
     clock: &dyn Clock,
     pause: &dyn Pause,
@@ -365,6 +394,24 @@ pub fn run(
                 Ok(2)
             }
         },
+        Command::Exec {
+            branch,
+            command,
+            worktree,
+            json,
+            release,
+        } => exec::Exec {
+            branch,
+            worktree,
+            command,
+            json,
+            release,
+            host,
+            clock,
+            pause,
+        }
+        .run(&s, out),
+        Command::Release { worktree } => exec::release(&s, host, &worktree, false, out),
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)

@@ -38,13 +38,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, Limits, Network, Outcome, Progress, RunHandle, RunReport, RunRequest,
-    Setting, Settings, Source, TaskLog, TaskResult, Tests,
+    log_tail, Enforced, Limits, Network, Outcome, Place, Progress, RunHandle, RunReport,
+    RunRequest, Setting, Settings, Source, TaskLog, TaskResult, Tests,
 };
 
 use super::moon::Moon;
 use crate::instance::Instance;
 use crate::runs::{Ended, Request, RunState, Runs};
+use crate::sessions::Sessions;
 
 /// What a run's place, environment and toolchain are, for a runner.
 pub struct Context<'a> {
@@ -110,6 +111,8 @@ struct Meta {
 pub struct Checks {
     runs: Runs,
     instance: Instance,
+    /// The host's session runs, when not the host's own directory.
+    sessions: Option<Sessions>,
 }
 
 impl Checks {
@@ -118,11 +121,32 @@ impl Checks {
         Checks {
             runs: Runs::new(common, program),
             instance,
+            sessions: None,
+        }
+    }
+
+    /// The same profile, keeping the host's session runs under `dir`.
+    pub fn with_sessions(mut self, dir: PathBuf) -> Self {
+        self.sessions = Some(Sessions::new(dir));
+        self
+    }
+
+    /// The host's session runs: the count a session run is started under,
+    /// with their lock (session-runs-1 clauses 89, 91).
+    pub fn host_sessions(&self) -> Result<Sessions> {
+        match &self.sessions {
+            Some(s) => Ok(s.clone()),
+            None => Sessions::host(),
         }
     }
 
     pub fn runs(&self) -> &Runs {
         &self.runs
+    }
+
+    /// The host's settings the profile was bound with.
+    pub fn instance(&self) -> &Instance {
+        &self.instance
     }
 }
 
@@ -402,6 +426,91 @@ fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
     }
 }
 
+/// Session-runs-1 clause 95: the release command of `place` as the
+/// policy's `[tests]` and limits state it now, under the same executor,
+/// toolchain and environment its runs had, ports included; `None` when
+/// the policy names no release command. What the toolchain and the
+/// executor write goes in `dir`.
+pub fn release_request(
+    place: &Place,
+    tests: &Settings,
+    limits: &Limits,
+    jobs: usize,
+    dir: &Path,
+) -> Result<Option<Request>> {
+    let Some(release) = release_argv(tests)? else {
+        return Ok(None);
+    };
+    let tool_argv = match tests.get("toolchain") {
+        None => None,
+        Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
+        Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+    };
+    let kind = choose(limits)?;
+    let request = RunRequest {
+        place: place.clone(),
+        revision: sluice_seams::Rev::new(""),
+        required: Vec::new(),
+        since: None,
+        limit: None,
+        limits: limits.clone(),
+        tests: tests.clone(),
+        replay: false,
+    };
+    let mut env = environment(&request, jobs);
+    if kind == Kind::Sandbox {
+        env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let script = dir.join("toolchain.sh");
+    if let Some(argv) = &tool_argv {
+        toolchain(argv, &place.path, &env, &script)?;
+    }
+    let cx = Context {
+        request: &request,
+        env: &env,
+        toolchain: tool_argv.is_some().then_some(script.as_path()),
+        jobs,
+    };
+    let r: Vec<&str> = release.iter().map(String::as_str).collect();
+    let mut argv = cx.argv(&r);
+    if kind == Kind::Sandbox {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let profile = dir.join("sandbox.sb");
+        std::fs::write(
+            &profile,
+            seatbelt(
+                &[canon(&place.path), canon(&place.tmp)],
+                &[],
+                limits.network,
+                &if limits.docker {
+                    docker_sockets()
+                } else {
+                    Vec::new()
+                },
+                user_tmp().as_deref(),
+            ),
+        )?;
+        argv.splice(
+            0..0,
+            [
+                "/usr/bin/sandbox-exec".to_string(),
+                "-f".into(),
+                profile.to_string_lossy().into_owned(),
+            ],
+        );
+    }
+    Ok(Some(Request {
+        argv: Vec::new(),
+        cwd: place.path.clone(),
+        env,
+        limit: None,
+        grace: 10,
+        meta: serde_json::Value::Null,
+        release: Some(argv),
+    }))
+}
+
 pub fn hostname() -> String {
     nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().into_owned())
@@ -430,7 +539,13 @@ impl Tests for Checks {
         if kind == Kind::Sandbox {
             env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
         }
-        let name = &request.place.name;
+        // A session's place takes a new run each time, and keeps the last
+        // (session-runs-1 clause 94).
+        let name = &if crate::runs::is_session(&request.place.name) {
+            self.runs.next_run(&request.place.name)?
+        } else {
+            request.place.name.clone()
+        };
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
         if let Some(argv) = &tool_argv {
@@ -562,6 +677,10 @@ impl Tests for Checks {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.instance.bound)
+    }
+
+    fn sessions(&self) -> Result<usize> {
+        Ok(self.host_sessions()?.running()?.len())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {

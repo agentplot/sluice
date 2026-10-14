@@ -8,11 +8,15 @@
 //! ```toml
 //! [runs]
 //! max = 2
+//! reserved = 1
 //!
 //! [forge]
 //! app_id = 123456
 //! key = "~/.config/sluice/app.pem"
 //! ```
+//!
+//! `reserved` is how many of the bound's slots session runs never take,
+//! so submissions' runs start first (session-runs-1 clause 91).
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +27,8 @@ use serde::Deserialize;
 pub struct Instance {
     /// The most runs under test at once.
     pub bound: usize,
+    /// The slots of the bound that session runs never take (91).
+    pub reserved: usize,
     /// The processors sluice may use: the process's affinity and its
     /// cgroup's quota where the host has them.
     pub processors: usize,
@@ -57,6 +63,7 @@ struct ForgeForm {
 #[serde(deny_unknown_fields)]
 struct RunsForm {
     max: Option<i64>,
+    reserved: Option<i64>,
 }
 
 impl Instance {
@@ -83,12 +90,22 @@ impl Instance {
             Some(n) if n >= 1 => n as usize,
             Some(n) => bail!("[runs] max must be at least 1, not {n}"),
         };
+        let reserved = match form.runs.reserved {
+            None => 0,
+            Some(n) if n >= 0 && (n as usize) < bound => n as usize,
+            Some(n) if n < 0 => bail!("[runs] reserved must be at least 0, not {n}"),
+            Some(n) => bail!(
+                "[runs] reserved = {n} leaves no slot of [runs] max = {bound} for session runs: \
+                 it must be less than the bound"
+            ),
+        };
         let forge = form
             .forge
             .map(|f| forge(f, home().as_deref()))
             .transpose()?;
         Ok(Instance {
             bound,
+            reserved,
             processors,
             forge,
         })
@@ -129,6 +146,18 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
+}
+
+/// The host's own state, shared by every repository on it:
+/// `$XDG_STATE_HOME/sluice` (default `~/.local/state/sluice`).
+pub fn state_dir() -> Result<PathBuf> {
+    let state = match std::env::var_os("XDG_STATE_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+            .join(".local")
+            .join("state"),
+    };
+    Ok(state.join("sluice"))
 }
 
 fn config_path() -> Option<PathBuf> {

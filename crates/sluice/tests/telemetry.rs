@@ -2,6 +2,8 @@
 //! its metric events, over the fakes. What it decides is the same with
 //! telemetry on or off, which the CLI's tests show with it off.
 
+mod support;
+
 use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 
@@ -72,6 +74,10 @@ fn submit(f: &Fakes, worktree: &str, agent: &str, changes: &[(&str, Option<&str>
         run(
             cli,
             f.seams(),
+            &support::FakeHost {
+                world: f.world.clone(),
+                reserved: 0,
+            },
             &(),
             &f.clock,
             &Rounds(Cell::new(0)),

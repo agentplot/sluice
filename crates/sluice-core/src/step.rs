@@ -34,7 +34,7 @@ use crate::order::{self, Entry};
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord, LandingIntent,
-    OutboxItem, ResultKind, ResultLine, State, Tested, ToldRecord,
+    OutboxItem, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice};
@@ -487,44 +487,30 @@ impl Sluice<'_> {
                     let mut results = self.results()?;
                     let mut fresh = Vec::new();
                     for t in &report.tasks {
-                        let (kind, host, executor, event) = match &t.source {
-                            Source::Ran { host } => (
-                                ResultKind::Ran,
-                                Some(host.clone()),
-                                Some(report.executor.clone()),
-                                Event::Ran {
-                                    combination: c.revision.clone(),
-                                    task: t.task.clone(),
-                                    hash: t.hash.clone(),
-                                    outcome: t.outcome,
-                                    host: host.clone(),
-                                },
-                            ),
-                            Source::Replayed { from_run_at } => (
-                                ResultKind::Replayed,
-                                None,
-                                None,
-                                Event::Replayed {
-                                    combination: c.revision.clone(),
-                                    task: t.task.clone(),
-                                    hash: t.hash.clone(),
-                                    outcome: t.outcome,
-                                    from_run_at: from_run_at.clone(),
-                                },
-                            ),
+                        let event = match &t.source {
+                            Source::Ran { host } => Event::Ran {
+                                combination: c.revision.clone(),
+                                task: t.task.clone(),
+                                hash: t.hash.clone(),
+                                outcome: t.outcome,
+                                host: host.clone(),
+                            },
+                            Source::Replayed { from_run_at } => Event::Replayed {
+                                combination: c.revision.clone(),
+                                task: t.task.clone(),
+                                hash: t.hash.clone(),
+                                outcome: t.outcome,
+                                from_run_at: from_run_at.clone(),
+                            },
                         };
-                        let r = ResultLine {
-                            schema: crate::records::RESULT_SCHEMA.into(),
-                            at: now.into(),
-                            kind,
-                            task: t.task.clone(),
-                            hash: t.hash.clone(),
-                            outcome: t.outcome,
-                            host,
-                            executor,
-                            branch: line.branch.clone(),
-                            combination: c.revision.clone(),
-                        };
+                        let r = ResultLine::of(
+                            now,
+                            t,
+                            &report.executor,
+                            &line.branch,
+                            &c.revision,
+                            None,
+                        );
                         if !results.iter().any(|x| x.same_as(&r)) {
                             fresh.push(r);
                         }
@@ -943,14 +929,17 @@ impl Sluice<'_> {
 
     /// 71: how many more runs this instance starts now: its bound less the
     /// candidates under test in the records of the branches it serves,
-    /// `line` as this step has it.
+    /// `line` as this step has it, and less the host's session runs
+    /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let mut under = line
-            .doc
-            .candidates
-            .iter()
-            .filter(|c| c.state.under_test())
-            .count();
+        let sessions = self.seams.tests.sessions()?;
+        let mut under = sessions
+            + line
+                .doc
+                .candidates
+                .iter()
+                .filter(|c| c.state.under_test())
+                .count();
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
@@ -965,6 +954,30 @@ impl Sluice<'_> {
             }
         }
         Ok(self.seams.tests.bound()?.saturating_sub(under))
+    }
+
+    /// Session-runs-1 clauses 89 and 91: how many session runs may start
+    /// now: the bound less `reserved`, the slots kept for submissions'
+    /// runs, less the candidates under test on every branch and the
+    /// session runs. A session run belongs to the host, not to a branch an
+    /// instance serves, so every branch's runs count against it.
+    pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
+        let mut under = self.seams.tests.sessions()?;
+        for b in self.seams.state.branches()? {
+            under += self
+                .read_line(&b)?
+                .doc
+                .candidates
+                .iter()
+                .filter(|c| c.state.under_test())
+                .count();
+        }
+        Ok(self
+            .seams
+            .tests
+            .bound()?
+            .saturating_sub(reserved)
+            .saturating_sub(under))
     }
 
     /// 13, 14, 71: start candidates up to the window, and up to what the
