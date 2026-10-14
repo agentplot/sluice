@@ -5,11 +5,14 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
+import mermaid from 'astro-mermaid';
 
 export default defineConfig({
   site: 'https://agentplot.github.io',
   base: '/sluice',
   integrations: [
+    // Before Starlight, so ```mermaid blocks become diagrams in the browser.
+    mermaid({ theme: 'default', autoTheme: true }),
     starlight({
       title: 'sluice',
       description: 'A merge queue for agents working in parallel worktrees.',
@@ -25,6 +28,7 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/agentplot/sluice/edit/main/site/',
       },
+      customCss: ['./src/styles/mermaid.css'],
       plugins: [starlightLinksValidator()],
       sidebar: [
         { label: 'Start', link: '/' },

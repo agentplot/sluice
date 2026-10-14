@@ -48,7 +48,8 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 | 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
-| 23 | `main` kept in step with the shared remote | C.4 | to design: whether every push goes through sluice |
+| 23 | `main` kept in step with the shared remote | C.4 | designing, with 24: built once 24's design is settled |
+| 24 | pull requests: one per submission, and one opened by hand submitted | C.5 | designing |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -263,9 +264,28 @@ needed.
   pushed-refs profile (C.4): fetch before a round reads the branch, form
   on the remote's revision, land with a push leased on the revision
   read, the forge's rules letting only sluice's identity move the branch.
-  To settle first: whether every push to `main` goes through sluice, as
-  C.4 has it, or the forge stays open to direct pushes and pull requests,
-  which sluice would then take as the branch moving under its queue.
+  sluice's identity is the operator's own GitHub account for now; a
+  GitHub App, named as the ruleset's one bypass, replaces it later.
+  Only sluice's identity moves `main` on GitHub; a person or a merged
+  pull request moving it is an outside move, which sluice takes as the
+  branch moving under its queue. Only the branch is pushed: on one
+  machine the records stay local files.
+- **24, pull requests.** A pull request is a submission, from a branch
+  in the repository (never a fork), opened by `submit` or by hand. It
+  waits until it is ready: out of draft, and every condition the
+  branch's policy names holds, such as an approving review or a check
+  another system posts (a QA team's approval on a test deployment).
+  Only then does it enter the queue, sluice's ordered list of what is
+  ready to land, which sluice tests in combination and lands by pushing
+  the branch (23); the forge then marks the request merged because its
+  head is in the branch. sluice posts each pull request's state as a
+  check on its head, and on a waiting one a forecast each round: whether
+  it would merge cleanly behind the queue, with no checks run. The
+  conditions are in sluice's policy for the branch, read from the
+  branch's revision (core.15), never from the forge's branch rules.
+  None of this needs a GitHub Action: sluice's checks
+  run where sluice runs them. GitHub as the executor and the stepper is
+  a separate deployment, designed apart from this.
 
 ## Decisions this pass builds on
 
