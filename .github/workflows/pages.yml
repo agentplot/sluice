@@ -47,6 +47,9 @@ jobs:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
         working-directory: site
+      # The build draws the diagrams in a headless Chromium (astro.config.mjs).
+      - run: bunx playwright install --with-deps chromium
+        working-directory: site
       - run: bun run build
         working-directory: site
       - uses: actions/upload-pages-artifact@v3

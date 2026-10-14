@@ -5,14 +5,33 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
-import mermaid from 'astro-mermaid';
+import rehypeMermaid from 'rehype-mermaid';
+
+// ```mermaid blocks are drawn as SVG at build time, a light and a dark one
+// in a <picture>, so a page needs no script to show them. Drawing needs a
+// Chromium: Playwright's (PLAYWRIGHT_BROWSERS_PATH in the devenv shell).
+// The dark one's arrows and labels are near white on the dark page.
+const dark = {
+  theme: 'dark',
+  themeVariables: {
+    lineColor: '#d8dce4',
+    textColor: '#f2f3f5',
+    signalColor: '#d8dce4',
+    signalTextColor: '#f2f3f5',
+    edgeLabelBackground: '#2a2f38',
+    titleColor: '#f2f3f5',
+  },
+};
 
 export default defineConfig({
   site: 'https://agentplot.github.io',
   base: '/sluice',
+  markdown: {
+    rehypePlugins: [
+      [rehypeMermaid, { strategy: 'img-svg', dark, launchOptions: { channel: 'chromium' } }],
+    ],
+  },
   integrations: [
-    // Before Starlight, so ```mermaid blocks become diagrams in the browser.
-    mermaid({ theme: 'default', autoTheme: true }),
     starlight({
       title: 'sluice',
       description: 'A merge queue for agents working in parallel worktrees.',
@@ -28,7 +47,6 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/agentplot/sluice/edit/main/site/',
       },
-      customCss: ['./src/styles/mermaid.css'],
       plugins: [starlightLinksValidator()],
       sidebar: [
         { label: 'Start', link: '/' },
