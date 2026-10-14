@@ -629,6 +629,25 @@ pub fn flat_name(name: &str) -> String {
     }
 }
 
+/// A place's name as the one directory its checks work in, its checkout
+/// or its scratch directory: `+`, `%` and `/` written `+2B`, `+25` and
+/// `+2F`, so no two names share one and the path holds no `%`. LLVM and
+/// other tools make a temporary file's name from a pattern in which every
+/// `%` is a random character, the directories' included, so a `%` in the
+/// place's path sends clang's temporary files into a directory that does
+/// not exist.
+pub fn dir_name(name: &str) -> String {
+    assert!(!name.is_empty(), "a place has a name");
+    let flat = name
+        .replace('+', "+2B")
+        .replace('%', "+25")
+        .replace('/', "+2F");
+    match flat.strip_prefix('.') {
+        Some(rest) => format!("+2E{rest}"),
+        None => flat,
+    }
+}
+
 /// How the run in `dir` ended, once its supervisor wrote it.
 pub fn ended(dir: &Path) -> Result<Option<Ended>> {
     read_ended(dir)
@@ -664,4 +683,34 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dir_name;
+
+    /// A place's directory name holds no `%` and no `/`, and no two names
+    /// share one.
+    #[test]
+    fn a_places_directory_holds_no_percent() {
+        let names = [
+            "sluice/try/main/39",
+            "session//Users/me/wt",
+            "a+2Fb",
+            "a/b",
+            "a%2Fb",
+            ".hidden",
+            "+2Ehidden",
+        ];
+        let dirs: Vec<String> = names.iter().map(|n| dir_name(n)).collect();
+        for d in &dirs {
+            assert!(
+                !d.contains('%') && !d.contains('/') && !d.starts_with('.'),
+                "{d}"
+            );
+        }
+        let unique: std::collections::BTreeSet<&String> = dirs.iter().collect();
+        assert_eq!(unique.len(), names.len(), "{dirs:?}");
+        assert_eq!(dir_name("sluice/try/main/39"), "sluice+2Ftry+2Fmain+2F39");
+    }
 }
