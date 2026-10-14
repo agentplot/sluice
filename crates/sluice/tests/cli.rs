@@ -47,6 +47,7 @@ fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
             world: f.world.clone(),
             reserved: 0,
         },
+        &(),
         &f.clock,
         &Rounds(Cell::new(0)),
         &mut out,
@@ -308,7 +309,7 @@ fn exec_with(f: &Fakes, reserved: usize, pause: &dyn Pause, args: &[&str]) -> (i
         world: f.world.clone(),
         reserved,
     };
-    let code = run(cli, f.seams(), &host, &f.clock, pause, &mut out).unwrap();
+    let code = run(cli, f.seams(), &host, &(), &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 
@@ -639,6 +640,7 @@ fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
         cli,
         f.seams(),
         &host,
+        &(),
         &f.clock,
         &Rounds(Cell::new(0)),
         &mut out,

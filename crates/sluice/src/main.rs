@@ -16,6 +16,34 @@ fn main() {
         }
         return;
     }
+    // git's credential helper needs no repository: what it gives is in
+    // its environment.
+    if let Command::Credential { operation } = &cli.command {
+        let mut out = std::io::stdout();
+        if let Err(e) = sluice::identity::helper(operation, &mut std::io::stdin().lock(), &mut out)
+        {
+            eprintln!("sluice credential: {e:#}");
+            std::process::exit(3);
+        }
+        return;
+    }
+    // The forge check reads the host's config itself, and says what in it
+    // is wrong rather than failing on it.
+    if let Command::Forge {
+        command: sluice::ForgeCommand::Check { branch },
+    } = &cli.command
+    {
+        let code = std::env::current_dir()
+            .map_err(anyhow::Error::from)
+            .and_then(|dir| {
+                sluice::profiles::forge_check(&dir, branch.as_deref(), &mut std::io::stdout())
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("sluice: {e:#}");
+                3
+            });
+        std::process::exit(code);
+    }
     // Every ref update in every worktree runs the hook: leave at once
     // unless git asks for the decision.
     if let Command::Hook { state, .. } = &cli.command {
@@ -69,6 +97,7 @@ fn main() {
         cli,
         bound.seams(),
         &bound,
+        &bound.branch,
         &SystemClock,
         &Sleep(Duration::from_secs(3)),
         &mut out,

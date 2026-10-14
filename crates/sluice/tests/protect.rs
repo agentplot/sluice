@@ -40,7 +40,7 @@ fn protected(name: &str) -> (Repo, PathBuf) {
 }
 
 fn sl(repo: &Repo, args: &[&str]) -> Output {
-    Command::new(sluice())
+    support::isolated(&mut Command::new(sluice()))
         .current_dir(repo.dir())
         .args(args)
         .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
@@ -185,7 +185,7 @@ fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
     std::fs::write(session.join("s.txt"), "s\n").unwrap();
     git_in(&repo, &session, &["add", "-A"]);
     git_in(&repo, &session, &["commit", "-q", "-m", "s"]);
-    let out = Command::new(sluice())
+    let out = support::isolated(&mut Command::new(sluice()))
         .current_dir(&session)
         .args(["submit", "bolt/x", "--no-wait"])
         .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
@@ -252,7 +252,8 @@ fn apples_git_is_refused_too() {
     }
     let (repo, _) = protected("protect-apple");
     let tip = repo.rev("bolt/x");
-    let out = Command::new("/usr/bin/git")
+    let out = support::isolated(&mut Command::new("/usr/bin/git"))
+        .args(["-c", "credential.helper="])
         .current_dir(repo.dir())
         .args(["update-ref", "refs/heads/bolt/x", "unit/a"])
         .env_remove("GIT_DIR")
@@ -297,7 +298,7 @@ fn installing_is_idempotent_and_follows_the_binary() {
     let moved = repo.dir().join(".git/moved-sluice");
     std::fs::copy(sluice(), &moved).unwrap();
     std::fs::set_permissions(&moved, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let out = Command::new(&moved)
+    let out = support::isolated(&mut Command::new(&moved))
         .current_dir(repo.dir())
         .arg("protect")
         .stdin(Stdio::null())

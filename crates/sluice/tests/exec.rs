@@ -61,7 +61,7 @@ impl Setup {
     }
 
     fn sluice(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_sluice"))
+        support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
             .args(args)
             .current_dir(&self.worktree)
             .env("XDG_CONFIG_HOME", self.config.path())

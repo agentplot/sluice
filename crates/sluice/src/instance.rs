@@ -1,6 +1,7 @@
 //! The instance's own settings, never a policy's: how many runs it has
 //! under test at once and how many processors each is given (71; ADR
-//! 0012; `docs/plans/phase-1-integrations.md` section 4).
+//! 0012; `docs/plans/phase-1-integrations.md` section 4), and the
+//! identity it pushes as on a forge (C.4 pushed refs).
 //!
 //! `$XDG_CONFIG_HOME/sluice/config.toml` (default `~/.config`):
 //!
@@ -8,6 +9,10 @@
 //! [runs]
 //! max = 2
 //! reserved = 1
+//!
+//! [forge]
+//! app_id = 123456
+//! key = "~/.config/sluice/app.pem"
 //! ```
 //!
 //! `reserved` keeps that many runs of the bound for submissions, which
@@ -18,7 +23,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
     /// The most runs under test at once.
     pub bound: usize,
@@ -28,6 +33,16 @@ pub struct Instance {
     /// The processors sluice may use: the process's affinity and its
     /// cgroup's quota where the host has them.
     pub processors: usize,
+    /// The app sluice pushes as, where the host names one.
+    pub forge: Option<Forge>,
+}
+
+/// The host's `[forge]` table: the app sluice is on the forge, and the
+/// path of its private key on this host, which no repository holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Forge {
+    pub app_id: u64,
+    pub key: PathBuf,
 }
 
 #[derive(Deserialize, Default)]
@@ -35,6 +50,14 @@ pub struct Instance {
 struct ConfigForm {
     #[serde(default)]
     runs: RunsForm,
+    forge: Option<ForgeForm>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForgeForm {
+    app_id: u64,
+    key: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -77,10 +100,15 @@ impl Instance {
                  it must be less than the bound"
             ),
         };
+        let forge = form
+            .forge
+            .map(|f| forge(f, home().as_deref()))
+            .transpose()?;
         Ok(Instance {
             bound,
             reserved,
             processors,
+            forge,
         })
     }
 
@@ -89,6 +117,36 @@ impl Instance {
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
     }
+}
+
+/// The `[forge]` table, its key's path with `~` expanded. A key anyone
+/// but its owner may read is refused.
+fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
+    let key = match (form.key.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        (Some(_), None) => bail!("[forge] key {}: no home directory to expand ~ in", form.key),
+        (None, _) => PathBuf::from(&form.key),
+    };
+    let meta = std::fs::metadata(&key).with_context(|| format!("[forge] key {}", key.display()))?;
+    let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o777;
+    if mode & 0o077 != 0 {
+        bail!(
+            "[forge] key {} has mode {mode:04o}, which lets others read it: \
+             give it mode 0600 (chmod 600 {})",
+            key.display(),
+            key.display()
+        );
+    }
+    Ok(Forge {
+        app_id: form.app_id,
+        key,
+    })
+}
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The host's own state, shared by every repository on it:
@@ -106,7 +164,7 @@ pub fn state_dir() -> Result<PathBuf> {
 fn config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+        _ => home()?.join(".config"),
     };
     Some(base.join("sluice").join("config.toml"))
 }
@@ -143,5 +201,55 @@ mod tests {
                 .bound,
             2
         );
+    }
+
+    /// The `[forge]` table: absent, present, and a key others may read
+    /// refused with the file and the mode it needs.
+    #[test]
+    fn the_forge_table_and_its_key() {
+        let dir = std::env::temp_dir().join(format!("sluice-forge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("app.pem");
+        std::fs::write(&key, "key").unwrap();
+        let set = |mode: u32| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let table = format!(
+            "[forge]\napp_id = 42\nkey = {:?}\n",
+            key.display().to_string()
+        );
+
+        assert_eq!(with("[runs]\nmax = 1\n", 4).unwrap().forge, None);
+
+        set(0o600);
+        assert_eq!(
+            with(&table, 4).unwrap().forge,
+            Some(Forge {
+                app_id: 42,
+                key: key.clone()
+            })
+        );
+
+        set(0o644);
+        let err = format!("{:#}", with(&table, 4).unwrap_err());
+        assert!(err.contains(&key.display().to_string()), "{err}");
+        assert!(err.contains("0600"), "{err}");
+
+        set(0o640);
+        assert!(with(&table, 4).is_err());
+
+        set(0o400);
+        let home = forge(
+            ForgeForm {
+                app_id: 1,
+                key: "~/app.pem".into(),
+            },
+            Some(&dir),
+        )
+        .unwrap();
+        assert_eq!(home.key, key);
+        assert!(with("[forge]\napp_id = 1\n", 4).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

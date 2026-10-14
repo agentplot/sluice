@@ -3,9 +3,46 @@
 
 #![allow(dead_code)]
 
+pub mod http;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Out of reach of whatever runs git under `c`, sluice included: the
+/// user's and the system's git config, so their credential helpers, and
+/// every prompt and askpass program. No test may reach the user's
+/// credentials or ask anyone anything.
+pub fn isolated(c: &mut Command) -> &mut Command {
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
+}
+
+/// git, [`isolated`], with every credential helper cleared before any a
+/// test gives.
+pub fn git_command() -> Command {
+    let mut c = Command::new("git");
+    isolated(&mut c).args(["-c", "credential.helper="]);
+    c
+}
+
+/// A repository's own config clears credential helpers and askpass, so
+/// the git sluice's profiles run in it reaches none of the user's.
+fn no_credentials(dir: &Path) {
+    for (key, value) in [("credential.helper", ""), ("core.askPass", "")] {
+        let out = git_command()
+            .arg("--git-dir")
+            .arg(dir)
+            .args(["config", key, value])
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git config {key}");
+    }
+}
 
 /// A directory removed when the test ends.
 pub struct Scratch(pub PathBuf);
@@ -45,6 +82,7 @@ impl Repo {
             scratch: Scratch::new(name),
         };
         repo.git(&["init", "-q", "-b", "main"]);
+        no_credentials(&repo.dir().join(".git"));
         repo.write("README", "scratch\n");
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "root"]);
@@ -61,6 +99,7 @@ impl Repo {
         let bare = Scratch::new("origin.git");
         let at = bare.path().to_str().unwrap();
         self.git(&["clone", "-q", "--bare", ".", at]);
+        no_credentials(bare.path());
         self.git(&["remote", "add", "origin", at]);
         self.git(&["fetch", "-q", "origin"]);
         bare
@@ -72,6 +111,7 @@ impl Repo {
             scratch: Scratch::new(name),
         };
         repo.git(&["clone", "-q", remote.to_str().unwrap(), "."]);
+        no_credentials(&repo.dir().join(".git"));
         repo
     }
 
@@ -98,14 +138,12 @@ impl Repo {
     }
 
     pub fn git_raw(&self, args: &[&str]) -> std::process::Output {
-        Command::new("git")
+        git_command()
             .current_dir(self.dir())
             .args(args)
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("XDG_CONFIG_HOME", self.dir().join(".git/no-config"))
             .env("GIT_AUTHOR_NAME", "test")
             .env("GIT_AUTHOR_EMAIL", "test@localhost")

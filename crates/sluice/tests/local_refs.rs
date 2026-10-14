@@ -173,7 +173,7 @@ fn commit_writes_the_landing() {
         repo.rev(&format!("{candidate}^{{tree}}"))
     );
     let body = repo.git(&["log", "-1", "--format=%B", landed.as_str()]);
-    let out = std::process::Command::new("git")
+    let out = support::git_command()
         .args(["interpret-trailers", "--parse"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

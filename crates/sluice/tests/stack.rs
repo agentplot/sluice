@@ -98,7 +98,8 @@ struct Setup {
 impl Setup {
     fn command(&self, dir: &Path) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
-        c.current_dir(dir)
+        support::isolated(&mut c)
+            .current_dir(dir)
             .env("XDG_CONFIG_HOME", self.config.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env_remove("SLUICE_AGENT")
@@ -331,6 +332,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             bound: 2,
             reserved: 0,
             processors: 2,
+            forge: None,
         },
     );
     let checkout = Settings::from([

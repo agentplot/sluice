@@ -16,7 +16,7 @@ mod support;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -197,14 +197,12 @@ struct Real {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::git_command()
         .current_dir(dir)
         .args(args)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_AUTHOR_NAME", "test")
         .env("GIT_AUTHOR_EMAIL", "test@localhost")
         .env("GIT_COMMITTER_NAME", "test")
@@ -268,6 +266,7 @@ impl Real {
                 bound: 4,
                 reserved: 0,
                 processors: 4,
+                forge: None,
             },
         )
         .expect("the profiles bind");

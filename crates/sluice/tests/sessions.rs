@@ -116,7 +116,7 @@ fn hold_the_sessions_lock_until_killed() {
 #[test]
 fn a_session_run_is_begun_under_the_hosts_lock() {
     let dir = Scratch::new("sessions-lock");
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = support::isolated(&mut Command::new(std::env::current_exe().unwrap()))
         .args([
             "--exact",
             "hold_the_sessions_lock_until_killed",
@@ -166,6 +166,7 @@ fn the_check_seam_counts_the_hosts_session_runs() {
             bound: 2,
             reserved: 0,
             processors: 2,
+            forge: None,
         },
     )
     .with_sessions(dir.path().join("sessions"));

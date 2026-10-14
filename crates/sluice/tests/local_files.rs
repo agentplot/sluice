@@ -59,7 +59,7 @@ fn the_lock_is_one_holder_and_dies_with_it() {
     drop(held);
     drop(s.lock("bolt/x").unwrap().expect("free again"));
 
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = support::isolated(&mut Command::new(std::env::current_exe().unwrap()))
         .args(["--exact", "hold_the_lock_until_killed", "--nocapture"])
         .env("SLUICE_TEST_COMMON", dir.path())
         .env("SLUICE_TEST_BRANCH", "bolt/x")
@@ -84,7 +84,7 @@ fn the_lock_is_one_holder_and_dies_with_it() {
 #[test]
 fn a_waiting_lock_is_taken_when_the_holder_lets_go() {
     let dir = Scratch::new("wait-lock");
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = support::isolated(&mut Command::new(std::env::current_exe().unwrap()))
         .args(["--exact", "hold_the_lock_until_killed", "--nocapture"])
         .env("SLUICE_TEST_COMMON", dir.path())
         .env("SLUICE_TEST_BRANCH", "bolt/x")

@@ -86,7 +86,8 @@ impl Scratch {
         let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         let mut c = Command::new(program);
-        c.current_dir(dir)
+        support::isolated(&mut c)
+            .current_dir(dir)
             .env("PATH", path)
             .env("XDG_CONFIG_HOME", &self.config)
             .env("XDG_STATE_HOME", &self.state)

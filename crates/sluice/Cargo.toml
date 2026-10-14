@@ -32,6 +32,8 @@ tracing-opentelemetry.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
+jsonwebtoken.workspace = true
+ureq.workspace = true
 
 # A profile's acceptance tests that name its tool live under a profile
 # directory (rule core.1).
@@ -46,6 +48,10 @@ path = "tests/profiles/places.rs"
 [[test]]
 name = "worktrunk"
 path = "tests/profiles/worktrunk.rs"
+
+[[test]]
+name = "forge"
+path = "tests/profiles/forge.rs"
 
 [[test]]
 name = "conformance"

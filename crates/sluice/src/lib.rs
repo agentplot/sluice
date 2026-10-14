@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod exec;
+pub mod identity;
 pub mod instance;
 pub mod profiles;
 pub mod protect;
@@ -160,6 +161,45 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
+    /// sluice's identity on a forge.
+    Forge {
+        #[command(subcommand)]
+        command: ForgeCommand,
+    },
+    /// Run by sluice's own git calls as their credential helper:
+    /// `credential get`, git's credential protocol on stdin.
+    #[command(hide = true)]
+    Credential { operation: String },
+}
+
+/// Who pushes a branch that lives on a remote (C.4 pushed refs), for
+/// `sluice status`.
+pub struct Pusher {
+    pub remote: String,
+    /// sluice's own identity there; `None` for the host's credentials.
+    pub identity: Option<String>,
+}
+
+pub trait Pushers {
+    /// `None` for a branch that lives on no remote.
+    fn pusher(&self, branch: &str) -> Result<Option<Pusher>>;
+}
+
+/// Every branch local.
+impl Pushers for () {
+    fn pusher(&self, _: &str) -> Result<Option<Pusher>> {
+        Ok(None)
+    }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ForgeCommand {
+    /// Whether the host's [forge] identity is set up so only sluice may
+    /// move the branch on its remote; exits 1 naming what is not.
+    Check {
+        /// The branch; the one checked out here by default.
+        branch: Option<String>,
+    },
 }
 
 /// What a waiting command does between rounds.
@@ -220,6 +260,7 @@ pub fn run(
     cli: Cli,
     seams: Seams<'_>,
     host: &dyn exec::Host,
+    pushers: &dyn Pushers,
     clock: &dyn Clock,
     pause: &dyn Pause,
     out: &mut dyn Write,
@@ -292,7 +333,8 @@ pub fn run(
                 }
                 Some(sub) => {
                     let branch = sub.branch.clone();
-                    write_status(&s.status(&branch)?, &[sub], out)?;
+                    let pusher = pushers.pusher(&branch)?;
+                    write_status(&s.status(&branch)?, pusher.as_ref(), &[sub], out)?;
                     Ok(0)
                 }
             },
@@ -305,7 +347,8 @@ pub fn run(
                         serde_json::to_string_pretty(&status_json(&status))?
                     )?;
                 } else {
-                    write_status(&status, &status.submissions, out)?;
+                    let pusher = pushers.pusher(&target)?;
+                    write_status(&status, pusher.as_ref(), &status.submissions, out)?;
                 }
                 Ok(0)
             }
@@ -382,6 +425,13 @@ pub fn run(
                 protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
                 writeln!(out, "branch protection installed")?;
             }
+            Ok(0)
+        }
+        Command::Forge {
+            command: ForgeCommand::Check { branch },
+        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), out),
+        Command::Credential { operation } => {
+            identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)
         }
         Command::Hook { name, state } => match name.as_str() {
@@ -682,7 +732,12 @@ fn detail(branch: &str, s: &Submission) -> String {
     }
 }
 
-fn write_status(status: &Status, subs: &[Submission], out: &mut dyn Write) -> Result<()> {
+fn write_status(
+    status: &Status,
+    pusher: Option<&Pusher>,
+    subs: &[Submission],
+    out: &mut dyn Write,
+) -> Result<()> {
     let at = status.at.as_ref().map_or("nothing", |r| r.short());
     let up_to = status
         .parallel
@@ -692,6 +747,21 @@ fn write_status(status: &Status, subs: &[Submission], out: &mut dyn Write) -> Re
         "{} at {at} · testing {} at once{up_to}",
         status.branch, status.testing
     )?;
+    match pusher {
+        None => {}
+        Some(Pusher {
+            remote,
+            identity: Some(who),
+        }) => writeln!(out, "pushed to {remote} as {who}")?,
+        Some(Pusher {
+            remote,
+            identity: None,
+        }) => writeln!(
+            out,
+            "pushed to {remote} with this host's own git credentials: \
+             sluice has no identity of its own there"
+        )?,
+    }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs
         .iter()
