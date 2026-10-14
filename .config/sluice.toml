@@ -32,3 +32,5 @@ trust = ["open", "sandbox", "container", "cache"]
 required = ["#check-fast", "#check-tools", "#check-e2e"]
 batch = true
 trust = ["confined", "sandbox"]
+# main lives on GitHub: fetched every round, landed by a leased push.
+remote = "origin"
