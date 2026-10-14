@@ -270,17 +270,18 @@ needed.
   pull request moving it is an outside move, which sluice takes as the
   branch moving under its queue. Only the branch is pushed: on one
   machine the records stay local files.
-- **24, pull requests.** A pull request shows a submission and is not
-  the queue: the queue stays in sluice's records. `submit` pushes the
-  session's branch and opens or updates a pull request to the branch;
-  sluice posts the entry's state as a check on its head and comments
-  why when it is removed; the landing pushes the branch (23), and the
-  forge then marks the request merged because its head is in the
-  branch; a withdrawal closes it. A pull request opened by hand, outside
-  `submit`, is noticed by a round and submitted like any other. None of
-  this needs a GitHub Action: the checks run where sluice runs them.
-  GitHub as the executor and the stepper is a separate deployment,
-  designed apart from this.
+- **24, pull requests.** A pull request is a submission, from a branch
+  in the repository (never a fork), opened by `submit` or by hand. It
+  waits until it is ready: out of draft, and every condition the
+  branch's policy names holds, such as an approving review or a check
+  another system posts (a QA team's approval on a test deployment).
+  Only then does it enter the queue, sluice's ordered list of what is
+  ready to land, which sluice tests in combination and lands by pushing
+  the branch (23); the forge then marks the request merged because its
+  head is in the branch. sluice posts each pull request's state as a
+  check on its head. None of this needs a GitHub Action: sluice's checks
+  run where sluice runs them. GitHub as the executor and the stepper is
+  a separate deployment, designed apart from this.
 
 ## Decisions this pass builds on
 
