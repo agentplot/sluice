@@ -9,8 +9,8 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 
 ## 1. The host config
 
-- [ ] 1.1 Add `[forge] app_id` and `key` to the host config in `crates/sluice/src/instance.rs`, refusing a key file with group or other permission bits. Verify with unit tests: absent, present, a `0644` key refused with the file and `0600` named.
-- [ ] 1.2 Document `[forge]` in the host config section of `site/src/content/docs/reference/configuration.md`. Verify `devenv shell -- moon run site:prose` passes.
+- [x] 1.1 Add `[forge] app_id` and `key` to the host config in `crates/sluice/src/instance.rs`, refusing a key file with group or other permission bits. Verify with unit tests: absent, present, a `0644` key refused with the file and `0600` named.
+- [x] 1.2 Document `[forge]` in the host config section of `site/src/content/docs/reference/configuration.md`. Verify `devenv shell -- moon run site:prose` passes.
 
 ## 2. Tokens
 

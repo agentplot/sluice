@@ -243,6 +243,7 @@ impl Real {
             Instance {
                 bound: 4,
                 processors: 4,
+                forge: None,
             },
         )
         .expect("the profiles bind");

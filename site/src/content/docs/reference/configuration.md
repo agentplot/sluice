@@ -180,17 +180,37 @@ a tool submits only once the work is approved.
 
 ## The host's config: `~/.config/sluice/config.toml`
 
-How many runs a host tests at once is the host's own setting, not the
-repository's:
+How many runs a host tests at once, and who sluice pushes as, are the
+host's own settings, not the repository's:
 
 ```toml
 [runs]
 max = 2    # default: a quarter of the processors, shared equally between runs
+
+[forge]
+app_id = 123456                  # the GitHub App sluice pushes as
+key = "~/.config/sluice/app.pem" # its private key on this host
 ```
 
 The bound is the instance's: sluice starts no more runs at once than it,
 counted from the state of every branch the instance serves
 ([ADR 0012](/sluice/decisions/0012/)).
+
+### `[forge]`
+
+The app sluice pushes as, for every branch whose `remote` is on GitHub.
+sluice makes a token from the key for each repository when it needs
+one, keeps it in memory, and gives it only to its own fetches and
+pushes. An agent's own git gets nothing from it, so a ruleset whose only
+bypass is the app refuses an agent's push to the branch. `key` is a
+path on the host, with `~` for the home directory; sluice refuses a key
+file that anyone but its owner may read, and names the mode it needs,
+`0600`. Without `[forge]`, sluice pushes with the host's own git
+credentials, and `sluice status` says the branch has no identity of its
+own. The guide [Give sluice its own GitHub
+identity](/sluice/guides/github-app/) sets it up, and
+[`sluice forge check`](/sluice/reference/commands/#sluice-forge-check)
+says whether it is set up right.
 
 ## Environment
 

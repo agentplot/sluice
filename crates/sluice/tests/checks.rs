@@ -23,6 +23,7 @@ fn checks(repo: &Repo) -> Checks {
         Instance {
             bound: 2,
             processors: 8,
+            forge: None,
         },
     )
 }
