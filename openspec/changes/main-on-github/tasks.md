@@ -27,9 +27,9 @@ core.17); `crates/sluice/src/profiles/local_refs.rs`; the landing in
 
 ## 4. Documentation and the decision
 
-- [ ] 4.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): a branch on a remote is read by fetch and landed by a leased push, through a profile wrapping local refs and a router per branch; options: a profile per branch, a `sync` method in the core, a mirror pushed after each landing. Verify `site/scripts/adrs.mjs` renders it under `/sluice/decisions/`.
-- [ ] 4.2 Update `site/src/content/docs/guides/github.md` to what was built: drop the "Designed, not built" banner and the `design` badge, and make its console output match the real output. Verify `devenv shell -- moon run site:prose` and `cd site && bun run build` pass.
-- [ ] 4.3 Mark piece 23 done in `docs/plans/phase-1-pass-2.md` (its row and entry, naming the tests). Verify the row reads done.
+- [x] 4.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): a branch on a remote is read by fetch and landed by a leased push, through a profile wrapping local refs and a router per branch; options: a profile per branch, a `sync` method in the core, a mirror pushed after each landing. Verify `site/scripts/adrs.mjs` renders it under `/sluice/decisions/`.
+- [x] 4.2 Update `site/src/content/docs/guides/github.md` to what was built: drop the "Designed, not built" banner and the `design` badge, and make its console output match the real output. Verify `devenv shell -- moon run site:prose` and `cd site && bun run build` pass.
+- [x] 4.3 Mark piece 23 done in `docs/plans/phase-1-pass-2.md` (its row and entry, naming the tests). Verify the row reads done.
 
 ## 5. sluice's own `main`
 

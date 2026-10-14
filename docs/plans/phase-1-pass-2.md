@@ -48,7 +48,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 | 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); the repository's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this one |
-| 23 | `main` kept in step with the shared remote | C.4 | designing, with 24: built once 24's design is settled |
+| 23 | `main` kept in step with the shared remote | C.4 | **done**: ADR 0017, `[branches] remote`, `profiles/pushed_refs.rs` and the router `profiles/branches.rs`; `tests/pushed_refs.rs` (6) and `tests/remote_branch.rs` (6), `cli:tools` |
 | 24 | pull requests: one per submission, and one opened by hand submitted | C.5 | designing |
 
 The `container` executor comes after the goal; on one Mac it is not
@@ -272,6 +272,16 @@ needed.
   pull request moving it is an outside move, which sluice takes as the
   branch moving under its queue. Only the branch is pushed: on one
   machine the records stay local files.
+  Built as ADR 0017 says: a branch whose policy names a `remote` is
+  fetched on every read, never moving the local branch, and landed by a
+  push leased on the revision read, after which the local branch is set
+  to the landing; it pushes with the operator's credentials until
+  `github-app`. `tests/pushed_refs.rs` covers the profile and the router
+  against a bare repository as the remote; `tests/remote_branch.rs`
+  covers rounds end to end: landing through `sluice run`, a push from
+  elsewhere refused and tested again, a push stopped before it was
+  recorded, a push that never reached the remote, a failed fetch, and an
+  unknown remote.
 - **24, pull requests.** A pull request is a submission, from a branch
   in the repository (never a fork), opened by `submit` or by hand. It
   waits until it is ready: out of draft, and every condition the

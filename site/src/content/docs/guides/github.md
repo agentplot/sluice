@@ -3,15 +3,7 @@ title: Keep main in step with GitHub
 description: When the target branch lives on GitHub, sluice fetches it every round and lands by pushing it. Nothing else of sluice's goes to GitHub.
 sidebar:
   order: 3
-  badge: { text: 'design', variant: 'caution' }
 ---
-
-:::caution[Designed, not built]
-This is the design of piece 23 of sluice's plan, under review in
-[agentplot/blueprints](https://github.com/agentplot/blueprints),
-`design/sluice/proposals/pull-requests-1.md`. The commands below show
-what it will look like.
-:::
 
 [Setting up sluice](/sluice/guides/walkthrough/) lands on a branch in
 the repository on your machine. Most teams' `main` lives on GitHub
@@ -31,9 +23,9 @@ required = ["#check-fast", "#check-tools"]
 With `remote` set, GitHub's copy of `main` is the real one:
 
 - **Every round fetches it first.** Whoever runs the round (a waiting
-  `wt submit`, `sluice run` or `sluice step`) runs `git fetch origin
-  main` before reading the branch, and forms every combination on
-  `origin/main`.
+  `wt submit`, `sluice run` or `sluice step`) fetches `main` from
+  `origin` into `origin/main` before reading the branch, and forms every
+  combination on it. Fetching leaves your local `main` where it is.
 - **A landing is a push.** When a combination passes, sluice pushes its
   merge commit to GitHub's `main`, and the push only succeeds if `main`
   is still where the combination started. Then it moves your local
@@ -90,25 +82,33 @@ machine, as in [branch protection](/sluice/guides/walkthrough/#4-branch-protecti
 
 While the bypass is yours, your own push to `main` still gets through,
 and so does a click of GitHub's merge button. sluice treats either as
-`main` moving under its queue:
+`main` moving under its queue. Say someone pushes `4847258` to `main`
+while submission 1's push is on its way:
 
 ```console
-$ sluice run
-round: main at m1 · testing m1 + #12
-round: #12 passed · pushing to origin/main
-round: refused: origin/main moved to m2 (not by sluice)
-round: main at m2 · testing m2 + #12
+$ wt submit main
+submission 1 to main · nothing queued ahead
+testing main + #1 · 1 tasks to run, 0 replayed
+passed · landed as f2a1614
 ```
 
 The push names the revision the combination started from, so GitHub
-refuses it once `main` has moved. sluice reports that, lands nothing,
-and the next round forms every combination again on the new `main` and
-tests it again. Nothing in the queue is lost.
+refuses it once `main` has moved. sluice records the refusal in the
+branch's log, lands nothing, and the next round forms every combination
+again on the new `main` and tests it again. Nothing in the queue is
+lost: `f2a1614` is the combination tested on `4847258`. The log says
+what happened:
+
+```console
+$ grep refused .git/sluice/main/log.jsonl
+{"schema":"sluice/log@1","at":"2026-10-14T20:02:23Z","event":"refused","ids":[1],"expected":"7c829a5…","found":"4847258…"}
+```
 
 The same holds when the push fails for any other reason, a dropped
 connection included: the next round fetches and finds out where `main`
 is. If sluice stops between the push and recording it, it
-fetches on restart, finds its landing on `main`, and records it.
+fetches on restart, finds its landing on `main`, and records it. Your
+local `main` catches up at the next landing.
 
 When sluice lands submissions exactly as they were tested, the ones behind
 them keep their results and aren't tested again. Only a move from
@@ -117,8 +117,19 @@ outside the queue sends them back.
 ## When GitHub can't be reached
 
 A round that can't fetch lands nothing, since it can't know where
-`main` is. It says why and tries again next round. Tests already
-running keep running.
+`main` is. It stops and says why:
+
+```console
+$ wt submit main
+sluice: fetching main from origin failed: ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+```
+
+Run it again once GitHub answers. Tests already running keep running,
+and their results count when the next round reads them.
 
 ## What everyone else does
 
