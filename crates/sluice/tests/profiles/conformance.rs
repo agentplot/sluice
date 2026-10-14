@@ -562,4 +562,5 @@ scenarios! {
     every_record_written_is_the_real_format_and_names_its_schema: bolt();
     s26_a_clean_session_run_is_replayed_by_its_submission: cached();
     s28_a_dirty_session_run_records_nothing: bolt();
+    s27_a_sessions_place_stays_until_it_is_released: bolt();
 }

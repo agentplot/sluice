@@ -8,7 +8,7 @@ use sluice_core::records::{
 };
 use sluice_core::session::Recorded;
 use sluice_core::{Forecast, SubmitRefusal};
-use sluice_seams::{Outcome, Told};
+use sluice_seams::{Outcome, ReleasePolicy, Released, Told};
 
 use crate::{Rig, BRANCH};
 
@@ -631,4 +631,57 @@ pub fn s28_a_dirty_session_run_records_nothing(h: &impl Rig) {
     assert!(!report.tasks.is_empty());
     assert_eq!(recorded, Recorded::NotClean);
     assert_eq!(h.results(), before, "a dirty run records nothing");
+}
+
+/// S27: a session runs its checks twice; its place stays equipped between
+/// the runs and through its landing, which leaves it alone; its release,
+/// under the policy read from the branch now, ends it, and a second
+/// release finds nothing (25, 94, 95; core.16; session-runs-1).
+pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let place = h.place("unit/a");
+    let s = h.sluice();
+    h.session_run("unit/a");
+    let adopted = s
+        .seams()
+        .checkout
+        .adopted(&place)
+        .expect("the place seam reads")
+        .expect("equipped after its first run");
+    h.session_run("unit/a");
+    assert_eq!(
+        s.seams().checkout.adopted(&place).unwrap().as_ref(),
+        Some(&adopted),
+        "the same place between runs"
+    );
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(
+        s.seams().checkout.adopted(&place).unwrap().is_some(),
+        "a landing released the session's place"
+    );
+    let policy = s
+        .policy_at(&h.tip())
+        .expect("the policy reads")
+        .expect("a policy");
+    let release = ReleasePolicy {
+        tests: policy.tests,
+        limits: policy.limits,
+    };
+    assert_eq!(
+        s.seams()
+            .checkout
+            .release_session(&adopted.name, Some(&release))
+            .unwrap(),
+        Released::Policy
+    );
+    assert!(s.seams().checkout.adopted(&place).unwrap().is_none());
+    assert_eq!(
+        s.seams()
+            .checkout
+            .release_session(&adopted.name, Some(&release))
+            .unwrap(),
+        Released::Nothing
+    );
 }

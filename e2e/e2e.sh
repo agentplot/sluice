@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sluice end to end: S1 to S4 of the statement, for real, on a scratch repository: a moon workspace of two
+# sluice end to end: S1 to S4 of the statement, and S27 of session-runs-1, for real, on a scratch repository: a moon workspace of two
 # projects, beta depending on alpha.
 #
 #   e2e.sh <new dir> fixture   build the repository, then prove each scenario's fixture with git and moon alone:
@@ -121,7 +121,19 @@ case $(indir "$REPO" "$MOON" --version) in
 *) die "needs moon >= 2.5, found $(indir "$REPO" "$MOON" --version)" ;;
 esac
 # Every scenario's branch exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
-for s in s1 s2 s3 s4; do git branch "bolt/$s" main; done
+for s in s1 s2 s3 s4 s27; do git branch "bolt/$s" main; done
+# S27's branch gives each checkout a port and a release command that writes which checkout it released, while
+# that checkout still exists.
+git switch -q bolt/s27
+# shellcheck disable=SC2016 # $SLUICE_CHECKOUT is the release command's, expanded when it runs
+sed -e 's|^runner = "moon"$|&\
+release = "test -d \\"$SLUICE_CHECKOUT\\" \&\& echo \\"$SLUICE_CHECKOUT\\" >> '"$ROOT"'/released.log"|' \
+  -e 's|^method = "git-worktree"$|&\
+ports = ["web"]\
+ports_from = 42000|' .config/sluice.toml >.config/sluice.toml.e2e
+mv .config/sluice.toml.e2e .config/sluice.toml
+git commit -qam "a port and a release command for S27"
+git switch -q main
 
 # --- three sessions' places, each on a fresh unit branch per scenario ----------------------------------------------
 place() { # place <session> <scenario>: the session's worktree on unit/<session>-<scenario>, off bolt/<scenario>
@@ -225,6 +237,8 @@ if [ "$MODE" = fixture ]; then
 fi
 
 # --- sluice: S1 to S4 for real -------------------------------------------------------------------------------------
+# The host's slots and session runs, kept with the scratch repository.
+export XDG_STATE_HOME=$ROOT/state
 COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
 submit() { # submit <session> <scenario> [flags...]: wt submit from the session's place, as its agent would; the
   #        place is kept on landing, since each session's place serves every scenario
@@ -297,4 +311,24 @@ expect "S4 none of a's work on the branch" "$(git -C "$REPO" grep -c -F "$BROKEN
 
 # S11 in passing: sluice left every session's place alone.
 for w in a b c; do expect "place $w kept" "$(git -C "$ROOT/places/$w" rev-parse --is-inside-work-tree)" true; done
+
+# S27: a session runs its tests twice with sluice exec, with the same port and nothing released between; its
+# landing releases its worktree before worktrunk removes it.
+released() { cat "$ROOT/released.log" 2>/dev/null | grep -c '/places/d$' || true; }
+place d s27
+edit d "$A_FILE" "$A_LINE" "# d was here"
+P1=$(indir "$ROOT/places/d" sluice exec bolt/s27 --json 2>/dev/null | jq -r '.ports.SLUICE_PORT_WEB')
+P2=$(indir "$ROOT/places/d" sluice exec bolt/s27 --json 2>/dev/null | jq -r '.ports.SLUICE_PORT_WEB')
+expect "S27 a port" "$P1" "42[0-9][0-9][0-9]"
+expect "S27 the same port on the second run" "$P2" "$P1"
+expect "S27 nothing released between runs" "$(released)" 0
+out=$(SLUICE_AGENT=e2e-d indir "$ROOT/places/d" wt-submit bolt/s27) && rc=0 || rc=$?
+expect "S27 d's exit" "$rc" 0
+expect "S27 released before removal" "$(released)" 1
+expect "S27 d's worktree removed" "$([ -d "$ROOT/places/d" ] && echo kept || echo removed)" removed
+held() { # held: how many slots of ports the host still holds
+  set -- "$XDG_STATE_HOME"/sluice/slots/*
+  if [ -e "$1" ]; then echo $#; else echo 0; fi
+}
+expect "S27 d's ports free" "$(held)" 0
 exit $FAILED

@@ -243,3 +243,9 @@ fn s25_sessions_runs_wait_and_a_submissions_run_starts_first() {
     h.step();
     assert_eq!(h.w().started().len(), 1);
 }
+
+/// satisfies: S27, 25, 94, 95
+#[test]
+fn s27_a_sessions_place_stays_until_it_is_released() {
+    shared::s27_a_sessions_place_stays_until_it_is_released(&Harness::bolt());
+}
