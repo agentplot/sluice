@@ -50,6 +50,7 @@ trust = ["confined", "sandbox"]
 | `runner` | `"moon"` | Run moon tasks. sluice asks moon which tasks the combination affects and runs only those; a task whose inputs did not change replays its earlier result instead of running. |
 | | `"command"` | Run one command; exit 0 passes. Every test runs every time. For a repository without moon. |
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
+| `release` | a command | The release command: what removes what the tests handed to another process to keep, a container above all. It runs once a checkout is released, under the same executor, toolchain and environment as the tests, ports included, and for a worktree when `sluice release` runs in it ([ADR 0016](/sluice/decisions/0016/)). A list, the command first, or a string run by `sh -c`. |
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
 
 Which tasks must pass is not here: it is set per branch.
@@ -65,6 +66,8 @@ goes in the toolchain or in a task the test depends on.
 | key | values | meaning |
 |---|---|---|
 | `method` | `"git-worktree"` | The one method. Anything else is refused with the reason ([ADR 0013](/sluice/decisions/0013/)). |
+| `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. |
+| `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
 
 ### `[[checkout.cache]]`
 
@@ -91,6 +94,7 @@ never decides a result.
 | | `"container"` | The tests run in a container from the image the policy names. Designed for [many hosts](/sluice/many-hosts/peers/); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
+| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. |
 
 Every result records which executor ran it and what it held. An executor
 that cannot enforce a limit the policy states refuses the run
@@ -227,5 +231,8 @@ starts removes it, and nothing counts it before then.
 |---|---|---|
 | `SLUICE_AGENT` | the agent | The agent's name, recorded on its submissions and shown in `sluice status`. |
 | `SLUICE_CHECKOUT` | sluice, for a run | The absolute path of the checkout under test. |
-| `SLUICE_TMP` | sluice, for a run | A scratch directory of the run's own, for sockets, pid files and data directories, so parallel checkouts never collide. |
+| `SLUICE_TMP` | sluice, for a run | A scratch directory of the run's own, for sockets, pid files and data directories, so parallel checkouts never collide. An agent's worktree keeps one across its runs. |
+| `SLUICE_PLACE` | sluice, for a run | A short name of the checkout's own, for labelling what the tests start, so the release command finds it. |
+| `SLUICE_PORT_<NAME>` | sluice, for a run | The port given for each name in `[checkout] ports`, upper-cased, `-` written `_`. |
+| `SLUICE_JOBS` | sluice, for a run | The processors the run may use: the host's share for each of `[runs] max` runs. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |

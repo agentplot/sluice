@@ -125,6 +125,14 @@ Anything that escapes the process group (a docker container, a detached
 daemon) is the repository's to clean up, through moon's `cleanup`
 dependencies, devenv, or testcontainers' reaper.
 
+An agent running the same tests while it works should run them with
+`sluice exec <branch>` in its worktree rather than on its own. Several
+agents on one host then share the host's bound with the submissions'
+runs, and each worktree gets ports no other holds. A stack the tests
+bring up stays between runs and goes with `sluice release`, and a run
+in a clean worktree is recorded for the submission that follows. See
+[commands](/sluice/reference/commands/#sluice-exec).
+
 ## 3. What changes for the agents
 
 Agents stop merging. Whatever step merged a finished branch into its
