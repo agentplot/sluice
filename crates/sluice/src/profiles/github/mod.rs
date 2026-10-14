@@ -6,8 +6,11 @@
 
 pub mod app;
 pub mod check;
+pub mod fake;
+pub mod forge;
 
 pub use app::{App, Repo};
+pub use forge::Forge;
 
 use anyhow::Result;
 
