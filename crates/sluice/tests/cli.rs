@@ -38,7 +38,15 @@ fn setup() -> Fakes {
 fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let code = run(cli, f.seams(), &f.clock, &Rounds(Cell::new(0)), &mut out).unwrap();
+    let code = run(
+        cli,
+        f.seams(),
+        &(),
+        &f.clock,
+        &Rounds(Cell::new(0)),
+        &mut out,
+    )
+    .unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 

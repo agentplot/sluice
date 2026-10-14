@@ -69,7 +69,15 @@ fn submit(f: &Fakes, worktree: &str, agent: &str, changes: &[(&str, Option<&str>
     let cli = Cli::try_parse_from(["sluice", "submit", BRANCH, "--worktree", worktree]).unwrap();
     let mut out = Vec::new();
     let code = tracing::subscriber::with_default(subscriber, || {
-        run(cli, f.seams(), &f.clock, &Rounds(Cell::new(0)), &mut out).unwrap()
+        run(
+            cli,
+            f.seams(),
+            &(),
+            &f.clock,
+            &Rounds(Cell::new(0)),
+            &mut out,
+        )
+        .unwrap()
     });
     let mut seen = seen.0.lock().unwrap().clone();
     seen.push(format!("exit {code}"));

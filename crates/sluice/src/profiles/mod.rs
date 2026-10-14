@@ -17,9 +17,11 @@ pub mod pushed_refs;
 pub mod worktrunk;
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use anyhow::Result;
 
+use crate::identity::Identity;
 use crate::instance::Instance;
 
 /// The profiles the walkthrough's setup names, for the repository holding
@@ -41,7 +43,15 @@ impl Bound {
 
     /// `program` is the `sluice` executable that supervises check runs.
     pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
-        let branch = branches::Branches::open(dir)?;
+        // C.4: the app the host names is sluice's identity on GitHub.
+        let identity = match &instance.forge {
+            Some(f) => Some((
+                Rc::new(github::App::open(f)?) as Rc<dyn Identity>,
+                program.clone(),
+            )),
+            None => None,
+        };
+        let branch = branches::Branches::open_as(dir, identity)?;
         let common = branch.common_dir()?;
         let state = local_files::LocalFiles::new(&common);
         Ok(Bound {

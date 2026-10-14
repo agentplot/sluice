@@ -159,3 +159,76 @@ fn a_refused_token_says_why() {
         "{err}"
     );
 }
+
+/// `sluice status` on a branch whose `remote` is GitHub's: with no
+/// `[forge]`, it says sluice has no identity of its own; with one, it
+/// names the app, whose token the fetch was made with.
+#[cfg(feature = "tools")]
+#[test]
+fn status_says_who_pushes_the_branch() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use support::{Repo, Scratch};
+
+    let repo = Repo::new("forge-status");
+    repo.write(
+        ".config/sluice.toml",
+        "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n[branches.main]\nremote = \"origin\"\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+    let bare = repo.bare_origin();
+    // The remote is GitHub's as configured, and the bare repository on
+    // this host as git reaches it.
+    repo.git(&["remote", "set-url", "origin", "https://github.com/o/r.git"]);
+    repo.git(&[
+        "config",
+        &format!("url.{}.insteadOf", bare.path().display()),
+        "https://github.com/o/r.git",
+    ]);
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let config = Scratch::new("forge-status-config");
+    let status = || {
+        let out = support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
+            .current_dir(repo.dir())
+            .args(["status", "main"])
+            .env("XDG_CONFIG_HOME", config.path())
+            .env("SLUICE_FORGE_API", fake.url())
+            .env_remove("GIT_DIR")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{text}");
+        text
+    };
+
+    let without = status();
+    assert!(
+        without.contains("pushed to origin with this host's own git credentials: sluice has no identity of its own there"),
+        "{without}"
+    );
+    assert_eq!(minted(&fake), 0);
+
+    let dir = config.path().join("sluice");
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("app.pem");
+    std::fs::write(&key, KEY).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "[forge]\napp_id = {APP}\nkey = {:?}\n",
+            key.display().to_string()
+        ),
+    )
+    .unwrap();
+    let with = status();
+    assert!(
+        with.contains(&format!("pushed to origin as GitHub app {APP}")),
+        "{with}"
+    );
+    assert_eq!(minted(&fake), 1, "the fetch was made with the app's token");
+}

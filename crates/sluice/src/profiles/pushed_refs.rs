@@ -66,12 +66,11 @@ impl PushedRefs {
         let speaker = match identity {
             None => None,
             Some((identity, program)) => {
-                let out = git(local.git_dir(), &["remote", "get-url", remote])?;
+                // The URL as configured, before any `insteadOf`.
+                let key = format!("remote.{remote}.url");
+                let out = git(local.git_dir(), &["config", "--get", &key])?;
                 if !out.status.success() {
-                    bail!(
-                        "git remote get-url {remote}: {}",
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    );
+                    bail!("the remote {remote:?} has no url");
                 }
                 let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 identity.url(&url).map(|url| Speaker {
@@ -86,6 +85,11 @@ impl PushedRefs {
             remote: remote.into(),
             speaker,
         })
+    }
+
+    /// The remote's name.
+    pub fn remote(&self) -> &str {
+        &self.remote
     }
 
     /// The identity sluice reaches the remote as; `None` for the host's

@@ -14,20 +14,31 @@ use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
 use super::pushed_refs::PushedRefs;
+use crate::identity::Identity;
+use crate::{Pusher, Pushers};
 
 pub struct Branches {
     local: LocalRefs,
     dir: PathBuf,
+    identity: Option<(Rc<dyn Identity>, PathBuf)>,
     pushed: RefCell<BTreeMap<String, Rc<PushedRefs>>>,
 }
 
 impl Branches {
     /// The repository holding `path`, a worktree or a git directory.
     pub fn open(path: &Path) -> Result<Self> {
+        Branches::open_as(path, None)
+    }
+
+    /// As [`Branches::open`], each remote reached as `identity` where it
+    /// has one on the remote's forge; the `PathBuf` is the `sluice`
+    /// executable git runs as its credential helper.
+    pub fn open_as(path: &Path, identity: Option<(Rc<dyn Identity>, PathBuf)>) -> Result<Self> {
         let local = LocalRefs::open(path)?;
         Ok(Branches {
             dir: local.git_dir().to_path_buf(),
             local,
+            identity,
             pushed: RefCell::default(),
         })
     }
@@ -62,10 +73,20 @@ impl Branches {
             return Ok(Some(p.clone()));
         }
         let p = Rc::new(
-            PushedRefs::open(&self.dir, &remote).with_context(|| format!("{branch}'s remote"))?,
+            PushedRefs::open_as(&self.dir, &remote, self.identity.clone())
+                .with_context(|| format!("{branch}'s remote"))?,
         );
         self.pushed.borrow_mut().insert(remote, p.clone());
         Ok(Some(p))
+    }
+}
+
+impl Pushers for Branches {
+    fn pusher(&self, branch: &str) -> Result<Option<Pusher>> {
+        Ok(self.route(branch)?.map(|p| Pusher {
+            remote: p.remote().into(),
+            identity: p.identity(),
+        }))
     }
 }
 

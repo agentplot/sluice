@@ -139,6 +139,26 @@ pub enum Command {
     Credential { operation: String },
 }
 
+/// Who pushes a branch that lives on a remote (C.4 pushed refs), for
+/// `sluice status`.
+pub struct Pusher {
+    pub remote: String,
+    /// sluice's own identity there; `None` for the host's credentials.
+    pub identity: Option<String>,
+}
+
+pub trait Pushers {
+    /// `None` for a branch that lives on no remote.
+    fn pusher(&self, branch: &str) -> Result<Option<Pusher>>;
+}
+
+/// Every branch local.
+impl Pushers for () {
+    fn pusher(&self, _: &str) -> Result<Option<Pusher>> {
+        Ok(None)
+    }
+}
+
 /// What a waiting command does between rounds.
 pub trait Pause {
     /// Wait for the next round; `false` when the wait was stopped.
@@ -196,6 +216,7 @@ fn requester(by: &str) -> Requester {
 pub fn run(
     cli: Cli,
     seams: Seams<'_>,
+    pushers: &dyn Pushers,
     clock: &dyn Clock,
     pause: &dyn Pause,
     out: &mut dyn Write,
@@ -268,7 +289,8 @@ pub fn run(
                 }
                 Some(sub) => {
                     let branch = sub.branch.clone();
-                    write_status(&s.status(&branch)?, &[sub], out)?;
+                    let pusher = pushers.pusher(&branch)?;
+                    write_status(&s.status(&branch)?, pusher.as_ref(), &[sub], out)?;
                     Ok(0)
                 }
             },
@@ -281,7 +303,8 @@ pub fn run(
                         serde_json::to_string_pretty(&status_json(&status))?
                     )?;
                 } else {
-                    write_status(&status, &status.submissions, out)?;
+                    let pusher = pushers.pusher(&target)?;
+                    write_status(&status, pusher.as_ref(), &status.submissions, out)?;
                 }
                 Ok(0)
             }
@@ -644,7 +667,12 @@ fn detail(branch: &str, s: &Submission) -> String {
     }
 }
 
-fn write_status(status: &Status, subs: &[Submission], out: &mut dyn Write) -> Result<()> {
+fn write_status(
+    status: &Status,
+    pusher: Option<&Pusher>,
+    subs: &[Submission],
+    out: &mut dyn Write,
+) -> Result<()> {
     let at = status.at.as_ref().map_or("nothing", |r| r.short());
     let up_to = status
         .parallel
@@ -654,6 +682,21 @@ fn write_status(status: &Status, subs: &[Submission], out: &mut dyn Write) -> Re
         "{} at {at} · testing {} at once{up_to}",
         status.branch, status.testing
     )?;
+    match pusher {
+        None => {}
+        Some(Pusher {
+            remote,
+            identity: Some(who),
+        }) => writeln!(out, "pushed to {remote} as {who}")?,
+        Some(Pusher {
+            remote,
+            identity: None,
+        }) => writeln!(
+            out,
+            "pushed to {remote} with this host's own git credentials: \
+             sluice has no identity of its own there"
+        )?,
+    }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs
         .iter()
