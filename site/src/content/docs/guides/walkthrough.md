@@ -129,8 +129,10 @@ An agent running the same tests while it works should run them with
 `sluice exec <branch>` in its worktree rather than on its own. Several
 agents on one host then share the host's bound with the submissions'
 runs, and each worktree gets ports no other holds. A stack the tests
-bring up stays between runs and goes with `sluice release`, and a run
-in a clean worktree is recorded for the submission that follows. See
+bring up stays between runs and goes with `sluice release`. A run in
+a clean worktree is recorded for the submission that follows, which
+replays it when the policy declares the cache, as one combination
+replays another's. See
 [commands](/sluice/reference/commands/#sluice-exec).
 
 ## 3. What changes for the agents
