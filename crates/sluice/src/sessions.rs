@@ -1,9 +1,9 @@
 //! The host's session runs (session-runs-1 clauses 89 to 91): each run a
-//! session asked for in its own place, holding one slot of the host's
-//! bound for as long as its supervisor holds its run directory.
+//! session asked for in its own place, counting against the host's bound
+//! for as long as its supervisor holds its run directory.
 //!
 //! A session run is a fact about this host, never about a branch, so it
-//! is kept beside the host's port slots and never in the records, whose
+//! is kept beside the host's blocks of ports and never in the records, whose
 //! profiles may live on a remote or a server:
 //!
 //! ```text
@@ -39,8 +39,8 @@ pub struct SessionRun {
     pub pid: u32,
     /// When it started, RFC 3339.
     pub started: String,
-    /// Its run directory: the run holds its slot while a supervisor holds
-    /// this directory's lock.
+    /// Its run directory: the run counts against the bound while a
+    /// supervisor holds this directory's lock.
     pub run_dir: PathBuf,
 }
 
@@ -71,7 +71,7 @@ impl Sessions {
 
     /// The host's lock, once whatever holds it lets go: held by a starter
     /// across reading the count and recording its run, so two starters
-    /// never both take the last slot.
+    /// never both take the bound's last run.
     pub fn lock(&self) -> Result<SessionsLock> {
         std::fs::create_dir_all(&self.dir)
             .with_context(|| format!("creating {}", self.dir.display()))?;

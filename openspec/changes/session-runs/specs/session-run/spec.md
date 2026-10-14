@@ -3,7 +3,7 @@
 ## Purpose
 
 Lets an agent run its own checks, or any command, in its own worktree
-under the same contract sluice gives a candidate's checkout: a slot under
+under the same contract sluice gives a candidate's checkout: room under
 the host's bound, the checkout's ports, the policy's executor and limits,
 and a record under the checks' keys when the worktree holds exactly its
 head.
@@ -48,18 +48,19 @@ SHALL record nothing (89, 92).
 - **THEN** the exit is 0 and the repository's check-run log gains no
   record
 
-### Requirement: A session run takes a slot under the bound
+### Requirement: A session run counts against the bound
 
-A session run SHALL take one slot of the host's bound for exactly as
-long as it runs, waiting while no slot is free, and SHALL never take a
-slot the host's reserve keeps for submissions' runs (89, 91).
+A session run SHALL count against the host's bound for exactly as
+long as it runs, waiting while the bound has no room, and SHALL never
+use the part of the bound the host's reserve keeps for submissions'
+runs (89, 91).
 
-#### Scenario: No slot free
+#### Scenario: The bound is full
 
 - **WHEN** the bound is 2, two runs are running, and an agent runs
   `sluice exec`
-- **THEN** the command reports it is waiting for a slot and starts when
-  one frees
+- **THEN** the command reports it is waiting because the host is at its
+  bound and starts when a run ends
 
 #### Scenario: The reserve
 

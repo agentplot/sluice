@@ -155,7 +155,7 @@ pub trait Rig {
 
     /// Session-runs-1 clause 89: a session's run of its checks in its own
     /// place, against the branch, to its end, and what it recorded. The
-    /// caller stands for the slot `sluice exec` would hold.
+    /// caller stands for the run `sluice exec` would count against the bound.
     fn session_run(&self, worktree: &str) -> (RunReport, Recorded) {
         let s = self.sluice();
         let place = self.place(worktree);
