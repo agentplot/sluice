@@ -263,6 +263,8 @@ needed.
   pushed-refs profile (C.4): fetch before a round reads the branch, form
   on the remote's revision, land with a push leased on the revision
   read, the forge's rules letting only sluice's identity move the branch.
+  sluice's identity is the operator's own GitHub account for now; a
+  GitHub App, named as the ruleset's one bypass, replaces it later.
   To settle first: whether every push to `main` goes through sluice, as
   C.4 has it, or the forge stays open to direct pushes and pull requests,
   which sluice would then take as the branch moving under its queue.
