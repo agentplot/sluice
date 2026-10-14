@@ -71,7 +71,10 @@ candidates' ports.
 
 ### D2. A session run is a `RunRequest` on the adopted place, named per run
 
-`sluice exec` builds `RunRequest{place: adopted, revision: head,
+`sluice exec <branch>` names its branch, as `sluice submit <branch>`
+does: neither git nor the driver records which branch a worktree's
+branch was taken from, so there is no default to take. It builds
+`RunRequest{place: adopted, revision: head,
 required: gate.required, since: Some(branch rev), limit: rules.timeout,
 limits: policy.executor, tests, replay: false}` and calls
 `Tests::start`. Run directories are `.runs/<session flat>/<n>`, a fresh
@@ -153,17 +156,29 @@ instance serves it; a round's capacity is `bound - under - sessions`. A session 
 starts into the reserve; a round starts into any free slot. This is the
 whole of 91's "started first": a reserve, not a queue between starters.
 
-### D5. Recording a clean session run
+### D5. Recording a clean session run, and its caches
 
-`exec` records the run's `Ran` results only when `Driver::session` says
-`dirty == false` and not detached-ambiguous (a detached head is allowed,
-the head is still exact). The write reuses the `ResultLine` builder from
-`Sluice::poll`, moved to a function `records::result_lines(report, host,
-branch, combination)` both call, with `combination = head` and a new
+`Sluice::finish_session` records the run's `Ran` results only when
+`Driver::session` says `dirty` is empty (a detached head is allowed:
+the head is still exact). Each record is built by `ResultLine::of`, the
+builder `Sluice::poll` uses too, with `combination = head` and the
 optional field `worktree`. `Replayed` results are never written (core.9).
 A dirty worktree runs with `replay: false` as well and writes nothing;
-the output says "not recorded: worktree is not clean". A command run
-writes nothing.
+the output says "not recorded: worktree is not clean". A command, and a
+run that hit its time limit, write nothing.
+
+A recorded run that passed then saves the caches the branch's policy
+declares (`[[checkout.cache]]`), exactly as a passed candidate's place
+does on release (35): keyed by the content of the key files at the head,
+saved only from a run that passed, a saved key never changed. The place
+seam gains `Checkout::save_caches(name, rev, checkout)`; for a session's
+place it copies the cached paths out of the worktree and never moves
+them, so the session keeps what it built. A later candidate's place
+restores them, and its task runner replays from them: a session's run
+is replayed by a later submission when the policy declares the cache,
+the same condition as between candidates. Nothing changes in the verdict
+path: the record already satisfies the key, and the cache is what makes
+the candidate's run cheap.
 
 `Enforced.confined` is `false` for every session run; the existing
 `choose` never sets it today, and `verdict::read` with the default trust
@@ -219,27 +234,3 @@ rollback needed beyond removing them.
 
 - Whether `sluice exec` should accept `--cached` to let moon replay and
   skip recording. Deferrable: adds a flag, changes no spec.
-
-## Notes from the build
-
-- Task 3.5, 93: S26 holds over the fakes and not on the real profiles.
-  A clean session run under moon records its results under the same keys
-  a candidate's run of the same inputs computes (checked: `a:test`'s hash
-  is identical in both), and the candidate's verdict reads them. But the
-  candidate's checks still run: a replay is moon answering from its
-  cache, and moon's cache lives in each workspace's `.moon/cache`, so a
-  candidate's place has none of what the session's worktree ran.
-  `[[checkout.cache]]` restores only what a passed candidate's place
-  saved. S26 therefore runs on the fakes alone, and S28 on both. Making
-  93 hold under moon needs a ruling: the session's worktree saving into
-  the declared caches when its run is recorded, a cache moon shares
-  across workspaces, or the verdict skipping a check whose key already
-  holds a trusted pass, which would need the key before the run.
-- Task 3.1, the session-run spec's first requirement: `sluice exec`
-  takes its branch as a required argument. The spec has it default to
-  "the branch the worktree's branch was taken from, as `sluice submit`
-  does", but `sluice submit <branch>` has no default: its branch is
-  required, and neither git nor the driver records which branch a
-  worktree's branch was taken from. A default needs a ruling on where it
-  comes from (the branch's upstream, worktrunk's default branch, or a
-  setting); until then 3.1 stays open on that point alone.

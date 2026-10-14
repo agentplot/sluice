@@ -14,7 +14,7 @@ clauses 89 to 96; this change builds the one-host part of it.
 
 ## What Changes
 
-- `sluice exec [<branch>]`, run in an agent's worktree, runs the checks
+- `sluice exec <branch>`, run in an agent's worktree, runs the checks
   the worktree's head affects against the branch; `sluice exec --
   <command>` runs any command. Either takes a slot under the host's run
   bound for as long as it runs, receives the checkout's ports, runs under
