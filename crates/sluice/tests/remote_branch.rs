@@ -1,0 +1,397 @@
+//! A branch whose shared copy lives on a remote, end to end through
+//! `sluice submit`, `sluice step` and `sluice run` (C.4 pushed refs, C.7
+//! `remote`). A bare repository on this host is the remote: git leases,
+//! refuses and fetches against it as against a forge. A `receivepack`
+//! wrapper on the remote times what happens around one push: another
+//! clone's push, a stop after it, an unreachable remote. Needs git, so it
+//! is in the check-tools tier.
+
+#![cfg(feature = "tools")]
+
+#[path = "support/mod.rs"]
+mod support;
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use support::{Repo, Scratch};
+
+/// Each run counts itself in `runs`, then waits for `go` when the test
+/// holds it.
+fn check(seen: &Path) -> String {
+    let seen = seen.display();
+    format!(
+        "echo run >> {seen}/runs\n\
+         while [ -e {seen}/hold ] && [ ! -e {seen}/go ]; do sleep 0.1; done\n"
+    )
+}
+
+fn policy(remote: &str) -> String {
+    format!(
+        "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
+         [checkout]\nmethod = \"git-worktree\"\n\n\
+         [branches.main]\ntimeout = \"1m\"\nremote = \"{remote}\"\n"
+    )
+}
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+struct Setup {
+    repo: Repo,
+    origin: Scratch,
+    seen: Scratch,
+    sessions: Scratch,
+    config: Scratch,
+}
+
+impl Setup {
+    /// A repository whose `main` lives on `origin`, a bare repository,
+    /// under a policy naming `remote`.
+    fn new(name: &str, remote: &str) -> Setup {
+        let repo = Repo::new(name);
+        let seen = Scratch::new(&format!("{name}-seen"));
+        repo.write(".config/sluice.toml", &policy(remote));
+        repo.write("check.sh", &check(seen.path()));
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+        let origin = repo.bare_origin();
+        Setup {
+            repo,
+            origin,
+            seen,
+            sessions: Scratch::new(&format!("{name}-sessions")),
+            config: Scratch::new(&format!("{name}-config")),
+        }
+    }
+
+    fn command(&self, dir: &Path) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        c.current_dir(dir)
+            .env("XDG_CONFIG_HOME", self.config.path())
+            .env_remove("SLUICE_AGENT")
+            .env_remove("SLUICE_OTEL")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null());
+        c
+    }
+
+    fn sluice(&self, args: &[&str]) -> Output {
+        self.command(self.repo.dir()).args(args).output().unwrap()
+    }
+
+    /// A session on `unit/<name>` off the local `main`, with one commit
+    /// of its own file, submitted without waiting.
+    fn submit(&self, name: &str) {
+        let out = self.try_submit(name);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+
+    fn try_submit(&self, name: &str) -> Output {
+        let dir: PathBuf = self.sessions.path().join(name);
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("unit/{name}"),
+            dir.to_str().unwrap(),
+            "main",
+        ]);
+        std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
+        let git = |args: &[&str]| {
+            let mut a = vec!["-C", dir.to_str().unwrap()];
+            a.extend(args);
+            self.repo.git(&a)
+        };
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", name]);
+        self.command(&dir)
+            .args(["submit", "main", "--no-wait", "--json"])
+            .output()
+            .unwrap()
+    }
+
+    fn status(&self) -> serde_json::Value {
+        let out = self.sluice(&["status", "main", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    fn states(&self) -> Vec<String> {
+        self.status()["submissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["state"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// Step `main` until every submission is out of the queue.
+    fn step_until_out(&self) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let out = self.sluice(&["step", "main"]);
+            assert!(out.status.success(), "{}", text(&out));
+            if self
+                .states()
+                .iter()
+                .all(|s| ["landed", "failed", "withdrawn"].contains(&s.as_str()))
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{}", self.status());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// The remote's refs, name and revision, as another host sees them.
+    fn remote_refs(&self) -> Vec<String> {
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(self.origin.path())
+            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    fn remote_main(&self) -> String {
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(self.origin.path())
+            .args(["rev-parse", "refs/heads/main"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn runs(&self) -> usize {
+        std::fs::read_to_string(self.seen.path().join("runs"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
+
+    /// Run `script` on the remote's side of the next push only, before
+    /// the push is received unless `after` is set.
+    fn on_next_push(&self, script: &str, after: bool) {
+        let mark = self.seen.path().join("pushed-once");
+        let wrapper = self.seen.path().join("receive-pack");
+        let body = if after {
+            format!("git-receive-pack \"$@\"\ncode=$?\n{script}\nexit $code\n")
+        } else {
+            format!("{script}\nexec git-receive-pack \"$@\"\n")
+        };
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\n\
+                 if [ -e {mark} ]; then exec git-receive-pack \"$@\"; fi\n\
+                 touch {mark}\n{body}",
+                mark = mark.display(),
+            ),
+        )
+        .unwrap();
+        self.repo.git(&[
+            "config",
+            "remote.origin.receivepack",
+            &format!("sh {}", wrapper.display()),
+        ]);
+    }
+
+    /// A records file of `main` holds `word`.
+    fn logged(&self, word: &str) -> bool {
+        let dir = self.repo.dir().join(".git/sluice/main");
+        std::fs::read_dir(&dir).unwrap().any(|e| {
+            std::fs::read_to_string(e.unwrap().path())
+                .map(|t| t.contains(word))
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// C.4: three submissions land on the remote's `main` through `sluice
+/// run`; the local `main` follows, and nothing else reaches the remote.
+#[test]
+fn submissions_land_on_the_remote_through_run() {
+    let s = Setup::new("remote-run", "origin");
+    let before: Vec<String> = s
+        .remote_refs()
+        .into_iter()
+        .filter(|r| !r.starts_with("refs/heads/main "))
+        .collect();
+    for n in ["a", "b", "c"] {
+        s.submit(n);
+    }
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.states(), ["landed"; 3], "{}", s.status());
+    let main = s.remote_main();
+    assert_eq!(s.repo.rev("main"), main);
+    for n in ["a", "b", "c"] {
+        s.repo.git(&["cat-file", "-e", &format!("{main}:{n}.txt")]);
+    }
+    let after: Vec<String> = s
+        .remote_refs()
+        .into_iter()
+        .filter(|r| !r.starts_with("refs/heads/main "))
+        .collect();
+    assert_eq!(after, before);
+}
+
+/// 24, S8: another clone pushes to the remote's `main` after the
+/// combination was formed; the landing is refused and reported, and the
+/// next round tests the submission on the new revision and lands it.
+#[test]
+fn a_push_from_elsewhere_refuses_the_landing_and_the_next_round_lands() {
+    let s = Setup::new("remote-moved", "origin");
+    let other = Repo::clone_of(s.origin.path(), "remote-moved-other");
+    other.write("other.txt", "other\n");
+    other.git(&["add", "-A"]);
+    other.git(&["commit", "-q", "-m", "other"]);
+    let theirs = other.rev("HEAD");
+    s.on_next_push(
+        &format!("git -C {} push -q origin HEAD:main", other.dir().display()),
+        false,
+    );
+    s.submit("a");
+    s.step_until_out();
+    assert!(s.logged("refused"), "the refusal is not reported");
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 2, "tested once on each revision");
+    let main = s.remote_main();
+    assert_eq!(s.repo.rev("main"), main);
+    assert_eq!(s.repo.rev(&format!("{main}^1")), theirs);
+}
+
+/// 24: the push was accepted and sluice stopped before recording it; the
+/// next round finds the landing on the remote and records it, with no new
+/// run.
+#[test]
+fn a_landing_pushed_but_unrecorded_is_recorded_by_the_next_round() {
+    let s = Setup::new("remote-stopped", "origin");
+    let pushed = s.seen.path().join("pushed");
+    s.on_next_push(&format!("touch {}\nsleep 5", pushed.display()), true);
+    s.submit("a");
+    // Step until the push is under way, then stop the step that made it.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut step = s
+            .command(s.repo.dir())
+            .args(["step", "main"])
+            .spawn()
+            .unwrap();
+        loop {
+            if pushed.exists() {
+                step.kill().unwrap();
+                step.wait().unwrap();
+                break;
+            }
+            if step.try_wait().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if pushed.exists() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{}", s.status());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let landed = s.remote_main();
+    assert_ne!(s.states(), ["landed"]);
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 1, "no new run");
+    assert_eq!(s.remote_main(), landed);
+}
+
+/// 24: the remote could not be reached during the push; the next round
+/// finds the remote unchanged and lands then, with no new run.
+#[test]
+fn a_push_that_never_reached_the_remote_lands_on_the_next_round() {
+    let s = Setup::new("remote-unreachable", "origin");
+    let aside = s.origin.path().with_extension("aside");
+    s.on_next_push(
+        &format!("mv {} {}", s.origin.path().display(), aside.display()),
+        false,
+    );
+    let before = s.remote_main();
+    s.submit("a");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let failed = loop {
+        let out = s.sluice(&["step", "main"]);
+        if !out.status.success() {
+            break text(&out);
+        }
+        assert!(Instant::now() < deadline, "{}", s.status());
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(failed.contains("pushing main to origin failed"), "{failed}");
+    std::fs::rename(&aside, s.origin.path()).unwrap();
+    assert_eq!(s.remote_main(), before);
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 1, "no new run");
+    assert_eq!(s.repo.rev("main"), s.remote_main());
+}
+
+/// A failed fetch lands nothing and says so; the checks already running
+/// keep running, and their verdict lands the submission once the remote
+/// is back.
+#[test]
+fn a_failed_fetch_lands_nothing_and_says_so() {
+    let s = Setup::new("remote-fetch", "origin");
+    std::fs::write(s.seen.path().join("hold"), "").unwrap();
+    s.submit("a");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while s.runs() == 0 {
+        let out = s.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert!(Instant::now() < deadline, "{}", s.status());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let before = s.remote_main();
+    let aside = s.origin.path().with_extension("aside");
+    std::fs::rename(s.origin.path(), &aside).unwrap();
+    let out = s.sluice(&["step", "main"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("fetching main from origin failed"),
+        "{}",
+        text(&out)
+    );
+    std::fs::write(s.seen.path().join("go"), "").unwrap();
+    std::fs::rename(&aside, s.origin.path()).unwrap();
+    assert_eq!(s.remote_main(), before);
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 1, "the run kept running and its verdict stood");
+}
+
+/// C.7: a `remote` the repository does not have lands nothing, and both
+/// the submission and the round name it.
+#[test]
+fn an_unknown_remote_lands_nothing_and_is_named() {
+    let s = Setup::new("remote-unknown", "nowhere");
+    let before = s.repo.rev("main");
+    let out = s.try_submit("a");
+    assert!(!out.status.success());
+    assert!(text(&out).contains("\"nowhere\""), "{}", text(&out));
+    let out = s.sluice(&["step", "main"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("\"nowhere\""), "{}", text(&out));
+    assert_eq!(s.repo.rev("main"), before);
+    assert_eq!(s.runs(), 0);
+}

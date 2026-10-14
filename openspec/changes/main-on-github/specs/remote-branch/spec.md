@@ -24,13 +24,14 @@ SHALL be refused with a message naming it.
 
 ### Requirement: Every round reads the branch from its remote
 For a branch with a `remote`, every round SHALL fetch the branch from the
-remote before reading it, form every combination on the fetched revision,
-and move the local branch to that revision. The policy SHALL be read from
-that revision (56).
+remote before reading it and form every combination on the fetched
+revision. The policy SHALL be read from that revision (56). Reading SHALL
+NOT move the local branch: it moves only when a landing's push is
+accepted.
 
 #### Scenario: A combination is formed on the remote's revision
 - **WHEN** the remote's `main` is ahead of the local `main` and a submission is queued
-- **THEN** the combination tested is the remote's `main` plus the submission, and the local `main` equals the remote's after the round
+- **THEN** the combination tested is the remote's `main` plus the submission, and the local `main` equals the remote's after the submission lands
 
 #### Scenario: The remote cannot be reached
 - **WHEN** the fetch fails

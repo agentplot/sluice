@@ -39,6 +39,79 @@ impl LocalRefs {
             .context("canonicalizing the common git directory")
     }
 
+    /// The git directory of the worktree it was opened from.
+    pub fn git_dir(&self) -> &Path {
+        &self.git_dir
+    }
+
+    /// The revision a full ref name points at, or `None` when it does not
+    /// exist.
+    pub fn read_ref(&self, name: &str) -> Result<Option<Rev>> {
+        let found = self
+            .repo
+            .try_find_reference(name)
+            .map_err(|e| anyhow!("reading {name}: {e}"))?;
+        let Some(mut r) = found else { return Ok(None) };
+        let id = r.peel_to_id().map_err(|e| anyhow!("peeling {name}: {e}"))?;
+        Ok(Some(Rev::new(id.to_string())))
+    }
+
+    /// Set `branch` to `to`, whatever it held: the local copy of a branch
+    /// whose shared copy a remote has just accepted (C.4 pushed refs).
+    pub fn set(&self, branch: &str, to: &Rev) -> Result<()> {
+        match self.edit(branch, PreviousValue::Any, to)? {
+            Moved::Moved => Ok(()),
+            Moved::Elsewhere(_) => bail!("{branch} could not be set to {to}"),
+        }
+    }
+
+    /// Move `branch` to `to` from `expected`; a branch found elsewhere is
+    /// reported, never retried blind (24, rule core.5).
+    fn edit(&self, branch: &str, expected: PreviousValue, to: &Rev) -> Result<Moved> {
+        let new = self.id(to)?;
+        let edit = RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: format!("sluice: land on {branch}").into(),
+                },
+                expected,
+                new: Target::Object(new),
+            },
+            name: full_name(branch)
+                .try_into()
+                .map_err(|e| anyhow!("{branch} is not a branch name: {e}"))?,
+            deref: false,
+        };
+        let who = Self::signature(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .context("the clock is before 1970")?
+                .as_secs() as i64,
+        );
+        let mut buf = gix::date::parse::TimeBuf::default();
+        match self
+            .repo
+            .edit_references_as([edit], Some(who.to_ref(&mut buf)))
+        {
+            Ok(_) => Ok(Moved::Moved),
+            Err(e) => {
+                if let Some(out) = e.downcast_any_ref::<ReferenceOutOfDate>() {
+                    let actual = match &out.actual {
+                        Target::Object(id) => Some(Rev::new(id.to_string())),
+                        Target::Symbolic(_) => None,
+                    };
+                    Ok(Moved::Elsewhere(actual))
+                } else if e.classify().is_not_found() {
+                    Ok(Moved::Elsewhere(None))
+                } else {
+                    Err(anyhow!("moving {branch}: {e}"))
+                }
+            }
+        }
+    }
+
     fn id(&self, rev: &Rev) -> Result<ObjectId> {
         let id = ObjectId::from_hex(rev.as_str().as_bytes())
             .map_err(|e| anyhow!("{rev} is not an object id: {e}"))?;
@@ -115,15 +188,7 @@ fn is_object_id(field: &[u8]) -> bool {
 
 impl Branch for LocalRefs {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
-        let found = self
-            .repo
-            .try_find_reference(full_name(branch).as_str())
-            .map_err(|e| anyhow!("reading {branch}: {e}"))?;
-        let Some(mut r) = found else { return Ok(None) };
-        let id = r
-            .peel_to_id()
-            .map_err(|e| anyhow!("peeling {branch}: {e}"))?;
-        Ok(Some(Rev::new(id.to_string())))
+        self.read_ref(&full_name(branch))
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
@@ -227,48 +292,11 @@ impl Branch for LocalRefs {
     }
 
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
-        let (from, new) = (self.id(expected)?, self.id(to)?);
-        let edit = RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: format!("sluice: land on {branch}").into(),
-                },
-                expected: PreviousValue::MustExistAndMatch(Target::Object(from)),
-                new: Target::Object(new),
-            },
-            name: full_name(branch)
-                .try_into()
-                .map_err(|e| anyhow!("{branch} is not a branch name: {e}"))?,
-            deref: false,
-        };
-        let who = Self::signature(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .context("the clock is before 1970")?
-                .as_secs() as i64,
-        );
-        let mut buf = gix::date::parse::TimeBuf::default();
-        match self
-            .repo
-            .edit_references_as([edit], Some(who.to_ref(&mut buf)))
-        {
-            Ok(_) => Ok(Moved::Moved),
-            // 24, core.5: found elsewhere is reported, never retried blind.
-            Err(e) => {
-                if let Some(out) = e.downcast_any_ref::<ReferenceOutOfDate>() {
-                    let actual = match &out.actual {
-                        Target::Object(id) => Some(Rev::new(id.to_string())),
-                        Target::Symbolic(_) => None,
-                    };
-                    Ok(Moved::Elsewhere(actual))
-                } else if e.classify().is_not_found() {
-                    Ok(Moved::Elsewhere(None))
-                } else {
-                    Err(anyhow!("moving {branch}: {e}"))
-                }
-            }
-        }
+        let from = self.id(expected)?;
+        self.edit(
+            branch,
+            PreviousValue::MustExistAndMatch(Target::Object(from)),
+            to,
+        )
     }
 }

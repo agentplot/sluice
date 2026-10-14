@@ -2,14 +2,17 @@
 //! this crate that may name a tool (rule core.1).
 //!
 //! The profiles are `docs/plans/phase-1-integrations.md`'s: the branch is
-//! bound to [`local_refs`], the records to [`local_files`], the check to
+//! bound to [`local_refs`], or [`pushed_refs`] where its policy names a
+//! remote, through [`branches`]; the records to [`local_files`], the check to
 //! [`checks`], the place to [`places`] and the driver to [`worktrunk`].
 
+pub mod branches;
 pub mod checks;
 pub mod local_files;
 pub mod local_refs;
 pub mod moon;
 pub mod places;
+pub mod pushed_refs;
 pub mod worktrunk;
 
 use std::path::{Path, PathBuf};
@@ -23,7 +26,7 @@ use crate::instance::Instance;
 pub struct Bound {
     pub checkout: places::Places,
     pub tests: checks::Checks,
-    pub branch: local_refs::LocalRefs,
+    pub branch: branches::Branches,
     pub driver: worktrunk::Worktrunk,
     pub state: local_files::LocalFiles,
 }
@@ -37,7 +40,7 @@ impl Bound {
 
     /// `program` is the `sluice` executable that supervises check runs.
     pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
-        let branch = local_refs::LocalRefs::open(dir)?;
+        let branch = branches::Branches::open(dir)?;
         let common = branch.common_dir()?;
         let state = local_files::LocalFiles::new(&common);
         Ok(Bound {
