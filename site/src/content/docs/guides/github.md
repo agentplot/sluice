@@ -60,11 +60,7 @@ accepted the push.
 
 ## Set up GitHub
 
-sluice pushes as you, with whatever credentials `git push` already uses
-on this machine. A GitHub App for sluice will take that role later, so
-pushes to `main` come from sluice and nobody else.
-
-Then keep everyone else's pushes off `main` with a ruleset, in the
+Keep everyone else's pushes off `main` with a ruleset, in the
 repository's **Settings › Rules › Rulesets › New branch ruleset**:
 
 | setting | value |
@@ -72,20 +68,27 @@ repository's **Settings › Rules › Rulesets › New branch ruleset**:
 | target branches | `main` |
 | restrict updates | on |
 | block force pushes | on |
-| bypass list | your account, until sluice's GitHub App replaces it |
+| bypass list | sluice's GitHub App alone |
 
 Leave GitHub's own merge queue off, and don't require status checks on
 `main`: sluice's gate is the check, and it runs before the push.
 
-Your agents push with your credentials too, so GitHub can't tell their
-pushes from yours. Keeping them off `main` is the job of the
-`reference-transaction` hook that `sluice protect` installs on this
-machine, as in [branch protection](/sluice/guides/walkthrough/#4-branch-protection).
+sluice pushes as its own GitHub App, which [Give sluice its own GitHub
+identity](/sluice/guides/github-app/) sets up. Only sluice's own fetches
+and pushes carry the app's token, so the ruleset refuses every other
+push to `main`, your agents' included. Until the app is set up, sluice
+pushes with the credentials your `git push` uses, the bypass list has
+to hold your account, and `sluice status` says sluice has no identity of
+its own. Your agents push with those credentials too, so keeping them
+off `main` is then the job of the `reference-transaction` hook that
+`sluice protect` installs, as in [branch
+protection](/sluice/guides/walkthrough/#4-branch-protection).
 
 ## When `main` moves under the queue
 
-While the bypass is yours, your own push to `main` still gets through,
-and so does a click of GitHub's merge button. sluice treats either as
+While the bypass is yours, before sluice has its app, your own push to
+`main` still gets through, and so does a click of GitHub's merge
+button. sluice treats either as
 `main` moving under its queue. Say someone pushes `4847258` to `main`
 while submission 1's push is on its way:
 

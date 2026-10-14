@@ -28,7 +28,7 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 
 ## 5. Guide and decision
 
-- [ ] 5.1 Write `site/src/content/docs/guides/github-app.md`, "Give sluice its own GitHub identity": create the app (permissions: contents read and write, commit statuses, checks and pull requests read and write, metadata read), install it on the repository, save the key with mode `0600`, add `[forge]`, set the ruleset's only bypass to the app, run `sluice forge check main`; link it from `guides/github.md` in place of "sluice pushes as you". Verify `moon run site:prose` and `cd site && bun run build` pass.
+- [x] 5.1 Write `site/src/content/docs/guides/github-app.md`, "Give sluice its own GitHub identity": create the app (permissions: contents read and write, commit statuses, checks and pull requests read and write, metadata read), install it on the repository, save the key with mode `0600`, add `[forge]`, set the ruleset's only bypass to the app, run `sluice forge check main`; link it from `guides/github.md` in place of "sluice pushes as you". Verify `moon run site:prose` and `cd site && bun run build` pass.
 - [ ] 5.2 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): sluice's identity on a forge is an app whose token reaches only sluice's own git calls; options: the operator's account, a machine user's token, an app. Record the live test's run if it was made. Verify `site/scripts/adrs.mjs` renders it.
 - [ ] 5.3 Note the app in piece 23's entry of `docs/plans/phase-1-pass-2.md` and add the change's row. Verify the plan reads current.
 
