@@ -16,6 +16,17 @@ fn main() {
         }
         return;
     }
+    // git's credential helper needs no repository: what it gives is in
+    // its environment.
+    if let Command::Credential { operation } = &cli.command {
+        let mut out = std::io::stdout();
+        if let Err(e) = sluice::identity::helper(operation, &mut std::io::stdin().lock(), &mut out)
+        {
+            eprintln!("sluice credential: {e:#}");
+            std::process::exit(3);
+        }
+        return;
+    }
     // Every ref update in every worktree runs the hook: leave at once
     // unless git asks for the decision.
     if let Command::Hook { state, .. } = &cli.command {

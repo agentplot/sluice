@@ -18,7 +18,7 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 
 ## 3. git with the app's token
 
-- [ ] 3.1 Add the `Identity` interface and give `PushedRefs` an optional one; with it, fetch and push run with `-c credential.helper=` and sluice's helper, over the remote's HTTPS URL. Add the hidden `sluice credential get`. Verify with an acceptance test that a git call made through `PushedRefs` with a fake identity receives the fake token through the helper, that `.git/config` and the environment of the parent hold no token afterwards, and that `git push` run directly in a worktree gets no credential from sluice.
+- [x] 3.1 Add the `Identity` interface and give `PushedRefs` an optional one; with it, fetch and push run with `-c credential.helper=` and sluice's helper, over the remote's HTTPS URL. Add the hidden `sluice credential get`. Verify with an acceptance test that a git call made through `PushedRefs` with a fake identity receives the fake token through the helper, that `.git/config` and the environment of the parent hold no token afterwards, and that `git push` run directly in a worktree gets no credential from sluice.
 - [ ] 3.2 Wire the app's identity from `[forge]` where the seams are built, and make `sluice status` say when a branch with a `remote` has no identity of its own. Verify with an acceptance test of the status line with and without `[forge]`.
 
 ## 4. forge check

@@ -31,25 +31,31 @@ pub struct Fake {
 }
 
 impl Fake {
-    pub fn start(handler: impl Fn(&Request) -> Answer + Send + 'static) -> Fake {
+    pub fn start(handler: impl Fn(&Request) -> Answer + Send + Sync + 'static) -> Fake {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let kept = seen.clone();
+        let handler = Arc::new(handler);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let Some(req) = read(&mut BufReader::new(&stream)) else {
-                    continue;
-                };
-                kept.lock().unwrap().push(req.clone());
-                let (status, headers, body) = handler(&req);
-                let mut out = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
-                for (k, v) in headers {
-                    out.push_str(&format!("{k}: {v}\r\n"));
-                }
-                out.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
-                let _ = stream.write_all(out.as_bytes());
+                let (kept, handler) = (kept.clone(), handler.clone());
+                // A connection of its own each: a client may open one and
+                // send nothing on it.
+                std::thread::spawn(move || {
+                    let Some(req) = read(&mut BufReader::new(&stream)) else {
+                        return;
+                    };
+                    kept.lock().unwrap().push(req.clone());
+                    let (status, headers, body) = handler(&req);
+                    let mut out = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
+                    for (k, v) in headers {
+                        out.push_str(&format!("{k}: {v}\r\n"));
+                    }
+                    out.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+                    let _ = stream.write_all(out.as_bytes());
+                });
             }
         });
         Fake { url, seen }

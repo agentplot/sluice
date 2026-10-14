@@ -6,9 +6,15 @@
 
 mod support;
 
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::rc::Rc;
+
+use sluice::identity::{Credentials, Identity};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::pushed_refs::PushedRefs;
 use sluice_seams::{Branch, LandingCommit, Moved, Rev};
+use support::http::Fake;
 use support::Repo;
 
 fn rev(s: String) -> Rev {
@@ -145,4 +151,155 @@ fn the_router_sends_a_branch_to_its_remote() {
     assert_eq!(b.read("main").unwrap(), Some(rev(pushed)));
     let err = format!("{:#}", b.read("bolt/x").unwrap_err());
     assert!(err.contains("\"nowhere\""), "{err}");
+}
+
+/// An identity whose remote is a fake HTTP server, with a token of its own.
+struct FakeIdentity {
+    url: String,
+    token: String,
+}
+
+impl Identity for FakeIdentity {
+    fn name(&self) -> String {
+        "a fake identity".into()
+    }
+
+    fn url(&self, _remote_url: &str) -> Option<String> {
+        Some(self.url.clone())
+    }
+
+    fn credentials(&self, url: &str) -> anyhow::Result<Credentials> {
+        assert_eq!(url, self.url);
+        Ok(Credentials {
+            username: "x-fake".into(),
+            password: self.token.clone(),
+        })
+    }
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::new();
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                s.push('=');
+            }
+        }
+    }
+    s
+}
+
+/// C.4: sluice's git calls get the identity's token through the helper
+/// named on their own command line; nothing holds it afterwards, and git
+/// run directly in a worktree gets nothing of sluice's.
+#[test]
+fn an_identity_reaches_only_sluices_git() {
+    let repo = Repo::new("identity");
+    let _bare = repo.bare_origin();
+    // A remote that asks for credentials and refuses whatever it gets.
+    let fake = Fake::start(|r| match r.header("Authorization") {
+        Some(_) => (403, vec![], "refused\n".into()),
+        None => (
+            401,
+            vec![("WWW-Authenticate".into(), "Basic realm=\"fake\"".into())],
+            String::new(),
+        ),
+    });
+    let token = format!("fake-token-{}", std::process::id());
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity {
+        url: url.clone(),
+        token: token.clone(),
+    });
+    let p = PushedRefs::open_as(
+        repo.dir(),
+        "origin",
+        Some((identity, PathBuf::from(env!("CARGO_BIN_EXE_sluice")))),
+    )
+    .unwrap();
+    assert_eq!(p.identity().as_deref(), Some("a fake identity"));
+    assert!(p.read("main").is_err(), "the fake refuses every fetch");
+    let given: Vec<String> = fake
+        .requests()
+        .iter()
+        .filter_map(|r| r.header("Authorization").map(String::from))
+        .collect();
+    let basic = format!("Basic {}", base64(format!("x-fake:{token}").as_bytes()));
+    assert_eq!(
+        given,
+        [basic.clone()],
+        "git gave the fake identity's credentials"
+    );
+
+    let config = std::fs::read_to_string(repo.dir().join(".git/config")).unwrap();
+    assert!(!config.contains(&token), "{config}");
+    assert!(std::env::vars().all(|(_, v)| !v.contains(&token)));
+
+    let worktree = repo.dir().join("agent");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "agent",
+        worktree.to_str().unwrap(),
+    ]);
+    let before = fake.requests().len();
+    let push = support::git_command()
+        .current_dir(&worktree)
+        .args(["push", &url, "HEAD:main"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!push.status.success());
+    let seen = fake.requests();
+    assert!(seen.len() > before, "the agent's push reached the remote");
+    for r in &seen[before..] {
+        let auth = r.header("Authorization").unwrap_or("");
+        assert_ne!(auth, basic, "an agent's push carried sluice's token");
+    }
+}
+
+/// sluice runs unattended: a push to a remote that wants a credential the
+/// host cannot give fails at once with an error, never a prompt or a wait.
+#[test]
+fn a_push_with_no_credential_fails_rather_than_waits() {
+    let repo = Repo::new("no-credential");
+    let fake = Fake::start(|_| {
+        (
+            401,
+            vec![("WWW-Authenticate".into(), "Basic realm=\"fake\"".into())],
+            String::new(),
+        )
+    });
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        &format!("{}/o/r.git", fake.url()),
+    ]);
+    let head = rev(repo.rev("main"));
+    let dir = repo.dir().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let p = PushedRefs::open(&dir, "origin").unwrap();
+        let read = p.read("main").map_err(|e| e.to_string());
+        let push = p.move_to("main", &head, &head).map_err(|e| e.to_string());
+        let _ = tx.send((read, push));
+    });
+    let (read, push) = rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("git waited instead of failing");
+    let read = read.unwrap_err();
+    assert!(read.contains("fetching main from origin failed"), "{read}");
+    let push = push.unwrap_err();
+    assert!(push.contains("pushing main to origin failed"), "{push}");
 }

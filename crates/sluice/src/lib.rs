@@ -133,6 +133,10 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
+    /// Run by sluice's own git calls as their credential helper:
+    /// `credential get`, git's credential protocol on stdin.
+    #[command(hide = true)]
+    Credential { operation: String },
 }
 
 /// What a waiting command does between rounds.
@@ -336,6 +340,10 @@ pub fn run(
                 protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
                 writeln!(out, "branch protection installed")?;
             }
+            Ok(0)
+        }
+        Command::Credential { operation } => {
+            identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)
         }
         Command::Hook { name, state } => match name.as_str() {
