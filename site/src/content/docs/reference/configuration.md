@@ -185,12 +185,22 @@ repository's:
 
 ```toml
 [runs]
-max = 2    # default: a quarter of the processors, shared equally between runs
+max = 2        # default: a quarter of the processors, shared equally between runs
+reserved = 1   # default: 0; slots an agent's own runs never take
 ```
 
 The bound is the instance's: sluice starts no more runs at once than it,
 counted from the state of every branch the instance serves
-([ADR 0012](/sluice/decisions/0012/)).
+([ADR 0012](/sluice/decisions/0012/)). The runs an agent starts in its
+own worktree with `sluice exec` count against the same bound, read from
+the state like the rest.
+
+`reserved` keeps that many slots of the bound for the runs of
+submissions: an agent's run in its worktree waits rather than take one,
+and a submission's run starts in any free slot. With the default, 0,
+agents' runs may hold the whole bound. A `reserved` at or above `max`
+leaves agents no slot, and sluice refuses to start with the setting
+named.
 
 ## Environment
 

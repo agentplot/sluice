@@ -10,11 +10,11 @@ pathspec after each task group, Conventional Commits, scope the crate or
 
 ## 1. Host config and the count
 
-- [ ] 1.1 Add `[runs] reserved` (default 0) to `instance::Instance`, refusing `reserved >= max` with the setting named; verify with tests in `crates/sluice/tests/instance.rs` for default, a value, and the refusal text.
-- [ ] 1.2 Add `SessionRun` to `sluice-seams` and `sessions`, `begin_session`, `end_session` to the `State` trait; implement in `profiles/local_files.rs` under `<common>/sluice/sessions/<flat>.json` with the repository `.lock`, dropping records whose pid is gone on read; verify with `crates/sluice/tests/local_files.rs` (write, read, dead-pid drop, lock held).
-- [ ] 1.3 Implement the same on `FakeState` with a scripting helper to add a live or dead session; verify the fakes crate tests pass.
-- [ ] 1.4 Make `Sluice::capacity` subtract live sessions under both `Serves` variants and add `Sluice::session_capacity` (less the reserve); verify with a core test over fakes: bound 2 with two sessions starts no run; reserve 1 of 4 leaves 3 for sessions.
-- [ ] 1.5 Document `[runs] reserved` beside `[runs] max` in `site/src/content/docs/reference/configuration.md` and the `sessions/` directory in `reference/state.md`; verify `moon run 'site:prose'` is clean.
+- [x] 1.1 Add `[runs] reserved` (default 0) to `instance::Instance`, refusing `reserved >= max` with the setting named; verify with tests in `crates/sluice/tests/instance.rs` for default, a value, and the refusal text.
+- [x] 1.2 Add `SessionRun` to `sluice-seams` and `sessions`, `begin_session`, `end_session` to the `State` trait; implement in `profiles/local_files.rs` under `<common>/sluice/sessions/<flat>.json` with the repository `.lock`, dropping records whose pid is gone on read; verify with `crates/sluice/tests/local_files.rs` (write, read, dead-pid drop, lock held).
+- [x] 1.3 Implement the same on `FakeState` with a scripting helper to add a live or dead session; verify the fakes crate tests pass.
+- [x] 1.4 Make `Sluice::capacity` subtract live sessions under both `Serves` variants and add `Sluice::session_capacity` (less the reserve); verify with a core test over fakes: bound 2 with two sessions starts no run; reserve 1 of 4 leaves 3 for sessions.
+- [x] 1.5 Document `[runs] reserved` beside `[runs] max` in `site/src/content/docs/reference/configuration.md` and the `sessions/` directory in `reference/state.md`; verify `moon run 'site:prose'` is clean.
 
 ## 2. The session place
 

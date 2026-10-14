@@ -184,3 +184,22 @@ rollback needed beyond removing them.
 
 - Whether `sluice exec` should accept `--cached` to let moon replay and
   skip recording. Deferrable: adds a flag, changes no spec.
+
+## Notes from the build
+
+- Task 1.2, D3: session runs are recorded under
+  `<common>/sluice/.sessions/<flat>.json`, not `sessions/`. A branch's
+  records live at `<common>/sluice/<branch>/`, so a branch named
+  `sessions` would share the directory; `LocalFiles::dir` refuses only
+  dot-named components, as `.places`, `.runs` and `.logs` rely on.
+- Task 1.2, D3: the `State` trait gains a fourth method beside
+  `sessions`, `begin_session` and `end_session`: `lock_sessions`, the
+  repository `.lock` as a guard. `exec` must hold it across reading the
+  count and writing its run, and a second `flock` of the same file from
+  one process waits on itself, so `begin_session`, `end_session`,
+  `record_results` and `allocate_id` take the lock only when this
+  process's guard does not hold it.
+- Task 1.4, D4: `Sluice::session_capacity(reserved)` takes the reserve as
+  an argument (the reserve is the host's, read by the CLI) and counts the
+  candidates under test on every branch whatever the `Serves`, because a
+  session run is the host's and no instance serves it.
