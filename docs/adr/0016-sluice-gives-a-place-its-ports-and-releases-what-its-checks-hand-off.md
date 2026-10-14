@@ -9,8 +9,8 @@ decision-makers:
 
 # sluice gives a place its ports and releases what its checks hand off
 
-Deciders: the user, preparing sluice for Switchboard's checks, 2026-10-13.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 31 to 34, 66, 83, 84, C.1, C.2; ADRs 0010, 0013; a survey of Switchboard's test stack (an AWS emulator in a container, stand-ins for GitHub, Frontegg and Zuplo, API and dev servers, Playwright), and research of 2026-10-13 comparing moon 2.6, devenv and Earthly for bringing such a stack up.
+Deciders: the user, preparing sluice for a repository whose checks bring up a stack, 2026-10-13.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 31 to 34, 66, 83, 84, C.1, C.2; ADRs 0010, 0013; a survey of one repository's test stack (an AWS emulator in a container, stand-ins for the forge and two outside services, API and dev servers, Playwright), and research of 2026-10-13 comparing moon 2.6, devenv and Earthly for bringing such a stack up.
 
 ## Context and problem statement
 
@@ -36,5 +36,5 @@ Option 1 cannot wire separate systems together. Option 2 collides by chance and 
 
 - The statement's clauses 31 to 34 are rewritten and C.1 and C.2 bind them; rule core.10 is rewritten.
 - Supersedes ADR 0010's "on ports they pick"; its decisions on services, the operator's word and the submit gate stand.
-- A repository's stack is started by its own tools, devenv's processes with their readiness checks for Switchboard, from a moon task the checks depend on; sluice runs moon as before.
+- A repository's stack is started by its own tools, devenv's processes with their readiness checks, from a moon task the checks depend on; sluice runs moon as before.
 - The release command runs once per place release and may run again after a crash, so it must be safe to repeat.
