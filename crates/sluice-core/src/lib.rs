@@ -28,7 +28,7 @@ pub use ops::{
     Accepted, AmendRefusal, Forecast, Requester, Status, SubmitRefusal, SubmitRequest,
     WithdrawRefusal,
 };
-pub use step::Step;
+pub use step::{Round, Step};
 
 /// The time, for the records' timestamps. Not a seam: the environment.
 pub trait Clock {

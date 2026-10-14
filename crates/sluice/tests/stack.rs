@@ -347,7 +347,12 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     ]);
     let run = |n: usize| {
         let place = places
-            .adopt(wt.to_str().unwrap(), "bolt/x", &checkout)
+            .adopt(
+                wt.to_str().unwrap(),
+                "bolt/x",
+                &checkout,
+                "2026-10-14T09:00:00Z",
+            )
             .unwrap();
         let handle = checks
             .start(&RunRequest {

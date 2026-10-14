@@ -455,7 +455,12 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let (before, listed) = (others(&repo), worktrees(&repo));
 
     let a = p
-        .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+        .adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &settings,
+            "2026-10-14T09:00:00Z",
+        )
         .unwrap();
     assert_eq!(a.path, std::fs::canonicalize(&session).unwrap());
     assert!(a.name.starts_with("session/"), "{}", a.name);
@@ -470,12 +475,18 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
             session.to_str().unwrap(),
             "bolt/x",
             &ported(&["web"], "41200"),
+            "2026-10-14T09:00:00Z",
         )
         .unwrap();
     assert_eq!(again, a);
 
     let b = p
-        .adopt(other.to_str().unwrap(), "bolt/x", &settings)
+        .adopt(
+            other.to_str().unwrap(),
+            "bolt/x",
+            &settings,
+            "2026-10-14T09:00:00Z",
+        )
         .unwrap();
     // Another block: a port something else holds is passed over,
     // so which block is the host's to say.
@@ -506,7 +517,12 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
     let settings = ported(&["web"], "41300");
     let (before, listed) = (others(&repo), worktrees(&repo));
     let place = p
-        .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+        .adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &settings,
+            "2026-10-14T09:00:00Z",
+        )
         .unwrap();
 
     let r = runs(&repo);
@@ -557,7 +573,12 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
     // Its ports are free for another worktree.
     let other = another_session(&repo, "next");
     let next = p
-        .adopt(other.to_str().unwrap(), "bolt/x", &settings)
+        .adopt(
+            other.to_str().unwrap(),
+            "bolt/x",
+            &settings,
+            "2026-10-14T09:00:00Z",
+        )
         .unwrap();
     assert_eq!(
         port(&next, "SLUICE_PORT_WEB"),
@@ -594,7 +615,14 @@ fn a_sessions_place_saves_its_caches_and_keeps_them() {
     std::fs::create_dir_all(wt.join("target/debug")).unwrap();
     std::fs::write(wt.join("target/debug/a"), "built by the session\n").unwrap();
 
-    let place = p.adopt(wt.to_str().unwrap(), "bolt/x", &cached).unwrap();
+    let place = p
+        .adopt(
+            wt.to_str().unwrap(),
+            "bolt/x",
+            &cached,
+            "2026-10-14T09:00:00Z",
+        )
+        .unwrap();
     p.save_caches(&place.name, &head, &cached).unwrap();
     assert_eq!(
         std::fs::read_to_string(wt.join("target/debug/a")).unwrap(),
@@ -642,7 +670,12 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
 
     let run = |cmd: &str| {
         let place = p
-            .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+            .adopt(
+                session.to_str().unwrap(),
+                "bolt/x",
+                &settings,
+                "2026-10-14T09:00:00Z",
+            )
             .unwrap();
         let r = runs(&repo);
         let name = r.next_run(&place.name).unwrap();

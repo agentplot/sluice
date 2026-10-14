@@ -26,8 +26,9 @@ readable with plain tools whether or not sluice is running.
   caches/<bucket>/<key>/
                        the [[checkout.cache]] entries, the last two keys of each
   .places/<checkout>.json
-                       a checkout's record: its kind, path, branch, ports, caches
-                       and the block of ports it holds on the host
+                       a checkout's record: its kind, path, branch, ports, caches,
+                       the block of ports it holds on the host and, for a
+                       worktree, when its last run started
   .places/<checkout>/  a candidate's checkout, made for its run and removed after
   .tmp/<checkout>/     the checkout's scratch, SLUICE_TMP; a worktree keeps its own across runs
   .runs/<checkout>/    a candidate's run
@@ -106,7 +107,17 @@ run:
 
 `landing` is written before the branch moves and `landed` after, so a
 round that crashes between the two is finished correctly by the next
-one. Full example files are in the repository under
+one.
+
+`released` is logged when a combination's checkout is released, and
+when a run or round releases the checkout of a worktree that no longer
+exists, which also names the worktree:
+
+```json
+{"schema":"sluice/log@1","event":"released","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c"}
+```
+
+Full example files are in the repository under
 [docs/examples/state](https://github.com/agentplot/sluice/tree/main/docs/examples/state).
 
 ## The version

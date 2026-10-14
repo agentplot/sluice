@@ -39,6 +39,14 @@ use crate::records::{
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice};
 
+/// A round: how its step went, and the session places it released
+/// because their worktrees no longer exist (session-runs-1 clause 97).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Round {
+    pub step: Step,
+    pub released: Vec<crate::session::Abandoned>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     /// Another step holds the branch's lock (rule core.14).
@@ -52,8 +60,22 @@ pub enum Step {
 impl Sluice<'_> {
     /// One round of `branch`'s work.
     pub fn step(&self, branch: &str) -> Result<Step> {
+        Ok(self.round(branch)?.step)
+    }
+
+    /// One round of `branch`'s work, first releasing every session place
+    /// on the host whose worktree no longer exists (session-runs-1
+    /// clause 97), before the branch's lock is taken: that release takes
+    /// the lock of its own place's branch.
+    pub fn round(&self, branch: &str) -> Result<Round> {
         let round = info_span!("sluice.round", sluice.branch = branch, sluice.step = "");
         let _round = round.enter();
+        let released = info_span!("sluice.abandoned").in_scope(|| self.release_abandoned())?;
+        let step = self.step_locked(branch, &round)?;
+        Ok(Round { step, released })
+    }
+
+    fn step_locked(&self, branch: &str, round: &tracing::Span) -> Result<Step> {
         let Some(_lock) = self.seams.state.lock(branch)? else {
             round.record("sluice.step", "busy");
             return Ok(Step::Busy);
@@ -98,6 +120,7 @@ impl Sluice<'_> {
                     &now,
                     Event::Released {
                         place: place.clone(),
+                        worktree: None,
                     },
                 );
                 Ok(())
@@ -133,6 +156,7 @@ impl Sluice<'_> {
                         &now,
                         Event::Released {
                             place: place.clone(),
+                            worktree: None,
                         },
                     );
                 }

@@ -685,3 +685,59 @@ pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
         Released::Nothing
     );
 }
+
+/// Session-runs-1 clause 97: a session's place whose worktree no longer
+/// exists is no session's, and the next round on the host releases it
+/// and logs the release where the branch's other releases are; a place
+/// whose worktree exists stays, however long since its last run, and is
+/// listed with the time of that run (25, 95; core.16).
+pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.session_run("unit/a");
+    h.session_run("unit/b");
+    let s = h.sluice();
+    let held = s.session_places().expect("the place seam lists");
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert!(
+        held.iter().all(|p| !p.gone && p.last_run.is_some()),
+        "{held:?}"
+    );
+    assert!(held.iter().all(|p| p.branch == BRANCH), "{held:?}");
+
+    h.remove_worktree("unit/a");
+    let listed = s.session_places().expect("the place seam lists");
+    let gone: Vec<_> = listed.iter().filter(|p| p.gone).cloned().collect();
+    assert_eq!(gone.len(), 1, "{listed:?}");
+    let gone = gone[0].clone();
+    let kept = listed
+        .iter()
+        .find(|p| !p.gone)
+        .cloned()
+        .expect("unit/b's place is listed");
+
+    // A rig whose lock a starting child holds for a moment leaves the
+    // release to the round after; on the fakes the first round releases.
+    for _ in 0..50 {
+        h.step();
+        if s.session_places().expect("lists").iter().all(|p| !p.gone) {
+            break;
+        }
+    }
+    let left = s.session_places().expect("the place seam lists");
+    assert_eq!(left, vec![kept.clone()], "only unit/b's place is left");
+    let worktree = gone.worktree.to_string_lossy().into_owned();
+    assert!(
+        h.events().iter().any(|e| matches!(
+            e,
+            Event::Released { place, worktree: Some(w) } if *place == gone.name && *w == worktree
+        )),
+        "{:?}",
+        h.events()
+    );
+
+    // Rounds after leave a place whose worktree exists alone.
+    h.step();
+    h.step();
+    assert_eq!(s.session_places().expect("lists"), vec![kept]);
+}
