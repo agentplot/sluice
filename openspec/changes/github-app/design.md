@@ -64,6 +64,13 @@ and reads the branch's rules
 they come from) to list their bypass actors. The command's word is
 `forge`, so `main.rs` names no forge (core.1).
 
+GitHub shows a ruleset's `bypass_actors` only to a caller with write
+access to the ruleset, which the app is not given: an app that could
+edit the ruleset could let anyone through it. So the check reads the
+rulesets with the operator's own token, from `GH_TOKEN`, `GITHUB_TOKEN`
+or `gh auth token`, and everything else with the app's. With no token
+of the operator's, the bypass check fails and says how to give one.
+
 **The host config.** `[forge] app_id` (integer) and `key` (path, `~`
 expanded) in `instance.rs`'s form, `deny_unknown_fields` kept; a key
 file with any group or other permission bit is refused.

@@ -5,6 +5,7 @@
 //! own git calls are given (`docs/adr/0018`).
 
 pub mod app;
+pub mod check;
 
 pub use app::{App, Repo};
 

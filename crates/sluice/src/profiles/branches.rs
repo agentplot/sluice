@@ -52,7 +52,7 @@ impl Branches {
     /// revision: it may lag the remote's, which is enough to choose the
     /// profile; the gate itself is read from the revision the profile
     /// reads (rule core.15).
-    fn remote(&self, branch: &str) -> Result<Option<String>> {
+    pub fn remote(&self, branch: &str) -> Result<Option<String>> {
         let Some(rev) = self.local.read(branch)? else {
             return Ok(None);
         };

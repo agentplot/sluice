@@ -233,7 +233,7 @@ fn an_identity_reaches_only_sluices_git() {
     let basic = format!("Basic {}", base64(format!("x-fake:{token}").as_bytes()));
     assert_eq!(
         given,
-        [basic.clone()],
+        std::slice::from_ref(&basic),
         "git gave the fake identity's credentials"
     );
 

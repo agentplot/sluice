@@ -27,6 +27,23 @@ fn main() {
         }
         return;
     }
+    // The forge check reads the host's config itself, and says what in it
+    // is wrong rather than failing on it.
+    if let Command::Forge {
+        command: sluice::ForgeCommand::Check { branch },
+    } = &cli.command
+    {
+        let code = std::env::current_dir()
+            .map_err(anyhow::Error::from)
+            .and_then(|dir| {
+                sluice::profiles::forge_check(&dir, branch.as_deref(), &mut std::io::stdout())
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("sluice: {e:#}");
+                3
+            });
+        std::process::exit(code);
+    }
     // Every ref update in every worktree runs the hook: leave at once
     // unless git asks for the decision.
     if let Command::Hook { state, .. } = &cli.command {

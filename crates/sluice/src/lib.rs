@@ -133,6 +133,11 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
+    /// sluice's identity on a forge.
+    Forge {
+        #[command(subcommand)]
+        command: ForgeCommand,
+    },
     /// Run by sluice's own git calls as their credential helper:
     /// `credential get`, git's credential protocol on stdin.
     #[command(hide = true)]
@@ -157,6 +162,16 @@ impl Pushers for () {
     fn pusher(&self, _: &str) -> Result<Option<Pusher>> {
         Ok(None)
     }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ForgeCommand {
+    /// Whether the host's [forge] identity is set up so only sluice may
+    /// move the branch on its remote; exits 1 naming what is not.
+    Check {
+        /// The branch; the one checked out here by default.
+        branch: Option<String>,
+    },
 }
 
 /// What a waiting command does between rounds.
@@ -365,6 +380,9 @@ pub fn run(
             }
             Ok(0)
         }
+        Command::Forge {
+            command: ForgeCommand::Check { branch },
+        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), out),
         Command::Credential { operation } => {
             identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)

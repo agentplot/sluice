@@ -66,13 +66,7 @@ impl PushedRefs {
         let speaker = match identity {
             None => None,
             Some((identity, program)) => {
-                // The URL as configured, before any `insteadOf`.
-                let key = format!("remote.{remote}.url");
-                let out = git(local.git_dir(), &["config", "--get", &key])?;
-                if !out.status.success() {
-                    bail!("the remote {remote:?} has no url");
-                }
-                let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let url = configured_url(local.git_dir(), remote)?;
                 identity.url(&url).map(|url| Speaker {
                     identity,
                     url,
@@ -183,6 +177,22 @@ fn command(git_dir: &Path, args: &[&str]) -> Command {
         .env("GIT_ASKPASS", "")
         .stdin(Stdio::null());
     c
+}
+
+/// The URL of the remote `remote` of the repository holding `path`.
+pub fn remote_url(path: &Path, remote: &str) -> Result<String> {
+    configured_url(LocalRefs::open(path)?.git_dir(), remote)
+}
+
+/// The remote's URL as configured, before any `insteadOf`: the forge it
+/// names is the one an identity is for.
+fn configured_url(git_dir: &Path, remote: &str) -> Result<String> {
+    let key = format!("remote.{remote}.url");
+    let out = git(git_dir, &["config", "--get", &key])?;
+    if !out.status.success() {
+        bail!("the remote {remote:?} has no url");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// `path` quoted for the shell git runs a `!` helper with.
