@@ -28,6 +28,7 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/agentplot/sluice/edit/main/site/',
       },
+      customCss: ['./src/styles/mermaid.css'],
       plugins: [starlightLinksValidator()],
       sidebar: [
         { label: 'Start', link: '/' },

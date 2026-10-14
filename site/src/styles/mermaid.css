@@ -1,0 +1,41 @@
+/* Mermaid's dark theme draws arrows and their labels in a dim gray;
+   lift them to near white on the dark background. */
+:root[data-theme='dark'] pre.mermaid svg .flowchart-link,
+:root[data-theme='dark'] pre.mermaid svg .messageLine0,
+:root[data-theme='dark'] pre.mermaid svg .messageLine1,
+:root[data-theme='dark'] pre.mermaid svg .relation {
+  stroke: #d8dce4 !important;
+}
+:root[data-theme='dark'] pre.mermaid svg .marker,
+:root[data-theme='dark'] pre.mermaid svg marker path,
+:root[data-theme='dark'] pre.mermaid svg #arrowhead path,
+:root[data-theme='dark'] pre.mermaid svg .arrowheadPath {
+  fill: #d8dce4 !important;
+  stroke: #d8dce4 !important;
+}
+:root[data-theme='dark'] pre.mermaid svg .messageText,
+:root[data-theme='dark'] pre.mermaid svg .edgeLabel,
+:root[data-theme='dark'] pre.mermaid svg .edgeLabel p,
+:root[data-theme='dark'] pre.mermaid svg .edgeLabel span,
+:root[data-theme='dark'] pre.mermaid svg .labelText,
+:root[data-theme='dark'] pre.mermaid svg .loopText {
+  fill: #f2f3f5 !important;
+  color: #f2f3f5 !important;
+}
+:root[data-theme='dark'] pre.mermaid svg .edgeLabel,
+:root[data-theme='dark'] pre.mermaid svg .edgeLabel p,
+:root[data-theme='dark'] pre.mermaid svg .labelBkg {
+  background-color: #2a2f38 !important;
+}
+:root[data-theme='dark'] pre.mermaid svg .actor-line {
+  stroke: #8a93a3 !important;
+}
+:root[data-theme='dark'] pre.mermaid svg .cluster-label,
+:root[data-theme='dark'] pre.mermaid svg .cluster-label span,
+:root[data-theme='dark'] pre.mermaid svg .cluster-label p,
+:root[data-theme='dark'] pre.mermaid svg .noteText,
+:root[data-theme='dark'] pre.mermaid svg .nodeLabel,
+:root[data-theme='dark'] pre.mermaid svg .nodeLabel p {
+  fill: #f2f3f5 !important;
+  color: #f2f3f5 !important;
+}
