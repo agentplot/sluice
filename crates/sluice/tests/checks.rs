@@ -137,14 +137,16 @@ fn env_probe() {
 fn a_command_sees_its_place_and_nothing_of_sluices() {
     let out = support::Scratch::new("checks-env-out");
     let file = out.path().join("seen");
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "env_probe", "--nocapture"])
-        .env("SLUICE_TEST_ENV_OUT", &file)
-        .env("MOON_FORCE", "1")
-        .env("GIT_DIR", "/elsewhere/.git")
-        .env("DEVENV_ROOT", "/elsewhere")
-        .status()
-        .unwrap();
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "env_probe", "--nocapture"])
+    .env("SLUICE_TEST_ENV_OUT", &file)
+    .env("MOON_FORCE", "1")
+    .env("GIT_DIR", "/elsewhere/.git")
+    .env("DEVENV_ROOT", "/elsewhere")
+    .status()
+    .unwrap();
     assert!(status.success());
     let text = std::fs::read_to_string(&file).unwrap();
     let parts: Vec<&str> = text.splitn(3, "\n--\n").collect();

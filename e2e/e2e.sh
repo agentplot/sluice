@@ -34,6 +34,9 @@ REPO=$ROOT/repo
 # moon's own variables never leak in from a caller's shell: moon reads MOON_* as options.
 for v in $(env | sed -n 's/^\(MOON_[A-Z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@localhost GIT_COMMITTER_NAME=e2e GIT_COMMITTER_EMAIL=e2e@localhost
+# No git here, sluice's included, reaches the user's config, credential helpers or a prompt.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
+unset GIT_ASKPASS SSH_ASKPASS
 
 # indir <dir> <command...>: run a command in a directory.
 indir() {

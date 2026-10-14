@@ -293,14 +293,16 @@ fn moon_env_probe() {
 fn moon_options_in_sluices_environment_change_nothing() {
     let out = support::Scratch::new("moon-env-out");
     let file = out.path().join("seen");
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "moon_env_probe", "--nocapture"])
-        .env("SLUICE_TEST_MOON_OUT", &file)
-        .env("MOON_FORCE", "1")
-        .env("MOON_BASE", "nonsense")
-        .env("MOON_AFFECTED", "1")
-        .status()
-        .unwrap();
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "moon_env_probe", "--nocapture"])
+    .env("SLUICE_TEST_MOON_OUT", &file)
+    .env("MOON_FORCE", "1")
+    .env("MOON_BASE", "nonsense")
+    .env("MOON_AFFECTED", "1")
+    .status()
+    .unwrap();
     assert!(status.success());
     let seen = std::fs::read_to_string(&file).unwrap();
     assert_eq!(

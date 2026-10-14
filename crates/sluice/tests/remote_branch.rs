@@ -73,7 +73,8 @@ impl Setup {
 
     fn command(&self, dir: &Path) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
-        c.current_dir(dir)
+        support::isolated(&mut c)
+            .current_dir(dir)
             .env("XDG_CONFIG_HOME", self.config.path())
             .env_remove("SLUICE_AGENT")
             .env_remove("SLUICE_OTEL")
@@ -154,7 +155,7 @@ impl Setup {
 
     /// The remote's refs, name and revision, as another host sees them.
     fn remote_refs(&self) -> Vec<String> {
-        let out = Command::new("git")
+        let out = support::git_command()
             .arg("--git-dir")
             .arg(self.origin.path())
             .args(["for-each-ref", "--format=%(refname) %(objectname)"])
@@ -167,7 +168,7 @@ impl Setup {
     }
 
     fn remote_main(&self) -> String {
-        let out = Command::new("git")
+        let out = support::git_command()
             .arg("--git-dir")
             .arg(self.origin.path())
             .args(["rev-parse", "refs/heads/main"])
