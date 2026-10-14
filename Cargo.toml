@@ -61,6 +61,11 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = [
   "reqwest-blocking-client",
 ] }
 
+# sluice's identity on a forge: a JWT signed with the app's key (RS256)
+# and a blocking HTTPS client for the forge's API.
+jsonwebtoken = "9"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"

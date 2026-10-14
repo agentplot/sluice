@@ -14,7 +14,7 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 
 ## 2. Tokens
 
-- [ ] 2.1 Add the app's JWT and installation token to `crates/sluice/src/profiles/github/`, with a blocking HTTPS client and an RS256 crate, refreshing five minutes before expiry and holding the token in memory only. Verify with unit tests: a JWT signed with a test key verifies with its public half and carries the app id and a ten-minute expiry; a fake token endpoint is called once per hour of tokens.
+- [x] 2.1 Add the app's JWT and installation token to `crates/sluice/src/profiles/github/`, with a blocking HTTPS client and an RS256 crate, refreshing five minutes before expiry and holding the token in memory only. Verify with unit tests: a JWT signed with a test key verifies with its public half and carries the app id and a ten-minute expiry; a fake token endpoint is called once per hour of tokens.
 
 ## 3. git with the app's token
 

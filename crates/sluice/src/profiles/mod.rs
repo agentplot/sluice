@@ -8,6 +8,7 @@
 
 pub mod branches;
 pub mod checks;
+pub mod github;
 pub mod local_files;
 pub mod local_refs;
 pub mod moon;
