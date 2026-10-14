@@ -137,7 +137,6 @@ conflict shows up while people are still reviewing.
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant A as agent
     participant S as sluice run
     participant G as GitHub
@@ -150,7 +149,7 @@ sequenceDiagram
     Note over S: test main + PR 38 + PR 40 + PR 41
     S->>G: post "testing behind PR 38, PR 40"
     S->>G: PR 38, PR 40 land, push main with PR 41
-    G-->>G: PR 41's commits are in main: merged
+    Note over G: PR 41's commits are in main: merged
     S->>G: post "landed"
     S-->>A: landed
 ```
