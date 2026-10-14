@@ -269,6 +269,10 @@ needed.
 
 ## Decisions this pass builds on
 
+- A key reads as flaky only across ran results held to the same limits
+  (19): the executor, memory, network and container engine, not the
+  processors. A fail with no container engine and a pass with one are
+  two experiments, not one check failing at random.
 - The branch protection hook calls an installed sluice at a stable path
   (`~/.cargo/bin/sluice` now, the nix profile's once published), never
   one built from a candidate: a submission never changes the guard it is
