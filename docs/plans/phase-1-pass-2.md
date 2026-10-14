@@ -48,7 +48,7 @@ never pushed). `devenv shell -- cargo-tests` runs the fast tier;
 | 20 | semantic releases with git-cliff | | **done**: `cliff.toml`, `.versionrc` (convco, the commit-msg hook and CI's check), the `version`, `binaries` and `release` jobs, `SLUICE_VERSION`, `release-preview` |
 | 21 | CI: the deeper tiers on Linux, and `target/` kept between runs | | **done**: the `linux` job (`#check-tools`, `#check-e2e`) green, worktrunk 0.80.0 pinned in the devenv shell, `target/` in GitHub's cache |
 | 22 | a full stack per candidate, side by side: containers, servers and a browser test | §4 | **done**: ADR 0016, `[checkout] ports`, `[tests] release`, `[executor] docker`, `tests/stack.rs` (open and sandbox, `cli:tools` and `cli:sandbox`); Switchboard's own move to `SLUICE_PORT_*` and `SLUICE_PLACE` is outside this repository |
-| 23 | `main` kept in step with the shared remote | C.4 | to design: whether every push goes through sluice |
+| 23 | `main` kept in step with the shared remote | C.4 | designing |
 
 The `container` executor comes after the goal; on one Mac it is not
 needed.
@@ -265,9 +265,10 @@ needed.
   read, the forge's rules letting only sluice's identity move the branch.
   sluice's identity is the operator's own GitHub account for now; a
   GitHub App, named as the ruleset's one bypass, replaces it later.
-  To settle first: whether every push to `main` goes through sluice, as
-  C.4 has it, or the forge stays open to direct pushes and pull requests,
-  which sluice would then take as the branch moving under its queue.
+  Only sluice's identity moves `main` on GitHub; a person or a merged
+  pull request moving it is an outside move, which sluice takes as the
+  branch moving under its queue. Only the branch is pushed: on one
+  machine the records stay local files.
 
 ## Decisions this pass builds on
 
