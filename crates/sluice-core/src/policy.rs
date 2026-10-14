@@ -422,7 +422,8 @@ batch = true
 
     /// sluice's own policy reads, and gates as section 9 says: bolt
     /// branches on the fast tier from any run or the cache, `main` on
-    /// every tier from sandboxed or confined runs only, deepest first.
+    /// every tier from sandboxed or confined runs only, deepest first,
+    /// landed on `origin`.
     #[test]
     fn sluices_own_policy_reads() {
         let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
@@ -435,6 +436,8 @@ batch = true
         let main = p.rules_for("main").unwrap().unwrap();
         assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
         assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
+        assert_eq!(main.remote.as_deref(), Some("origin"));
+        assert_eq!(bolt.remote, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
     }
 
