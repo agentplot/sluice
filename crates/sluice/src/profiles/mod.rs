@@ -44,10 +44,15 @@ impl Bound {
         let common = branch.common_dir()?;
         let state = local_files::LocalFiles::new(&common);
         Ok(Bound {
+            // A session's place's release command is the check seam's to
+            // build; the binding hands the builder over (rule core.2).
             checkout: places::Places::new(
                 &common,
                 crate::runs::Runs::new(&common, program.clone()),
-            ),
+            )
+            .with_release(Box::new(move |place, tests, limits, dir| {
+                checks::release_request(place, tests, limits, instance.jobs(), dir)
+            })),
             tests: checks::Checks::new(&common, program, instance),
             branch,
             driver: worktrunk::Worktrunk,

@@ -162,6 +162,18 @@ impl Runs {
     /// (session-runs-1 clauses 94, 95; ADR 0016). Nothing when it has
     /// none.
     pub fn remove_all(&self, place: &str) -> Result<()> {
+        self.remove_all_with(place, ReleaseWith::LastRun)
+    }
+
+    /// Where a session's place's release command, built fresh, keeps what
+    /// its toolchain and executor write, and its output.
+    pub fn release_dir(&self, place: &str) -> PathBuf {
+        self.root.join(flat_name(place)).join("release")
+    }
+
+    /// End every run of the session's place `place`, run the release
+    /// command once as `with` says, and remove them all.
+    pub fn remove_all_with(&self, place: &str, with: ReleaseWith) -> Result<()> {
         assert!(is_session(place), "{place} is no session's place");
         let parent = self.root.join(flat_name(place));
         let runs = numbered(&parent)?;
@@ -180,12 +192,24 @@ impl Runs {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
-        if let Some((_, last)) = runs
-            .iter()
-            .rev()
-            .find(|(_, d)| d.join("request.json").exists())
-        {
-            self.release(last)?;
+        match with {
+            ReleaseWith::LastRun => {
+                if let Some((_, last)) = runs
+                    .iter()
+                    .rev()
+                    .find(|(_, d)| d.join("request.json").exists())
+                {
+                    self.release(last)?;
+                }
+            }
+            ReleaseWith::Fresh(None) => {}
+            ReleaseWith::Fresh(Some(request)) => {
+                let dir = self.release_dir(place);
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                write_atomic(&dir.join("request.json"), &serde_json::to_vec(&request)?)?;
+                self.release(&dir)?;
+            }
         }
         match std::fs::remove_dir_all(&parent) {
             Err(e) if e.kind() != ErrorKind::NotFound => {
@@ -546,6 +570,15 @@ pub fn end_group(pgid: i32, grace: Duration, reap: &mut dyn FnMut() -> bool) {
     while alive(reap) && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Which release command a session's place is released with.
+#[derive(Clone, Debug)]
+pub enum ReleaseWith {
+    /// The one its last run carried.
+    LastRun,
+    /// One built now from the policy; `None` when the policy names none.
+    Fresh(Option<Request>),
 }
 
 /// The names of a session's place begin so; a candidate's never do.

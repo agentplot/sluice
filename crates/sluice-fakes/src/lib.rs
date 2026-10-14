@@ -16,9 +16,10 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Network,
-    Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
+    Adopted, Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved,
+    Network, Notification, Outcome, Place, Progress, ReleasePolicy, Released, Rev, RunHandle,
+    RunReport, RunRequest, Session, Settings, Snapshot, Source, State, Submitter, TaskLog,
+    TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -108,6 +109,11 @@ struct Inner {
     released: Vec<String>,
     /// Session places adopted and not yet released.
     adopted: Vec<String>,
+    /// The branch each session place was adopted for.
+    adopted_for: BTreeMap<String, String>,
+    /// Each session place released, and the `[tests] release` it was
+    /// released with, or `None` for its last run's.
+    session_releases: Vec<(String, Option<String>)>,
     saved: Vec<String>,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
@@ -269,6 +275,11 @@ impl World {
     }
 
     /// Someone moves the branch by hand with a commit of their own.
+    /// The branch is deleted, as by hand.
+    pub fn delete_branch(&self, branch: &str) {
+        self.0.borrow_mut().refs.remove(branch);
+    }
+
     pub fn hand_commit(&self, branch: &str, changes: &[(&str, Option<&str>)]) -> Rev {
         let tip = self.tip(branch);
         let rev = self.work(&tip, changes);
@@ -557,6 +568,12 @@ impl World {
 
     pub fn made_places(&self) -> Vec<String> {
         self.0.borrow().made.clone()
+    }
+
+    /// Each session place released, with the `[tests] release` text of the
+    /// policy it was released under, or `None` for its last run's.
+    pub fn session_releases(&self) -> Vec<(String, Option<String>)> {
+        self.0.borrow().session_releases.clone()
     }
 
     /// Session places adopted and not yet released.
@@ -902,7 +919,7 @@ impl Checkout for FakeCheckout {
         })
     }
 
-    fn adopt(&self, worktree: &str, _branch: &str, _: &Settings) -> Result<Place> {
+    fn adopt(&self, worktree: &str, branch: &str, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
         let head = inner
             .worktrees
@@ -915,12 +932,43 @@ impl Checkout for FakeCheckout {
         inner.places.insert(name.clone(), head);
         if !inner.adopted.contains(&name) {
             inner.adopted.push(name.clone());
+            inner.adopted_for.insert(name.clone(), branch.into());
         }
         Ok(Place {
             name: name.clone(),
             path: worktree.into(),
             tmp: format!("/fake/tmp/{name}").into(),
             env: Default::default(),
+        })
+    }
+
+    fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {
+        let name = format!("session/{worktree}");
+        let inner = self.0 .0.borrow();
+        Ok(inner.adopted.contains(&name).then(|| Adopted {
+            branch: inner.adopted_for.get(&name).cloned().unwrap_or_default(),
+            name,
+        }))
+    }
+
+    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+        if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
+            return Ok(Released::Nothing);
+        }
+        self.release(name, false)?;
+        let release = policy.and_then(|p| match p.tests.get("release") {
+            Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
+            _ => None,
+        });
+        self.0
+             .0
+            .borrow_mut()
+            .session_releases
+            .push((name.into(), release));
+        Ok(if policy.is_some() {
+            Released::Policy
+        } else {
+            Released::LastRun
         })
     }
 
@@ -941,6 +989,7 @@ impl Checkout for FakeCheckout {
             "sluice released a session's place {name}"
         );
         inner.adopted.retain(|a| a != name);
+        inner.adopted_for.remove(name);
         if inner.places.remove(name).is_some() {
             inner.released.push(name.into());
             if passed {

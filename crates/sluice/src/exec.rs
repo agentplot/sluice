@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sluice_core::session::{Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
-use sluice_seams::{Outcome, Progress, RunHandle, RunReport};
+use sluice_seams::{Outcome, Progress, ReleasePolicy, Released, RunHandle, RunReport};
 
 use crate::sessions::SessionRun;
 use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
@@ -41,6 +41,8 @@ pub struct Exec<'a> {
     /// The command after `--`; empty runs the checks.
     pub command: Vec<String>,
     pub json: bool,
+    /// Release the worktree once the run ends (95).
+    pub release: bool,
     pub host: &'a dyn Host,
     pub clock: &'a dyn Clock,
     pub pause: &'a dyn Pause,
@@ -76,6 +78,14 @@ pub fn shell_line(argv: &[String]) -> String {
 
 impl Exec<'_> {
     pub fn run(&self, s: &Sluice<'_>, out: &mut dyn Write) -> Result<i32> {
+        let code = self.exec(s, out)?;
+        if self.release && code != CONFLICT {
+            release(s, self.host, &self.worktree, self.json, out)?;
+        }
+        Ok(code)
+    }
+
+    fn exec(&self, s: &Sluice<'_>, out: &mut dyn Write) -> Result<i32> {
         let seams = s.seams();
         let json = self.json;
         let worktree = match self.host.worktree(&self.worktree) {
@@ -353,6 +363,70 @@ impl Exec<'_> {
         )?;
         Ok(())
     }
+}
+
+/// `sluice release`: release the session's place of the worktree `dir`,
+/// at its session's or driver's asking (session-runs-1 clause 95; rule
+/// core.16). The release command is the policy's, read from the branch's
+/// current revision (56); only when the branch cannot be read is it the
+/// one the last run carried, and the output says so.
+pub fn release(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    dir: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let seams = s.seams();
+    let adopted = match host.worktree(dir) {
+        Ok(w) => seams.checkout.adopted(&w)?.map(|a| (w, a)),
+        Err(_) => None,
+    };
+    let Some((worktree, adopted)) = adopted else {
+        say(out, json, "nothing to release")?;
+        return Ok(LANDED);
+    };
+    let branch = &adopted.branch;
+    let read = seams.branch.read(branch).and_then(|rev| match rev {
+        None => Err(anyhow::anyhow!("no branch {branch}")),
+        Some(rev) => s.policy_at(&rev),
+    });
+    let policy = match read {
+        Ok(Some(p)) => Some(ReleasePolicy {
+            tests: p.tests,
+            limits: p.limits,
+        }),
+        // No policy at all names no release command.
+        Ok(None) => Some(ReleasePolicy {
+            tests: Default::default(),
+            limits: Default::default(),
+        }),
+        Err(e) => {
+            say(
+                out,
+                json,
+                &format!(
+                    "{branch} cannot be read ({e:#}): running the release command saved with the last run"
+                ),
+            )?;
+            None
+        }
+    };
+    let released = seams
+        .checkout
+        .release_session(&adopted.name, policy.as_ref())?;
+    host.end_session(&worktree)?;
+    match released {
+        Released::Nothing => say(out, json, "nothing to release")?,
+        _ => say(
+            out,
+            json,
+            &format!(
+                "released {worktree}: its runs ended, the release command run, its ports free"
+            ),
+        )?,
+    }
+    Ok(LANDED)
 }
 
 fn passed(report: &RunReport) -> bool {

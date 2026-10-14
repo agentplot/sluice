@@ -136,6 +136,16 @@ pub enum Command {
         /// One JSON document on stdout; the rest on stderr.
         #[arg(long)]
         json: bool,
+        /// Release the worktree once the run ends.
+        #[arg(long)]
+        release: bool,
+    },
+    /// Release this worktree: run the policy's release command, end what
+    /// its runs left running, free its ports. The worktree stays.
+    Release {
+        /// The worktree to release.
+        #[arg(long, default_value = ".")]
+        worktree: String,
     },
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
@@ -346,16 +356,19 @@ pub fn run(
             command,
             worktree,
             json,
+            release,
         } => exec::Exec {
             branch,
             worktree,
             command,
             json,
+            release,
             host,
             clock,
             pause,
         }
         .run(&s, out),
+        Command::Release { worktree } => exec::release(&s, host, &worktree, false, out),
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)

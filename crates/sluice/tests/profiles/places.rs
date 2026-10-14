@@ -596,3 +596,103 @@ fn a_sessions_place_saves_its_caches_and_keeps_them() {
     p.release(&place.name, false).unwrap();
     assert!(wt.join("target/debug/a").exists());
 }
+
+/// 56, 95: a session's place is released under the release command its
+/// branch's policy states now, built with the executor and the place's
+/// environment, ports included; given no policy, the one its last run
+/// carried runs.
+#[test]
+fn a_sessions_place_is_released_under_the_policy_read_now() {
+    use sluice_seams::{Limits, ReleasePolicy, Released};
+    let _ports = ports_lock();
+    let (repo, _) = scratch("places-release-now");
+    let slots = support::Scratch::new("places-release-now-slots");
+    let jobs = 2;
+    let p = places(&repo)
+        .with_slots(slots.path().to_path_buf())
+        .with_release(Box::new(move |place, tests, limits, dir| {
+            sluice::profiles::checks::release_request(place, tests, limits, jobs, dir)
+        }));
+    let session = repo.dir().with_extension("session");
+    let settings = ported(&["web"], "41600");
+    let log = repo.dir().with_extension("release-now.log");
+    let _ = std::fs::remove_file(&log);
+    let release = |what: &str| {
+        format!(
+            "echo \"{what} $SLUICE_PORT_WEB $SLUICE_CHECKOUT\" >> {}",
+            log.display()
+        )
+    };
+
+    let run = |cmd: &str| {
+        let place = p
+            .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+            .unwrap();
+        let r = runs(&repo);
+        let name = r.next_run(&place.name).unwrap();
+        r.start(
+            &name,
+            &Request {
+                argv: vec!["/bin/sh".into(), "-c".into(), "true".into()],
+                cwd: place.path.clone(),
+                // As a run's request carries it.
+                env: place
+                    .env
+                    .clone()
+                    .into_iter()
+                    .chain([(
+                        "SLUICE_CHECKOUT".to_string(),
+                        place.path.display().to_string(),
+                    )])
+                    .collect(),
+                limit: None,
+                grace: 1,
+                meta: serde_json::Value::Null,
+                release: Some(vec!["/bin/sh".into(), "-c".into(), cmd.into()]),
+            },
+        )
+        .unwrap();
+        place
+    };
+    let policy = |cmd: &str| ReleasePolicy {
+        tests: Settings::from([("release".into(), Setting::Text(cmd.into()))]),
+        limits: Limits::default(),
+    };
+
+    // Run under the old command, released under the policy's new one.
+    let place = run(&release("old"));
+    let port = place.env["SLUICE_PORT_WEB"].clone();
+    let canon = place.path.display().to_string();
+    assert_eq!(
+        p.release_session(&place.name, Some(&policy(&release("new"))))
+            .unwrap(),
+        Released::Policy
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!("new {port} {canon}\n")
+    );
+    assert!(p.adopted(session.to_str().unwrap()).unwrap().is_none());
+
+    // Given no policy: the last run's.
+    let place = run(&release("last"));
+    assert_eq!(
+        p.adopted(session.to_str().unwrap())
+            .unwrap()
+            .map(|a| a.branch),
+        Some("bolt/x".to_string())
+    );
+    assert_eq!(
+        p.release_session(&place.name, None).unwrap(),
+        Released::LastRun
+    );
+    let port = place.env["SLUICE_PORT_WEB"].clone();
+    assert!(std::fs::read_to_string(&log)
+        .unwrap()
+        .ends_with(&format!("last {port} {canon}\n")));
+    assert_eq!(
+        p.release_session(&place.name, None).unwrap(),
+        Released::Nothing
+    );
+    assert!(session.join("work").exists());
+}

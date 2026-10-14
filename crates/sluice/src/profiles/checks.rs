@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, Limits, Network, Outcome, Progress, RunHandle, RunReport, RunRequest,
-    Setting, Settings, Source, TaskLog, TaskResult, Tests,
+    log_tail, Enforced, Limits, Network, Outcome, Place, Progress, RunHandle, RunReport,
+    RunRequest, Setting, Settings, Source, TaskLog, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -424,6 +424,91 @@ fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
         Some(Setting::List(xs)) if !xs.is_empty() => Ok(Some(xs.clone())),
         Some(_) => bail!("[tests] release must be a string or a list, the command first"),
     }
+}
+
+/// Session-runs-1 clause 95: the release command of `place` as the
+/// policy's `[tests]` and limits state it now, under the same executor,
+/// toolchain and environment its runs had, ports included; `None` when
+/// the policy names no release command. What the toolchain and the
+/// executor write goes in `dir`.
+pub fn release_request(
+    place: &Place,
+    tests: &Settings,
+    limits: &Limits,
+    jobs: usize,
+    dir: &Path,
+) -> Result<Option<Request>> {
+    let Some(release) = release_argv(tests)? else {
+        return Ok(None);
+    };
+    let tool_argv = match tests.get("toolchain") {
+        None => None,
+        Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
+        Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+    };
+    let kind = choose(limits)?;
+    let request = RunRequest {
+        place: place.clone(),
+        revision: sluice_seams::Rev::new(""),
+        required: Vec::new(),
+        since: None,
+        limit: None,
+        limits: limits.clone(),
+        tests: tests.clone(),
+        replay: false,
+    };
+    let mut env = environment(&request, jobs);
+    if kind == Kind::Sandbox {
+        env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let script = dir.join("toolchain.sh");
+    if let Some(argv) = &tool_argv {
+        toolchain(argv, &place.path, &env, &script)?;
+    }
+    let cx = Context {
+        request: &request,
+        env: &env,
+        toolchain: tool_argv.is_some().then_some(script.as_path()),
+        jobs,
+    };
+    let r: Vec<&str> = release.iter().map(String::as_str).collect();
+    let mut argv = cx.argv(&r);
+    if kind == Kind::Sandbox {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let profile = dir.join("sandbox.sb");
+        std::fs::write(
+            &profile,
+            seatbelt(
+                &[canon(&place.path), canon(&place.tmp)],
+                &[],
+                limits.network,
+                &if limits.docker {
+                    docker_sockets()
+                } else {
+                    Vec::new()
+                },
+                user_tmp().as_deref(),
+            ),
+        )?;
+        argv.splice(
+            0..0,
+            [
+                "/usr/bin/sandbox-exec".to_string(),
+                "-f".into(),
+                profile.to_string_lossy().into_owned(),
+            ],
+        );
+    }
+    Ok(Some(Request {
+        argv: Vec::new(),
+        cwd: place.path.clone(),
+        env,
+        limit: None,
+        grace: 10,
+        meta: serde_json::Value::Null,
+        release: Some(argv),
+    }))
 }
 
 pub fn hostname() -> String {

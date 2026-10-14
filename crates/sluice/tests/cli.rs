@@ -328,7 +328,9 @@ fn exec_takes_a_branch_and_a_command() {
             command,
             worktree,
             json,
+            release,
         } => {
+            assert!(!release);
             assert_eq!(branch, BRANCH);
             assert_eq!(command, ["moon", "run", ":test"]);
             assert_eq!(worktree, ".");
@@ -600,4 +602,173 @@ fn exec_json_is_one_document() {
     let (_, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--json"]);
     let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(doc["tasks"][0]["recorded"], false);
+}
+
+// ---------------------------------------------------------------------------
+// sluice release (session-runs-1 clauses 94, 95)
+// ---------------------------------------------------------------------------
+
+const RELEASING: &str = "[tests]\nrelease = \"sh release.sh\"\n\n";
+
+fn setup_releasing() -> Fakes {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", &format!("{RELEASING}{POLICY}")),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f
+}
+
+fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
+    let cli = Cli::try_parse_from(
+        ["sluice", "release"]
+            .into_iter()
+            .chain(args.iter().copied()),
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let code = run(
+        cli,
+        f.seams(),
+        &host,
+        &f.clock,
+        &Rounds(Cell::new(0)),
+        &mut out,
+    )
+    .unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+/// 94, 95: the worktree's runs leave its place equipped; `sluice release`
+/// releases it under the release command its branch's policy states now,
+/// and a second release finds nothing.
+#[test]
+fn release_runs_the_policys_release_command_once() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert!(
+        f.world.session_releases().is_empty(),
+        "released between runs"
+    );
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+
+    // The policy's release command changed after the last run: the new
+    // one is the one that runs (56).
+    f.world.hand_commit(
+        BRANCH,
+        &[(
+            ".config/sluice.toml",
+            Some(&format!(
+                "[tests]\nrelease = \"sh teardown.sh\"\n\n{POLICY}"
+            )),
+        )],
+    );
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "released unit/a: its runs ended, the release command run, its ports free\n"
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [(
+            "session/unit/a".to_string(),
+            Some("sh teardown.sh".to_string())
+        )]
+    );
+    assert!(f.world.adopted_places().is_empty());
+
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+    assert_eq!(f.world.session_releases().len(), 1);
+    // A worktree that never ran has nothing to release.
+    let (code, out) = release(&f, &["--worktree", "unit/none"]);
+    assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+}
+
+/// 95: with the branch gone, the release command the last run carried
+/// runs, and the output says so.
+#[test]
+fn release_falls_back_to_the_last_runs_command_and_says_so() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.delete_branch(BRANCH);
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!(
+            "{BRANCH} cannot be read (no branch {BRANCH}): running the release command saved with the last run"
+        )
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [("session/unit/a".to_string(), None)]
+    );
+}
+
+/// 95: `sluice exec --release` releases once its run ends, and the exit
+/// is the run's.
+#[test]
+fn exec_release_releases_after_the_run() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--release"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(
+        out.ends_with("released unit/a: its runs ended, the release command run, its ports free\n"),
+        "{out}"
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [(
+            "session/unit/a".to_string(),
+            Some("sh release.sh".to_string())
+        )]
+    );
+}
+
+/// 25, rule core.16: a submission from a worktree that ran `sluice exec`
+/// lands, and no round releases the worktree's place.
+#[test]
+fn a_landing_leaves_a_sessions_place_alone() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let (code, _) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED);
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+    assert!(f.world.session_releases().is_empty());
 }

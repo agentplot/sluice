@@ -72,6 +72,34 @@ pub struct Place {
     pub env: BTreeMap<String, String>,
 }
 
+/// A session's place sluice equips, as the place seam finds it by its
+/// worktree (session-runs-1 clause 90).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Adopted {
+    pub name: String,
+    /// The branch whose policy its runs were held to.
+    pub branch: String,
+}
+
+/// The policy a session's place is released under, read from its
+/// branch's current revision (56, 95).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleasePolicy {
+    pub tests: Settings,
+    pub limits: Limits,
+}
+
+/// How a session's place was released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Released {
+    /// No such place: nothing to release.
+    Nothing,
+    /// Under the policy given.
+    Policy,
+    /// With no policy given: the release command its last run carried.
+    LastRun,
+}
+
 pub trait Checkout {
     /// 33: a place holding exactly `rev`, with the environment the
     /// repository declares, named `name`, made as the policy's
@@ -100,6 +128,16 @@ pub trait Checkout {
     /// candidate's are, and copied, never moved, so the session keeps
     /// what it built.
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()>;
+
+    /// The session's place sluice equips for `worktree`, if any.
+    fn adopted(&self, worktree: &str) -> Result<Option<Adopted>>;
+
+    /// Session-runs-1 clause 95: release the session's place `name` at its
+    /// session's or driver's asking: end every run in it, run the release
+    /// command once, as `policy` states it or, given none, as its last run
+    /// carried it, remove its scratch directory and let its ports go. The
+    /// worktree is left as it is (25, rule core.16).
+    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
 }
 
 // ---------------------------------------------------------------------------

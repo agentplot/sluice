@@ -80,6 +80,18 @@ impl Checkout for RecordedPlaces {
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
         self.inner.save_caches(name, rev, checkout)
     }
+
+    fn adopted(&self, worktree: &str) -> Result<Option<sluice_seams::Adopted>> {
+        self.inner.adopted(worktree)
+    }
+
+    fn release_session(
+        &self,
+        name: &str,
+        policy: Option<&sluice_seams::ReleasePolicy>,
+    ) -> Result<sluice_seams::Released> {
+        self.inner.release_session(name, policy)
+    }
 }
 
 struct RecordedChecks {
