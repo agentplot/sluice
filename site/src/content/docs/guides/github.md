@@ -52,11 +52,11 @@ sequenceDiagram
     participant G as GitHub
     S->>G: git fetch origin main
     G-->>S: main is at m1
-    Note over S: form m1 + PR 12, run the tests
+    Note over S: form m1 + submission 12, run the tests
     Note over S: passed
     S->>G: git push origin L:main --force-with-lease=main:m1
     G-->>S: accepted: main is at L
-    Note over S: move local main to L, record PR 12 landed
+    Note over S: move local main to L, record submission 12 landed
 ```
 
 `sluice submit` and `wt submit` report "landed" only once GitHub has
