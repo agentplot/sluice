@@ -449,7 +449,13 @@ impl Tests for Checks {
         if kind == Kind::Sandbox {
             env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
         }
-        let name = &request.place.name;
+        // A session's place takes a new run each time, and keeps the last
+        // (session-runs-1 clause 94).
+        let name = &if crate::runs::is_session(&request.place.name) {
+            self.runs.next_run(&request.place.name)?
+        } else {
+            request.place.name.clone()
+        };
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
         if let Some(argv) = &tool_argv {

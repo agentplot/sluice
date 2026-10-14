@@ -85,6 +85,14 @@ pub trait Checkout {
     /// `passed` says the place's candidate passed, by the verdict the core
     /// read: only such a place's declared caches are saved (35).
     fn release(&self, name: &str, passed: bool) -> Result<()>;
+
+    /// Session-runs-1 clause 90: a session's own place, `worktree`, taken
+    /// as found for a session run held to `branch`'s policy: its ports,
+    /// held from its first run until its release and the same on every
+    /// run, and a scratch directory kept across its runs. Nothing of the
+    /// worktree is written, moved or removed (25). Its name begins
+    /// `session/`, so it is never a candidate's.
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place>;
 }
 
 // ---------------------------------------------------------------------------

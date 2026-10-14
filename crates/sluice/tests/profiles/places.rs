@@ -384,3 +384,157 @@ fn ports_with_bad_names_are_refused() {
         assert!(p.materialize(NAME, &rev, &ported(names, from)).is_err());
     }
 }
+
+/// The worktrees git lists for the repository.
+fn worktrees(repo: &Repo) -> Vec<String> {
+    repo.git(&["worktree", "list", "--porcelain"])
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree ").map(str::to_string))
+        .collect()
+}
+
+/// A second session's worktree off main, `<repo>.<name>`.
+fn another_session(repo: &Repo, name: &str) -> PathBuf {
+    let path = repo.dir().with_extension(name);
+    let _ = std::fs::remove_dir_all(&path);
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        &format!("unit/{name}"),
+        path.to_str().unwrap(),
+        "main",
+    ]);
+    path
+}
+
+/// Session-runs-1 clause 90, 25: a session's worktree is adopted as
+/// found, never made: no git worktree is added and nothing of it changes;
+/// it holds the same ports on every run until it is released, and no two
+/// worktrees share a port.
+#[test]
+fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
+    let (repo, _) = scratch("places-adopt");
+    let slots = support::Scratch::new("places-adopt-slots");
+    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let session = repo.dir().with_extension("session");
+    let other = another_session(&repo, "other");
+    let settings = ported(&["web", "db"], "41200");
+    let (before, listed) = (others(&repo), worktrees(&repo));
+
+    let a = p
+        .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+        .unwrap();
+    assert_eq!(a.path, std::fs::canonicalize(&session).unwrap());
+    assert!(a.name.starts_with("session/"), "{}", a.name);
+    assert!(a.tmp.is_dir());
+    assert_eq!(port(&a, "SLUICE_PORT_DB"), port(&a, "SLUICE_PORT_WEB") + 1);
+    assert!(a.env["SLUICE_PLACE"].starts_with("sluice-"));
+
+    // Its second run: the same place, the same ports, the same short name,
+    // whatever the policy now lists.
+    let again = p
+        .adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &ported(&["web"], "41200"),
+        )
+        .unwrap();
+    assert_eq!(again, a);
+
+    let b = p
+        .adopt(other.to_str().unwrap(), "bolt/x", &settings)
+        .unwrap();
+    // Another slot's block: a port something else holds is passed over,
+    // so which block is the host's to say.
+    let (aw, ad) = (port(&a, "SLUICE_PORT_WEB"), port(&a, "SLUICE_PORT_DB"));
+    let (bw, bd) = (port(&b, "SLUICE_PORT_WEB"), port(&b, "SLUICE_PORT_DB"));
+    assert_eq!(bd, bw + 1);
+    assert!(bw >= 41202 && bw % 2 == 0, "{bw}");
+    assert!(![aw, ad].contains(&bw) && ![aw, ad].contains(&bd));
+    assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
+
+    assert_eq!(others(&repo), before, "the session's worktree was touched");
+    assert_eq!(worktrees(&repo), listed, "a git worktree was added");
+    p.release(&a.name, false).unwrap();
+    p.release(&b.name, false).unwrap();
+}
+
+/// 34, 95, core.16: releasing a session's place ends its runs, runs the
+/// release command once in the worktree, removes its scratch directory and
+/// lets its ports go, and leaves the worktree as it was; a second release
+/// is nothing.
+#[test]
+fn releasing_a_sessions_place_leaves_its_worktree() {
+    let (repo, _) = scratch("places-session-release");
+    let slots = support::Scratch::new("places-session-slots");
+    let p = places(&repo).with_slots(slots.path().to_path_buf());
+    let session = repo.dir().with_extension("session");
+    let settings = ported(&["web"], "41300");
+    let (before, listed) = (others(&repo), worktrees(&repo));
+    let place = p
+        .adopt(session.to_str().unwrap(), "bolt/x", &settings)
+        .unwrap();
+
+    let r = runs(&repo);
+    let log = repo.dir().with_extension("released.log");
+    let _ = std::fs::remove_file(&log);
+    let request = |script: &str| Request {
+        argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+        cwd: place.path.clone(),
+        env: place.env.clone(),
+        limit: None,
+        grace: 1,
+        meta: serde_json::Value::Null,
+        release: Some(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("echo \"$SLUICE_PORT_WEB\" >> {}", log.display()),
+        ]),
+    };
+    let first = r.next_run(&place.name).unwrap();
+    r.start(&first, &request("true")).unwrap();
+    let second = r.next_run(&place.name).unwrap();
+    r.start(&second, &request("sleep 300")).unwrap();
+    let pgid_file = r.dir(&second).join("pgid");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !pgid_file.exists() {
+        assert!(std::time::Instant::now() < until);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let pgid: i32 = std::fs::read_to_string(&pgid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    p.release(&place.name, false).unwrap();
+    assert_eq!(
+        nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+        Err(nix::errno::Errno::ESRCH)
+    );
+    let web = format!("{}\n", port(&place, "SLUICE_PORT_WEB"));
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), web);
+    assert!(!place.tmp.exists());
+    assert!(!r.dir(&first).exists() && !r.dir(&second).exists());
+    assert!(session.join("work").exists());
+    assert_eq!(others(&repo), before);
+    assert_eq!(worktrees(&repo), listed, "the worktree is still listed");
+
+    // Its ports are free for another worktree.
+    let other = another_session(&repo, "next");
+    let next = p
+        .adopt(other.to_str().unwrap(), "bolt/x", &settings)
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&place, "SLUICE_PORT_WEB")
+    );
+    p.release(&next.name, false).unwrap();
+
+    // Again: nothing to release, and nothing runs.
+    p.release(&place.name, false).unwrap();
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), web);
+    assert!(session.exists());
+}

@@ -22,6 +22,13 @@
 //! `SLUICE_PLACE`, a short name unique to it, and `SLUICE_PORT_<NAME>`
 //! for each name.
 //!
+//! A session's own worktree is adopted, never made (session-runs-1
+//! clauses 90, 94, 95): its record, `kind: "session"`, names the worktree
+//! and its branch and holds its slot and its ports from its first run
+//! until `sluice release`, which ends its runs, runs the release command
+//! once, removes its scratch directory and lets its slot go, and never
+//! removes the worktree.
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
@@ -38,12 +45,32 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{Checkout, Place, Rev, Setting, Settings};
 
-use crate::runs::{flat_name, Runs};
+use crate::runs::{flat_name, Runs, SESSION};
+
+/// Whose a place is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    /// A candidate's, made by sluice and removed on release (25).
+    #[default]
+    Made,
+    /// A session's own worktree, adopted for its runs and never removed.
+    Session,
+}
 
 /// What made a place: `<common>/sluice/.places/<name>.json`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Made {
+    #[serde(default)]
+    kind: Kind,
     method: String,
+    /// A session's place: the branch whose policy its runs are held to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    /// A session's place: the ports it was given on its first run, kept
+    /// until its release (90).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    ports: BTreeMap<String, String>,
     /// The checkout, once it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
@@ -561,7 +588,10 @@ impl Checkout for Places {
         }
         let record = self.record(name);
         let mut made = Made {
+            kind: Kind::Made,
             method,
+            branch: None,
+            ports: BTreeMap::new(),
             path: None,
             caches,
             slot: None,
@@ -599,10 +629,11 @@ impl Checkout for Places {
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         // 34: everything started in it ends first, its release command
-        // included (ADR 0016).
+        // included (ADR 0016); a session's runs all at once, its release
+        // command once (95).
         self.runs.remove(name)?;
         let made = self.read_record(name)?;
-        if let Some(made) = &made {
+        if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Made) {
             // 35: a passed candidate's place saves what it built.
             if passed {
                 if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
@@ -629,5 +660,59 @@ impl Checkout for Places {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
         }
+    }
+
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
+        let path = std::fs::canonicalize(worktree)
+            .with_context(|| format!("finding the worktree {worktree}"))?;
+        let name = format!(
+            "{SESSION}{}",
+            path.to_str()
+                .ok_or_else(|| anyhow!("{} is not UTF-8", path.display()))?
+        );
+        let record = self.record(&name);
+        let made = match self.read_record(&name)? {
+            Some(made) if made.kind == Kind::Session => made,
+            Some(_) => bail!("place {name} is a candidate's, not a session's"),
+            None => {
+                let mut made = Made {
+                    kind: Kind::Session,
+                    method: "session".into(),
+                    branch: Some(branch.into()),
+                    ports: BTreeMap::new(),
+                    path: Some(path.clone()),
+                    caches: Vec::new(),
+                    slot: None,
+                };
+                // Written before the slot is held, so a slot names a record
+                // that exists, and a stop between leaves a record release
+                // reads.
+                self.write_record(&name, &made)?;
+                if let Some(ports) = Ports::read(checkout)? {
+                    let n = hold_slot(&self.slots()?, &ports, &record)?;
+                    made.slot = Some(n);
+                    let first = ports.first(n).expect("a held slot fits");
+                    for (i, p) in ports.names.iter().enumerate() {
+                        made.ports
+                            .insert(env_name(p), (first + i as u16).to_string());
+                    }
+                    self.write_record(&name, &made)?;
+                }
+                made
+            }
+        };
+        let tmp = self.tmp(&name);
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut env = made.ports.clone();
+        env.insert(
+            "SLUICE_PLACE".to_string(),
+            format!("sluice-{}", &self.hash(&record.to_string_lossy())?[..10]),
+        );
+        Ok(Place {
+            name,
+            path,
+            tmp,
+            env,
+        })
     }
 }

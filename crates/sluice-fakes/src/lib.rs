@@ -106,6 +106,8 @@ struct Inner {
     places: BTreeMap<String, Rev>,
     made: Vec<String>,
     released: Vec<String>,
+    /// Session places adopted and not yet released.
+    adopted: Vec<String>,
     saved: Vec<String>,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
@@ -557,6 +559,11 @@ impl World {
         self.0.borrow().made.clone()
     }
 
+    /// Session places adopted and not yet released.
+    pub fn adopted_places(&self) -> Vec<String> {
+        self.0.borrow().adopted.clone()
+    }
+
     pub fn released_places(&self) -> Vec<String> {
         self.0.borrow().released.clone()
     }
@@ -895,6 +902,28 @@ impl Checkout for FakeCheckout {
         })
     }
 
+    fn adopt(&self, worktree: &str, _branch: &str, _: &Settings) -> Result<Place> {
+        let mut inner = self.0 .0.borrow_mut();
+        let head = inner
+            .worktrees
+            .get(worktree)
+            .ok_or_else(|| anyhow!("no worktree {worktree}"))?
+            .head
+            .clone();
+        let name = format!("session/{worktree}");
+        // The place holds what the worktree holds, for the run's check.
+        inner.places.insert(name.clone(), head);
+        if !inner.adopted.contains(&name) {
+            inner.adopted.push(name.clone());
+        }
+        Ok(Place {
+            name: name.clone(),
+            path: worktree.into(),
+            tmp: format!("/fake/tmp/{name}").into(),
+            env: Default::default(),
+        })
+    }
+
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         let mut inner = self.0 .0.borrow_mut();
         // Rule core.16: never a session's place.
@@ -902,6 +931,7 @@ impl Checkout for FakeCheckout {
             !inner.worktrees.contains_key(name),
             "sluice released a session's place {name}"
         );
+        inner.adopted.retain(|a| a != name);
         if inner.places.remove(name).is_some() {
             inner.released.push(name.into());
             if passed {

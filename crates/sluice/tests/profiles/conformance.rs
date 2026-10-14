@@ -72,6 +72,10 @@ impl Checkout for RecordedPlaces {
         self.log.borrow_mut().released.push(name.into());
         Ok(())
     }
+
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
+        self.inner.adopt(worktree, branch, checkout)
+    }
 }
 
 struct RecordedChecks {

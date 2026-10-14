@@ -21,6 +21,12 @@
 //!   released       the release command finished; written last
 //! ```
 //!
+//! A session's place (session-runs-1 clauses 89, 94) keeps a directory
+//! per run, `.runs/<place, flat>/<n>/`, a fresh `n` for each, named
+//! `<place>#<n>` by [`Runs::next_run`]: a run is never cleared into
+//! another, so nothing is released between runs, and
+//! [`Runs::remove_all`] ends them all and runs the release command once.
+//!
 //! A request may carry a release command (ADR 0016): what removes the
 //! things the run handed to another process to keep, which ending its
 //! group does not reach. It runs once the run's group has ended, as the
@@ -122,9 +128,71 @@ impl Runs {
         }
     }
 
-    /// The run directory of the place `name`.
+    /// The run directory of the place `name`, or of the session run
+    /// `name` names.
     pub fn dir(&self, name: &str) -> PathBuf {
-        self.root.join(flat_name(name))
+        match session_run(name) {
+            Some((place, n)) => self.root.join(flat_name(place)).join(n.to_string()),
+            None => self.root.join(flat_name(name)),
+        }
+    }
+
+    /// A new run of the session's place `place`: its name, `<place>#<n>`,
+    /// with a fresh `n` whose directory this call made.
+    pub fn next_run(&self, place: &str) -> Result<String> {
+        assert!(is_session(place), "{place} is no session's place");
+        let parent = self.root.join(flat_name(place));
+        std::fs::create_dir_all(&parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+        let mut n = numbered(&parent)?.last().map_or(1, |(n, _)| n + 1);
+        loop {
+            match std::fs::create_dir(parent.join(n.to_string())) {
+                Ok(()) => return Ok(format!("{place}#{n}")),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => n += 1,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("creating a run in {}", parent.display()))
+                }
+            }
+        }
+    }
+
+    /// End every run of the session's place `place`, run the release
+    /// command once, from its last run's request, and remove them all
+    /// (session-runs-1 clauses 94, 95; ADR 0016). Nothing when it has
+    /// none.
+    pub fn remove_all(&self, place: &str) -> Result<()> {
+        assert!(is_session(place), "{place} is no session's place");
+        let parent = self.root.join(flat_name(place));
+        let runs = numbered(&parent)?;
+        for (n, _) in &runs {
+            self.end(&format!("{place}#{n}"))?;
+        }
+        let until = Instant::now() + Duration::from_secs(30);
+        for (_, dir) in &runs {
+            while self.supervised(dir)? {
+                if Instant::now() >= until {
+                    bail!(
+                        "the supervisor of {} still holds it 30 s after its run ended",
+                        dir.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        if let Some((_, last)) = runs
+            .iter()
+            .rev()
+            .find(|(_, d)| d.join("request.json").exists())
+        {
+            self.release(last)?;
+        }
+        match std::fs::remove_dir_all(&parent) {
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", parent.display()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Start `request` in a new run directory for the place `name`, under
@@ -132,7 +200,7 @@ impl Runs {
     /// hang-up never reaches the run. Returns without waiting for it.
     pub fn start(&self, name: &str, request: &Request) -> Result<()> {
         let dir = self.dir(name);
-        if dir.join("request.json").exists() {
+        if session_run(name).is_none() && dir.join("request.json").exists() {
             self.clear(name)?;
         }
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -179,7 +247,10 @@ impl Runs {
     /// writes before the run starts (its toolchain, an executor's
     /// profile); any earlier run of that place is ended and removed.
     pub fn prepare(&self, name: &str) -> Result<PathBuf> {
-        self.clear(name)?;
+        // A session run's directory is its own: there is none before it.
+        if session_run(name).is_none() {
+            self.clear(name)?;
+        }
         let dir = self.dir(name);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(dir)
@@ -248,6 +319,9 @@ impl Runs {
     /// supervisor write the result there, and a removal racing that write
     /// fails.
     pub fn remove(&self, name: &str) -> Result<()> {
+        if is_session(name) && session_run(name).is_none() {
+            return self.remove_all(name);
+        }
         self.end(name)?;
         let dir = self.dir(name);
         let until = Instant::now() + Duration::from_secs(30);
@@ -472,6 +546,42 @@ pub fn end_group(pgid: i32, grace: Duration, reap: &mut dyn FnMut() -> bool) {
     while alive(reap) && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The names of a session's place begin so; a candidate's never do.
+pub const SESSION: &str = "session/";
+
+/// Whether `place` names a session's place.
+pub fn is_session(place: &str) -> bool {
+    place.starts_with(SESSION) && place.len() > SESSION.len()
+}
+
+/// The session's place and the run's number, when `name` names a run of
+/// a session's place.
+fn session_run(name: &str) -> Option<(&str, u64)> {
+    let (place, n) = name.rsplit_once('#')?;
+    if !is_session(place) || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((place, n.parse().ok()?))
+}
+
+/// The numbered run directories under `parent`, in order.
+fn numbered(parent: &Path) -> Result<Vec<(u64, PathBuf)>> {
+    let entries = match std::fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("listing {}", parent.display())),
+    };
+    let mut out = Vec::new();
+    for e in entries {
+        let e = e?;
+        if let Some(n) = e.file_name().to_str().and_then(|n| n.parse::<u64>().ok()) {
+            out.push((n, e.path()));
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// A place's name as one directory name: `/` and `%` written `%2F` and
