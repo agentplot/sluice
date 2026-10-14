@@ -18,6 +18,17 @@ use support::Repo;
 
 const NAME: &str = "sluice/try/bolt/x/1";
 
+/// Held by every test that checks ports free or starts a run that
+/// outlives the moment: on macOS a socket is made close-on-exec only
+/// after it is made, so a child spawned on another thread between the
+/// two keeps a port another test was checking, and that port reads as
+/// in use for the child's whole life.
+static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn ports_lock() -> std::sync::MutexGuard<'static, ()> {
+    PORTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn places(repo: &Repo) -> Places {
     let common = repo.dir().join(".git");
     Places::new(&common, runs(repo))
@@ -147,6 +158,7 @@ fn a_git_worktree_place_left_by_a_crash() {
 /// 34: releasing a place ends the run in it before removing it.
 #[test]
 fn releasing_a_place_ends_its_run() {
+    let _ports = ports_lock();
     let (repo, rev) = scratch("places-run");
     let p = places(&repo);
     let place = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
@@ -325,6 +337,7 @@ fn port(place: &Place, name: &str) -> u16 {
 /// is free again once its place is released.
 #[test]
 fn places_alive_at_once_hold_their_own_ports() {
+    let _ports = ports_lock();
     let (repo, rev) = scratch("places-ports");
     let slots = support::Scratch::new("places-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
@@ -359,6 +372,7 @@ fn places_alive_at_once_hold_their_own_ports() {
 /// 31: a slot one of whose ports something else holds is passed over.
 #[test]
 fn a_slot_with_a_port_in_use_is_passed_over() {
+    let _ports = ports_lock();
     let (repo, rev) = scratch("places-busy");
     let slots = support::Scratch::new("places-busy-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
@@ -415,6 +429,7 @@ fn another_session(repo: &Repo, name: &str) -> PathBuf {
 /// worktrees share a port.
 #[test]
 fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
+    let _ports = ports_lock();
     let (repo, _) = scratch("places-adopt");
     let slots = support::Scratch::new("places-adopt-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
@@ -451,7 +466,7 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let (aw, ad) = (port(&a, "SLUICE_PORT_WEB"), port(&a, "SLUICE_PORT_DB"));
     let (bw, bd) = (port(&b, "SLUICE_PORT_WEB"), port(&b, "SLUICE_PORT_DB"));
     assert_eq!(bd, bw + 1);
-    assert!(bw >= 41202 && bw % 2 == 0, "{bw}");
+    assert!(bw >= 41200 && (bw - 41200) % 2 == 0, "{bw}");
     assert!(![aw, ad].contains(&bw) && ![aw, ad].contains(&bd));
     assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
 
@@ -467,6 +482,7 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
 /// is nothing.
 #[test]
 fn releasing_a_sessions_place_leaves_its_worktree() {
+    let _ports = ports_lock();
     let (repo, _) = scratch("places-session-release");
     let slots = support::Scratch::new("places-session-slots");
     let p = places(&repo).with_slots(slots.path().to_path_buf());
@@ -537,4 +553,46 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
     p.release(&place.name, false).unwrap();
     assert_eq!(std::fs::read_to_string(&log).unwrap(), web);
     assert!(session.exists());
+}
+
+/// 35, session-runs-1 clause 93: a session's place saves the caches its
+/// policy declares as a passed candidate's does, keyed at its head, and
+/// keeps its own copy; a candidate's place of that key restores them. A
+/// candidate's place saves only on release.
+#[test]
+fn a_sessions_place_saves_its_caches_and_keeps_them() {
+    let (repo, _) = scratch("places-session-cache");
+    let p = places(&repo);
+    let cached = cached("git-worktree");
+    let head = locked(&repo, "one\n");
+    let wt = repo.dir().with_extension("cached");
+    let _ = std::fs::remove_dir_all(&wt);
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        wt.to_str().unwrap(),
+        head.as_str(),
+    ]);
+    std::fs::create_dir_all(wt.join("target/debug")).unwrap();
+    std::fs::write(wt.join("target/debug/a"), "built by the session\n").unwrap();
+
+    let place = p.adopt(wt.to_str().unwrap(), "bolt/x", &cached).unwrap();
+    p.save_caches(&place.name, &head, &cached).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(wt.join("target/debug/a")).unwrap(),
+        "built by the session\n",
+        "the session keeps what it built"
+    );
+
+    let candidate = p.materialize(NAME, &head, &cached).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(candidate.path.join("target/debug/a")).unwrap(),
+        "built by the session\n"
+    );
+    assert!(p.save_caches(NAME, &head, &cached).is_err());
+    p.release(NAME, false).unwrap();
+    p.release(&place.name, false).unwrap();
+    assert!(wt.join("target/debug/a").exists());
 }

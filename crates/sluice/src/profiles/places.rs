@@ -467,9 +467,10 @@ impl Places {
         Ok(())
     }
 
-    /// The place's `paths` moved into a new cache of its key, whole or not
-    /// at all; a saved key never changes. The last `KEPT` keys stay.
-    fn save(&self, cache: &Cache, place: &Path) -> Result<()> {
+    /// The place's `paths` moved, or copied when `keep`, into a new cache
+    /// of its key, whole or not at all; a saved key never changes. The
+    /// last `KEPT` keys stay.
+    fn save(&self, cache: &Cache, place: &Path, keep: bool) -> Result<()> {
         let dir = self.bucket(cache);
         let dest = dir.join(&cache.key);
         if dest.exists() {
@@ -489,7 +490,7 @@ impl Places {
                 std::fs::create_dir_all(parent)?;
             }
             // Across filesystems, copied.
-            if std::fs::rename(&src, &dst).is_err() {
+            if keep || std::fs::rename(&src, &dst).is_err() {
                 clone(&src, &dst)?;
             }
         }
@@ -638,7 +639,7 @@ impl Checkout for Places {
             if passed {
                 if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
                     for cache in &made.caches {
-                        self.save(cache, path)?;
+                        self.save(cache, path, false)?;
                     }
                 }
             }
@@ -660,6 +661,21 @@ impl Checkout for Places {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
         }
+    }
+
+    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
+        let made = match self.read_record(name)? {
+            Some(m) if m.kind == Kind::Session => m,
+            Some(_) => bail!("place {name} is a candidate's: its caches are saved on release"),
+            None => bail!("no session's place {name}"),
+        };
+        let path = made
+            .path
+            .ok_or_else(|| anyhow!("place {name} names no worktree"))?;
+        for cache in self.caches(rev, checkout)? {
+            self.save(&cache, &path, true)?;
+        }
+        Ok(())
     }
 
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {

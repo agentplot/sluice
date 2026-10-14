@@ -93,6 +93,13 @@ pub trait Checkout {
     /// worktree is written, moved or removed (25). Its name begins
     /// `session/`, so it is never a candidate's.
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place>;
+
+    /// 35, session-runs-1 clause 93: after a session's recorded run that
+    /// passed, the caches `checkout` declares, keyed by their files at
+    /// `rev`, saved from the session's place `name` as a passed
+    /// candidate's are, and copied, never moved, so the session keeps
+    /// what it built.
+    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------

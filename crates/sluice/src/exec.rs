@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sluice_core::session::{Recorded, SessionPlan, SessionRefusal};
+use sluice_core::session::{Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
 use sluice_seams::{Outcome, Progress, RunHandle, RunReport};
 
@@ -229,8 +229,12 @@ impl Exec<'_> {
         // 92: recorded only when the worktree holds exactly its head, and
         // only a run of the checks; never a run that hit its time limit.
         self.summary(out, &report, command.is_some())?;
+        let started = SessionStart {
+            place: place.clone(),
+            run: run.clone(),
+        };
         let recorded =
-            match s.finish_session(&plan, &session, &worktree, command.is_some(), &report)? {
+            match s.finish_session(&plan, &session, &started, command.is_some(), &report)? {
                 Recorded::Written(n) => {
                     let head = session.head.short();
                     let text = match n {

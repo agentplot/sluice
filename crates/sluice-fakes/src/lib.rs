@@ -924,6 +924,15 @@ impl Checkout for FakeCheckout {
         })
     }
 
+    fn save_caches(&self, name: &str, _: &Rev, _: &Settings) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        if !inner.adopted.iter().any(|a| a == name) {
+            bail!("no session's place {name}");
+        }
+        inner.saved.push(name.into());
+        Ok(())
+    }
+
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         let mut inner = self.0 .0.borrow_mut();
         // Rule core.16: never a session's place.

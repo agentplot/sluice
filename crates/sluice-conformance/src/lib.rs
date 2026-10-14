@@ -182,7 +182,7 @@ pub trait Rig {
             }
         };
         let recorded = s
-            .finish_session(&plan, &session, &place, false, &report)
+            .finish_session(&plan, &session, &started, false, &report)
             .expect("the session run records");
         (report, recorded)
     }

@@ -120,11 +120,15 @@ impl Sluice<'_> {
     /// a run of the checks in a worktree that holds exactly its head, and
     /// nothing of a command, of a run that hit its time limit, or of a
     /// worktree holding more.
+    ///
+    /// A recorded run that passed saves the caches the policy declares from
+    /// the place, as a passed candidate's place does (35), so a later
+    /// candidate's place restores them and its runner replays (93).
     pub fn finish_session(
         &self,
         plan: &SessionPlan,
         session: &Session,
-        worktree: &str,
+        started: &SessionStart,
         command: bool,
         report: &RunReport,
     ) -> Result<Recorded> {
@@ -134,12 +138,21 @@ impl Sluice<'_> {
         if !session.dirty.is_empty() {
             return Ok(Recorded::NotClean);
         }
-        Ok(Recorded::Written(self.record_session(
-            plan,
-            &session.head,
-            worktree,
-            report,
-        )?))
+        let worktree = started.place.path.to_string_lossy();
+        let n = self.record_session(plan, &session.head, &worktree, report)?;
+        let passed = report.missing.is_empty()
+            && report
+                .tasks
+                .iter()
+                .all(|t| t.outcome == sluice_seams::Outcome::Pass);
+        if passed {
+            self.seams.checkout.save_caches(
+                &started.place.name,
+                &session.head,
+                &plan.policy.checkout,
+            )?;
+        }
+        Ok(Recorded::Written(n))
     }
 
     /// 92, 16, core.7: a clean session run's observed results, recorded

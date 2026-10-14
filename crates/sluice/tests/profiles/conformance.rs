@@ -76,6 +76,10 @@ impl Checkout for RecordedPlaces {
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
         self.inner.adopt(worktree, branch, checkout)
     }
+
+    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
+        self.inner.save_caches(name, rev, checkout)
+    }
 }
 
 struct RecordedChecks {
@@ -509,6 +513,16 @@ fn batch() -> String {
     policy(true, "fail", 4)
 }
 
+/// The bolt policy with moon's cache declared, keyed by its workspace:
+/// what lets a combination's place replay what a session's run, or a
+/// passed combination, ran (35, 93).
+fn cached() -> String {
+    bolt().replace(
+        "method = \"fake\"\n",
+        "method = \"fake\"\n\n[[checkout.cache]]\nkey = [\".moon/workspace.yml\"]\npaths = [\".moon/cache\"]\n",
+    )
+}
+
 fn narrow() -> String {
     bolt().replace("[\"#gate\"]", "[\"a:test\"]")
 }
@@ -534,5 +548,6 @@ scenarios! {
     deepest_first_the_longest_passes_and_all_land_on_its_verdict: batch();
     a_conflict_names_every_submission_it_is_contested_with: bolt();
     every_record_written_is_the_real_format_and_names_its_schema: bolt();
+    s26_a_clean_session_run_is_replayed_by_its_submission: cached();
     s28_a_dirty_session_run_records_nothing: bolt();
 }
