@@ -10,8 +10,8 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 1. The policy table
 
-- [ ] 1.1 Add `[branches."<pattern>".pull_requests]` with `reviews` (default 0) and `checks` (default empty) to `crates/sluice-core/src/policy.rs`, refused on a branch with no `remote`. Verify with unit tests: present, absent, defaults, refused without `remote`.
-- [ ] 1.2 Document the table in `site/src/content/docs/reference/configuration.md`. Verify `devenv shell -- moon run site:prose` passes.
+- [x] 1.1 Add `[branches."<pattern>".pull_requests]` with `reviews` (default 0) and `checks` (default empty) to `crates/sluice-core/src/policy.rs`, refused on a branch with no `remote`. Verify with unit tests: present, absent, defaults, refused without `remote`.
+- [x] 1.2 Document the table in `site/src/content/docs/reference/configuration.md`. Verify `devenv shell -- moon run site:prose` passes.
 
 ## 2. The forge interface
 

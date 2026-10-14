@@ -59,6 +59,21 @@ pub struct Rules {
     /// The git remote the branch lives on (C.4, C.7): read by fetch and
     /// landed by a leased push. `None` for a local branch.
     pub remote: Option<String>,
+    /// C.7 `pull_requests`: the branch takes its work as pull requests on
+    /// its remote, submitted once these conditions hold. `None` for a
+    /// branch whose work is submitted straight from a session's place.
+    pub pull_requests: Option<PullRequests>,
+}
+
+/// C.7 `pull_requests`: what a pull request into the branch meets before
+/// its driver submits it (27). Read from the branch's revision (56), so a
+/// pull request cannot loosen its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullRequests {
+    /// Approving reviews on the pull request's current head.
+    pub reviews: u32,
+    /// Checks other systems post on its head, by name, each to have passed.
+    pub checks: Vec<String>,
 }
 
 /// What `trust` may list.
@@ -95,6 +110,7 @@ impl Default for Rules {
             timeout: Some(Duration::from_secs(3600)),
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
             remote: None,
+            pull_requests: None,
         }
     }
 }
@@ -140,6 +156,15 @@ struct RulesForm {
     timeout: Option<String>,
     trust: Option<Vec<String>>,
     remote: Option<String>,
+    pull_requests: Option<PullRequestsForm>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PullRequestsForm {
+    reviews: Option<i64>,
+    #[serde(default)]
+    checks: Vec<String>,
 }
 
 impl Policy {
@@ -186,6 +211,23 @@ impl Policy {
                     TRUSTS.join(", ")
                 );
             }
+            let pull_requests = match r.pull_requests {
+                None => None,
+                Some(_) if r.remote.is_none() => bail!(
+                    "[branches.\"{pattern}\".pull_requests] needs remote: pull requests \
+                     are on the remote the branch lives on, and {pattern} names none"
+                ),
+                Some(p) => Some(PullRequests {
+                    reviews: match p.reviews {
+                        None => 0,
+                        Some(n) if n >= 0 => n as u32,
+                        Some(n) => bail!(
+                            "[branches.\"{pattern}\".pull_requests] reviews must be at least 0, not {n}"
+                        ),
+                    },
+                    checks: p.checks,
+                }),
+            };
             branches.push((
                 pattern,
                 Rules {
@@ -196,6 +238,7 @@ impl Policy {
                     timeout,
                     trust,
                     remote: r.remote,
+                    pull_requests,
                 },
             ));
         }
@@ -515,6 +558,48 @@ batch = true
         assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().remote, None);
         assert!(Policy::parse("[branches.main]\nremote = 1\n").is_err());
         assert!(Policy::parse("[branches.main]\nremote = [\"origin\"]\n").is_err());
+    }
+
+    /// C.7: a branch may turn pull requests on, with the conditions a pull
+    /// request meets before it is submitted; only on a remote.
+    #[test]
+    fn reads_a_branchs_pull_requests() {
+        let p = Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n\
+             [branches.main.pull_requests]\nreviews = 1\nchecks = [\"qa/approved\"]\n\
+             [branches.\"bolt/*\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            p.rules_for("main").unwrap().unwrap().pull_requests,
+            Some(PullRequests {
+                reviews: 1,
+                checks: vec!["qa/approved".into()],
+            })
+        );
+        // Absent: work is submitted straight from a session's place.
+        assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().pull_requests, None);
+        // An empty table takes every pull request out of draft.
+        let p =
+            Policy::parse("[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\n")
+                .unwrap();
+        assert_eq!(
+            p.rules_for("main").unwrap().unwrap().pull_requests,
+            Some(PullRequests::default())
+        );
+        // Pull requests need the remote they are on.
+        let err = Policy::parse("[branches.main]\n[branches.main.pull_requests]\nreviews = 1\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("main") && err.contains("remote"), "{err}");
+        assert!(Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nreviews = -1\n"
+        )
+        .is_err());
+        assert!(Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlabels = [\"x\"]\n"
+        )
+        .is_err());
     }
 
     #[test]
