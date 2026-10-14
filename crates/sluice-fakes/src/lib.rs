@@ -899,6 +899,27 @@ impl Tests for FakeTests {
     }
 }
 
+impl FakeCheckout {
+    /// A place's removal, with everything started in it ended.
+    fn drop_place(&self, name: &str, passed: bool) {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.adopted.retain(|a| a != name);
+        inner.adopted_for.remove(name);
+        if inner.places.remove(name).is_some() {
+            inner.released.push(name.into());
+            if passed {
+                inner.saved.push(name.into());
+            }
+            // 34: everything started in it is ended.
+            for r in inner.runs.iter_mut() {
+                if r.request.place.name == name && r.report.is_none() {
+                    r.killed = true;
+                }
+            }
+        }
+    }
+}
+
 impl Checkout for FakeCheckout {
     fn materialize(&self, name: &str, rev: &Rev, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
@@ -955,7 +976,7 @@ impl Checkout for FakeCheckout {
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
             return Ok(Released::Nothing);
         }
-        self.release(name, false)?;
+        self.drop_place(name, false);
         let release = policy.and_then(|p| match p.tests.get("release") {
             Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
             _ => None,
@@ -982,26 +1003,13 @@ impl Checkout for FakeCheckout {
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
-        let mut inner = self.0 .0.borrow_mut();
-        // Rule core.16: never a session's place.
+        // Rule core.16: the core releases only places it made, never a
+        // session's; a session's place goes only through `release_session`.
         assert!(
-            !inner.worktrees.contains_key(name),
+            !self.0 .0.borrow().worktrees.contains_key(name) && !name.starts_with("session/"),
             "sluice released a session's place {name}"
         );
-        inner.adopted.retain(|a| a != name);
-        inner.adopted_for.remove(name);
-        if inner.places.remove(name).is_some() {
-            inner.released.push(name.into());
-            if passed {
-                inner.saved.push(name.into());
-            }
-            // 34: everything started in it is ended.
-            for r in inner.runs.iter_mut() {
-                if r.request.place.name == name && r.report.is_none() {
-                    r.killed = true;
-                }
-            }
-        }
+        self.drop_place(name, passed);
         Ok(())
     }
 }
