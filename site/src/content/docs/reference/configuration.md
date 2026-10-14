@@ -220,3 +220,4 @@ says whether it is set up right.
 | `SLUICE_CHECKOUT` | sluice, for a run | The absolute path of the checkout under test. |
 | `SLUICE_TMP` | sluice, for a run | A scratch directory of the run's own, for sockets, pid files and data directories, so parallel checkouts never collide. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
+| `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

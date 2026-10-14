@@ -14,6 +14,7 @@ sidebar:
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
 | `sluice withdraw <id>` | Take a submission out of the queue. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
+| `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. |
 
 ## `wt submit`
 
@@ -34,6 +35,32 @@ passed · landed as b7d2e94
 
 Submitting again from the same worktree withdraws that worktree's earlier
 submission.
+
+## `sluice forge check`
+
+Checks what the host's
+[`[forge]`](/sluice/reference/configuration/#forge) table needs for a
+branch whose `remote` is on GitHub. The key reads and the app makes a
+token for the repository. The app may write the repository's contents.
+Every ruleset on the branch lets the app through and nobody else. The branch is the one checked out where it
+runs unless it is named. It says each thing it checked, and exits `1`
+when any fails, naming which.
+
+GitHub shows who may bypass a ruleset only to the ruleset's admins, so
+the check reads the rulesets with your own token: `GH_TOKEN`,
+`GITHUB_TOKEN`, or the one `gh` is signed in with. Everything else it
+reads as the app.
+
+```console
+$ sluice forge check main
+ok      [forge] key /home/me/.config/sluice/app.pem reads
+ok      app 123456 makes a token for acme/widgets
+ok      the app may write acme/widgets's contents
+failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
+```
+
+[Give sluice its own GitHub identity](/sluice/guides/github-app/) sets
+it up.
 
 ## Exit codes
 

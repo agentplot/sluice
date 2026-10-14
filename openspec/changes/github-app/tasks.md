@@ -24,7 +24,7 @@ Commits; land with `wt submit main`. Read first: `proposal.md`,
 ## 4. forge check
 
 - [x] 4.1 Add `sluice forge check [<branch>]` with the GitHub profile's checks (key mode, token, installation permissions, rules' bypass actors), exiting non-zero and naming each failure. Verify with tests against a fake API for each scenario of the spec, and `rg -n 'github' crates --glob '!**/profiles/**'` finds nothing (core.1).
-- [ ] 4.2 Document `sluice forge check` in `site/src/content/docs/reference/commands.md`. Verify `moon run site:prose` passes.
+- [x] 4.2 Document `sluice forge check` in `site/src/content/docs/reference/commands.md`. Verify `moon run site:prose` passes.
 
 ## 5. Guide and decision
 
