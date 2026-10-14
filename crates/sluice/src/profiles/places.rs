@@ -122,13 +122,7 @@ fn port_free(port: u16) -> bool {
 
 /// The host's slots of ports, shared by every repository.
 fn slots_dir() -> Result<PathBuf> {
-    let state = match std::env::var_os("XDG_STATE_HOME") {
-        Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?)
-            .join(".local")
-            .join("state"),
-    };
-    Ok(state.join("sluice").join("slots"))
+    Ok(crate::instance::state_dir()?.join("slots"))
 }
 
 /// The host's slots, locked while held.

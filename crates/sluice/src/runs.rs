@@ -326,18 +326,24 @@ impl Runs {
 
     /// Whether a supervisor holds the run's lock.
     fn supervised(&self, dir: &Path) -> Result<bool> {
-        let file = match File::open(dir.join("lock")) {
-            Ok(f) => f,
-            // The supervisor makes the lock first; none yet means it has
-            // not started, or never will: read as not held.
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(e.into()),
-        };
-        match file.try_lock() {
-            Ok(()) => Ok(false),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
-            Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
-        }
+        supervised(dir)
+    }
+}
+
+/// Whether a supervisor holds the lock of the run directory `dir`: while
+/// it does, the run is running.
+pub fn supervised(dir: &Path) -> Result<bool> {
+    let file = match File::open(dir.join("lock")) {
+        Ok(f) => f,
+        // The supervisor makes the lock first; none yet means it has not
+        // started, or never will: read as not held.
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
     }
 }
 

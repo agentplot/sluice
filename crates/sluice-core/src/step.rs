@@ -946,7 +946,7 @@ impl Sluice<'_> {
     /// `line` as this step has it, and less the host's session runs
     /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let sessions = self.seams.state.sessions()?.len();
+        let sessions = self.seams.tests.sessions()?;
         let mut under = sessions
             + line
                 .doc
@@ -976,7 +976,7 @@ impl Sluice<'_> {
     /// session runs. A session run belongs to the host, not to a branch an
     /// instance serves, so every branch's runs count against it.
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
-        let mut under = self.seams.state.sessions()?.len();
+        let mut under = self.seams.tests.sessions()?;
         for b in self.seams.state.branches()? {
             under += self
                 .read_line(&b)?

@@ -9,6 +9,7 @@ pub mod instance;
 pub mod profiles;
 pub mod protect;
 pub mod runs;
+pub mod sessions;
 pub mod telemetry;
 
 use std::io::Write;

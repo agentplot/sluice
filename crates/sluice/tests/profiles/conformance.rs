@@ -96,6 +96,10 @@ impl Tests for RecordedChecks {
         self.inner.bound()
     }
 
+    fn sessions(&self) -> Result<usize> {
+        self.inner.sessions()
+    }
+
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         self.inner.logs(run, tasks)
     }

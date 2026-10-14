@@ -90,6 +90,18 @@ impl Instance {
     }
 }
 
+/// The host's own state, shared by every repository on it:
+/// `$XDG_STATE_HOME/sluice` (default `~/.local/state/sluice`).
+pub fn state_dir() -> Result<PathBuf> {
+    let state = match std::env::var_os("XDG_STATE_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+            .join(".local")
+            .join("state"),
+    };
+    Ok(state.join("sluice"))
+}
+
 fn config_path() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(d) if !d.is_empty() => PathBuf::from(d),

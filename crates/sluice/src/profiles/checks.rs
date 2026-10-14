@@ -45,6 +45,7 @@ use sluice_seams::{
 use super::moon::Moon;
 use crate::instance::Instance;
 use crate::runs::{Ended, Request, RunState, Runs};
+use crate::sessions::Sessions;
 
 /// What a run's place, environment and toolchain are, for a runner.
 pub struct Context<'a> {
@@ -110,6 +111,8 @@ struct Meta {
 pub struct Checks {
     runs: Runs,
     instance: Instance,
+    /// The host's session runs, when not the host's own directory.
+    sessions: Option<Sessions>,
 }
 
 impl Checks {
@@ -118,6 +121,22 @@ impl Checks {
         Checks {
             runs: Runs::new(common, program),
             instance,
+            sessions: None,
+        }
+    }
+
+    /// The same profile, keeping the host's session runs under `dir`.
+    pub fn with_sessions(mut self, dir: PathBuf) -> Self {
+        self.sessions = Some(Sessions::new(dir));
+        self
+    }
+
+    /// The host's session runs: the count a session run is started under,
+    /// with their lock (session-runs-1 clauses 89, 91).
+    pub fn host_sessions(&self) -> Result<Sessions> {
+        match &self.sessions {
+            Some(s) => Ok(s.clone()),
+            None => Sessions::host(),
         }
     }
 
@@ -562,6 +581,10 @@ impl Tests for Checks {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.instance.bound)
+    }
+
+    fn sessions(&self) -> Result<usize> {
+        Ok(self.host_sessions()?.running()?.len())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {

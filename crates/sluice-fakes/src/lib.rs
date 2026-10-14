@@ -18,7 +18,7 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Network,
     Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
-    SessionRun, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
+    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -98,6 +98,8 @@ struct Inner {
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
+    /// Session runs on the host, by worktree, and whether each still runs.
+    sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
     host: String,
     // the place
@@ -117,9 +119,6 @@ struct Inner {
     next_id: u64,
     crash_writes: usize,
     interfere: usize,
-    /// Session runs by worktree, and whether each one's process lives.
-    sessions: BTreeMap<String, (SessionRun, bool)>,
-    sessions_locked: bool,
     // the clock
     now: DateTime<Utc>,
 }
@@ -660,38 +659,20 @@ impl World {
         String::from_utf8(self.0.borrow().results.clone()).expect("records are text")
     }
 
-    /// A session run on `worktree` recorded as running, its process alive
-    /// or gone.
-    pub fn session_run(&self, worktree: &str, alive: bool) {
-        let run = SessionRun {
-            worktree: worktree.into(),
-            place: format!("session/{worktree}"),
-            branch: String::new(),
-            pid: 1,
-            started: String::new(),
-            run_dir: String::new(),
-        };
+    /// A session run on `worktree`, running or ended with its record
+    /// left.
+    pub fn session_run(&self, worktree: &str, running: bool) {
         self.0
             .borrow_mut()
             .sessions
-            .insert(worktree.into(), (run, alive));
+            .insert(worktree.into(), running);
     }
 
-    /// The process of `worktree`'s session run is gone, its record left.
+    /// `worktree`'s session run has ended; its record is left behind.
     pub fn kill_session(&self, worktree: &str) {
-        if let Some(s) = self.0.borrow_mut().sessions.get_mut(worktree) {
-            s.1 = false;
+        if let Some(r) = self.0.borrow_mut().sessions.get_mut(worktree) {
+            *r = false;
         }
-    }
-
-    /// Every session run recorded, live or not.
-    pub fn session_records(&self) -> Vec<SessionRun> {
-        self.0
-            .borrow()
-            .sessions
-            .values()
-            .map(|(r, _)| r.clone())
-            .collect()
     }
 
     pub fn hold_lock(&self, branch: &str, held: bool) {
@@ -879,6 +860,10 @@ impl Tests for FakeTests {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
 
+    fn sessions(&self) -> Result<usize> {
+        Ok(self.0 .0.borrow().sessions.values().filter(|r| **r).count())
+    }
+
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         Ok(tasks
             .iter()
@@ -951,16 +936,6 @@ impl Driver for FakeDriver {
             bail!("crashed after telling {}", notification.id);
         }
         Ok(())
-    }
-}
-
-struct FakeSessionsGuard<'a>(&'a World);
-
-impl Guard for FakeSessionsGuard<'_> {}
-
-impl Drop for FakeSessionsGuard<'_> {
-    fn drop(&mut self) {
-        self.0 .0.borrow_mut().sessions_locked = false;
     }
 }
 
@@ -1089,42 +1064,6 @@ impl State for FakeState {
             })
             .collect())
     }
-
-    fn sessions(&self) -> Result<Vec<SessionRun>> {
-        Ok(self
-            .0
-             .0
-            .borrow()
-            .sessions
-            .values()
-            .filter(|(_, alive)| *alive)
-            .map(|(r, _)| r.clone())
-            .collect())
-    }
-
-    fn lock_sessions<'a>(&'a self) -> Result<Box<dyn Guard + 'a>> {
-        let mut inner = self.0 .0.borrow_mut();
-        // One thread: a held lock would never be let go.
-        if inner.sessions_locked {
-            bail!("the session runs' lock is held, and nothing here lets it go");
-        }
-        inner.sessions_locked = true;
-        Ok(Box::new(FakeSessionsGuard(&self.0)))
-    }
-
-    fn begin_session(&self, run: &SessionRun) -> Result<()> {
-        let mut inner = self.0 .0.borrow_mut();
-        inner.sessions.retain(|_, (_, alive)| *alive);
-        inner
-            .sessions
-            .insert(run.worktree.clone(), (run.clone(), true));
-        Ok(())
-    }
-
-    fn end_session(&self, worktree: &str) -> Result<()> {
-        self.0 .0.borrow_mut().sessions.remove(worktree);
-        Ok(())
-    }
 }
 
 impl Clock for FakeClock {
@@ -1139,53 +1078,17 @@ impl Clock for FakeClock {
 mod tests {
     use super::*;
 
-    fn run(worktree: &str) -> SessionRun {
-        SessionRun {
-            worktree: worktree.into(),
-            place: format!("session/{worktree}"),
-            branch: "bolt/x".into(),
-            pid: 7,
-            started: "2026-10-14T09:00:00Z".into(),
-            run_dir: String::new(),
-        }
-    }
-
-    /// The records fake keeps session runs as the real records do: live
-    /// ones are counted, a gone one is not and the next start drops it,
-    /// and an end removes the record.
+    /// The check fake counts the host's session runs while they run, and
+    /// never one that has ended.
     #[test]
-    fn session_runs_are_counted_while_their_process_lives() {
+    fn session_runs_are_counted_while_they_run() {
         let f = Fakes::new();
-        f.world.session_run("/w/live", true);
-        f.world.session_run("/w/dead", false);
-        let live: Vec<String> = f
-            .state
-            .sessions()
-            .unwrap()
-            .into_iter()
-            .map(|r| r.worktree)
-            .collect();
-        assert_eq!(live, ["/w/live"]);
-        assert_eq!(f.world.session_records().len(), 2);
-
-        f.state.begin_session(&run("/w/new")).unwrap();
-        assert_eq!(f.world.session_records().len(), 2, "the dead one dropped");
-        assert_eq!(f.state.sessions().unwrap().len(), 2);
-
-        f.world.kill_session("/w/new");
-        assert_eq!(f.state.sessions().unwrap().len(), 1);
-        f.state.end_session("/w/live").unwrap();
-        f.state.end_session("/w/none").unwrap();
-        assert!(f.state.sessions().unwrap().is_empty());
-    }
-
-    /// The lock over session runs is one holder at a time.
-    #[test]
-    fn the_sessions_lock_is_one_holder() {
-        let f = Fakes::new();
-        let g = f.state.lock_sessions().unwrap();
-        assert!(f.state.lock_sessions().is_err());
-        drop(g);
-        drop(f.state.lock_sessions().unwrap());
+        assert_eq!(f.tests.sessions().unwrap(), 0);
+        f.world.session_run("/w/a", true);
+        f.world.session_run("/w/b", true);
+        f.world.session_run("/w/gone", false);
+        assert_eq!(f.tests.sessions().unwrap(), 2);
+        f.world.kill_session("/w/a");
+        assert_eq!(f.tests.sessions().unwrap(), 1);
     }
 }

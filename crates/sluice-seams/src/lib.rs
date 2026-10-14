@@ -278,6 +278,12 @@ pub trait Tests {
     /// under test from the records.
     fn bound(&self) -> Result<usize>;
 
+    /// Session-runs-1 clause 89: how many session runs are running on this
+    /// host, each holding one slot of the bound. A session run is the
+    /// host's, never a branch's, so the check seam counts it beside the
+    /// bound and the records never hold it.
+    fn sessions(&self) -> Result<usize>;
+
     /// 20: what each of `tasks` printed in a finished run, while its place
     /// still exists: the run's own output for a task with none of its
     /// own. Only the end of a long output is kept.
@@ -477,27 +483,6 @@ pub enum Written {
 /// The branch's lock, held until dropped (ADR 0005; rule core.14).
 pub trait Guard {}
 
-/// A session run running on the host: a run a session asked for in its
-/// own place, holding one slot of the host's bound for as long as its
-/// process lives (session-runs-1 clauses 89, 91). Its record is the
-/// count, so a starter reads it with no sluice process running (core.11,
-/// core.14).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct SessionRun {
-    /// The session's place, as its canonical path.
-    pub worktree: String,
-    /// The name of the place the run was given.
-    pub place: String,
-    /// The branch whose policy the run is held to.
-    pub branch: String,
-    /// The process that holds the slot: while it lives, the slot is held.
-    pub pid: u32,
-    /// When the run started, RFC 3339.
-    pub started: String,
-    /// Where the run's output and result are kept.
-    pub run_dir: String,
-}
-
 pub trait State {
     /// The branch's lock, or `None` when another step holds it.
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>>;
@@ -529,23 +514,4 @@ pub trait State {
     /// running (26); the answer says where each is. Only the last
     /// `KEPT_LOGS` candidates of a branch keep theirs.
     fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>>;
-
-    /// The host's session runs whose process is alive. A record whose
-    /// process is gone is no run, and is never counted (session-runs-1
-    /// clause 89).
-    fn sessions(&self) -> Result<Vec<SessionRun>>;
-
-    /// The host's lock over its session runs, once whatever holds it lets
-    /// go: held across reading the count and writing a session run, so
-    /// two starters never both take the last slot. `begin_session` and
-    /// `end_session` take it themselves when this process does not hold
-    /// it.
-    fn lock_sessions<'a>(&'a self) -> Result<Box<dyn Guard + 'a>>;
-
-    /// Record a session run as running, one per worktree, dropping every
-    /// record whose process is gone.
-    fn begin_session(&self, run: &SessionRun) -> Result<()>;
-
-    /// The worktree's session run has ended; nothing when none is recorded.
-    fn end_session(&self, worktree: &str) -> Result<()>;
 }
