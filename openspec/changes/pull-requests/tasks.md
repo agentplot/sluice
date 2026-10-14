@@ -16,7 +16,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 ## 2. The forge interface
 
 - [x] 2.1 Add `crates/sluice/src/profiles/github/` with the `Forge` trait (design: Decisions) and its file-backed fake. Verify unit tests of the fake: pull requests listed, reviews on a head, statuses and check runs by name, ready-for-review events, posting a status and a comment.
-- [ ] 2.2 Add `App`, the `Forge` over GitHub's REST API with the app's installation token: the `sluice` check run created or updated by name, reviews filtered to the head, other systems' check runs and statuses by name, the timeline's ready-for-review events, opening and editing pull requests. Verify with an opt-in live test (`SLUICE_GITHUB_TEST_REPO`, skipped when unset) against a scratch repository, run once by hand and recorded in the ADR; verify `rg -n 'github' crates --glob '!**/profiles/**'` finds nothing (core.1).
+- [x] 2.2 Add `App`, the `Forge` over GitHub's REST API with the app's installation token: the `sluice` check run created or updated by name, reviews filtered to the head, other systems' check runs and statuses by name, the timeline's ready-for-review events, opening and editing pull requests. Verify with an opt-in live test (`SLUICE_GITHUB_TEST_REPO`, skipped when unset) against a scratch repository, run once by hand and recorded in the ADR; verify `rg -n 'github' crates --glob '!**/profiles/**'` finds nothing (core.1).
 
 ## 3. Intake
 
