@@ -1,5 +1,5 @@
 ---
-number: 17
+number: 18
 title: An agent's worktree is a place sluice equips and never removes
 status: accepted
 date: 2026-10-14

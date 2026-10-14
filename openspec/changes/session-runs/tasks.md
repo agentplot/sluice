@@ -43,7 +43,7 @@ pathspec after each task group, Conventional Commits, scope the crate or
 
 ## 5. Decisions and rules
 
-- [x] 5.1 Write ADR 0017 "An agent's worktree is a place sluice equips and never removes" in `docs/adr/` (MADR bare front matter as 0016; sources: blueprint proposal session-runs-1 clauses 89 to 95, clauses 25, 31, 34, 71, 83, 84; ADRs 0012, 0013, 0016; options: nothing, a separate semaphore tool, the adopted place), naming the one-over-the-bound race; verify `site/scripts/adrs.mjs` renders it at `/sluice/decisions/0017/`.
+- [x] 5.1 Write ADR 0018 "An agent's worktree is a place sluice equips and never removes" in `docs/adr/` (MADR bare front matter as 0016; sources: blueprint proposal session-runs-1 clauses 89 to 95, clauses 25, 31, 34, 71, 83, 84; ADRs 0012, 0013, 0016; options: nothing, a separate semaphore tool, the adopted place), naming the one-over-the-bound race; verify `site/scripts/adrs.mjs` renders it at `/sluice/decisions/0018/`.
 - [x] 5.2 Update `docs/architecture/core.md` and its mirror `site/src/content/docs/architecture/rules.md`: core.10's "Not ruled out" gains a session's run under the executor; core.16 becomes "The core releases only places it made; a session's place is released only by `sluice release` at its session's or driver's asking"; add core.18 "A session run counts toward the bound from the host's state and is recorded under its keys only when its worktree holds exactly its head"; verify every code comment that cites core.16 still reads true.
 - [x] 5.3 Run the full `:#check-fast`, `:#check-tools` and `:#check-e2e` tiers and `openspec validate session-runs --strict`; verify all pass and the change's tasks are all checked.
 
