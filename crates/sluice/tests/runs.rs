@@ -244,3 +244,54 @@ fn removing_a_run_runs_its_release_once() {
     let log = std::fs::read_to_string(place.path().join("log")).unwrap();
     assert_eq!(log, "released\nreleased\n");
 }
+
+/// Session-runs-1 clauses 94, 95: a session's place keeps a directory per
+/// run; a second run releases nothing of the first, what a run handed off
+/// outlives it, and removing them all ends any still running and runs the
+/// release command once.
+#[test]
+fn a_sessions_runs_are_released_once_and_only_together() {
+    let place = Scratch::new("runs-session");
+    let runs = runs(place.path());
+    let name = "session//work/agent-a";
+    let release = Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "echo released >> log".into(),
+    ]);
+    let first = runs.next_run(name).unwrap();
+    let mut req = request(place.path(), "echo one >> ran", None);
+    req.release = release.clone();
+    runs.start(&first, &req).unwrap();
+    assert!(matches!(wait(&runs, &first), RunState::Finished(_)));
+
+    let second = runs.next_run(name).unwrap();
+    assert_ne!(first, second);
+    let mut req = request(place.path(), "echo two >> ran; touch up; sleep 300", None);
+    req.release = release;
+    runs.start(&second, &req).unwrap();
+    wait_for(&place.path().join("up"));
+    wait_for(&runs.dir(&second).join("pgid"));
+    assert!(
+        !place.path().join("log").exists(),
+        "a new run released the last"
+    );
+    // The first run's directory and result are still there.
+    assert!(matches!(runs.state(&first).unwrap(), RunState::Finished(_)));
+    let pgid = number(&runs.dir(&second).join("pgid"));
+
+    runs.remove_all(name).unwrap();
+    assert!(group_gone(pgid), "a run still going was ended");
+    let log = std::fs::read_to_string(place.path().join("log")).unwrap();
+    assert_eq!(log, "released\n");
+    assert!(!runs.dir(&first).exists() && !runs.dir(&second).exists());
+    // Again, nothing: no run is left to release.
+    runs.remove_all(name).unwrap();
+    runs.remove(name).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(place.path().join("log")).unwrap(),
+        "released\n"
+    );
+    let ran = std::fs::read_to_string(place.path().join("ran")).unwrap();
+    assert_eq!(ran, "one\ntwo\n");
+}

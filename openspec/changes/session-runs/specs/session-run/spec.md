@@ -12,11 +12,10 @@ head.
 
 ### Requirement: An agent runs its checks in its worktree
 
-`sluice exec [<branch>]`, run inside a git worktree, SHALL run the checks
+`sluice exec <branch>`, run inside a git worktree, SHALL run the checks
 the worktree's head affects against the branch, with the policy of that
-branch read from the branch's current revision. With no branch given it
-SHALL use the branch the worktree's branch was taken from, as `sluice
-submit` does. The run SHALL go through the check seam's execute
+branch read from the branch's current revision. The branch SHALL be
+named, as `sluice submit`'s is. The run SHALL go through the check seam's execute
 operation under the branch's executor and limits, in one process group
 ended when the command exits or the branch's time limit passes (66, 83,
 89).

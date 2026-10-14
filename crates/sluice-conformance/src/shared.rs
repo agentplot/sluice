@@ -6,8 +6,9 @@ use sluice_core::records::{
     parse_lines, BranchDoc, Event, LogLine, ResultKind, State, Submission, BRANCH_SCHEMA,
     SUBMISSION_SCHEMA,
 };
+use sluice_core::session::Recorded;
 use sluice_core::{Forecast, SubmitRefusal};
-use sluice_seams::{Outcome, Told};
+use sluice_seams::{Outcome, ReleasePolicy, Released, Told};
 
 use crate::{Rig, BRANCH};
 
@@ -570,5 +571,117 @@ pub fn every_record_written_is_the_real_format_and_names_its_schema(h: &impl Rig
             .iter()
             .map(|r| (&r.task, r.outcome, &r.kind))
             .collect::<Vec<_>>()
+    );
+}
+
+/// S26: a session runs the checks in a clean place, edits nothing, and
+/// submits. The candidate's required checks are covered under their keys
+/// by the session's run, recorded as an open run; the gate trusts open
+/// runs and the cache, so the candidate replays them and lands without
+/// running them again (69, 92, 93; session-runs-1).
+pub fn s26_a_clean_session_run_is_replayed_by_its_submission(h: &impl Rig) {
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let (report, recorded) = h.session_run("unit/a");
+    assert!(!report.tasks.is_empty(), "the session ran its checks");
+    assert!(report.tasks.iter().all(|t| t.outcome == Outcome::Pass));
+    assert_eq!(recorded, Recorded::Written(report.tasks.len()));
+    let session: Vec<_> = h
+        .results()
+        .into_iter()
+        .filter(|r| r.combination == head)
+        .collect();
+    assert_eq!(session.len(), report.tasks.len());
+    for r in &session {
+        assert_eq!(r.kind, ResultKind::Ran);
+        assert!(r.worktree.is_some());
+        let e = r.executor.as_ref().expect("a run records its executor");
+        assert!(!e.confined, "a session run is never confined");
+    }
+    let before = h.results().len();
+
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    // The candidate's checks under the session's keys were replays, and
+    // recorded as replays, never as runs (16, 38).
+    let candidate: Vec<_> = h.results().into_iter().skip(before).collect();
+    for r in &session {
+        assert!(
+            candidate
+                .iter()
+                .any(|c| c.task == r.task && c.hash == r.hash && c.kind == ResultKind::Replayed),
+            "{} was not replayed: {candidate:?}",
+            r.task
+        );
+    }
+    assert!(candidate
+        .iter()
+        .filter(|c| session.iter().any(|r| r.task == c.task && r.hash == c.hash))
+        .all(|c| c.kind == ResultKind::Replayed));
+}
+
+/// S28: a session runs its checks with a file beyond its commits. The run
+/// gives its outcome and records nothing; the candidate formed later runs
+/// the checks itself (92; session-runs-1).
+pub fn s28_a_dirty_session_run_records_nothing(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.dirty("unit/a", &["a/scratch"]);
+    let before = h.results();
+    let (report, recorded) = h.session_run("unit/a");
+    assert!(!report.tasks.is_empty());
+    assert_eq!(recorded, Recorded::NotClean);
+    assert_eq!(h.results(), before, "a dirty run records nothing");
+}
+
+/// S27: a session runs its checks twice; its place stays equipped between
+/// the runs and through its landing, which leaves it alone; its release,
+/// under the policy read from the branch now, ends it, and a second
+/// release finds nothing (25, 94, 95; core.16; session-runs-1).
+pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let place = h.place("unit/a");
+    let s = h.sluice();
+    h.session_run("unit/a");
+    let adopted = s
+        .seams()
+        .checkout
+        .adopted(&place)
+        .expect("the place seam reads")
+        .expect("equipped after its first run");
+    h.session_run("unit/a");
+    assert_eq!(
+        s.seams().checkout.adopted(&place).unwrap().as_ref(),
+        Some(&adopted),
+        "the same place between runs"
+    );
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(
+        s.seams().checkout.adopted(&place).unwrap().is_some(),
+        "a landing released the session's place"
+    );
+    let policy = s
+        .policy_at(&h.tip())
+        .expect("the policy reads")
+        .expect("a policy");
+    let release = ReleasePolicy {
+        tests: policy.tests,
+        limits: policy.limits,
+    };
+    assert_eq!(
+        s.seams()
+            .checkout
+            .release_session(&adopted.name, Some(&release))
+            .unwrap(),
+        Released::Policy
+    );
+    assert!(s.seams().checkout.adopted(&place).unwrap().is_none());
+    assert_eq!(
+        s.seams()
+            .checkout
+            .release_session(&adopted.name, Some(&release))
+            .unwrap(),
+        Released::Nothing
     );
 }

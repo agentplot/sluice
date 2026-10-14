@@ -1,5 +1,7 @@
 //! The CLI over the fakes: the walkthrough's output and exits.
 
+mod support;
+
 use std::cell::Cell;
 
 use clap::Parser;
@@ -38,7 +40,18 @@ fn setup() -> Fakes {
 fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let code = run(cli, f.seams(), &f.clock, &Rounds(Cell::new(0)), &mut out).unwrap();
+    let code = run(
+        cli,
+        f.seams(),
+        &support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        },
+        &f.clock,
+        &Rounds(Cell::new(0)),
+        &mut out,
+    )
+    .unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 
@@ -269,4 +282,493 @@ fn amend_and_withdraw() {
         sluice(&f, &["withdraw", "1", "--as", "agent-a"]),
         (0, "withdrew #1\n".into())
     );
+}
+
+// ---------------------------------------------------------------------------
+// sluice exec (session-runs-1 clauses 89 to 93)
+// ---------------------------------------------------------------------------
+
+/// A pause that runs `then` on its first call, and stops the wait when
+/// `stop` says so.
+struct Then<F: Fn(usize) -> bool>(Cell<usize>, F);
+
+impl<F: Fn(usize) -> bool> Pause for Then<F> {
+    fn pause(&self) -> bool {
+        self.0.set(self.0.get() + 1);
+        assert!(self.0.get() < 50, "waited too long");
+        (self.1)(self.0.get())
+    }
+}
+
+fn exec_with(f: &Fakes, reserved: usize, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
+    let cli =
+        Cli::try_parse_from(["sluice", "exec"].into_iter().chain(args.iter().copied())).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved,
+    };
+    let code = run(cli, f.seams(), &host, &f.clock, pause, &mut out).unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+fn exec(f: &Fakes, args: &[&str]) -> (i32, String) {
+    exec_with(f, 0, &Rounds(Cell::new(0)), args)
+}
+
+/// The arguments: a branch, and a command after `--`.
+#[test]
+fn exec_takes_a_branch_and_a_command() {
+    assert!(Cli::try_parse_from(["sluice", "exec"]).is_err());
+    let cli =
+        Cli::try_parse_from(["sluice", "exec", BRANCH, "--", "moon", "run", ":test"]).unwrap();
+    match cli.command {
+        sluice::Command::Exec {
+            branch,
+            command,
+            worktree,
+            json,
+            release,
+        } => {
+            assert!(!release);
+            assert_eq!(branch, BRANCH);
+            assert_eq!(command, ["moon", "run", ":test"]);
+            assert_eq!(worktree, ".");
+            assert!(!json);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A place that is no worktree is refused, and nothing runs.
+#[test]
+fn exec_outside_a_worktree_is_refused() {
+    let f = setup();
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "nowhere"]);
+    assert_eq!(code, CONFLICT);
+    assert!(
+        out.starts_with("refused: nowhere is not a worktree"),
+        "{out}"
+    );
+    assert!(f.world.started().is_empty());
+    let (code, out) = exec(&f, &["bolt/none", "--worktree", "nowhere"]);
+    assert_eq!(code, CONFLICT, "{out}");
+}
+
+/// 89: the checks the head affects against the branch run in the
+/// worktree's adopted place, take a slot only while they run, and the
+/// exit is theirs.
+#[test]
+fn exec_runs_the_affected_checks_against_the_branch() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let base = f.world.tip(BRANCH);
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let req = f.world.requests().pop().unwrap();
+    assert_eq!(req.place.name, "session/unit/a");
+    assert_eq!(req.since, Some(base.clone()));
+    assert!(!req.replay);
+    assert_eq!(f.world.observed().len(), 1, "only the affected check ran");
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+    assert_eq!(
+        sluice_seams::Tests::sessions(&f.tests).unwrap(),
+        0,
+        "the slot is let go"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!(
+            "running the checks {} affects against {BRANCH} ({})",
+            sluice_seams::Driver::session(&f.driver, "unit/a")
+                .unwrap()
+                .head
+                .short(),
+            base.short()
+        )
+    );
+    let n = lines.len();
+    assert_eq!(lines[n - 2], "passed: 1 task");
+    assert!(lines[n - 1].starts_with("recorded 1 result under its key for "));
+
+    f.world
+        .fails_with("plugin:test", "plugin/lib/plan.py", "p2");
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED);
+    assert!(out.contains("failed: plugin:test\n"), "{out}");
+}
+
+/// 89, 71: with no slot free, exec waits, and starts when one frees.
+#[test]
+fn exec_waits_for_a_slot() {
+    let f = setup();
+    f.world.host_limit(1);
+    f.world.session_run("/w/other", true);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let world = f.world.clone();
+    let pause = Then(Cell::new(0), move |n| {
+        if n == 1 {
+            assert!(world.started().is_empty(), "started into a held slot");
+            world.kill_session("/w/other");
+        }
+        true
+    });
+    let (code, out) = exec_with(&f, 0, &pause, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(out.contains("waiting for a slot\n"), "{out}");
+    assert_eq!(f.world.started().len(), 1);
+}
+
+/// 91: a session run never takes a slot the reserve keeps; stopped while
+/// waiting, nothing ran and nothing is recorded.
+#[test]
+fn exec_never_takes_the_reserve() {
+    let f = setup();
+    f.world.host_limit(2);
+    f.world.session_run("/w/other", true);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let pause = Then(Cell::new(0), |_| false);
+    let (code, out) = exec_with(&f, 1, &pause, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, sluice::STOPPED);
+    assert!(
+        out.ends_with("waiting for a slot\nstopped: nothing ran\n"),
+        "{out}"
+    );
+    assert!(f.world.started().is_empty());
+    assert_eq!(f.world.results_log(), "");
+    // Without the reserve, the free slot is taken.
+    let (code, _) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED);
+}
+
+/// 66, 92: a run past the branch's time limit is reported as timed out,
+/// and recorded as neither a pass nor a fail.
+#[test]
+fn exec_past_its_time_limit_is_timed_out_and_unrecorded() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!("{POLICY}timeout = \"1m\"\n"),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.hangs("plugin:test");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED);
+    assert!(out.ends_with("timed out\n"), "{out}");
+    assert_eq!(f.world.results_log(), "");
+}
+
+/// 89, 92: a command runs in the adopted place under the command runner
+/// with its words quoted for `sh -c`, gives its exit, and records
+/// nothing, clean worktree or not.
+#[test]
+fn exec_runs_a_command_and_records_nothing() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = exec(
+        &f,
+        &[BRANCH, "--worktree", "unit/a", "--", "moon", "run", "a b's"],
+    );
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(out, "running moon run 'a b'\\''s'\n");
+    let req = f.world.requests().pop().unwrap();
+    assert!(req.required.is_empty());
+    assert_eq!(
+        req.tests.get("runner"),
+        Some(&sluice_seams::Setting::Text("command".into()))
+    );
+    assert_eq!(
+        req.tests.get("command"),
+        Some(&sluice_seams::Setting::Text("moon run 'a b'\\''s'".into()))
+    );
+    assert_eq!(f.world.results_log(), "");
+}
+
+fn result_lines(f: &Fakes) -> Vec<sluice_core::records::ResultLine> {
+    sluice_core::records::parse_lines(f.world.results_log().as_bytes()).unwrap()
+}
+
+/// 92, 16: a clean worktree's run of the checks writes one record per
+/// check it ran, with its executor and host, on its head from its
+/// worktree; a dirty worktree's run writes none and says so.
+#[test]
+fn exec_records_a_clean_run_and_not_a_dirty_one() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[
+            ("plugin/lib/plan.py", Some("p2")),
+            ("tests/t_cards.py", Some("c2")),
+        ],
+    );
+    let head = sluice_seams::Driver::session(&f.driver, "unit/a")
+        .unwrap()
+        .head;
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(
+        out.contains(&format!(
+            "recorded 2 results under their keys for {}\n",
+            head.short()
+        )),
+        "{out}"
+    );
+    let lines = result_lines(&f);
+    assert_eq!(lines.len(), 2);
+    for l in &lines {
+        assert_eq!(l.kind, sluice_core::records::ResultKind::Ran);
+        assert_eq!(l.combination, head);
+        assert_eq!(l.branch, BRANCH);
+        assert_eq!(l.worktree.as_deref(), Some("unit/a"));
+        assert_eq!(l.host.as_deref(), Some("fake-host"));
+        let e = l.executor.as_ref().unwrap();
+        assert_eq!((e.kind.as_str(), e.confined), ("open", false));
+    }
+
+    f.world.dirty("unit/a", &["notes.txt"]);
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(
+        out.contains("not recorded: worktree is not clean\n"),
+        "{out}"
+    );
+    assert_eq!(result_lines(&f).len(), 2);
+}
+
+/// `--json`: one document on stdout, in `sluice status --json`'s field
+/// names, with each check's key, outcome and whether it was recorded; the
+/// human output goes to stderr.
+#[test]
+fn exec_json_is_one_document() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, LANDED);
+    let doc: serde_json::Value =
+        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(out.lines().count(), 1, "{out}");
+    assert_eq!(doc["branch"], BRANCH);
+    assert_eq!(doc["exit"], 0);
+    assert_eq!(doc["timed_out"], false);
+    assert_eq!(doc["ports"], serde_json::json!({}));
+    let tasks = doc["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["task"], "plugin:test");
+    assert_eq!(tasks[0]["outcome"], "pass");
+    assert_eq!(tasks[0]["recorded"], true);
+    assert!(tasks[0]["hash"].is_string());
+
+    f.world.dirty("unit/a", &["notes.txt"]);
+    let (_, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["tasks"][0]["recorded"], false);
+}
+
+// ---------------------------------------------------------------------------
+// sluice release (session-runs-1 clauses 94, 95)
+// ---------------------------------------------------------------------------
+
+const RELEASING: &str = "[tests]\nrelease = \"sh release.sh\"\n\n";
+
+fn setup_releasing() -> Fakes {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", &format!("{RELEASING}{POLICY}")),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f
+}
+
+fn release(f: &Fakes, args: &[&str]) -> (i32, String) {
+    let cli = Cli::try_parse_from(
+        ["sluice", "release"]
+            .into_iter()
+            .chain(args.iter().copied()),
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let code = run(
+        cli,
+        f.seams(),
+        &host,
+        &f.clock,
+        &Rounds(Cell::new(0)),
+        &mut out,
+    )
+    .unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+/// 94, 95: the worktree's runs leave its place equipped; `sluice release`
+/// releases it under the release command its branch's policy states now,
+/// and a second release finds nothing.
+#[test]
+fn release_runs_the_policys_release_command_once() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert!(
+        f.world.session_releases().is_empty(),
+        "released between runs"
+    );
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+
+    // The policy's release command changed after the last run: the new
+    // one is the one that runs (56).
+    f.world.hand_commit(
+        BRANCH,
+        &[(
+            ".config/sluice.toml",
+            Some(&format!(
+                "[tests]\nrelease = \"sh teardown.sh\"\n\n{POLICY}"
+            )),
+        )],
+    );
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "released unit/a: its runs ended, the release command run, its ports free\n"
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [(
+            "session/unit/a".to_string(),
+            Some("sh teardown.sh".to_string())
+        )]
+    );
+    assert!(f.world.adopted_places().is_empty());
+
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+    assert_eq!(f.world.session_releases().len(), 1);
+    // A worktree that never ran has nothing to release.
+    let (code, out) = release(&f, &["--worktree", "unit/none"]);
+    assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+}
+
+/// 95: with the branch gone, the release command the last run carried
+/// runs, and the output says so.
+#[test]
+fn release_falls_back_to_the_last_runs_command_and_says_so() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.delete_branch(BRANCH);
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!(
+            "{BRANCH} cannot be read (no branch {BRANCH}): running the release command saved with the last run"
+        )
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [("session/unit/a".to_string(), None)]
+    );
+}
+
+/// 95: `sluice exec --release` releases once its run ends, and the exit
+/// is the run's.
+#[test]
+fn exec_release_releases_after_the_run() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a", "--release"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(
+        out.ends_with("released unit/a: its runs ended, the release command run, its ports free\n"),
+        "{out}"
+    );
+    assert_eq!(
+        f.world.session_releases(),
+        [(
+            "session/unit/a".to_string(),
+            Some("sh release.sh".to_string())
+        )]
+    );
+}
+
+/// 25, rule core.16: a submission from a worktree that ran `sluice exec`
+/// lands, and no round releases the worktree's place.
+#[test]
+fn a_landing_leaves_a_sessions_place_alone() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let (code, _) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED);
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+    assert!(f.world.session_releases().is_empty());
 }

@@ -152,6 +152,7 @@ mod tests {
             executor,
             branch: "main".into(),
             combination: sluice_seams::Rev::new("c"),
+            worktree: None,
         }
     }
 

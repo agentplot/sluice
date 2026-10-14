@@ -22,6 +22,13 @@
 //! `SLUICE_PLACE`, a short name unique to it, and `SLUICE_PORT_<NAME>`
 //! for each name.
 //!
+//! A session's own worktree is adopted, never made (session-runs-1
+//! clauses 90, 94, 95): its record, `kind: "session"`, names the worktree
+//! and its branch and holds its slot and its ports from its first run
+//! until `sluice release`, which ends its runs, runs the release command
+//! once, removes its scratch directory and lets its slot go, and never
+//! removes the worktree.
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
@@ -36,14 +43,42 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Checkout, Place, Rev, Setting, Settings};
+use sluice_seams::{
+    Adopted, Checkout, Limits, Place, ReleasePolicy, Released, Rev, Setting, Settings,
+};
 
-use crate::runs::{flat_name, Runs};
+use crate::runs::{flat_name, ReleaseWith, Request, Runs, SESSION};
+
+/// Builds a session's place's release command from the policy's `[tests]`
+/// and limits, under the executor its runs had, writing what the
+/// toolchain and the executor need in the directory given: the check
+/// seam's, handed to this profile by the binding (rule core.2).
+pub type ReleaseBuilder = Box<dyn Fn(&Place, &Settings, &Limits, &Path) -> Result<Option<Request>>>;
+
+/// Whose a place is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    /// A candidate's, made by sluice and removed on release (25).
+    #[default]
+    Made,
+    /// A session's own worktree, adopted for its runs and never removed.
+    Session,
+}
 
 /// What made a place: `<common>/sluice/.places/<name>.json`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Made {
+    #[serde(default)]
+    kind: Kind,
     method: String,
+    /// A session's place: the branch whose policy its runs are held to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    /// A session's place: the ports it was given on its first run, kept
+    /// until its release (90).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    ports: BTreeMap<String, String>,
     /// The checkout, once it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
@@ -122,13 +157,7 @@ fn port_free(port: u16) -> bool {
 
 /// The host's slots of ports, shared by every repository.
 fn slots_dir() -> Result<PathBuf> {
-    let state = match std::env::var_os("XDG_STATE_HOME") {
-        Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?)
-            .join(".local")
-            .join("state"),
-    };
-    Ok(state.join("sluice").join("slots"))
+    Ok(crate::instance::state_dir()?.join("slots"))
 }
 
 /// The host's slots, locked while held.
@@ -206,6 +235,8 @@ pub struct Places {
     runs: Runs,
     /// Where the host's slots of ports are held; the default when `None`.
     slots: Option<PathBuf>,
+    /// How a session's place's release command is built from its policy.
+    release: Option<ReleaseBuilder>,
 }
 
 impl Places {
@@ -214,6 +245,62 @@ impl Places {
             common: common.to_path_buf(),
             runs,
             slots: None,
+            release: None,
+        }
+    }
+
+    /// Build a session's place's release command with `builder`.
+    pub fn with_release(mut self, builder: ReleaseBuilder) -> Self {
+        self.release = Some(builder);
+        self
+    }
+
+    /// The session's place of `worktree`: its canonical path and its name.
+    fn session_name(worktree: &str) -> Result<(PathBuf, String)> {
+        let path = std::fs::canonicalize(worktree)
+            .with_context(|| format!("finding the worktree {worktree}"))?;
+        let name = format!(
+            "{SESSION}{}",
+            path.to_str()
+                .ok_or_else(|| anyhow!("{} is not UTF-8", path.display()))?
+        );
+        Ok((path, name))
+    }
+
+    /// The place a session's record names, as its runs were given it.
+    fn session_place(&self, name: &str, made: &Made) -> Result<Place> {
+        let mut env = made.ports.clone();
+        env.insert(
+            "SLUICE_PLACE".to_string(),
+            format!(
+                "sluice-{}",
+                &self.hash(&self.record(name).to_string_lossy())?[..10]
+            ),
+        );
+        Ok(Place {
+            name: name.into(),
+            path: made
+                .path
+                .clone()
+                .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
+            tmp: self.tmp(name),
+            env,
+        })
+    }
+
+    /// Let go of what a place held beyond its checkout: its scratch
+    /// directory, its slot and its record.
+    fn let_go(&self, name: &str, slot: Option<u32>) -> Result<()> {
+        let tmp = self.tmp(name);
+        if tmp.exists() {
+            std::fs::remove_dir_all(&tmp)?;
+        }
+        if let Some(n) = slot {
+            free_slot(&self.slots()?, n, &self.record(name))?;
+        }
+        match std::fs::remove_file(self.record(name)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
         }
     }
 
@@ -446,9 +533,10 @@ impl Places {
         Ok(())
     }
 
-    /// The place's `paths` moved into a new cache of its key, whole or not
-    /// at all; a saved key never changes. The last `KEPT` keys stay.
-    fn save(&self, cache: &Cache, place: &Path) -> Result<()> {
+    /// The place's `paths` moved, or copied when `keep`, into a new cache
+    /// of its key, whole or not at all; a saved key never changes. The
+    /// last `KEPT` keys stay.
+    fn save(&self, cache: &Cache, place: &Path, keep: bool) -> Result<()> {
         let dir = self.bucket(cache);
         let dest = dir.join(&cache.key);
         if dest.exists() {
@@ -468,7 +556,7 @@ impl Places {
                 std::fs::create_dir_all(parent)?;
             }
             // Across filesystems, copied.
-            if std::fs::rename(&src, &dst).is_err() {
+            if keep || std::fs::rename(&src, &dst).is_err() {
                 clone(&src, &dst)?;
             }
         }
@@ -567,7 +655,10 @@ impl Checkout for Places {
         }
         let record = self.record(name);
         let mut made = Made {
+            kind: Kind::Made,
             method,
+            branch: None,
+            ports: BTreeMap::new(),
             path: None,
             caches,
             slot: None,
@@ -604,16 +695,20 @@ impl Checkout for Places {
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
+        if crate::runs::is_session(name) {
+            self.release_session(name, None)?;
+            return Ok(());
+        }
         // 34: everything started in it ends first, its release command
         // included (ADR 0016).
         self.runs.remove(name)?;
         let made = self.read_record(name)?;
-        if let Some(made) = &made {
+        if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Made) {
             // 35: a passed candidate's place saves what it built.
             if passed {
                 if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
                     for cache in &made.caches {
-                        self.save(cache, path)?;
+                        self.save(cache, path, false)?;
                     }
                 }
             }
@@ -624,16 +719,112 @@ impl Checkout for Places {
                 }
             }
         }
-        let tmp = self.tmp(name);
-        if tmp.exists() {
-            std::fs::remove_dir_all(&tmp)?;
+        self.let_go(name, made.and_then(|m| m.slot))
+    }
+
+    fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {
+        let Ok((_, name)) = Places::session_name(worktree) else {
+            return Ok(None);
+        };
+        Ok(match self.read_record(&name)? {
+            Some(made) if made.kind == Kind::Session => Some(Adopted {
+                branch: made.branch.unwrap_or_default(),
+                name,
+            }),
+            _ => None,
+        })
+    }
+
+    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+        let Some(made) = self.read_record(name)? else {
+            // A stop part way may have left its runs: end them all the same.
+            if crate::runs::is_session(name) {
+                self.runs.remove_all_with(name, ReleaseWith::Fresh(None))?;
+            }
+            return Ok(Released::Nothing);
+        };
+        if made.kind != Kind::Session {
+            bail!("place {name} is a candidate's, not a session's");
         }
-        if let Some(n) = made.and_then(|m| m.slot) {
-            free_slot(&self.slots()?, n, &self.record(name))?;
+        // 95: the policy's release command, built now, under the executor
+        // its runs had; the last run's only when no policy is given.
+        let (with, released) = match policy {
+            None => (ReleaseWith::LastRun, Released::LastRun),
+            Some(p) => {
+                let build = self
+                    .release
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("no release command builder is bound"))?;
+                let place = self.session_place(name, &made)?;
+                let request = build(&place, &p.tests, &p.limits, &self.runs.release_dir(name))?;
+                (ReleaseWith::Fresh(request), Released::Policy)
+            }
+        };
+        self.runs.remove_all_with(name, with)?;
+        self.let_go(name, made.slot)?;
+        Ok(released)
+    }
+
+    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
+        let made = match self.read_record(name)? {
+            Some(m) if m.kind == Kind::Session => m,
+            Some(_) => bail!("place {name} is a candidate's: its caches are saved on release"),
+            None => bail!("no session's place {name}"),
+        };
+        let path = made
+            .path
+            .ok_or_else(|| anyhow!("place {name} names no worktree"))?;
+        for cache in self.caches(rev, checkout)? {
+            self.save(&cache, &path, true)?;
         }
-        match std::fs::remove_file(self.record(name)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-            _ => Ok(()),
-        }
+        Ok(())
+    }
+
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
+        let (path, name) = Places::session_name(worktree)?;
+        let record = self.record(&name);
+        let made = match self.read_record(&name)? {
+            Some(made) if made.kind == Kind::Session => made,
+            Some(_) => bail!("place {name} is a candidate's, not a session's"),
+            None => {
+                let mut made = Made {
+                    kind: Kind::Session,
+                    method: "session".into(),
+                    branch: Some(branch.into()),
+                    ports: BTreeMap::new(),
+                    path: Some(path.clone()),
+                    caches: Vec::new(),
+                    slot: None,
+                };
+                // Written before the slot is held, so a slot names a record
+                // that exists, and a stop between leaves a record release
+                // reads.
+                self.write_record(&name, &made)?;
+                if let Some(ports) = Ports::read(checkout)? {
+                    let n = hold_slot(&self.slots()?, &ports, &record)?;
+                    made.slot = Some(n);
+                    let first = ports.first(n).expect("a held slot fits");
+                    for (i, p) in ports.names.iter().enumerate() {
+                        made.ports
+                            .insert(env_name(p), (first + i as u16).to_string());
+                    }
+                    self.write_record(&name, &made)?;
+                }
+                made
+            }
+        };
+        let tmp = self.tmp(&name);
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut env = made.ports.clone();
+        env.insert(
+            "SLUICE_PLACE".to_string(),
+            format!("sluice-{}", &self.hash(&record.to_string_lossy())?[..10]),
+        );
+        Ok(Place {
+            name,
+            path,
+            tmp,
+            env,
+        })
     }
 }

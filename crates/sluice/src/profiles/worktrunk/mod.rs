@@ -171,6 +171,23 @@ pub fn removes_on_landing(worktree: &Path) -> bool {
         .unwrap_or(true)
 }
 
+/// Session-runs-1 clause 95, C.5 worktrunk: `sluice release` in the
+/// landed session's worktree, before worktrunk removes it, so a
+/// `post-remove` hook finds nothing of its runs left.
+pub fn release(worktree: &Path) -> Result<()> {
+    let status = Command::new("sluice")
+        .arg("release")
+        .arg("--worktree")
+        .arg(worktree)
+        .stdin(Stdio::null())
+        .status()
+        .context("running sluice release")?;
+    if !status.success() {
+        bail!("sluice release exited {status}");
+    }
+    Ok(())
+}
+
 /// `wt remove` of the landed session's worktree, in the foreground so it is
 /// gone when `wt submit` exits; its branch goes with it once merged. Its
 /// own hooks need approval as any `wt remove`'s do.

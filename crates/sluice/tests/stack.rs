@@ -271,3 +271,144 @@ fn two_stacks_side_by_side_and_a_time_limit_leaves_nothing() {
 fn two_stacks_side_by_side_in_the_sandbox() {
     stacks("sandbox");
 }
+
+/// A session run's check: the stack is brought up once, on the worktree's
+/// port, and found by every later run (session-runs-1 clause 94).
+const SESSION_CHECK: &str = r#"set -eu
+if [ -n "$(docker ps -q --filter "label=sluice.place=$SLUICE_PLACE")" ]; then
+  echo found >> "$SLUICE_CHECKOUT/runs.log"
+else
+  docker run -d --rm --label "sluice.fixture=$FIXTURE" --label "sluice.place=$SLUICE_PLACE" \
+    -p "127.0.0.1:$SLUICE_PORT_WEB:80" nginx:alpine >/dev/null
+  echo started >> "$SLUICE_CHECKOUT/runs.log"
+fi
+n=0
+until curl -fs -o /dev/null "http://127.0.0.1:$SLUICE_PORT_WEB/"; do
+  n=$((n + 1)); [ "$n" -lt 300 ] || { echo "nothing answers"; exit 1; }
+  sleep 0.2
+done
+"#;
+
+/// Session-runs-1 clauses 90, 94, 95: a session's worktree adopted twice
+/// keeps its ports, and the container its first run started is still up
+/// after the run and found by the second; its release runs the release
+/// command once, which removes the container, and frees the ports.
+#[test]
+fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
+    use sluice::instance::Instance;
+    use sluice::profiles::checks::Checks;
+    use sluice::profiles::places::Places;
+    use sluice::runs::Runs;
+    use sluice_seams::{Checkout, Limits, Progress, Rev, RunRequest, Setting, Settings, Tests};
+
+    let id = format!("{}-session", std::process::id());
+    let repo = Repo::new("stack-session");
+    repo.write("check.sh", &format!("export FIXTURE={id}\n{SESSION_CHECK}"));
+    repo.write("release.sh", RELEASE);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "a stack for a session"]);
+    let worktree = Scratch::new("stack-session-worktree");
+    let wt = worktree.path().join("a");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "unit/a",
+        wt.to_str().unwrap(),
+        "main",
+    ]);
+    let head = Rev::new(repo.rev("unit/a"));
+    let common = repo.dir().join(".git");
+    let program = PathBuf::from(env!("CARGO_BIN_EXE_sluice"));
+    let slots = Scratch::new("stack-session-slots");
+    let places = Places::new(&common, Runs::new(&common, program.clone()))
+        .with_slots(slots.path().to_path_buf());
+    let checks = Checks::new(
+        &common,
+        program,
+        Instance {
+            bound: 2,
+            reserved: 0,
+            processors: 2,
+        },
+    );
+    let checkout = Settings::from([
+        ("method".into(), Setting::Text("git-worktree".into())),
+        ("ports".into(), Setting::List(vec!["web".into()])),
+        ("ports_from".into(), Setting::Text("41400".into())),
+    ]);
+    let tests = Settings::from([
+        ("runner".into(), Setting::Text("command".into())),
+        ("command".into(), Setting::Text("sh check.sh".into())),
+        ("release".into(), Setting::Text("sh release.sh".into())),
+    ]);
+    let run = |n: usize| {
+        let place = places
+            .adopt(wt.to_str().unwrap(), "bolt/x", &checkout)
+            .unwrap();
+        let handle = checks
+            .start(&RunRequest {
+                place: place.clone(),
+                revision: head.clone(),
+                required: vec!["sh check.sh".into()],
+                since: None,
+                limit: Some(std::time::Duration::from_secs(180)),
+                limits: Limits {
+                    docker: true,
+                    ..Limits::default()
+                },
+                tests: tests.clone(),
+                replay: false,
+            })
+            .unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(200);
+        let report = loop {
+            match checks.progress(&handle).unwrap() {
+                Progress::Running => {
+                    assert!(std::time::Instant::now() < until, "run {n} never ended");
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Progress::Finished(r) => break r,
+                Progress::Lost => panic!("run {n} was lost"),
+            }
+        };
+        assert!(
+            report
+                .tasks
+                .iter()
+                .all(|t| t.outcome == sluice_seams::Outcome::Pass),
+            "run {n}: {report:?}\n{}",
+            std::fs::read_to_string(checks.runs().dir(&handle.0).join("out.log"))
+                .unwrap_or_default()
+        );
+        place
+    };
+
+    let first = run(1);
+    assert_eq!(first.env["SLUICE_PORT_WEB"], "41400");
+    // 94: the run ended and its container did not.
+    assert!(!leftovers(&id).0.is_empty(), "the stack went with the run");
+    let second = run(2);
+    assert_eq!(second, first, "the same place and ports on the second run");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("runs.log")).unwrap(),
+        "started\nfound\n"
+    );
+    assert!(!leftovers(&id).0.is_empty());
+
+    // 95: released, the container is gone, the ports free, the worktree
+    // standing.
+    places.release(&first.name, false).unwrap();
+    assert_eq!(leftovers(&id).0, "", "the release left a container");
+    let held: Vec<String> = std::fs::read_dir(slots.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    assert!(held.is_empty(), "slots still held: {held:?}");
+    assert!(wt.join("check.sh").exists());
+    assert!(repo
+        .git(&["worktree", "list"])
+        .contains(wt.to_str().unwrap()));
+}

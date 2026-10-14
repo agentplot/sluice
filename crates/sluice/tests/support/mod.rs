@@ -158,3 +158,46 @@ impl Repo {
         head
     }
 }
+
+/// The host over the fakes: session runs counted by the fake check seam,
+/// a reserve, and no run directories.
+pub struct FakeHost {
+    pub world: sluice_fakes::World,
+    pub reserved: usize,
+}
+
+impl sluice::exec::Host for FakeHost {
+    fn reserved(&self) -> usize {
+        self.reserved
+    }
+
+    fn worktree(&self, dir: &str) -> anyhow::Result<String> {
+        Ok(dir.to_string())
+    }
+
+    fn lock_sessions(&self) -> anyhow::Result<Box<dyn std::any::Any>> {
+        Ok(Box::new(()))
+    }
+
+    fn begin_session(
+        &self,
+        _: &dyn std::any::Any,
+        run: &sluice::sessions::SessionRun,
+    ) -> anyhow::Result<()> {
+        self.world.session_run(&run.worktree, true);
+        Ok(())
+    }
+
+    fn end_session(&self, worktree: &str) -> anyhow::Result<()> {
+        self.world.kill_session(worktree);
+        Ok(())
+    }
+
+    fn run_dir(&self, _: &sluice_seams::RunHandle) -> Option<PathBuf> {
+        None
+    }
+
+    fn end_run(&self, _: &sluice_seams::RunHandle) -> anyhow::Result<()> {
+        Ok(())
+    }
+}

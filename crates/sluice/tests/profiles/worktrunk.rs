@@ -28,12 +28,17 @@ const CHECK: &str = "sleep ${SLOW:-0}\ntest ! -e broken\n";
 struct Scratch {
     repo: Repo,
     config: PathBuf,
+    state: PathBuf,
 }
 
 impl Scratch {
     fn new(name: &str) -> Scratch {
+        Scratch::with_policy(name, POLICY)
+    }
+
+    fn with_policy(name: &str, policy: &str) -> Scratch {
         let repo = Repo::new(name);
-        repo.write(".config/sluice.toml", POLICY);
+        repo.write(".config/sluice.toml", policy);
         repo.write("check.sh", CHECK);
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "sluice's policy"]);
@@ -41,7 +46,13 @@ impl Scratch {
         let config = repo.dir().with_extension("config");
         std::fs::create_dir_all(config.join("sluice")).unwrap();
         std::fs::write(config.join("sluice/config.toml"), "[runs]\nmax = 2\n").unwrap();
-        Scratch { repo, config }
+        let state = repo.dir().with_extension("state");
+        let _ = std::fs::remove_dir_all(&state);
+        Scratch {
+            repo,
+            config,
+            state,
+        }
     }
 
     /// A session's worktree on `unit/<name>` off `bolt/x`, with one commit
@@ -78,6 +89,7 @@ impl Scratch {
         c.current_dir(dir)
             .env("PATH", path)
             .env("XDG_CONFIG_HOME", &self.config)
+            .env("XDG_STATE_HOME", &self.state)
             .env_remove("SLUICE_AGENT")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
@@ -320,4 +332,62 @@ fn ctrl_c_ends_only_the_wait() {
         s.sluice(&["step", "bolt/x"]);
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Session-runs-1 clause 95, C.5 worktrunk: a worktree that ran `sluice
+/// exec` is released before worktrunk removes it on landing, and left
+/// unreleased under `--no-remove`. The release command writes the checkout
+/// it ran for while that checkout still exists: the combination's own
+/// checkout is released as well, as every place sluice made is.
+#[test]
+fn wt_submit_releases_before_it_removes() {
+    let log = std::env::temp_dir().join(format!("sluice-wt-release-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log);
+    let policy = POLICY.replace(
+        "command = \"sh check.sh\"\n",
+        &format!(
+            "command = \"sh check.sh\"\nrelease = \"test -d \\\"$SLUICE_CHECKOUT\\\" && echo \\\"$SLUICE_CHECKOUT\\\" >> {}\"\n",
+            log.display()
+        ),
+    );
+    let s = Scratch::with_policy("wt-release", &policy);
+    let released = |dir: &Path| -> usize {
+        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| Path::new(l) == dir)
+            .count()
+    };
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let a_canon = std::fs::canonicalize(&a).unwrap();
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.wt_submit(&a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(released(&a_canon), 1, "{}", text(&out));
+    assert!(!a.exists(), "{}", text(&out));
+
+    let k = s.session("k", &[("k.txt", "k\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &k)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.wt_submit(&k, &["--no-remove"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(released(&k), 0, "released under --no-remove");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &k)
+        .arg("release")
+        .output()
+        .unwrap();
+    assert!(text(&out).starts_with("released "), "{}", text(&out));
+    assert_eq!(released(&k), 1);
+    let _ = std::fs::remove_file(&log);
 }

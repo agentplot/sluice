@@ -16,9 +16,10 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved, Network,
-    Notification, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Session,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
+    Adopted, Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved,
+    Network, Notification, Outcome, Place, Progress, ReleasePolicy, Released, Rev, RunHandle,
+    RunReport, RunRequest, Session, Settings, Snapshot, Source, State, Submitter, TaskLog,
+    TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -98,12 +99,21 @@ struct Inner {
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
+    /// Session runs on the host, by worktree, and whether each still runs.
+    sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
     host: String,
     // the place
     places: BTreeMap<String, Rev>,
     made: Vec<String>,
     released: Vec<String>,
+    /// Session places adopted and not yet released.
+    adopted: Vec<String>,
+    /// The branch each session place was adopted for.
+    adopted_for: BTreeMap<String, String>,
+    /// Each session place released, and the `[tests] release` it was
+    /// released with, or `None` for its last run's.
+    session_releases: Vec<(String, Option<String>)>,
     saved: Vec<String>,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
@@ -265,6 +275,11 @@ impl World {
     }
 
     /// Someone moves the branch by hand with a commit of their own.
+    /// The branch is deleted, as by hand.
+    pub fn delete_branch(&self, branch: &str) {
+        self.0.borrow_mut().refs.remove(branch);
+    }
+
     pub fn hand_commit(&self, branch: &str, changes: &[(&str, Option<&str>)]) -> Rev {
         let tip = self.tip(branch);
         let rev = self.work(&tip, changes);
@@ -555,6 +570,17 @@ impl World {
         self.0.borrow().made.clone()
     }
 
+    /// Each session place released, with the `[tests] release` text of the
+    /// policy it was released under, or `None` for its last run's.
+    pub fn session_releases(&self) -> Vec<(String, Option<String>)> {
+        self.0.borrow().session_releases.clone()
+    }
+
+    /// Session places adopted and not yet released.
+    pub fn adopted_places(&self) -> Vec<String> {
+        self.0.borrow().adopted.clone()
+    }
+
     pub fn released_places(&self) -> Vec<String> {
         self.0.borrow().released.clone()
     }
@@ -655,6 +681,22 @@ impl World {
 
     pub fn results_log(&self) -> String {
         String::from_utf8(self.0.borrow().results.clone()).expect("records are text")
+    }
+
+    /// A session run on `worktree`, running or ended with its record
+    /// left.
+    pub fn session_run(&self, worktree: &str, running: bool) {
+        self.0
+            .borrow_mut()
+            .sessions
+            .insert(worktree.into(), running);
+    }
+
+    /// `worktree`'s session run has ended; its record is left behind.
+    pub fn kill_session(&self, worktree: &str) {
+        if let Some(r) = self.0.borrow_mut().sessions.get_mut(worktree) {
+            *r = false;
+        }
     }
 
     pub fn hold_lock(&self, branch: &str, held: bool) {
@@ -842,6 +884,10 @@ impl Tests for FakeTests {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
 
+    fn sessions(&self) -> Result<usize> {
+        Ok(self.0 .0.borrow().sessions.values().filter(|r| **r).count())
+    }
+
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         Ok(tasks
             .iter()
@@ -850,6 +896,27 @@ impl Tests for FakeTests {
                 text: format!("{t} failed in {}\n", run.0),
             })
             .collect())
+    }
+}
+
+impl FakeCheckout {
+    /// A place's removal, with everything started in it ended.
+    fn drop_place(&self, name: &str, passed: bool) {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.adopted.retain(|a| a != name);
+        inner.adopted_for.remove(name);
+        if inner.places.remove(name).is_some() {
+            inner.released.push(name.into());
+            if passed {
+                inner.saved.push(name.into());
+            }
+            // 34: everything started in it is ended.
+            for r in inner.runs.iter_mut() {
+                if r.request.place.name == name && r.report.is_none() {
+                    r.killed = true;
+                }
+            }
+        }
     }
 }
 
@@ -873,25 +940,76 @@ impl Checkout for FakeCheckout {
         })
     }
 
-    fn release(&self, name: &str, passed: bool) -> Result<()> {
+    fn adopt(&self, worktree: &str, branch: &str, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
-        // Rule core.16: never a session's place.
+        let head = inner
+            .worktrees
+            .get(worktree)
+            .ok_or_else(|| anyhow!("no worktree {worktree}"))?
+            .head
+            .clone();
+        let name = format!("session/{worktree}");
+        // The place holds what the worktree holds, for the run's check.
+        inner.places.insert(name.clone(), head);
+        if !inner.adopted.contains(&name) {
+            inner.adopted.push(name.clone());
+            inner.adopted_for.insert(name.clone(), branch.into());
+        }
+        Ok(Place {
+            name: name.clone(),
+            path: worktree.into(),
+            tmp: format!("/fake/tmp/{name}").into(),
+            env: Default::default(),
+        })
+    }
+
+    fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {
+        let name = format!("session/{worktree}");
+        let inner = self.0 .0.borrow();
+        Ok(inner.adopted.contains(&name).then(|| Adopted {
+            branch: inner.adopted_for.get(&name).cloned().unwrap_or_default(),
+            name,
+        }))
+    }
+
+    fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released> {
+        if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
+            return Ok(Released::Nothing);
+        }
+        self.drop_place(name, false);
+        let release = policy.and_then(|p| match p.tests.get("release") {
+            Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
+            _ => None,
+        });
+        self.0
+             .0
+            .borrow_mut()
+            .session_releases
+            .push((name.into(), release));
+        Ok(if policy.is_some() {
+            Released::Policy
+        } else {
+            Released::LastRun
+        })
+    }
+
+    fn save_caches(&self, name: &str, _: &Rev, _: &Settings) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        if !inner.adopted.iter().any(|a| a == name) {
+            bail!("no session's place {name}");
+        }
+        inner.saved.push(name.into());
+        Ok(())
+    }
+
+    fn release(&self, name: &str, passed: bool) -> Result<()> {
+        // Rule core.16: the core releases only places it made, never a
+        // session's; a session's place goes only through `release_session`.
         assert!(
-            !inner.worktrees.contains_key(name),
+            !self.0 .0.borrow().worktrees.contains_key(name) && !name.starts_with("session/"),
             "sluice released a session's place {name}"
         );
-        if inner.places.remove(name).is_some() {
-            inner.released.push(name.into());
-            if passed {
-                inner.saved.push(name.into());
-            }
-            // 34: everything started in it is ended.
-            for r in inner.runs.iter_mut() {
-                if r.request.place.name == name && r.report.is_none() {
-                    r.killed = true;
-                }
-            }
-        }
+        self.drop_place(name, passed);
         Ok(())
     }
 }
@@ -1049,5 +1167,24 @@ impl Clock for FakeClock {
         let mut inner = self.0 .0.borrow_mut();
         inner.now += Span::seconds(1);
         inner.now
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The check fake counts the host's session runs while they run, and
+    /// never one that has ended.
+    #[test]
+    fn session_runs_are_counted_while_they_run() {
+        let f = Fakes::new();
+        assert_eq!(f.tests.sessions().unwrap(), 0);
+        f.world.session_run("/w/a", true);
+        f.world.session_run("/w/b", true);
+        f.world.session_run("/w/gone", false);
+        assert_eq!(f.tests.sessions().unwrap(), 2);
+        f.world.kill_session("/w/a");
+        assert_eq!(f.tests.sessions().unwrap(), 1);
     }
 }
