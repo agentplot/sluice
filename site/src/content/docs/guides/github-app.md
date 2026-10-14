@@ -1,8 +1,8 @@
 ---
-title: Give sluice its own GitHub identity
-description: A GitHub App for sluice, the only bypass of main's ruleset, so sluice's landings get through and every other push to main is refused, your agents' included.
+title: Protecting main on GitHub
+description: "Make sluice the only way onto main: a GitHub App that only sluice uses is the one exception to main's ruleset, so every other push, your agents' included, is refused."
 sidebar:
-  order: 3.5
+  order: 4
 ---
 
 With [main on GitHub](/sluice/guides/github/), sluice pushes each
@@ -32,7 +32,7 @@ Under **Repository permissions**:
 | Metadata | Read-only |
 
 sluice needs contents to land. The statuses, checks and pull requests
-are for [working through pull requests](/sluice/guides/pull-requests/).
+are for [pull requests](/sluice/guides/pull-requests/).
 Under **Where can this GitHub App be installed?** choose **Only on this
 account**, then **Create GitHub App**. Note the **App ID** at the top
 of the app's page.
@@ -82,7 +82,7 @@ pushed to origin as GitHub app 123456
 ## 5. Make the app the ruleset's only bypass
 
 In the repository's **Settings › Rules › Rulesets**, open the ruleset on
-`main` from [Keep main in step with GitHub](/sluice/guides/github/#set-up-github).
+`main` from [GitHub integration](/sluice/guides/github/#set-up-github).
 Under **Bypass list**, **Add bypass**, choose the app, and set it to
 **Always allow**. Remove every other entry, your own account and any
 role included.

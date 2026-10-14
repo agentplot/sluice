@@ -10,7 +10,7 @@ one machine. The repository runs its tests with moon, and its agents each
 work in a git worktree of their own. Everything here runs today on one
 machine; sluice lands its own `main` this way. If the agents work in
 worktrunk, read this page first and then
-[sluice with worktrunk](/sluice/guides/worktrunk/).
+[worktrunk integration](/sluice/guides/worktrunk/).
 
 ## What sluice does, in one paragraph
 
@@ -153,7 +153,7 @@ untested. Agents still run their tests while they work; they never
 merge.
 
 A team on worktrunk makes the same change, from `wt merge` to
-`wt submit`; [sluice with worktrunk](/sluice/guides/worktrunk/) has the
+`wt submit`; [worktrunk integration](/sluice/guides/worktrunk/) has the
 details.
 
 ## 4. Branch protection

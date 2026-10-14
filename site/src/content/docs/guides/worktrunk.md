@@ -1,5 +1,5 @@
 ---
-title: sluice with worktrunk
+title: worktrunk integration
 description: Moving a worktrunk repository from wt merge to wt submit, and how the two tools share a repository.
 sidebar:
   order: 2
