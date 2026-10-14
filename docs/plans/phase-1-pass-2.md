@@ -264,8 +264,10 @@ needed.
   pushed-refs profile (C.4): fetch before a round reads the branch, form
   on the remote's revision, land with a push leased on the revision
   read, the forge's rules letting only sluice's identity move the branch.
-  sluice's identity is the operator's own GitHub account for now; a
-  GitHub App, named as the ruleset's one bypass, replaces it later.
+  sluice's identity is a GitHub App, the ruleset's one bypass, whose
+  token reaches only sluice's own git calls, so agents pushing with the
+  operator's credentials are refused (OpenSpec change `github-app`,
+  built after `main-on-github` and before `pull-requests`).
   Only sluice's identity moves `main` on GitHub; a person or a merged
   pull request moving it is an outside move, which sluice takes as the
   branch moving under its queue. Only the branch is pushed: on one

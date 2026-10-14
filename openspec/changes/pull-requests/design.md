@@ -23,7 +23,7 @@ request driver's, and the core does not change.
   tests run with no network.
 
 **Non-Goals:**
-- Webhooks, a GitHub App, Actions, forks, and running checks on waiting
+- Webhooks, Actions, forks, and running checks on waiting
   pull requests (see proposal).
 
 ## Decisions
@@ -31,20 +31,19 @@ request driver's, and the core does not change.
 **A forge interface inside the profile.** `profiles/github/` holds a
 `Forge` trait (list open pull requests into a branch with head, head
 repository, draft flag and number; reviews on a head; statuses and
-check runs on a head; ready-for-review events; set a commit status;
+check runs on a head; ready-for-review events; create or update a check run;
 comment; open or update a pull request) with two implementations:
-`Gh`, which calls `gh api` (the operator's `gh` login is the identity
-until the app), and a file-backed fake for tests. Only this directory
-names GitHub or `gh` (core.1). Alternative: octocrab or a raw HTTPS
-client. Rejected for now: `gh` already holds the operator's credentials
-and its JSON output is enough.
+`App`, which calls GitHub's REST API with the installation token from
+`github-app` over the same HTTPS client, and a file-backed fake for
+tests. Only this directory names GitHub (core.1). Alternative: `gh
+api`. Rejected: it would act as the operator, not the app.
 
-**A commit status, not a check run.** GitHub accepts check runs only
-from an app; a personal login can post commit statuses. The status's
-context is `sluice`, its state pending, failure or success, its
-description (140 characters) the state, what is missing and the
-forecast, and its target URL left empty. When the app exists it may post
-a check run instead.
+**A check run named `sluice`.** The app posts one check run per head:
+status queued for waiting and queued, in progress for testing,
+completed with conclusion failure or success after; its title is the
+state, its summary what is missing, the forecast and, once tested, the
+failed checks. sluice finds its earlier check run on the head by name
+and updates it rather than adding another.
 
 **A submitter per pull request.** A pull request's entry is submitted
 through the same `ops.submit` with worktree `pull/<n>`. A driver router
@@ -98,13 +97,11 @@ names `pull_requests`, in addition to those with records.
   requests out of draft and whose head changed or whose status is not
   final; `sluice run` keeps its round cadence of seconds, well inside
   5,000 requests an hour for a few dozen pull requests.
-- [The operator's login posts statuses as the operator] → accepted
-  until the app; the guide says so.
 - [A person merges with GitHub's button] → the branch moves under the
   queue (`main-on-github`); intake sees the pull request closed and
   withdraws its entry (S24).
-- [`gh` missing or logged out] → intake fails the round's intake with a
-  message naming `gh auth login`; the round itself still lands what is
+- [The app not set up (no `[forge]`)] → intake refuses with a message
+  naming the GitHub App guide; the round itself still lands what is
   queued.
 
 ## Open Questions

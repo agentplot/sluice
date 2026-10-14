@@ -1,6 +1,6 @@
 # Tasks
 
-Starts only after `main-on-github` is on `main`. Work in a worktree off
+Starts only after `main-on-github` and `github-app` are on `main`. Work in a worktree off
 `main` inside `devenv shell`; commit by pathspec with Conventional
 Commits; land with `wt submit main`. Read first: `proposal.md`,
 `design.md`, the three specs; `docs/architecture/core.md` (core.1,
@@ -16,7 +16,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 ## 2. The forge interface
 
 - [ ] 2.1 Add `crates/sluice/src/profiles/github/` with the `Forge` trait (design: Decisions) and its file-backed fake. Verify unit tests of the fake: pull requests listed, reviews on a head, statuses and check runs by name, ready-for-review events, posting a status and a comment.
-- [ ] 2.2 Add `Gh`, the `Forge` over `gh api`: commit statuses with context `sluice`, reviews filtered to the head, check runs and statuses by name, the timeline's ready-for-review events, `gh pr create` and edit. Verify with an opt-in live test (`SLUICE_GITHUB_TEST_REPO`, skipped when unset) against a scratch repository, run once by hand and recorded in the ADR; verify `rg -n 'github|\bgh\b' crates --glob '!**/profiles/**'` finds nothing (core.1).
+- [ ] 2.2 Add `App`, the `Forge` over GitHub's REST API with the app's installation token: the `sluice` check run created or updated by name, reviews filtered to the head, other systems' check runs and statuses by name, the timeline's ready-for-review events, opening and editing pull requests. Verify with an opt-in live test (`SLUICE_GITHUB_TEST_REPO`, skipped when unset) against a scratch repository, run once by hand and recorded in the ADR; verify `rg -n 'github' crates --glob '!**/profiles/**'` finds nothing (core.1).
 
 ## 3. Intake
 
@@ -25,7 +25,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 4. Status and comments
 
-- [ ] 4.1 Post the `sluice` status from intake and from the driver's `notify`, with what is missing and the forecast while waiting, never reposting the same status; comment once on failed and conflict. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-status/spec.md`, and that a landing leaves the pull request's head as the landing commit's second parent on the bare remote.
+- [ ] 4.1 Post the `sluice` check run from intake and from the driver's `notify`, with what is missing and the forecast while waiting, never updating it to what it already reads; comment once on failed and conflict. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-status/spec.md`, and that a landing leaves the pull request's head as the landing commit's second parent on the bare remote.
 
 ## 5. Submit
 
@@ -34,7 +34,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 6. Documentation and the decision
 
-- [ ] 6.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): pull requests are a driver's, waiting is read from GitHub each round and never stored, a commit status as the state, `gh` as the client; options: pull requests in the core's records, check runs through an app, webhooks. Verify `site/scripts/adrs.mjs` renders it.
+- [ ] 6.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): pull requests are a driver's, waiting is read from GitHub each round and never stored, a check run as the app as the state; options: pull requests in the core's records, commit statuses as the operator, webhooks. Verify `site/scripts/adrs.mjs` renders it.
 - [ ] 6.2 Update `site/src/content/docs/guides/pull-requests.md` to what was built: drop the banner and badge, make console output and posted states match. Verify `moon run site:prose` and `cd site && bun run build` pass.
 - [ ] 6.3 Mark piece 24 done in `docs/plans/phase-1-pass-2.md`. Verify the row reads done.
 
