@@ -100,7 +100,7 @@ ok      the app may write acme/widgets's contents
 failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 ```
 
-[Give sluice its own GitHub identity](/sluice/guides/github-app/) sets
+[Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
 
 ## Exit codes

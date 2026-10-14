@@ -1,6 +1,6 @@
 ---
-title: Keep main in step with GitHub
-description: When the target branch lives on GitHub, sluice fetches it every round and lands by pushing it. Nothing else of sluice's goes to GitHub.
+title: GitHub integration
+description: "Keep main on GitHub, with sluice landing on it: every round fetches it, and every landing is a push that only goes through if main hasn't moved."
 sidebar:
   order: 3
 ---
@@ -144,5 +144,5 @@ Pull `main` as usual: `git pull` brings in each landing, one merge
 commit per submission. To land work, submit it to sluice; the ruleset
 refuses a direct push to `main` from anyone but the bypass.
 
-Next: [work through pull requests](/sluice/guides/pull-requests/), so
+Next: [pull requests](/sluice/guides/pull-requests/), so
 each submission has a page on GitHub and people can review it first.
