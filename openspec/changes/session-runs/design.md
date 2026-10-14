@@ -164,7 +164,7 @@ trusts only confined runs ignores it (29).
 
 `Command::Release{--worktree "."}` finds the session record by the
 worktree's canonical path, calls `Checkout::release(name, false)` and
-`State::end_session`, and exits 0 with "nothing to release" when no
+`Sessions::end(worktree)`, and exits 0 with "nothing to release" when no
 record exists. `Command::Exec{--release}` runs release after the run
 ends. `wt-submit` runs `sluice release --worktree <wt>` before `wt
 remove`, and not under `--no-remove`, `--no-wait` or `--check`.
@@ -208,3 +208,18 @@ rollback needed beyond removing them.
 
 - Whether `sluice exec` should accept `--cached` to let moon replay and
   skip recording. Deferrable: adds a flag, changes no spec.
+
+## Notes from the build
+
+- Task 2.2, D2: the release command of a session's place is run from
+  its last run's `request.json`, not from a request built at release
+  time from the branch's policy. `Checkout::release(name, passed)`
+  carries no policy and the place profile reads none (core.2), while the
+  last run's request already holds the release command as that run's
+  policy stated it, with the executor's wrapping, the toolchain, the
+  worktree and the run's environment, ports included. A place that never
+  ran has started nothing, so it has nothing to release. Where the
+  branch's policy changed `[tests] release` after the last run, the old
+  command runs. Building it fresh would need the release path to pass
+  the policy's `[tests]` and limits through the seam, which group 4's
+  `sluice release` can do if wanted.

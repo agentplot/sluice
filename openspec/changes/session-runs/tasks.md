@@ -18,10 +18,10 @@ pathspec after each task group, Conventional Commits, scope the crate or
 
 ## 2. The session place
 
-- [ ] 2.1 Add `kind: Made | Session` and `branch` to the place record in `profiles/places.rs` (serde default `Made`), and `Places::adopt(worktree, branch, settings)` that writes the record, holds a slot, makes tmp and returns a `Place` with `SLUICE_PLACE` and `SLUICE_PORT_*`; add `adopt` to the `Checkout` trait and to `FakeCheckout`; verify with `crates/sluice/tests/profiles/places.rs`: same ports on a second adopt, two worktrees never share a port, no `git worktree` is created.
-- [ ] 2.2 Make `Checkout::release` on a session record end its runs, run the policy's release command once from a request built from the record's branch policy, remove tmp, free the slot and remove the record, leaving the worktree; make it exit clean when no record exists; verify with places.rs tests: worktree still listed after release, release twice is a no-op, slot free after release.
-- [ ] 2.3 Teach `runs::Runs` per-run directories `.runs/<session flat>/<n>` that never trigger the release command on reuse, and a `remove_all` for release; verify with `crates/sluice/tests/runs.rs`: two runs under one session name, release command runs once at remove_all and not between.
-- [ ] 2.4 Extend `crates/sluice/tests/stack.rs`: a run that starts a container leaves it running after the run; `release` removes it and frees the ports; verify under `moon run ':#check-tools'` (docker available).
+- [x] 2.1 Add `kind: Made | Session` and `branch` to the place record in `profiles/places.rs` (serde default `Made`), and `Places::adopt(worktree, branch, settings)` that writes the record, holds a slot, makes tmp and returns a `Place` with `SLUICE_PLACE` and `SLUICE_PORT_*`; add `adopt` to the `Checkout` trait and to `FakeCheckout`; verify with `crates/sluice/tests/profiles/places.rs`: same ports on a second adopt, two worktrees never share a port, no `git worktree` is created.
+- [x] 2.2 Make `Checkout::release` on a session record end its runs, run the policy's release command once from a request built from the record's branch policy, remove tmp, free the slot and remove the record, leaving the worktree; make it exit clean when no record exists; verify with places.rs tests: worktree still listed after release, release twice is a no-op, slot free after release.
+- [x] 2.3 Teach `runs::Runs` per-run directories `.runs/<session flat>/<n>` that never trigger the release command on reuse, and a `remove_all` for release; verify with `crates/sluice/tests/runs.rs`: two runs under one session name, release command runs once at remove_all and not between.
+- [x] 2.4 Extend `crates/sluice/tests/stack.rs`: a run that starts a container leaves it running after the run; `release` removes it and frees the ports; verify under `moon run ':#check-tools'` (docker available).
 
 ## 3. `sluice exec`
 
