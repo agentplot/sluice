@@ -66,7 +66,7 @@ goes in the toolchain or in a task the test depends on.
 | key | values | meaning |
 |---|---|---|
 | `method` | `"git-worktree"` | The one method. Anything else is refused with the reason ([ADR 0013](/sluice/decisions/0013/)). |
-| `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. |
+| `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. A preview gets a name for each as well, `SLUICE_NAME_WEB`. |
 | `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
 
 ### `[[checkout.cache]]`
@@ -99,6 +99,36 @@ never decides a result.
 Every result records which executor ran it and what it held. An executor
 that cannot enforce a limit the policy states refuses the run
 ([ADR 0012](/sluice/decisions/0012/)).
+
+## `[preview]`: a running copy of a landed revision
+
+What brings a [preview](/sluice/guides/previews/) up. Read from the
+revision being previewed, since it describes that revision's stack;
+what its command may use and reach, `[executor]` and the time limit,
+comes from the branch's current revision. With no `[preview]` table,
+`sluice preview` refuses the revision.
+
+| key | values | meaning |
+|---|---|---|
+| `command` | a command | Brings the stack up in the preview's checkout, hands what must stay running to the tools that keep it (a container engine, a process manager), and exits; exit 0 is `up`. A list, the command first, or a string run by `sh -c`. It runs once, under the executor, with `[tests] toolchain`, and ends with its process group. |
+| `addresses` | e.g. `{ web = "https://{name.web}.localhost" }` | What a person opens, by label. `{name.<port>}` is the preview's name for a port of `[checkout] ports`, `{port.<port>}` its number. A port not listed is refused. sluice fills them in and never contacts them. |
+| `timeout` | e.g. `"10m"` | How long the command may run; the branch's `timeout` when unset. |
+
+```toml
+[checkout]
+method = "git-worktree"
+ports = ["web", "api"]
+
+[preview]
+command = "moon run app:preview"
+addresses = { web = "https://{name.web}.localhost", api = "https://{name.api}.localhost/docs" }
+```
+
+`[tests] release` is a preview's release command too: it runs when the
+preview is released and removes what the command handed off, routes
+included. Each name is one DNS label of at most 63 characters,
+`<port>-<revision>--<branch>--<repository>`, cut with a hash when it is
+longer, unique among the repository's previews.
 
 ## `[landing]`
 
@@ -250,6 +280,9 @@ says whether it is set up right.
 | `SLUICE_TMP` | sluice, for a run | A scratch directory of the run's own, for sockets, pid files and data directories, so parallel checkouts never collide. An agent's worktree keeps one across its runs. |
 | `SLUICE_PLACE` | sluice, for a run | A short name of the checkout's own, for labelling what the tests start, so the release command finds it. |
 | `SLUICE_PORT_<NAME>` | sluice, for a run | The port given for each name in `[checkout] ports`, upper-cased, `-` written `_`. |
+| `SLUICE_NAME_<NAME>` | sluice, for a preview | The preview's name for each port: one DNS label, unique among the repository's previews, for a proxy to route to the port. |
+| `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
+| `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

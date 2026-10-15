@@ -23,7 +23,7 @@ pathspec after each task group, Conventional Commits, scope the crate or
 - [x] 2.3 Read state from the run directory (no run: `waiting`; supervised: `starting`; exit 0: `up`; else, time limit included: `failed`) and write no result line for any of it (103); verify over fakes that a failed command writes nothing to `results.jsonl` and an entry queued on the branch lands as it would without the preview.
 - [x] 2.4 Add `Command::Preview{branch, revision, --wait, --json}` in `crates/sluice/src/lib.rs` with a `preview.rs` beside `exec.rs`: print name, state, ports and filled addresses, or one JSON document on stdout; `--wait` exits 0 on `up` and 1 on `failed`; verify in `crates/sluice/tests/cli.rs` over fakes, including addresses printed before the command ends (S30).
 - [x] 2.5 Add a real-tools test in `crates/sluice/tests/stack.rs`: a preview command that starts a container and a server on `SLUICE_PORT_WEB`, writes `SLUICE_NAME_WEB` to a file and exits; the stack is still up afterwards and the name and port reached the command; verify under `moon run ':#check-tools'`.
-- [ ] 2.6 Document `sluice preview` in `site/src/content/docs/reference/commands.md` (table row, console example with `--json`, exit codes) and `[preview]` with `SLUICE_NAME_*`, `SLUICE_BRANCH`, `SLUICE_REVISION` in `reference/configuration.md`; verify `site:prose` clean.
+- [x] 2.6 Document `sluice preview` in `site/src/content/docs/reference/commands.md` (table row, console example with `--json`, exit codes) and `[preview]` with `SLUICE_NAME_*`, `SLUICE_BRANCH`, `SLUICE_REVISION` in `reference/configuration.md`; verify `site:prose` clean.
 
 ## 3. Listing and releasing
 
@@ -31,7 +31,7 @@ pathspec after each task group, Conventional Commits, scope the crate or
 - [x] 3.2 Let `Command::Release` take an optional preview name: release it (saved release request under the executor, process group ended, worktree removed, block freed, record removed), "nothing to release" with exit 0 when no record exists, `--worktree` unchanged without a name; verify in cli.rs over fakes and in places.rs with real git that the saved release command runs even after the branch is deleted.
 - [x] 3.3 Add `Sluice::release_unusable_previews` beside `release_abandoned`, run at the start of every round, `exec`, `preview` and `previews`: a failed or timed-out preview, or one whose checkout is gone, is released under the branch's lock taken without waiting, logged `released` in the branch's log, and kept as a `failed` record with the output tail and nothing held; verify over fakes that a round never releases an `up` preview, and with real git that `git worktree remove` of a preview's checkout frees its block at the next `sluice previews`.
 - [x] 3.4 Add conformance scenarios S30 to S35 to `crates/sluice-conformance/src/shared.rs` over fakes, and an e2e step in `e2e/e2e.sh`: land a submission, `sluice preview main <landed rev> --wait`, `sluice previews --json` shows it up, `sluice release <name>` frees its ports; verify `moon run ':#check-e2e'`.
-- [ ] 3.5 Document `sluice previews` and `sluice release <preview>` in `reference/commands.md`, and the `.previews/` records and their run directories in `reference/state.md`; verify `site:prose` clean.
+- [x] 3.5 Document `sluice previews` and `sluice release <preview>` in `reference/commands.md`, and the `.previews/` records and their run directories in `reference/state.md`; verify `site:prose` clean.
 
 ## 4. The previews guide, home page and README
 
