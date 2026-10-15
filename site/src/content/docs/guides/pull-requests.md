@@ -2,7 +2,7 @@
 title: Pull requests
 description: Each submission gets a pull request on GitHub. It waits for review, QA and other checks, then joins sluice's queue and lands when its combination passes.
 sidebar:
-  order: 5
+  order: 6
   badge: { text: 'design', variant: 'caution' }
 ---
 

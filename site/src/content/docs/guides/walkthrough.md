@@ -136,6 +136,11 @@ replays it when the policy declares the cache, as one combination
 replays another's. See
 [commands](/sluice/reference/commands/#sluice-exec).
 
+The same stack serves a person who wants to try what a branch landed:
+`sluice preview <branch> <revision>` brings it up in a checkout of its
+own, at addresses the policy's `[preview]` table names, and keeps it up
+until it is released. See [previews](/sluice/guides/previews/).
+
 ## 3. What changes for the agents
 
 Agents stop merging. Whatever step merged a finished branch into its

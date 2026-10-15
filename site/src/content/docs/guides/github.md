@@ -2,7 +2,7 @@
 title: GitHub integration
 description: "Keep main on GitHub, with sluice landing on it: every round fetches it, and every landing is a push that only goes through if main hasn't moved."
 sidebar:
-  order: 3
+  order: 4
 ---
 
 [Setting up sluice](/sluice/guides/walkthrough/) lands on a branch in

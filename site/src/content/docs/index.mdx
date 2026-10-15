@@ -47,11 +47,18 @@ combination passes.
     A git hook refuses every update to a protected branch except sluice's,
     and sluice moves it only from the revision it tested on.
   </Card>
+  <Card title="Try what landed" icon="laptop">
+    `sluice preview` brings a revision the branch landed up on your
+    repository's own stack, at addresses a person opens, and keeps it
+    until it is released. One per landing, side by side, nothing kept
+    checked out by hand. [Previews](/sluice/guides/previews/).
+  </Card>
   <Card title="No daemon" icon="setting">
-    sluice starts no services. A waiting `sluice submit` drives the queue
-    while it waits; `sluice run`, or `sluice step` from cron, does the same
-    for a host. Every decision is written to plain files before it is acted
-    on, so a crash at any point resumes from the files.
+    sluice keeps nothing running itself. A waiting `sluice submit` drives
+    the queue while it waits; `sluice run`, or `sluice step` from cron,
+    does the same for a host. What a preview leaves up, your own tools
+    keep until it is released. Every decision is written to plain files
+    before it is acted on, so a crash at any point resumes from the files.
   </Card>
 </CardGrid>
 

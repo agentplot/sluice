@@ -15,6 +15,8 @@ way, gated on every test tier in a sandbox.
 | Sandboxed checks | ✓ Seatbelt | planned: bubblewrap, Landlock |
 | moon as the task runner, or one command | ✓ | ✓ |
 | A build cache a checkout starts from | ✓ | ✓ |
+| An agent's own test runs, under the host's bound | ✓ | ✓ |
+| Previews of what a branch landed, held until released | ✓ | ✓ |
 | Telemetry over OTLP, opt-in | ✓ | ✓ |
 
 ## Designed, not built

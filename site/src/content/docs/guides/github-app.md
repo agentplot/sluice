@@ -2,7 +2,7 @@
 title: Protecting main on GitHub
 description: "Make sluice the only way onto main: a GitHub App that only sluice uses is the one exception to main's ruleset, so every other push, your agents' included, is refused."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 With [main on GitHub](/sluice/guides/github/), sluice pushes each

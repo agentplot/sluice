@@ -49,10 +49,21 @@ combination passes.
   a branch can accept results moon already has.
 - **Confined checks.** A run can be held in a sandbox: it writes only its
   own worktree and reaches only the network its branch allows.
-- **No daemon.** sluice starts no services. A waiting `sluice submit`
-  drives the queue while it waits; `sluice run`, or `sluice step` from
-  cron, does the same for a host. Every decision is written to plain
-  files before it is acted on, so a crash at any point resumes cleanly.
+- **Agents' own test runs, under the same bound.** `sluice exec` runs an
+  agent's tests in its worktree with ports of its own and the branch's
+  limits, sharing the host with the queue's runs; a clean run is recorded
+  for the submission that follows.
+- **Try what landed.** `sluice preview` brings a revision a branch landed
+  up on the repository's own stack, at addresses a person opens, and
+  keeps it until it is released: one per landing, with nothing kept
+  checked out by hand. It is a cheap environment on the tests' own fakes,
+  not a deployment ([previews](https://agentplot.github.io/sluice/guides/previews/)).
+- **No daemon.** sluice keeps nothing running itself. A waiting `sluice
+  submit` drives the queue while it waits; `sluice run`, or `sluice
+  step` from cron, does the same for a host. What a preview leaves up,
+  the repository's own tools keep until its release. Every decision is
+  written to plain files before it is acted on, so a crash at any point
+  resumes cleanly.
 
 ## Install
 
@@ -157,6 +168,11 @@ branches, is walked through in [docs/examples](docs/examples/README.md).
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
 | `sluice withdraw <id>` | Take a submission out of the queue. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
+| `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound; `-- <command>` runs a command instead. |
+| `sluice release` | Release this worktree: its release command, what its runs left running, its ports. |
+| `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
+| `sluice previews` | Every preview on the host, with its addresses and state. |
+| `sluice release <preview>` | Release a preview, by its name or its revision. |
 
 An agent names itself with `SLUICE_AGENT`. How many runs a host tests at
 once is the host's own setting, in `~/.config/sluice/config.toml`:
