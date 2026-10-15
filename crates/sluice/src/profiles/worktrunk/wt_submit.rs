@@ -1,13 +1,13 @@
 //! `wt-submit`: `wt submit <branch> [args]` is `sluice submit <branch>
-//! [args]`, with the same output and exit; once a waiting submit lands,
-//! the session's worktree is released with `sluice release` and then removed
-//! as `wt merge` removes it (C.4; session-runs-1 clause 95), unless
-//! `--no-remove` is given or worktrunk's `[merge] remove` is false.
+//! [args]`, with the same output and exit; once a waiting submit exits as
+//! landed and sluice's record says its head landed, the session's worktree
+//! is released with `sluice release` and then removed as `wt merge`
+//! removes it (C.4; session-runs-1 clause 95), unless `--no-remove` is
+//! given or worktrunk's `[merge] remove` is false.
 
-use std::path::Path;
 use std::process::Command;
 
-use sluice::profiles::worktrunk::{release, remove, removes_on_landing, Submit};
+use sluice::profiles::worktrunk::{landed, release, remove, removes_on_landing, Submit};
 use sluice::LANDED;
 
 fn main() {
@@ -20,8 +20,13 @@ fn main() {
         }
     };
     if code == LANDED {
-        if let Some(w) = submit.remove.as_deref().map(Path::new) {
-            if removes_on_landing(w) {
+        if let Some(waiting) = &submit.remove {
+            let w = waiting.worktree.as_path();
+            if !landed(&waiting.branch, w) {
+                eprintln!(
+                    "wt submit: sluice records no landing of this worktree's head, so it was kept"
+                );
+            } else if removes_on_landing(w) {
                 // A driver that removes a session's place releases it first.
                 if let Err(e) = release(w) {
                     eprintln!(

@@ -169,6 +169,39 @@ fn wt_submit_lands_or_fails_by_its_exit() {
     assert!(!s.repo.git(&["worktree", "list"]).contains("sluice/.places"));
 }
 
+/// C.4: a worktree goes only once sluice records its head landed. Asking
+/// for help, or arguments sluice refuses, exit as sluice does and keep
+/// it, though `--help` exits 0.
+#[test]
+fn only_a_landing_removes_the_worktree() {
+    let s = Scratch::new("wt-help");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    for asks in [&["--help"][..], &["-h"]] {
+        let out = s
+            .command("wt", &a)
+            .arg("submit")
+            .args(asks)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{asks:?}: {}", text(&out));
+        assert!(a.join("a.txt").exists(), "{asks:?}: {}", text(&out));
+    }
+    let out = s.wt_submit(&a, &["--help"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(text(&out).contains("Usage"), "{}", text(&out));
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    let out = s.wt_submit(&a, &["--version"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    let out = s.wt_submit(&a, &["--no-such-flag"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    assert_eq!(
+        s.repo.git(&["log", "-1", "--format=%s", "bolt/x"]),
+        "sluice's policy"
+    );
+}
+
 /// 12, S2: a head whose content conflicts with what landed exits 2.
 #[test]
 fn wt_submit_conflicts_with_exit_2() {
