@@ -570,6 +570,11 @@ fn cached() -> String {
     )
 }
 
+/// The bolt policy with ports and a preview whose command does nothing.
+fn preview() -> String {
+    sluice_conformance::previewed(&bolt(), "true")
+}
+
 fn narrow() -> String {
     bolt().replace("[\"#gate\"]", "[\"a:test\"]")
 }
@@ -598,5 +603,8 @@ scenarios! {
     s26_a_clean_session_run_is_replayed_by_its_submission: cached();
     s28_a_dirty_session_run_records_nothing: bolt();
     s27_a_sessions_place_stays_until_it_is_released: bolt();
+    s30_a_landed_revision_is_previewed_at_its_addresses: preview();
+    s31_the_next_landings_preview_replaces_the_last: preview();
+    s32_asking_again_gives_back_the_same_preview: preview();
     a_removed_worktrees_place_is_released_by_the_next_round: bolt();
 }

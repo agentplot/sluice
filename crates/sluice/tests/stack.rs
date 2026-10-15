@@ -419,3 +419,111 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
         .git(&["worktree", "list"])
         .contains(wt.to_str().unwrap()));
 }
+
+/// What a preview's command brings up: a container on the preview's port,
+/// handed off to the engine; then it says what it was given and exits.
+const PREVIEW: &str = r#"set -eu
+docker run -d --rm --label "sluice.fixture=$FIXTURE" --label "sluice.place=$SLUICE_PLACE" \
+  -p "127.0.0.1:$SLUICE_PORT_WEB:80" nginx:alpine >/dev/null
+n=0
+until curl -fs -o /dev/null "http://127.0.0.1:$SLUICE_PORT_WEB/"; do
+  n=$((n + 1)); [ "$n" -lt 300 ] || { echo "nothing answers on $SLUICE_PORT_WEB"; exit 1; }
+  sleep 0.2
+done
+echo "$SLUICE_NAME_WEB $SLUICE_PORT_WEB $SLUICE_BRANCH $SLUICE_REVISION" > given
+"#;
+
+/// Previews-1 clauses 98, 99, 101, 102: a preview's command starts a
+/// container on its port and exits; the container is still up after, its
+/// name and port reached the command, the host counts nothing once the
+/// command has ended, and its release removes the container and frees the
+/// port.
+#[test]
+fn a_previews_stack_stays_up_until_it_is_released() {
+    let id = format!("{}-preview", std::process::id());
+    let repo = Repo::new("stack-preview");
+    repo.write(
+        ".config/sluice.toml",
+        "[tests]\nrunner = \"command\"\ncommand = \"true\"\nrelease = \"sh release.sh\"\n\n\
+         [checkout]\nmethod = \"git-worktree\"\nports = [\"web\"]\nports_from = \"41900\"\n\n\
+         [executor]\ndocker = true\n\n\
+         [branches.\"bolt/*\"]\ntimeout = \"3m\"\n\n\
+         [preview]\ncommand = \"sh preview.sh\"\n\
+         addresses = { web = \"https://{name.web}.localhost\" }\n",
+    );
+    repo.write("preview.sh", &format!("export FIXTURE={id}\n{PREVIEW}"));
+    repo.write("release.sh", RELEASE);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "a preview"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let rev = repo.rev("bolt/x");
+    let setup = Setup {
+        repo,
+        sessions: Scratch::new("stack-preview-sessions"),
+        config: Scratch::new("stack-preview-config"),
+        state: Scratch::new("stack-preview-state"),
+    };
+    let sluice = |args: &[&str]| setup.command(setup.repo.dir()).args(args).output().unwrap();
+
+    let out = sluice(&["preview", "bolt/x", &rev[..10], "--wait", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["state"], "up", "{doc}");
+    let name = doc["names"]["SLUICE_NAME_WEB"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let port = doc["ports"]["SLUICE_PORT_WEB"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(doc["addresses"]["web"], format!("https://{name}.localhost"));
+    let checkout = PathBuf::from(doc["checkout"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("given")).unwrap(),
+        format!("{name} {port} bolt/x {rev}\n")
+    );
+    // 98: handed off, the container outlived the command.
+    assert!(
+        !leftovers(&id).0.is_empty(),
+        "the stack went with the command"
+    );
+    let answer = Command::new("curl")
+        .args([
+            "-fs",
+            "-o",
+            "/dev/null",
+            &format!("http://127.0.0.1:{port}/"),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        answer.success(),
+        "nothing answers on {port} after the command"
+    );
+    // 102: the host counts nothing once the command has ended.
+    let counted = std::fs::read_dir(setup.state.path().join("sluice/sessions"))
+        .map(|d| {
+            d.filter(|e| {
+                !e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with('.')
+            })
+            .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(counted, 0, "a held preview still counts");
+
+    let out = sluice(&["release", doc["name"].as_str().unwrap()]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(leftovers(&id).0, "", "the release left a container");
+    assert!(!checkout.exists());
+    let held: Vec<String> = std::fs::read_dir(setup.state.path().join("sluice/ports"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    assert!(held.is_empty(), "blocks of ports still held: {held:?}");
+}

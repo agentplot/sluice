@@ -1,24 +1,61 @@
 //! Previews: previews-1 clauses 98 to 103, over the fakes.
 
-use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, previewed, shared, Harness, Rig, BRANCH};
 use sluice_core::preview::{PreviewRefusal, PreviewState};
 use sluice_core::records::State;
 use sluice_core::Sluice;
 use sluice_seams::Setting;
 
-/// The bolt's gate, with ports and a preview table.
-fn previewed(command: &str) -> String {
-    policy(false, "fail", 4).replace(
-        "method = \"fake\"\n",
-        "method = \"fake\"\nports = [\"web\", \"api\"]\n",
-    ) + &format!(
-        "\n[preview]\ncommand = \"{command}\"\n\
-         addresses = {{ web = \"https://{{name.web}}.localhost\", api = \"http://localhost:{{port.api}}/docs\" }}\n"
-    )
+fn harness() -> Harness {
+    Harness::new(&previewed(&policy(false, "fail", 4), "make preview"))
 }
 
-fn harness() -> Harness {
-    Harness::new(&previewed("make preview"))
+/// satisfies: previews-1 98, 99, 103, S30, S35
+#[test]
+fn s30_a_landed_revision_is_previewed_at_its_addresses() {
+    shared::s30_a_landed_revision_is_previewed_at_its_addresses(&harness());
+}
+
+/// satisfies: previews-1 99, 101, S31
+#[test]
+fn s31_the_next_landings_preview_replaces_the_last() {
+    shared::s31_the_next_landings_preview_replaces_the_last(&harness());
+}
+
+/// satisfies: previews-1 100, 101, S32
+#[test]
+fn s32_asking_again_gives_back_the_same_preview() {
+    shared::s32_asking_again_gives_back_the_same_preview(&harness());
+}
+
+/// satisfies: previews-1 99, S34: two branches' previews, combinations and
+/// a session run under test on one host share no port and no name.
+#[test]
+fn s34_previews_share_no_port_or_name() {
+    let h = harness();
+    let s = h.sluice();
+    let r1 = h.tip();
+    let plan = s.preview_plan(BRANCH, &r1).unwrap().unwrap();
+    s.make_preview(&plan).unwrap();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/a");
+    h.submit("unit/b");
+    h.step();
+    h.w().session_run("unit/c", true);
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    h.settle();
+    let plan = s.preview_plan(BRANCH, &h.tip()).unwrap().unwrap();
+    s.make_preview(&plan).unwrap();
+    let previews = h.w().live_previews();
+    assert_eq!(previews.len(), 2);
+    let ports: Vec<&String> = previews.iter().flat_map(|p| p.ports.values()).collect();
+    let names: Vec<&String> = previews.iter().flat_map(|p| p.names.values()).collect();
+    let unique = |xs: &Vec<&String>| xs.iter().collect::<std::collections::BTreeSet<_>>().len();
+    assert_eq!(unique(&ports), ports.len());
+    assert_eq!(unique(&names), names.len());
 }
 
 /// satisfies: previews-1 98, S35
@@ -71,7 +108,10 @@ fn the_command_is_the_previewed_revisions_and_the_limits_the_branchs() {
         BRANCH,
         &[(
             ".config/sluice.toml",
-            Some(&previewed("make other").replace("timeout = \"20m\"", "timeout = \"5m\"")),
+            Some(
+                &previewed(&policy(false, "fail", 4), "make other")
+                    .replace("timeout = \"20m\"", "timeout = \"5m\""),
+            ),
         )],
     );
     let s = h.sluice();

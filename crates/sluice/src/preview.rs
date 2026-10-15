@@ -61,6 +61,7 @@ fn preview_json(v: &PreviewView) -> serde_json::Value {
         "revision": p.revision,
         "state": v.state.word(),
         "made": p.made,
+        "checkout": p.path,
         "addresses": p.addresses,
         "names": p.names,
         "ports": p.ports,
