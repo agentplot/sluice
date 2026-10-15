@@ -34,3 +34,10 @@ batch = true
 trust = ["confined", "sandbox"]
 # main lives on GitHub: fetched every round, landed by a leased push.
 remote = "origin"
+
+# main takes its work as pull requests on GitHub (C.7): a submit pushes the
+# agent's branch and opens its pull request, which sluice submits once it
+# meets these, and tests and lands as any other. sluice's gate is the one
+# above, so a pull request waits on nothing more.
+[branches.main.pull_requests]
+reviews = 0

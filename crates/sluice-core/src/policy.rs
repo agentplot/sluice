@@ -538,7 +538,8 @@ batch = true
     /// sluice's own policy reads, and gates as section 9 says: bolt
     /// branches on the fast tier from any run or the cache, `main` on
     /// every tier from sandboxed or confined runs only, deepest first,
-    /// landed on `origin`.
+    /// landed on `origin`, taking its work as pull requests that wait on
+    /// nothing beyond the gate.
     #[test]
     fn sluices_own_policy_reads() {
         let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
@@ -553,6 +554,8 @@ batch = true
         assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
         assert_eq!(main.remote.as_deref(), Some("origin"));
         assert_eq!(bolt.remote, None);
+        assert_eq!(main.pull_requests, Some(PullRequests::default()));
+        assert_eq!(bolt.pull_requests, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
     }
 
