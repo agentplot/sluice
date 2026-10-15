@@ -950,6 +950,10 @@ fn submit_pull(
         intake(pulls, seams, clock, branch);
         match pulls.follow(seams, clock, branch, number)? {
             Followed::Done(sub, names) => {
+                if status && json {
+                    writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+                    return Ok(0);
+                }
                 if status {
                     write_status(&s.status(branch)?, None, std::slice::from_ref(&sub), out)?;
                     return Ok(0);

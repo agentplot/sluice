@@ -8,10 +8,11 @@
 //! `wt merge` does (C.4): the driver's, never the core's (rule core.16).
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context as _, Result};
+use clap::Parser as _;
 use sluice_seams::{Driver, Notification, Rev, Session, Submitter};
 
 /// The worktrunk driver.
@@ -109,48 +110,82 @@ pub fn forward(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
 }
 
 /// What `wt submit` does once sluice answers: the arguments for sluice,
-/// and the worktree to remove if the submission lands, if any.
+/// and the waiting submit whose worktree goes if it lands, if any.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Submit {
     pub sluice: Vec<OsString>,
-    pub remove: Option<OsString>,
+    pub remove: Option<Waiting>,
+}
+
+/// A waiting submit: the branch it waits on and the worktree it is from.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Waiting {
+    pub branch: String,
+    pub worktree: PathBuf,
 }
 
 impl Submit {
-    /// `--no-remove` is `wt submit`'s own; a submit that does not wait
-    /// for its outcome (`--no-wait`, `--check`, `--status`) removes
-    /// nothing.
+    /// `--no-remove` is `wt submit`'s own; the rest is read as sluice
+    /// reads it, so that only a waiting submit can remove anything: not
+    /// one that does not wait for its outcome (`--no-wait`, `--check`,
+    /// `--status`), and not `--help`, `--version` or arguments sluice
+    /// refuses, which exit as they do with nothing submitted.
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Submit {
-        let mut rest = Vec::new();
         let mut keep = false;
-        let mut worktree = OsString::from(".");
-        let mut args = args.into_iter().peekable();
-        while let Some(a) = args.next() {
-            match a.to_str() {
-                Some("--no-remove") => keep = true,
-                Some("--no-wait" | "--check" | "--status") => {
-                    keep = true;
-                    rest.push(a);
-                }
-                Some("--worktree") => {
-                    rest.push(a);
-                    if let Some(w) = args.next() {
-                        worktree = w.clone();
-                        rest.push(w);
-                    }
-                }
-                Some(s) if s.starts_with("--worktree=") => {
-                    worktree = s["--worktree=".len()..].into();
-                    rest.push(a);
-                }
-                _ => rest.push(a),
-            }
-        }
-        Submit {
-            sluice: forward(rest),
-            remove: (!keep).then_some(worktree),
-        }
+        let rest: Vec<OsString> = args
+            .into_iter()
+            .filter(|a| {
+                let ours = a.to_str() == Some("--no-remove");
+                keep |= ours;
+                !ours
+            })
+            .collect();
+        let sluice = forward(rest);
+        let read = crate::Cli::try_parse_from(
+            std::iter::once(OsString::from("sluice")).chain(sluice.iter().cloned()),
+        );
+        let remove = match read.map(|c| c.command) {
+            Ok(crate::Command::Submit {
+                branch,
+                no_wait: false,
+                check: false,
+                status: false,
+                worktree,
+                ..
+            }) if !keep => Some(Waiting {
+                branch,
+                worktree: worktree.into(),
+            }),
+            _ => None,
+        };
+        Submit { sluice, remove }
     }
+}
+
+/// Whether sluice records `worktree`'s head as landed on `branch`: its
+/// last submission from the worktree has landed, and is of the head the
+/// worktree holds now. A worktree is removed on this, never on an exit
+/// alone.
+pub fn landed(branch: &str, worktree: &Path) -> bool {
+    let head = Worktrunk
+        .git(worktree, &["rev-parse", "--verify", "HEAD"])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let Some(head) = head else {
+        return false;
+    };
+    let out = Command::new("sluice")
+        .args(["submit", branch, "--status", "--json", "--worktree"])
+        .arg(worktree)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Some(out) = out.ok().filter(|o| o.status.success()) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .is_ok_and(|v| v["state"] == "landed" && v["head"] == head.as_str())
 }
 
 /// Whether worktrunk removes a worktree once it lands: the user's
@@ -214,23 +249,44 @@ mod tests {
     /// not, a rename, an addition, and untracked files with a space and
     /// in a new directory (section 7).
     /// C.4: a waiting submit removes its worktree once it lands, unless
-    /// told not to; one that does not wait never does.
+    /// told not to; one that does not wait never does, nor does asking
+    /// for help or arguments sluice refuses.
     #[test]
     fn what_a_submit_removes() {
         let parse = |a: &[&str]| Submit::parse(a.iter().map(OsString::from));
+        let waiting = |b: &str, w: &str| {
+            Some(Waiting {
+                branch: b.into(),
+                worktree: w.into(),
+            })
+        };
         let s = parse(&["main", "--json"]);
         assert_eq!(s.sluice, ["submit", "main", "--json"]);
-        assert_eq!(s.remove.as_deref(), Some(std::ffi::OsStr::new(".")));
+        assert_eq!(s.remove, waiting("main", "."));
         assert_eq!(parse(&["main", "--no-remove"]).remove, None);
         assert_eq!(parse(&["main", "--no-remove"]).sluice, ["submit", "main"]);
         assert_eq!(parse(&["main", "--no-wait"]).remove, None);
         assert_eq!(parse(&["main", "--check"]).remove, None);
         assert_eq!(parse(&["main", "--status"]).remove, None);
         let w = parse(&["main", "--worktree", "../s"]);
-        assert_eq!(w.remove.as_deref(), Some(std::ffi::OsStr::new("../s")));
+        assert_eq!(w.remove, waiting("main", "../s"));
         assert_eq!(w.sluice, ["submit", "main", "--worktree", "../s"]);
         let w = parse(&["main", "--worktree=../t"]);
-        assert_eq!(w.remove.as_deref(), Some(std::ffi::OsStr::new("../t")));
+        assert_eq!(w.remove, waiting("main", "../t"));
+        let w = parse(&["--priority", "3", "main", "--after", "1,2"]);
+        assert_eq!(w.remove, waiting("main", "."));
+        for asks in [
+            &["--help"][..],
+            &["-h"],
+            &["main", "--help"],
+            &["--version"],
+            &[],
+            &["main", "--no-such-flag"],
+        ] {
+            let s = parse(asks);
+            assert_eq!(s.remove, None, "{asks:?}");
+            assert_eq!(s.sluice.len(), asks.len() + 1, "{asks:?}");
+        }
     }
 
     #[test]
