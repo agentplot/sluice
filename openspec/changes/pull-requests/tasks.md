@@ -40,7 +40,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 7. Integration
 
-- [ ] 7.1 Run all tiers (`devenv shell -- moon run ':#check-fast' ':#check-tools' ':#check-e2e'`) and the sandbox task (`moon run cli:sandbox`); verify all pass before submitting.
+- [x] 7.1 Run all tiers (`devenv shell -- moon run ':#check-fast' ':#check-tools' ':#check-e2e'`) and the sandbox task (`moon run cli:sandbox`); verify all pass before submitting.
 
 ## Workflow follow-up
 
