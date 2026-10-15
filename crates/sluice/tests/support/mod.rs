@@ -238,4 +238,9 @@ impl sluice::exec::Host for FakeHost {
     fn end_run(&self, _: &sluice_seams::RunHandle) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// The fakes' revisions are named whole.
+    fn revision(&self, rev: &str) -> anyhow::Result<Option<String>> {
+        Ok(Some(rev.to_string()))
+    }
 }

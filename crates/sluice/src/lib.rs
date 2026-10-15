@@ -8,6 +8,7 @@
 pub mod exec;
 pub mod identity;
 pub mod instance;
+pub mod preview;
 pub mod profiles;
 pub mod protect;
 pub mod runs;
@@ -142,9 +143,32 @@ pub enum Command {
         #[arg(long)]
         release: bool,
     },
+    /// Bring up a running copy of a revision a branch has landed, at
+    /// addresses a person opens; held until `sluice release <preview>`.
+    Preview {
+        /// The branch that landed it.
+        branch: String,
+        /// The revision.
+        revision: String,
+        /// Return once its command has ended, exiting 1 if it failed.
+        #[arg(long)]
+        wait: bool,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Every preview on this host, with its addresses and state.
+    Previews {
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
     /// Release this worktree: run the policy's release command, end what
-    /// its runs left running, free its ports. The worktree stays.
+    /// its runs left running, free its ports. The worktree stays. Given a
+    /// preview, release the preview.
     Release {
+        /// A preview, by its name or its revision.
+        preview: Option<String>,
         /// The worktree to release.
         #[arg(long, default_value = ".")]
         worktree: String,
@@ -297,6 +321,7 @@ pub fn run(
         Command::Step { branch } => {
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, false, &round.released)?;
+            preview::tell_dropped(out, false, &round.previews)?;
             let word = match round.step {
                 Step::Stepped => "stepped",
                 Step::Busy => "busy: another round holds the lock",
@@ -309,12 +334,16 @@ pub fn run(
             let s = s.serving(Serves::Every);
             let mut n = 0;
             loop {
-                // 97: every pass, whether or not a branch has a queue.
+                // 97, previews-1 101: every pass, whether or not a branch
+                // has a queue.
                 exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
+                preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
                 for branch in seams.state.branches()? {
                     let status = s.status(&branch)?;
                     if status.submissions.iter().any(|x| !x.state.is_out()) {
-                        exec::tell_abandoned(out, false, &s.round(&branch)?.released)?;
+                        let round = s.round(&branch)?;
+                        exec::tell_abandoned(out, false, &round.released)?;
+                        preview::tell_dropped(out, false, &round.previews)?;
                     }
                 }
                 n += 1;
@@ -432,7 +461,30 @@ pub fn run(
             pause,
         }
         .run(&s, out),
-        Command::Release { worktree } => exec::release(&s, host, &worktree, false, out),
+        Command::Preview {
+            branch,
+            revision,
+            wait,
+            json,
+        } => preview::Ask {
+            branch,
+            revision,
+            wait,
+            json,
+            host,
+            clock,
+            pause,
+        }
+        .run(&s, out),
+        Command::Previews { json } => preview::list(&s, host, json, out),
+        Command::Release {
+            preview: Some(name),
+            ..
+        } => preview::release(&s, host, &name, out),
+        Command::Release {
+            preview: None,
+            worktree,
+        } => exec::release(&s, host, &worktree, false, out),
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)
