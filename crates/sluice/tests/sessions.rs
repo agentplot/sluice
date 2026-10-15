@@ -7,7 +7,7 @@ mod support;
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use sluice::sessions::{SessionRun, Sessions};
@@ -37,6 +37,60 @@ fn supervised(dir: &Path, name: &str) -> (PathBuf, File) {
         .unwrap();
     lock.lock().unwrap();
     (run_dir, lock)
+}
+
+/// A run directory whose lock a supervisor in another process holds,
+/// until the returned [`Supervisor`] is dropped. A lock dropped in this
+/// process may still be held a moment by a child another test is
+/// spawning, which has a copy of every descriptor until it execs; a
+/// supervisor's lock ends with its process, as this one's does.
+fn supervisor(dir: &Path, name: &str) -> (PathBuf, Supervisor) {
+    let run_dir = dir.join(name);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let child = support::isolated(&mut Command::new(std::env::current_exe().unwrap()))
+        .args([
+            "--exact",
+            "hold_a_run_directory_until_killed",
+            "--nocapture",
+        ])
+        .env("SLUICE_TEST_RUN_DIR", &run_dir)
+        .spawn()
+        .unwrap();
+    let held = Supervisor(child);
+    let start = Instant::now();
+    while !run_dir.join("held").exists() {
+        assert!(start.elapsed() < Duration::from_secs(20));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (run_dir, held)
+}
+
+/// A supervisor's process, killed and reaped when dropped, and with it
+/// its lock.
+struct Supervisor(Child);
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Held by a child process of this test binary until it is killed.
+#[test]
+fn hold_a_run_directory_until_killed() {
+    let Ok(dir) = std::env::var("SLUICE_TEST_RUN_DIR") else {
+        return;
+    };
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(Path::new(&dir).join("lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    std::fs::write(Path::new(&dir).join("held"), "").unwrap();
+    std::thread::sleep(Duration::from_secs(60));
 }
 
 /// 89, core.11: a session run is a file a reader finds with no sluice
@@ -79,11 +133,11 @@ fn a_session_run_is_written_read_and_ended() {
 fn a_session_run_whose_supervisor_is_gone_is_dropped() {
     let dir = Scratch::new("sessions-dead");
     let s = Sessions::new(dir.path().join("sessions"));
-    let (dead_dir, dead_lock) = supervised(dir.path(), "run-dead");
+    let (dead_dir, dead) = supervisor(dir.path(), "run-dead");
     s.begin(&s.lock().unwrap(), &run("/work/dead", &dead_dir))
         .unwrap();
     assert_eq!(s.running().unwrap().len(), 1);
-    drop(dead_lock);
+    drop(dead);
     assert!(s.running().unwrap().is_empty());
     // A run directory that never had a supervisor is no run either.
     let never = dir.path().join("run-never");
@@ -171,11 +225,11 @@ fn the_check_seam_counts_the_hosts_session_runs() {
     )
     .with_sessions(dir.path().join("sessions"));
     assert_eq!(checks.sessions().unwrap(), 0);
-    let (run_dir, lock) = supervised(dir.path(), "run-a");
+    let (run_dir, a) = supervisor(dir.path(), "run-a");
     let s = checks.host_sessions().unwrap();
     s.begin(&s.lock().unwrap(), &run("/work/a", &run_dir))
         .unwrap();
     assert_eq!(checks.sessions().unwrap(), 1);
-    drop(lock);
+    drop(a);
     assert_eq!(checks.sessions().unwrap(), 0);
 }
