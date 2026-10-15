@@ -52,7 +52,7 @@ pathspec after each task group, Conventional Commits, scope the crate or
 
 ## 7. Integration
 
-- [ ] 7.1 Run `:#check-fast`, `:#check-tools` and `:#check-e2e`, and `openspec validate previews --strict`; verify all pass and every task above is checked.
+- [x] 7.1 Run `:#check-fast`, `:#check-tools` and `:#check-e2e`, and `openspec validate previews --strict`; verify all pass and every task above is checked.
 
 ## Workflow follow-up
 
