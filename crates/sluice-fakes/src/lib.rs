@@ -17,9 +17,9 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved,
-    Network, Notification, Outcome, Place, Progress, ReleasePolicy, Released, Rev, RunHandle,
-    RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter,
-    TaskLog, TaskResult, Tests, Written,
+    Network, Notification, Outcome, Place, PreviewPlace, Progress, ReleasePolicy, Released, Rev,
+    RunHandle, RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State,
+    Submitter, TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -117,6 +117,12 @@ struct Inner {
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
     saved: Vec<String>,
+    /// Previews made and not yet released, by name.
+    previews: BTreeMap<String, PreviewPlace>,
+    /// Each preview released, and whether it was kept as failed.
+    preview_releases: Vec<(String, bool)>,
+    /// Preview commands started from now fail.
+    preview_fails: bool,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
     // the driver
@@ -469,6 +475,33 @@ impl World {
     }
 
     fn evaluate(inner: &mut Inner, request: &RunRequest) -> RunReport {
+        if request.place.name.starts_with("preview/") {
+            // A preview's command: one exit, never a check (103).
+            return RunReport {
+                tasks: vec![TaskResult {
+                    task: "preview".into(),
+                    hash: request.revision.to_string(),
+                    outcome: if inner.preview_fails {
+                        Outcome::Fail
+                    } else {
+                        Outcome::Pass
+                    },
+                    source: Source::Ran {
+                        host: inner.host.clone(),
+                    },
+                }],
+                executor: Enforced {
+                    kind: "open".into(),
+                    confined: false,
+                    processors: None,
+                    memory: None,
+                    network: None,
+                    docker: false,
+                },
+                missing: Vec::new(),
+                timed_out: false,
+            };
+        }
         let tree = inner.commits[&request.revision].tree.clone();
         let since = request
             .since
@@ -590,6 +623,28 @@ impl World {
     /// A kept log's text, by where the records seam said it is (20).
     pub fn kept_log(&self, at: &str) -> Option<String> {
         self.0.borrow().logs.get(at).cloned()
+    }
+
+    /// Previews made and not yet released, as the place seam lists them.
+    pub fn live_previews(&self) -> Vec<PreviewPlace> {
+        self.0.borrow().previews.values().cloned().collect()
+    }
+
+    /// Each preview released, and whether it was kept as failed.
+    pub fn preview_releases(&self) -> Vec<(String, bool)> {
+        self.0.borrow().preview_releases.clone()
+    }
+
+    /// Preview commands started from now exit non-zero, or zero again.
+    pub fn preview_fails(&self, fails: bool) {
+        self.0.borrow_mut().preview_fails = fails;
+    }
+
+    /// A preview's checkout is removed by hand, with nothing released.
+    pub fn remove_preview_checkout(&self, name: &str) {
+        if let Some(p) = self.0.borrow_mut().previews.get_mut(name) {
+            p.gone = true;
+        }
     }
 
     /// The released places whose candidate passed, so whose caches were
@@ -934,6 +989,36 @@ impl FakeCheckout {
     }
 }
 
+/// Each `{name.<port>}` and `{port.<port>}` of `template` filled in.
+fn fake_fill(
+    label: &str,
+    template: &str,
+    names: &BTreeMap<String, String>,
+    ports: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let close = rest[i..]
+            .find('}')
+            .ok_or_else(|| anyhow!("{label} leaves a {{ open"))?;
+        let inner = &rest[i + 1..i + close];
+        let value = match inner.split_once('.') {
+            Some(("name", p)) => names.get(p),
+            Some(("port", p)) => ports.get(p),
+            _ => None,
+        };
+        let Some(value) = value else {
+            bail!("[preview] addresses {label} names {{{inner}}}, a port [checkout] ports does not list");
+        };
+        out.push_str(value);
+        rest = &rest[i + close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 impl Checkout for FakeCheckout {
     fn materialize(&self, name: &str, rev: &Rev, _: &Settings) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
@@ -1045,6 +1130,108 @@ impl Checkout for FakeCheckout {
         );
         self.drop_place(name, passed);
         Ok(())
+    }
+
+    fn preview(
+        &self,
+        name: &str,
+        rev: &Rev,
+        branch: &str,
+        checkout: &Settings,
+        addresses: &BTreeMap<String, String>,
+        at: &str,
+    ) -> Result<(Place, PreviewPlace)> {
+        let mut inner = self.0 .0.borrow_mut();
+        let place = |p: &PreviewPlace| Place {
+            name: p.name.clone(),
+            path: p.path.clone(),
+            tmp: format!("/fake/tmp/{}", p.name).into(),
+            env: p.ports.clone().into_iter().chain(p.names.clone()).collect(),
+        };
+        if let Some(p) = inner.previews.get(name) {
+            return Ok((place(p), p.clone()));
+        }
+        if !inner.commits.contains_key(rev) {
+            bail!("no revision {rev}");
+        }
+        let ports: Vec<String> = match checkout.get("ports") {
+            Some(sluice_seams::Setting::List(xs)) => xs.clone(),
+            _ => Vec::new(),
+        };
+        // Two previews never share a port or a name.
+        let block = inner.previews.len() + inner.preview_releases.len();
+        let (mut names, mut numbers) = (BTreeMap::new(), BTreeMap::new());
+        for (i, p) in ports.iter().enumerate() {
+            names.insert(p.clone(), format!("{p}-{}--{branch}", rev.short()));
+            numbers.insert(p.clone(), (30000 + block * 10 + i).to_string());
+        }
+        let mut filled = BTreeMap::new();
+        for (label, template) in addresses {
+            filled.insert(label.clone(), fake_fill(label, template, &names, &numbers)?);
+        }
+        let upper = |prefix: &str, m: &BTreeMap<String, String>| -> BTreeMap<String, String> {
+            m.iter()
+                .map(|(k, v)| (format!("{prefix}{}", k.to_ascii_uppercase()), v.clone()))
+                .collect()
+        };
+        let preview = PreviewPlace {
+            name: name.into(),
+            branch: branch.into(),
+            revision: rev.clone(),
+            path: format!("/fake/previews/{name}").into(),
+            ports: upper("SLUICE_PORT_", &numbers),
+            names: upper("SLUICE_NAME_", &names),
+            addresses: filled,
+            made: at.into(),
+            run: None,
+            gone: false,
+            failed: None,
+        };
+        inner.places.insert(name.into(), rev.clone());
+        inner.made.push(name.into());
+        inner.previews.insert(name.into(), preview.clone());
+        Ok((place(&preview), preview))
+    }
+
+    fn preview_run(&self, name: &str, run: &RunHandle) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let p = inner
+            .previews
+            .get_mut(name)
+            .ok_or_else(|| anyhow!("no preview {name}"))?;
+        p.run = Some(run.clone());
+        Ok(())
+    }
+
+    fn previews(&self) -> Result<Vec<PreviewPlace>> {
+        Ok(self.0 .0.borrow().previews.values().cloned().collect())
+    }
+
+    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+        let Some(p) = self.0 .0.borrow().previews.get(name).cloned() else {
+            return Ok(false);
+        };
+        self.drop_place(name, false);
+        let mut inner = self.0 .0.borrow_mut();
+        inner.preview_releases.push((name.into(), failed.is_some()));
+        match failed {
+            Some(output) if p.failed.is_none() => {
+                inner.previews.insert(
+                    name.into(),
+                    PreviewPlace {
+                        ports: BTreeMap::new(),
+                        run: None,
+                        gone: false,
+                        failed: Some(output.into()),
+                        ..p
+                    },
+                );
+            }
+            _ => {
+                inner.previews.remove(name);
+            }
+        }
+        Ok(true)
     }
 }
 

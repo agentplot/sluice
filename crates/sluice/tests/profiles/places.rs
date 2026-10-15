@@ -752,3 +752,263 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
     );
     assert!(session.join("work").exists());
 }
+
+fn preview_name(rev: &Rev) -> String {
+    format!("preview/{}", &rev.as_str()[..12])
+}
+
+fn addresses(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// Previews-1 clauses 98 to 101: a preview is made at its revision with
+/// its ports and a name for each, kept apart in `.previews/` where no
+/// session's or candidate's reader looks, given back as it is when asked
+/// again, and released with its checkout, its scratch directory and its
+/// block of ports; a second release is nothing.
+#[test]
+fn a_preview_is_made_kept_apart_and_released() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-preview");
+    let blocks = support::Scratch::new("places-preview-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web", "api"], "41700");
+    let name = preview_name(&rev);
+    let urls = addresses(&[
+        ("web", "https://{name.web}.localhost"),
+        ("api", "http://localhost:{port.api}/docs"),
+    ]);
+
+    let (place, preview) = p
+        .preview(
+            &name,
+            &rev,
+            "bolt/x",
+            &settings,
+            &urls,
+            "2026-10-14T09:00:00Z",
+        )
+        .unwrap();
+    holds_the_candidate(&repo, &place, &rev);
+    let record = repo
+        .dir()
+        .join(".git/sluice/.previews")
+        .join(format!("{}.json", name.replace('/', "%2F")));
+    assert!(record.exists(), "{}", record.display());
+    assert!(place
+        .path
+        .starts_with(repo.dir().join(".git/sluice/.previews")));
+    assert_eq!(preview.revision, rev);
+    assert_eq!(preview.branch, "bolt/x");
+    let web = &preview.names["SLUICE_NAME_WEB"];
+    // `<port>-<rev>--<branch>--<repository>`, the repository named by
+    // the directory holding `.git`.
+    assert!(
+        web.starts_with(&format!("web-{}--bolt-x--", rev.short())),
+        "{web}"
+    );
+    assert!(web.ends_with("places-preview"), "{web}");
+    assert_eq!(place.env["SLUICE_NAME_WEB"], *web);
+    assert_eq!(place.env["SLUICE_BRANCH"], "bolt/x");
+    assert_eq!(place.env["SLUICE_REVISION"], rev.as_str());
+    assert_eq!(preview.addresses["web"], format!("https://{web}.localhost"));
+    assert_eq!(
+        preview.addresses["api"],
+        format!("http://localhost:{}/docs", place.env["SLUICE_PORT_API"])
+    );
+    assert!(p.session_places().unwrap().is_empty());
+    assert!(!repo
+        .dir()
+        .join(".git/sluice/.places")
+        .join(format!("{}.json", name.replace('/', "%2F")))
+        .exists());
+
+    // Asked again: the same preview, whatever the settings now say.
+    let (again, listed) = p
+        .preview(
+            &name,
+            &rev,
+            "main",
+            &ported(&["web"], "41700"),
+            &BTreeMap::new(),
+            "later",
+        )
+        .unwrap();
+    assert_eq!(again.path, place.path);
+    assert_eq!(listed.names, preview.names);
+    assert_eq!(listed.ports, preview.ports);
+    assert_eq!(p.previews().unwrap(), vec![listed]);
+
+    // A candidate's place and a session's worktree beside it share nothing.
+    let cand = p.materialize(NAME, &rev, &settings).unwrap();
+    let session = repo.dir().with_extension("session");
+    let adopted = p
+        .adopt(session.to_str().unwrap(), "bolt/x", &settings, "now")
+        .unwrap();
+    for other in [&cand, &adopted] {
+        for k in ["SLUICE_PORT_WEB", "SLUICE_PORT_API"] {
+            assert!(
+                !place.env.values().any(|v| *v == other.env[k]),
+                "{k} shared"
+            );
+        }
+    }
+    p.release(NAME, false).unwrap();
+    p.release(&adopted.name, false).unwrap();
+
+    assert!(p.release_preview(&name, None).unwrap());
+    left_behind(&repo, &place);
+    assert!(!record.exists());
+    assert!(p.previews().unwrap().is_empty());
+    assert!(!p.release_preview(&name, None).unwrap());
+    let held = std::fs::read_dir(blocks.path())
+        .unwrap()
+        .filter(|e| {
+            !e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        })
+        .count();
+    assert_eq!(held, 0, "a block is still held");
+}
+
+/// 99: an address that names a port the policy does not list is refused
+/// before anything is made.
+#[test]
+fn a_preview_naming_an_unlisted_port_is_refused() {
+    let (repo, rev) = scratch("places-preview-refused");
+    let blocks = support::Scratch::new("places-preview-refused-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let name = preview_name(&rev);
+    let e = p
+        .preview(
+            &name,
+            &rev,
+            "main",
+            &ported(&["web"], "41750"),
+            &addresses(&[("api", "https://{name.api}.localhost")]),
+            "now",
+        )
+        .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("[preview] addresses api names {name.api}"),
+        "{e:#}"
+    );
+    assert!(p.previews().unwrap().is_empty());
+    assert!(!repo.dir().join(".git/sluice/.previews").exists());
+    assert_eq!(
+        std::fs::read_dir(blocks.path())
+            .map(|d| d.count())
+            .unwrap_or(0),
+        0
+    );
+}
+
+/// 101: a preview released because its command failed keeps its record,
+/// holding nothing, with what the command printed, until it is released
+/// again; its release command runs from the request its run carried, so a
+/// preview is released with no policy read at all.
+#[test]
+fn a_failed_preview_is_kept_holding_nothing() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-preview-failed");
+    let blocks = support::Scratch::new("places-preview-failed-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let name = preview_name(&rev);
+    let (place, _) = p
+        .preview(
+            &name,
+            &rev,
+            "main",
+            &ported(&["web"], "41800"),
+            &BTreeMap::new(),
+            "now",
+        )
+        .unwrap();
+    let log = repo.dir().with_extension("preview-release.log");
+    let _ = std::fs::remove_file(&log);
+    let r = runs(&repo);
+    r.start(
+        &name,
+        &Request {
+            argv: vec!["/bin/sh".into(), "-c".into(), "echo broken; exit 3".into()],
+            cwd: place.path.clone(),
+            env: place.env.clone(),
+            limit: None,
+            grace: 1,
+            meta: serde_json::Value::Null,
+            release: Some(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("echo \"released $SLUICE_NAME_WEB\" >> {}", log.display()),
+            ]),
+        },
+    )
+    .unwrap();
+    while matches!(r.state(&name).unwrap(), sluice::runs::RunState::Running) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    p.preview_run(&name, &sluice_seams::RunHandle(name.clone()))
+        .unwrap();
+
+    assert!(p.release_preview(&name, Some("broken\n")).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!("released {}\n", place.env["SLUICE_NAME_WEB"])
+    );
+    left_behind(&repo, &place);
+    let kept = p.previews().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].failed.as_deref(), Some("broken\n"));
+    assert!(kept[0].ports.is_empty() && kept[0].run.is_none() && !kept[0].gone);
+    assert!(p.release_preview(&name, None).unwrap());
+    assert!(p.previews().unwrap().is_empty());
+}
+
+/// 99: a preview whose short revision would give a name another preview
+/// holds is named by the longer revision.
+#[test]
+fn a_name_another_preview_holds_takes_the_longer_revision() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-preview-clash");
+    let blocks = support::Scratch::new("places-preview-clash-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web"], "41850");
+    let name = preview_name(&rev);
+    let (_, first) = p
+        .preview(&name, &rev, "main", &settings, &BTreeMap::new(), "now")
+        .unwrap();
+    let short = first.names["SLUICE_NAME_WEB"].clone();
+    // Another revision's preview that took the same name.
+    let dir = repo.dir().join(".git/sluice/.previews");
+    let record = |n: &str| dir.join(format!("{}.json", n.replace('/', "%2F")));
+    let mut other: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record(&name)).unwrap()).unwrap();
+    let rival = "f".repeat(40);
+    other["revision"] = rival.clone().into();
+    other["block"] = serde_json::Value::Null;
+    std::fs::write(
+        record(&format!("preview/{}", &rival[..12])),
+        other.to_string(),
+    )
+    .unwrap();
+    p.release_preview(&name, None).unwrap();
+
+    let (_, again) = p
+        .preview(&name, &rev, "main", &settings, &BTreeMap::new(), "now")
+        .unwrap();
+    let long = &again.names["SLUICE_NAME_WEB"];
+    assert_ne!(*long, short);
+    assert!(
+        long.starts_with(&format!("web-{}--", &rev.as_str()[..12])),
+        "{long}"
+    );
+    p.release_preview(&name, None).unwrap();
+    p.release_preview(&format!("preview/{}", &rival[..12]), None)
+        .unwrap();
+}

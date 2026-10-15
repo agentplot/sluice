@@ -96,6 +96,31 @@ impl Checkout for RecordedPlaces {
     ) -> Result<sluice_seams::Released> {
         self.inner.release_session(name, policy)
     }
+
+    fn preview(
+        &self,
+        name: &str,
+        rev: &Rev,
+        branch: &str,
+        checkout: &Settings,
+        addresses: &std::collections::BTreeMap<String, String>,
+        at: &str,
+    ) -> Result<(Place, sluice_seams::PreviewPlace)> {
+        self.inner
+            .preview(name, rev, branch, checkout, addresses, at)
+    }
+
+    fn preview_run(&self, name: &str, run: &RunHandle) -> Result<()> {
+        self.inner.preview_run(name, run)
+    }
+
+    fn previews(&self) -> Result<Vec<sluice_seams::PreviewPlace>> {
+        self.inner.previews()
+    }
+
+    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+        self.inner.release_preview(name, failed)
+    }
 }
 
 struct RecordedChecks {
