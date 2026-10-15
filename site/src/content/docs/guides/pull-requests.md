@@ -1,14 +1,13 @@
 ---
-title: Work through pull requests
+title: Pull requests
 description: Each submission gets a pull request on GitHub. It waits for review, QA and other checks, then joins sluice's queue and lands when its combination passes.
 sidebar:
-  order: 4
+  order: 5
 ---
 
-This builds on [keeping `main` in step with GitHub](/sluice/guides/github/)
-and on [giving sluice its own GitHub
-identity](/sluice/guides/github-app/): sluice reads pull requests and
-posts on them as its GitHub App.
+This builds on [GitHub integration](/sluice/guides/github/) and on
+[protecting `main` on GitHub](/sluice/guides/github-app/): sluice reads
+pull requests and posts on them as its GitHub App.
 There, work went straight from an agent's worktree into sluice's queue.
 Here, every piece of work also gets a pull request: a page where people
 review it, where other systems post their checks, and where sluice shows

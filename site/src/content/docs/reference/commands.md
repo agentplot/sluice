@@ -8,7 +8,7 @@ sidebar:
 | Command | |
 |---|---|
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
-| `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. `--json` for tools. |
+| `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice run` | Work every branch's queue until stopped. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
@@ -56,6 +56,41 @@ What a run starts and hands to another process, a container above all,
 stays up between runs, so the next run finds it. `sluice release` ends
 it. `wt submit` releases the worktree before worktrunk removes it; on
 plain git, run `sluice release` before `git worktree remove`.
+
+## Worktrees sluice holds
+
+A worktree keeps its ports and what its runs left running until it is
+released, however long since its last run: sluice cannot tell an agent
+that is thinking from one that is gone. `sluice status` with no argument
+lists every worktree it holds in the repository, with its branch, its
+last run and its ports, so a person or a crew can release one with
+`sluice release --worktree <path>`. `--json` gives the same as one
+document, a `worktrees` list with `worktree`, `branch`, `last_run`,
+`ports` and `removed`.
+
+```console
+$ sluice status
+worktrees held until released:
+  /home/me/wt/unit-a  bolt/concurrent-units  last run 2026-10-14T09:12:40Z  SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
+  /home/me/wt/unit-b  bolt/concurrent-units  last run 2026-10-11T16:03:05Z  SLUICE_PORT_DB=20003 SLUICE_PORT_WEB=20002
+release one with: sluice release --worktree <worktree>
+```
+
+A worktree removed without a release is no agent's. The next `sluice
+exec` on the host, or the next round, releases it as `sluice release`
+would. The policy's release command runs in the worktree's scratch
+directory with its ports, its runs end, and its ports are free. That
+command says so first, and the release is logged in the branch's
+state beside the releases of combinations' checkouts:
+
+```console
+$ sluice exec bolt/concurrent-units
+released /home/me/wt/unit-c: the worktree no longer exists; its runs ended, the release command run, its ports free
+running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
+…
+```
+
+Until then, `sluice status` lists it as removed.
 
 ## `wt submit`
 
@@ -128,7 +163,7 @@ ok      the app may write acme/widgets's contents
 failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 ```
 
-[Give sluice its own GitHub identity](/sluice/guides/github-app/) sets
+[Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
 
 ## Exit codes

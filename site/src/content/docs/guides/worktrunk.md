@@ -1,5 +1,5 @@
 ---
-title: sluice with worktrunk
+title: worktrunk integration
 description: Moving a worktrunk repository from wt merge to wt submit, and how the two tools share a repository.
 sidebar:
   order: 2
@@ -50,7 +50,9 @@ agent's runs left. Keep in `post-remove` only what is not a run's: a
 cache directory, a scratch database the agent made by hand. Under
 `--no-remove` the worktree is kept and not released; run
 `sluice release` when it is done with. On plain git, run
-`sluice release` in the worktree before `git worktree remove`.
+`sluice release` in the worktree before `git worktree remove`. The
+next `sluice exec` or round on the host releases a worktree removed
+without it, and `sluice status` lists every worktree held until then.
 
 **The branch.** Every branch with a `[branches]` section in
 `.config/sluice.toml` is protected: `wt merge` into it is refused with

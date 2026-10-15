@@ -1,4 +1,4 @@
-//! The pull request driver (C.5 pull request; `docs/adr/0020`): a branch
+//! The pull request driver (C.5 pull request; `docs/adr/0021`): a branch
 //! whose policy names `pull_requests` takes its work as pull requests on
 //! GitHub. A pull request waits until it is out of draft and its
 //! conditions hold on its head (C.7), and is then submitted through the
@@ -155,7 +155,7 @@ impl Pulls {
             anyhow!(
                 "{branch} takes pull requests, which sluice reads and posts as its GitHub App, \
                  and this host's config has no [forge] table naming it: see the guide \
-                 \"Give sluice its own GitHub identity\""
+                 \"Protecting main on GitHub\""
             )
         })
     }

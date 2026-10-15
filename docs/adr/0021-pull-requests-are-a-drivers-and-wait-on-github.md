@@ -1,5 +1,5 @@
 ---
-number: 20
+number: 21
 title: Pull requests are a driver's, and wait on GitHub
 status: accepted
 date: 2026-10-14

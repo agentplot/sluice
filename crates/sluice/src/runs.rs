@@ -380,9 +380,22 @@ impl Runs {
         };
         let log = dir.join("release.log");
         let out = File::create(&log)?;
+        // A session's worktree removed before its release (session-runs-1
+        // clause 97): the command runs in the place's scratch directory,
+        // which the release removes only after it.
+        let cwd = if request.cwd.is_dir() {
+            request.cwd.clone()
+        } else {
+            request
+                .env
+                .get("SLUICE_TMP")
+                .map(PathBuf::from)
+                .filter(|t| t.is_dir())
+                .unwrap_or_else(|| dir.to_path_buf())
+        };
         let mut child = Command::new(program)
             .args(args)
-            .current_dir(&request.cwd)
+            .current_dir(&cwd)
             .env_clear()
             .envs(&request.env)
             .stdin(Stdio::null())

@@ -81,6 +81,23 @@ pub struct Adopted {
     pub branch: String,
 }
 
+/// A session's place the repository holds, as the place seam lists it
+/// (session-runs-1 clause 97).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionPlace {
+    pub name: String,
+    /// The worktree it was adopted for.
+    pub worktree: PathBuf,
+    /// The branch whose policy its runs were held to.
+    pub branch: String,
+    /// `SLUICE_PORT_<NAME>` for each port it holds.
+    pub ports: BTreeMap<String, String>,
+    /// When its last run started, as the core gave it to `adopt`.
+    pub last_run: Option<String>,
+    /// Its worktree no longer exists: the place is no session's (97).
+    pub gone: bool,
+}
+
 /// The policy a session's place is released under, read from its
 /// branch's current revision (56, 95).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,8 +136,9 @@ pub trait Checkout {
     /// held from its first run until its release and the same on every
     /// run, and a scratch directory kept across its runs. Nothing of the
     /// worktree is written, moved or removed (25). Its name begins
-    /// `session/`, so it is never a candidate's.
-    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place>;
+    /// `session/`, so it is never a candidate's. `at` is when the run
+    /// starts, kept as the place's last run (97).
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place>;
 
     /// 35, session-runs-1 clause 93: after a session's recorded run that
     /// passed, the caches `checkout` declares, keyed by their files at
@@ -138,6 +156,10 @@ pub trait Checkout {
     /// carried it, remove its scratch directory and let its ports go. The
     /// worktree is left as it is (25, rule core.16).
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
+
+    /// Session-runs-1 clause 97: every session's place the repository
+    /// holds, each with whether its worktree still exists.
+    fn session_places(&self) -> Result<Vec<SessionPlace>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +220,7 @@ impl<'de> Deserialize<'de> for Network {
 }
 
 /// 83: what a run may use and reach, as the branch's policy states it.
-/// The processors each run is given are the instance's, not the policy's,
+/// The cores each run is given are the instance's, not the policy's,
 /// so they are the check seam's own (71).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Limits {

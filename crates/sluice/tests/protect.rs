@@ -296,14 +296,14 @@ fn installing_is_idempotent_and_follows_the_binary() {
     );
 
     let moved = repo.dir().join(".git/moved-sluice");
-    std::fs::copy(sluice(), &moved).unwrap();
-    std::fs::set_permissions(&moved, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let out = support::isolated(&mut Command::new(&moved))
-        .current_dir(repo.dir())
-        .arg("protect")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    copy_executable(Path::new(sluice()), &moved);
+    let out = run_copied(&moved, || {
+        support::isolated(&mut Command::new(&moved))
+            .current_dir(repo.dir())
+            .arg("protect")
+            .stdin(Stdio::null())
+            .output()
+    });
     assert!(out.status.success(), "{}", text(&out));
     let now = std::fs::read_to_string(&hook).unwrap();
     assert!(now.contains(&std::fs::canonicalize(&moved).unwrap().display().to_string()));
@@ -311,6 +311,39 @@ fn installing_is_idempotent_and_follows_the_binary() {
         .dir()
         .join(".git/hooks/reference-transaction.pre-sluice")
         .exists());
+}
+
+/// Copy `from` to `to` as an executable through a file of our own,
+/// written, synced and closed before anything may run it: a copy still
+/// open for writing cannot be executed (ETXTBSY).
+fn copy_executable(from: &Path, to: &Path) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut src = std::fs::File::open(from).unwrap();
+    let mut dst = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(to)
+        .unwrap();
+    std::io::copy(&mut src, &mut dst).unwrap();
+    dst.sync_all().unwrap();
+    drop(dst);
+}
+
+/// Run a freshly copied executable, again after a short sleep while the
+/// system calls it busy: a child another test forks while the copy is
+/// open inherits the descriptor until it execs, and holds the copy busy
+/// that long.
+fn run_copied(moved: &Path, mut run: impl FnMut() -> std::io::Result<Output>) -> Output {
+    for _ in 0..20 {
+        match run() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            other => return other.unwrap_or_else(|e| panic!("running {}: {e}", moved.display())),
+        }
+    }
+    panic!("{} stayed busy", moved.display())
 }
 
 /// A hooks directory inside a worktree is tracked: sluice will not write

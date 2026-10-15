@@ -10,7 +10,7 @@ one machine. The repository runs its tests with moon, and its agents each
 work in a git worktree of their own. Everything here runs today on one
 machine; sluice lands its own `main` this way. If the agents work in
 worktrunk, read this page first and then
-[sluice with worktrunk](/sluice/guides/worktrunk/).
+[worktrunk integration](/sluice/guides/worktrunk/).
 
 ## What sluice does, in one paragraph
 
@@ -129,7 +129,8 @@ An agent running the same tests while it works should run them with
 `sluice exec <branch>` in its worktree rather than on its own. Several
 agents on one host then share the host's bound with the submissions'
 runs, and each worktree gets ports no other holds. A stack the tests
-bring up stays between runs and goes with `sluice release`. A run in
+bring up stays between runs and goes with `sluice release`, or with the
+next run or round on the host once the worktree is removed. A run in
 a clean worktree is recorded for the submission that follows, which
 replays it when the policy declares the cache, as one combination
 replays another's. See
@@ -153,7 +154,7 @@ untested. Agents still run their tests while they work; they never
 merge.
 
 A team on worktrunk makes the same change, from `wt merge` to
-`wt submit`; [sluice with worktrunk](/sluice/guides/worktrunk/) has the
+`wt submit`; [worktrunk integration](/sluice/guides/worktrunk/) has the
 details.
 
 ## 4. Branch protection
