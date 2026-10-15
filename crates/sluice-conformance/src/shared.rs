@@ -2,12 +2,13 @@
 //! test that runs one cites the clauses it exercises, here on the fakes
 //! (`tests/`) and in the `sluice` crate on the real profiles.
 
+use sluice_core::preview::{PreviewRefusal, PreviewState};
 use sluice_core::records::{
     parse_lines, BranchDoc, Event, LogLine, ResultKind, State, Submission, BRANCH_SCHEMA,
     SUBMISSION_SCHEMA,
 };
 use sluice_core::session::Recorded;
-use sluice_core::{Forecast, SubmitRefusal};
+use sluice_core::{Forecast, Sluice, SubmitRefusal};
 use sluice_seams::{Outcome, ReleasePolicy, Released, Told};
 
 use crate::{Rig, BRANCH};
@@ -740,4 +741,117 @@ pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
     h.step();
     h.step();
     assert_eq!(s.session_places().expect("lists"), vec![kept]);
+}
+
+/// A preview of `rev` through the rig's branch, its command started and
+/// read until it has ended; the preview as listed then.
+fn preview_up(h: &impl Rig, rev: &sluice_seams::Rev) -> sluice_seams::PreviewPlace {
+    let s = h.sluice();
+    let plan = s
+        .preview_plan(BRANCH, rev)
+        .expect("the branch reads")
+        .expect("a landed revision with a preview table");
+    let (place, _) = s.make_preview(&plan).expect("the preview is made");
+    s.start_preview(&plan, place).expect("its command starts");
+    for _ in 0..600 {
+        let p = s.preview_of(rev).unwrap().expect("listed");
+        match s.preview_state(&p).unwrap() {
+            PreviewState::Starting => std::thread::sleep(std::time::Duration::from_millis(50)),
+            PreviewState::Up => return p,
+            other => panic!("the preview's command ended {other:?}"),
+        }
+    }
+    panic!("the preview's command never ended")
+}
+
+/// S30, S35: a landed revision is previewed at addresses filled in with
+/// its names and ports, known before its command runs; a head the branch
+/// has not landed is refused and nothing is made (previews-1 clauses 98,
+/// 99).
+pub fn s30_a_landed_revision_is_previewed_at_its_addresses(h: &impl Rig) {
+    let s = h.sluice();
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    assert_eq!(
+        s.preview_plan(BRANCH, &head).unwrap().unwrap_err(),
+        PreviewRefusal::NotLanded
+    );
+    assert!(s.seams().checkout.previews().unwrap().is_empty());
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    let landed = h.tip();
+    let plan = s.preview_plan(BRANCH, &landed).unwrap().unwrap();
+    let (_, made) = s.make_preview(&plan).unwrap();
+    assert_eq!(made.name, Sluice::preview_name(&landed));
+    assert_eq!(
+        made.addresses["web"],
+        format!("https://{}.localhost", made.names["SLUICE_NAME_WEB"])
+    );
+    assert_eq!(
+        made.addresses["api"],
+        format!("http://localhost:{}/docs", made.ports["SLUICE_PORT_API"])
+    );
+    assert_eq!(s.preview_state(&made).unwrap(), PreviewState::Waiting);
+    s.release_preview(&made.name).unwrap();
+    let up = preview_up(h, &landed);
+    assert_eq!(up.revision, landed);
+    // 103: nothing of it is a result.
+    let results = String::from_utf8(s.seams().state.results().unwrap()).unwrap();
+    assert!(!results.contains(&up.name) && !results.contains("preview"));
+    assert!(s.release_preview(&up.name).unwrap());
+}
+
+/// S31: the next landing's preview is made beside the last, sharing no
+/// port and no name, and the last is released at its caller's asking
+/// (previews-1 clauses 99, 101).
+pub fn s31_the_next_landings_preview_replaces_the_last(h: &impl Rig) {
+    let s = h.sluice();
+    let r1 = h.tip();
+    let first = preview_up(h, &r1);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/b");
+    h.settle();
+    assert_eq!(h.sub(two).state, State::Landed);
+    let r2 = h.tip();
+    let second = preview_up(h, &r2);
+    assert!(first
+        .ports
+        .values()
+        .all(|p| !second.ports.values().any(|q| q == p)));
+    assert!(first
+        .names
+        .values()
+        .all(|n| !second.names.values().any(|m| m == n)));
+    assert!(s.release_preview(&first.name).unwrap());
+    let left: Vec<String> = s
+        .seams()
+        .checkout
+        .previews()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(left, vec![second.name.clone()]);
+    assert!(s.release_preview(&second.name).unwrap());
+    assert!(!s.release_preview(&second.name).unwrap());
+}
+
+/// S32: a caller that asks again gets the preview it asked for the first
+/// time, and finds every preview the host holds by listing them
+/// (previews-1 clauses 100, 101).
+pub fn s32_asking_again_gives_back_the_same_preview(h: &impl Rig) {
+    let s = h.sluice();
+    let rev = h.tip();
+    let up = preview_up(h, &rev);
+    let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
+    let (_, again) = s.make_preview(&plan).unwrap();
+    assert_eq!(again, up);
+    let listed = s.previews().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].place, up);
+    assert_eq!(listed[0].state, PreviewState::Up);
+    // A round leaves a preview that is up alone (rule core.16).
+    h.step();
+    assert_eq!(s.preview_of(&rev).unwrap(), Some(up.clone()));
+    assert!(s.release_preview(&up.name).unwrap());
 }

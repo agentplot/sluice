@@ -32,6 +32,18 @@
 //! still exists, so the core can release one whose worktree is gone
 //! (clause 97).
 //!
+//! A preview (previews-1 clauses 98 to 101) is a place made as a
+//! candidate's is, at a revision its branch has landed, and released only
+//! when asked, or by the core when its command failed or its checkout is
+//! gone. Its record, `kind: "preview"`, is kept apart from the others, at
+//! `<common>/sluice/.previews/<name>.json` beside its checkout, so a
+//! sluice that predates previews never reads one. Each port it holds is
+//! given a name too, `SLUICE_NAME_<NAME>`: one DNS label made of the
+//! port's name, the revision, the branch and the repository, unique among
+//! the repository's previews (99). A preview released because its
+//! command failed keeps its record, holding nothing, with what the command
+//! printed, until it is released again.
+//!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
@@ -47,7 +59,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, Checkout, Limits, Place, ReleasePolicy, Released, Rev, SessionPlace, Setting, Settings,
+    Adopted, Checkout, Limits, Place, PreviewPlace, ReleasePolicy, Released, Rev, RunHandle,
+    SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -67,6 +80,8 @@ enum Kind {
     Made,
     /// A session's own worktree, adopted for its runs and never removed.
     Session,
+    /// A preview, made at a landed revision and released when asked.
+    Preview,
 }
 
 /// What made a place: `<common>/sluice/.places/<name>.json`.
@@ -92,9 +107,44 @@ struct Made {
     #[serde(default, alias = "slot", skip_serializing_if = "Option::is_none")]
     block: Option<u32>,
     /// A session's place: when its last run started (session-runs-1
-    /// clause 97).
+    /// clause 97); a preview: when it was made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_run: Option<String>,
+    /// A preview's revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<Rev>,
+    /// A preview's `SLUICE_NAME_<NAME>` for each port (99).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    names: BTreeMap<String, String>,
+    /// A preview's addresses, filled in (99).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    addresses: BTreeMap<String, String>,
+    /// A preview's command's run, once started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run: Option<String>,
+    /// A preview released because its command failed: what it printed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failed: Option<String>,
+}
+
+impl Made {
+    fn new(kind: Kind, method: &str) -> Made {
+        Made {
+            kind,
+            method: method.into(),
+            branch: None,
+            ports: BTreeMap::new(),
+            path: None,
+            caches: Vec::new(),
+            block: None,
+            last_run: None,
+            revision: None,
+            names: BTreeMap::new(),
+            addresses: BTreeMap::new(),
+            run: None,
+            failed: None,
+        }
+    }
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -149,10 +199,102 @@ impl Ports {
 
 /// `SLUICE_PORT_<NAME>`: the name upper-cased, `-` written `_`.
 fn env_name(name: &str) -> String {
-    format!(
-        "SLUICE_PORT_{}",
-        name.to_ascii_uppercase().replace('-', "_")
-    )
+    format!("SLUICE_PORT_{}", env_part(name))
+}
+
+/// `SLUICE_NAME_<NAME>`: a preview's name for the port `name` (99).
+fn name_env(name: &str) -> String {
+    format!("SLUICE_NAME_{}", env_part(name))
+}
+
+fn env_part(name: &str) -> String {
+    name.to_ascii_uppercase().replace('-', "_")
+}
+
+/// The longest a DNS label may be.
+const LABEL: usize = 63;
+
+/// `text` as part of a DNS label: lower-case letters, digits and single
+/// hyphens, none at either end.
+fn slug(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// Previews-1 clause 99: a preview's name for its port `port`, one DNS
+/// label: `<port>-<rev>--<branch>--<repository>`, the port and the
+/// revision kept whole; past 63 characters the rest is cut, and `hash`,
+/// six characters of a hash of the whole, added so two long names that
+/// share a beginning stay apart.
+fn label(port: &str, rev: &str, branch: &str, repository: &str, hash: &str) -> String {
+    let head = format!("{}-{rev}--", slug(port));
+    let tail = format!("{}--{}", slug(branch), slug(repository));
+    let whole = format!("{head}{tail}");
+    if whole.len() <= LABEL {
+        return whole.trim_end_matches('-').to_string();
+    }
+    let room = LABEL.saturating_sub(head.len() + 1 + hash.len());
+    let cut = tail[..room.min(tail.len())].trim_end_matches('-');
+    format!("{head}{cut}-{hash}")
+}
+
+/// The repository's name, from its common directory as `devurl` takes
+/// it: `<project>.git` names the project, and a `.git`, `.bare` or `git`
+/// directory names the one that holds it.
+fn repository(common: &Path) -> String {
+    let base = common
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = base.strip_suffix(".git").unwrap_or(&base);
+    let name = name.trim_start_matches('.');
+    match name {
+        "" | "bare" | "git" => common
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repository".into()),
+        n => n.to_string(),
+    }
+}
+
+/// Each `{name.<port>}` and `{port.<port>}` of `template` filled in; an
+/// error naming the address when it names a port that is not listed.
+fn fill(
+    label: &str,
+    template: &str,
+    names: &BTreeMap<String, String>,
+    ports: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let close = rest[i..]
+            .find('}')
+            .ok_or_else(|| anyhow!("[preview] addresses {label} leaves a {{ open"))?;
+        let inner = &rest[i + 1..i + close];
+        let value = match inner.split_once('.') {
+            Some(("name", p)) => names.get(&name_env(p)),
+            Some(("port", p)) => ports.get(&env_name(p)),
+            _ => None,
+        };
+        let Some(value) = value else {
+            bail!("[preview] addresses {label} names {{{inner}}}, a port [checkout] ports does not list");
+        };
+        out.push_str(value);
+        rest = &rest[i + close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// Whether nothing listens on `port` and it can be bound.
@@ -295,6 +437,119 @@ impl Places {
         })
     }
 
+    /// A preview as its record holds it.
+    fn preview_place(&self, name: &str, made: &Made) -> PreviewPlace {
+        let path = made
+            .path
+            .clone()
+            .unwrap_or_else(|| self.worktree_path(name));
+        PreviewPlace {
+            name: name.into(),
+            branch: made.branch.clone().unwrap_or_default(),
+            revision: made.revision.clone().unwrap_or_else(|| Rev::new("")),
+            gone: made.failed.is_none() && !path.is_dir(),
+            path,
+            ports: made.ports.clone(),
+            names: made.names.clone(),
+            addresses: made.addresses.clone(),
+            made: made.last_run.clone().unwrap_or_default(),
+            run: made.run.clone().map(RunHandle),
+            failed: made.failed.clone(),
+        }
+    }
+
+    /// The place a preview's command runs in, as its record names it.
+    fn preview_run_place(&self, name: &str, made: &Made) -> Result<Place> {
+        let mut env = made.ports.clone();
+        env.extend(made.names.clone());
+        env.insert(
+            "SLUICE_PLACE".to_string(),
+            format!(
+                "sluice-{}",
+                &self.hash(&self.record(name).to_string_lossy())?[..10]
+            ),
+        );
+        if let Some(b) = &made.branch {
+            env.insert("SLUICE_BRANCH".into(), b.clone());
+        }
+        if let Some(r) = &made.revision {
+            env.insert("SLUICE_REVISION".into(), r.to_string());
+        }
+        Ok(Place {
+            name: name.into(),
+            path: made
+                .path
+                .clone()
+                .unwrap_or_else(|| self.worktree_path(name)),
+            tmp: self.tmp(name),
+            env,
+        })
+    }
+
+    /// Every record in `.previews/`, by name.
+    fn preview_records(&self) -> Result<Vec<(String, Made)>> {
+        let dir = self.root().join(".previews");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for e in entries {
+            let path = e?.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let made: Made = match std::fs::read(&path) {
+                Ok(b) => serde_json::from_slice(&b)
+                    .with_context(|| format!("reading {}", path.display()))?,
+                // Released meanwhile.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if made.kind != Kind::Preview {
+                continue;
+            }
+            let Some(rev) = &made.revision else { continue };
+            let name = format!("{PREVIEW}{}", &rev.as_str()[..rev.as_str().len().min(12)]);
+            out.push((name, made));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// Previews-1 clause 99: a name for each of `ports` of a preview of
+    /// `rev` on `branch`, none the same as another preview's.
+    fn preview_names(
+        &self,
+        ports: &Ports,
+        rev: &Rev,
+        branch: &str,
+    ) -> Result<BTreeMap<String, String>> {
+        let taken: std::collections::BTreeSet<String> = self
+            .preview_records()?
+            .into_iter()
+            .filter(|(_, m)| m.revision.as_ref() != Some(rev))
+            .flat_map(|(_, m)| m.names.into_values())
+            .collect();
+        let repository = repository(&self.common);
+        let make = |len: usize| -> Result<BTreeMap<String, String>> {
+            let short = &rev.as_str()[..rev.as_str().len().min(len)];
+            let mut names = BTreeMap::new();
+            for p in &ports.names {
+                let whole = format!("{p}\0{}\0{branch}\0{repository}", rev.as_str());
+                let hash = &self.hash(&whole)?[..6];
+                names.insert(name_env(p), label(p, short, branch, &repository, hash));
+            }
+            Ok(names)
+        };
+        let names = make(7)?;
+        if names.values().any(|n| taken.contains(n)) {
+            return make(12);
+        }
+        Ok(names)
+    }
+
     /// Let go of what a place held beyond its checkout: its scratch
     /// directory, its block of ports and its record.
     fn let_go(&self, name: &str, block: Option<u32>) -> Result<()> {
@@ -330,13 +585,13 @@ impl Places {
 
     fn record(&self, name: &str) -> PathBuf {
         self.root()
-            .join(".places")
+            .join(places_dir(name))
             .join(format!("{}.json", flat_name(name)))
     }
 
     /// A `git-worktree` place's checkout.
     fn worktree_path(&self, name: &str) -> PathBuf {
-        self.root().join(".places").join(dir_name(name))
+        self.root().join(places_dir(name)).join(dir_name(name))
     }
 
     fn tmp(&self, name: &str) -> PathBuf {
@@ -612,6 +867,19 @@ impl Places {
     }
 }
 
+/// The names of a preview begin so (previews-1 clause 98).
+pub const PREVIEW: &str = "preview/";
+
+/// Where a place's record and checkout are kept: a preview's apart, in
+/// `.previews/`, which a sluice that predates previews never reads.
+fn places_dir(name: &str) -> &'static str {
+    if name.starts_with(PREVIEW) {
+        ".previews"
+    } else {
+        ".places"
+    }
+}
+
 /// A copy that shares blocks until written where the filesystem allows,
 /// keeping times, which cargo's fingerprints read. macOS's own `cp`, by
 /// path: a toolchain's GNU `cp` may come first on `PATH`.
@@ -662,14 +930,8 @@ impl Checkout for Places {
         }
         let record = self.record(name);
         let mut made = Made {
-            kind: Kind::Made,
-            method,
-            branch: None,
-            ports: BTreeMap::new(),
-            path: None,
             caches,
-            block: None,
-            last_run: None,
+            ..Made::new(Kind::Made, &method)
         };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
@@ -705,6 +967,10 @@ impl Checkout for Places {
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         if crate::runs::is_session(name) {
             self.release_session(name, None)?;
+            return Ok(());
+        }
+        if name.starts_with(PREVIEW) {
+            self.release_preview(name, None)?;
             return Ok(());
         }
         // 34: everything started in it ends first, its release command
@@ -843,14 +1109,9 @@ impl Checkout for Places {
             Some(_) => bail!("place {name} is a candidate's, not a session's"),
             None => {
                 let mut made = Made {
-                    kind: Kind::Session,
-                    method: "session".into(),
                     branch: Some(branch.into()),
-                    ports: BTreeMap::new(),
                     path: Some(path.clone()),
-                    caches: Vec::new(),
-                    block: None,
-                    last_run: None,
+                    ..Made::new(Kind::Session, "session")
                 };
                 // Written before the block is held, so a block names a record
                 // that exists, and a stop between leaves a record release
@@ -884,5 +1145,231 @@ impl Checkout for Places {
             tmp,
             env,
         })
+    }
+
+    fn preview(
+        &self,
+        name: &str,
+        rev: &Rev,
+        branch: &str,
+        checkout: &Settings,
+        addresses: &BTreeMap<String, String>,
+        at: &str,
+    ) -> Result<(Place, PreviewPlace)> {
+        assert!(name.starts_with(PREVIEW), "{name} is no preview's name");
+        // 100: one preview of a revision, given back as it is.
+        if let Some(made) = self.read_record(name)? {
+            if made.kind != Kind::Preview {
+                bail!("place {name} is not a preview");
+            }
+            return Ok((
+                self.preview_run_place(name, &made)?,
+                self.preview_place(name, &made),
+            ));
+        }
+        let method = match checkout.get("method") {
+            Some(Setting::Text(m)) => m.clone(),
+            None => bail!("[checkout] names no method: \"git-worktree\""),
+            Some(_) => bail!("[checkout] method must be a string"),
+        };
+        if method != "git-worktree" {
+            bail!(
+                "[checkout] method = {method:?}: a place is a git worktree, \"git-worktree\" (ADR 0013)"
+            );
+        }
+        let caches = self.caches(rev, checkout)?;
+        let ports = Ports::read(checkout)?;
+        // 99: each address checked against the ports before anything is
+        // made, with stand-in names and ports.
+        let (mut names, mut env_ports) = (BTreeMap::new(), BTreeMap::new());
+        for p in ports.iter().flat_map(|p| &p.names) {
+            names.insert(name_env(p), String::new());
+            env_ports.insert(env_name(p), String::new());
+        }
+        for (label, template) in addresses {
+            fill(label, template, &names, &env_ports)?;
+        }
+        let record = self.record(name);
+        let mut made = Made {
+            branch: Some(branch.into()),
+            caches,
+            last_run: Some(at.into()),
+            revision: Some(rev.clone()),
+            ..Made::new(Kind::Preview, &method)
+        };
+        // Written before the block is held, so a block names a record that
+        // exists, and a stop part way leaves a record release reads.
+        self.write_record(name, &made)?;
+        if let Some(ports) = &ports {
+            made.names = self.preview_names(ports, rev, branch)?;
+            let n = hold_block(&self.blocks()?, ports, &record)?;
+            made.block = Some(n);
+            let first = ports.first(n).expect("a held block fits");
+            for (i, p) in ports.names.iter().enumerate() {
+                made.ports
+                    .insert(env_name(p), (first + i as u16).to_string());
+            }
+            self.write_record(name, &made)?;
+        }
+        for (label, template) in addresses {
+            made.addresses.insert(
+                label.clone(),
+                fill(label, template, &made.names, &made.ports)?,
+            );
+        }
+        self.write_record(name, &made)?;
+        let tmp = self.tmp(name);
+        if tmp.exists() {
+            std::fs::remove_dir_all(&tmp)?;
+        }
+        std::fs::create_dir_all(&tmp)?;
+        let path = self.make_worktree(name, rev)?;
+        self.restore(&made.caches, &path)?;
+        made.path = Some(path);
+        self.write_record(name, &made)?;
+        Ok((
+            self.preview_run_place(name, &made)?,
+            self.preview_place(name, &made),
+        ))
+    }
+
+    fn preview_run(&self, name: &str, run: &RunHandle) -> Result<()> {
+        let mut made = match self.read_record(name)? {
+            Some(m) if m.kind == Kind::Preview => m,
+            _ => bail!("no preview {name}"),
+        };
+        made.run = Some(run.0.clone());
+        self.write_record(name, &made)
+    }
+
+    fn previews(&self) -> Result<Vec<PreviewPlace>> {
+        Ok(self
+            .preview_records()?
+            .iter()
+            .map(|(name, made)| self.preview_place(name, made))
+            .collect())
+    }
+
+    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+        let Some(made) = self.read_record(name)? else {
+            // A stop part way may have left its run: end it all the same.
+            self.runs.remove(name)?;
+            return Ok(false);
+        };
+        if made.kind != Kind::Preview {
+            bail!("place {name} is not a preview");
+        }
+        // 34: everything started in it ends, its release command included
+        // (ADR 0016), before its checkout goes.
+        self.runs.remove(name)?;
+        self.remove_worktree(&self.worktree_path(name))?;
+        let tmp = self.tmp(name);
+        if tmp.exists() {
+            std::fs::remove_dir_all(&tmp)?;
+        }
+        if let Some(n) = made.block {
+            free_block(&self.blocks()?, n, &self.record(name))?;
+        }
+        match failed {
+            // 101: kept, holding nothing, with what its command printed.
+            Some(output) if made.failed.is_none() => self.write_record(
+                name,
+                &Made {
+                    branch: made.branch.clone(),
+                    last_run: made.last_run.clone(),
+                    revision: made.revision.clone(),
+                    names: made.names.clone(),
+                    addresses: made.addresses.clone(),
+                    failed: Some(output.into()),
+                    ..Made::new(Kind::Preview, &made.method)
+                },
+            )?,
+            _ => match std::fs::remove_file(self.record(name)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            },
+        }
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fill, label, repository, slug};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    /// 99: a name is one label of lower-case letters, digits and hyphens.
+    #[test]
+    fn a_slug_is_part_of_a_label() {
+        assert_eq!(slug("Bolt/The_Edge--signs"), "bolt-the-edge-signs");
+        assert_eq!(slug("/x/"), "x");
+        assert_eq!(slug("API_Server"), "api-server");
+    }
+
+    /// 99: a short name is whole; a long one keeps the port and the
+    /// revision and is cut to 63 with a hash; a slash and capitals fold.
+    #[test]
+    fn a_name_is_one_label_of_at_most_63() {
+        assert_eq!(
+            label("web", "abc1234", "bolt/x", "sluice", "3f9a1c"),
+            "web-abc1234--bolt-x--sluice"
+        );
+        let long = label(
+            "portal",
+            "abc1234",
+            "bolt/the-local-world-finishes-the-real-deploy",
+            "switchboard",
+            "3f9a1c",
+        );
+        assert_eq!(long.len(), 63, "{long}");
+        assert!(
+            long.starts_with("portal-abc1234--bolt-the-local-world"),
+            "{long}"
+        );
+        assert!(long.ends_with("-3f9a1c"), "{long}");
+        assert!(!long.contains("---"), "{long}");
+        let other = label(
+            "portal",
+            "abc1234",
+            "bolt/the-local-world-finishes-the-real-deploy-again",
+            "switchboard",
+            "77e0d2",
+        );
+        assert_ne!(long, other, "two long names that share a beginning");
+        let caps = label("Web_Server", "ABC1234", "Unit/X", "Repo.Name", "000000");
+        assert_eq!(caps, "web-server-ABC1234--unit-x--repo-name");
+    }
+
+    /// 99: the repository's name, from its common directory.
+    #[test]
+    fn the_repository_is_named_from_its_common_directory() {
+        assert_eq!(repository(Path::new("/c/sluice/sluice.git")), "sluice");
+        assert_eq!(repository(Path::new("/c/switchboard/.git")), "switchboard");
+        assert_eq!(repository(Path::new("/c/breadboard/.bare")), "breadboard");
+        assert_eq!(repository(Path::new("/c/crew/git")), "crew");
+    }
+
+    /// 99: an address is filled in with the names and ports; a port the
+    /// policy does not list is refused, naming the address.
+    #[test]
+    fn an_address_is_filled_in() {
+        let names = BTreeMap::from([("SLUICE_NAME_WEB".to_string(), "web-a--b--c".to_string())]);
+        let ports = BTreeMap::from([("SLUICE_PORT_WEB".to_string(), "20000".to_string())]);
+        assert_eq!(
+            fill(
+                "web",
+                "https://{name.web}.localhost:{port.web}/x",
+                &names,
+                &ports
+            )
+            .unwrap(),
+            "https://web-a--b--c.localhost:20000/x"
+        );
+        let e = fill("api", "https://{name.api}.localhost", &names, &ports).unwrap_err();
+        assert!(
+            format!("{e}").contains("[preview] addresses api names {name.api}"),
+            "{e}"
+        );
     }
 }

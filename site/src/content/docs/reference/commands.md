@@ -16,6 +16,9 @@ sidebar:
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
 | `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. |
+| `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
+| `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
+| `sluice release <preview>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. |
 
 ## `sluice exec`
@@ -91,6 +94,60 @@ running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
 ```
 
 Until then, `sluice status` lists it as removed.
+
+## `sluice preview`
+
+A preview is a running copy of a revision a branch has landed, for a
+person to try: the repository's own stack, brought up by the policy's
+[`[preview]` command](/sluice/reference/configuration/#preview-a-running-copy-of-a-landed-revision)
+in a checkout of its own, with a port and a name for each of
+`[checkout] ports`. It is held until something asks for its release. The
+[previews guide](/sluice/guides/previews/) says what it is for and how a
+crew drives it.
+
+```console
+$ sluice preview bolt/concurrent-units 2eb676c
+preview/2eb676c8e45d of bolt/concurrent-units at 2eb676c: starting
+  api  http://localhost:20001/docs
+  web  https://web-2eb676c--bolt-concurrent-units--shop.localhost
+  ports: SLUICE_PORT_API=20001 SLUICE_PORT_WEB=20000
+```
+
+Only a revision in the branch's history is previewed: the head of a
+submission still queued, or a combination under test, is refused. The
+addresses are printed as soon as the command starts, filled in from the
+policy's templates. The command counts against the host's bound while it
+runs, waiting while the bound is full and never using the part
+`[runs] reserved` keeps for submissions; once it has ended, the preview
+counts against nothing. Ctrl-C while it waits leaves the preview to be
+started by the next `sluice preview` of that revision.
+
+Asking again for a revision that has a preview gives that preview, its
+names, ports and state unchanged, and starts nothing, so a caller that
+cannot tell whether it asked can ask. A revision has one preview on the
+host, whichever branch it was asked for through.
+
+A preview is `waiting` for room, `starting` while its command runs,
+`up` once the command exited 0, or `failed`. A failed preview is
+released at once, with what its command printed kept, and stays listed
+until it is released. `--wait` returns once the command has ended and
+exits 1 for a failure. `--json` prints one document:
+
+```console
+$ sluice preview bolt/concurrent-units 2eb676c --wait --json
+{"name":"preview/2eb676c8e45d","branch":"bolt/concurrent-units","revision":"2eb676c8e45d…","state":"up","made":"2026-10-14T09:12:40Z","checkout":"/home/me/shop/.git/sluice/.previews/preview+2F2eb676c8e45d","addresses":{"api":"http://localhost:20001/docs","web":"https://web-2eb676c--bolt-concurrent-units--shop.localhost"},"names":{"SLUICE_NAME_API":"api-2eb676c--bolt-concurrent-units--shop","SLUICE_NAME_WEB":"web-2eb676c--bolt-concurrent-units--shop"},"ports":{"SLUICE_PORT_API":"20001","SLUICE_PORT_WEB":"20000"},"exit":0}
+```
+
+A failed preview's document carries `output`, the end of what its
+command printed. Nothing of a preview is recorded as a test result, and
+no submission waits on it.
+
+`sluice previews` lists the host's previews the same way, as a list
+with `--json`. It first releases any preview whose command failed or
+whose checkout someone removed by hand. `sluice release <preview>` releases
+one: its command's run ends, the release command runs in the checkout,
+the checkout is removed and its ports and names are free. No round, step
+or landing ever releases a preview that is up.
 
 ## `wt submit`
 
@@ -177,6 +234,11 @@ it up.
 
 A submit following a pull request exits `1` as well when the pull
 request is closed without landing.
+
+`sluice preview` exits `0` once its command has started, or with
+`--wait` once the preview is up; `1` with `--wait` when its command
+failed; `2` when the revision or the branch is refused; `130` when
+stopped while it waits.
 
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
 not run or timed out, `2` on a refusal, and `130` when stopped with

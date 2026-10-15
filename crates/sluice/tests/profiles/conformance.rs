@@ -96,6 +96,31 @@ impl Checkout for RecordedPlaces {
     ) -> Result<sluice_seams::Released> {
         self.inner.release_session(name, policy)
     }
+
+    fn preview(
+        &self,
+        name: &str,
+        rev: &Rev,
+        branch: &str,
+        checkout: &Settings,
+        addresses: &std::collections::BTreeMap<String, String>,
+        at: &str,
+    ) -> Result<(Place, sluice_seams::PreviewPlace)> {
+        self.inner
+            .preview(name, rev, branch, checkout, addresses, at)
+    }
+
+    fn preview_run(&self, name: &str, run: &RunHandle) -> Result<()> {
+        self.inner.preview_run(name, run)
+    }
+
+    fn previews(&self) -> Result<Vec<sluice_seams::PreviewPlace>> {
+        self.inner.previews()
+    }
+
+    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+        self.inner.release_preview(name, failed)
+    }
 }
 
 struct RecordedChecks {
@@ -192,6 +217,9 @@ impl Driver for Sessions {
 struct Real {
     repo: Repo,
     sessions: Scratch,
+    /// The host's blocks of ports, kept with the rig: a sandboxed run
+    /// writes nothing of the user's own state.
+    _blocks: Scratch,
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
@@ -282,12 +310,13 @@ impl Real {
             state,
             ..
         } = bound;
+        let blocks = Scratch::new(&format!("{name}-blocks"));
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
             rules,
             checkout: RecordedPlaces {
-                inner: checkout,
+                inner: checkout.with_blocks(blocks.path().to_path_buf()),
                 log: RefCell::default(),
             },
             tests: RecordedChecks {
@@ -305,6 +334,7 @@ impl Real {
                 told: RefCell::default(),
             },
             state,
+            _blocks: blocks,
         }
     }
 
@@ -546,6 +576,11 @@ fn cached() -> String {
     )
 }
 
+/// The bolt policy with ports and a preview whose command does nothing.
+fn preview() -> String {
+    sluice_conformance::previewed(&bolt(), "true")
+}
+
 fn narrow() -> String {
     bolt().replace("[\"#gate\"]", "[\"a:test\"]")
 }
@@ -574,5 +609,8 @@ scenarios! {
     s26_a_clean_session_run_is_replayed_by_its_submission: cached();
     s28_a_dirty_session_run_records_nothing: bolt();
     s27_a_sessions_place_stays_until_it_is_released: bolt();
+    s30_a_landed_revision_is_previewed_at_its_addresses: preview();
+    s31_the_next_landings_preview_replaces_the_last: preview();
+    s32_asking_again_gives_back_the_same_preview: preview();
     a_removed_worktrees_place_is_released_by_the_next_round: bolt();
 }

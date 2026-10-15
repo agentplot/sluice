@@ -39,12 +39,15 @@ use crate::records::{
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice};
 
-/// A round: how its step went, and the session places it released
-/// because their worktrees no longer exist (session-runs-1 clause 97).
+/// A round: how its step went, the session places it released because
+/// their worktrees no longer exist (session-runs-1 clause 97), and the
+/// previews it released because nobody can use them (previews-1 clause
+/// 101).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Round {
     pub step: Step,
     pub released: Vec<crate::session::Abandoned>,
+    pub previews: Vec<crate::preview::Dropped>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,14 +68,21 @@ impl Sluice<'_> {
 
     /// One round of `branch`'s work, first releasing every session place
     /// on the host whose worktree no longer exists (session-runs-1
-    /// clause 97), before the branch's lock is taken: that release takes
-    /// the lock of its own place's branch.
+    /// clause 97) and every preview nobody can use (previews-1 clause
+    /// 101), before the branch's lock is taken: each release takes the
+    /// lock of its own place's branch.
     pub fn round(&self, branch: &str) -> Result<Round> {
         let round = info_span!("sluice.round", sluice.branch = branch, sluice.step = "");
         let _round = round.enter();
         let released = info_span!("sluice.abandoned").in_scope(|| self.release_abandoned())?;
+        let previews =
+            info_span!("sluice.previews").in_scope(|| self.release_unusable_previews())?;
         let step = self.step_locked(branch, &round)?;
-        Ok(Round { step, released })
+        Ok(Round {
+            step,
+            released,
+            previews,
+        })
     }
 
     fn step_locked(&self, branch: &str, round: &tracing::Span) -> Result<Step> {

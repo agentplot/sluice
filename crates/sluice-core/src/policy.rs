@@ -30,6 +30,23 @@ pub struct Policy {
     /// `[landing] subject`: a landing commit's first line, with `{id}`,
     /// `{from}`, `{agent}` and `{to}` filled in (23).
     pub landing_subject: String,
+    /// `[preview]`: how a preview of this revision is brought up
+    /// (previews-1 clauses 98, 99); `None` when the table is absent.
+    pub preview: Option<Preview>,
+}
+
+/// `[preview]`: what brings a preview of the revision up, and the
+/// addresses a person opens (previews-1 clauses 98, 99).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Preview {
+    /// The command, first word first: a list, or a string run by `sh -c`.
+    pub command: Vec<String>,
+    /// Each address by its label, a template over `{name.<port>}` and
+    /// `{port.<port>}`; the place seam fills them in and refuses a port
+    /// `[checkout] ports` does not list.
+    pub addresses: BTreeMap<String, String>,
+    /// How long the command may run; the branch's time limit when unset.
+    pub timeout: Option<Duration>,
 }
 
 /// A conventional commit's subject by default.
@@ -128,6 +145,16 @@ struct FileForm {
     branches: BTreeMap<String, RulesForm>,
     #[serde(default)]
     landing: LandingForm,
+    preview: Option<PreviewForm>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewForm {
+    command: Option<toml::Value>,
+    #[serde(default)]
+    addresses: BTreeMap<String, String>,
+    timeout: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -260,12 +287,14 @@ impl Policy {
         if landing_subject.trim().is_empty() || landing_subject.contains('\n') {
             bail!("[landing] subject must be one line");
         }
+        let preview = form.preview.map(preview).transpose()?;
         Ok(Policy {
             tests,
             checkout,
             limits,
             branches,
             landing_subject,
+            preview,
         })
     }
 
@@ -298,6 +327,49 @@ impl Policy {
         }
         Ok(best.map(|(_, _, r)| r))
     }
+}
+
+/// `[preview]`, its command and the shape of its addresses checked.
+fn preview(form: PreviewForm) -> Result<Preview> {
+    let command = match form.command {
+        None => bail!("[preview] names no command"),
+        Some(toml::Value::String(s)) if !s.trim().is_empty() => {
+            vec!["/bin/sh".into(), "-c".into(), s]
+        }
+        Some(toml::Value::Array(xs)) if !xs.is_empty() => xs
+            .into_iter()
+            .map(|x| match x {
+                toml::Value::String(s) => Ok(s),
+                other => bail!("[preview] command must list strings, not {other}"),
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => bail!("[preview] command must be a string or a list, the command first"),
+    };
+    for (label, template) in &form.addresses {
+        let mut rest = template.as_str();
+        while let Some(i) = rest.find('{') {
+            let close = rest[i..].find('}').ok_or_else(|| {
+                anyhow!("[preview] addresses {label} = {template:?} leaves a {{ open")
+            })?;
+            let inner = &rest[i + 1..i + close];
+            match inner.split_once('.') {
+                Some(("name" | "port", port)) if !port.is_empty() => {}
+                _ => bail!(
+                    "[preview] addresses {label} names {{{inner}}}; it may name {{name.<port>}} and {{port.<port>}}"
+                ),
+            }
+            rest = &rest[i + close + 1..];
+        }
+    }
+    let timeout = match form.timeout.as_deref() {
+        None => None,
+        Some(t) => Some(parse_duration(t).context("[preview] timeout")?),
+    };
+    Ok(Preview {
+        command,
+        addresses: form.addresses,
+        timeout,
+    })
 }
 
 /// A profile's table: each value a string, a number, a list of strings,
@@ -655,6 +727,43 @@ batch = true
                 .checkout["ports_from"],
             Setting::Text("20000".into())
         );
+    }
+
+    /// Previews-1 clauses 98, 99: `[preview]`'s command, addresses and
+    /// time limit.
+    #[test]
+    fn reads_the_preview_table() {
+        assert_eq!(Policy::parse("").unwrap().preview, None);
+        let p = Policy::parse(
+            "[preview]\ncommand = [\"moon\", \"run\", \"app:preview\"]\n\
+             addresses = { web = \"https://{name.web}.localhost\", api = \"http://localhost:{port.api}/docs\" }\n\
+             timeout = \"10m\"\n",
+        )
+        .unwrap()
+        .preview
+        .unwrap();
+        assert_eq!(p.command, ["moon", "run", "app:preview"]);
+        assert_eq!(p.addresses["web"], "https://{name.web}.localhost");
+        assert_eq!(p.timeout, Some(Duration::from_secs(600)));
+        let shell = Policy::parse("[preview]\ncommand = \"make preview\"\n").unwrap();
+        assert_eq!(
+            shell.preview.unwrap().command,
+            ["/bin/sh", "-c", "make preview"]
+        );
+        let refused = |text: &str| format!("{:#}", Policy::parse(text).unwrap_err());
+        assert!(refused("[preview]\n").contains("[preview] names no command"));
+        assert!(refused("[preview]\ncommand = []\n").contains("a string or a list"));
+        assert!(
+            refused("[preview]\ncommand = \"x\"\naddresses = { web = \"{host}\" }\n")
+                .contains("[preview] addresses web names {host}")
+        );
+        assert!(
+            refused("[preview]\ncommand = \"x\"\naddresses = { web = \"{name.web\" }\n")
+                .contains("leaves a { open")
+        );
+        assert!(refused("[preview]\ncommand = \"x\"\ntimeout = \"soon\"\n")
+            .contains("[preview] timeout"));
+        assert!(refused("[preview]\ncommand = \"x\"\nurls = {}\n").contains("urls"));
     }
 
     #[test]

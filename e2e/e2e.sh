@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sluice end to end: S1 to S4 of the statement, and S27 of session-runs-1, for real, on a scratch repository: a moon workspace of two
+# sluice end to end: S1 to S4 of the statement, S27 of session-runs-1 and S30 of previews-1, for real, on a scratch repository: a moon workspace of two
 # projects, beta depending on alpha.
 #
 #   e2e.sh <new dir> fixture   build the repository, then prove each scenario's fixture with git and moon alone:
@@ -126,7 +126,7 @@ esac
 # Every scenario's branch exists before sluice protects bolt/*: made here, and from now on moved only by sluice.
 for s in s1 s2 s3 s4 s27; do git branch "bolt/$s" main; done
 # S27's branch gives each checkout a port and a release command that writes which checkout it released, while
-# that checkout still exists.
+# that checkout still exists, and a preview whose command does nothing (S30).
 git switch -q bolt/s27
 # shellcheck disable=SC2016 # $SLUICE_CHECKOUT is the release command's, expanded when it runs
 sed -e 's|^runner = "moon"$|&\
@@ -135,7 +135,8 @@ release = "test -d \\"$SLUICE_CHECKOUT\\" \&\& echo \\"$SLUICE_CHECKOUT\\" >> '"
 ports = ["web"]\
 ports_from = 42000|' .config/sluice.toml >.config/sluice.toml.e2e
 mv .config/sluice.toml.e2e .config/sluice.toml
-git commit -qam "a port and a release command for S27"
+printf '\n[preview]\ncommand = "true"\naddresses = { web = "https://{name.web}.localhost" }\n' >>.config/sluice.toml
+git commit -qam "a port, a release command and a preview for S27 and S30"
 git switch -q main
 
 # --- three sessions' places, each on a fresh unit branch per scenario ----------------------------------------------
@@ -334,4 +335,19 @@ held() { # held: how many blocks of ports the host still holds
   if [ -e "$1" ]; then echo $#; else echo 0; fi
 }
 expect "S27 d's ports free" "$(held)" 0
+
+# S30: the revision d's submission landed is previewed: its command runs and ends, the preview stays up and listed,
+# at an address made of its port's name; released at its caller's asking, its checkout goes and its port is free.
+R=$(git -C "$REPO" rev-parse bolt/s27)
+out=$(indir "$REPO" sluice preview bolt/s27 "$R" --wait --json) && rc=0 || rc=$?
+expect "S30 exit" "$rc" 0
+expect "S30 up" "$(printf '%s' "$out" | jq -r .state)" up
+expect "S30 address" "$(printf '%s' "$out" | jq -r .addresses.web)" "https://web-${R:0:7}--bolt-s27--*.localhost"
+N=$(printf '%s' "$out" | jq -r .name)
+expect "S30 listed" "$(indir "$REPO" sluice previews --json | jq -r '.[0].name')" "$N"
+expect "S30 held" "$(held)" 1
+indir "$REPO" sluice release "$N" >/dev/null
+expect "S30 released in its checkout" "$(grep -c '/.previews/' "$ROOT/released.log" || true)" 1
+expect "S30 its port free" "$(held)" 0
+expect "S30 none left" "$(indir "$REPO" sluice previews --json | jq length)" 0
 exit $FAILED

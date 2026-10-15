@@ -252,4 +252,17 @@ impl crate::exec::Host for Bound {
     fn end_run(&self, run: &sluice_seams::RunHandle) -> Result<()> {
         self.tests.runs().end(&run.0)
     }
+
+    fn revision(&self, rev: &str) -> Result<Option<String>> {
+        let out = Command::new("git")
+            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+            .arg(format!("{rev}^{{commit}}"))
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()?;
+        let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok((out.status.success() && !full.is_empty()).then_some(full))
+    }
 }

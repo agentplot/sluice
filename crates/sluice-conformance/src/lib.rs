@@ -37,6 +37,18 @@ pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
     )
 }
 
+/// `policy` with two ports and a preview table whose command is
+/// `command` (previews-1 clauses 98, 99).
+pub fn previewed(policy: &str, command: &str) -> String {
+    policy.replace(
+        "method = \"fake\"\n",
+        "method = \"fake\"\nports = [\"web\", \"api\"]\n",
+    ) + &format!(
+        "\n[preview]\ncommand = \"{command}\"\n\
+         addresses = {{ web = \"https://{{name.web}}.localhost\", api = \"http://localhost:{{port.api}}/docs\" }}\n"
+    )
+}
+
 /// What a scenario needs of a world: `bolt/x` holding three projects,
 /// `a/`, `b/` and `c/`, each with one check `<project>:test` tagged
 /// `gate` that the project's files affect, under a policy.

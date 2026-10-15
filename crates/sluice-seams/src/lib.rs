@@ -106,6 +106,35 @@ pub struct ReleasePolicy {
     pub limits: Limits,
 }
 
+/// A preview: a place sluice made at a revision its branch has landed,
+/// held until its caller asks for its release (previews-1 clauses 98 to
+/// 101).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewPlace {
+    pub name: String,
+    /// The branch it was first asked for through.
+    pub branch: String,
+    pub revision: Rev,
+    /// Its checkout.
+    pub path: PathBuf,
+    /// `SLUICE_PORT_<NAME>` for each port it holds (31).
+    pub ports: BTreeMap<String, String>,
+    /// `SLUICE_NAME_<NAME>` for each port: one DNS label, unique on the
+    /// host (99).
+    pub names: BTreeMap<String, String>,
+    /// Each address the policy names, filled in (99).
+    pub addresses: BTreeMap<String, String>,
+    /// When it was made.
+    pub made: String,
+    /// Its command's run, once started.
+    pub run: Option<RunHandle>,
+    /// Its checkout no longer exists.
+    pub gone: bool,
+    /// It was released because its command failed: the end of what the
+    /// command printed. Such a preview holds nothing (101).
+    pub failed: Option<String>,
+}
+
 /// How a session's place was released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Released {
@@ -160,6 +189,35 @@ pub trait Checkout {
     /// Session-runs-1 clause 97: every session's place the repository
     /// holds, each with whether its worktree still exists.
     fn session_places(&self) -> Result<Vec<SessionPlace>>;
+
+    /// Previews-1 clauses 98, 99: a preview named `name` holding exactly
+    /// `rev`, made as a candidate's place is, with its caches and ports, and
+    /// a name for each port; each of `addresses` filled in with the names
+    /// and ports. An address that names a port `checkout` does not list is
+    /// refused before anything is made. A preview of that name that exists
+    /// already is given back as it is (100).
+    fn preview(
+        &self,
+        name: &str,
+        rev: &Rev,
+        branch: &str,
+        checkout: &Settings,
+        addresses: &BTreeMap<String, String>,
+        at: &str,
+    ) -> Result<(Place, PreviewPlace)>;
+
+    /// The preview `name`'s command has started as `run`.
+    fn preview_run(&self, name: &str, run: &RunHandle) -> Result<()>;
+
+    /// Previews-1 clause 101: every preview the repository holds.
+    fn previews(&self) -> Result<Vec<PreviewPlace>>;
+
+    /// Previews-1 clause 101: release the preview `name`: its command's
+    /// run ended, the release command run, its checkout removed, its ports
+    /// and names let go. With `failed`, a record of it is kept, holding
+    /// nothing, with what its command printed. `false` when there is no
+    /// such preview.
+    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool>;
 }
 
 // ---------------------------------------------------------------------------

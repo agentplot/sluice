@@ -30,8 +30,13 @@ readable with plain tools whether or not sluice is running.
                        the block of ports it holds on the host and, for a
                        worktree, when its last run started
   .places/<checkout>/  a candidate's checkout, made for its run and removed after
+  .previews/<preview>.json
+                       a preview's record: its branch, revision, ports, names,
+                       addresses, when it was made and its command's run; for a
+                       failed preview, what its command printed and nothing held
+  .previews/<preview>/ a preview's checkout, kept until it is released
   .tmp/<checkout>/     the checkout's scratch, SLUICE_TMP; a worktree keeps its own across runs
-  .runs/<checkout>/    a candidate's run
+  .runs/<checkout>/    a candidate's run, or a preview's command
   .runs/<worktree>/<n>/
                        each run an agent started in its worktree, numbered;
                        release/ beside them is where sluice release runs
@@ -58,6 +63,10 @@ every repository on the host and never pushed:
                        worktree, its branch, its process, when it started
                        and where its output is
 ```
+
+A preview's record is kept apart from the other checkouts' so that a
+sluice older than previews never reads one. A preview's command counts
+in `sessions/` while it runs, as an agent's run does.
 
 A block of ports is free again when the checkout named in it is gone.
 A file in `sessions/` counts against the bound for as long as its run

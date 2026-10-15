@@ -33,6 +33,9 @@ pub trait Host {
     fn run_dir(&self, run: &RunHandle) -> Option<PathBuf>;
     /// End a run's process group now.
     fn end_run(&self, run: &RunHandle) -> Result<()>;
+    /// `rev` as the repository's full revision, or `None` when it names
+    /// none.
+    fn revision(&self, rev: &str) -> Result<Option<String>>;
 }
 
 pub struct Exec<'a> {
@@ -157,6 +160,7 @@ impl Exec<'_> {
         // 97: a session's place whose worktree is gone is released by the
         // next run on the host, before this one counts.
         tell_abandoned(out, json, &s.release_abandoned()?)?;
+        crate::preview::tell_dropped(out, json, &s.release_unusable_previews()?)?;
         let command = (!self.command.is_empty()).then(|| shell_line(&self.command));
         match &command {
             None => say(
