@@ -1043,7 +1043,7 @@ impl crate::PullRequests for Pulls {
         if let Some(e) = latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
-                return Ok(Followed::Done(e.clone()));
+                return Ok(Followed::Done(e.clone(), names(&status.submissions)));
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {

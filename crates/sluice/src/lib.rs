@@ -14,6 +14,7 @@ pub mod runs;
 pub mod sessions;
 pub mod telemetry;
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -207,8 +208,9 @@ pub struct Opened {
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
     Open { title: String, lines: Vec<String> },
-    /// Its submission on its head landed, failed or conflicts.
-    Done(Submission),
+    /// Its submission on its head landed, failed or conflicts, with what
+    /// each submission is called on a pull request.
+    Done(Submission, BTreeMap<u64, String>),
     /// Closed without landing.
     Closed,
 }
@@ -712,7 +714,7 @@ fn submit(
             return still_queued(out);
         }
     };
-    report(s, &sub, &req.branch, json, out)
+    report(s, &sub, &req.branch, &BTreeMap::new(), json, out)
 }
 
 /// A submission's outcome, as a waiting submit ends with it.
@@ -720,10 +722,19 @@ fn report(
     s: &Sluice<'_>,
     sub: &Submission,
     branch: &str,
+    names: &BTreeMap<u64, String>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let id = sub.id;
+    let name = |i: u64| names.get(&i).cloned().unwrap_or_else(|| format!("#{i}"));
+    let combination = |ids: &[u64]| {
+        let mut s = branch.to_string();
+        for i in ids {
+            s.push_str(&format!(" + {}", name(*i)));
+        }
+        s
+    };
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
         return Ok(exit_for(sub));
@@ -746,7 +757,7 @@ fn report(
         writeln!(
             out,
             "testing {} · {ran} tasks to run, {replayed} replayed",
-            combination(branch, &t.submissions)
+            combination(&t.submissions)
         )?;
     }
     match sub.state {
@@ -776,7 +787,7 @@ fn report(
             writeln!(
                 out,
                 "  on {} ({})",
-                combination(branch, &t.submissions),
+                combination(&t.submissions),
                 t.combination.short()
             )?;
             let ahead: Vec<u64> = t.submissions.iter().copied().filter(|i| *i != id).collect();
@@ -784,13 +795,17 @@ fn report(
                 0 => {}
                 1 => writeln!(
                     out,
-                    "  #{} passed on its own, so the failure is from this submission",
-                    ahead[0]
+                    "  {} passed on its own, so the failure is from this submission",
+                    name(ahead[0])
                 )?,
                 _ => writeln!(
                     out,
                     "  {} passed ahead of it, so the failure is from this submission",
-                    hashes(&ahead)
+                    ahead
+                        .iter()
+                        .map(|i| name(*i))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )?,
             }
             // 20: where what each failed task printed is kept.
@@ -810,8 +825,10 @@ fn report(
             for w in &c.with {
                 writeln!(
                     out,
-                    "  conflicts with #{} ({}, {})",
-                    w.id, w.from.agent, w.from.worktree
+                    "  conflicts with {} ({}, {})",
+                    name(w.id),
+                    w.from.agent,
+                    w.from.worktree
                 )?;
             }
             writeln!(
@@ -908,12 +925,12 @@ fn submit_pull(
     loop {
         intake(pulls, seams, clock, branch);
         match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub) => {
+            Followed::Done(sub, names) => {
                 if status {
                     write_status(&s.status(branch)?, None, std::slice::from_ref(&sub), out)?;
                     return Ok(0);
                 }
-                return report(s, &sub, branch, json, out);
+                return report(s, &sub, branch, &names, json, out);
             }
             Followed::Closed => {
                 writeln!(out, "#{number} was closed without landing")?;

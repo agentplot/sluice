@@ -662,6 +662,11 @@ fn a_waiting_submit_follows_its_pull_request() {
         .expect(&said);
     let landed = said.find("landed as").expect(&said);
     assert!(waiting < queued && queued < landed, "{said}");
+    // Every submission is named by its pull request's number.
+    assert!(
+        said.contains(&format!("testing main + #{} ·", pull.number)),
+        "{said}"
+    );
     assert!(!w.exists(), "the worktree is removed on landing: {said}");
 }
 
