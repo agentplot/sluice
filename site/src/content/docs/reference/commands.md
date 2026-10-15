@@ -7,7 +7,7 @@ sidebar:
 
 | Command | |
 |---|---|
-| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome. `--no-wait` returns once queued; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
+| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
 | `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. `--json` for tools. |
 | `sluice run` | Work every branch's queue until stopped. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
@@ -77,6 +77,34 @@ passed · landed as b7d2e94
 Submitting again from the same worktree withdraws that worktree's earlier
 submission.
 
+### To a branch with pull requests
+
+When the branch's policy has a
+[`pull_requests` table](/sluice/reference/configuration/#branchespatternpull_requests),
+`sluice submit` and `wt submit` don't queue the worktree's head. They
+push the worktree's branch to the branch's remote and open a pull
+request from it, ready for review, or update the one already open from
+that branch. The pull request waits for its conditions like any other,
+and sluice submits it once they hold:
+
+```console
+$ wt submit main
+pushed unit/batch-review · opened #41: Batch review cards
+waiting: needs 1 review, qa/approved
+  forecast: merges without conflict behind #38, #40
+queued behind #38, #40
+testing main + #38 + #40 + #41
+testing main + #38 + #40 + #41 · 2 tasks to run, 0 replayed
+passed · landed as b7d2e94
+```
+
+A waiting submit prints each state the pull request reaches, runs
+sluice's rounds while it waits, and exits as any submit does. On a pull
+request, `#41` is the pull request's number. `--no-wait` returns once
+the pull request is open, and `wt submit main --status` reports its
+state later. `wt submit` removes the worktree only when the pull request
+lands; sent back, the worktree stays for the fix.
+
 ## `sluice forge check`
 
 Checks what the host's
@@ -112,6 +140,9 @@ it up.
 | `2` | a conflict, or a refusal |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
+A submit following a pull request exits `1` as well when the pull
+request is closed without landing.
+
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
 not run or timed out, `2` on a refusal, and `130` when stopped with
 Ctrl-C, which ends the run. With a command, it exits with the command's
@@ -128,7 +159,9 @@ only one run at a time for a branch.
   rounds itself between reads of its own submission's state, so nothing
   else needs to be running ([ADR 0011](/sluice/decisions/0011/)).
   `sluice run` and `sluice step` do the same for a host when no agent is
-  waiting.
+  waiting. For a branch with pull requests, each round first reads its
+  open pull requests on GitHub, and `sluice run` serves that branch
+  before it has any submission.
 - **On a fleet**, passed `--remote`, a submit only submits and waits, and
   a `sluice run` runs every round: one on a shared host that every
   submission goes to ([ADR 0012](/sluice/decisions/0012/)), or one on

@@ -30,7 +30,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 ## 5. Submit
 
 - [x] 5.1 `sluice submit` to a branch with `pull_requests` pushes the agent's branch, opens or updates the pull request with the body marker, and waits or returns; `wt submit` passes through, removing the worktree only on landing. Verify with acceptance tests on the fake and a bare remote for every scenario of `specs/pull-request-submit/spec.md`, through `wt submit` as the worktrunk tests do.
-- [ ] 5.2 Update `site/src/content/docs/reference/commands.md` and `state.md` for submitting to a branch with pull requests and the `pull/<n>` submitter. Verify `devenv shell -- moon run site:prose` passes.
+- [x] 5.2 Update `site/src/content/docs/reference/commands.md` and `state.md` for submitting to a branch with pull requests and the `pull/<n>` submitter. Verify `devenv shell -- moon run site:prose` passes.
 
 ## 6. Documentation and the decision
 
