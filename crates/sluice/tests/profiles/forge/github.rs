@@ -62,6 +62,21 @@ fn sync(forge: &FileForge, bare: &Path) {
         }
         set_ref(bare, &format!("refs/pull/{}/head", p.number), &head);
     }
+    // A pull request whose head is in its branch is merged.
+    for p in held.pulls.iter().filter(|p| p.open && !p.head.is_empty()) {
+        let into = format!("refs/heads/{}", p.base);
+        let merged = crate::support::git_command()
+            .arg("--git-dir")
+            .arg(bare)
+            .args(["merge-base", "--is-ancestor", &p.head, &into])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        if merged {
+            forge.close(p.number).unwrap();
+        }
+    }
 }
 
 pub fn rev(bare: &Path, name: &str) -> Option<String> {

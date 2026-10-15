@@ -148,6 +148,55 @@ impl PushedRefs {
         }
         self.local.read_ref(&self.tracking(branch))
     }
+
+    /// Fetch the remote's ref `src` into the local ref `dst`, which it
+    /// replaces; `None` when the remote has no such ref. Writes no branch.
+    pub fn fetch_ref(&self, src: &str, dst: &str) -> Result<Option<Rev>> {
+        let spec = format!("+{src}:{dst}");
+        let out = self.remote_git(&[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            self.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            if err.contains("couldn't find remote ref") {
+                return Ok(None);
+            }
+            bail!("fetching {src} from {} failed: {}", self.remote, err.trim());
+        }
+        self.local.read_ref(dst)
+    }
+
+    /// A local ref's revision, `None` when there is none.
+    pub fn read_ref(&self, name: &str) -> Result<Option<Rev>> {
+        self.local.read_ref(name)
+    }
+
+    /// Set the remote's branch `branch` to `rev`, whatever it held: a
+    /// session's own branch, which no policy protects, pushed for its
+    /// pull request.
+    pub fn push_branch(&self, rev: &Rev, branch: &str) -> Result<()> {
+        let refspec = format!("+{rev}:refs/heads/{branch}");
+        let out = self.remote_git(&[
+            "push",
+            "--porcelain",
+            "--no-verify",
+            self.target(),
+            &refspec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "pushing {branch} to {} failed: {}",
+                self.remote,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// The git command for the remote: the host's own configuration and

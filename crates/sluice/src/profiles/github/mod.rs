@@ -8,6 +8,7 @@ pub mod app;
 pub mod check;
 pub mod fake;
 pub mod forge;
+pub mod pulls;
 mod rest;
 
 pub use app::{App, Repo};

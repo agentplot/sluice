@@ -20,16 +20,16 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 3. Intake
 
-- [ ] 3.1 Add the pull request driver (`session("pull/<n>")` fetching `refs/pull/<n>/head`, the agent from the body marker or the author) and the driver router. Verify with acceptance tests on the fake that a submission from `pull/7` has the pull request's head and agent.
-- [ ] 3.2 Add the intake pass before each round of a branch with `pull_requests` in `submit`'s wait, `step` and `run`; `run` serves branches whose policy names `pull_requests`. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-intake/spec.md`: waiting for a check, a draft, opened by hand, a stale review, a fork, a new commit while queued, closed while queued, blamed then retried, blamed and left alone. Run in the tools tier.
+- [x] 3.1 Add the pull request driver (`session("pull/<n>")` fetching `refs/pull/<n>/head`, the agent from the body marker or the author) and the driver router. Verify with acceptance tests on the fake that a submission from `pull/7` has the pull request's head and agent.
+- [x] 3.2 Add the intake pass before each round of a branch with `pull_requests` in `submit`'s wait, `step` and `run`; `run` serves branches whose policy names `pull_requests`. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-intake/spec.md`: waiting for a check, a draft, opened by hand, a stale review, a fork, a new commit while queued, closed while queued, blamed then retried, blamed and left alone. Run in the tools tier.
 
 ## 4. Status and comments
 
-- [ ] 4.1 Post the `sluice` check run from intake and from the driver's `notify`, with what is missing and the forecast while waiting, never updating it to what it already reads; comment once on failed and conflict. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-status/spec.md`, and that a landing leaves the pull request's head as the landing commit's second parent on the bare remote.
+- [x] 4.1 Post the `sluice` check run from intake and from the driver's `notify`, with what is missing and the forecast while waiting, never updating it to what it already reads; comment once on failed and conflict. Verify with acceptance tests on the fake, one per scenario of `specs/pull-request-status/spec.md`, and that a landing leaves the pull request's head as the landing commit's second parent on the bare remote.
 
 ## 5. Submit
 
-- [ ] 5.1 `sluice submit` to a branch with `pull_requests` pushes the agent's branch, opens or updates the pull request with the body marker, and waits or returns; `wt submit` passes through, removing the worktree only on landing. Verify with acceptance tests on the fake and a bare remote for every scenario of `specs/pull-request-submit/spec.md`, through `wt submit` as the worktrunk tests do.
+- [x] 5.1 `sluice submit` to a branch with `pull_requests` pushes the agent's branch, opens or updates the pull request with the body marker, and waits or returns; `wt submit` passes through, removing the worktree only on landing. Verify with acceptance tests on the fake and a bare remote for every scenario of `specs/pull-request-submit/spec.md`, through `wt submit` as the worktrunk tests do.
 - [ ] 5.2 Update `site/src/content/docs/reference/commands.md` and `state.md` for submitting to a branch with pull requests and the `pull/<n>` submitter. Verify `devenv shell -- moon run site:prose` passes.
 
 ## 6. Documentation and the decision
