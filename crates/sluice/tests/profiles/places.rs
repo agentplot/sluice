@@ -396,7 +396,14 @@ fn a_block_with_a_port_in_use_is_passed_over() {
     let a = p
         .materialize(NAME, &rev, &ported(&["web", "api"], &from.to_string()))
         .unwrap();
-    assert_eq!(port(&a, "SLUICE_PORT_WEB"), from + 2);
+    // The first block holds the busy port, so a later block is given: which
+    // one depends on what else the host holds at that moment.
+    let web = port(&a, "SLUICE_PORT_WEB");
+    assert_ne!(web, from, "the block with the busy port was given");
+    assert!(
+        web > from + 1 && (web - from) % 2 == 0,
+        "not a block's first port: {web}"
+    );
     p.release(NAME, false).unwrap();
 }
 
