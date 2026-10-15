@@ -32,8 +32,34 @@ pub struct Bound {
     pub checkout: places::Places,
     pub tests: checks::Checks,
     pub branch: branches::Branches,
-    pub driver: worktrunk::Worktrunk,
+    pub driver: Drivers,
     pub state: local_files::LocalFiles,
+    /// The pull request driver, which also takes pull requests in.
+    pub pulls: Rc<github::pulls::Pulls>,
+}
+
+/// The driver seam as an instance binds it: a pull request's place,
+/// `pull/<n>`, to the pull request driver, and every other to worktrunk's
+/// (C.5).
+pub struct Drivers {
+    worktrunk: worktrunk::Worktrunk,
+    pulls: Rc<github::pulls::Pulls>,
+}
+
+impl sluice_seams::Driver for Drivers {
+    fn session(&self, worktree: &str) -> Result<sluice_seams::Session> {
+        match github::pulls::number(worktree) {
+            Some(_) => self.pulls.session(worktree),
+            None => self.worktrunk.session(worktree),
+        }
+    }
+
+    fn notify(&self, n: &sluice_seams::Notification) -> Result<()> {
+        match github::pulls::number(&n.to.worktree) {
+            Some(_) => self.pulls.notify(n),
+            None => self.worktrunk.notify(n),
+        }
+    }
 }
 
 impl Bound {
@@ -45,16 +71,24 @@ impl Bound {
 
     /// `program` is the `sluice` executable that supervises check runs.
     pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
-        // C.4: the app the host names is sluice's identity on GitHub.
-        let identity = match &instance.forge {
-            Some(f) => Some((
-                Rc::new(github::App::open(f)?) as Rc<dyn Identity>,
-                program.clone(),
-            )),
+        // C.4: the app the host names is sluice's identity on GitHub, and
+        // C.5: what reads and posts pull requests there.
+        let app = match &instance.forge {
+            Some(f) => Some(Rc::new(github::App::open(f)?)),
             None => None,
         };
-        let branch = branches::Branches::open_as(dir, identity)?;
+        let identity = app
+            .clone()
+            .map(|a| (a as Rc<dyn Identity>, program.clone()));
+        let forge = app.map(|a| a as Rc<dyn github::Forge>);
+        let branch = branches::Branches::open_as(dir, identity.clone())?;
         let common = branch.common_dir()?;
+        let pulls = Rc::new(github::pulls::Pulls::new(
+            branch.git_dir(),
+            &common,
+            forge,
+            identity,
+        ));
         let state = local_files::LocalFiles::new(&common);
         let jobs = instance.jobs();
         Ok(Bound {
@@ -69,8 +103,12 @@ impl Bound {
             })),
             tests: checks::Checks::new(&common, program, instance),
             branch,
-            driver: worktrunk::Worktrunk,
+            driver: Drivers {
+                worktrunk: worktrunk::Worktrunk,
+                pulls: pulls.clone(),
+            },
             state,
+            pulls,
         })
     }
 

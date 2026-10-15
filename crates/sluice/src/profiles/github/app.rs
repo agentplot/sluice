@@ -183,7 +183,7 @@ impl App {
         let installation = self.installation(repo)?;
         let body = serde_json::json!({ "repositories": [repo.name] }).to_string();
         let v = self
-            .post(
+            .post_api(
                 &format!("/app/installations/{}/access_tokens", installation.id),
                 &self.jwt()?,
                 &body,
@@ -210,48 +210,79 @@ impl App {
 
     /// `GET` an API path with a bearer token.
     pub fn get(&self, path: &str, bearer: &str) -> Result<Value> {
-        let resp = self
-            .http
-            .get(format!("{}{path}", self.api))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("Authorization", format!("Bearer {bearer}"))
-            .call();
-        answer("GET", path, resp)
+        self.send("GET", path, bearer, None)
     }
 
-    fn post(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.api))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("Authorization", format!("Bearer {bearer}"))
-            .header("Content-Type", "application/json")
-            .send(body);
-        answer("POST", path, resp)
+    pub(super) fn post_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
+        self.send("POST", path, bearer, Some(body))
     }
-}
 
-/// The JSON of a successful answer; any other is an error with GitHub's
-/// message.
-fn answer(
-    method: &str,
-    path: &str,
-    resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> Result<Value> {
-    let mut resp = resp.with_context(|| format!("{method} {path}"))?;
-    let status = resp.status().as_u16();
-    let text = resp
-        .body_mut()
-        .read_to_string()
-        .with_context(|| format!("{method} {path}"))?;
-    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    if !(200..300).contains(&status) {
-        let why = v["message"].as_str().unwrap_or(text.trim());
-        bail!("{method} {path}: {status} {why}");
+    pub(super) fn patch_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
+        self.send("PATCH", path, bearer, Some(body))
     }
-    Ok(v)
+
+    fn send(&self, method: &str, path: &str, bearer: &str, body: Option<&str>) -> Result<Value> {
+        let (status, v, text) = self.call(method, path, bearer, body)?;
+        if !(200..300).contains(&status) {
+            let why = v["message"].as_str().unwrap_or(text.trim());
+            bail!("{method} {path}: {status} {why}");
+        }
+        Ok(v)
+    }
+
+    /// `GET` an API path; `None` when GitHub has nothing there (404).
+    pub(super) fn get_found(&self, path: &str, bearer: &str) -> Result<Option<Value>> {
+        let (status, v, text) = self.call("GET", path, bearer, None)?;
+        match status {
+            404 => Ok(None),
+            200..=299 => Ok(Some(v)),
+            _ => {
+                let why = v["message"].as_str().unwrap_or(text.trim());
+                bail!("GET {path}: {status} {why}");
+            }
+        }
+    }
+
+    /// One call: its status, its JSON, and its text.
+    fn call(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: &str,
+        body: Option<&str>,
+    ) -> Result<(u16, Value, String)> {
+        let url = format!("{}{path}", self.api);
+        let auth = format!("Bearer {bearer}");
+        let resp = match (method, body) {
+            ("GET", _) => self
+                .http
+                .get(&url)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("Authorization", &auth)
+                .call(),
+            (_, body) => {
+                let req = match method {
+                    "POST" => self.http.post(&url),
+                    "PATCH" => self.http.patch(&url),
+                    other => bail!("sluice makes no {other} call"),
+                };
+                req.header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .header("Authorization", &auth)
+                    .header("Content-Type", "application/json")
+                    .send(body.unwrap_or(""))
+            }
+        };
+        let mut resp = resp.with_context(|| format!("{method} {path}"))?;
+        let status = resp.status().as_u16();
+        let text = resp
+            .body_mut()
+            .read_to_string()
+            .with_context(|| format!("{method} {path}"))?;
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        Ok((status, v, text))
+    }
 }
 
 #[cfg(test)]

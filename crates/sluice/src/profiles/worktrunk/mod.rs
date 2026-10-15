@@ -118,7 +118,8 @@ pub struct Submit {
 
 impl Submit {
     /// `--no-remove` is `wt submit`'s own; a submit that does not wait
-    /// for its outcome (`--no-wait`, `--check`) removes nothing.
+    /// for its outcome (`--no-wait`, `--check`, `--status`) removes
+    /// nothing.
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Submit {
         let mut rest = Vec::new();
         let mut keep = false;
@@ -127,7 +128,7 @@ impl Submit {
         while let Some(a) = args.next() {
             match a.to_str() {
                 Some("--no-remove") => keep = true,
-                Some("--no-wait" | "--check") => {
+                Some("--no-wait" | "--check" | "--status") => {
                     keep = true;
                     rest.push(a);
                 }
@@ -224,6 +225,7 @@ mod tests {
         assert_eq!(parse(&["main", "--no-remove"]).sluice, ["submit", "main"]);
         assert_eq!(parse(&["main", "--no-wait"]).remove, None);
         assert_eq!(parse(&["main", "--check"]).remove, None);
+        assert_eq!(parse(&["main", "--status"]).remove, None);
         let w = parse(&["main", "--worktree", "../s"]);
         assert_eq!(w.remove.as_deref(), Some(std::ffi::OsStr::new("../s")));
         assert_eq!(w.sluice, ["submit", "main", "--worktree", "../s"]);

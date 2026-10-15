@@ -98,6 +98,7 @@ fn main() {
         bound.seams(),
         &bound,
         &bound.branch,
+        &*bound.pulls,
         &SystemClock,
         &Sleep(Duration::from_secs(3)),
         &mut out,

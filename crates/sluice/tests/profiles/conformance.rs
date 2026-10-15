@@ -25,8 +25,8 @@ use sluice::profiles::branches::Branches;
 use sluice::profiles::checks::Checks;
 use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::places::Places;
-use sluice::profiles::worktrunk::Worktrunk;
 use sluice::profiles::Bound;
+use sluice::profiles::Drivers;
 use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
@@ -168,7 +168,7 @@ impl Branch for RecordedRefs {
 /// The driver, with each session's agent named by the rig, and every
 /// outcome it delivered kept.
 struct Sessions {
-    inner: Worktrunk,
+    inner: Drivers,
     agents: RefCell<BTreeMap<String, String>>,
     told: RefCell<Vec<Notification>>,
 }
@@ -280,6 +280,7 @@ impl Real {
             branch,
             driver,
             state,
+            ..
         } = bound;
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),

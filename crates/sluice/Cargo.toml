@@ -54,6 +54,10 @@ name = "forge"
 path = "tests/profiles/forge.rs"
 
 [[test]]
+name = "pull_requests"
+path = "tests/profiles/pull_requests.rs"
+
+[[test]]
 name = "conformance"
 path = "tests/profiles/conformance.rs"
 

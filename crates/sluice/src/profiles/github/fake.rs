@@ -1,0 +1,388 @@
+//! A [`Forge`] that keeps one repository's pull requests in a JSON file,
+//! for tests: what GitHub would hold, and what a test does to it as a
+//! person would, opening, reviewing, checking, drafting and closing.
+//! Every call reads the file and every change writes it, so a fake API
+//! answering from it and the test that changes it see one GitHub.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use super::app::Repo;
+use super::forge::{Check, Forge, Posted, Posting, Pull, Review, Standing};
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Held {
+    pub next: u64,
+    pub pulls: Vec<Pull>,
+    pub reviews: BTreeMap<u64, Vec<Review>>,
+    /// Other systems' checks, by revision.
+    pub checks: BTreeMap<String, Vec<Check>>,
+    /// sluice's check runs, by revision.
+    pub posted: BTreeMap<String, Posted>,
+    /// Every post of sluice's check run, in order: the revision and what.
+    pub posts: Vec<(String, Posting)>,
+    pub readied: BTreeMap<u64, Vec<DateTime<Utc>>>,
+    pub comments: BTreeMap<u64, Vec<String>>,
+}
+
+pub struct FileForge {
+    path: PathBuf,
+    repo: String,
+    lock: Mutex<()>,
+}
+
+impl FileForge {
+    /// The fake GitHub of `repo` kept in `path`, empty when it does not
+    /// exist yet.
+    pub fn new(path: &Path, repo: &Repo) -> FileForge {
+        FileForge {
+            path: path.to_path_buf(),
+            repo: repo.to_string(),
+            lock: Mutex::new(()),
+        }
+    }
+
+    pub fn held(&self) -> Result<Held> {
+        let _g = self.lock.lock().unwrap();
+        self.read()
+    }
+
+    fn read(&self) -> Result<Held> {
+        match std::fs::read(&self.path) {
+            Ok(b) => serde_json::from_slice(&b).with_context(|| self.path.display().to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Held {
+                next: 1,
+                ..Held::default()
+            }),
+            Err(e) => Err(e).with_context(|| self.path.display().to_string()),
+        }
+    }
+
+    /// Read, change and write the file.
+    pub fn change<T>(&self, f: impl FnOnce(&mut Held) -> Result<T>) -> Result<T> {
+        let _g = self.lock.lock().unwrap();
+        let mut held = self.read()?;
+        let out = f(&mut held)?;
+        let tmp = self.path.with_extension("tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&held)?)?;
+        std::fs::rename(&tmp, &self.path)?;
+        Ok(out)
+    }
+
+    fn with_pull<T>(&self, number: u64, f: impl FnOnce(&mut Pull) -> T) -> Result<T> {
+        self.change(|h| {
+            let p = h
+                .pulls
+                .iter_mut()
+                .find(|p| p.number == number)
+                .ok_or_else(|| anyhow!("no pull request {number}"))?;
+            Ok(f(p))
+        })
+    }
+
+    /// A person opens a pull request into `base` from `head_ref` at
+    /// `head`, in `from` (`None` for this repository itself); returns its
+    /// number.
+    pub fn open_by(
+        &self,
+        author: &str,
+        base: &str,
+        head_ref: &str,
+        head: &str,
+        draft: bool,
+        from: Option<&str>,
+    ) -> Result<u64> {
+        let repo = self.repo.clone();
+        self.change(|h| {
+            let number = h.next;
+            h.next += 1;
+            h.pulls.push(Pull {
+                number,
+                title: head_ref.into(),
+                body: String::new(),
+                author: author.into(),
+                draft,
+                open: true,
+                head: head.into(),
+                head_ref: head_ref.into(),
+                head_repo: from.map_or(repo, str::to_string),
+                base: base.into(),
+            });
+            Ok(number)
+        })
+    }
+
+    /// A commit pushed to pull request `number`'s branch.
+    pub fn push(&self, number: u64, head: &str) -> Result<()> {
+        self.with_pull(number, |p| p.head = head.into())
+    }
+
+    /// Mark it a draft, or ready for review, which GitHub's timeline
+    /// records.
+    pub fn set_draft(&self, number: u64, draft: bool) -> Result<()> {
+        self.change(|h| {
+            let p = h
+                .pulls
+                .iter_mut()
+                .find(|p| p.number == number)
+                .ok_or_else(|| anyhow!("no pull request {number}"))?;
+            if p.draft && !draft {
+                h.readied.entry(number).or_default().push(Utc::now());
+            }
+            p.draft = draft;
+            Ok(())
+        })
+    }
+
+    pub fn close(&self, number: u64) -> Result<()> {
+        self.with_pull(number, |p| p.open = false)
+    }
+
+    /// `user` reviews pull request `number` on `commit`.
+    pub fn review(&self, number: u64, user: &str, state: &str, commit: &str) -> Result<()> {
+        self.change(|h| {
+            h.reviews.entry(number).or_default().push(Review {
+                user: user.into(),
+                state: state.into(),
+                commit: commit.into(),
+            });
+            Ok(())
+        })
+    }
+
+    /// Another system posts the check `name` on `rev`.
+    pub fn check(&self, rev: &str, name: &str, standing: Standing) -> Result<()> {
+        self.change(|h| {
+            let cs = h.checks.entry(rev.into()).or_default();
+            cs.retain(|c| c.name != name);
+            cs.push(Check {
+                name: name.into(),
+                standing,
+            });
+            Ok(())
+        })
+    }
+
+    /// The pull request from `head_ref`, open or closed, the latest.
+    pub fn by_ref(&self, head_ref: &str) -> Result<Option<Pull>> {
+        Ok(self
+            .held()?
+            .pulls
+            .into_iter()
+            .rev()
+            .find(|p| p.head_ref == head_ref))
+    }
+}
+
+impl Forge for FileForge {
+    fn pulls(&self, _: &Repo, base: &str) -> Result<Vec<Pull>> {
+        Ok(self
+            .held()?
+            .pulls
+            .into_iter()
+            .filter(|p| p.open && p.base == base)
+            .collect())
+    }
+
+    fn pull(&self, _: &Repo, number: u64) -> Result<Option<Pull>> {
+        Ok(self.held()?.pulls.into_iter().find(|p| p.number == number))
+    }
+
+    fn reviews(&self, _: &Repo, number: u64) -> Result<Vec<Review>> {
+        Ok(self.held()?.reviews.remove(&number).unwrap_or_default())
+    }
+
+    fn checks(&self, _: &Repo, rev: &str) -> Result<Vec<Check>> {
+        Ok(self.held()?.checks.remove(rev).unwrap_or_default())
+    }
+
+    fn readied(&self, _: &Repo, number: u64) -> Result<Vec<DateTime<Utc>>> {
+        Ok(self.held()?.readied.remove(&number).unwrap_or_default())
+    }
+
+    fn posted(&self, _: &Repo, rev: &str) -> Result<Option<Posted>> {
+        Ok(self.held()?.posted.remove(rev))
+    }
+
+    fn post(&self, _: &Repo, rev: &str, existing: Option<u64>, posting: &Posting) -> Result<()> {
+        self.change(|h| {
+            let id = match existing {
+                Some(id) => id,
+                None => {
+                    let id = h.next;
+                    h.next += 1;
+                    id
+                }
+            };
+            h.posted.insert(
+                rev.into(),
+                Posted {
+                    id,
+                    posting: posting.clone(),
+                },
+            );
+            h.posts.push((rev.into(), posting.clone()));
+            Ok(())
+        })
+    }
+
+    fn comments(&self, _: &Repo, number: u64) -> Result<Vec<String>> {
+        Ok(self.held()?.comments.remove(&number).unwrap_or_default())
+    }
+
+    fn comment(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
+        self.change(|h| {
+            h.comments.entry(number).or_default().push(body.into());
+            Ok(())
+        })
+    }
+
+    fn open(
+        &self,
+        repo: &Repo,
+        base: &str,
+        head_ref: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<Pull> {
+        // GitHub reads the head from the branch as pushed; the test's push
+        // is to a bare remote this fake cannot see, so it is named after.
+        let number = self.open_by("sluice", base, head_ref, "", false, None)?;
+        self.with_pull(number, |p| {
+            p.title = title.into();
+            p.body = body.into();
+        })?;
+        self.pull(repo, number)?
+            .ok_or_else(|| anyhow!("no pull request {number}"))
+    }
+
+    fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
+        self.with_pull(number, |p| p.body = body.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiles::github::forge::{approvals, Status};
+
+    fn forge(name: &str) -> (FileForge, Repo, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("sluice-fake-forge-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        (FileForge::new(&dir.join("github.json"), &repo), repo, dir)
+    }
+
+    /// Open pull requests into a branch are listed with what intake reads;
+    /// closed ones and those into other branches are not, and a fork's is
+    /// known as one.
+    #[test]
+    fn pull_requests_are_listed() {
+        let (f, repo, dir) = forge("list");
+        let a = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let b = f
+            .open_by("bob", "main", "unit/b", "bbb", true, None)
+            .unwrap();
+        f.open_by("cat", "bolt/x", "unit/c", "ccc", false, None)
+            .unwrap();
+        let d = f
+            .open_by("dan", "main", "unit/d", "ddd", false, Some("dan/r"))
+            .unwrap();
+        f.close(b).unwrap();
+        let open = f.pulls(&repo, "main").unwrap();
+        assert_eq!(open.iter().map(|p| p.number).collect::<Vec<_>>(), [a, d]);
+        assert!(open[0].from_repo(&repo) && !open[1].from_repo(&repo));
+        assert!(!f.pull(&repo, b).unwrap().unwrap().open);
+        f.push(a, "aa2").unwrap();
+        assert_eq!(f.pull(&repo, a).unwrap().unwrap().head, "aa2");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reviews_on_a_head() {
+        let (f, repo, dir) = forge("reviews");
+        let n = f
+            .open_by("ann", "main", "unit/a", "old", false, None)
+            .unwrap();
+        f.review(n, "bob", "APPROVED", "old").unwrap();
+        f.push(n, "new").unwrap();
+        let rs = f.reviews(&repo, n).unwrap();
+        assert_eq!(approvals(&rs, "new"), 0);
+        f.review(n, "bob", "APPROVED", "new").unwrap();
+        assert_eq!(approvals(&f.reviews(&repo, n).unwrap(), "new"), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn checks_by_name() {
+        let (f, repo, dir) = forge("checks");
+        f.check("aaa", "qa/approved", Standing::Pending).unwrap();
+        f.check("aaa", "ci", Standing::Failed).unwrap();
+        f.check("aaa", "qa/approved", Standing::Passed).unwrap();
+        let cs = f.checks(&repo, "aaa").unwrap();
+        assert_eq!(cs.len(), 2);
+        assert!(cs
+            .iter()
+            .any(|c| c.name == "qa/approved" && c.standing == Standing::Passed));
+        assert!(f.checks(&repo, "bbb").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ready_for_review_events() {
+        let (f, repo, dir) = forge("ready");
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", true, None)
+            .unwrap();
+        assert!(f.readied(&repo, n).unwrap().is_empty());
+        f.set_draft(n, false).unwrap();
+        f.set_draft(n, false).unwrap();
+        f.set_draft(n, true).unwrap();
+        f.set_draft(n, false).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// sluice's check run is found by its head and updated in place; every
+    /// post is kept, for a test to count.
+    #[test]
+    fn posting_a_status_and_a_comment() {
+        let (f, repo, dir) = forge("post");
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        assert_eq!(f.posted(&repo, "aaa").unwrap(), None);
+        let waiting = Posting {
+            status: Status::Queued,
+            title: "waiting".into(),
+            summary: "needs 1 review".into(),
+        };
+        f.post(&repo, "aaa", None, &waiting).unwrap();
+        let first = f.posted(&repo, "aaa").unwrap().unwrap();
+        assert_eq!(first.posting, waiting);
+        let landed = Posting {
+            status: Status::Success,
+            title: "landed".into(),
+            summary: String::new(),
+        };
+        f.post(&repo, "aaa", Some(first.id), &landed).unwrap();
+        let second = f.posted(&repo, "aaa").unwrap().unwrap();
+        assert_eq!((second.id, second.posting), (first.id, landed));
+        assert_eq!(f.held().unwrap().posts.len(), 2);
+        f.comment(&repo, n, "blamed").unwrap();
+        assert_eq!(f.comments(&repo, n).unwrap(), ["blamed"]);
+        let opened = f.open(&repo, "main", "unit/b", "B", "body").unwrap();
+        f.edit(&repo, opened.number, "new body").unwrap();
+        assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
