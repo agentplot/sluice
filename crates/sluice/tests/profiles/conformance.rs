@@ -217,6 +217,9 @@ impl Driver for Sessions {
 struct Real {
     repo: Repo,
     sessions: Scratch,
+    /// The host's blocks of ports, kept with the rig: a sandboxed run
+    /// writes nothing of the user's own state.
+    _blocks: Scratch,
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
@@ -307,12 +310,13 @@ impl Real {
             state,
             ..
         } = bound;
+        let blocks = Scratch::new(&format!("{name}-blocks"));
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
             rules,
             checkout: RecordedPlaces {
-                inner: checkout,
+                inner: checkout.with_blocks(blocks.path().to_path_buf()),
                 log: RefCell::default(),
             },
             tests: RecordedChecks {
@@ -330,6 +334,7 @@ impl Real {
                 told: RefCell::default(),
             },
             state,
+            _blocks: blocks,
         }
     }
 
