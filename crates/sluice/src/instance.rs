@@ -1,5 +1,5 @@
 //! The instance's own settings, never a policy's: how many runs it has
-//! under test at once and how many processors each is given (71; ADR
+//! under test at once and how many cores each is given (71; ADR
 //! 0012; `docs/plans/phase-1-integrations.md` section 4), and the
 //! identity it pushes as on a forge (C.4 pushed refs).
 //!
@@ -30,7 +30,7 @@ pub struct Instance {
     /// The runs of the bound kept for submissions, which session runs never
     /// take (91).
     pub reserved: usize,
-    /// The processors sluice may use: the process's affinity and its
+    /// The cores sluice may use: the process's affinity and its
     /// cgroup's quota where the host has them.
     pub processors: usize,
     /// The app sluice pushes as, where the host names one.
@@ -69,7 +69,7 @@ struct RunsForm {
 
 impl Instance {
     /// The instance's settings from its configuration file, or the
-    /// defaults where it has none: a quarter of the processors, never
+    /// defaults where it has none: a quarter of the cores, never
     /// fewer than one.
     pub fn read() -> Result<Instance> {
         let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -112,7 +112,7 @@ impl Instance {
         })
     }
 
-    /// The processors each run is given, so `bound` runs at once use what
+    /// The cores each run is given, so `bound` runs at once use what
     /// sluice may use and no more.
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
@@ -183,7 +183,7 @@ mod tests {
         out
     }
 
-    /// 71: the bound is the instance's, a quarter of its processors unless
+    /// 71: the bound is the instance's, a quarter of its cores unless
     /// its configuration says otherwise; each run gets an equal share.
     #[test]
     fn the_bound_and_each_runs_share() {

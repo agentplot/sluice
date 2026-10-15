@@ -59,6 +59,11 @@ pub trait Rig {
     /// The place `worktree` holds `paths` beyond its commits.
     fn dirty(&self, worktree: &str, paths: &[&str]);
 
+    /// The session's worktree `worktree` is removed, with nothing released
+    /// first, as a person or a driver that knows nothing of sluice removes
+    /// it.
+    fn remove_worktree(&self, worktree: &str);
+
     /// `task` fails on any candidate whose `path` holds `content`.
     fn fails_with(&self, task: &str, path: &str, content: &str);
 
@@ -305,6 +310,10 @@ impl Rig for Harness {
 
     fn dirty(&self, worktree: &str, paths: &[&str]) {
         self.w().dirty(worktree, paths);
+    }
+
+    fn remove_worktree(&self, worktree: &str) {
+        self.w().remove_worktree(worktree);
     }
 
     fn fails_with(&self, task: &str, path: &str, content: &str) {

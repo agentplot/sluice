@@ -774,3 +774,163 @@ fn a_landing_leaves_a_sessions_place_alone() {
     assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
     assert!(f.world.session_releases().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// A worktree removed unreleased, and the worktrees held (session-runs-1
+// clause 97)
+// ---------------------------------------------------------------------------
+
+const GONE: &str = "released unit/a: the worktree no longer exists; its runs ended, the release command run, its ports free";
+
+/// 97: the next `sluice exec` on the host releases the place of a worktree
+/// removed unreleased, under the policy's release command, says so first,
+/// and logs the release in the branch's records; the worktree it runs in
+/// is left alone.
+#[test]
+fn the_next_exec_releases_a_removed_worktrees_place() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.remove_worktree("unit/a");
+
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(out.lines().next(), Some(GONE), "{out}");
+    assert_eq!(
+        f.world.session_releases(),
+        [(
+            "session/unit/a".to_string(),
+            Some("sh release.sh".to_string())
+        )]
+    );
+    assert_eq!(f.world.adopted_places(), ["session/unit/b"]);
+    let snap = sluice_seams::State::read(&f.state, BRANCH).unwrap();
+    let log = sluice_core::line::Line::read_log(&snap).unwrap();
+    assert!(
+        log.iter().any(|l| matches!(
+            &l.event,
+            sluice_core::records::Event::Released { place, worktree: Some(w) }
+                if place == "session/unit/a" && w == "unit/a"
+        )),
+        "{log:?}"
+    );
+
+    // Released once: the next run finds nothing more to release.
+    let (_, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
+    assert!(!out.contains("released"), "{out}");
+    assert_eq!(f.world.session_releases().len(), 1);
+}
+
+/// 97: the next round, `sluice step` or a pass of `sluice run`, releases
+/// it as well and says so.
+#[test]
+fn the_next_round_releases_a_removed_worktrees_place() {
+    for args in [&["step", BRANCH][..], &["run", "--rounds", "1"][..]] {
+        let f = setup_releasing();
+        work(
+            &f,
+            "unit/a",
+            "agent-a",
+            &[("plugin/lib/plan.py", Some("p2"))],
+        );
+        exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+        f.world.remove_worktree("unit/a");
+        let (code, out) = sluice(&f, args);
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(out.lines().next(), Some(GONE), "{args:?}: {out}");
+        assert!(f.world.adopted_places().is_empty(), "{args:?}");
+    }
+}
+
+/// 97, 25, rule core.16: a worktree that still exists is never released by
+/// a round or a run, however long since its last run.
+#[test]
+fn a_worktree_that_exists_is_held_however_old_its_last_run() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.advance(chrono::Duration::days(90));
+    sluice(&f, &["step", BRANCH]);
+    sluice(&f, &["run", "--rounds", "3"]);
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/b"]);
+    assert!(f.world.session_releases().is_empty());
+    assert_eq!(
+        f.world.adopted_places(),
+        ["session/unit/a", "session/unit/b"]
+    );
+}
+
+/// 97: `sluice status` with no argument lists every worktree sluice holds,
+/// with its branch, its ports and the time of its last run; `--json` is
+/// one document of the same.
+#[test]
+fn status_lists_the_worktrees_held() {
+    let f = setup_releasing();
+    let (code, out) = sluice(&f, &["status"]);
+    assert_eq!(code, 0);
+    assert_eq!(out, "no worktree holds ports or runs here\n");
+
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let (code, out) = sluice(&f, &["status"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "worktrees held until released:", "{out}");
+    assert!(
+        lines[1].starts_with("  unit/a  bolt/concurrent-units  last run 2026-10-11T09:"),
+        "{out}"
+    );
+    assert_eq!(
+        lines[2],
+        "release one with: sluice release --worktree <worktree>"
+    );
+
+    // A removed worktree is listed as such until a run or round releases it.
+    f.world.remove_worktree("unit/a");
+    let (_, out) = sluice(&f, &["status"]);
+    assert!(
+        out.contains("(removed: released by the next run or round)"),
+        "{out}"
+    );
+    assert!(f.world.session_releases().is_empty(), "status released");
+
+    let (code, out) = sluice(&f, &["status", "--json"]);
+    assert_eq!(code, 0);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let w = &doc["worktrees"][0];
+    assert_eq!(w["worktree"], "unit/a");
+    assert_eq!(w["branch"], BRANCH);
+    assert!(w["ports"].is_object());
+    assert!(w["last_run"]
+        .as_str()
+        .unwrap()
+        .starts_with("2026-10-11T09:"));
+    assert_eq!(w["removed"], true);
+}

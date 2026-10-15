@@ -73,8 +73,12 @@ impl Checkout for RecordedPlaces {
         Ok(())
     }
 
-    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
-        self.inner.adopt(worktree, branch, checkout)
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
+        self.inner.adopt(worktree, branch, checkout, at)
+    }
+
+    fn session_places(&self) -> Result<Vec<sluice_seams::SessionPlace>> {
+        self.inner.session_places()
     }
 
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
@@ -407,6 +411,13 @@ impl Rig for Real {
         }
     }
 
+    fn remove_worktree(&self, worktree: &str) {
+        git(
+            self.repo.dir(),
+            &["worktree", "remove", "--force", &self.place(worktree)],
+        );
+    }
+
     fn policy_text(&self, policy: &str) -> String {
         real_policy(policy)
     }
@@ -562,4 +573,5 @@ scenarios! {
     s26_a_clean_session_run_is_replayed_by_its_submission: cached();
     s28_a_dirty_session_run_records_nothing: bolt();
     s27_a_sessions_place_stays_until_it_is_released: bolt();
+    a_removed_worktrees_place_is_released_by_the_next_round: bolt();
 }

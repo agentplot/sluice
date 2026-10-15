@@ -212,7 +212,7 @@ needed.
 - **8, end to end.** Section 4's acceptance test 7 on real places
   (`tests/instance.rs`, `cli:tools`): one `sluice run` with `[runs] max =
   2` serving three branches of window four has two runs under test at
-  most, reaches two, and gives each half the processors.
+  most, reaches two, and gives each half the cores.
 
 - **22, a full stack per candidate.** A repository's checks bring up
   everything a browser test needs: a container stack on a port, stand-ins
@@ -316,7 +316,7 @@ needed.
 
 - A key reads as flaky only across ran results held to the same limits
   (19): the executor, memory, network and container engine, not the
-  processors. A fail with no container engine and a pass with one are
+  cores. A fail with no container engine and a pass with one are
   two experiments, not one check failing at random.
 - The branch protection hook calls an installed sluice at a stable path
   (`~/.cargo/bin/sluice` now, the nix profile's once published), never

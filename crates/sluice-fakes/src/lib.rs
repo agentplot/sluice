@@ -18,8 +18,8 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved,
     Network, Notification, Outcome, Place, Progress, ReleasePolicy, Released, Rev, RunHandle,
-    RunReport, RunRequest, Session, Settings, Snapshot, Source, State, Submitter, TaskLog,
-    TaskResult, Tests, Written,
+    RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter,
+    TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -111,6 +111,8 @@ struct Inner {
     adopted: Vec<String>,
     /// The branch each session place was adopted for.
     adopted_for: BTreeMap<String, String>,
+    /// When each session place's last run started.
+    adopted_at: BTreeMap<String, String>,
     /// Each session place released, and the `[tests] release` it was
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
@@ -614,6 +616,17 @@ impl World {
         );
     }
 
+    /// The clock moves on by `by`.
+    pub fn advance(&self, by: Span) {
+        self.0.borrow_mut().now += by;
+    }
+
+    /// The session's worktree is removed, as its driver or a person
+    /// removes it, with nothing released first.
+    pub fn remove_worktree(&self, worktree: &str) {
+        self.0.borrow_mut().worktrees.remove(worktree);
+    }
+
     /// The session's place holds `paths` beyond its commits.
     pub fn dirty(&self, worktree: &str, paths: &[&str]) {
         self.0
@@ -905,6 +918,7 @@ impl FakeCheckout {
         let mut inner = self.0 .0.borrow_mut();
         inner.adopted.retain(|a| a != name);
         inner.adopted_for.remove(name);
+        inner.adopted_at.remove(name);
         if inner.places.remove(name).is_some() {
             inner.released.push(name.into());
             if passed {
@@ -940,7 +954,7 @@ impl Checkout for FakeCheckout {
         })
     }
 
-    fn adopt(&self, worktree: &str, branch: &str, _: &Settings) -> Result<Place> {
+    fn adopt(&self, worktree: &str, branch: &str, _: &Settings, at: &str) -> Result<Place> {
         let mut inner = self.0 .0.borrow_mut();
         let head = inner
             .worktrees
@@ -955,6 +969,7 @@ impl Checkout for FakeCheckout {
             inner.adopted.push(name.clone());
             inner.adopted_for.insert(name.clone(), branch.into());
         }
+        inner.adopted_at.insert(name.clone(), at.into());
         Ok(Place {
             name: name.clone(),
             path: worktree.into(),
@@ -991,6 +1006,25 @@ impl Checkout for FakeCheckout {
         } else {
             Released::LastRun
         })
+    }
+
+    fn session_places(&self) -> Result<Vec<SessionPlace>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .adopted
+            .iter()
+            .map(|name| {
+                let worktree = name.strip_prefix("session/").unwrap_or(name);
+                SessionPlace {
+                    name: name.clone(),
+                    worktree: worktree.into(),
+                    branch: inner.adopted_for.get(name).cloned().unwrap_or_default(),
+                    ports: BTreeMap::new(),
+                    last_run: inner.adopted_at.get(name).cloned(),
+                    gone: !inner.worktrees.contains_key(worktree),
+                }
+            })
+            .collect())
     }
 
     fn save_caches(&self, name: &str, _: &Rev, _: &Settings) -> Result<()> {

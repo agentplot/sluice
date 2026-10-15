@@ -24,7 +24,7 @@ use sluice_core::{
     AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
     SubmitRequest, WithdrawRefusal,
 };
-use sluice_seams::Rev;
+use sluice_seams::{Rev, SessionPlace};
 
 /// Exits of a waiting submit (walkthrough section 5).
 pub const LANDED: i32 = 0;
@@ -97,10 +97,11 @@ pub enum Command {
         #[arg(long)]
         rounds: Option<usize>,
     },
-    /// A branch's queue, or one submission.
+    /// A branch's queue, or one submission; with neither, every worktree
+    /// sluice holds ports or runs for.
     Status {
         /// A branch, or a submission's number.
-        target: String,
+        target: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -294,7 +295,9 @@ pub fn run(
             )
         }
         Command::Step { branch } => {
-            let word = match s.step(&branch)? {
+            let round = s.round(&branch)?;
+            exec::tell_abandoned(out, false, &round.released)?;
+            let word = match round.step {
                 Step::Stepped => "stepped",
                 Step::Busy => "busy: another round holds the lock",
                 Step::Contended => "contended: the records moved; nothing done",
@@ -306,10 +309,12 @@ pub fn run(
             let s = s.serving(Serves::Every);
             let mut n = 0;
             loop {
+                // 97: every pass, whether or not a branch has a queue.
+                exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
                 for branch in seams.state.branches()? {
                     let status = s.status(&branch)?;
                     if status.submissions.iter().any(|x| !x.state.is_out()) {
-                        s.step(&branch)?;
+                        exec::tell_abandoned(out, false, &s.round(&branch)?.released)?;
                     }
                 }
                 n += 1;
@@ -321,7 +326,23 @@ pub fn run(
                 }
             }
         }
-        Command::Status { target, json } => match target.parse::<u64>() {
+        Command::Status { target: None, json } => {
+            let places = s.session_places()?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&worktrees_json(&places))?
+                )?;
+            } else {
+                write_worktrees(&places, out)?;
+            }
+            Ok(0)
+        }
+        Command::Status {
+            target: Some(target),
+            json,
+        } => match target.parse::<u64>() {
             Ok(id) => match s.state(id)? {
                 None => {
                     writeln!(out, "no submission {id}")?;
@@ -568,12 +589,15 @@ fn submit(
         Ok(STOPPED)
     };
     let sub = loop {
-        if let Err(e) = s.step(&req.branch) {
-            // Ctrl-C reaches the tools a round runs in the foreground.
-            if INTERRUPTED.load(Ordering::SeqCst) {
-                return still_queued(out);
+        match s.round(&req.branch) {
+            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Err(e) => {
+                // Ctrl-C reaches the tools a round runs in the foreground.
+                if INTERRUPTED.load(Ordering::SeqCst) {
+                    return still_queued(out);
+                }
+                return Err(e);
             }
-            return Err(e);
         }
         let sub = s.state(id)?.expect("a submission just made");
         if matches!(
@@ -796,4 +820,58 @@ fn status_json(status: &Status) -> serde_json::Value {
         "parallel": status.parallel,
         "submissions": status.submissions,
     })
+}
+
+/// Session-runs-1 clause 97: every worktree sluice holds ports or runs
+/// for, for a person or a crew to release.
+fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
+    if places.is_empty() {
+        writeln!(out, "no worktree holds ports or runs here")?;
+        return Ok(());
+    }
+    writeln!(out, "worktrees held until released:")?;
+    let ww = places
+        .iter()
+        .map(|p| p.worktree.to_string_lossy().len())
+        .max()
+        .unwrap_or(0);
+    let bw = places.iter().map(|p| p.branch.len()).max().unwrap_or(0);
+    for p in places {
+        let ports: Vec<String> = p.ports.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let last = p.last_run.as_deref().unwrap_or("never");
+        let mut line = format!(
+            "  {:<ww$}  {:<bw$}  last run {last}  {}",
+            p.worktree.to_string_lossy(),
+            p.branch,
+            ports.join(" "),
+        );
+        if p.gone {
+            line = format!(
+                "{}  (removed: released by the next run or round)",
+                line.trim_end()
+            );
+        }
+        writeln!(out, "{}", line.trim_end())?;
+    }
+    writeln!(
+        out,
+        "release one with: sluice release --worktree <worktree>"
+    )?;
+    Ok(())
+}
+
+fn worktrees_json(places: &[SessionPlace]) -> serde_json::Value {
+    let worktrees: Vec<serde_json::Value> = places
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "worktree": p.worktree,
+                "branch": p.branch,
+                "ports": p.ports,
+                "last_run": p.last_run,
+                "removed": p.gone,
+            })
+        })
+        .collect();
+    serde_json::json!({ "worktrees": worktrees })
 }

@@ -27,7 +27,10 @@
 //! and its branch and holds its block of ports from its first run
 //! until `sluice release`, which ends its runs, runs the release command
 //! once, removes its scratch directory and lets its block go, and never
-//! removes the worktree.
+//! removes the worktree. Its record keeps when its last run started, and
+//! `session_places` lists every such record with whether its worktree
+//! still exists, so the core can release one whose worktree is gone
+//! (clause 97).
 //!
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
@@ -44,7 +47,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, Checkout, Limits, Place, ReleasePolicy, Released, Rev, Setting, Settings,
+    Adopted, Checkout, Limits, Place, ReleasePolicy, Released, Rev, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -88,6 +91,10 @@ struct Made {
     /// The block of ports it holds on the host (31).
     #[serde(default, alias = "slot", skip_serializing_if = "Option::is_none")]
     block: Option<u32>,
+    /// A session's place: when its last run started (session-runs-1
+    /// clause 97).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_run: Option<String>,
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -662,6 +669,7 @@ impl Checkout for Places {
             path: None,
             caches,
             block: None,
+            last_run: None,
         };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
@@ -765,6 +773,53 @@ impl Checkout for Places {
         Ok(released)
     }
 
+    fn session_places(&self) -> Result<Vec<SessionPlace>> {
+        let dir = self.root().join(".places");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for e in entries {
+            let path = e?.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let made: Made = match std::fs::read(&path) {
+                Ok(b) => serde_json::from_slice(&b)
+                    .with_context(|| format!("reading {}", path.display()))?,
+                // Released meanwhile.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if made.kind != Kind::Session {
+                continue;
+            }
+            let Some(worktree) = made.path.clone() else {
+                continue;
+            };
+            let name = format!(
+                "{SESSION}{}",
+                worktree
+                    .to_str()
+                    .ok_or_else(|| anyhow!("{} is not UTF-8", worktree.display()))?
+            );
+            // 97: a worktree that no longer exists is no session's.
+            let gone = !worktree.is_dir();
+            out.push(SessionPlace {
+                name,
+                gone,
+                worktree,
+                branch: made.branch.unwrap_or_default(),
+                ports: made.ports,
+                last_run: made.last_run,
+            });
+        }
+        out.sort_by(|a, b| a.worktree.cmp(&b.worktree));
+        Ok(out)
+    }
+
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
         let made = match self.read_record(name)? {
             Some(m) if m.kind == Kind::Session => m,
@@ -780,10 +835,10 @@ impl Checkout for Places {
         Ok(())
     }
 
-    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings) -> Result<Place> {
+    fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         let (path, name) = Places::session_name(worktree)?;
         let record = self.record(&name);
-        let made = match self.read_record(&name)? {
+        let mut made = match self.read_record(&name)? {
             Some(made) if made.kind == Kind::Session => made,
             Some(_) => bail!("place {name} is a candidate's, not a session's"),
             None => {
@@ -795,6 +850,7 @@ impl Checkout for Places {
                     path: Some(path.clone()),
                     caches: Vec::new(),
                     block: None,
+                    last_run: None,
                 };
                 // Written before the block is held, so a block names a record
                 // that exists, and a stop between leaves a record release
@@ -813,6 +869,8 @@ impl Checkout for Places {
                 made
             }
         };
+        made.last_run = Some(at.into());
+        self.write_record(&name, &made)?;
         let tmp = self.tmp(&name);
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut env = made.ports.clone();

@@ -452,6 +452,10 @@ pub enum Event {
     },
     Released {
         place: String,
+        /// A session's place released because this, its worktree, no
+        /// longer exists (session-runs-1 clause 97).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
     },
     /// An update to the branch made by anything but sluice, refused (1).
     Protected {

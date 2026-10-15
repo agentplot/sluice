@@ -249,3 +249,9 @@ fn s25_sessions_runs_wait_and_a_submissions_run_starts_first() {
 fn s27_a_sessions_place_stays_until_it_is_released() {
     shared::s27_a_sessions_place_stays_until_it_is_released(&Harness::bolt());
 }
+
+/// satisfies: 25; session-runs-1 95, 97
+#[test]
+fn a_removed_worktrees_place_is_released_by_the_next_round() {
+    shared::a_removed_worktrees_place_is_released_by_the_next_round(&Harness::bolt());
+}

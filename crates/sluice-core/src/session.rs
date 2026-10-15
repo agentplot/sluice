@@ -4,11 +4,14 @@
 //! head (rule core.15: the policy is read from the branch's current
 //! revision, never from the session's place).
 
-use anyhow::Result;
-use sluice_seams::{Place, Rev, RunHandle, RunReport, RunRequest, Session, Setting, Source};
+use anyhow::{anyhow, Result};
+use sluice_seams::{
+    Place, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
+    Setting, Source,
+};
 
 use crate::policy::{Policy, Rules};
-use crate::records::ResultLine;
+use crate::records::{Event, ResultLine};
 use crate::Sluice;
 
 /// What a session run is held to: the branch's revision and the policy
@@ -37,6 +40,21 @@ pub enum Recorded {
     NotClean,
     /// Nothing: a command, or a run that hit its time limit.
     Nothing,
+}
+
+/// A session's place released because its worktree no longer exists
+/// (session-runs-1 clause 97), as the round or run that released it
+/// reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Abandoned {
+    pub worktree: String,
+    pub branch: String,
+    /// How it was released; `None` when the release failed, and `why`
+    /// says how.
+    pub released: Option<Released>,
+    /// The branch could not be read, so the release command saved with the
+    /// last run ran; or the release failed.
+    pub why: Option<String>,
 }
 
 /// Why a session run cannot be held to a branch.
@@ -107,10 +125,12 @@ impl Sluice<'_> {
         head: &Rev,
         command: Option<&str>,
     ) -> Result<SessionStart> {
-        let place = self
-            .seams
-            .checkout
-            .adopt(worktree, &plan.branch, &plan.policy.checkout)?;
+        let place = self.seams.checkout.adopt(
+            worktree,
+            &plan.branch,
+            &plan.policy.checkout,
+            &self.now(),
+        )?;
         let request = Sluice::session_request(plan, place.clone(), head, command);
         let run = self.seams.tests.start(&request)?;
         Ok(SessionStart { place, run })
@@ -190,5 +210,114 @@ impl Sluice<'_> {
             self.seams.state.record_results(&bytes)?;
         }
         Ok(n)
+    }
+}
+
+impl Sluice<'_> {
+    /// Every session's place the repository holds (session-runs-1 clause
+    /// 97), for `sluice status` to list.
+    pub fn session_places(&self) -> Result<Vec<SessionPlace>> {
+        self.seams.checkout.session_places()
+    }
+
+    /// 95, 56: what a session's place on `branch` is released under, read
+    /// from the branch's current revision; an error when the branch cannot
+    /// be read. A branch whose revision names no policy names no release
+    /// command.
+    pub fn release_policy(&self, branch: &str) -> Result<ReleasePolicy> {
+        let rev = self
+            .seams
+            .branch
+            .read(branch)?
+            .ok_or_else(|| anyhow!("no branch {branch}"))?;
+        Ok(match self.policy_at(&rev)? {
+            Some(p) => ReleasePolicy {
+                tests: p.tests,
+                limits: p.limits,
+            },
+            None => ReleasePolicy {
+                tests: Default::default(),
+                limits: Default::default(),
+            },
+        })
+    }
+
+    /// Session-runs-1 clause 97, rule core.16: release every session's
+    /// place whose worktree no longer exists, as `sluice release` would
+    /// (95), and log each release in its branch's records. A place whose
+    /// worktree exists is never released here, however old its last run.
+    ///
+    /// Each release takes its branch's lock, never waiting for it (rule
+    /// core.14): a place whose branch a round holds is left to the next
+    /// round or run. A release that fails is reported and the rest go on:
+    /// one broken place never stops the host's rounds.
+    pub fn release_abandoned(&self) -> Result<Vec<Abandoned>> {
+        let mut out = Vec::new();
+        for p in self.seams.checkout.session_places()? {
+            if !p.gone {
+                continue;
+            }
+            let _lock = if p.branch.is_empty() {
+                None
+            } else {
+                match self.seams.state.lock(&p.branch)? {
+                    Some(l) => Some(l),
+                    None => continue,
+                }
+            };
+            let worktree = p.worktree.to_string_lossy().into_owned();
+            let (policy, mut why) = match self.release_policy(&p.branch) {
+                Ok(policy) => (Some(policy), None),
+                Err(e) => (
+                    None,
+                    Some(format!(
+                        "{} cannot be read ({e:#}): ran the release command saved with the last run",
+                        p.branch
+                    )),
+                ),
+            };
+            let released = match self
+                .seams
+                .checkout
+                .release_session(&p.name, policy.as_ref())
+            {
+                Ok(Released::Nothing) => continue,
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!(
+                        sluice.worktree = %worktree,
+                        "releasing a removed worktree's place failed: {e:#}"
+                    );
+                    why = Some(format!("{e:#}"));
+                    None
+                }
+            };
+            if released.is_some() {
+                tracing::info!(
+                    monotonic_counter.sluice.abandoned.released = 1u64,
+                    sluice.branch = %p.branch,
+                );
+                if !p.branch.is_empty() {
+                    let now = self.now();
+                    self.update(&p.branch, |l| {
+                        l.log(
+                            &now,
+                            Event::Released {
+                                place: p.name.clone(),
+                                worktree: Some(worktree.clone()),
+                            },
+                        );
+                        Ok(())
+                    })?;
+                }
+            }
+            out.push(Abandoned {
+                worktree,
+                branch: p.branch,
+                released,
+                why,
+            });
+        }
+        Ok(out)
     }
 }

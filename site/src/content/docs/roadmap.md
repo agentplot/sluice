@@ -20,7 +20,7 @@ way, gated on every test tier in a sandbox.
 ## Designed, not built
 
 - **Sandboxed checks on Linux**, with bubblewrap and Landlock, and memory
-  and processor limits by cgroup
+  and core limits by cgroup
   ([ADR 0012](/sluice/decisions/0012/)).
 - **Several hosts sharing one branch's queue**, as peers coordinating
   through the git remote or through a central server:

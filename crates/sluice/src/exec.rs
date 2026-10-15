@@ -9,9 +9,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sluice_core::session::{Recorded, SessionPlan, SessionRefusal, SessionStart};
+use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
-use sluice_seams::{Outcome, Progress, ReleasePolicy, Released, RunHandle, RunReport};
+use sluice_seams::{Outcome, Progress, Released, RunHandle, RunReport};
 
 use crate::sessions::SessionRun;
 use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
@@ -55,6 +55,32 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
         writeln!(e, "{text}")?;
     } else {
         writeln!(out, "{text}")?;
+    }
+    Ok(())
+}
+
+/// Say what a round or a run released because its worktree no longer
+/// exists (session-runs-1 clause 97).
+pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -> Result<()> {
+    for a in released {
+        let text = match (&a.released, &a.why) {
+            (None, why) => format!(
+                "could not release {}, whose worktree no longer exists: {}",
+                a.worktree,
+                why.as_deref().unwrap_or("no reason given")
+            ),
+            (Some(_), why) => {
+                let mut t = format!(
+                    "released {}: the worktree no longer exists; its runs ended, the release command run, its ports free",
+                    a.worktree
+                );
+                if let Some(why) = why {
+                    t.push_str(&format!(" ({why})"));
+                }
+                t
+            }
+        };
+        say(out, json, &text)?;
     }
     Ok(())
 }
@@ -128,6 +154,9 @@ impl Exec<'_> {
                 return Ok(CONFLICT);
             }
         };
+        // 97: a session's place whose worktree is gone is released by the
+        // next run on the host, before this one counts.
+        tell_abandoned(out, json, &s.release_abandoned()?)?;
         let command = (!self.command.is_empty()).then(|| shell_line(&self.command));
         match &command {
             None => say(
@@ -387,20 +416,8 @@ pub fn release(
         return Ok(LANDED);
     };
     let branch = &adopted.branch;
-    let read = seams.branch.read(branch).and_then(|rev| match rev {
-        None => Err(anyhow::anyhow!("no branch {branch}")),
-        Some(rev) => s.policy_at(&rev),
-    });
-    let policy = match read {
-        Ok(Some(p)) => Some(ReleasePolicy {
-            tests: p.tests,
-            limits: p.limits,
-        }),
-        // No policy at all names no release command.
-        Ok(None) => Some(ReleasePolicy {
-            tests: Default::default(),
-            limits: Default::default(),
-        }),
+    let policy = match s.release_policy(branch) {
+        Ok(p) => Some(p),
         Err(e) => {
             say(
                 out,

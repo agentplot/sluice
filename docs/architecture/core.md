@@ -35,7 +35,7 @@ part exists.
 - **[core.11]** Every record a reader may need is readable with no sluice process running, from every host that submits to its branch.
 - **[core.14]** Nothing the core decides is held between steps outside the records, and no two steps act on one branch at once.
 - **[core.15]** A branch's gate is read from the branch's current revision, never from a candidate or a place.
-- **[core.16]** The core releases only places it made; a session's place is released only by `sluice release` at its session's or driver's asking.
+- **[core.16]** The core releases only places it made, and a session's only when its working copy is gone; otherwise a session's place is released only by `sluice release` at its session's or driver's asking.
 - **[core.18]** A session run counts toward the bound from the host's state and is recorded under its keys only when its worktree holds exactly its head.
 
 ### Design and records
@@ -59,7 +59,7 @@ part exists.
 - **core.11** Rules out: state held only in a running process's memory; a database only a server reads, except through the records seam's server profile; records reached other than through the records seam. Source: clauses 26, 51, 61 to 63; C.6; ADR 0008.
 - **core.14** Rules out: a decision kept in a loop's memory and not in the records; a step that proceeds without the branch's lock; behavior that differs between `sluice run` and `sluice step`. Source: clauses 26, 51, S10; ADR 0005.
 - **core.15** Rules out: reading policy from a candidate's tree or a session's place; a submission whose change to the policy relaxes its own gate. Source: clauses 27, 56; ADR 0007.
-- **core.16** Rules out: removing or cleaning a session's worktree on landing; a round releasing a session's place, running its release command or letting its ports go; a candidate place left behind after its verdict is read. Not ruled out: `sluice release`, `sluice exec --release` and a driver's removal releasing a session's place. Source: clauses 25, 34; session-runs-1 clause 95; ADR 0018.
+- **core.16** Rules out: removing or cleaning a session's worktree on landing; a round or a run releasing a session's place whose worktree exists, running its release command or letting its ports go, however long since its last run; a candidate place left behind after its verdict is read. Not ruled out: `sluice release`, `sluice exec --release` and a driver's removal releasing a session's place; the next round or `sluice exec` on the host releasing a session's place whose worktree no longer exists, which is no session's. Source: clauses 25, 34; session-runs-1 clauses 95, 97; ADRs 0018, 0020.
 - **core.18** Rules out: a session run started when the count, read under the host's lock, leaves no room outside the reserve; a session run's count held in a process's memory or in a branch's records; recording a run from a worktree that holds anything beyond its head, a command's run, or a replay as a run. Source: clauses 16, 71; session-runs-1 clauses 89, 91, 92; ADRs 0012, 0018.
 - **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
 - **core.13** Rules out: a pricing table, a tier name, a customer name, a hosted-plan reference in any file. Source: ADR 0001.
