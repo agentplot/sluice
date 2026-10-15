@@ -209,6 +209,34 @@ branch is pushed: the state stays on the host. A branch without
 of that name for lands nothing and says so. The guide
 [sluice on GitHub](/sluice/guides/github/) sets one up.
 
+### `[branches."<pattern>".pull_requests]`
+
+Turns pull requests on for the branch: work reaches it as pull requests
+on its `remote`. A pull request joins the queue only once it is out of
+draft and meets these conditions on its latest commit.
+
+```toml
+[branches.main]
+remote = "origin"
+
+[branches.main.pull_requests]
+reviews = 1                  # approving reviews on the current head
+checks = ["qa/approved"]     # checks other systems post, by name
+```
+
+| key | meaning |
+|---|---|
+| `reviews` | How many approving reviews the pull request needs on its latest commit; a review given on an earlier commit doesn't count. The default is 0. |
+| `checks` | Checks other systems post on the pull request's latest commit, by the name GitHub shows, each of which must have passed. The default is none. |
+
+The conditions are read from the branch itself, so a pull request that
+changes `.config/sluice.toml` can't loosen its own. They decide when
+sluice takes a pull request, never what it tests: that is `required`.
+The table needs `remote`, and sluice refuses a policy that has it
+without one. Without the table, `sluice submit` puts work straight into
+the queue. The guide [Pull requests](/sluice/guides/pull-requests/) sets
+it up.
+
 No key covers operator approval: that is the caller's business, and
 a tool submits only once the work is approved.
 

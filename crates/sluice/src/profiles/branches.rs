@@ -43,6 +43,11 @@ impl Branches {
         })
     }
 
+    /// The repository's git directory.
+    pub fn git_dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// The repository's common git directory.
     pub fn common_dir(&self) -> Result<PathBuf> {
         self.local.common_dir()

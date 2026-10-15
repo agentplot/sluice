@@ -401,7 +401,7 @@ fn a_block_with_a_port_in_use_is_passed_over() {
     let web = port(&a, "SLUICE_PORT_WEB");
     assert_ne!(web, from, "the block with the busy port was given");
     assert!(
-        web > from + 1 && (web - from) % 2 == 0,
+        web > from + 1 && (web - from).is_multiple_of(2),
         "not a block's first port: {web}"
     );
     p.release(NAME, false).unwrap();

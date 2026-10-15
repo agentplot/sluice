@@ -96,7 +96,16 @@ starts removes it, and nothing counts it before then.
 ```
 
 `after` lists submissions this one must land after. `attempt` counts how
-many times this worktree has submitted to this branch. Submission ids
+many times this worktree has submitted to this branch.
+
+A pull request's submission comes from `pull/<n>`, its number on
+GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",
+"worktree": "pull/41" }`. Its agent is the one the pull request's
+description names, in the comment `sluice submit` writes there, or
+else whoever opened it. Each new commit on the pull request is a new
+submission from the same `pull/<n>`. A pull request still waiting for
+review or checks has no submission at all: its state is read from GitHub
+each round, and shown there as the `sluice` check. Submission ids
 are numbered in order, and that order is the queue's order.
 
 ## The log

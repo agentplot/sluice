@@ -15,6 +15,7 @@ pub mod runs;
 pub mod sessions;
 pub mod telemetry;
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -84,6 +85,10 @@ pub enum Command {
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
+        /// Only say where this worktree's last submission, or its pull
+        /// request, stands.
+        #[arg(long)]
+        status: bool,
         /// The place to submit from.
         #[arg(long, default_value = ".")]
         worktree: String,
@@ -217,6 +222,110 @@ impl Pushers for () {
     }
 }
 
+/// What `sluice submit` to a branch with pull requests opened or updated.
+pub struct Opened {
+    pub number: u64,
+    /// What it did: the branch pushed, and the pull request.
+    pub said: String,
+}
+
+/// Where a pull request stands, for a submit that follows it.
+pub enum Followed {
+    /// Not decided yet: its state, and lines beneath it.
+    Open { title: String, lines: Vec<String> },
+    /// Its submission on its head landed, failed or conflicts, with what
+    /// each submission is called on a pull request.
+    Done(Submission, BTreeMap<u64, String>),
+    /// Closed without landing.
+    Closed,
+}
+
+/// A branch whose work arrives as pull requests on its remote (C.5 pull
+/// request, C.7 `pull_requests`): the driver that takes them into its
+/// queue and opens them for `submit`.
+pub trait PullRequests {
+    /// The branches `sluice run` serves for their pull requests, beside
+    /// those with records: each the policy on the default branch's
+    /// revision turns pull requests on for.
+    fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>>;
+
+    /// Before a round of `branch`: submit each pull request ready, withdraw
+    /// each changed, and post each one's state. `false` for a branch that
+    /// takes no pull requests.
+    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
+
+    /// Push `worktree`'s branch and open its pull request into `branch`,
+    /// or update the one open.
+    fn open(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        worktree: &str,
+        branch: &str,
+    ) -> Result<Result<Opened, SubmitRefusal>>;
+
+    /// The pull request `worktree`'s work is in, open or landed.
+    fn find(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        worktree: &str,
+    ) -> Result<Option<u64>>;
+
+    /// Where pull request `number` into `branch` stands, as the last
+    /// intake read it.
+    fn follow(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        number: u64,
+    ) -> Result<Followed>;
+}
+
+/// No branch takes pull requests.
+impl PullRequests for () {
+    fn branches(&self, _: Seams<'_>) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn open(
+        &self,
+        _: Seams<'_>,
+        _: &dyn Clock,
+        _: &str,
+        branch: &str,
+    ) -> Result<Result<Opened, SubmitRefusal>> {
+        anyhow::bail!("{branch} takes no pull requests")
+    }
+
+    fn find(&self, _: Seams<'_>, _: &dyn Clock, _: &str, _: &str) -> Result<Option<u64>> {
+        Ok(None)
+    }
+
+    fn follow(&self, _: Seams<'_>, _: &dyn Clock, branch: &str, _: u64) -> Result<Followed> {
+        anyhow::bail!("{branch} takes no pull requests")
+    }
+}
+
+/// Take in `branch`'s pull requests before its round: whether it takes
+/// any. One that cannot be read is said and the round goes on, landing
+/// what is queued.
+fn intake(pulls: &dyn PullRequests, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> bool {
+    match pulls.intake(seams, clock, branch) {
+        Ok(takes) => takes,
+        Err(e) => {
+            eprintln!("sluice: warning: {e:#}");
+            true
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum ForgeCommand {
     /// Whether the host's [forge] identity is set up so only sluice may
@@ -286,6 +395,7 @@ pub fn run(
     seams: Seams<'_>,
     host: &dyn exec::Host,
     pushers: &dyn Pushers,
+    pulls: &dyn PullRequests,
     clock: &dyn Clock,
     pause: &dyn Pause,
     out: &mut dyn Write,
@@ -298,11 +408,20 @@ pub fn run(
             priority,
             no_wait,
             check,
+            status,
             worktree,
             json,
         } => {
             if check {
                 return forecast(&s, &worktree, &branch, &after, json, out);
+            }
+            if takes_pulls(&s, &branch)? {
+                return submit_pull(
+                    &s, pulls, clock, &worktree, &branch, no_wait, status, json, pause, out,
+                );
+            }
+            if status {
+                return submitted(&s, &worktree, &branch, json, out);
             }
             submit(
                 &s,
@@ -319,6 +438,7 @@ pub fn run(
             )
         }
         Command::Step { branch } => {
+            intake(pulls, seams, clock, &branch);
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, false, &round.released)?;
             preview::tell_dropped(out, false, &round.previews)?;
@@ -338,7 +458,15 @@ pub fn run(
                 // has a queue.
                 exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
                 preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
-                for branch in seams.state.branches()? {
+                let mut branches = seams.state.branches()?;
+                match pulls.branches(seams) {
+                    Ok(b) => branches.extend(b),
+                    Err(e) => eprintln!("sluice: warning: {e:#}"),
+                }
+                branches.sort();
+                branches.dedup();
+                for branch in branches {
+                    intake(pulls, seams, clock, &branch);
                     let status = s.status(&branch)?;
                     if status.submissions.iter().any(|x| !x.state.is_out()) {
                         let round = s.round(&branch)?;
@@ -662,12 +790,33 @@ fn submit(
             return still_queued(out);
         }
     };
+    report(s, &sub, &req.branch, &BTreeMap::new(), json, out)
+}
+
+/// A submission's outcome, as a waiting submit ends with it.
+fn report(
+    s: &Sluice<'_>,
+    sub: &Submission,
+    branch: &str,
+    names: &BTreeMap<u64, String>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let id = sub.id;
+    let name = |i: u64| names.get(&i).cloned().unwrap_or_else(|| format!("#{i}"));
+    let combination = |ids: &[u64]| {
+        let mut s = branch.to_string();
+        for i in ids {
+            s.push_str(&format!(" + {}", name(*i)));
+        }
+        s
+    };
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
-        return Ok(exit_for(&sub));
+        return Ok(exit_for(sub));
     }
     let counts = |rev: &Rev| -> Result<(usize, usize)> {
-        let snap = sluice_seams::State::read(s_state(s), &req.branch)?;
+        let snap = sluice_seams::State::read(s_state(s), branch)?;
         let log = sluice_core::line::Line::read_log(&snap)?;
         let mut n = (0, 0);
         for l in log {
@@ -684,7 +833,7 @@ fn submit(
         writeln!(
             out,
             "testing {} · {ran} tasks to run, {replayed} replayed",
-            combination(&req.branch, &t.submissions)
+            combination(&t.submissions)
         )?;
     }
     match sub.state {
@@ -714,7 +863,7 @@ fn submit(
             writeln!(
                 out,
                 "  on {} ({})",
-                combination(&req.branch, &t.submissions),
+                combination(&t.submissions),
                 t.combination.short()
             )?;
             let ahead: Vec<u64> = t.submissions.iter().copied().filter(|i| *i != id).collect();
@@ -722,13 +871,17 @@ fn submit(
                 0 => {}
                 1 => writeln!(
                     out,
-                    "  #{} passed on its own, so the failure is from this submission",
-                    ahead[0]
+                    "  {} passed on its own, so the failure is from this submission",
+                    name(ahead[0])
                 )?,
                 _ => writeln!(
                     out,
                     "  {} passed ahead of it, so the failure is from this submission",
-                    hashes(&ahead)
+                    ahead
+                        .iter()
+                        .map(|i| name(*i))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )?,
             }
             // 20: where what each failed task printed is kept.
@@ -748,19 +901,162 @@ fn submit(
             for w in &c.with {
                 writeln!(
                     out,
-                    "  conflicts with #{} ({}, {})",
-                    w.id, w.from.agent, w.from.worktree
+                    "  conflicts with {} ({}, {})",
+                    name(w.id),
+                    w.from.agent,
+                    w.from.worktree
                 )?;
             }
             writeln!(
                 out,
                 "merge or rebase onto {} in your worktree and submit again",
-                req.branch
+                branch
             )?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
-    Ok(exit_for(&sub))
+    Ok(exit_for(sub))
+}
+
+/// Whether `branch`, at its revision, takes its work as pull requests
+/// (C.7 `pull_requests`).
+fn takes_pulls(s: &Sluice<'_>, branch: &str) -> Result<bool> {
+    let Some(tip) = s.seams().branch.read(branch)? else {
+        return Ok(false);
+    };
+    Ok(s.rules_at(branch, &tip)?
+        .is_some_and(|r| r.pull_requests.is_some()))
+}
+
+/// `sluice submit --status`: where `worktree`'s last submission to
+/// `branch` stands.
+fn submitted(
+    s: &Sluice<'_>,
+    worktree: &str,
+    branch: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let from = s.seams().driver.session(worktree)?.from;
+    let status = s.status(branch)?;
+    let Some(sub) = status
+        .submissions
+        .iter()
+        .rev()
+        .find(|x| x.from.worktree == from.worktree)
+        .cloned()
+    else {
+        writeln!(out, "nothing submitted from {} to {branch}", from.worktree)?;
+        return Ok(1);
+    };
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+    } else {
+        write_status(&status, None, &[sub], out)?;
+    }
+    Ok(0)
+}
+
+/// `sluice submit` to a branch with pull requests (C.5 pull request):
+/// push the worktree's branch and open or update its pull request, which
+/// waits for its conditions; then follow it, reporting each state it
+/// reaches, to its outcome. With `status`, only say where it stands.
+#[allow(clippy::too_many_arguments)]
+fn submit_pull(
+    s: &Sluice<'_>,
+    pulls: &dyn PullRequests,
+    clock: &dyn Clock,
+    worktree: &str,
+    branch: &str,
+    no_wait: bool,
+    status: bool,
+    json: bool,
+    pause: &dyn Pause,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let seams = s.seams();
+    let number = if status {
+        match pulls.find(seams, clock, branch, worktree)? {
+            Some(n) => n,
+            None => {
+                writeln!(out, "no pull request from {worktree} into {branch}")?;
+                return Ok(1);
+            }
+        }
+    } else {
+        match pulls.open(seams, clock, worktree, branch)? {
+            Ok(o) => {
+                if !json {
+                    writeln!(out, "{}", o.said)?;
+                }
+                o.number
+            }
+            Err(r) => {
+                writeln!(out, "{}", refusal(&r, worktree, branch))?;
+                return Ok(CONFLICT);
+            }
+        }
+    };
+    let mut last: Option<(String, Vec<String>)> = None;
+    loop {
+        intake(pulls, seams, clock, branch);
+        match pulls.follow(seams, clock, branch, number)? {
+            Followed::Done(sub, names) => {
+                if status {
+                    write_status(&s.status(branch)?, None, std::slice::from_ref(&sub), out)?;
+                    return Ok(0);
+                }
+                return report(s, &sub, branch, &names, json, out);
+            }
+            Followed::Closed => {
+                writeln!(out, "#{number} was closed without landing")?;
+                return Ok(FAILED);
+            }
+            Followed::Open { title, lines } => {
+                let now = (title, lines);
+                if last.as_ref() != Some(&now) {
+                    if json && (no_wait || status) {
+                        writeln!(
+                            out,
+                            "{}",
+                            serde_json::json!({
+                                "pull_request": number, "branch": branch, "state": now.0,
+                            })
+                        )?;
+                    } else if !json {
+                        writeln!(out, "{}", now.0)?;
+                        for l in &now.1 {
+                            writeln!(out, "  {l}")?;
+                        }
+                    }
+                    last = Some(now);
+                }
+            }
+        }
+        if no_wait || status {
+            return Ok(0);
+        }
+        match s.round(branch) {
+            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Err(e) => {
+                if INTERRUPTED.load(Ordering::SeqCst) {
+                    writeln!(
+                        out,
+                        "still open: #{number}; sluice submit {branch} --status"
+                    )?;
+                    return Ok(STOPPED);
+                }
+                return Err(e);
+            }
+        }
+        if !pause.pause() {
+            writeln!(
+                out,
+                "still open: #{number}; sluice submit {branch} --status"
+            )?;
+            return Ok(STOPPED);
+        }
+    }
 }
 
 /// The records seam of a sluice, for reading the log.

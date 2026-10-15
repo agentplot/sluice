@@ -3,17 +3,11 @@ title: Pull requests
 description: Each submission gets a pull request on GitHub. It waits for review, QA and other checks, then joins sluice's queue and lands when its combination passes.
 sidebar:
   order: 6
-  badge: { text: 'design', variant: 'caution' }
 ---
 
-:::caution[Designed, not built]
-This is the design of piece 24 of sluice's plan, under review in
-[agentplot/blueprints](https://github.com/agentplot/blueprints),
-`design/sluice/proposals/pull-requests-1.md`. The commands and the
-posted states below show what it will look like.
-:::
-
-This builds on [GitHub integration](/sluice/guides/github/).
+This builds on [GitHub integration](/sluice/guides/github/) and on
+[protecting `main` on GitHub](/sluice/guides/github-app/): sluice reads
+pull requests and posts on them as its GitHub App.
 There, work went straight from an agent's worktree into sluice's queue.
 Here, every piece of work also gets a pull request: a page where people
 review it, where other systems post their checks, and where sluice shows
@@ -119,15 +113,19 @@ are never taken.
 sluice posts one check named `sluice` on the pull request's latest
 commit, and comments when it sends one back:
 
-| state | means |
+| the check reads | means |
 |---|---|
-| waiting | a draft, or something is missing: the check lists what, such as "needs 1 review, `qa/approved`" |
-| waiting, forecast | as above, plus where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in `plan.py`" |
-| queued | in the queue, behind the submissions it names |
-| testing | its combination is being tested |
-| failed | its combination failed and it is to blame; the comment names the failed tests and their logs |
-| conflict | it no longer merges with what is ahead of it; the comment names the files and the pull requests |
-| landed | on `main`; GitHub marks the pull request merged |
+| `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
+| `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
+| `queued behind #38, #40` | in the queue, behind the pull requests it names |
+| `testing main + #38 + #40 + #41` | its combination is being tested |
+| `failed: app:test` | its combination failed and it is to blame; the comment names the failed tests and where their logs are |
+| `conflict: plan.py` | it no longer merges with what is ahead of it; the comment names the files and the pull requests |
+| `landed as b7d2e94` | on `main`; GitHub marks the pull request merged |
+
+While a pull request waits or is queued, the check shows as pending on
+GitHub; while it is tested, in progress; failed and conflict fail it,
+and landed passes it. sluice posts only when the state changes.
 
 The forecast runs no tests. It only checks whether the pull request
 would merge on top of `main` and the queue as they are now, so a
@@ -175,6 +173,9 @@ sequenceDiagram
 Keep the ruleset from [the previous guide](/sluice/guides/github/). On
 top of it:
 
+- Give sluice's app Checks and Pull requests, read and write, beside
+  Contents: it posts its check and its comments, and opens pull
+  requests, with them.
 - Leave GitHub's merge queue off; sluice is the queue.
 - Don't require approvals or status checks in the ruleset. Put them in
   `[branches.main.pull_requests]` instead, so they are read from `main`

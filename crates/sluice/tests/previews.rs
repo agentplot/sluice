@@ -46,7 +46,7 @@ fn sluice_with(f: &Fakes, reserved: usize, pause: &dyn Pause, args: &[&str]) -> 
         world: f.world.clone(),
         reserved,
     };
-    let code = run(cli, f.seams(), &host, &(), &f.clock, pause, &mut out).unwrap();
+    let code = run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 
