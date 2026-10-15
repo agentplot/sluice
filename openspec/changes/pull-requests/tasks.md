@@ -34,7 +34,7 @@ the guide `site/src/content/docs/guides/pull-requests.md`.
 
 ## 6. Documentation and the decision
 
-- [ ] 6.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): pull requests are a driver's, waiting is read from GitHub each round and never stored, a check run as the app as the state; options: pull requests in the core's records, commit statuses as the operator, webhooks. Verify `site/scripts/adrs.mjs` renders it.
+- [x] 6.1 Write the next free-numbered ADR in `docs/adr/` (MADR, as 0016): pull requests are a driver's, waiting is read from GitHub each round and never stored, a check run as the app as the state; options: pull requests in the core's records, commit statuses as the operator, webhooks. Verify `site/scripts/adrs.mjs` renders it.
 - [ ] 6.2 Update `site/src/content/docs/guides/pull-requests.md` to what was built: drop the banner and badge, make console output and posted states match. Verify `moon run site:prose` and `cd site && bun run build` pass.
 - [ ] 6.3 Mark piece 24 done in `docs/plans/phase-1-pass-2.md`. Verify the row reads done.
 
