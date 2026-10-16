@@ -21,7 +21,7 @@ list=$(printf '%s' "$patterns" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g'
 # The example names a branch, not a pattern, where the policy has one.
 first=$(printf '%s\n' "$patterns" | grep -v '[*?[]' | head -n 1)
 [ -n "$first" ] || first=$(printf '%s' "$patterns" | head -n 1)
-note="This repository lands work through sluice, a merge queue: $list only move through it. Never merge or push onto them. Commit your work and submit from your worktree: \`sluice submit $first\` (or \`wt submit $first\` under worktrunk), then read the outcome. The using-sluice skill has the details."
+note="This repository lands work through sluice, a merge queue: $list only move through it. Never merge or push onto them. Commit your work and submit from your worktree: \`sluice submit $first\` (or \`wt submit $first\` under worktrunk), then read the outcome. Test while you work with \`sluice exec $first -- <command>\` (your worktree's ports, nothing recorded), and get the gate's verdict before submitting with \`sluice exec $first\` once your work is committed. The using-sluice skill has the details."
 
 if ! command -v sluice >/dev/null 2>&1; then
   note="$note sluice itself is not installed on this host: the setting-up-sluice skill installs it, asking first."

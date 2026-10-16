@@ -15,6 +15,7 @@ Read first: this change's proposal, design and specs; ADR 0023. Work inside
 - [x] 2.1 Add `plugins/sluice/hooks/hooks.json` with a PreToolUse hook on Bash and a SessionStart hook, and their scripts; verify `claude plugin validate plugins/sluice`.
 - [x] 2.2 Test the guard on a scratch repository with isolated git and no credentials: a push, merge, `update-ref` and `gh pr merge` aimed at `main` are refused naming `sluice submit main`; a push of `unit/x` and any command in a repository with no policy go through; verify with `plugins/sluice/tests/hooks.sh`, run by the moon task `root:plugin-hooks` (check-fast).
 - [x] 2.3 Document the guard and the note in `guides/claude-code.md`; verify Vale.
+- [x] 2.4 Teach when to use each form of `sluice exec` in `using-sluice` (SKILL.md and references/exec.md: the `--` form while iterating, the forced affected run before submitting, the branch's `trust` deciding whether it is reused) and name both in the session note; verify `plugins/sluice/tests/hooks.sh` and `crates/sluice/tests/plugin_docs.rs` pass.
 
 ## 3. The board
 
