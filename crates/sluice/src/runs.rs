@@ -246,8 +246,11 @@ impl Runs {
             .spawn()
             .with_context(|| format!("starting {} supervise", self.program.display()))?;
         // The run is under way once its supervisor holds the lock, so no
-        // later read takes a supervisor still starting for a lost one.
-        let until = Instant::now() + Duration::from_secs(10);
+        // later read takes a supervisor still starting for a lost one. One
+        // that fails exits and is caught at once; the deadline is for one
+        // that never runs, and is long because a loaded host may hold a
+        // program for many seconds before it runs a line of it.
+        let until = Instant::now() + Duration::from_secs(60);
         loop {
             if self.supervised(&dir)? || read_ended(&dir)?.is_some() {
                 break;
