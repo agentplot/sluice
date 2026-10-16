@@ -1,0 +1,44 @@
+# .config/sluice.toml: moon in a devenv shell, a sandbox, two tiers of
+# branches, main on GitHub taking pull requests. Agents work in worktrunk
+# worktrees and finish with `wt submit <branch>`. This is close to sluice's
+# own policy.
+
+[tests]
+runner = "moon"
+# The shell the tasks run in: printed outside the sandbox, sourced inside.
+toolchain = ["devenv", "print-dev-env"]
+release = "docker compose -p \"$SLUICE_PLACE\" down -v" # what the tests hand off
+
+[checkout]
+ports = ["db"] # SLUICE_PORT_DB, held per checkout
+
+[[checkout.cache]]
+key = ["Cargo.lock", ".prototools"]
+paths = ["target"]
+
+[executor]
+kind = "sandbox"      # writes only the checkout and SLUICE_TMP (macOS)
+network = "localhost"
+docker = true         # the integration tests start a database container
+
+[landing]
+subject = "chore(land): #{id} {from}"
+
+# Small, fast landings many times a day.
+[branches."bolt/*"]
+required = ["#check-fast"]
+parallel = 4
+trust = ["open", "sandbox", "cache"]
+
+# Whole features; every required task really runs.
+[branches.main]
+required = ["#check-fast", "#check-tools"]
+parallel = 2
+batch = true                               # test the longest combination, bisect on failure
+timeout = "30m"
+trust = ["confined", "sandbox"]
+remote = "origin"                          # fetched every round, landed by a leased push
+
+[branches.main.pull_requests]
+reviews = 1
+checks = []

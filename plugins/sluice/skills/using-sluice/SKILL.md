@@ -1,0 +1,121 @@
+---
+name: using-sluice
+description: Land work through sluice, the merge queue for agents in worktrees. Use in a repository with a `.config/sluice.toml` when work is to be submitted, landed, merged or queued, or when a sluice submission failed, conflicted or seems stuck. Covers `sluice submit` and `wt submit`, waiting on or checking a submission, reading a failure's blamed tests and logs, `sluice exec` for tests in the worktree, and `sluice preview`, `previews` and `release`.
+---
+
+# Using sluice
+
+sluice is the only way onto a branch that `.config/sluice.toml` names under
+`[branches."<pattern>"]`. You never merge into such a branch and never push
+to it. You **submit** your worktree's head; sluice tests it combined with
+everything queued ahead of it and lands it only if that combination passes.
+
+## The rules
+
+- **Never** `git merge`, `git push`, `git update-ref` or `gh pr merge` onto a
+  branch sluice manages. Local updates are refused by sluice's git hook;
+  pushes are refused by the forge's ruleset. Submit instead.
+- Commit everything first. A worktree holding modified, staged or untracked
+  files is refused (exit 2), naming each path.
+- Submit from your own worktree, on your own branch. A detached HEAD is
+  refused.
+- Submitting again from the same worktree replaces your earlier submission.
+
+Which branches sluice manages: `sluice overview` lists the branches with a
+queue; the policy's `[branches."<pattern>"]` tables are the whole list.
+
+## Submit
+
+```sh
+sluice submit --check main      # would it conflict? writes nothing
+sluice submit main              # submit, wait, exit with the outcome
+wt submit main                  # the same under worktrunk; removes the worktree on landing
+```
+
+Exit codes: `0` landed, `1` failed (this submission was blamed), `2` a
+conflict or a refusal, `130` stopped with Ctrl-C (the submission stays
+queued).
+
+A waiting submit also runs sluice's rounds, so it is what moves the queue on
+a single machine. Prefer it. When you must not block, submit with
+`--no-wait` and check later:
+
+```sh
+sluice submit main --no-wait --json     # {"id":12,"branch":"main","ahead":[...]}
+sluice status 12 --json                 # the submission's record
+sluice submit main --status             # this worktree's last submission, or its pull request
+```
+
+Nothing moves while nobody waits and no `sluice run` is going. If a
+`--no-wait` submission sits at `queued` with nothing testing, move it with
+`sluice step main` (one round) in a loop, or `sluice run --rounds N`. Do not
+submit again to move it: a second submit from the same worktree replaces the
+first. On a pull-request branch, a waiting `sluice submit main` follows the
+pull request already open, so there it is the way to wait.
+
+On a branch with `[branches."<pattern>".pull_requests]`, `submit` pushes your
+branch and opens or updates its pull request instead; the pull request joins
+the queue once its reviews and checks hold. See
+[references/submit.md](references/submit.md).
+
+## When it fails
+
+Read what sluice printed, then the log it names. `failed: <task>` means
+your submission broke that test **in combination with what was ahead of
+it**; sluice has already checked the entries ahead passed on their own.
+
+1. Open the log path printed after `log of <task>:` (also
+   `failed[].log` in `sluice status <id> --json`).
+2. Reproduce in your worktree with `sluice exec <branch>`, the same tests
+   under the same limits.
+3. Fix, commit, submit again.
+
+A **conflict** names the paths and the submission it conflicts with. Merge
+or rebase the target branch into your worktree, resolve, commit, submit
+again. Details and every state: [references/verdicts.md](references/verdicts.md).
+
+## Seeing the queue
+
+```sh
+sluice overview                 # every branch: depth, what is testing, latest landings and blames
+sluice overview --json          # sluice/overview@1, for scripts
+sluice status main              # one branch's submissions
+```
+
+A submission's `from.path` is the worktree it came from: filter
+`branches[].submissions[]` on your worktree's path to find yours.
+
+## Tests while you work: `sluice exec`
+
+```sh
+sluice exec main                # the tests your head affects, against main's policy
+sluice exec main -- npm test    # any command, with the worktree's ports
+sluice release                  # end what your runs left up and free the ports
+```
+
+Run tests through `sluice exec`, not directly: runs share the host's bound
+with the queue, and your worktree gets ports no other worktree holds. A run
+in a clean worktree is recorded as an `open` run, which the submission that
+follows reuses only on a branch that trusts `"open"`. Release before
+removing a worktree by hand (`sluice exec --release` does both in one go). See
+[references/exec.md](references/exec.md).
+
+## Previews
+
+`sluice preview <branch> <revision>` brings up a revision the branch has
+**landed** on the repository's own stack, at addresses a person opens, until
+`sluice release <preview>`. Queued heads and combinations under test are
+refused. See [references/previews.md](references/previews.md).
+
+## Amend and withdraw
+
+```sh
+me="${SLUICE_AGENT:-$(git branch --show-current)}"
+sluice amend 14 --after 12 --as "$me"     # land after #12
+sluice amend 14 --priority 1 --as "$me"   # higher goes first; the default is 0
+sluice withdraw 14 --as "$me"
+```
+
+`--as` must match the agent recorded on the submission (`from.agent`):
+`SLUICE_AGENT` when it was set at submit, else the branch name. A
+submission's order is fixed once it is under test.
