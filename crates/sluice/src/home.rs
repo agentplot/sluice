@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
-use sluice_core::overview::{counts, BranchCount, HOME_SCHEMA};
+use sluice_core::overview::{counts, BranchCount, Here, HOME_SCHEMA};
 use sluice_core::records::{State, Submission};
 use sluice_core::Sluice;
 use sluice_seams::{SessionPlace, Submitter};
@@ -30,8 +30,6 @@ fn next(from: Option<&Submitter>, sub: Option<&Submission>) -> Vec<String> {
             format!("sluice submit {}", s.branch),
             "sluice overview".into(),
         ],
-        // A pull request's submission names no worktree's path: following
-        // it is a forge's read, left to `--status` rather than made here.
         None => vec![
             "sluice submit <branch>".into(),
             "sluice submit <branch> --status".into(),
@@ -61,9 +59,15 @@ pub fn run(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> R
     // Outside a worktree the driver knows, there is no session to show.
     let from = s.seams().driver.session(worktree).ok().map(|x| x.from);
     let path = from.as_ref().and_then(|f| f.path.clone());
-    let sub = match &path {
-        Some(p) => s.home(&branches, p)?,
-        None => None,
+    let sub = match (&from, &path) {
+        (Some(f), Some(p)) => s.home(
+            &branches,
+            Here {
+                path: p,
+                branch: &f.worktree,
+            },
+        )?,
+        _ => None,
     };
     let place: Option<SessionPlace> = match &path {
         Some(p) => s

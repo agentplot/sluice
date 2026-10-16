@@ -353,6 +353,9 @@ fn a_pull_request_opened_by_hand() {
     assert_eq!(subs[0]["head"], head.as_str());
     assert_eq!(subs[0]["from"]["agent"], "crw-1-unit-1");
     assert_eq!(subs[0]["from"]["worktree"], format!("pull/{n}"));
+    // The branch it was opened from, for the home view (ADR 0025).
+    assert_eq!(subs[0]["from"]["head"], "unit/hand");
+    assert!(subs[0]["from"].get("path").is_none());
 }
 
 /// C.7 `reviews`: an approval given on an earlier head does not count.
