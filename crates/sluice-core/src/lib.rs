@@ -31,6 +31,11 @@ pub use ops::{
 };
 pub use step::{Round, Step};
 
+/// The `tracing` target of a failure's output, one event per failed task
+/// with the output as its message: telemetry sends it as its level says,
+/// and nothing reads it back (ADR 0022). The kept copy is the record (20).
+pub const OUTPUT: &str = "sluice::output";
+
 /// The time, for the records' timestamps. Not a seam: the environment.
 pub trait Clock {
     fn now(&self) -> DateTime<Utc>;

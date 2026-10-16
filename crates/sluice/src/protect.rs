@@ -301,7 +301,7 @@ pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
         } else {
             String::new()
         };
-        eprintln!("{}", refusal(branch, &why));
+        crate::telemetry::warn(&refusal(branch, &why));
         refused.push((branch.to_string(), cur, new));
     }
     if refused.is_empty() {
