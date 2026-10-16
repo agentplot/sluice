@@ -36,7 +36,7 @@ export function overview(): Overview {
         submissions: [
           { id: 12, state: 'testing', from: { agent: 'claude', worktree: 'overview-docs', path: '/work/sluice/overview-docs' } },
           { id: 13, state: 'testing', from: { agent: 'claude', worktree: 'plugin-board', path: '/work/sluice/plugin-board' } },
-          { id: 14, state: 'queued', from: { agent: 'herdr', worktree: 'herdr-panel', path: '/work/sluice/herdr-panel' } },
+          { id: 14, state: 'queued', from: { agent: 'herdr', worktree: 'pull/41' } },
         ],
         recent: [
           { schema: 'sluice/log@1', at: '2026-10-16T19:41:00Z', event: 'landed', ids: [11], to: '9ecc34a1b2' },

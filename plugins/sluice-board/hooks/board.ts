@@ -47,17 +47,34 @@ export function recentWords(r: Recent): string {
   }
 }
 
+/** `main+#80+#81`: a combination as the band names it. */
+export function combination(branch: string, list: readonly number[]): string {
+  return [branch, ...list.map(i => `#${i}`)].join('+')
+}
+
+/** The submissions in no combination under test. */
+export function waiting(b: OverviewBranch): number[] {
+  const under = new Set(testing(b).flatMap(c => c.submissions))
+  return b.submissions.map(s => s.id).filter(i => !under.has(i))
+}
+
+export function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
 /** The band's line for one branch, or null when it has nothing to show. */
 export function branchLine(b: OverviewBranch, now: number): string | null {
   const under = testing(b)
   if (b.depth === 0 && under.length === 0) return null
-  const parts = [`sluice ${b.branch}`, `${b.depth} queued`]
+  const parts = [`sluice ${b.branch}`, plural(b.depth, 'submission')]
   for (const c of under) {
     const took = since(c.started, now)
     const clock =
       took === undefined ? '' : ` ${duration(took)}${c.limit ? `/${limit(c.limit)}` : ''}`
-    parts.push(`testing ${ids(c.submissions)}${clock}`)
+    parts.push(`testing ${combination(b.branch, c.submissions)}${clock}`)
   }
+  const idle = waiting(b)
+  if (idle.length > 0) parts.push(`${idle.map(i => `#${i}`).join(' ')} waiting`)
   const last = b.recent[b.recent.length - 1]
   if (last) parts.push(`last ${recentWords(last)}`)
   return parts.join(' · ')
@@ -152,7 +169,7 @@ export function statusLine(doc: Overview | null, mine: Mine): string | undefined
   const own = doc.branches.flatMap(b => b.submissions).filter(s => isMine(s, mine))
   if (queued === 0 && own.length === 0) return undefined
   const yours = own.map(s => ` · yours #${s.id} ${s.state}`).join('')
-  return `sluice: ${queued} queued${yours}`
+  return `sluice: ${plural(queued, 'submission')}${yours}`
 }
 
 /** The prompt that tells an idle session its submission's outcome. */
@@ -173,4 +190,16 @@ export function wakeText(o: Outcome, failed: { task: string; log?: string }[]): 
     ...logs,
     `Read the log, reproduce with \`sluice exec ${o.branch}\`, fix, commit, and submit again.`,
   ].join('\n')
+}
+
+/** `https://github.com/<owner>/<repo>` from a remote's URL, or null off GitHub. */
+export function githubBase(url: string): string | null {
+  const m = url.trim().match(/^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/)
+  return m ? `https://github.com/${m[1]}/${m[2]}` : null
+}
+
+/** The pull request number of a submission from `pull/<n>`, or null. */
+export function pullOf(worktree: string): number | null {
+  const m = worktree.match(/^pull\/(\d+)$/)
+  return m ? Number(m[1]) : null
 }

@@ -22,9 +22,9 @@ Read first: this change's proposal, design and specs; ADR 0023. Work inside
 - [x] 3.1 Add `plugins/sluice-board` (manifest, hooks module, state contract) and list it in the marketplace; verify `claude plugin validate plugins/sluice-board`, `claude plugin validate .` and `tsc` over the module and its tests with the types' tsconfig.
 - [x] 3.2 Feed it from `sluice overview --json --watch`, falling back to polling; draw the band, the `/sluice` pane and the status line; verify `claude plugin test plugins/sluice-board`: the band and the pane drawn from a fixture document on `terminal` and `desktop`, and the status line.
 - [x] 3.3 Add the wake on `from.path`, once per outcome across reloads, behind a `wake` option; verify with tests that one blame starts one turn naming the test and its log, and none with `wake` off.
-- [ ] 3.4 Try it live: two submissions to `main` tracked from testing to landed, and a failing branch's wake naming the blamed test; document it in `guides/claude-code.md`.
+- [x] 3.4 Try it live: submissions to `main` tracked from testing to landed in a session, and the wake telling the session its own landing (#81, 2026-10-16); the band and pane reworded to say submissions and combinations, with pull requests linked to GitHub; documented in `guides/claude-code.md`.
 
 ## 4. Drift and close
 
 - [x] 4.1 Add drift tests: every key the policy parser accepts appears in the setup references, and every subcommand in the skills (`crates/sluice/tests/plugin_docs.rs`, with the skills in `cli:test`'s inputs); verify they fail when a key is removed from a reference.
-- [ ] 4.2 Run `openspec validate claude-code-plugins --strict`, then archive the change once 2 and 3 have landed.
+- [x] 4.2 Run `openspec validate claude-code-plugins --strict`, then archive the change once 2 and 3 have landed.

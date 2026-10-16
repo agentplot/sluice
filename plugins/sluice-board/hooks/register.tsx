@@ -10,8 +10,11 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Mine, Outcome, Overview } from '../types'
 import {
   bandLines,
+  combination,
+  githubBase,
+  plural,
+  pullOf,
   duration,
-  ids,
   isMine,
   learn,
   limit,
@@ -33,6 +36,7 @@ const mine = atom({ plugin: 'sluice-board', key: 'mine' } as const, NO_ONE)
 const told = atom({ plugin: 'sluice-board', key: 'told' } as const, [])
 const isHidden = atom({ plugin: 'sluice-board', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'sluice-board', key: 'now' } as const, 0)
+const repo = atom({ plugin: 'sluice-board', key: 'repo' } as const, null)
 
 type $ = EngineInterface
 
@@ -107,6 +111,9 @@ export const register: Register = (on, options) => {
     const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd }).catch(() => null)
     const root = top && top.exitCode === 0 ? top.stdout.trim() : null
     await update($, mine, m => ({ ...m, root }))
+    const origin = await $.process.run(['git', 'remote', 'get-url', 'origin'], { cwd }).catch(() => null)
+    const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null
+    await update($, repo, () => base)
     await take($, JSON.parse(probe.stdout) as Overview, cwd, wake)
     void feed($, cwd, wake)
     // Elapsed times move while something is under test.
@@ -164,9 +171,10 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Button, Link, Text } = $.ui.resolve(e)
     const d = await read($, doc)
     const m = await read($, mine)
+    const base = await read($, repo)
     await read($, now)
     if (!d) return <Text dimColor>No sluice records in this repository.</Text>
     const at = await $.clock.now()
@@ -179,15 +187,15 @@ export const register: Register = (on, options) => {
         {d.branches.map(b => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>
             <Text bold>
-              {b.branch} at {(b.at ?? 'nothing').slice(0, 7)} · {b.depth} in the queue · testing {testing(b).length} at
-              once{b.parallel ? ` (up to ${b.parallel})` : ''}
+              {b.branch} at {(b.at ?? 'nothing').slice(0, 7)} · {plural(b.depth, 'submission')} ·{' '}
+              {plural(testing(b).length, 'combination')} under test{b.parallel ? ` (up to ${b.parallel} at once)` : ''}
             </Text>
             {testing(b).map(c => {
               const took = since(c.started, at)
               return (
                 <Box key={`cand-${b.branch}-${c.id}`} flexDirection="column">
                   <Text color="yellow">
-                    ▶ {b.branch} + {ids(c.submissions)}
+                    ▶ testing {combination(b.branch, c.submissions)}
                     {took === undefined ? '' : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ''}`}
                   </Text>
                   <Text dimColor>
@@ -198,12 +206,28 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })}
-            {b.submissions.map(s => (
-              <Text key={`sub-${b.branch}-${s.id}`}>
-                {'  '}#{s.id} {s.state.padEnd(9)} {s.from.worktree} {s.from.agent}
-                {isMine(s, m) ? '  ← you' : ''}
-              </Text>
-            ))}
+            {b.candidates
+              .filter(c => c.state === 'formed')
+              .map(c => (
+                <Text key={`formed-${b.branch}-${c.id}`} dimColor>
+                  {'    '}formed, not running: {combination(b.branch, c.submissions)}
+                </Text>
+              ))}
+            {b.submissions.map(s => {
+              const pull = pullOf(s.from.worktree)
+              return (
+                <Text key={`sub-${b.branch}-${s.id}`}>
+                  {'  '}#{s.id} {s.state.padEnd(9)}{' '}
+                  {pull !== null && base ? (
+                    <Link href={`${base}/pull/${pull}`}>PR {pull}</Link>
+                  ) : (
+                    s.from.worktree
+                  )}{' '}
+                  {s.from.agent}
+                  {isMine(s, m) ? '  ← you' : ''}
+                </Text>
+              )
+            })}
             {[...b.recent]
               .reverse()
               .slice(0, 5)
