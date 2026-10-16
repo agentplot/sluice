@@ -15,3 +15,9 @@ tasks:
     inputs: ['/crates/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock', '/.prototools']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # The Claude Code plugin's hooks on a scratch repository.
+  plugin-hooks:
+    command: 'plugins/sluice/tests/hooks.sh'
+    inputs: ['/plugins/sluice/scripts/**/*', '/plugins/sluice/tests/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}

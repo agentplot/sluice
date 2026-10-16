@@ -13,6 +13,11 @@ work through the queue instead of merging.
 | `using-sluice` | submitting, reading failures and conflicts, `sluice exec`, previews |
 | `worktrees` | the bare repository and worktrees layout |
 
+Two hooks: at session start, a note naming the branches sluice protects;
+before each shell command, a guard that refuses a push, merge or ref
+update onto one, naming `sluice submit` instead (`scripts/`, tested by
+`tests/hooks.sh`).
+
 Guide: <https://agentplot.github.io/sluice/guides/claude-code/>.
 
 This directory sits outside sluice's core: no crate imports it, so it may
