@@ -63,6 +63,24 @@ In a repository with a `.config/sluice.toml`, Claude:
   `sluice release`;
 - brings up a landed revision with `sluice preview` when you ask to try it.
 
+## Kept off protected branches
+
+Two hooks come with the skills.
+
+At the start of a session in a repository whose policy protects branches,
+Claude is told which ones, and that work lands on them only through
+`sluice submit`.
+
+Before Claude runs a shell command, a guard checks it. A `git push` to a
+protected branch, a `git merge` or `git update-ref` onto one, or a
+`gh pr merge` into one is refused, with the reason naming the
+`sluice submit` command to run instead. Every other command, its own
+branch's push included, goes through. The guard reads which branches are
+protected from the policy committed in the repository. sluice's own git
+hook already refuses a local update; the guard says why before git does,
+and covers a push to GitHub and a pull request merge, which that hook
+never sees. It needs `jq`, and lets everything through without it.
+
 ## Worktrees
 
 Ask about worktrees or a bare repository and the plugin gives the layout
@@ -78,6 +96,8 @@ agent or an editor has open, and deleting nothing.
 | `setting-up-sluice` | installing sluice, writing or changing `.config/sluice.toml`, GitHub, pull requests |
 | `using-sluice` | submitting, waiting, reading a failure or conflict, `sluice exec`, previews |
 | `worktrees` | the bare repository and worktrees layout, conversions, repairs |
+
+and two hooks: the session note and the guard on shell commands.
 
 Each skill points at the pages of this site for the full story:
 [configuration](/sluice/reference/configuration/),

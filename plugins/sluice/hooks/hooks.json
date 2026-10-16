@@ -1,0 +1,20 @@
+{
+  "description": "Keep a session off the branches sluice protects, and tell it at start which they are.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/guard.sh\"", "timeout": 20 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.sh\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# SessionStart: in a repository whose policy protects branches, tell the
+# session which, and how work lands on them; say so when sluice is missing
+# or too old for this plugin. Silent everywhere else.
+
+set -u
+command -v jq >/dev/null 2>&1 || exit 0
+
+input=$(cat)
+dir=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+[ -n "$dir" ] || dir=$PWD
+
+# shellcheck disable=SC1091 # beside this script
+. "$(dirname "$0")/protected.sh"
+
+patterns=$(sluice_patterns "$(sluice_policy "$dir")")
+[ -n "$patterns" ] || exit 0
+
+# shellcheck disable=SC2016 # backticks are the text
+list=$(printf '%s' "$patterns" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')
+# The example names a branch, not a pattern, where the policy has one.
+first=$(printf '%s\n' "$patterns" | grep -v '[*?[]' | head -n 1)
+[ -n "$first" ] || first=$(printf '%s' "$patterns" | head -n 1)
+note="This repository lands work through sluice, a merge queue: $list only move through it. Never merge or push onto them. Commit your work and submit from your worktree: \`sluice submit $first\` (or \`wt submit $first\` under worktrunk), then read the outcome. The using-sluice skill has the details."
+
+if ! command -v sluice >/dev/null 2>&1; then
+  note="$note sluice itself is not installed on this host: the setting-up-sluice skill installs it, asking first."
+else
+  version=$(sluice --version 2>/dev/null | awk '{print $2}')
+  major=${version%%.*}
+  minor=${version#*.}
+  minor=${minor%%.*}
+  if [ -n "$version" ] && { [ "${major:-0}" -eq 0 ] && [ "${minor:-0}" -lt 11 ]; } 2>/dev/null; then
+    note="$note The installed sluice is $version; this plugin needs 0.11 or later (the setting-up-sluice skill upgrades it)."
+  fi
+fi
+
+jq -n --arg c "$note" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
