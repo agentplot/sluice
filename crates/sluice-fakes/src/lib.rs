@@ -16,10 +16,10 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, Branch, Changes, Checkout, Driver, Enforced, Formed, Guard, LandingCommit, Moved,
-    Network, Notification, Outcome, Place, PreviewPlace, Progress, ReleasePolicy, Released, Rev,
-    RunHandle, RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State,
-    Submitter, TaskLog, TaskResult, Tests, Written,
+    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
+    Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress, ReleasePolicy, Released,
+    Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source,
+    State, Submitter, TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -127,6 +127,8 @@ struct Inner {
     logs: BTreeMap<String, String>,
     // the driver
     worktrees: BTreeMap<String, Session>,
+    /// Worktrees with a branch checked out: the branch and the revision.
+    checked_out: BTreeMap<String, (String, Rev)>,
     told: Vec<Notification>,
     crash_notify: bool,
     // the records
@@ -672,6 +674,21 @@ impl World {
         );
     }
 
+    /// A worktree has `branch` checked out, at the branch's tip; `None`
+    /// detaches it.
+    pub fn check_out(&self, worktree: &str, branch: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match branch {
+            Some(b) => {
+                let head = inner.refs.get(b).cloned().expect("a branch");
+                inner.checked_out.insert(worktree.into(), (b.into(), head));
+            }
+            None => {
+                inner.checked_out.remove(worktree);
+            }
+        }
+    }
+
     /// The clock moves on by `by`.
     pub fn advance(&self, by: Span) {
         self.0.borrow_mut().now += by;
@@ -1109,6 +1126,19 @@ impl Checkout for FakeCheckout {
                     last_run: inner.adopted_at.get(name).cloned(),
                     gone: !inner.worktrees.contains_key(worktree),
                 }
+            })
+            .collect())
+    }
+
+    fn checked_out(&self) -> Result<Vec<CheckedOut>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .checked_out
+            .iter()
+            .map(|(w, (branch, head))| CheckedOut {
+                worktree: w.into(),
+                branch: branch.clone(),
+                head: head.clone(),
             })
             .collect())
     }

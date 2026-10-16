@@ -61,8 +61,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, Checkout, Limits, Place, PreviewPlace, ReleasePolicy, Released, Rev, RunHandle,
-    SessionPlace, Setting, Settings,
+    Adopted, CheckedOut, Checkout, Limits, Place, PreviewPlace, ReleasePolicy, Released, Rev,
+    RunHandle, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -869,6 +869,48 @@ impl Places {
     }
 }
 
+/// The worktrees `git worktree list --porcelain -z` names with a branch
+/// checked out: a bare entry, a detached one and one whose directory is
+/// gone (`prunable`) are left out.
+fn parse_worktree_list(out: &[u8]) -> Vec<CheckedOut> {
+    let mut found = Vec::new();
+    let mut fields: Vec<&[u8]> = Vec::new();
+    let mut flush = |fields: &mut Vec<&[u8]>| {
+        let mut worktree = None;
+        let mut head = None;
+        let mut branch = None;
+        let mut gone = false;
+        for f in fields.drain(..) {
+            let f = String::from_utf8_lossy(f);
+            if let Some(w) = f.strip_prefix("worktree ") {
+                worktree = Some(PathBuf::from(w));
+            } else if let Some(h) = f.strip_prefix("HEAD ") {
+                head = Some(Rev(h.to_string()));
+            } else if let Some(b) = f.strip_prefix("branch refs/heads/") {
+                branch = Some(b.to_string());
+            } else if f.starts_with("prunable") {
+                gone = true;
+            }
+        }
+        if let (Some(worktree), Some(head), Some(branch), false) = (worktree, head, branch, gone) {
+            found.push(CheckedOut {
+                worktree,
+                branch,
+                head,
+            });
+        }
+    };
+    for f in out.split(|b| *b == 0) {
+        if f.is_empty() {
+            flush(&mut fields);
+        } else {
+            fields.push(f);
+        }
+    }
+    flush(&mut fields);
+    found
+}
+
 /// The names of a preview begin so (previews-1 clause 98).
 pub const PREVIEW: &str = "preview/";
 
@@ -1108,6 +1150,26 @@ impl Checkout for Places {
             self.save(&cache, &path, true)?;
         }
         Ok(())
+    }
+
+    fn checked_out(&self) -> Result<Vec<CheckedOut>> {
+        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
+        if !out.status.success() {
+            bail!(
+                "git worktree list: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(parse_worktree_list(&out.stdout)
+            .into_iter()
+            .map(|mut c| {
+                // As a session's place names its worktree (`session_name`).
+                if let Ok(p) = std::fs::canonicalize(&c.worktree) {
+                    c.worktree = p;
+                }
+                c
+            })
+            .collect())
     }
 
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {

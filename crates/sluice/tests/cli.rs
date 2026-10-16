@@ -1132,3 +1132,81 @@ fn status_lists_the_worktrees_held() {
         .starts_with("2026-10-11T09:"));
     assert_eq!(w["removed"], true);
 }
+
+/// ADR 0024: a worktree that has checked out a branch sluice lands on, by
+/// its records or by a gate its policy gives it, is named in overview's
+/// `sessions[]`, in `sluice status` and by `sluice protect`'s output; a
+/// detached one and one on a branch of its own are not, and the landing
+/// goes through.
+#[test]
+fn a_worktree_holding_a_branch_sluice_lands_on_is_warned_of() {
+    let f = setup();
+    let other = "bolt/no-records";
+    f.world.init(other, &[(".config/sluice.toml", POLICY)]);
+    f.world.check_out("/w/main-like", Some(BRANCH));
+    f.world.check_out("/w/bolt", Some(other));
+    f.world.check_out("/w/view", Some(BRANCH));
+    f.world.check_out("/w/view", None);
+    work(
+        &f,
+        "unit/mine",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    f.world.init("unit/mine", &[("plugin/lib/plan.py", "p2")]);
+    f.world.check_out("/w/unit", Some("unit/mine"));
+
+    let (code, _) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/mine"]);
+    assert_eq!(code, LANDED, "a held branch never stops a landing");
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let held: Vec<(&str, &str)> = v["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| Some((w["worktree"].as_str()?, w["holds_queued_branch"].as_str()?)))
+        .collect();
+    assert_eq!(held, vec![("/w/bolt", other), ("/w/main-like", BRANCH)]);
+    assert!(v["sessions"][0].get("ports").is_none());
+
+    let (_, text) = sluice(&f, &["overview"]);
+    assert!(
+        text.contains(&format!("warning: /w/main-like has {BRANCH} checked out")),
+        "{text}"
+    );
+    assert!(!text.contains("worktrees held"), "{text}");
+
+    let (code, out) = sluice(&f, &["status"]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(&format!(
+            "warning: /w/main-like has {BRANCH} checked out: sluice moves {BRANCH} under it"
+        )),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["worktrees"].as_array().unwrap().len(), 2);
+}
+
+/// A session's place whose worktree holds a branch sluice lands on carries
+/// `holds_queued_branch` on its own entry, not a second one.
+#[test]
+fn a_held_place_is_one_entry() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.check_out("unit/a", Some(BRANCH));
+    let (_, out) = sluice(&f, &["status", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let w = doc["worktrees"].as_array().unwrap();
+    assert_eq!(w.len(), 1, "{out}");
+    assert_eq!(w[0]["holds_queued_branch"], BRANCH);
+    assert!(w[0]["ports"].is_object());
+}

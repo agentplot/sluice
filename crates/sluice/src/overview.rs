@@ -13,7 +13,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::{combination, hashes, worktree_json, Pause, STOPPED};
+use crate::{combination, hashes, sessions_json, Pause, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -22,7 +22,7 @@ pub fn document(
     clock: &dyn Clock,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     let branches = s.overview()?;
-    let sessions: Vec<serde_json::Value> = s.session_places()?.iter().map(worktree_json).collect();
+    let sessions = sessions_json(&s.session_places()?, &s.held()?);
     let previews: Vec<serde_json::Value> = s.previews()?.iter().map(preview_json).collect();
     let doc = serde_json::json!({
         "schema": OVERVIEW_SCHEMA,
@@ -112,10 +112,20 @@ fn write_overview(
             writeln!(out, "  {}", recent_line(r))?;
         }
     }
-    let held = doc["sessions"].as_array().map_or(0, Vec::len);
+    let sessions = doc["sessions"].as_array().map_or(&[][..], Vec::as_slice);
+    let held = sessions.iter().filter(|w| w.get("ports").is_some()).count();
     let previews = doc["previews"].as_array().map_or(0, Vec::len);
     if held + previews > 0 {
         writeln!(out, "{held} worktrees held · {previews} previews")?;
+    }
+    for w in sessions {
+        if let Some(b) = w["holds_queued_branch"].as_str() {
+            writeln!(
+                out,
+                "warning: {} has {b} checked out: sluice moves {b} under it",
+                w["worktree"].as_str().unwrap_or("")
+            )?;
+        }
     }
     Ok(())
 }
