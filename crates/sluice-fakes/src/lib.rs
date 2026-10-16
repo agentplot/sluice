@@ -710,6 +710,17 @@ impl World {
             .dirty = paths.iter().map(|p| p.to_string()).collect();
     }
 
+    /// The session's place is at `path`, the path its submissions name.
+    pub fn at_path(&self, worktree: &str, path: &str) {
+        self.0
+            .borrow_mut()
+            .worktrees
+            .get_mut(worktree)
+            .expect("a session's place")
+            .from
+            .path = Some(path.into());
+    }
+
     /// The next notification is delivered and the process stops before
     /// it is confirmed.
     pub fn crash_after_next_notify(&self) {

@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod exec;
+pub mod home;
 pub mod identity;
 pub mod instance;
 pub mod overview;
@@ -52,11 +53,22 @@ pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
 #[command(
     name = "sluice",
     version = VERSION,
-    about = "A merge queue for agents in worktrees."
+    about = "A merge queue for agents in worktrees.",
+    long_about = "A merge queue for agents in worktrees.\n\n\
+                  With no command, where this worktree stands: its submission, the \
+                  branches' queues, its place and what to run next.",
+    args_conflicts_with_subcommands = true
 )]
 pub struct Cli {
+    /// None: the home view, where this worktree stands.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
+    /// With no command: the home view as one JSON document.
+    #[arg(long)]
+    pub json: bool,
+    /// With no command: the worktree to show.
+    #[arg(long, default_value = ".")]
+    pub worktree: String,
     /// Export traces and metrics over OTLP/HTTP, to where the
     /// OTEL_EXPORTER_OTLP_* variables say.
     /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
@@ -431,13 +443,16 @@ impl Cli {
     /// before or outside it is said as JSON.
     pub fn json(&self) -> bool {
         match &self.command {
-            Command::Submit { json, .. }
-            | Command::Status { json, .. }
-            | Command::Overview { json, .. }
-            | Command::Exec { json, .. }
-            | Command::Preview { json, .. }
-            | Command::Previews { json } => *json,
-            _ => false,
+            None => self.json,
+            Some(
+                Command::Submit { json, .. }
+                | Command::Status { json, .. }
+                | Command::Overview { json, .. }
+                | Command::Exec { json, .. }
+                | Command::Preview { json, .. }
+                | Command::Previews { json },
+            ) => *json,
+            Some(_) => false,
         }
     }
 }
@@ -454,7 +469,10 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock);
-    match cli.command {
+    let Some(command) = cli.command else {
+        return home::run(&s, &cli.worktree, cli.json, out);
+    };
+    match command {
         Command::Submit {
             branch,
             after,

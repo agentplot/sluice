@@ -16,7 +16,7 @@ fn main() {
     });
     let json = cli.json();
     // A supervisor needs no repository: its run directory says everything.
-    if let Command::Supervise { dir } = &cli.command {
+    if let Some(Command::Supervise { dir }) = &cli.command {
         if let Err(e) = sluice::runs::supervise(dir) {
             eprintln!("sluice supervise: {e:#}");
             std::process::exit(3);
@@ -25,7 +25,7 @@ fn main() {
     }
     // git's credential helper needs no repository: what it gives is in
     // its environment.
-    if let Command::Credential { operation } = &cli.command {
+    if let Some(Command::Credential { operation }) = &cli.command {
         let mut out = std::io::stdout();
         if let Err(e) = sluice::identity::helper(operation, &mut std::io::stdin().lock(), &mut out)
         {
@@ -36,9 +36,9 @@ fn main() {
     }
     // The forge check reads the host's config itself, and says what in it
     // is wrong rather than failing on it.
-    if let Command::Forge {
+    if let Some(Command::Forge {
         command: sluice::ForgeCommand::Check { branch },
-    } = &cli.command
+    }) = &cli.command
     {
         let code = std::env::current_dir()
             .map_err(anyhow::Error::from)
@@ -53,7 +53,7 @@ fn main() {
     }
     // Every ref update in every worktree runs the hook: leave at once
     // unless git asks for the decision.
-    if let Command::Hook { state, .. } = &cli.command {
+    if let Some(Command::Hook { state, .. }) = &cli.command {
         if state != "prepared" {
             return;
         }
@@ -61,7 +61,7 @@ fn main() {
     // 1: whatever runs sluice's work keeps its branches protected.
     if matches!(
         cli.command,
-        Command::Submit { .. } | Command::Step { .. } | Command::Run { .. }
+        Some(Command::Submit { .. } | Command::Step { .. } | Command::Run { .. })
     ) {
         let ensured = std::env::current_dir()
             .map_err(anyhow::Error::from)
@@ -104,7 +104,7 @@ fn main() {
     // A watching overview reads the records about once a second; a run
     // or a waiting submit rounds every three.
     let every = match cli.command {
-        Command::Overview { .. } => Duration::from_secs(1),
+        Some(Command::Overview { .. }) => Duration::from_secs(1),
         _ => Duration::from_secs(3),
     };
     let mut out = std::io::stdout();

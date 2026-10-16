@@ -262,6 +262,102 @@ fn nothing_found_under_json_is_an_error_document() {
     assert_eq!(v["error"]["kind"], "refused");
 }
 
+fn home(f: &Fakes, worktree: &str) -> serde_json::Value {
+    let (code, out) = sluice(f, &["--worktree", worktree, "--json"]);
+    assert_eq!(code, 0, "{out}");
+    serde_json::from_str(&out).unwrap()
+}
+
+/// With no command: the worktree's own submission, found by the path it
+/// was submitted from, the branches' counts and what to run next.
+#[test]
+fn home_shows_the_worktrees_submission_by_its_path() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    f.world.at_path("unit/a", "/w/a");
+    let v = home(&f, "unit/a");
+    assert_eq!(v["schema"], "sluice/home@1");
+    assert_eq!(v["worktree"]["path"], "/w/a");
+    assert_eq!(v["submission"], serde_json::Value::Null);
+
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let v = home(&f, "unit/a");
+    assert_eq!(v["submission"]["id"], 1);
+    assert_eq!(v["submission"]["state"], "queued");
+    assert_eq!(
+        v["branches"],
+        serde_json::json!([{"branch": BRANCH, "depth": 1, "testing": 0, "parallel": null}])
+    );
+    assert_eq!(
+        v["next"],
+        serde_json::json!(["sluice status 1", "sluice withdraw 1 --as agent-a"])
+    );
+
+    // A submission with no path is no worktree's, whatever its branch.
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    assert_eq!(home(&f, "unit/b")["submission"], serde_json::Value::Null);
+}
+
+/// Once out of the queue, a submission is still the worktree's, found
+/// through the branch's recent lines: landed, or failed with its log.
+#[test]
+fn home_finds_a_landed_or_failed_submission_through_recent() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    f.world.at_path("unit/a", "/w/a");
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]).0,
+        LANDED
+    );
+    let v = home(&f, "unit/a");
+    assert_eq!(v["submission"]["state"], "landed");
+    assert_eq!(v["submission"]["landed_as"], f.world.tip(BRANCH).0);
+    assert_eq!(v["next"][0], format!("sluice submit {BRANCH}"));
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    f.world.at_path("unit/b", "/w/b");
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]).0,
+        FAILED
+    );
+    let v = home(&f, "unit/b");
+    assert_eq!(v["submission"]["state"], "failed");
+    assert_eq!(v["submission"]["failed"][0]["task"], "tests:t-batch-cards");
+    assert!(v["submission"]["failed"][0]["log"].is_string());
+    assert_eq!(
+        v["next"],
+        serde_json::json!([format!("sluice submit {BRANCH}")])
+    );
+
+    let (code, out) = sluice(&f, &["--worktree", "unit/b"]);
+    assert_eq!(code, 0);
+    assert!(out.contains(&format!("#2 to {BRANCH} · failed\n")), "{out}");
+    assert!(out.contains("  failed tests:t-batch-cards: "), "{out}");
+}
+
+/// Outside any worktree sluice can submit from, it says so, shows the
+/// queues and points at the overview.
+#[test]
+fn home_outside_a_worktree_says_so() {
+    let f = setup();
+    let v = home(&f, "nowhere");
+    assert_eq!(v["worktree"], serde_json::Value::Null);
+    assert_eq!(v["next"], serde_json::json!(["sluice overview"]));
+    let (_, out) = sluice(&f, &["--worktree", "nowhere"]);
+    assert!(
+        out.starts_with("not in a worktree sluice can submit from\n"),
+        "{out}"
+    );
+}
+
 #[test]
 fn status_lists_the_queue() {
     let f = setup();
@@ -591,13 +687,13 @@ fn exec_takes_a_branch_and_a_command() {
     let cli =
         Cli::try_parse_from(["sluice", "exec", BRANCH, "--", "moon", "run", ":test"]).unwrap();
     match cli.command {
-        sluice::Command::Exec {
+        Some(sluice::Command::Exec {
             branch,
             command,
             worktree,
             json,
             release,
-        } => {
+        }) => {
             assert!(!release);
             assert_eq!(branch, BRANCH);
             assert_eq!(command, ["moon", "run", ":test"]);

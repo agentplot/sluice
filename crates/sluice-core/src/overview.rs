@@ -233,6 +233,84 @@ impl Sluice<'_> {
     }
 }
 
+pub const HOME_SCHEMA: &str = "sluice/home@1";
+
+/// One branch as the home view counts it: the overview's own counts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BranchCount {
+    pub branch: String,
+    pub depth: usize,
+    pub testing: usize,
+    pub parallel: Option<usize>,
+}
+
+/// Every branch's counts, as the overview gives them.
+pub fn counts(branches: &[BranchView]) -> Vec<BranchCount> {
+    branches
+        .iter()
+        .map(|b| BranchCount {
+            branch: b.branch.clone(),
+            depth: b.depth,
+            testing: b.candidates.iter().filter(|c| c.state.under_test()).count(),
+            parallel: b.parallel,
+        })
+        .collect()
+}
+
+/// The latest submission still in a chain from the worktree at `path`,
+/// matched by the path it was submitted from and never by its branch's
+/// name: a record without one is no worktree's.
+pub fn in_play<'a>(branches: &'a [BranchView], path: &str) -> Option<&'a Submission> {
+    branches
+        .iter()
+        .flat_map(|b| &b.submissions)
+        .filter(|s| s.from.path.as_deref() == Some(path))
+        .max_by_key(|s| s.id)
+}
+
+/// The submissions the branches' recent lines name, newest first.
+pub fn recent_ids(branches: &[BranchView]) -> Vec<u64> {
+    let mut named: Vec<(&str, u64)> = Vec::new();
+    for b in branches {
+        for r in &b.recent {
+            let at = r["at"].as_str().unwrap_or("");
+            match r["event"].as_str() {
+                Some("landed") => named.extend(
+                    r["ids"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_u64)
+                        .map(|id| (at, id)),
+                ),
+                Some(_) => named.extend(r["id"].as_u64().map(|id| (at, id))),
+                None => {}
+            }
+        }
+    }
+    named.sort_by(|a, b| b.cmp(a));
+    named.into_iter().map(|(_, id)| id).collect()
+}
+
+impl Sluice<'_> {
+    /// The worktree at `path`'s submission, as the home view shows it: the
+    /// latest still in a chain, else the latest the branches' recent
+    /// lines name. A read, as the overview is.
+    pub fn home(&self, branches: &[BranchView], path: &str) -> Result<Option<Submission>> {
+        if let Some(s) = in_play(branches, path) {
+            return Ok(Some(s.clone()));
+        }
+        for id in recent_ids(branches) {
+            if let Some(s) = self.state(id)? {
+                if s.from.path.as_deref() == Some(path) {
+                    return Ok(Some(s));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +351,45 @@ mod tests {
         assert!(lands_on("unit/queued", &recorded, None));
         assert!(!lands_on("unit/mine", &recorded, Some(&policy)));
         assert!(!lands_on("main", &[], None));
+    }
+
+    fn view(branch: &str, recent: Vec<serde_json::Value>) -> BranchView {
+        BranchView {
+            branch: branch.into(),
+            at: None,
+            version: 0,
+            window: 0,
+            parallel: None,
+            depth: 0,
+            candidates: Vec::new(),
+            submissions: Vec::new(),
+            recent,
+        }
+    }
+
+    #[test]
+    fn recent_ids_are_newest_first_across_branches() {
+        let at = |t: &str, rest: &str| -> serde_json::Value {
+            serde_json::from_str(&format!("{{\"at\":\"{t}\"{rest}}}")).unwrap()
+        };
+        let a = view(
+            "a",
+            vec![
+                at(
+                    "2026-10-16T01:00:00Z",
+                    ",\"event\":\"landed\",\"ids\":[1,2]",
+                ),
+                at("2026-10-16T03:00:00Z", ",\"event\":\"blamed\",\"id\":5"),
+            ],
+        );
+        let b = view(
+            "b",
+            vec![at(
+                "2026-10-16T02:00:00Z",
+                ",\"event\":\"conflict\",\"id\":3",
+            )],
+        );
+        assert_eq!(recent_ids(&[a, b]), [5, 3, 2, 1]);
     }
 
     #[test]
