@@ -25,5 +25,5 @@ Read first: this change's proposal, design and specs; ADR 0023. Work inside
 
 ## 4. Drift and close
 
-- [ ] 4.1 Add drift tests: every key the policy parser accepts appears in the setup references, and every subcommand in the usage skill; verify they fail when a key is removed from a reference.
+- [x] 4.1 Add drift tests: every key the policy parser accepts appears in the setup references, and every subcommand in the skills (`crates/sluice/tests/plugin_docs.rs`, with the skills in `cli:test`'s inputs); verify they fail when a key is removed from a reference.
 - [ ] 4.2 Run `openspec validate claude-code-plugins --strict`, then archive the change once 2 and 3 have landed.
