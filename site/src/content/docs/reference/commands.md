@@ -288,6 +288,13 @@ it up.
 | `2` | a conflict, or a refusal |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
+Every command, not only submit, exits `3` when sluice itself fails (a
+repository it cannot open, a record it cannot read), with the cause on
+stderr, and `64` when it cannot read its command line: an unknown
+command, flag or value, or a missing argument. `64` is kept apart from
+`2`, so a mistyped flag is never taken for a conflict. `--help` and
+`--version` exit `0`.
+
 A submit following a pull request exits `1` as well when the pull
 request is closed without landing.
 

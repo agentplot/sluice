@@ -7,7 +7,13 @@ use sluice::{run, Cli, Command, Sleep};
 use sluice_core::SystemClock;
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|e| {
+        // Help and the version exit 0; anything sluice cannot read exits
+        // USAGE, not clap's 2, which is a conflict's.
+        let code = if e.exit_code() == 0 { 0 } else { sluice::USAGE };
+        let _ = e.print();
+        std::process::exit(code);
+    });
     // A supervisor needs no repository: its run directory says everything.
     if let Command::Supervise { dir } = &cli.command {
         if let Err(e) = sluice::runs::supervise(dir) {

@@ -171,7 +171,9 @@ fix it in your worktree and submit again
 ```
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
-refusal, `130` stopped with Ctrl-C (the submission stays queued).
+refusal, `130` stopped with Ctrl-C (the submission stays queued). Any
+command exits `3` when sluice itself fails and `64` on a command line it
+cannot read.
 
 A complete setup, with moon, a sandbox, a build cache and two tiers of
 branches, is walked through in [docs/examples](docs/examples/README.md).

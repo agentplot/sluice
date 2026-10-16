@@ -34,6 +34,10 @@ use sluice_seams::{Rev, SessionPlace};
 pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
+/// A command line sluice cannot read: an unknown command, flag or value.
+/// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
+/// conflict.
+pub const USAGE: i32 = 64;
 
 /// The release's version, from its tag (SLUICE_VERSION at build time);
 /// a build from a checkout is 0.0.0.
