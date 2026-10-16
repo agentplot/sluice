@@ -13,6 +13,7 @@ use sluice_seams::{PreviewPlace, Rev};
 
 use crate::exec::Host;
 use crate::sessions::SessionRun;
+use crate::told::{self, Kind};
 use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
 
 pub struct Ask<'a> {
@@ -113,11 +114,8 @@ impl Ask<'_> {
         let seams = s.seams();
         let json = self.json;
         let Some(revision) = self.host.revision(&self.revision)? else {
-            say(
-                out,
-                json,
-                &format!("refused: no revision {}", self.revision),
-            )?;
+            let text = format!("refused: no revision {}", self.revision);
+            told::tell(out, json, Kind::Refused, &text, &[])?;
             return Ok(CONFLICT);
         };
         let revision = Rev::new(revision);
@@ -125,6 +123,10 @@ impl Ask<'_> {
         let plan = match s.preview_plan(&self.branch, &revision)? {
             Ok(p) => p,
             Err(r) => {
+                let next = match r {
+                    PreviewRefusal::NoTable => vec![],
+                    _ => vec!["sluice overview".to_string()],
+                };
                 let why = match r {
                     PreviewRefusal::NoBranch => format!("no branch {}", self.branch),
                     PreviewRefusal::NotManaged => format!(
@@ -141,7 +143,7 @@ impl Ask<'_> {
                         revision.short()
                     ),
                 };
-                say(out, json, &format!("refused: {why}"))?;
+                told::tell(out, json, Kind::Refused, &format!("refused: {why}"), &next)?;
                 return Ok(CONFLICT);
             }
         };

@@ -192,6 +192,76 @@ fn a_dirty_place_is_refused_with_exit_two() {
     );
 }
 
+/// Under `--json`, a refusal is one error document on stdout, naming
+/// what moves it on; the exit is a refusal's still.
+#[test]
+fn a_refusal_under_json_is_an_error_document() {
+    let f = setup();
+    work(&f, "unit/a", "agent", &[("plugin/x", Some("x"))]);
+    f.world.dirty("unit/a", &["plugin/scratch.py"]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, CONFLICT, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "refused");
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("unit/a holds changes beyond its commits"));
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice submit {BRANCH}")])
+    );
+
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            "bolt/none",
+            "--worktree",
+            "unit/a",
+            "--check",
+            "--json",
+        ],
+    );
+    assert_eq!(code, CONFLICT, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["message"], "no branch bolt/none");
+    assert_eq!(v["error"]["next"], serde_json::json!(["sluice overview"]));
+}
+
+/// What is asked about and does not exist is `not_found` under `--json`.
+#[test]
+fn nothing_found_under_json_is_an_error_document() {
+    let f = setup();
+    let (code, out) = sluice(&f, &["status", "9999", "--json"]);
+    assert_eq!(code, 1);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "not_found");
+    assert_eq!(v["error"]["message"], "no submission 9999");
+    assert_eq!(v["error"]["next"], serde_json::json!(["sluice overview"]));
+
+    work(&f, "unit/a", "agent", &[("plugin/x", Some("x"))]);
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/a",
+            "--status",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 1);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "not_found");
+
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "nowhere", "--json"]);
+    assert_eq!(code, CONFLICT);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "refused");
+}
+
 #[test]
 fn status_lists_the_queue() {
     let f = setup();

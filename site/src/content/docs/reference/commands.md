@@ -295,6 +295,17 @@ command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
 
+With `--json`, a command that cannot do what it was asked still prints
+JSON on stdout, one document in place of the one it would have printed:
+
+```json
+{"error":{"kind":"refused","message":"no branch bolt/none","next":["sluice overview"]}}
+```
+
+`kind` is `refused` (exit `2`), `not_found` (exit `1`) or `internal`
+(exit `3`, with the cause on stderr as well). `next` holds the commands
+that move it on, and is empty when there are none.
+
 A submit following a pull request exits `1` as well when the pull
 request is closed without landing.
 

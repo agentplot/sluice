@@ -14,6 +14,7 @@ fn main() {
         let _ = e.print();
         std::process::exit(code);
     });
+    let json = cli.json();
     // A supervisor needs no repository: its run directory says everything.
     if let Command::Supervise { dir } = &cli.command {
         if let Err(e) = sluice::runs::supervise(dir) {
@@ -79,11 +80,13 @@ fn main() {
         Ok(b) => b,
         Err(e) => {
             eprintln!("sluice: {e:#}");
+            tell_json(json, &e);
             std::process::exit(3);
         }
     };
     if let Err(e) = sluice::stop_on_interrupt() {
         eprintln!("sluice: {e:#}");
+        tell_json(json, &e);
         std::process::exit(3);
     }
     // ADR 0014: telemetry that cannot start is reported and left off.
@@ -118,6 +121,7 @@ fn main() {
         Ok(code) => code,
         Err(e) => {
             sluice::telemetry::error(&format!("sluice: {e:#}"));
+            tell_json(json, &e);
             3
         }
     };
@@ -125,4 +129,13 @@ fn main() {
         t.finish();
     }
     std::process::exit(code);
+}
+
+/// sluice failing itself (exit 3), told on stdout as well when the reader
+/// asked for JSON and waits for it there.
+fn tell_json(json: bool, e: &anyhow::Error) {
+    if json {
+        let d = sluice::told::document(sluice::told::Kind::Internal, &format!("{e:#}"), &[]);
+        println!("{d}");
+    }
 }

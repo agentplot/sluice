@@ -15,6 +15,7 @@ pub mod protect;
 pub mod runs;
 pub mod sessions;
 pub mod telemetry;
+pub mod told;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -29,6 +30,7 @@ use sluice_core::{
     SubmitRequest, WithdrawRefusal,
 };
 use sluice_seams::{Rev, SessionPlace};
+use told::Kind;
 
 /// Exits of a waiting submit (walkthrough section 5).
 pub const LANDED: i32 = 0;
@@ -424,6 +426,22 @@ fn requester(by: &str) -> Requester {
     }
 }
 
+impl Cli {
+    /// Whether the command was asked for JSON, so that even a failure
+    /// before or outside it is said as JSON.
+    pub fn json(&self) -> bool {
+        match &self.command {
+            Command::Submit { json, .. }
+            | Command::Status { json, .. }
+            | Command::Overview { json, .. }
+            | Command::Exec { json, .. }
+            | Command::Preview { json, .. }
+            | Command::Previews { json } => *json,
+            _ => false,
+        }
+    }
+}
+
 /// Run one command; returns its exit code.
 pub fn run(
     cli: Cli,
@@ -541,7 +559,14 @@ pub fn run(
         } => match target.parse::<u64>() {
             Ok(id) => match s.state(id)? {
                 None => {
-                    writeln!(out, "no submission {id}")?;
+                    let next = ["sluice overview".to_string()];
+                    told::tell(
+                        out,
+                        json,
+                        Kind::NotFound,
+                        &format!("no submission {id}"),
+                        &next,
+                    )?;
                     Ok(1)
                 }
                 Some(sub) if json => {
@@ -732,6 +757,16 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
     }
 }
 
+/// The commands that move a refused submit on.
+fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
+    match r {
+        SubmitRefusal::Dirty(_) => vec![format!("sluice submit {branch}")],
+        SubmitRefusal::Detached => vec![],
+        SubmitRefusal::NoBranch | SubmitRefusal::NotManaged => vec!["sluice overview".into()],
+        SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
+    }
+}
+
 fn forecast(
     s: &Sluice<'_>,
     worktree: &str,
@@ -742,7 +777,8 @@ fn forecast(
 ) -> Result<i32> {
     match s.forecast(worktree, branch, after)? {
         Err(r) => {
-            writeln!(out, "{}", refusal(&r, worktree, branch))?;
+            let text = refusal(&r, worktree, branch);
+            told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
             Ok(CONFLICT)
         }
         Ok(Forecast::Clear) => {
@@ -788,7 +824,9 @@ fn submit(
     let accepted = match s.submit(&req)? {
         Ok(a) => a,
         Err(r) => {
-            writeln!(out, "{}", refusal(&r, &req.worktree, &req.branch))?;
+            let text = refusal(&r, &req.worktree, &req.branch);
+            let next = refusal_next(&r, &req.branch);
+            told::tell(out, json, Kind::Refused, &text, &next)?;
             return Ok(CONFLICT);
         }
     };
@@ -994,7 +1032,9 @@ fn submitted(
         .find(|x| x.from.worktree == from.worktree)
         .cloned()
     else {
-        writeln!(out, "nothing submitted from {} to {branch}", from.worktree)?;
+        let text = format!("nothing submitted from {} to {branch}", from.worktree);
+        let next = [format!("sluice submit {branch}")];
+        told::tell(out, json, Kind::NotFound, &text, &next)?;
         return Ok(1);
     };
     if json {
@@ -1027,7 +1067,9 @@ fn submit_pull(
         match pulls.find(seams, clock, branch, worktree)? {
             Some(n) => n,
             None => {
-                writeln!(out, "no pull request from {worktree} into {branch}")?;
+                let text = format!("no pull request from {worktree} into {branch}");
+                let next = [format!("sluice submit {branch}")];
+                told::tell(out, json, Kind::NotFound, &text, &next)?;
                 return Ok(1);
             }
         }
