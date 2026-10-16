@@ -1,0 +1,18 @@
+{
+  "name": "sluice-board",
+  "version": "0.1.0",
+  "description": "sluice's queue inside a Claude Code session: a band above the prompt, a /sluice pane, a status line, and a turn that tells an idle session its submission's outcome.",
+  "author": { "name": "agentplot" },
+  "homepage": "https://agentplot.github.io/sluice/guides/claude-code/",
+  "repository": "https://github.com/agentplot/sluice",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "wake": {
+      "type": "boolean",
+      "title": "Wake on an outcome",
+      "description": "Start a turn telling an idle session when its submission lands, fails or conflicts.",
+      "default": true
+    }
+  }
+}

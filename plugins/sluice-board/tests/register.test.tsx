@@ -1,0 +1,109 @@
+import { expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+
+import type { Overview } from '../types'
+import { NOW, overview } from './fixture'
+
+const ROOT = '/work/sluice/plugin-board'
+const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false }
+const LOG = '/work/sluice/sluice.git/sluice/.logs/main/c41/cli:test.log'
+
+/** The fixture, then #13 blamed. */
+function blamed(): Overview {
+  const d = overview()
+  d.branches[0]!.candidates = []
+  d.branches[0]!.submissions = d.branches[0]!.submissions.filter(s => s.id !== 13)
+  d.branches[0]!.depth = 2
+  d.branches[0]!.recent.push({
+    schema: 'sluice/log@1',
+    at: '2026-10-16T19:50:00Z',
+    event: 'blamed',
+    id: 13,
+    combination: 'e20a6f9b48',
+  })
+  return d
+}
+
+/** A host where sluice answers from `docs`, streamed by --watch in turn. */
+function host(on: On, docs: Overview[], seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] }) {
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('process.run', ($, e) => {
+    const argv = e.argv.join(' ')
+    if (argv === 'git rev-parse --show-toplevel') return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', ...WHOLE } }
+    if (argv === 'sluice overview --json') return { value: { exitCode: 0, stdout: JSON.stringify(docs[0]), stderr: '', ...WHOLE } }
+    if (argv === 'sluice status 13 --json') {
+      return {
+        value: { exitCode: 0, stdout: JSON.stringify({ id: 13, failed: [{ task: 'cli:test', log: LOG }] }), stderr: '', ...WHOLE },
+      }
+    }
+    return { value: { exitCode: 1, stdout: '', stderr: `no ${argv}`, ...WHOLE } }
+  })
+  on('process.spawn', async function* () {
+    for (const d of docs) yield { stream: 'stdout' as const, text: `${JSON.stringify(d)}\n` }
+    return { value: { code: 0, signal: null } }
+  })
+  on('ui.status', ($, e) => {
+    seen.status.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', ($, e) => {
+    seen.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.notify', () => ({ value: { isSent: true as const, channel: 'terminal_bell' } }))
+  on('prompt.submit', ($, e) => {
+    seen.prompts.push(e.text)
+    return { text: e.text }
+  })
+}
+
+const BAND = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120 } as never
+const PANE = { title: 'sluice', isFocused: false, bodyColumns: 80, placement: 'dock' } as never
+
+test('the band and the pane show the queue on every surface', async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.set(NOW)
+  const seen = { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] }
+  host(on, [overview()], seen)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(seen.status).toContain('sluice: 3 queued · yours #13 testing')
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({ plugin: 'sluice-board', surface, component: 'AbovePrompt', props: BAND })
+    expect(
+      await band.find({ type: 'Text', text: 'sluice main · 3 queued · testing #12+#13 2m10s/15m · last #9 blamed on 4f1c2aa' }),
+    ).toBeDefined()
+    await band.unmount()
+
+    const pane = await $.ui.mount({ plugin: 'sluice-board', surface, component: 'Pane', props: PANE, requestId: 'sluice' })
+    expect(await pane.find({ type: 'Text', text: /#13 testing\s+plugin-board claude\s+← you/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /▶ main \+ #12\+#13\s+2m10s \/ 15m/ })).toBeDefined()
+    await pane.unmount()
+  }
+})
+
+test("a blame of this session's submission starts one turn naming the test and its log", async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.set(NOW)
+  const seen = { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] }
+  host(on, [overview(), blamed()], seen)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]).toContain('#13 to main failed: cli:test on e20a6f9')
+  expect(seen.prompts[0]).toContain(`Log of cli:test: ${LOG}`)
+  expect(seen.toasts).toContain('sluice: #13 was blamed')
+})
+
+test('the wake can be turned off', { options: { wake: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.set(NOW)
+  const seen = { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] }
+  host(on, [overview(), blamed()], seen)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(seen.prompts).toEqual([])
+  expect(seen.toasts).toContain('sluice: #13 was blamed')
+})
