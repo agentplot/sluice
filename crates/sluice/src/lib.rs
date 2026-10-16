@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod exec;
+pub mod home;
 pub mod identity;
 pub mod instance;
 pub mod overview;
@@ -15,6 +16,7 @@ pub mod protect;
 pub mod runs;
 pub mod sessions;
 pub mod telemetry;
+pub mod told;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -29,11 +31,16 @@ use sluice_core::{
     SubmitRequest, WithdrawRefusal,
 };
 use sluice_seams::{Rev, SessionPlace};
+use told::Kind;
 
 /// Exits of a waiting submit (walkthrough section 5).
 pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
+/// A command line sluice cannot read: an unknown command, flag or value.
+/// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
+/// conflict.
+pub const USAGE: i32 = 64;
 
 /// The release's version, from its tag (SLUICE_VERSION at build time);
 /// a build from a checkout is 0.0.0.
@@ -46,11 +53,22 @@ pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
 #[command(
     name = "sluice",
     version = VERSION,
-    about = "A merge queue for agents in worktrees."
+    about = "A merge queue for agents in worktrees.",
+    long_about = "A merge queue for agents in worktrees.\n\n\
+                  With no command, where this worktree stands: its submission, the \
+                  branches' queues, its place and what to run next.",
+    args_conflicts_with_subcommands = true
 )]
 pub struct Cli {
+    /// None: the home view, where this worktree stands.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
+    /// With no command: the home view as one JSON document.
+    #[arg(long)]
+    pub json: bool,
+    /// With no command: the worktree to show.
+    #[arg(long, default_value = ".")]
+    pub worktree: String,
     /// Export traces and metrics over OTLP/HTTP, to where the
     /// OTEL_EXPORTER_OTLP_* variables say.
     /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
@@ -420,6 +438,25 @@ fn requester(by: &str) -> Requester {
     }
 }
 
+impl Cli {
+    /// Whether the command was asked for JSON, so that even a failure
+    /// before or outside it is said as JSON.
+    pub fn json(&self) -> bool {
+        match &self.command {
+            None => self.json,
+            Some(
+                Command::Submit { json, .. }
+                | Command::Status { json, .. }
+                | Command::Overview { json, .. }
+                | Command::Exec { json, .. }
+                | Command::Preview { json, .. }
+                | Command::Previews { json },
+            ) => *json,
+            Some(_) => false,
+        }
+    }
+}
+
 /// Run one command; returns its exit code.
 pub fn run(
     cli: Cli,
@@ -432,7 +469,10 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock);
-    match cli.command {
+    let Some(command) = cli.command else {
+        return home::run(&s, &cli.worktree, cli.json, out);
+    };
+    match command {
         Command::Submit {
             branch,
             after,
@@ -537,7 +577,14 @@ pub fn run(
         } => match target.parse::<u64>() {
             Ok(id) => match s.state(id)? {
                 None => {
-                    writeln!(out, "no submission {id}")?;
+                    let next = ["sluice overview".to_string()];
+                    told::tell(
+                        out,
+                        json,
+                        Kind::NotFound,
+                        &format!("no submission {id}"),
+                        &next,
+                    )?;
                     Ok(1)
                 }
                 Some(sub) if json => {
@@ -728,6 +775,16 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
     }
 }
 
+/// The commands that move a refused submit on.
+fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
+    match r {
+        SubmitRefusal::Dirty(_) => vec![format!("sluice submit {branch}")],
+        SubmitRefusal::Detached => vec![],
+        SubmitRefusal::NoBranch | SubmitRefusal::NotManaged => vec!["sluice overview".into()],
+        SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
+    }
+}
+
 fn forecast(
     s: &Sluice<'_>,
     worktree: &str,
@@ -738,7 +795,8 @@ fn forecast(
 ) -> Result<i32> {
     match s.forecast(worktree, branch, after)? {
         Err(r) => {
-            writeln!(out, "{}", refusal(&r, worktree, branch))?;
+            let text = refusal(&r, worktree, branch);
+            told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
             Ok(CONFLICT)
         }
         Ok(Forecast::Clear) => {
@@ -784,7 +842,9 @@ fn submit(
     let accepted = match s.submit(&req)? {
         Ok(a) => a,
         Err(r) => {
-            writeln!(out, "{}", refusal(&r, &req.worktree, &req.branch))?;
+            let text = refusal(&r, &req.worktree, &req.branch);
+            let next = refusal_next(&r, &req.branch);
+            told::tell(out, json, Kind::Refused, &text, &next)?;
             return Ok(CONFLICT);
         }
     };
@@ -990,7 +1050,9 @@ fn submitted(
         .find(|x| x.from.worktree == from.worktree)
         .cloned()
     else {
-        writeln!(out, "nothing submitted from {} to {branch}", from.worktree)?;
+        let text = format!("nothing submitted from {} to {branch}", from.worktree);
+        let next = [format!("sluice submit {branch}")];
+        told::tell(out, json, Kind::NotFound, &text, &next)?;
         return Ok(1);
     };
     if json {
@@ -1023,7 +1085,9 @@ fn submit_pull(
         match pulls.find(seams, clock, branch, worktree)? {
             Some(n) => n,
             None => {
-                writeln!(out, "no pull request from {worktree} into {branch}")?;
+                let text = format!("no pull request from {worktree} into {branch}");
+                let next = [format!("sluice submit {branch}")];
+                told::tell(out, json, Kind::NotFound, &text, &next)?;
                 return Ok(1);
             }
         }

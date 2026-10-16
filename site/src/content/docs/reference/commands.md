@@ -7,6 +7,7 @@ sidebar:
 
 | Command | |
 |---|---|
+| `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
 | `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
@@ -149,6 +150,35 @@ never fetched, so a branch on a remote costs it nothing to watch.
 A submission's `from.path` names the worktree it came from, so a pane
 or a session can find its own submissions in the document.
 
+## `sluice` with no command
+
+`sluice` alone shows where this worktree stands, cut from the overview
+to the worktree by the path it submits from: its latest submission
+still queued, or else the latest the branches' recent lines name; each
+branch's counts; its place; and the commands that follow. Like the
+overview it reads the state alone and writes nothing, so a status line
+may run it every few seconds.
+
+```console
+$ sluice
+worktree unit/cards (crw-1-unit-2) at /home/me/shop.unit-cards
+#14 to bolt/concurrent-units · testing
+bolt/concurrent-units: 2 in the queue · testing 1 at once (up to 4)
+place: SLUICE_PORT_WEB=20000 · last run 2026-10-16T09:16:44Z
+next: sluice status 14
+next: sluice withdraw 14 --as crw-1-unit-2
+```
+
+`--json` prints one line, `sluice/home@1`, whose fields are only ever
+added to: `worktree` (`path`, `branch`, `agent`), `submission` (`id`,
+`branch`, `state`, `failed` with each test's `log`, `landed_as`),
+`branches[]` (`branch`, `depth`, `testing`, `parallel`, the overview's
+counts), `place` (`ports`, `last_run`) and `next`. Outside a worktree
+sluice can submit from, `worktree`, `submission` and `place` are null.
+A submission from before `from.path` was recorded, or one a pull
+request made, names no worktree's path and is not shown; `sluice submit
+<branch> --status` follows a pull request.
+
 ## `sluice preview`
 
 A preview is a running copy of a revision a branch has landed, for a
@@ -287,6 +317,24 @@ it up.
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
 | `130` | stopped with Ctrl-C; the submission stays queued |
+
+Every command, not only submit, exits `3` when sluice itself fails (a
+repository it cannot open, a record it cannot read), with the cause on
+stderr, and `64` when it cannot read its command line: an unknown
+command, flag or value, or a missing argument. `64` is kept apart from
+`2`, so a mistyped flag is never taken for a conflict. `--help` and
+`--version` exit `0`.
+
+With `--json`, a command that cannot do what it was asked still prints
+JSON on stdout, one document in place of the one it would have printed:
+
+```json
+{"error":{"kind":"refused","message":"no branch bolt/none","next":["sluice overview"]}}
+```
+
+`kind` is `refused` (exit `2`), `not_found` (exit `1`) or `internal`
+(exit `3`, with the cause on stderr as well). `next` holds the commands
+that move it on, and is empty when there are none.
 
 A submit following a pull request exits `1` as well when the pull
 request is closed without landing.

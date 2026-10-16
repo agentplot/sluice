@@ -150,14 +150,14 @@ impl Submit {
             std::iter::once(OsString::from("sluice")).chain(sluice.iter().cloned()),
         );
         let remove = match read.map(|c| c.command) {
-            Ok(crate::Command::Submit {
+            Ok(Some(crate::Command::Submit {
                 branch,
                 no_wait: false,
                 check: false,
                 status: false,
                 worktree,
                 ..
-            }) if !keep => Some(Waiting {
+            })) if !keep => Some(Waiting {
                 branch,
                 worktree: worktree.into(),
             }),

@@ -171,7 +171,9 @@ fix it in your worktree and submit again
 ```
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
-refusal, `130` stopped with Ctrl-C (the submission stays queued).
+refusal, `130` stopped with Ctrl-C (the submission stays queued). Any
+command exits `3` when sluice itself fails and `64` on a command line it
+cannot read.
 
 A complete setup, with moon, a sandbox, a build cache and two tiers of
 branches, is walked through in [docs/examples](docs/examples/README.md).
@@ -182,6 +184,7 @@ branches, is walked through in [docs/examples](docs/examples/README.md).
 |---|---|
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome. `--no-wait` returns once queued; `--status` reports where this worktree's last submission stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
 | `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one; `sluice status` alone lists the worktrees sluice holds. |
+| `sluice` | Where this worktree stands: its submission, each branch's queue, its place and what to run next. `--json` for a status line. |
 | `sluice overview` | Every branch's queue at a glance, with the latest landings and blames. `--json` for tools; `--json --watch` prints it again on each change. |
 | `sluice run` | Work every branch's queue until stopped. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |

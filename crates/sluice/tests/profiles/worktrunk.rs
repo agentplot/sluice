@@ -190,10 +190,10 @@ fn only_a_landing_removes_the_worktree() {
     assert!(text(&out).contains("Usage"), "{}", text(&out));
     assert!(a.join("a.txt").exists(), "{}", text(&out));
     let out = s.wt_submit(&a, &["--version"]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
     assert!(a.join("a.txt").exists(), "{}", text(&out));
     let out = s.wt_submit(&a, &["--no-such-flag"]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
     assert!(a.join("a.txt").exists(), "{}", text(&out));
     assert_eq!(
         s.repo.git(&["log", "-1", "--format=%s", "bolt/x"]),

@@ -14,6 +14,7 @@ use sluice_core::{Clock, Sluice};
 use sluice_seams::{Outcome, Progress, Released, RunHandle, RunReport};
 
 use crate::sessions::SessionRun;
+use crate::told::{self, Kind};
 use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
 
 /// What `sluice exec` needs of the host beyond the seams: the reserve,
@@ -53,6 +54,11 @@ pub struct Exec<'a> {
     pub host: &'a dyn Host,
     pub clock: &'a dyn Clock,
     pub pause: &'a dyn Pause,
+}
+
+/// The next step after a refusal over the branch: see which there are.
+fn overview() -> [String; 1] {
+    ["sluice overview".to_string()]
 }
 
 /// Write human text: to stderr when stdout is the JSON document's.
@@ -124,40 +130,32 @@ impl Exec<'_> {
         let worktree = match self.host.worktree(&self.worktree) {
             Ok(w) => w,
             Err(e) => {
-                say(
-                    out,
-                    json,
-                    &format!("refused: {} is not a worktree: {e:#}", self.worktree),
-                )?;
+                let text = format!("refused: {} is not a worktree: {e:#}", self.worktree);
+                told::tell(out, json, Kind::Refused, &text, &[])?;
                 return Ok(CONFLICT);
             }
         };
         let session = match seams.driver.session(&worktree) {
             Ok(x) => x,
             Err(e) => {
-                say(
-                    out,
-                    json,
-                    &format!("refused: {} is not a worktree: {e:#}", self.worktree),
-                )?;
+                let text = format!("refused: {} is not a worktree: {e:#}", self.worktree);
+                told::tell(out, json, Kind::Refused, &text, &[])?;
                 return Ok(CONFLICT);
             }
         };
         let plan: SessionPlan = match s.session_plan(&self.branch)? {
             Ok(p) => p,
             Err(SessionRefusal::NoBranch) => {
-                say(out, json, &format!("refused: no branch {}", self.branch))?;
+                let text = format!("refused: no branch {}", self.branch);
+                told::tell(out, json, Kind::Refused, &text, &overview())?;
                 return Ok(CONFLICT);
             }
             Err(SessionRefusal::NotManaged) => {
-                say(
-                    out,
-                    json,
-                    &format!(
-                        "refused: no [branches] table in .config/sluice.toml on {} names it",
-                        self.branch
-                    ),
-                )?;
+                let text = format!(
+                    "refused: no [branches] table in .config/sluice.toml on {} names it",
+                    self.branch
+                );
+                told::tell(out, json, Kind::Refused, &text, &overview())?;
                 return Ok(CONFLICT);
             }
         };
