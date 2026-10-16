@@ -30,7 +30,8 @@ fn check(seen: &Path) -> String {
 fn policy(remote: &str) -> String {
     format!(
         "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-         [branches.main]\ntimeout = \"1m\"\nremote = \"{remote}\"\n"
+         [branches.main]\ntimeout = \"1m\"\nremote = \"{remote}\"\n\n\
+         [branches.\"bolt/*\"]\ntimeout = \"1m\"\nremote = \"{remote}\"\n"
     )
 }
 
@@ -95,6 +96,12 @@ impl Setup {
     }
 
     fn try_submit(&self, name: &str) -> Output {
+        self.submit_to(name, "main", "main")
+    }
+
+    /// A session on `unit/<name>` cut from `base`, with one commit of its
+    /// own file, submitted to `branch` without waiting.
+    fn submit_to(&self, name: &str, base: &str, branch: &str) -> Output {
         let dir: PathBuf = self.sessions.path().join(name);
         self.repo.git(&[
             "worktree",
@@ -103,7 +110,7 @@ impl Setup {
             "-b",
             &format!("unit/{name}"),
             dir.to_str().unwrap(),
-            "main",
+            base,
         ]);
         std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
         let git = |args: &[&str]| {
@@ -114,7 +121,7 @@ impl Setup {
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", name]);
         self.command(&dir)
-            .args(["submit", "main", "--no-wait", "--json"])
+            .args(["submit", branch, "--no-wait", "--json"])
             .output()
             .unwrap()
     }
@@ -394,4 +401,59 @@ fn an_unknown_remote_lands_nothing_and_is_named() {
     assert!(text(&out).contains("\"nowhere\""), "{}", text(&out));
     assert_eq!(s.repo.rev("main"), before);
     assert_eq!(s.runs(), 0);
+}
+
+/// A bolt whose policy names a remote that has no such branch is refused,
+/// saying where to make it; once it is pushed there, a submission to it
+/// lands on the remote.
+#[test]
+fn a_bolt_not_on_its_remote_is_refused_until_pushed_there() {
+    let s = Setup::new("remote-bolt-missing", "origin");
+    s.repo.git(&["branch", "bolt/x", "main"]);
+    let out = s.submit_to("a", "bolt/x", "bolt/x");
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("bolt/x is not on origin; push it there first"),
+        "{}",
+        text(&out)
+    );
+    s.repo.git(&["push", "-q", "origin", "bolt/x"]);
+    let out = s
+        .command(&s.sessions.path().join("a"))
+        .args(["submit", "bolt/x", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
+}
+
+/// A bolt another host made is on the remote and, here, only as its
+/// remote-tracking ref: a session cut from it submits to it, and the
+/// landing goes to the remote.
+#[test]
+fn a_bolt_only_fetched_here_lands_on_its_remote() {
+    let s = Setup::new("remote-bolt-fetched", "origin");
+    s.repo
+        .git(&["push", "-q", "origin", "origin/main:refs/heads/bolt/y"]);
+    s.repo.git(&["fetch", "-q", "origin"]);
+    let out = s.submit_to("b", "origin/bolt/y", "bolt/y");
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let bolt = remote_rev(&s, "refs/heads/bolt/y");
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:b.txt")]);
+}
+
+fn remote_rev(s: &Setup, name: &str) -> String {
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(s.origin.path())
+        .args(["rev-parse", name])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }

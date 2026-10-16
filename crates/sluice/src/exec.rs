@@ -15,7 +15,7 @@ use sluice_seams::{Outcome, Progress, Released, RunHandle, RunReport};
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
-use crate::{Pause, CONFLICT, FAILED, LANDED, STOPPED};
+use crate::{Pause, Pushers, CONFLICT, FAILED, LANDED, STOPPED};
 
 /// What `sluice exec` needs of the host beyond the seams: the reserve,
 /// the host's session runs and their lock, and a run's directory.
@@ -52,6 +52,8 @@ pub struct Exec<'a> {
     /// Release the worktree once the run ends (95).
     pub release: bool,
     pub host: &'a dyn Host,
+    /// Where each branch lives, to say so when it cannot be read.
+    pub pushers: &'a dyn Pushers,
     pub clock: &'a dyn Clock,
     pub pause: &'a dyn Pause,
 }
@@ -146,7 +148,7 @@ impl Exec<'_> {
         let plan: SessionPlan = match s.session_plan(&self.branch)? {
             Ok(p) => p,
             Err(SessionRefusal::NoBranch) => {
-                let text = format!("refused: no branch {}", self.branch);
+                let text = crate::no_branch(&self.branch, self.pushers)?;
                 told::tell(out, json, Kind::Refused, &text, &overview())?;
                 return Ok(CONFLICT);
             }

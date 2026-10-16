@@ -484,7 +484,7 @@ pub fn run(
             json,
         } => {
             if check {
-                return forecast(&s, &worktree, &branch, &after, json, out);
+                return forecast(&s, pushers, &worktree, &branch, &after, json, out);
             }
             if takes_pulls(&s, &branch)? {
                 return submit_pull(
@@ -496,6 +496,7 @@ pub fn run(
             }
             submit(
                 &s,
+                pushers,
                 SubmitRequest {
                     worktree,
                     branch,
@@ -670,6 +671,7 @@ pub fn run(
             json,
             release,
             host,
+            pushers,
             clock,
             pause,
         }
@@ -749,8 +751,25 @@ fn combination(branch: &str, ids: &[u64]) -> String {
     s
 }
 
-fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
-    match r {
+/// A branch's revision could not be read: on its remote, when its policy
+/// names one, which is where it must be made.
+pub(crate) fn no_branch(branch: &str, pushers: &dyn Pushers) -> Result<String> {
+    Ok(match pushers.pusher(branch)? {
+        Some(p) => format!(
+            "refused: {branch} is not on {r}; push it there first: git push {r} <revision>:refs/heads/{branch}",
+            r = p.remote
+        ),
+        None => format!("refused: no branch {branch}"),
+    })
+}
+
+fn refusal(
+    r: &SubmitRefusal,
+    worktree: &str,
+    branch: &str,
+    pushers: &dyn Pushers,
+) -> Result<String> {
+    Ok(match r {
         SubmitRefusal::Dirty(paths) => {
             let mut s = format!("refused: {worktree} holds changes beyond its commits:");
             for p in paths {
@@ -762,7 +781,7 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
         SubmitRefusal::Detached => {
             format!("refused: submit from a branch: {worktree} is detached")
         }
-        SubmitRefusal::NoBranch => format!("refused: no branch {branch}"),
+        SubmitRefusal::NoBranch => return no_branch(branch, pushers),
         SubmitRefusal::NotManaged => {
             format!("refused: no [branches] table in .config/sluice.toml on {branch} names it")
         }
@@ -772,7 +791,7 @@ fn refusal(r: &SubmitRefusal, worktree: &str, branch: &str) -> String {
                 hashes(ids)
             )
         }
-    }
+    })
 }
 
 /// The commands that move a refused submit on.
@@ -787,6 +806,7 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
 
 fn forecast(
     s: &Sluice<'_>,
+    pushers: &dyn Pushers,
     worktree: &str,
     branch: &str,
     after: &[u64],
@@ -795,7 +815,7 @@ fn forecast(
 ) -> Result<i32> {
     match s.forecast(worktree, branch, after)? {
         Err(r) => {
-            let text = refusal(&r, worktree, branch);
+            let text = refusal(&r, worktree, branch, pushers)?;
             told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
             Ok(CONFLICT)
         }
@@ -833,6 +853,7 @@ fn forecast(
 
 fn submit(
     s: &Sluice<'_>,
+    pushers: &dyn Pushers,
     req: SubmitRequest,
     no_wait: bool,
     json: bool,
@@ -842,7 +863,7 @@ fn submit(
     let accepted = match s.submit(&req)? {
         Ok(a) => a,
         Err(r) => {
-            let text = refusal(&r, &req.worktree, &req.branch);
+            let text = refusal(&r, &req.worktree, &req.branch, pushers)?;
             let next = refusal_next(&r, &req.branch);
             told::tell(out, json, Kind::Refused, &text, &next)?;
             return Ok(CONFLICT);
@@ -1100,7 +1121,7 @@ fn submit_pull(
                 o.number
             }
             Err(r) => {
-                writeln!(out, "{}", refusal(&r, worktree, branch))?;
+                writeln!(out, "{}", refusal(&r, worktree, branch, &())?)?;
                 return Ok(CONFLICT);
             }
         }
