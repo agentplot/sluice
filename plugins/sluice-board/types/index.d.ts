@@ -83,6 +83,8 @@ declare module 'claude-code' {
       told: string[]
       isHidden: boolean
       now: number
+      /** `https://github.com/<owner>/<repo>` when origin is on GitHub. */
+      repo: string | null
     }
   }
 }

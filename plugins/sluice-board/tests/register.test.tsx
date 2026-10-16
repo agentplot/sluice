@@ -30,6 +30,9 @@ function host(on: On, docs: Overview[], seen: { prompts: string[]; toasts: strin
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('process.run', ($, e) => {
     const argv = e.argv.join(' ')
+    if (argv === 'git remote get-url origin') {
+      return { value: { exitCode: 0, stdout: 'git@github.com:agentplot/sluice.git\n', stderr: '', ...WHOLE } }
+    }
     if (argv === 'git rev-parse --show-toplevel') return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', ...WHOLE } }
     if (argv === 'sluice overview --json') return { value: { exitCode: 0, stdout: JSON.stringify(docs[0]), stderr: '', ...WHOLE } }
     if (argv === 'sluice status 13 --json') {
@@ -68,18 +71,21 @@ test('the band and the pane show the queue on every surface', async ($, on) => {
   host(on, [overview()], seen)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   await clock.settle()
-  expect(seen.status).toContain('sluice: 3 queued · yours #13 testing')
+  expect(seen.status).toContain('sluice: 3 submissions · yours #13 testing')
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'sluice-board', surface, component: 'AbovePrompt', props: BAND })
     expect(
-      await band.find({ type: 'Text', text: 'sluice main · 3 queued · testing #12+#13 2m10s/15m · last #9 blamed on 4f1c2aa' }),
+      await band.find({ type: 'Text', text: 'sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' }),
     ).toBeDefined()
     await band.unmount()
 
     const pane = await $.ui.mount({ plugin: 'sluice-board', surface, component: 'Pane', props: PANE, requestId: 'sluice' })
     expect(await pane.find({ type: 'Text', text: /#13 testing\s+plugin-board claude\s+← you/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /▶ main \+ #12\+#13\s+2m10s \/ 15m/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /3 submissions · 1 combination under test \(up to 4 at once\)/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /▶ testing main\+#12\+#13\s+2m10s \/ 15m/ })).toBeDefined()
+    const link = await pane.find({ type: 'Link' })
+    expect(link?.props.href).toBe('https://github.com/agentplot/sluice/pull/41')
     await pane.unmount()
   }
 })

@@ -90,10 +90,10 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 ```
 
 While a branch has a queue, a line above the prompt reads like
-`sluice main · 3 queued · testing #12+#13 2m10s/15m · last #11 landed as 9ecc34a`,
+`sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`,
 and the status line says where your own submissions stand. `/sluice` opens
 a pane with each branch's combinations under test, its queue with your
-submissions marked, and its recent landings, blames and conflicts, with the
+submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
 blamed tests' logs.
 
 When one of the session's submissions lands, fails or conflicts, a toast

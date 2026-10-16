@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   bandLines,
+  githubBase,
+  pullOf,
   duration,
   isMine,
   learn,
@@ -19,7 +21,7 @@ const ME: Mine = { root: '/work/sluice/plugin-board', ids: [], pulls: [] }
 describe('the band', () => {
   test('one line per branch with a queue, with the clock against the limit', () => {
     expect(bandLines(overview(), NOW)).toEqual([
-      'sluice main · 3 queued · testing #12+#13 2m10s/15m · last #9 blamed on 4f1c2aa',
+      'sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa',
     ])
   })
 
@@ -35,6 +37,25 @@ describe('the band', () => {
     expect(duration(45)).toBe('45s')
     expect(duration(130)).toBe('2m10s')
     expect(duration(3780)).toBe('1h03m')
+  })
+})
+
+describe('links to pull requests', () => {
+  test('a GitHub origin in any spelling', () => {
+    for (const url of [
+      'https://github.com/agentplot/sluice.git',
+      'https://github.com/agentplot/sluice',
+      'git@github.com:agentplot/sluice.git',
+      'ssh://git@github.com/agentplot/sluice.git\n',
+    ]) {
+      expect(githubBase(url)).toBe('https://github.com/agentplot/sluice')
+    }
+    expect(githubBase('https://gitlab.com/agentplot/sluice.git')).toBe(null)
+  })
+
+  test('a submission from a pull request', () => {
+    expect(pullOf('pull/41')).toBe(41)
+    expect(pullOf('plugin-board')).toBe(null)
   })
 })
 
@@ -57,7 +78,7 @@ describe("this session's submissions", () => {
   })
 
   test('the status line', () => {
-    expect(statusLine(overview(), learn(overview(), ME))).toBe('sluice: 3 queued · yours #13 testing')
+    expect(statusLine(overview(), learn(overview(), ME))).toBe('sluice: 3 submissions · yours #13 testing')
   })
 })
 
