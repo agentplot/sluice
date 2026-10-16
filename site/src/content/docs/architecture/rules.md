@@ -50,7 +50,7 @@ the clause it enforces and never restates it.
 
 ## Details
 
-- **core.1** Rules out: the strings `moon`, `wt`, `worktrunk`, `devenv`, `herdr`, `gh`, `crew`, `flywheel` in any module outside a profile directory; an import of a profile from the core. Not ruled out: `git`, which section 9 of the statement fixes. Source: statement preamble and clause 52; ADR 0003.
+- **core.1** Rules out: the strings `moon`, `wt`, `worktrunk`, `devenv`, `herdr`, `gh`, `crew`, `flywheel` in any module outside a profile directory; an import of a profile from the core. Not ruled out: `git`, which section 9 of the statement fixes; `plugins/`, which no crate imports. Source: statement preamble and clause 52; ADRs 0003, 0023.
 - **core.2** Rules out: a profile calling another profile; a core function with a profile-specific branch. Source: clauses 52, 53; ADR 0003.
 - **core.3** Rules out: a seam whose only profile is undocumented as such. Source: ADR 0003.
 - **core.4** Rules out: `update-ref`, `push`, a merge or a fast-forward in the submit operation or anything it calls; a round that behaves differently because a driver ran it. Not ruled out: a waiting `wt submit` running rounds between reads of its submission's state. Source: clause 1; ADRs 0002, 0005, 0011.
