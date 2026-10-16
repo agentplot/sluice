@@ -33,7 +33,13 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # On a pull request moon compares the change against its base
+      # branch, `main` by name: it needs the history and the branch.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'pull_request'
+        run: git branch main origin/main
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
@@ -55,7 +61,12 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
+      # As in `fast`: moon compares a pull request against `main`.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - if: github.event_name == 'pull_request'
+        run: git branch main origin/main
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
