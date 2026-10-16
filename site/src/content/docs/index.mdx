@@ -9,16 +9,46 @@ hero:
     dark: ../../assets/mark-dark.svg
     alt: sluice
   actions:
-    - text: Walkthrough
-      link: /sluice/guides/walkthrough/
+    - text: Install for Claude Code
+      link: /sluice/guides/claude-code/
       icon: right-arrow
+    - text: Use with herdr
+      link: /sluice/guides/herdr/
+      icon: right-arrow
+      variant: secondary
     - text: GitHub
       link: https://github.com/agentplot/sluice
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Get started
+
+In a Claude Code session in a terminal, install the plugin, then ask Claude
+to set sluice up in your repository. It installs the `sluice` binary too,
+asking first.
+
+```
+/plugin install sluice --marketplace agentplot/sluice
+```
+
+<CardGrid>
+  <LinkCard
+    title="Claude Code"
+    description="Install the plugin; Claude installs sluice, writes the policy, and lands its work through the queue."
+    href="/sluice/guides/claude-code/"
+  />
+  <LinkCard
+    title="herdr"
+    description="The queue beside your agents' panes, each submission tied to the pane that made it."
+    href="/sluice/guides/herdr/"
+  />
+</CardGrid>
+
+Neither? [Install by hand](#install-by-hand) and follow the
+[walkthrough](/sluice/guides/walkthrough/).
 
 ## Why
 
@@ -62,7 +92,7 @@ combination passes.
   </Card>
 </CardGrid>
 
-## Install
+## Install by hand
 
 ```sh
 nix profile install github:agentplot/sluice
