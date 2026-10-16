@@ -111,9 +111,6 @@ Each installs two executables: `sluice`, and `wt-submit`, which
 runner = "command"          # or "moon", to run only what a change affects
 command = "make test"
 
-[checkout]
-method = "git-worktree"
-
 [branches.main]
 parallel = 4                # candidates under test at once
 ```

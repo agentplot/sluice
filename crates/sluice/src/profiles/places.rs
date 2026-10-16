@@ -2,9 +2,11 @@
 //! removal with everything started in it ended (C.1; 25, 32 to 35; rules
 //! core.10, core.16; `docs/plans/phase-1-integrations.md` section 5).
 //!
-//! The one method, `"git-worktree"` (ADR 0013): `git worktree add
+//! The one method, a git worktree (ADR 0013): `git worktree add
 //! --detach` under `<common>/sluice/.places/`, with no hook run, since
-//! nothing of the candidate's may run outside the executor.
+//! nothing of the candidate's may run outside the executor. `[checkout]`
+//! names no method; an older revision's `method = "git-worktree"` is read
+//! as before (core.15), and any other method is refused.
 //!
 //! Once the checkout exists, the place takes the caches `[[checkout.cache]]` declares, each keyed by the
 //! content of the files it names in the candidate; a place whose
@@ -872,6 +874,22 @@ pub const PREVIEW: &str = "preview/";
 
 /// Where a place's record and checkout are kept: a preview's apart, in
 /// `.previews/`, which a sluice that predates previews never reads.
+/// What a place's record says made it.
+const METHOD: &str = "git-worktree";
+
+/// `[checkout] method`, which a policy need not name, is the one there is
+/// or is refused with the reason (ADR 0013).
+fn one_method(checkout: &Settings) -> Result<()> {
+    match checkout.get("method") {
+        None => Ok(()),
+        Some(Setting::Text(m)) if m == METHOD => Ok(()),
+        Some(Setting::Text(m)) => bail!(
+            "[checkout] method = {m:?}: a place is a git worktree, and [checkout] names no method (ADR 0013)"
+        ),
+        Some(_) => bail!("[checkout] method must be a string"),
+    }
+}
+
 fn places_dir(name: &str) -> &'static str {
     if name.starts_with(PREVIEW) {
         ".previews"
@@ -912,16 +930,7 @@ fn clone(src: &Path, dst: &Path) -> Result<()> {
 
 impl Checkout for Places {
     fn materialize(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<Place> {
-        let method = match checkout.get("method") {
-            Some(Setting::Text(m)) => m.clone(),
-            None => bail!("[checkout] names no method: \"git-worktree\""),
-            Some(_) => bail!("[checkout] method must be a string"),
-        };
-        if method != "git-worktree" {
-            bail!(
-                "[checkout] method = {method:?}: a place is a git worktree, \"git-worktree\" (ADR 0013)"
-            );
-        }
+        one_method(checkout)?;
         let caches = self.caches(rev, checkout)?;
         let ports = Ports::read(checkout)?;
         // A place of this name left by a step that stopped part way.
@@ -931,7 +940,7 @@ impl Checkout for Places {
         let record = self.record(name);
         let mut made = Made {
             caches,
-            ..Made::new(Kind::Made, &method)
+            ..Made::new(Kind::Made, METHOD)
         };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
@@ -987,7 +996,7 @@ impl Checkout for Places {
                 }
             }
             match made.method.as_str() {
-                "git-worktree" => self.remove_worktree(&self.worktree_path(name))?,
+                METHOD => self.remove_worktree(&self.worktree_path(name))?,
                 other => {
                     bail!("place {name} was made by {other:?}, which this sluice cannot remove")
                 }
@@ -1167,16 +1176,7 @@ impl Checkout for Places {
                 self.preview_place(name, &made),
             ));
         }
-        let method = match checkout.get("method") {
-            Some(Setting::Text(m)) => m.clone(),
-            None => bail!("[checkout] names no method: \"git-worktree\""),
-            Some(_) => bail!("[checkout] method must be a string"),
-        };
-        if method != "git-worktree" {
-            bail!(
-                "[checkout] method = {method:?}: a place is a git worktree, \"git-worktree\" (ADR 0013)"
-            );
-        }
+        one_method(checkout)?;
         let caches = self.caches(rev, checkout)?;
         let ports = Ports::read(checkout)?;
         // 99: each address checked against the ports before anything is
@@ -1195,7 +1195,7 @@ impl Checkout for Places {
             caches,
             last_run: Some(at.into()),
             revision: Some(rev.clone()),
-            ..Made::new(Kind::Preview, &method)
+            ..Made::new(Kind::Preview, METHOD)
         };
         // Written before the block is held, so a block names a record that
         // exists, and a stop part way leaves a record release reads.

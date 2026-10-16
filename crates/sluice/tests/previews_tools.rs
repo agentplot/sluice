@@ -31,7 +31,7 @@ impl Setup {
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\
                  release = \"echo released $SLUICE_NAME_WEB >> {}\"\n\n\
-                 [checkout]\nmethod = \"git-worktree\"\nports = [\"web\"]\nports_from = \"{ports_from}\"\n\n\
+                 [checkout]\nports = [\"web\"]\nports_from = \"{ports_from}\"\n\n\
                  [branches.\"bolt/*\"]\ntimeout = \"1m\"\n\n\
                  [preview]\ncommand = \"{command}\"\n",
                 log.display()

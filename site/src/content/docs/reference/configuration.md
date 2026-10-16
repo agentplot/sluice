@@ -14,9 +14,6 @@ submission cannot loosen the rules it is tested under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[checkout]
-method = "git-worktree"
-
 [[checkout.cache]]
 key = ["Cargo.lock", ".prototools"]
 paths = ["target"]
@@ -63,9 +60,12 @@ every agent's worktree: `git worktree add --detach` at the combination,
 tests: no git or worktrunk hooks. Whatever a test needs before it runs
 goes in the toolchain or in a task the test depends on.
 
+There is one way to make a checkout, so no key names it. An older
+`method = "git-worktree"` is still read; any other `method` is refused
+with the reason ([ADR 0013](/sluice/decisions/0013/)).
+
 | key | values | meaning |
 |---|---|---|
-| `method` | `"git-worktree"` | The one method. Anything else is refused with the reason ([ADR 0013](/sluice/decisions/0013/)). |
 | `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. A preview gets a name for each as well, `SLUICE_NAME_WEB`. |
 | `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
 
@@ -116,7 +116,6 @@ comes from the branch's current revision. With no `[preview]` table,
 
 ```toml
 [checkout]
-method = "git-worktree"
 ports = ["web", "api"]
 
 [preview]

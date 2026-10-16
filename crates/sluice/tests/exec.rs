@@ -13,7 +13,7 @@ use std::process::{Command, Output, Stdio};
 use support::{Repo, Scratch};
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-[checkout]\nmethod = \"git-worktree\"\nports = [\"web\"]\nports_from = \"41500\"\n\n\
+[checkout]\nports = [\"web\"]\nports_from = \"41500\"\n\n\
 [branches.\"bolt/*\"]\ntimeout = \"1m\"\n";
 
 struct Setup {

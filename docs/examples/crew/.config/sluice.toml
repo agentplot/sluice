@@ -7,13 +7,6 @@ runner = "moon"        # "moon": run moon tasks, only those the change affects, 
                        # "command": run one command; exit 0 passes. Runs in full every time.
 # command = "tests/suite"   # used when runner = "command"
 
-[checkout]
-# How sluice gets a clean copy of the combination it is about to test.
-method = "worktrunk"   # "worktrunk": `wt switch --create sluice/try/<n>`; the checkout gets crew's
-                       #   worktrunk hooks, like any agent's worktree; `wt remove` cleans up
-                       # "git-worktree": `git worktree add --detach`; no hooks run
-                       # "archive": `git archive` into a temp dir; a copy with no git metadata
-
 [branches."bolt/*"]
 # Rules for submissions into any bolt branch.
 required = ["#suite"]  # moon targets that must pass to land here (`#suite`: every task tagged suite)

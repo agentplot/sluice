@@ -27,10 +27,10 @@ pub mod shared;
 pub const BRANCH: &str = "bolt/x";
 
 /// A bolt's gate, with the walkthrough's keys. A rig over real profiles
-/// names its own runner and checkout method in place of `fake`.
+/// names its own runner in place of `fake`.
 pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
     format!(
-        "[tests]\nrunner = \"fake\"\n\n[checkout]\nmethod = \"fake\"\n\n\
+        "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
          [branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = {parallel}\n\
          batch = {batch}\nflaky = \"{flaky}\"\ntimeout = \"20m\"\n\
          trust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n"
@@ -41,8 +41,8 @@ pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
 /// `command` (previews-1 clauses 98, 99).
 pub fn previewed(policy: &str, command: &str) -> String {
     policy.replace(
-        "method = \"fake\"\n",
-        "method = \"fake\"\nports = [\"web\", \"api\"]\n",
+        "[checkout]\n",
+        "[checkout]\nports = [\"web\", \"api\"]\n",
     ) + &format!(
         "\n[preview]\ncommand = \"{command}\"\n\
          addresses = {{ web = \"https://{{name.web}}.localhost\", api = \"http://localhost:{{port.api}}/docs\" }}\n"
@@ -79,8 +79,8 @@ pub trait Rig {
     /// `task` fails on any candidate whose `path` holds `content`.
     fn fails_with(&self, task: &str, path: &str, content: &str);
 
-    /// A policy written for the fakes, as this rig's own: its runner and
-    /// checkout method in place of `fake`.
+    /// A policy written for the fakes, as this rig's own: its runner in
+    /// place of `fake`.
     fn policy_text(&self, policy: &str) -> String {
         policy.into()
     }

@@ -35,9 +35,6 @@ submission, so a submission cannot loosen the rules it is tested under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[checkout]
-method = "git-worktree"
-
 [[checkout.cache]]
 key = ["Cargo.lock", ".prototools"]
 paths = ["target"]
