@@ -85,7 +85,8 @@ from `sluice overview --json`, or follows `sluice overview --json
 
 - a new `landed` line in a branch's `recent` says the branch moved;
 - a `conflict` or `blamed` line names the submission, and its
-  `from.path` names the worktree it came from;
+  `from.path` names the worktree it came from, or `from.head` the
+  branch a pull request was opened from;
 - a worktree in `sessions` with `holds_queued_branch` is one that
   has a branch sluice lands on checked out.
 

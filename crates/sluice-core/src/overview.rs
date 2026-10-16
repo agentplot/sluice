@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::Serialize;
-use sluice_seams::{Rev, Snapshot};
+use sluice_seams::{Rev, Snapshot, Submitter};
 
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
@@ -257,14 +257,31 @@ pub fn counts(branches: &[BranchView]) -> Vec<BranchCount> {
         .collect()
 }
 
-/// The latest submission still in a chain from the worktree at `path`,
-/// matched by the path it was submitted from and never by its branch's
-/// name: a record without one is no worktree's.
-pub fn in_play<'a>(branches: &'a [BranchView], path: &str) -> Option<&'a Submission> {
+/// The worktree a home view is for: its path, and the branch it is on,
+/// empty when it is on none.
+#[derive(Clone, Copy, Debug)]
+pub struct Here<'a> {
+    pub path: &'a str,
+    pub branch: &'a str,
+}
+
+impl Here<'_> {
+    /// Whether `from` is this worktree, by what its record says: the path
+    /// it was submitted from, or the branch a pull request was opened
+    /// from (ADR 0025). A record naming neither is no worktree's, and
+    /// a worktree's own submission is never matched by its branch's name.
+    pub fn made(&self, from: &Submitter) -> bool {
+        from.path.as_deref() == Some(self.path)
+            || (!self.branch.is_empty() && from.head.as_deref() == Some(self.branch))
+    }
+}
+
+/// The latest submission still in a chain from the worktree `here`.
+pub fn in_play<'a>(branches: &'a [BranchView], here: Here<'_>) -> Option<&'a Submission> {
     branches
         .iter()
         .flat_map(|b| &b.submissions)
-        .filter(|s| s.from.path.as_deref() == Some(path))
+        .filter(|s| here.made(&s.from))
         .max_by_key(|s| s.id)
 }
 
@@ -293,16 +310,16 @@ pub fn recent_ids(branches: &[BranchView]) -> Vec<u64> {
 }
 
 impl Sluice<'_> {
-    /// The worktree at `path`'s submission, as the home view shows it: the
+    /// The worktree `here`'s submission, as the home view shows it: the
     /// latest still in a chain, else the latest the branches' recent
     /// lines name. A read, as the overview is.
-    pub fn home(&self, branches: &[BranchView], path: &str) -> Result<Option<Submission>> {
-        if let Some(s) = in_play(branches, path) {
+    pub fn home(&self, branches: &[BranchView], here: Here<'_>) -> Result<Option<Submission>> {
+        if let Some(s) = in_play(branches, here) {
             return Ok(Some(s.clone()));
         }
         for id in recent_ids(branches) {
             if let Some(s) = self.state(id)? {
-                if s.from.path.as_deref() == Some(path) {
+                if here.made(&s.from) {
                     return Ok(Some(s));
                 }
             }
@@ -390,6 +407,29 @@ mod tests {
             )],
         );
         assert_eq!(recent_ids(&[a, b]), [5, 3, 2, 1]);
+    }
+
+    #[test]
+    fn a_worktree_made_what_names_its_path_or_its_branch_as_a_pull_requests_head() {
+        let from = |worktree: &str, path: Option<&str>, head: Option<&str>| Submitter {
+            agent: "a".into(),
+            worktree: worktree.into(),
+            path: path.map(Into::into),
+            head: head.map(Into::into),
+        };
+        let here = Here {
+            path: "/w/unit",
+            branch: "unit",
+        };
+        assert!(here.made(&from("unit", Some("/w/unit"), None)));
+        assert!(here.made(&from("pull/9", None, Some("unit"))));
+        assert!(!here.made(&from("unit", None, None)));
+        assert!(!here.made(&from("pull/9", None, Some("other"))));
+        let detached = Here {
+            path: "/w/unit",
+            branch: "",
+        };
+        assert!(!detached.made(&from("pull/9", None, Some(""))));
     }
 
     #[test]

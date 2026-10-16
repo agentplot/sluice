@@ -667,6 +667,7 @@ impl World {
                     agent: agent.into(),
                     worktree: worktree.into(),
                     path: None,
+                    head: None,
                 },
                 dirty: Vec::new(),
                 detached: false,
@@ -719,6 +720,18 @@ impl World {
             .expect("a session's place")
             .from
             .path = Some(path.into());
+    }
+
+    /// The session's place at `worktree` is a pull request opened from
+    /// `head`, as the pull-request driver records it: no path of its own.
+    pub fn opened_from(&self, worktree: &str, head: &str) {
+        self.0
+            .borrow_mut()
+            .worktrees
+            .get_mut(worktree)
+            .expect("a session's place")
+            .from
+            .head = Some(head.into());
     }
 
     /// The next notification is delivered and the process stops before

@@ -153,7 +153,8 @@ or a session can find its own submissions in the document.
 ## `sluice` with no command
 
 `sluice` alone shows where this worktree stands, cut from the overview
-to the worktree by the path it submits from: its latest submission
+to the worktree by the path it submits from, or, for a pull request, by
+the branch it was opened from: its latest submission
 still queued, or else the latest the branches' recent lines name; each
 branch's counts; its place; and the commands that follow. Like the
 overview it reads the state alone and writes nothing, so a status line
@@ -175,9 +176,9 @@ added to: `worktree` (`path`, `branch`, `agent`), `submission` (`id`,
 `branches[]` (`branch`, `depth`, `testing`, `parallel`, the overview's
 counts), `place` (`ports`, `last_run`) and `next`. Outside a worktree
 sluice can submit from, `worktree`, `submission` and `place` are null.
-A submission from before `from.path` was recorded, or one a pull
-request made, names no worktree's path and is not shown; `sluice submit
-<branch> --status` follows a pull request.
+A submission from before `from.path` was recorded names no worktree and
+is not shown. A pull request still waiting for review or checks has no
+submission yet; `sluice submit <branch> --status` follows it.
 
 ## `sluice preview`
 

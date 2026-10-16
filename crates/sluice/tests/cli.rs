@@ -343,6 +343,26 @@ fn home_finds_a_landed_or_failed_submission_through_recent() {
     assert!(out.contains("  failed tests:t-batch-cards: "), "{out}");
 }
 
+/// A pull request's submission names no worktree's path, but the branch it
+/// was opened from: the worktree on that branch is shown it (ADR 0025).
+#[test]
+fn home_shows_a_pull_requests_submission_to_the_worktree_it_was_opened_from() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    f.world.at_path("unit/a", "/w/a");
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    f.world.at_path("unit/b", "/w/b");
+    work(&f, "pull/9", "agent-a", &[("plugin/a", Some("a"))]);
+    f.world.opened_from("pull/9", "unit/a");
+    sluice(&f, &["submit", BRANCH, "--worktree", "pull/9", "--no-wait"]);
+
+    let v = home(&f, "unit/a");
+    assert_eq!(v["submission"]["id"], 1);
+    assert_eq!(v["submission"]["state"], "queued");
+    assert_eq!(v["next"][0], "sluice status 1");
+    assert_eq!(home(&f, "unit/b")["submission"], serde_json::Value::Null);
+}
+
 /// Outside any worktree sluice can submit from, it says so, shows the
 /// queues and points at the overview.
 #[test]

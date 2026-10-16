@@ -94,6 +94,7 @@ impl Driver for Worktrunk {
                 agent,
                 worktree: branch.clone(),
                 path: (top.status.success() && !path.is_empty()).then_some(path),
+                head: None,
             },
             dirty: dirty(&status.stdout),
             detached: branch.is_empty(),

@@ -104,7 +104,8 @@ A submission written by an older sluice has no `path`.
 
 A pull request's submission comes from `pull/<n>`, its number on
 GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",
-"worktree": "pull/41" }`, with no `path`. Its agent is the one the pull request's
+"worktree": "pull/41", "head": "unit/cards" }`, with no `path`; `head`
+is the branch the pull request was opened from. Its agent is the one the pull request's
 description names, in the comment `sluice submit` writes there, or
 else whoever opened it. Each new commit on the pull request is a new
 submission from the same `pull/<n>`. A pull request still waiting for

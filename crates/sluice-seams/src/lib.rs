@@ -530,6 +530,11 @@ pub struct Submitter {
     /// has no worktree on this host, and in records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The branch a pull request was opened from, for a reader to match
+    /// it to the worktree that pushed that branch; `None` for a worktree's
+    /// own submission, and in records written before it (ADR 0025).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 /// A session's place as its driver sees it.

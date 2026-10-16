@@ -1065,7 +1065,8 @@ impl crate::PullRequests for Pulls {
 impl Pulls {
     /// 2, 47: the head of pull request `worktree`, `pull/<n>`, as intake
     /// read it this round, fetched from its remote; never dirty, never
-    /// detached; its agent the one its body names, or its author.
+    /// detached; its agent the one its body names, or its author; and the
+    /// branch it was opened from, for a reader to find its worktree.
     pub fn session(&self, worktree: &str) -> Result<Session> {
         let k = self.known.borrow().get(worktree).cloned().ok_or_else(|| {
             anyhow!(
@@ -1080,6 +1081,7 @@ impl Pulls {
                 agent: marked_agent(&k.pull.body).unwrap_or_else(|| k.pull.author.clone()),
                 worktree: worktree.into(),
                 path: None,
+                head: Some(k.pull.head_ref.clone()),
             },
             dirty: Vec::new(),
             detached: false,
