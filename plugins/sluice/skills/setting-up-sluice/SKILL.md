@@ -15,7 +15,7 @@ touches GitHub settings.
 command -v sluice && sluice --version
 ```
 
-This plugin needs **sluice 0.11 or later** (`sluice overview`). If it is
+This plugin needs **sluice 0.12 or later** (`sluice overview`). If it is
 missing or older, install or upgrade it. Pick the first that fits:
 
 | the host has | install | upgrade |

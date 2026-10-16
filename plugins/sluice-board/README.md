@@ -16,7 +16,7 @@ sluice's queue inside a Claude Code session.
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.
 
-It reads everything from `sluice overview --json --watch` (sluice 0.11 or
+It reads everything from `sluice overview --json --watch` (sluice 0.12 or
 later), in a repository with sluice's records, and is silent elsewhere. A
 submission is this session's when its `from.path` is the session's worktree,
 or the session's own `sluice submit` / `wt submit` printed its number or its

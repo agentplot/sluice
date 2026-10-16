@@ -102,7 +102,7 @@ were blamed and where their logs are, so the agent can fix its work without
 being asked. The `wake` option in `/config` turns that turn off.
 
 It reads everything from `sluice overview --json --watch`, so it needs
-sluice 0.11 or later, and stays silent in a repository with no queue. It is a
+sluice 0.12 or later, and stays silent in a repository with no queue. It is a
 Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
