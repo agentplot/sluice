@@ -52,6 +52,8 @@ impl Clock {
 struct Forge {
     permissions: serde_json::Value,
     rulesets: Vec<(u64, serde_json::Value)>,
+    /// The rulesets whose only rule on the branch restricts creating it.
+    creation: Vec<u64>,
     clock: Clock,
 }
 
@@ -63,6 +65,7 @@ impl Forge {
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
             )],
+            creation: Vec::new(),
             clock: clock.clone(),
         }
     }
@@ -93,7 +96,14 @@ impl Forge {
                 let rules: Vec<_> = self
                     .rulesets
                     .iter()
-                    .map(|(id, _)| json!({ "type": "update", "ruleset_id": id }))
+                    .map(|(id, _)| {
+                        let kind = if self.creation.contains(id) {
+                            "creation"
+                        } else {
+                            "update"
+                        };
+                        json!({ "type": kind, "ruleset_id": id })
+                    })
                     .collect();
                 return json(200, json!(rules));
             }
@@ -183,6 +193,28 @@ fn forge_check_all_set() {
     let found = check(&app(&fake, &clock), &repo(), "main", Some("operator"));
     assert!(failures(&found).is_empty(), "{found:?}");
     assert_eq!(found.len(), 4, "{found:?}");
+}
+
+/// A ruleset that only restricts creating the branch may let others
+/// through beside the app's own: crew makes a bolt, sluice moves it.
+#[test]
+fn forge_check_lets_others_create_the_branch() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.rulesets.push((
+        12,
+        json!([{ "actor_id": 5, "actor_type": "Integration", "bypass_mode": "always" }]),
+    ));
+    forge.creation.push(12);
+    let fake = forge.start();
+    let found = check(&app(&fake, &clock), &repo(), "main", Some("operator"));
+    assert!(failures(&found).is_empty(), "{found:?}");
+    assert!(
+        found.iter().any(|f| f
+            .what
+            .contains("ruleset 12\" on main restricts only its creation")),
+        "{found:?}"
+    );
 }
 
 /// A ruleset that lets the operator's role through beside the app fails,

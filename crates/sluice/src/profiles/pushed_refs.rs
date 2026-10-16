@@ -250,6 +250,21 @@ pub fn remote_url(path: &Path, remote: &str) -> Result<String> {
     configured_url(LocalRefs::open(path)?.git_dir(), remote)
 }
 
+/// The names of the remotes of the repository at `git_dir`.
+pub fn remotes(git_dir: &Path) -> Result<Vec<String>> {
+    let out = git(git_dir, &["remote"])?;
+    if !out.status.success() {
+        bail!(
+            "listing remotes failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect())
+}
+
 /// The remote's URL as configured, before any `insteadOf`: the forge it
 /// names is the one an identity is for.
 fn configured_url(git_dir: &Path, remote: &str) -> Result<String> {

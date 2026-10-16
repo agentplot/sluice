@@ -13,7 +13,7 @@ use sluice_core::policy::{Policy, POLICY_PATH};
 use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
-use super::pushed_refs::PushedRefs;
+use super::pushed_refs::{remotes, PushedRefs};
 use crate::identity::Identity;
 use crate::{Pusher, Pushers};
 
@@ -56,12 +56,28 @@ impl Branches {
     /// The remote `branch`'s policy names, read on the local branch's
     /// revision: it may lag the remote's, which is enough to choose the
     /// profile; the gate itself is read from the revision the profile
-    /// reads (rule core.15).
+    /// reads (rule core.15). With no local branch, as on a host that has
+    /// only fetched one another host made, it is read on each remote's
+    /// tracking ref of it, and kept when it names that remote.
     pub fn remote(&self, branch: &str) -> Result<Option<String>> {
-        let Some(rev) = self.local.read(branch)? else {
-            return Ok(None);
-        };
-        let Some(bytes) = self.local.read_file(&rev, POLICY_PATH)? else {
+        if let Some(rev) = self.local.read(branch)? {
+            return self.named(branch, &rev);
+        }
+        for r in remotes(&self.dir)? {
+            let tracking = format!("refs/remotes/{r}/{branch}");
+            let Some(rev) = self.local.read_ref(&tracking)? else {
+                continue;
+            };
+            if self.named(branch, &rev)?.as_deref() == Some(r.as_str()) {
+                return Ok(Some(r));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The remote the policy at `rev` names for `branch`.
+    fn named(&self, branch: &str, rev: &Rev) -> Result<Option<String>> {
+        let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {
             return Ok(None);
         };
         let policy = Policy::parse(std::str::from_utf8(&bytes)?)

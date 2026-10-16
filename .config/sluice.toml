@@ -22,6 +22,9 @@ docker = true
 [branches."bolt/*"]
 required = ["#check-fast"]
 trust = ["open", "sandbox", "container", "cache"]
+# Bolts live on GitHub, as main does: crew pushes each new one there, and
+# sluice lands on it by a leased push, so agents on any host share it.
+remote = "origin"
 
 # On one Mac, until runs are confined, main accepts sandboxed runs too; it
 # never takes a replay, since the cache holds what open shells ran.

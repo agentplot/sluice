@@ -2,13 +2,15 @@
 //! branch's rules let only sluice move it (C.4 pushed refs). The app's
 //! token mints and the app may write the repository's contents and
 //! workflows; every ruleset on the branch lets the app through and nobody
-//! else.
+//! else. A ruleset whose only rule on the branch restricts its creation
+//! may let others through: it lets them make the branch, as crew makes a
+//! bolt, and never move it.
 //!
 //! GitHub shows a ruleset's bypass list only to a caller with write access
 //! to the ruleset, which the app is not given, so the rulesets are read
 //! with the operator's own token.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -71,7 +73,7 @@ pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Ve
 }
 
 /// Each ruleset on `branch`: the app among its bypass actors, and no one
-/// else.
+/// else, unless all it restricts on `branch` is creating it.
 fn rules(
     app: &App,
     repo: &Repo,
@@ -87,12 +89,14 @@ fn rules(
         Ok(v) => v,
         Err(e) => return vec![failed(format!("reading {branch}'s rules: {e:#}"))],
     };
-    let ids: BTreeSet<u64> = rules
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r["ruleset_id"].as_u64())
-        .collect();
+    let mut kinds: BTreeMap<u64, BTreeSet<String>> = BTreeMap::new();
+    for r in rules.as_array().into_iter().flatten() {
+        if let Some(id) = r["ruleset_id"].as_u64() {
+            let kind = r["type"].as_str().unwrap_or_default().to_string();
+            kinds.entry(id).or_default().insert(kind);
+        }
+    }
+    let ids: BTreeSet<u64> = kinds.keys().copied().collect();
     if ids.is_empty() {
         return vec![failed(format!(
             "no ruleset on GitHub protects {branch}: anyone who may push to {repo} may move it"
@@ -111,14 +115,18 @@ fn rules(
                 repo.owner, repo.name
             );
             match app.get(&path, operator) {
-                Ok(r) => ruleset(app.id(), branch, &r),
+                Ok(r) => {
+                    let creation = kinds[&id].iter().all(|k| k == "creation");
+                    ruleset(app.id(), branch, &r, creation)
+                }
                 Err(e) => failed(format!("reading ruleset {id}: {e:#}")),
             }
         })
         .collect()
 }
 
-fn ruleset(app: u64, branch: &str, r: &Value) -> Finding {
+/// `creation`: all the ruleset restricts on `branch` is creating it.
+fn ruleset(app: u64, branch: &str, r: &Value, creation: bool) -> Finding {
     let name = r["name"].as_str().map_or_else(
         || format!("ruleset {}", r["id"]),
         |n| format!("ruleset {n:?}"),
@@ -145,6 +153,12 @@ fn ruleset(app: u64, branch: &str, r: &Value) -> Finding {
             }
         })
         .collect();
+    if creation {
+        return ok(format!(
+            "{name} on {branch} restricts only its creation: whoever it lets through may \
+             make {branch}, never move it"
+        ));
+    }
     if !actors.iter().any(is_app) {
         return failed(format!(
             "{name} on {branch} does not let app {app} through: add it as the ruleset's \
