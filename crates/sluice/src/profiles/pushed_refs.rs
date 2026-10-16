@@ -192,11 +192,28 @@ impl PushedRefs {
             bail!(
                 "pushing {branch} to {} failed: {}",
                 self.remote,
-                String::from_utf8_lossy(&out.stderr).trim()
+                refusal(&out)
             );
         }
         Ok(())
     }
+}
+
+/// Why a `git push --porcelain` failed: the remote's reason for each ref
+/// it refused, which porcelain prints on stdout, then what git printed on
+/// stderr, which alone says only that some refs failed.
+fn refusal(out: &Output) -> String {
+    let report = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    report
+        .lines()
+        .filter(|l| l.starts_with('!'))
+        .filter_map(|l| l.rsplit('\t').next())
+        .map(str::trim)
+        .chain(std::iter::once(err.trim()))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The git command for the remote: the host's own configuration and
@@ -297,15 +314,10 @@ impl Branch for PushedRefs {
         if refused {
             return Ok(Moved::Elsewhere(self.fetch(branch)?));
         }
-        let err = String::from_utf8_lossy(&out.stderr);
-        let why: Vec<&str> = [report.trim(), err.trim()]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .collect();
         Err(anyhow!(
             "pushing {branch} to {} failed: {}",
             self.remote,
-            why.join("; ")
+            refusal(&out)
         ))
     }
 }
