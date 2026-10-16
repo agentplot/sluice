@@ -1,5 +1,23 @@
 # `sluice exec` and `sluice release`
 
+## Which form
+
+| you want | run | what it does |
+|---|---|---|
+| a fast loop while editing | `sluice exec <branch> -- moon run <project:task>` (or `-- moon run :test --affected`, `-- npm test`) | your command with the worktree's ports, `SLUICE_TMP`, the host's bound and the branch's limits; moon's cache applies; uncommitted edits count; nothing recorded |
+| the gate's verdict before submitting | commit, then `sluice exec <branch>` | the branch's required tasks your commits affect since the branch's tip, and their dependents (`moon query tasks --affected --downstream deep`, every required task if `.moon/` or a `moon.yml` changed), forced past moon's cache, recorded when the worktree is clean |
+| to know whether that saves the submission work | read the branch's `trust` | reused only on a branch that trusts `"open"` that has not moved since; otherwise feedback only |
+
+Affected-only is the whole gate: a task's key is the task and a hash of its
+inputs, so a task your change does not touch has the key it passed under
+when the branch's tip landed, and the submission's gate already holds that
+result. The submission computes the affected set the same way, since the
+branch's verified revision. `--force` is what makes the run worth recording:
+a replay from moon's cache is not an observation and is never recorded as a
+run.
+
+## `sluice exec <branch>`
+
 ```console
 $ sluice exec bolt/x
 running the checks 8d41b6c affects against bolt/x (c41e8f2)

@@ -87,18 +87,41 @@ A submission's `from.path` is the worktree it came from: filter
 
 ## Tests while you work: `sluice exec`
 
-```sh
-sluice exec main                # the tests your head affects, against main's policy
-sluice exec main -- npm test    # any command, with the worktree's ports
-sluice release                  # end what your runs left up and free the ports
-```
+Pick the form by what you want from the run:
 
-Run tests through `sluice exec`, not directly: runs share the host's bound
-with the queue, and your worktree gets ports no other worktree holds. A run
-in a clean worktree is recorded as an `open` run, which the submission that
-follows reuses only on a branch that trusts `"open"`. Release before
-removing a worktree by hand (`sluice exec --release` does both in one go). See
-[references/exec.md](references/exec.md).
+1. **While iterating**, run the targets you touched through sluice:
+
+   ```sh
+   sluice exec main -- moon run catalog:test     # or: -- moon run :test --affected, -- npm test
+   ```
+
+   It covers uncommitted edits, uses moon's cache, records nothing, and is
+   the fast loop. Going through `sluice exec` rather than straight to moon
+   shares the host's bound with the queue's runs and gives your worktree
+   ports no other worktree holds.
+2. **Before submitting**, to get the gate's own verdict early: commit, then
+
+   ```sh
+   sluice exec main
+   ```
+
+   It runs the branch's required tasks that your commits since the branch's
+   tip affect, with the tasks that depend on them, forced past moon's cache
+   so the run is observed. That is the whole gate: every task your change
+   does not touch has the same key (the task plus a hash of its inputs) it
+   passed under when the tip landed, so you do not need to run everything.
+3. **Whether that run saves the submission any work** depends on the
+   branch's `trust` in `.config/sluice.toml`. It is recorded, as an `open`
+   run, only when the worktree holds exactly its head. A submission reuses
+   it only when the branch trusts `"open"` and has not moved since. Without
+   `"open"` (sluice's own `main`, for one) it is feedback only, and the
+   submission runs the affected tasks again.
+
+Name targets as `project:task` or a single tag, `#task-tag`.
+
+`sluice release` ends what your runs left up and frees the ports; release
+before removing a worktree by hand (`sluice exec <branch> --release` runs
+and releases in one go). See [references/exec.md](references/exec.md).
 
 ## Previews
 
