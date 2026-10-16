@@ -12,9 +12,9 @@ Read first: this change's proposal, design and specs; ADR 0023. Work inside
 
 ## 2. The guard and the session note
 
-- [ ] 2.1 Add `plugins/sluice/hooks/hooks.json` with a PreToolUse hook on Bash and a SessionStart hook, and their scripts; verify `claude plugin validate plugins/sluice`.
-- [ ] 2.2 Test the guard on a scratch repository with isolated git and no credentials: a push, merge, `update-ref` and `gh pr merge` aimed at `main` are refused naming `sluice submit main`; a push of `unit/x` and any command in a repository with no policy go through; verify with a test script under `plugins/sluice/tests/` run by a moon task.
-- [ ] 2.3 Document the guard and the note in `guides/claude-code.md`; verify Vale.
+- [x] 2.1 Add `plugins/sluice/hooks/hooks.json` with a PreToolUse hook on Bash and a SessionStart hook, and their scripts; verify `claude plugin validate plugins/sluice`.
+- [x] 2.2 Test the guard on a scratch repository with isolated git and no credentials: a push, merge, `update-ref` and `gh pr merge` aimed at `main` are refused naming `sluice submit main`; a push of `unit/x` and any command in a repository with no policy go through; verify with `plugins/sluice/tests/hooks.sh`, run by the moon task `root:plugin-hooks` (check-fast).
+- [x] 2.3 Document the guard and the note in `guides/claude-code.md`; verify Vale.
 
 ## 3. The board
 
