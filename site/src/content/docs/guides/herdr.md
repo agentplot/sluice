@@ -19,6 +19,6 @@ herdr plugin install agentplot/sluice/plugins/herdr
 
 It reads what it shows from `sluice overview --json --watch`, the same
 document the [Claude Code plugin](/sluice/guides/claude-code/) reads, so it
-needs sluice 0.11 or later. Until it is released,
+needs sluice 0.12 or later. Until it is released,
 [set sluice up](/sluice/guides/walkthrough/) by hand or with the Claude Code
 plugin.

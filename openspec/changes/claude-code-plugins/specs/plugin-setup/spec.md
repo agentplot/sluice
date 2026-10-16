@@ -9,7 +9,7 @@ Installing sluice and setting a repository up for it from Claude Code.
 ### Requirement: The binary is installed when missing, asking first
 
 The setup skill SHALL check `sluice --version` first and, when sluice is
-missing or older than 0.11, SHALL propose an install or upgrade fit for the
+missing or older than 0.12, SHALL propose an install or upgrade fit for the
 host and run it only on the user's word. A sluice from the user's own flake
 or Home Manager SHALL be left for the user to update.
 

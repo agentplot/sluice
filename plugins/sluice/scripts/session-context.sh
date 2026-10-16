@@ -30,8 +30,8 @@ else
   major=${version%%.*}
   minor=${version#*.}
   minor=${minor%%.*}
-  if [ -n "$version" ] && { [ "${major:-0}" -eq 0 ] && [ "${minor:-0}" -lt 11 ]; } 2>/dev/null; then
-    note="$note The installed sluice is $version; this plugin needs 0.11 or later (the setting-up-sluice skill upgrades it)."
+  if [ -n "$version" ] && { [ "${major:-0}" -eq 0 ] && [ "${minor:-0}" -lt 12 ]; } 2>/dev/null; then
+    note="$note The installed sluice is $version; this plugin needs 0.12 or later (the setting-up-sluice skill upgrades it)."
   fi
 fi
 

@@ -1,6 +1,8 @@
 {
   "name": "sluice",
-  "owner": { "name": "agentplot" },
+  "owner": {
+    "name": "agentplot"
+  },
   "metadata": {
     "description": "Claude Code plugins for sluice, a merge queue for agents in worktrees."
   },
@@ -9,6 +11,11 @@
       "name": "sluice",
       "source": "./plugins/sluice",
       "description": "Set sluice up in a repository, submit work and read verdicts, run tests and previews, and lay out a repository as a bare repo with worktrees."
+    },
+    {
+      "name": "sluice-board",
+      "source": "./plugins/sluice-board",
+      "description": "sluice's queue inside a session: a band above the prompt, a /sluice pane, a status line, and a turn that tells an idle session its submission's outcome."
     }
   ]
 }
