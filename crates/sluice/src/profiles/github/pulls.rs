@@ -1079,6 +1079,7 @@ impl Pulls {
             from: Submitter {
                 agent: marked_agent(&k.pull.body).unwrap_or_else(|| k.pull.author.clone()),
                 worktree: worktree.into(),
+                path: None,
             },
             dirty: Vec::new(),
             detached: false,

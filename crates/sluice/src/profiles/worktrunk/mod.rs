@@ -68,6 +68,10 @@ impl Driver for Worktrunk {
         let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
         let branch = self.git(dir, &["symbolic-ref", "-q", "--short", "HEAD"])?;
         let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+        // Where it was submitted from, for a reader to find the session
+        // by its worktree.
+        let top = self.git(dir, &["rev-parse", "--show-toplevel"])?;
+        let path = String::from_utf8_lossy(&top.stdout).trim().to_string();
         let status = self.git(
             dir,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -89,6 +93,7 @@ impl Driver for Worktrunk {
             from: Submitter {
                 agent,
                 worktree: branch.clone(),
+                path: (top.status.success() && !path.is_empty()).then_some(path),
             },
             dirty: dirty(&status.stdout),
             detached: branch.is_empty(),

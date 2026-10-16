@@ -243,4 +243,12 @@ impl sluice::exec::Host for FakeHost {
     fn revision(&self, rev: &str) -> anyhow::Result<Option<String>> {
         Ok(Some(rev.to_string()))
     }
+
+    fn name(&self) -> String {
+        "fake-host".into()
+    }
+
+    fn repository(&self) -> anyhow::Result<String> {
+        Ok("/fake/repo.git".into())
+    }
 }

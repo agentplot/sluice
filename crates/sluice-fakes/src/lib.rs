@@ -664,6 +664,7 @@ impl World {
                 from: Submitter {
                     agent: agent.into(),
                     worktree: worktree.into(),
+                    path: None,
                 },
                 dirty: Vec::new(),
                 detached: false,

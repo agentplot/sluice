@@ -507,7 +507,14 @@ pub trait Branch {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Submitter {
     pub agent: String,
+    /// The session's work, as its driver names it: a branch, or a pull
+    /// request's `pull/<n>`.
     pub worktree: String,
+    /// The absolute path of the worktree it was submitted from, for a
+    /// reader to match a submission to a session; `None` where the driver
+    /// has no worktree on this host, and in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// A session's place as its driver sees it.

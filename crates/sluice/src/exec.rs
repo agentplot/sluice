@@ -36,6 +36,10 @@ pub trait Host {
     /// `rev` as the repository's full revision, or `None` when it names
     /// none.
     fn revision(&self, rev: &str) -> Result<Option<String>>;
+    /// The host's name, as its runs are recorded under.
+    fn name(&self) -> String;
+    /// The repository, as the path of its common git directory.
+    fn repository(&self) -> Result<String>;
 }
 
 pub struct Exec<'a> {

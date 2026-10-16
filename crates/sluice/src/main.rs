@@ -92,6 +92,12 @@ fn main() {
     } else {
         None
     };
+    // A watching overview reads the records about once a second; a run
+    // or a waiting submit rounds every three.
+    let every = match cli.command {
+        Command::Overview { .. } => Duration::from_secs(1),
+        _ => Duration::from_secs(3),
+    };
     let mut out = std::io::stdout();
     let code = match run(
         cli,
@@ -100,7 +106,7 @@ fn main() {
         &bound.branch,
         &*bound.pulls,
         &SystemClock,
-        &Sleep(Duration::from_secs(3)),
+        &Sleep(every),
         &mut out,
     ) {
         Ok(code) => code,

@@ -1,0 +1,228 @@
+//! What a reader sees of a repository's queues at a glance: every
+//! branch with records, its candidates, its submissions still in play and
+//! its latest landings, blames and conflicts (26, 49; ADR 0023).
+//!
+//! Read from the records alone (61; rule core.11): it takes no lock,
+//! holds no decision and writes nothing (rule core.14). A branch is read
+//! at the revision its records last saw, never fetched, so a reader that
+//! asks every second costs no remote a request.
+
+use anyhow::Result;
+use serde::Serialize;
+use sluice_seams::{Rev, Snapshot};
+
+use crate::line::Line;
+use crate::policy::Rules;
+use crate::records::{
+    parse_lines, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
+};
+use crate::Sluice;
+
+pub const OVERVIEW_SCHEMA: &str = "sluice/overview@1";
+
+/// How many of a branch's latest landings, blames and conflicts are
+/// shown.
+pub const RECENT: usize = 10;
+
+/// The log events a reader is shown as recent: what became of
+/// submissions.
+const RECENT_EVENTS: [&str; 3] = ["landed", "blamed", "conflict"];
+
+/// One branch as the overview is computed from: its records, and the
+/// gate and executor the policy names at the revision they last saw.
+#[derive(Clone, Debug)]
+pub struct BranchRead {
+    pub branch: String,
+    pub snapshot: Snapshot,
+    pub rules: Option<Rules>,
+    /// The executor `[executor] kind` names; `None` names none.
+    pub executor: Option<String>,
+}
+
+/// One branch's part of the overview.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BranchView {
+    pub branch: String,
+    /// The branch's revision as its records last saw it.
+    pub at: Option<Rev>,
+    /// The records' version: it moves on every write, so a reader redraws
+    /// only when it does.
+    pub version: u64,
+    /// How many candidates are under test at once (13).
+    pub window: usize,
+    /// The window's upper bound, as the policy states it.
+    pub parallel: Option<usize>,
+    /// Submissions still in a chain: queued, waiting, testing, passed or
+    /// landing.
+    pub depth: usize,
+    pub candidates: Vec<CandidateView>,
+    /// The submissions still in a chain, as `sluice status <id> --json`
+    /// prints each.
+    pub submissions: Vec<Submission>,
+    /// The latest `landed`, `blamed` and `conflict` lines of the branch's
+    /// log, oldest first, exactly as written.
+    pub recent: Vec<serde_json::Value>,
+}
+
+/// One candidate: a combination under test or judged.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CandidateView {
+    pub id: String,
+    pub submissions: Vec<u64>,
+    pub revision: Rev,
+    pub state: CandidateState,
+    /// When its run started, from the branch's log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// How long its checks may run, in seconds (66).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    /// The checks the gate requires (27).
+    pub targets: Vec<String>,
+    /// The executor the policy names.
+    pub executor: Option<String>,
+    pub ran: usize,
+    pub replayed: usize,
+    /// Each failed check, with where its output is kept (20).
+    pub failed: Vec<FailedTask>,
+}
+
+/// One branch's part of the overview, from what was read of it.
+pub fn branch_view(read: BranchRead) -> Result<BranchView> {
+    let BranchRead {
+        branch,
+        snapshot,
+        rules,
+        executor,
+    } = read;
+    let log = snapshot.files.get(LOG_FILE).cloned().unwrap_or_default();
+    let line = Line::load(&branch, snapshot)?;
+    let events: Vec<LogLine> = parse_lines(&log)?;
+    let started = |revision: &Rev| {
+        events.iter().rev().find_map(|l| match &l.event {
+            Event::Testing { combination, .. } if combination == revision => Some(l.at.clone()),
+            _ => None,
+        })
+    };
+    let candidates = line
+        .doc
+        .candidates
+        .iter()
+        .map(|c| CandidateView {
+            id: c.id.clone(),
+            submissions: c.submissions.clone(),
+            revision: c.revision.clone(),
+            state: c.state,
+            started: (c.state != CandidateState::Formed)
+                .then(|| started(&c.revision))
+                .flatten(),
+            limit: rules.as_ref().and_then(|r| r.timeout).map(|t| t.as_secs()),
+            targets: rules
+                .as_ref()
+                .map(|r| r.required.clone())
+                .unwrap_or_default(),
+            executor: executor.clone(),
+            ran: c.ran,
+            replayed: c.replayed,
+            failed: c.failed.clone(),
+        })
+        .collect();
+    let submissions: Vec<Submission> = line
+        .subs
+        .values()
+        .filter(|s| !s.state.is_out())
+        .cloned()
+        .collect();
+    Ok(BranchView {
+        branch,
+        at: line.doc.base.clone(),
+        version: line.version,
+        window: line.doc.window,
+        parallel: rules.as_ref().map(|r| r.parallel),
+        depth: submissions.len(),
+        candidates,
+        submissions,
+        recent: recent(&log, RECENT)?,
+    })
+}
+
+/// The last `n` lines of a log whose event is one a reader is shown as
+/// recent, oldest first, each as written.
+pub fn recent(log: &[u8], n: usize) -> Result<Vec<serde_json::Value>> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for l in std::str::from_utf8(log)?.lines() {
+        if l.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(l)?;
+        if v["event"]
+            .as_str()
+            .is_some_and(|e| RECENT_EVENTS.contains(&e))
+        {
+            out.push(v);
+        }
+    }
+    let skip = out.len().saturating_sub(n);
+    Ok(out.split_off(skip))
+}
+
+impl Sluice<'_> {
+    /// 26, 61: every branch with records, as last written, each read at
+    /// the revision its records last saw.
+    pub fn overview(&self) -> Result<Vec<BranchView>> {
+        let mut out = Vec::new();
+        for branch in self.seams.state.branches()? {
+            let snapshot = self.seams.state.read(&branch)?;
+            let base = Line::load(&branch, snapshot.clone())?.doc.base;
+            let policy = match &base {
+                Some(rev) => self.policy_at(rev)?,
+                None => None,
+            };
+            let rules = match &policy {
+                Some(p) => p.rules_for(&branch)?.cloned(),
+                None => None,
+            };
+            out.push(branch_view(BranchRead {
+                executor: policy.and_then(|p| p.limits.executor),
+                branch,
+                snapshot,
+                rules,
+            })?);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(event: &str, rest: &str) -> String {
+        format!("{{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-16T00:00:00Z\",\"event\":\"{event}\"{rest}}}\n")
+    }
+
+    #[test]
+    fn recent_keeps_the_last_landings_blames_and_conflicts_verbatim() {
+        let mut log = String::new();
+        log += &line("submitted", ",\"id\":1,\"head\":\"a\"");
+        for id in 1..=12 {
+            log += &line("landed", &format!(",\"ids\":[{id}],\"to\":\"b\""));
+        }
+        log += &line("blamed", ",\"id\":13,\"combination\":\"c\"");
+        log += &line("ran", ",\"combination\":\"c\",\"task\":\"t\",\"hash\":\"h\",\"outcome\":\"fail\",\"host\":\"x\"");
+        log += &line("conflict", ",\"id\":14,\"paths\":[\"p\"],\"with\":[]");
+
+        let r = recent(log.as_bytes(), RECENT).unwrap();
+        assert_eq!(r.len(), RECENT);
+        assert_eq!(r[0]["ids"][0], 5);
+        assert_eq!(r[8]["event"], "blamed");
+        assert_eq!(r[9]["event"], "conflict");
+        assert_eq!(r[9]["paths"][0], "p");
+        assert_eq!(r[9]["schema"], "sluice/log@1");
+    }
+
+    #[test]
+    fn recent_of_no_log_is_empty() {
+        assert!(recent(b"", RECENT).unwrap().is_empty());
+    }
+}
