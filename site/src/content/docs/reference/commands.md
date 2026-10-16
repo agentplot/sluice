@@ -288,7 +288,9 @@ Checks what the host's
 branch whose `remote` is on GitHub. The key reads and the app makes a
 token for the repository. The app may write the repository's contents
 and its workflows.
-Every ruleset on the branch lets the app through and nobody else. The branch is the one checked out where it
+Every ruleset on the branch lets the app through and nobody else, except
+one that only restricts creating the branch, which may let through
+whoever makes it, as [bolts on GitHub](/sluice/guides/github/#bolts-on-github) do. The branch is the one checked out where it
 runs unless it is named. It says each thing it checked, and exits `1`
 when any fails, naming which.
 

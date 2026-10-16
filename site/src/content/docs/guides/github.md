@@ -89,6 +89,40 @@ host that didn't land, and sluice moves `main` under it on the host that
 did. Keep a detached worktree at `origin/main` instead, as [worktrees
 beside sluice](/sluice/guides/worktrees/) shows.
 
+## Bolts on GitHub
+
+A bolt is a branch sluice lands on like `main`. Give its pattern a
+`remote` to keep it on GitHub too, so agents on any host can work on one:
+
+```toml
+[branches."bolt/*"]
+required = ["#check-fast"]
+remote = "origin"
+```
+
+sluice makes no branch. Whatever starts a bolt pushes it to GitHub
+first, cut from GitHub's `main`, and cuts its agents' worktrees from
+`origin/bolt/<name>`:
+
+```sh
+git push origin origin/main:refs/heads/bolt/payments
+```
+
+A submission to a bolt GitHub doesn't have yet is refused with `bolt/payments
+is not on origin; push it there first`. A host that has only fetched the
+bolt, with no local branch of it, submits to it all the same.
+
+Protect bolts with two rulesets on `bolt/*`. The first is the one above,
+for `bolt/*`: updates and force pushes restricted, sluice's app the only
+bypass. The second only restricts creations, and its bypass list holds
+whoever starts bolts. `sluice forge check bolt/payments` accepts that
+second ruleset's other bypasses, since they can make a bolt and never
+move it.
+
+Each host keeps its own queue for a bolt. The lease keeps every landing
+safe, but two hosts landing on one bolt land in the order their pushes
+reach GitHub.
+
 ## When `main` moves under the queue
 
 While the bypass is yours, before sluice has its app, your own push to

@@ -589,7 +589,7 @@ batch = true
         assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
         assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
         assert_eq!(main.remote.as_deref(), Some("origin"));
-        assert_eq!(bolt.remote, None);
+        assert_eq!(bolt.remote.as_deref(), Some("origin"));
         assert_eq!(main.pull_requests, Some(PullRequests::default()));
         assert_eq!(bolt.pull_requests, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
