@@ -88,3 +88,8 @@ copied ignored files and its template paths. sluice reads its head when
 it submits and nothing more. Submitting again from the same worktree
 withdraws that worktree's earlier submission, so an agent that fixes a
 failure and runs `wt submit` again is in the queue once.
+
+worktrunk's own worktree for the default branch is the exception: once
+sluice lands on `main`, keep no worktree on `main` or on any branch
+sluice lands on. [Worktrees beside sluice](/sluice/guides/worktrees/)
+says what to use instead.

@@ -14,7 +14,7 @@ sidebar:
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
 | `sluice withdraw <id>` | Take a submission out of the queue. |
-| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
+| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
 | `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
@@ -80,6 +80,22 @@ worktrees held until released:
 release one with: sluice release --worktree <worktree>
 ```
 
+A worktree that has checked out a branch sluice lands on is named
+too, whether sluice holds anything for it or not. sluice moves that
+branch under it and leaves its files as they were, so `git status`
+there shows each landing undone. `sluice status`, `sluice overview` and
+`sluice protect` warn of it, and in `--json` its entry carries
+`holds_queued_branch`, the branch. Nothing else changes: the landing
+goes through, and the worktree is left as it is. Look at the branch from
+a detached worktree instead; see
+[worktrees beside sluice](/sluice/guides/worktrees/).
+
+```console
+$ sluice status
+no worktree holds ports or runs here
+warning: /home/me/repo/main has main checked out: sluice moves main under it and leaves its files behind; look at it from a worktree switched with git switch --detach
+```
+
 A worktree removed without a release is no agent's. The next `sluice
 exec` on the host, or the next round, releases it as `sluice release`
 would. The policy's release command runs in the worktree's scratch
@@ -121,7 +137,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
-| `sessions[]` | the worktrees held, as `sluice status --json` lists them |
+| `sessions[]` | the worktrees held, and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
 
 `--json --watch` prints the document as one line at once, and again

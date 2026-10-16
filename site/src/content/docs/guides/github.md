@@ -84,6 +84,11 @@ off `main` is then the job of the `reference-transaction` hook that
 `sluice protect` installs, as in [branch
 protection](/sluice/guides/walkthrough/#4-branch-protection).
 
+A worktree with `main` checked out falls behind GitHub's `main` on every
+host that didn't land, and sluice moves `main` under it on the host that
+did. Keep a detached worktree at `origin/main` instead, as [worktrees
+beside sluice](/sluice/guides/worktrees/) shows.
+
 ## When `main` moves under the queue
 
 While the bypass is yours, before sluice has its app, your own push to

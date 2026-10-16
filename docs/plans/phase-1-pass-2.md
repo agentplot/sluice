@@ -128,9 +128,9 @@ needed.
   commits: no leaks; no customer, pricing or employer named). Making the
   repository public is confirmed with the operator first, telling them
   the commits carry their email and the docs absolute paths under their
-  home. After each landing, the `main` worktree is brought level with
-  `git read-tree -m -u <old> <new>`: sluice moves `main` under the
-  worktree that has it checked out.
+  home. The `main` worktree is detached at `origin/main` and moved with
+  `git switch --detach origin/main`: no worktree has `main` checked out,
+  since sluice moves it under one (ADR 0024).
 - **17, no tests of the repository's documents.** sluice's tests test
   sluice. A check that reads the statement or the source to enforce
   core.1 or core.12 is not one: those rules are kept by review.
@@ -180,12 +180,13 @@ needed.
   `Cargo.lock` and `.prototools`; moon's own cache is not kept, since it
   holds which tasks passed, not the compiled code, and nearly every push
   changes a task's inputs.
-- **Landing on `main`.** `main` moves only through sluice: from
-  `phase-2-git-state`, `SLUICE_AGENT=claude PATH="$HOME/.cargo/bin:$PATH"
-  wt submit main --no-remove`, then the `main` worktree brought level
-  (`git read-tree -m -u <old> main`), then `git push origin main`. After
-  a landing that changes sluice, `cargo install --path crates/sluice
-  --locked` in the `main` worktree and `sluice protect` upgrade the guard.
+- **Landing on `main`.** `main` moves only through sluice, which pushes
+  it to GitHub (ADR 0017): from the work's own worktree,
+  `SLUICE_AGENT=claude PATH="$HOME/.cargo/bin:$PATH" sluice submit main`.
+  The detached `main` worktree is then moved with `git fetch origin` and
+  `git switch --detach origin/main` (ADR 0024). After a landing that
+  changes sluice, `cargo install --path crates/sluice --locked` there and
+  `sluice protect` upgrade the guard.
 - **18, OpenTelemetry** (ADR 0014), as moon does it (`moon --otel`):
   opt-in with `--otel` / `SLUICE_OTEL` (`1`, `true`, `yes`, `on`), the
   service `SLUICE_OTEL_SERVICE_NAME` (default `sluice`), and the standard
@@ -430,9 +431,9 @@ Small follow-ups:
   a collector on each host. GHA sends nothing.
 
 - **crew:** export `SLUICE_AGENT=$CREW_AGENT` in its role environment;
-  the conductor brings its worktree level when its bolt's branch moves;
-  move to a design where no worktree has a bolt's branch checked out;
-  move its devenv to moon 2.6.
+  no worktree has `main` or a bolt's branch checked out, and a conductor
+  reads its bolt by ref (ADR 0024); it learns of landings and conflicts
+  from `sluice overview --json`; move its devenv to moon 2.6.
 - **The repository with the stack:** key its stack on sluice's place
   rather than its branch: every port from `SLUICE_PORT_*` instead of
   `hash_port`; container names and labels, service names and scratch
