@@ -358,3 +358,21 @@ fn a_tracked_hooks_directory_is_not_written() {
     assert!(text(&out).contains("core.hooksPath"), "{}", text(&out));
     assert!(!repo.dir().join(".githooks/reference-transaction").exists());
 }
+
+/// ADR 0024: `sluice protect` names a worktree that has checked out a
+/// branch it protects, and still succeeds.
+#[test]
+fn protect_names_a_worktree_holding_a_protected_branch() {
+    let (repo, held) = protected("protect-held");
+    let out = sl(&repo, &["protect"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let held = std::fs::canonicalize(held).unwrap();
+    assert!(
+        text(&out).contains(&format!(
+            "warning: {} has bolt/x checked out: sluice moves bolt/x under it",
+            held.display()
+        )),
+        "{}",
+        text(&out)
+    );
+}

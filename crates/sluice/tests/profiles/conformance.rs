@@ -81,6 +81,10 @@ impl Checkout for RecordedPlaces {
         self.inner.session_places()
     }
 
+    fn checked_out(&self) -> Result<Vec<sluice_seams::CheckedOut>> {
+        self.inner.checked_out()
+    }
+
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
         self.inner.save_caches(name, rev, checkout)
     }

@@ -7,12 +7,14 @@
 //! at the revision its records last saw, never fetched, so a reader that
 //! asks every second costs no remote a request.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::Serialize;
 use sluice_seams::{Rev, Snapshot};
 
 use crate::line::Line;
-use crate::policy::Rules;
+use crate::policy::{Policy, Rules};
 use crate::records::{
     parse_lines, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
 };
@@ -166,7 +168,45 @@ pub fn recent(log: &[u8], n: usize) -> Result<Vec<serde_json::Value>> {
     Ok(out.split_off(skip))
 }
 
+/// A worktree that has checked out a branch sluice lands on. sluice
+/// moves the branch under it and leaves its files as they were, so it is
+/// reported, never moved, and never stops a landing (25; ADR 0024).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Held {
+    pub worktree: PathBuf,
+    pub branch: String,
+}
+
+/// Whether sluice lands on `branch`: it has records, or `policy`, read
+/// from the branch's own revision (rule core.15), gives it a gate.
+pub fn lands_on(branch: &str, recorded: &[String], policy: Option<&Policy>) -> bool {
+    recorded.iter().any(|b| b == branch)
+        || policy.is_some_and(|p| matches!(p.rules_for(branch), Ok(Some(_))))
+}
+
 impl Sluice<'_> {
+    /// Every worktree that has checked out a branch sluice lands on, as
+    /// the place seam lists them. A read: a policy it cannot read marks
+    /// nothing.
+    pub fn held(&self) -> Result<Vec<Held>> {
+        let recorded = self.seams.state.branches()?;
+        let mut out = Vec::new();
+        for c in self.seams.checkout.checked_out()? {
+            let policy = if recorded.contains(&c.branch) {
+                None
+            } else {
+                self.policy_at(&c.head).ok().flatten()
+            };
+            if lands_on(&c.branch, &recorded, policy.as_ref()) {
+                out.push(Held {
+                    worktree: c.worktree,
+                    branch: c.branch,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// 26, 61: every branch with records, as last written, each read at
     /// the revision its records last saw.
     pub fn overview(&self) -> Result<Vec<BranchView>> {
@@ -219,6 +259,20 @@ mod tests {
         assert_eq!(r[9]["event"], "conflict");
         assert_eq!(r[9]["paths"][0], "p");
         assert_eq!(r[9]["schema"], "sluice/log@1");
+    }
+
+    #[test]
+    fn a_branch_with_records_or_a_gate_is_one_sluice_lands_on() {
+        let policy = Policy::parse(
+            "[branches.main]\nrequired = [\"#gate\"]\n[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\n",
+        )
+        .unwrap();
+        let recorded = vec!["unit/queued".to_string()];
+        assert!(lands_on("main", &[], Some(&policy)));
+        assert!(lands_on("bolt/units", &[], Some(&policy)));
+        assert!(lands_on("unit/queued", &recorded, None));
+        assert!(!lands_on("unit/mine", &recorded, Some(&policy)));
+        assert!(!lands_on("main", &[], None));
     }
 
     #[test]

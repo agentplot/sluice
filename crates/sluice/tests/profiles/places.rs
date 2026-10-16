@@ -1021,3 +1021,41 @@ fn a_name_another_preview_holds_takes_the_longer_revision() {
     p.release_preview(&format!("preview/{}", &rival[..12]), None)
         .unwrap();
 }
+
+/// ADR 0024: every worktree with a branch checked out, with its branch
+/// and head; a detached one, a candidate's place among them, is left out.
+#[test]
+fn checked_out_lists_the_worktrees_on_a_branch() {
+    let (repo, cand) = scratch("checked-out");
+    // The repository's own worktree back on main, as `<repo>/main` is.
+    repo.git(&["switch", "-q", "main"]);
+    let p = places(&repo);
+    let detached = repo.dir().with_extension("view");
+    let _ = std::fs::remove_dir_all(&detached);
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        detached.to_str().unwrap(),
+        "main",
+    ]);
+    p.materialize(NAME, &cand, &method("git-worktree")).unwrap();
+
+    let mut found = p.checked_out().unwrap();
+    found.sort_by(|a, b| a.branch.cmp(&b.branch));
+    let names: Vec<(&str, PathBuf)> = found
+        .iter()
+        .map(|c| (c.branch.as_str(), c.worktree.clone()))
+        .collect();
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap();
+    assert_eq!(
+        names,
+        vec![
+            ("main", canon(repo.dir())),
+            ("unit/a", canon(&repo.dir().with_extension("session"))),
+        ]
+    );
+    assert_eq!(found[0].head.0, repo.rev("main"));
+    p.release(NAME, false).unwrap();
+}

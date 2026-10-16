@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use sluice_core::overview::Held;
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
@@ -515,14 +516,18 @@ pub fn run(
         }
         Command::Status { target: None, json } => {
             let places = s.session_places()?;
+            let held = s.held()?;
             if json {
                 writeln!(
                     out,
                     "{}",
-                    serde_json::to_string_pretty(&worktrees_json(&places))?
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "worktrees": sessions_json(&places, &held),
+                    }))?
                 )?;
             } else {
                 write_worktrees(&places, out)?;
+                write_held(&held, out)?;
             }
             Ok(0)
         }
@@ -658,6 +663,12 @@ pub fn run(
             } else {
                 protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
                 writeln!(out, "branch protection installed")?;
+                // The hook guards the branch; a worktree holding it is
+                // only said, never moved (ADR 0024).
+                match s.held() {
+                    Ok(held) => write_held(&held, out)?,
+                    Err(e) => writeln!(out, "warning: the worktrees could not be read: {e:#}")?,
+                }
             }
             Ok(0)
         }
@@ -1245,9 +1256,46 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-fn worktrees_json(places: &[SessionPlace]) -> serde_json::Value {
-    let worktrees: Vec<serde_json::Value> = places.iter().map(worktree_json).collect();
-    serde_json::json!({ "worktrees": worktrees })
+/// ADR 0024: each worktree that has checked out a branch sluice lands
+/// on, which sluice moves under it.
+fn write_held(held: &[Held], out: &mut dyn Write) -> Result<()> {
+    for h in held {
+        writeln!(
+            out,
+            "warning: {} has {} checked out: sluice moves {} under it and leaves its files behind; \
+             look at it from a worktree switched with git switch --detach",
+            h.worktree.display(),
+            h.branch,
+            h.branch,
+        )?;
+    }
+    Ok(())
+}
+
+/// The worktrees `sluice status --json` and `sluice overview --json`
+/// list: every one sluice holds, and every one that has checked out a
+/// branch sluice lands on, which names it as `holds_queued_branch`.
+fn sessions_json(places: &[SessionPlace], held: &[Held]) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = places
+        .iter()
+        .map(|p| {
+            let mut v = worktree_json(p);
+            if let Some(h) = held.iter().find(|h| h.worktree == p.worktree) {
+                v["holds_queued_branch"] = h.branch.clone().into();
+            }
+            v
+        })
+        .collect();
+    for h in held {
+        if !places.iter().any(|p| p.worktree == h.worktree) {
+            out.push(serde_json::json!({
+                "worktree": h.worktree,
+                "branch": h.branch,
+                "holds_queued_branch": h.branch,
+            }));
+        }
+    }
+    out
 }
 
 /// One worktree sluice holds, as `sluice status --json` lists it.

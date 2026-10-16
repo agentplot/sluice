@@ -98,6 +98,16 @@ pub struct SessionPlace {
     pub gone: bool,
 }
 
+/// A worktree of the repository with a branch checked out, as the place
+/// seam lists it: none of sluice's places, which are detached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedOut {
+    pub worktree: PathBuf,
+    pub branch: String,
+    /// The revision it holds.
+    pub head: Rev,
+}
+
 /// The policy a session's place is released under, read from its
 /// branch's current revision (56, 95).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +199,11 @@ pub trait Checkout {
     /// Session-runs-1 clause 97: every session's place the repository
     /// holds, each with whether its worktree still exists.
     fn session_places(&self) -> Result<Vec<SessionPlace>>;
+
+    /// Every worktree of the repository that has a branch checked out,
+    /// with the branch and the revision it holds; a detached worktree is
+    /// left out. A read: nothing is written, moved or released.
+    fn checked_out(&self) -> Result<Vec<CheckedOut>>;
 
     /// Previews-1 clauses 98, 99: a preview named `name` holding exactly
     /// `rev`, made as a candidate's place is, with its caches and ports, and

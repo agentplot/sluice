@@ -187,7 +187,7 @@ branches, is walked through in [docs/examples](docs/examples/README.md).
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
 | `sluice withdraw <id>` | Take a submission out of the queue. |
-| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. |
+| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound; `-- <command>` runs a command instead. |
 | `sluice release` | Release this worktree: its release command, what its runs left running, its ports. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
