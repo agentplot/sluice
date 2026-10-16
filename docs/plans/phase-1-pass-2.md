@@ -327,9 +327,6 @@ needed.
 ### Open after 23 and 24
 
 Waiting on the operator:
-- A new private key for the app, the old one deleted (its 1Password
-  attachment keys were shared in a session), in the secret behind
-  `/run/secrets/vars/sluice-forge/key`.
 - The live tests of `github-app` and `pull-requests`.
 
 Small follow-ups:
