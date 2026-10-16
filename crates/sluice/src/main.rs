@@ -82,7 +82,7 @@ fn main() {
     }
     // ADR 0014: telemetry that cannot start is reported and left off.
     let telemetry = if cli.otel {
-        match Telemetry::start(&cli.otel_service_name) {
+        match Telemetry::start(&cli.otel_service_name, cli.otel_logs, cli.otel_logs_limit) {
             Ok(t) => Some(t),
             Err(e) => {
                 eprintln!("sluice: warning: telemetry off: {e:#}");
@@ -105,7 +105,7 @@ fn main() {
     ) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("sluice: {e:#}");
+            sluice::telemetry::error(&format!("sluice: {e:#}"));
             3
         }
     };

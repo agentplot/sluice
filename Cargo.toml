@@ -36,8 +36,8 @@ nix = { version = "0.31", default-features = false, features = [
   "process",
   "hostname",
 ] }
-# Telemetry (ADR 0014): the core emits tracing spans and events; the
-# binary exports them over OTLP/HTTP when asked to.
+# Telemetry (ADRs 0014, 0022): the core emits tracing spans and events;
+# the binary exports them over OTLP/HTTP when asked to.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = [
   "registry",
@@ -49,17 +49,23 @@ tracing-opentelemetry = { version = "0.34", default-features = false, features =
 opentelemetry = { version = "0.33", default-features = false, features = [
   "trace",
   "metrics",
+  "logs",
 ] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = [
   "trace",
   "metrics",
+  "logs",
 ] }
+opentelemetry-appender-tracing = { version = "0.33", default-features = false }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = [
   "trace",
   "metrics",
+  "logs",
   "http-proto",
   "reqwest-blocking-client",
 ] }
+# What a failure's output is scrubbed of before it is sent (ADR 0022).
+regex = "1"
 
 # sluice's identity on a forge: a JWT signed with the app's key (RS256)
 # and a blocking HTTPS client for the forge's API.

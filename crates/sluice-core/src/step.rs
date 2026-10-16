@@ -37,7 +37,7 @@ use crate::records::{
     OutboxItem, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
-use crate::{verdict, Serves, Sluice};
+use crate::{verdict, Serves, Sluice, OUTPUT};
 
 /// A round: how its step went, the session places it released because
 /// their worktrees no longer exist (session-runs-1 clause 97), and the
@@ -575,6 +575,27 @@ impl Sluice<'_> {
                                 .iter()
                                 .find(|k| k.task == f.task)
                                 .map(|k| k.text.clone());
+                        }
+                        // ADR 0022: the output, for telemetry to send as
+                        // its level says; the kept copy is the record.
+                        for l in &logs {
+                            let kept = kept.iter().find(|k| k.task == l.task);
+                            let replayed = report.tasks.iter().any(|t| {
+                                t.task == l.task && matches!(t.source, Source::Replayed { .. })
+                            });
+                            tracing::event!(
+                                target: OUTPUT,
+                                tracing::Level::INFO,
+                                sluice.branch = %line.branch,
+                                sluice.candidate = %c.revision,
+                                sluice.submissions = ?c.submissions,
+                                sluice.task = %l.task,
+                                sluice.kept = kept.map(|k| k.text.as_str()).unwrap_or(""),
+                                sluice.bytes = l.text.len() as u64,
+                                sluice.replayed = replayed,
+                                "{}",
+                                l.text
+                            );
                         }
                     }
                     let branch = line.branch.clone();

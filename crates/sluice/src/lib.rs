@@ -67,6 +67,25 @@ pub struct Cli {
         default_value = "sluice"
     )]
     pub otel_service_name: String,
+    /// While --otel is on, how much of a failed check's output is sent as
+    /// logs: `off`, `summary` (where it is kept, never what it says) or
+    /// `tail` (its end, scrubbed of what reads as a secret).
+    #[arg(
+        long,
+        global = true,
+        env = "SLUICE_OTEL_LOGS",
+        value_enum,
+        default_value = "summary"
+    )]
+    pub otel_logs: telemetry::Logs,
+    /// The most of a failed check's output sent at `tail`, in bytes.
+    #[arg(
+        long,
+        global = true,
+        env = "SLUICE_OTEL_LOGS_LIMIT",
+        default_value_t = 8192
+    )]
+    pub otel_logs_limit: usize,
 }
 
 #[derive(Subcommand, Debug)]
@@ -320,7 +339,7 @@ fn intake(pulls: &dyn PullRequests, seams: Seams<'_>, clock: &dyn Clock, branch:
     match pulls.intake(seams, clock, branch) {
         Ok(takes) => takes,
         Err(e) => {
-            eprintln!("sluice: warning: {e:#}");
+            telemetry::warn(&format!("sluice: warning: {e:#}"));
             true
         }
     }
@@ -461,7 +480,7 @@ pub fn run(
                 let mut branches = seams.state.branches()?;
                 match pulls.branches(seams) {
                     Ok(b) => branches.extend(b),
-                    Err(e) => eprintln!("sluice: warning: {e:#}"),
+                    Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
                 }
                 branches.sort();
                 branches.dedup();

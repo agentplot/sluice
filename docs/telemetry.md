@@ -3,14 +3,16 @@
 A brief for the repositories that set up the hosts sluice runs on (crew's
 EC2 host, swancloud and its crews, a developer's Mac). sluice sends; the
 host decides where it goes. Nothing here changes sluice. The decision is
-[ADR 0014](adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md).
+[ADR 0014](adr/0014-telemetry-is-opt-in-otlp-and-decides-nothing.md),
+and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-only-as-asked.md).
 
 ## What sluice sends
 
 - **Off unless asked**: `SLUICE_OTEL=1` (or `true`, `yes`, `on`) in the
   environment of whatever runs sluice, or `--otel` on its command line.
 - **Where**: OTLP over plain HTTP, protobuf, to `OTEL_EXPORTER_OTLP_ENDPOINT`,
-  by default `http://localhost:4318` (`/v1/traces`, `/v1/metrics`). No TLS:
+  by default `http://localhost:4318` (`/v1/traces`, `/v1/metrics`,
+  `/v1/logs`). No TLS:
   something on the host receives it and forwards it.
 - **As**: service `sluice` (`SLUICE_OTEL_SERVICE_NAME` changes it), with
   `service.version` the release's. The standard `OTEL_RESOURCE_ATTRIBUTES`
@@ -37,6 +39,27 @@ host decides where it goes. Nothing here changes sluice. The decision is
   | `sluice.candidate.tested_for` | histogram, seconds | a candidate's time under test, by `sluice.outcome` |
   | `sluice.cache.restored` | counter | a place's build cache restored, by `sluice.hit` (`key`, `last`, `none`) |
 
+- **Logs**: one record for each failed task, sent by the round that
+  reads its verdict, under that round's `sluice.verdict` span, with
+  `sluice.branch`, `sluice.candidate`, `sluice.submissions`,
+  `sluice.task`, `sluice.kept` (where its output is kept on the host),
+  `sluice.bytes` and `sluice.replayed`; one for a preview whose command
+  failed, with `sluice.preview`; and sluice's own warnings and errors.
+  How much of a failure's output goes is `SLUICE_OTEL_LOGS` (or
+  `--otel-logs`):
+
+  | Level | A failure's record carries |
+  |---|---|
+  | `off` | no logs are sent at all |
+  | `summary` (default) | which task failed and where its output is kept, never the output |
+  | `tail` | the end of the output, at most `SLUICE_OTEL_LOGS_LIMIT` bytes (8192 by default, 65536 at most) |
+
+  Every body sent is scrubbed first: the value of any variable in
+  sluice's environment whose name holds `TOKEN`, `SECRET`, `KEY`, `PASS`,
+  `AUTH`, `CREDENTIAL` or `HEADERS`, and anything shaped like a GitHub,
+  AWS, Slack or Anthropic token, a JWT, a bearer token or a private key,
+  becomes `[redacted]`. The output kept on disk is unchanged and stays
+  the record; a log record lost on the way is never sent again.
 - **The checks inside a run**: with telemetry on, a run gets sluice's
   `OTEL_*` variables, and moon runs with `--otel`, so moon's own traces
   and metrics arrive as service `moon`. moon does not nest them under
@@ -54,7 +77,17 @@ host decides where it goes. Nothing here changes sluice. The decision is
 3. **`OTEL_RESOURCE_ATTRIBUTES`** naming the host
    (`host.name=…,deployment.environment=…`), so hosts sending to one
    backend can be told apart.
-4. **No secrets in sluice's environment.** A run's checks see sluice's
+4. **`SLUICE_OTEL_LOGS`**, where sluice runs, if not `summary`:
+
+   | Host | Level |
+   |---|---|
+   | a developer's Mac, to a local viewer | `tail` |
+   | crew's EC2 host, to Datadog | `tail` only when everyone who reads the Datadog organisation may read the repository's check output; otherwise `summary` |
+   | swancloud | `summary`, until its backend's access and retention are settled |
+
+   Scrubbing lowers the chance a secret is sent; it does not rule it
+   out.
+5. **No secrets in sluice's environment.** A run's checks see sluice's
    `OTEL_*`, `OTEL_EXPORTER_OTLP_HEADERS` included. An API key belongs to
    the receiver's own configuration.
 
@@ -88,7 +121,19 @@ otlp_config:
 ```
 
 or `DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=localhost:4318` in
-the agent's environment. The API key and site are the agent's
+the agent's environment. For sluice's logs, the agent's log collection
+and its OTLP logs, also in `datadog.yaml`:
+
+```yaml
+logs_enabled: true
+otlp_config:
+  logs:
+    enabled: true
+```
+
+or `DD_LOGS_ENABLED=true` and `DD_OTLP_CONFIG_LOGS_ENABLED=true`. At
+`tail`, a Sensitive Data Scanner rule on service `sluice` is a second
+line behind sluice's own scrubbing. The API key and site are the agent's
 (`api_key`, `site`), from the host's secrets, never in a repository.
 sluice's metrics are cumulative; the agent turns counters into rates.
 
@@ -114,6 +159,7 @@ service:
   pipelines:
     traces: { receivers: [otlp], processors: [batch], exporters: [otlphttp] }
     metrics: { receivers: [otlp], processors: [batch], exporters: [otlphttp] }
+    logs: { receivers: [otlp], processors: [batch], exporters: [otlphttp] }
 ```
 
 `BACKEND_OTLP_ENDPOINT` and `BACKEND_OTLP_AUTH` are the collector's, from
@@ -131,5 +177,9 @@ sluice step <branch>      # in a repository sluice serves
   `sluice.branch` is that branch, and the metric `sluice.queue.depth`.
 - After a submission is tested with moon, it shows service `moon` with
   spans whose `sluice.trace_id` is a `sluice.round`'s trace id.
-- The host's `OTEL_RESOURCE_ATTRIBUTES` appear on both.
+- After a submission fails its gate, it shows a log record of service
+  `sluice` with `sluice.task` the failed task, whose trace id is a
+  `sluice.round`'s: at `summary` its body names where the output is
+  kept; at `tail` it is the output's end.
+- The host's `OTEL_RESOURCE_ATTRIBUTES` appear on all of them.
 - No API key appears in the environment of a session or of sluice.

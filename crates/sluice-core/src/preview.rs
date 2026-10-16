@@ -16,7 +16,7 @@ use sluice_seams::{Limits, Place, PreviewPlace, Progress, Rev, RunHandle, RunReq
 
 use crate::policy::{Policy, Preview};
 use crate::records::Event;
-use crate::Sluice;
+use crate::{Sluice, OUTPUT};
 
 /// The names of a preview begin so.
 pub const PREVIEW: &str = "preview/";
@@ -294,6 +294,19 @@ impl Sluice<'_> {
             };
             if !released && error.is_none() {
                 continue;
+            }
+            // ADR 0022: once, where the failure is kept, for telemetry.
+            if let (true, Some(output)) = (released, &failed) {
+                tracing::event!(
+                    target: OUTPUT,
+                    tracing::Level::INFO,
+                    sluice.branch = %p.branch,
+                    sluice.preview = %p.name,
+                    sluice.candidate = %p.revision,
+                    sluice.bytes = output.len() as u64,
+                    "{}",
+                    output
+                );
             }
             if released && self.seams.state.branches()?.contains(&p.branch) {
                 let now = self.now();

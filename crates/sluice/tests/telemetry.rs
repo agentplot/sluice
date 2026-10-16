@@ -1,6 +1,7 @@
-//! What a round reports while telemetry is on (ADR 0014): its spans and
-//! its metric events, over the fakes. What it decides is the same with
-//! telemetry on or off, which the CLI's tests show with it off.
+//! What a round reports while telemetry is on (ADRs 0014, 0022): its
+//! spans, its metric events and a failure's output, over the fakes. What
+//! it decides is the same with telemetry on or off, which the CLI's tests
+//! show with it off.
 
 mod support;
 
@@ -9,11 +10,13 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use sluice::{run, Cli, Pause, FAILED, LANDED};
+use sluice_core::OUTPUT;
 use sluice_fakes::Fakes;
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
 use tracing::{Event, Id, Subscriber};
 use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 
 const BRANCH: &str = "bolt/telemetry";
@@ -30,11 +33,23 @@ impl Pause for Rounds {
     }
 }
 
-/// Every span's name and every metric event's metric, in order.
+/// Every span's name, every metric event's metric and every output event
+/// as `output <task> in <span>`, in order.
 #[derive(Clone, Default)]
 struct Seen(Arc<Mutex<Vec<String>>>);
 
 struct Names<'a>(&'a mut Vec<String>);
+
+/// An output event's task.
+struct Task(String);
+
+impl Visit for Task {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "sluice.task" {
+            self.0 = format!("{value:?}");
+        }
+    }
+}
 
 impl Visit for Names<'_> {
     fn record_debug(&mut self, field: &Field, _: &dyn std::fmt::Debug) {
@@ -48,7 +63,7 @@ impl Visit for Names<'_> {
     }
 }
 
-impl<S: Subscriber> Layer<S> for Seen {
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Seen {
     fn on_new_span(&self, attrs: &Attributes<'_>, _: &Id, _: Context<'_, S>) {
         self.0
             .lock()
@@ -56,7 +71,16 @@ impl<S: Subscriber> Layer<S> for Seen {
             .push(attrs.metadata().name().to_string());
     }
 
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+    fn on_event(&self, event: &Event<'_>, cx: Context<'_, S>) {
+        if event.metadata().target() == OUTPUT {
+            let mut task = Task(String::new());
+            event.record(&mut task);
+            let span = cx.event_span(event).map(|s| s.name()).unwrap_or("none");
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("output {} in {span}", task.0));
+        }
         let mut names = Vec::new();
         event.record(&mut Names(&mut names));
         self.0.lock().unwrap().extend(names);
@@ -134,6 +158,7 @@ fn a_landing_reports_its_round_verdict_and_landing() {
         assert!(has(&seen, name), "no {name} in {seen:?}");
     }
     assert!(!has(&seen, "sluice.blame"), "{seen:?}");
+    assert!(!seen.iter().any(|s| s.starts_with("output ")), "{seen:?}");
 }
 
 #[test]
@@ -146,4 +171,7 @@ fn a_failure_reports_its_culprit() {
         assert!(has(&seen, name), "no {name} in {seen:?}");
     }
     assert!(!has(&seen, "sluice.land"), "{seen:?}");
+    // ADR 0022, 20: the failed task's output, once, in the verdict's span.
+    let outputs: Vec<&String> = seen.iter().filter(|s| s.starts_with("output ")).collect();
+    assert_eq!(outputs, ["output tests:t-a in sluice.verdict"], "{seen:?}");
 }

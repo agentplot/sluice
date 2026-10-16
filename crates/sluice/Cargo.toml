@@ -32,6 +32,8 @@ tracing-opentelemetry.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
+opentelemetry-appender-tracing.workspace = true
+regex.workspace = true
 jsonwebtoken.workspace = true
 ureq.workspace = true
 
@@ -68,6 +70,7 @@ tools = []
 [dev-dependencies]
 sluice-fakes = { path = "../sluice-fakes" }
 sluice-conformance = { path = "../sluice-conformance" }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [lib]
 doctest = false
