@@ -109,6 +109,29 @@ fn an_unreachable_remote_fails_the_read_and_the_push() {
     assert_eq!(p.read("main").unwrap(), Some(base));
 }
 
+/// A push the remote refuses names the remote's reason, which git's own
+/// error leaves out: a forge refusing an app's change to its workflows
+/// says so only there.
+#[test]
+fn a_refused_push_names_the_remotes_reason() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new("refused");
+    let bare = repo.bare_origin();
+    let hook = bare.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let base = p.read("main").unwrap().unwrap();
+    let err = p.push_branch(&head, "unit/u").unwrap_err().to_string();
+    assert!(err.contains("pre-receive hook declined"), "{err}");
+    let to = landing(&p, &base, &head);
+    let err = p.move_to("main", &base, &to).unwrap_err().to_string();
+    assert!(err.contains("pre-receive hook declined"), "{err}");
+    assert_eq!(repo.rev("main"), base.as_str());
+}
+
 /// C.7: a branch with no `remote` is local refs, exactly as before.
 #[test]
 fn the_router_keeps_a_branch_without_a_remote_local() {

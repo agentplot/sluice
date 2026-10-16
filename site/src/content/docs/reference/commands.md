@@ -202,7 +202,8 @@ lands; sent back, the worktree stays for the fix.
 Checks what the host's
 [`[forge]`](/sluice/reference/configuration/#forge) table needs for a
 branch whose `remote` is on GitHub. The key reads and the app makes a
-token for the repository. The app may write the repository's contents.
+token for the repository. The app may write the repository's contents
+and its workflows.
 Every ruleset on the branch lets the app through and nobody else. The branch is the one checked out where it
 runs unless it is named. It says each thing it checked, and exits `1`
 when any fails, naming which.
@@ -217,6 +218,7 @@ $ sluice forge check main
 ok      [forge] key /home/me/.config/sluice/app.pem reads
 ok      app 123456 makes a token for acme/widgets
 ok      the app may write acme/widgets's contents
+ok      the app may write acme/widgets's workflows
 failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 ```
 

@@ -58,7 +58,7 @@ struct Forge {
 impl Forge {
     fn new(clock: &Clock) -> Forge {
         Forge {
-            permissions: json!({ "contents": "write", "metadata": "read" }),
+            permissions: json!({ "contents": "write", "workflows": "write", "metadata": "read" }),
             rulesets: vec![(
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
@@ -174,7 +174,7 @@ fn failures(found: &[Finding]) -> Vec<&str> {
         .collect()
 }
 
-/// All set: the app is installed to write contents and is the only
+/// All set: the app is installed to write contents and workflows and is the only
 /// bypass of the branch's ruleset.
 #[test]
 fn forge_check_all_set() {
@@ -182,7 +182,7 @@ fn forge_check_all_set() {
     let fake = Forge::new(&clock).start();
     let found = check(&app(&fake, &clock), &repo(), "main", Some("operator"));
     assert!(failures(&found).is_empty(), "{found:?}");
-    assert_eq!(found.len(), 3, "{found:?}");
+    assert_eq!(found.len(), 4, "{found:?}");
 }
 
 /// A ruleset that lets the operator's role through beside the app fails,
@@ -207,7 +207,7 @@ fn forge_check_names_an_extra_bypass() {
 }
 
 /// Each other failure is named: a ruleset without the app, contents the
-/// app may only read, no ruleset at all, and no token of the operator's
+/// app may only read, workflows it may not write, no ruleset at all, and no token of the operator's
 /// or one that cannot see the bypass list.
 #[test]
 fn forge_check_names_each_failure() {
@@ -225,11 +225,22 @@ fn forge_check_names_each_failure() {
     assert!(got[0].contains("does not let app 4242 through"), "{got:?}");
 
     let mut f = Forge::new(&clock);
-    f.permissions = json!({ "contents": "read" });
+    f.permissions = json!({ "contents": "read", "workflows": "write" });
     let got = one(f, Some("operator"));
     assert_eq!(got.len(), 1, "{got:?}");
     assert!(
         got[0].contains("may not write o/r's contents (contents: read)"),
+        "{got:?}"
+    );
+
+    let mut f = Forge::new(&clock);
+    f.permissions = json!({ "contents": "write" });
+    let got = one(f, Some("operator"));
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(
+        got[0].contains(
+            "may not write o/r's workflows (workflows: none): give it Workflows read and write"
+        ),
         "{got:?}"
     );
 

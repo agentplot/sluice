@@ -39,6 +39,6 @@ Option 2 puts a person's review inside the core's chain, which lands in order: a
 
 - Each round costs one list of pull requests and, for each out of draft, its reviews, the checks on its head and sluice's check run: well inside GitHub's 5,000 requests an hour for a few dozen pull requests at a round every few seconds.
 - With no `[forge]`, intake fails with a message naming the guide that sets the app up, and the round still lands what is queued.
-- The app needs Checks, Pull requests and Contents read and write on the repository; `sluice forge check` checks only Contents.
+- The app needs Checks, Pull requests, Contents and Workflows read and write on the repository; `sluice forge check` checks only Contents and Workflows.
 - A list longer than a hundred is read page by page.
 - The live test, `SLUICE_GITHUB_TEST_REPO` with a scratch app on a scratch repository, is the operator's to run once by hand; it has not been run, since the app does not exist yet.

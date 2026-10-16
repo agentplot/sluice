@@ -26,13 +26,16 @@ Under **Repository permissions**:
 | permission | access |
 |---|---|
 | Contents | Read and write |
+| Workflows | Read and write |
 | Commit statuses | Read and write |
 | Checks | Read and write |
 | Pull requests | Read and write |
 | Metadata | Read-only |
 
-sluice needs contents to land. The statuses, checks and pull requests
-are for [pull requests](/sluice/guides/pull-requests/).
+sluice needs contents to land, and workflows to land any change under
+`.github/workflows`, since GitHub refuses an app's push of one without
+it. The statuses, checks and pull requests are for
+[pull requests](/sluice/guides/pull-requests/).
 Under **Where can this GitHub App be installed?** choose **Only on this
 account**, then **Create GitHub App**. Note the **App ID** at the top
 of the app's page.
@@ -97,6 +100,7 @@ $ sluice forge check main
 ok      [forge] key /home/me/.config/sluice/app.pem reads
 ok      app 123456 makes a token for acme/widgets
 ok      the app may write acme/widgets's contents
+ok      the app may write acme/widgets's workflows
 ok      ruleset "main" on main lets only app 123456 through
 ```
 

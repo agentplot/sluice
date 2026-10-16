@@ -327,18 +327,14 @@ needed.
 ### Open after 23 and 24
 
 Waiting on the operator:
-- The ruleset on `main`: restrict updates, block force pushes and
-  deletions, the app the only bypass. Then `sluice forge check main`
-  passes; until then anyone with write access may push `main`.
 - A new private key for the app, the old one deleted (its 1Password
-  attachment keys were shared in a session), fetched to
-  `~/.config/sluice/app.pem` with mode `0600`.
-- The live tests of `github-app` and `pull-requests`, and whether
-  sluice's own `main` takes pull requests.
+  attachment keys were shared in a session), in the secret behind
+  `/run/secrets/vars/sluice-forge/key`.
+- The live tests of `github-app` and `pull-requests`.
 
 Small follow-ups:
-- `sluice forge check` checks only the contents permission; it should
-  check checks, pull requests and statuses too, and warn of an
+- `sluice forge check` checks the contents and workflows permissions; it
+  should check checks, pull requests and statuses too, and warn of an
   installation on an account the host does not expect.
 - A pull request from a fork gets no notice of why it is not taken.
 - The `sluice` check is one summary; one check per task, and a check on
