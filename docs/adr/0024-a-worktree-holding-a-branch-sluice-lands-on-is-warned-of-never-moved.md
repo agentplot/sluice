@@ -10,7 +10,7 @@ decision-makers:
 # A worktree holding a branch sluice lands on is warned of, never moved
 
 Deciders: the user, planning how the fleet's worktrees follow what sluice lands, with crew's and swancloud's plans beside this one, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 2, 25, 50; ADRs 0010, 0011, 0017, 0018, 0020, 0023; rules core.4, core.14, core.15, core.16.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 1, 2, 25, 50; ADRs 0010, 0011, 0017, 0018, 0020, 0023; rules core.4, core.14, core.15, core.16, core.20.
 
 ## Context and problem statement
 
@@ -36,6 +36,7 @@ Option 1 writes a working copy sluice neither made nor adopted, from code a wait
 
 ### Consequences
 
+- Rule core.20 holds the decision: the core writes no working copy it neither made nor adopted.
 - The place seam gains `checked_out` and `CheckedOut`; the core gains `overview::Held`, `lands_on` and `Sluice::held`.
 - `sessions[]` of `sluice/overview@1` may hold an entry with no `ports`, `last_run` or `removed`: a worktree sluice holds nothing for. The schema's version stays, since fields are only added.
 - `overview`'s text counts as held only the worktrees sluice holds ports or runs for.
