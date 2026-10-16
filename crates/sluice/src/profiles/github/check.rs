@@ -1,7 +1,8 @@
 //! `sluice forge check` on GitHub: whether the app is set up so the
 //! branch's rules let only sluice move it (C.4 pushed refs). The app's
-//! token mints and the app may write the repository's contents; every
-//! ruleset on the branch lets the app through and nobody else.
+//! token mints and the app may write the repository's contents and
+//! workflows; every ruleset on the branch lets the app through and nobody
+//! else.
 //!
 //! GitHub shows a ruleset's bypass list only to a caller with write access
 //! to the ruleset, which the app is not given, so the rulesets are read
@@ -46,14 +47,23 @@ pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Ve
         }
     };
     match app.installation(repo) {
-        Ok(i) => match i.permissions.get("contents").map(String::as_str) {
-            Some("write") => found.push(ok(format!("the app may write {repo}'s contents"))),
-            other => found.push(failed(format!(
-                "the app may not write {repo}'s contents (contents: {}): give it \
-                 Contents read and write",
-                other.unwrap_or("none")
-            ))),
-        },
+        Ok(i) => {
+            // Contents to land at all; workflows because GitHub refuses an
+            // app's push of any change under `.github/workflows`.
+            for (key, what, grant) in [
+                ("contents", "contents", "Contents"),
+                ("workflows", "workflows", "Workflows"),
+            ] {
+                found.push(match i.permissions.get(key).map(String::as_str) {
+                    Some("write") => ok(format!("the app may write {repo}'s {what}")),
+                    other => failed(format!(
+                        "the app may not write {repo}'s {what} ({key}: {}): give it \
+                         {grant} read and write",
+                        other.unwrap_or("none")
+                    )),
+                });
+            }
+        }
         Err(e) => found.push(failed(format!("{e:#}"))),
     }
     found.extend(rules(app, repo, branch, &token, operator));
