@@ -309,6 +309,29 @@ fn the_submitter_is_the_agent_or_the_branch() {
     assert_eq!(s.status(two)["from"]["worktree"], "unit/b");
 }
 
+/// A submission names the worktree it came from by its path, and the
+/// overview lists it, read from the records with no round run.
+#[test]
+fn a_submission_names_its_worktrees_path_and_the_overview_shows_it() {
+    let s = Scratch::new("wt-path");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let path = std::fs::canonicalize(&a).unwrap();
+    assert_eq!(s.status(one)["from"]["path"], path.to_str().unwrap());
+
+    let out = s.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "sluice/overview@1");
+    let b = &v["branches"][0];
+    assert_eq!(b["branch"], "bolt/x");
+    assert_eq!(b["depth"], 1);
+    assert_eq!(b["submissions"][0]["id"], one);
+    assert_eq!(b["submissions"][0]["from"]["path"], path.to_str().unwrap());
+    let common = std::fs::canonicalize(s.repo.dir().join(".git")).unwrap();
+    assert_eq!(v["repository"], common.to_str().unwrap());
+}
+
 /// 67: a second submit from one worktree withdraws the first.
 #[test]
 fn a_resubmission_withdraws_the_first() {

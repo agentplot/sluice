@@ -265,4 +265,12 @@ impl crate::exec::Host for Bound {
         let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok((out.status.success() && !full.is_empty()).then_some(full))
     }
+
+    fn name(&self) -> String {
+        checks::hostname()
+    }
+
+    fn repository(&self) -> Result<String> {
+        Ok(self.branch.common_dir()?.to_string_lossy().into_owned())
+    }
 }

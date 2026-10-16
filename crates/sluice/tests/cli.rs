@@ -259,6 +259,202 @@ fn status_lists_the_queue() {
     assert_eq!(v["submissions"][1]["state"], "failed");
 }
 
+/// A landed #1, a blamed #2 and #3 under test, as `status_lists_the_queue`
+/// leaves them.
+fn three_submissions(f: &Fakes) {
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        f,
+        "unit/touches",
+        "crw-1-unit-1",
+        &[("plugin/lib/plan.py", Some("touched"))],
+    );
+    work(
+        f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    sluice(
+        f,
+        &["submit", BRANCH, "--worktree", "unit/touches", "--no-wait"],
+    );
+    sluice(
+        f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/batch-review",
+            "--no-wait",
+        ],
+    );
+    sluice(f, &["run", "--rounds", "6"]);
+    f.world.hold_runs(true);
+    work(
+        f,
+        "unit/forecast",
+        "crw-1-unit-3",
+        &[("plugin/other.py", Some("x"))],
+    );
+    sluice(
+        f,
+        &["submit", BRANCH, "--worktree", "unit/forecast", "--no-wait"],
+    );
+    sluice(f, &["step", BRANCH]);
+}
+
+#[test]
+fn overview_shows_every_branch_at_a_glance() {
+    let f = setup();
+    three_submissions(&f);
+
+    let (code, json) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["schema"], "sluice/overview@1");
+    assert_eq!(v["host"], "fake-host");
+    assert_eq!(v["repository"], "/fake/repo.git");
+    assert!(v["at"].is_string());
+    assert_eq!(v["sessions"], serde_json::json!([]));
+    assert_eq!(v["previews"], serde_json::json!([]));
+    let branches = v["branches"].as_array().unwrap();
+    assert_eq!(branches.len(), 1);
+    let b = &branches[0];
+    assert_eq!(b["branch"], BRANCH);
+    assert_eq!(b["at"], f.world.tip(BRANCH).0);
+    assert_eq!(b["parallel"], 4);
+    assert_eq!(b["depth"], 1);
+    assert!(b["version"].as_u64().unwrap() > 0);
+    // Only the submission still in play, as `status <id> --json` has it.
+    let subs = b["submissions"].as_array().unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0]["id"], 3);
+    assert_eq!(subs[0]["state"], "testing");
+    assert_eq!(subs[0]["from"]["worktree"], "unit/forecast");
+    let testing: Vec<&serde_json::Value> = b["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["state"] == "testing")
+        .collect();
+    assert_eq!(testing.len(), 1);
+    assert_eq!(testing[0]["submissions"], serde_json::json!([3]));
+    assert_eq!(testing[0]["targets"], serde_json::json!(["#gate"]));
+    assert!(testing[0]["started"].is_string());
+    // The log's own lines: #1 landed, #2 blamed.
+    let recent = b["recent"].as_array().unwrap();
+    let events: Vec<&str> = recent
+        .iter()
+        .map(|r| r["event"].as_str().unwrap())
+        .collect();
+    assert!(events.contains(&"landed"));
+    assert!(events.contains(&"blamed"));
+    let blamed = recent.iter().find(|r| r["event"] == "blamed").unwrap();
+    assert_eq!(blamed["id"], 2);
+    assert_eq!(blamed["schema"], "sluice/log@1");
+
+    let (code, text) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = text.lines().collect();
+    let tip = f.world.tip(BRANCH);
+    assert_eq!(
+        lines[0],
+        format!(
+            "{BRANCH} at {} · 1 in the queue · testing 1 at once (up to 4)",
+            &tip.0[..7]
+        )
+    );
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 since ")));
+}
+
+#[test]
+fn overview_of_a_repository_with_no_records_says_so() {
+    let f = setup();
+    let (code, text) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0);
+    assert_eq!(text, "no branch has records here\n");
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["branches"], serde_json::json!([]));
+}
+
+/// A pause that does `between(n)` before the `n`th wait, and stops after
+/// `rounds` of them.
+struct Between<'a> {
+    n: Cell<usize>,
+    rounds: usize,
+    between: &'a dyn Fn(usize),
+}
+
+impl Pause for Between<'_> {
+    fn pause(&self) -> bool {
+        let n = self.n.get() + 1;
+        self.n.set(n);
+        if n > self.rounds {
+            return false;
+        }
+        (self.between)(n);
+        true
+    }
+}
+
+#[test]
+fn overview_watch_prints_a_line_at_start_and_on_each_change() {
+    let f = setup();
+    work(
+        &f,
+        "unit/touches",
+        "crw-1-unit-1",
+        &[("plugin/lib/plan.py", Some("touched"))],
+    );
+    let between = |n: usize| {
+        if n == 2 {
+            sluice(
+                &f,
+                &["submit", BRANCH, "--worktree", "unit/touches", "--no-wait"],
+            );
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
+    let mut out = Vec::new();
+    let code = run(
+        cli,
+        f.seams(),
+        &support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        },
+        &(),
+        &(),
+        &f.clock,
+        &pause,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(code, sluice::STOPPED);
+    let out = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    // At the start, then once for the submission; the fake clock moves on
+    // at every read, and the time alone prints nothing.
+    assert_eq!(lines.len(), 2, "{out}");
+    let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(first["branches"], serde_json::json!([]));
+    assert_eq!(second["branches"][0]["depth"], 1);
+}
+
+#[test]
+fn watch_needs_json() {
+    assert!(Cli::try_parse_from(["sluice", "overview", "--watch"]).is_err());
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();

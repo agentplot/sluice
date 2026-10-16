@@ -81,7 +81,8 @@ starts removes it, and nothing counts it before then.
   "id": 13,
   "branch": "bolt/concurrent-units",
   "head": "8d41b6c2e5",
-  "from": { "agent": "crw-1-unit-2", "worktree": "unit/batch-review" },
+  "from": { "agent": "crw-1-unit-2", "worktree": "unit/batch-review",
+            "path": "/home/me/wt/unit-batch-review" },
   "submitted": "2026-10-11T09:16:40Z",
   "after": [],
   "priority": 0,
@@ -96,11 +97,14 @@ starts removes it, and nothing counts it before then.
 ```
 
 `after` lists submissions this one must land after. `attempt` counts how
-many times this worktree has submitted to this branch.
+many times this worktree has submitted to this branch. `from.worktree`
+is the branch the work was submitted from; `from.path` is the worktree
+itself, for a reader to match a submission to the session that made it.
+A submission written by an older sluice has no `path`.
 
 A pull request's submission comes from `pull/<n>`, its number on
 GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",
-"worktree": "pull/41" }`. Its agent is the one the pull request's
+"worktree": "pull/41" }`, with no `path`. Its agent is the one the pull request's
 description names, in the comment `sluice submit` writes there, or
 else whoever opened it. Each new commit on the pull request is a new
 submission from the same `pull/<n>`. A pull request still waiting for

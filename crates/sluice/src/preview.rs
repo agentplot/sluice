@@ -53,7 +53,7 @@ pub fn tell_dropped(out: &mut dyn Write, json: bool, dropped: &[Dropped]) -> Res
 }
 
 /// One preview as `--json` prints it.
-fn preview_json(v: &PreviewView) -> serde_json::Value {
+pub(crate) fn preview_json(v: &PreviewView) -> serde_json::Value {
     let p = &v.place;
     let mut doc = serde_json::json!({
         "name": p.name,

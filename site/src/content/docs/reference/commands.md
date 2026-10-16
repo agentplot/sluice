@@ -9,6 +9,7 @@ sidebar:
 |---|---|
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
 | `sluice status <branch>` | The queue: each submission, its agent, its worktree and its state. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
+| `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
@@ -94,6 +95,43 @@ running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
 ```
 
 Until then, `sluice status` lists it as removed.
+
+## `sluice overview`
+
+`sluice overview` shows every branch of the repository that has a
+queue, read from its state alone: it starts nothing, releases nothing
+and writes nothing, and it reads with no sluice running.
+
+```console
+$ sluice overview
+bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
+  testing bolt/concurrent-units + #13 + #14 since 2026-10-16T09:16:44Z
+  2026-10-16T09:15:02Z  landed #12 as c41e8f2
+  2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
+2 worktrees held · 0 previews
+```
+
+`--json` prints one document, `sluice/overview@1`, for a pane, a status
+line or a script. Fields are only ever added to it.
+
+| field | |
+|---|---|
+| `schema`, `host`, `repository`, `at` | the schema, the host's name, the repository's git directory, and when it was read |
+| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing) |
+| `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
+| `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
+| `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
+| `sessions[]` | the worktrees held, as `sluice status --json` lists them |
+| `previews[]` | the previews on the host, as `sluice previews --json` lists them |
+
+`--json --watch` prints the document as one line at once, and again
+each time anything in it but `at` changes, reading about once a second
+until stopped. A reader finds what happened since its last line by
+comparing `recent`. A branch's revision is the one its state last saw,
+never fetched, so a branch on a remote costs it nothing to watch.
+
+A submission's `from.path` names the worktree it came from, so a pane
+or a session can find its own submissions in the document.
 
 ## `sluice preview`
 

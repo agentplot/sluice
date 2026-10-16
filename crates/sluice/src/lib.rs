@@ -8,6 +8,7 @@
 pub mod exec;
 pub mod identity;
 pub mod instance;
+pub mod overview;
 pub mod preview;
 pub mod profiles;
 pub mod protect;
@@ -129,6 +130,16 @@ pub enum Command {
         target: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// Every branch's queue at a glance: its combinations under test, its
+    /// submissions, its latest landings and blames, and the worktrees and
+    /// previews held.
+    Overview {
+        #[arg(long)]
+        json: bool,
+        /// Print the document again, as one line, each time it changes.
+        #[arg(long, requires = "json")]
+        watch: bool,
     },
     /// Change a queued submission's order, until it is under test.
     Amend {
@@ -550,6 +561,9 @@ pub fn run(
                 Ok(0)
             }
         },
+        Command::Overview { json, watch } => {
+            overview::run(&s, host, clock, json, watch, pause, out)
+        }
         Command::Amend {
             id,
             after,
@@ -1232,17 +1246,17 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
 }
 
 fn worktrees_json(places: &[SessionPlace]) -> serde_json::Value {
-    let worktrees: Vec<serde_json::Value> = places
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "worktree": p.worktree,
-                "branch": p.branch,
-                "ports": p.ports,
-                "last_run": p.last_run,
-                "removed": p.gone,
-            })
-        })
-        .collect();
+    let worktrees: Vec<serde_json::Value> = places.iter().map(worktree_json).collect();
     serde_json::json!({ "worktrees": worktrees })
+}
+
+/// One worktree sluice holds, as `sluice status --json` lists it.
+fn worktree_json(p: &SessionPlace) -> serde_json::Value {
+    serde_json::json!({
+        "worktree": p.worktree,
+        "branch": p.branch,
+        "ports": p.ports,
+        "last_run": p.last_run,
+        "removed": p.gone,
+    })
 }
