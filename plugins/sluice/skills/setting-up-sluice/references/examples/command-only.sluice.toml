@@ -1,0 +1,10 @@
+# .config/sluice.toml: no moon, one command, one gated branch.
+
+[tests]
+runner = "command"
+command = "make test" # exit 0 passes; runs in full every time
+
+[branches.main]
+parallel = 2
+batch = true    # a slow suite: test the longest combination first
+timeout = "20m"

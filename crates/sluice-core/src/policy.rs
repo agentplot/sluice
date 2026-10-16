@@ -535,6 +535,42 @@ batch = true
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
     }
 
+    /// The Claude Code plugin's example policies read, and gate the
+    /// branches their comments say.
+    #[test]
+    fn the_plugins_example_policies_read() {
+        const DIR: &str = "../../plugins/sluice/skills/setting-up-sluice/references/examples";
+        let examples = [
+            (
+                include_str!(
+                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-minimal.sluice.toml"
+                ),
+                "main",
+            ),
+            (
+                include_str!(
+                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-worktrunk-github.sluice.toml"
+                ),
+                "main",
+            ),
+            (
+                include_str!(
+                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/command-only.sluice.toml"
+                ),
+                "main",
+            ),
+        ];
+        for (text, branch) in examples {
+            let p = Policy::parse(text).unwrap_or_else(|e| panic!("an example in {DIR}: {e:#}"));
+            assert!(p.rules_for(branch).unwrap().is_some(), "{DIR}: {branch}");
+        }
+        let full = Policy::parse(examples[1].0).unwrap();
+        assert!(full.rules_for("bolt/x").unwrap().is_some());
+        let main = full.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.remote.as_deref(), Some("origin"));
+        assert!(main.pull_requests.is_some());
+    }
+
     /// sluice's own policy reads, and gates as section 9 says: bolt
     /// branches on the fast tier from any run or the cache, `main` on
     /// every tier from sandboxed or confined runs only, deepest first,

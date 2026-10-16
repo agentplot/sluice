@@ -1,0 +1,15 @@
+# .config/sluice.toml: moon, one gated branch on this host.
+# sluice reads this file from the branch it gates, never from a submission.
+
+[tests]
+runner = "moon" # run only the required tasks a change affects
+
+[[checkout.cache]]
+key = ["bun.lock"]       # the files whose content keys the cache
+paths = ["node_modules"] # what a new checkout starts with
+
+[branches.main]
+required = ["#test"]                 # every task tagged `test` in moon.yml
+parallel = 2                         # combinations under test at once
+timeout = "15m"
+trust = ["open", "sandbox", "cache"] # moon's replays count

@@ -18,11 +18,33 @@ names the one that broke the build, and moves the branch only to code that passe
 
 </div>
 
+## Get started
+
+**With Claude Code.** At the prompt of a Claude Code session in a terminal:
+
+```
+/plugin install sluice --marketplace agentplot/sluice
+```
+
+Then ask Claude to set sluice up in your repository. It installs the
+`sluice` binary if it is missing, asking first, writes
+`.config/sluice.toml` for the tools you already use, and lands its own work
+through the queue from then on. [The Claude Code
+plugin](https://agentplot.github.io/sluice/guides/claude-code/) says what it
+does.
+
+**With herdr.** [The herdr
+plugin](https://agentplot.github.io/sluice/guides/herdr/) shows the queue
+beside your agents' panes. It is not released yet.
+
+**By hand.** [Install](#install) the binary and follow the
+[walkthrough](https://agentplot.github.io/sluice/guides/walkthrough/).
+
+## Why
+
 <p align="center">
   <img src="docs/diagrams/sluice.svg" alt="Agents submit and never merge; each candidate is tested as it would land; a failure names one culprit and tells only its agent; the branch moves only to what passed" width="820">
 </p>
-
-## Why
 
 Run ten coding agents in ten worktrees and each one's tests pass on its
 own. Merge them and the branch breaks, because nobody tested the
