@@ -324,6 +324,33 @@ needed.
   <sluice@localhost>`. Today one `[forge]` table serves every repository
   its app is installed on, the app installable on any account.
 
+### Open after 23 and 24
+
+Waiting on the operator:
+- The ruleset on `main`: restrict updates, block force pushes and
+  deletions, the app the only bypass. Then `sluice forge check main`
+  passes; until then anyone with write access may push `main`.
+- A new private key for the app, the old one deleted (its 1Password
+  attachment keys were shared in a session), fetched to
+  `~/.config/sluice/app.pem` with mode `0600`.
+- The live tests of `github-app` and `pull-requests`, and whether
+  sluice's own `main` takes pull requests.
+
+Small follow-ups:
+- `sluice forge check` checks only the contents permission; it should
+  check checks, pull requests and statuses too, and warn of an
+  installation on an account the host does not expect.
+- A pull request from a fork gets no notice of why it is not taken.
+- The `sluice` check is one summary; one check per task, and a check on
+  the landing commit, are open.
+- The design book (blueprints) still draws its diagrams in the browser;
+  the site draws them at build time. The book's pull requests chapter
+  and `proposals/pull-requests-1.md` still read "not yet built", and the
+  proposal awaits ratification into the statement.
+- Guides beyond the first five: a branch's policy, checks that need a
+  full stack, sandboxing, reading a failure, moving from a forge's merge
+  queue, many machines.
+
 ## Decisions this pass builds on
 
 - A key reads as flaky only across ran results held to the same limits
