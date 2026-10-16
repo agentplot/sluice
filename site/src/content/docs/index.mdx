@@ -88,9 +88,6 @@ curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-a
 runner = "command"          # or "moon", to run only what a change affects
 command = "make test"
 
-[checkout]
-method = "git-worktree"
-
 [branches.main]
 parallel = 4                # combinations under test at once
 ```

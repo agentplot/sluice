@@ -45,7 +45,6 @@ impl OnGitHub {
             ".config/sluice.toml",
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-                 [checkout]\nmethod = \"git-worktree\"\n\n\
                  [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n\n\
                  [branches.main.pull_requests]\n{conditions}\n"
             ),

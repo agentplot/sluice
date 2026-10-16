@@ -6,9 +6,6 @@ runner = "moon"
 # Printed outside the executor and sourced inside it (section 4).
 toolchain = ["devenv", "print-dev-env"]
 
-[checkout]
-method = "git-worktree"
-
 # A place starts from the build of the last candidate that passed with the
 # same lock file and compiler (35; section 5, Caches).
 [[checkout.cache]]

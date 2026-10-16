@@ -251,17 +251,13 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// A policy written for the fakes, with moon and git worktrees in place
-/// of `fake`.
+/// A policy written for the fakes, with moon in place of `fake`.
 fn real_policy(policy: &str) -> String {
-    policy
-        .replace("runner = \"fake\"", "runner = \"moon\"")
-        .replace("method = \"fake\"", "method = \"git-worktree\"")
+    policy.replace("runner = \"fake\"", "runner = \"moon\"")
 }
 
 impl Real {
-    /// `bolt/x` holding the three projects under `policy`, its runner and
-    /// checkout method moon and git worktrees.
+    /// `bolt/x` holding the three projects under `policy`, its runner moon.
     fn new(name: &str, policy: &str) -> Real {
         let repo = Repo::new(name);
         let rules = repo.dir().join(".git/rig-rules");
@@ -571,8 +567,8 @@ fn batch() -> String {
 /// passed combination, ran (35, 93).
 fn cached() -> String {
     bolt().replace(
-        "method = \"fake\"\n",
-        "method = \"fake\"\n\n[[checkout.cache]]\nkey = [\".moon/workspace.yml\"]\npaths = [\".moon/cache\"]\n",
+        "[checkout]\n",
+        "[checkout]\n\n[[checkout.cache]]\nkey = [\".moon/workspace.yml\"]\npaths = [\".moon/cache\"]\n",
     )
 }
 

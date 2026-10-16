@@ -125,7 +125,7 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
     let (repo, rev) = scratch("places-git");
     let before = others(&repo);
     let p = places(&repo);
-    let place = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
+    let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
     holds_the_candidate(&repo, &place, &rev);
     assert!(place
         .path
@@ -153,9 +153,9 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
 fn a_git_worktree_place_left_by_a_crash() {
     let (repo, rev) = scratch("places-git-crash");
     let p = places(&repo);
-    let first = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
+    let first = p.materialize(NAME, &rev, &Settings::new()).unwrap();
     std::fs::write(first.path.join("debris"), "x").unwrap();
-    let again = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
+    let again = p.materialize(NAME, &rev, &Settings::new()).unwrap();
     holds_the_candidate(&repo, &again, &rev);
     std::fs::remove_dir_all(&again.path).unwrap();
     p.release(NAME, false).unwrap();
@@ -168,7 +168,7 @@ fn releasing_a_place_ends_its_run() {
     let _ports = ports_lock();
     let (repo, rev) = scratch("places-run");
     let p = places(&repo);
-    let place = p.materialize(NAME, &rev, &method("git-worktree")).unwrap();
+    let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
     let r = runs(&repo);
     r.start(
         NAME,
@@ -203,18 +203,13 @@ fn releasing_a_place_ends_its_run() {
     left_behind(&repo, &place);
 }
 
-/// Section 5's acceptance test 8: a method other than `"git-worktree"`,
-/// or none, is refused before anything is made (ADR 0013).
+/// Section 5's acceptance test 8: a method other than `"git-worktree"`
+/// is refused before anything is made (ADR 0013).
 #[test]
 fn an_unknown_method_is_refused() {
     let (repo, rev) = scratch("places-method");
     let p = places(&repo);
-    for m in [
-        Settings::new(),
-        method("worktrunk"),
-        method("archive"),
-        method("rsync"),
-    ] {
+    for m in [method("worktrunk"), method("archive"), method("rsync")] {
         assert!(p.materialize(NAME, &rev, &m).is_err());
     }
     assert!(!repo
@@ -224,8 +219,22 @@ fn an_unknown_method_is_refused() {
         .exists());
 }
 
-fn cached(m: &str) -> Settings {
-    let mut s = method(m);
+/// ADR 0013, rule core.15: `[checkout]` names no method, and an older
+/// revision's policy that names the one there is still makes a place.
+#[test]
+fn a_policy_need_not_name_the_method() {
+    let (repo, rev) = scratch("places-no-method");
+    let p = places(&repo);
+    for m in [Settings::new(), method("git-worktree")] {
+        let place = p.materialize(NAME, &rev, &m).unwrap();
+        holds_the_candidate(&repo, &place, &rev);
+        p.release(NAME, false).unwrap();
+        assert!(!place.path.exists());
+    }
+}
+
+fn cached() -> Settings {
+    let mut s = Settings::new();
     s.insert(
         "cache".into(),
         Setting::Tables(vec![Settings::from([
@@ -259,7 +268,7 @@ fn locked(repo: &Repo, lock: &str) -> Rev {
 fn a_place_holds_the_caches_its_policy_declares() {
     let (repo, _) = scratch("places-cache");
     let p = places(&repo);
-    let cached = cached("git-worktree");
+    let cached = cached();
     let one = locked(&repo, "one\n");
     let built = |place: &Place| {
         std::fs::read_to_string(place.path.join("target/debug/a"))
@@ -326,7 +335,7 @@ fn a_place_holds_the_caches_its_policy_declares() {
 }
 
 fn ported(names: &[&str], from: &str) -> Settings {
-    let mut s = method("git-worktree");
+    let mut s = Settings::new();
     s.insert(
         "ports".into(),
         Setting::List(names.iter().map(|n| n.to_string()).collect()),
@@ -607,7 +616,7 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
 fn a_sessions_place_saves_its_caches_and_keeps_them() {
     let (repo, _) = scratch("places-session-cache");
     let p = places(&repo);
-    let cached = cached("git-worktree");
+    let cached = cached();
     let head = locked(&repo, "one\n");
     let wt = repo.dir().with_extension("cached");
     let _ = std::fs::remove_dir_all(&wt);

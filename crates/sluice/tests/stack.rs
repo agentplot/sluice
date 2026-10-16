@@ -68,7 +68,7 @@ const CONFIG: &str = r#"module.exports = {
 fn policy(executor: &str) -> String {
     format!(
         "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\nrelease = \"sh release.sh\"\n\n\
-         [checkout]\nmethod = \"git-worktree\"\nports = [\"web\", \"api\"]\n\n\
+         [checkout]\nports = [\"web\", \"api\"]\n\n\
          [executor]\nkind = \"{executor}\"\ndocker = true\n{network}\n\
          [branches.\"stack/*\"]\nparallel = 2\ntimeout = \"3m\"\n\n\
          [branches.\"hang/*\"]\ntimeout = \"20s\"\n",
@@ -336,7 +336,6 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
         },
     );
     let checkout = Settings::from([
-        ("method".into(), Setting::Text("git-worktree".into())),
         ("ports".into(), Setting::List(vec!["web".into()])),
         ("ports_from".into(), Setting::Text("41400".into())),
     ]);
@@ -445,7 +444,7 @@ fn a_previews_stack_stays_up_until_it_is_released() {
     repo.write(
         ".config/sluice.toml",
         "[tests]\nrunner = \"command\"\ncommand = \"true\"\nrelease = \"sh release.sh\"\n\n\
-         [checkout]\nmethod = \"git-worktree\"\nports = [\"web\"]\nports_from = \"41900\"\n\n\
+         [checkout]\nports = [\"web\"]\nports_from = \"41900\"\n\n\
          [executor]\ndocker = true\n\n\
          [branches.\"bolt/*\"]\ntimeout = \"3m\"\n\n\
          [preview]\ncommand = \"sh preview.sh\"\n\

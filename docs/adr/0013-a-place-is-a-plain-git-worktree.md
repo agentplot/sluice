@@ -30,6 +30,6 @@ The place seam keeps its interface (ADR 0003) with this one profile, which rule 
 ### Consequences
 
 - C.1 of the statement names the git worktree and the container; worktrunk is the driver alone (C.4).
-- `[checkout] method` takes `"git-worktree"`, and refuses anything else with the reason.
+- `[checkout]` names no method. A policy that still says `method = "git-worktree"`, as an older revision of a branch does, is read as before (rule core.15), and any other method is refused with the reason.
 - `.worktreeinclude` and `wt step copy-ignored` remain the repository's own, for worktrees people make; no place reads them.
 - Supersedes ADR 0009's checkout setting; its branch operations stand.

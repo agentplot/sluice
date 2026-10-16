@@ -76,7 +76,6 @@ mod bound {
     const BRANCHES: [&str; 3] = ["bolt/a", "bolt/b", "bolt/c"];
 
     const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-    [checkout]\nmethod = \"git-worktree\"\n\n\
     [branches.\"bolt/*\"]\nparallel = 4\ntimeout = \"1m\"\n";
 
     /// Each run marks itself alive in `alive/`, writes how many runs were

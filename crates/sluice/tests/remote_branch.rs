@@ -30,7 +30,6 @@ fn check(seen: &Path) -> String {
 fn policy(remote: &str) -> String {
     format!(
         "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-         [checkout]\nmethod = \"git-worktree\"\n\n\
          [branches.main]\ntimeout = \"1m\"\nremote = \"{remote}\"\n"
     )
 }

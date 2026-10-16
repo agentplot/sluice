@@ -603,11 +603,8 @@ batch = true
     /// array of tables, given no meaning here.
     #[test]
     fn reads_an_array_of_tables_for_a_profile() {
-        let p = Policy::parse(
-            "[checkout]\nmethod = \"git-worktree\"\n\
-             [[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n",
-        )
-        .unwrap();
+        let p = Policy::parse("[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n")
+            .unwrap();
         assert_eq!(
             p.checkout["cache"],
             Setting::Tables(vec![Settings::from([

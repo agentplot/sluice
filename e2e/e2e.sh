@@ -50,9 +50,6 @@ policy() { # the walkthrough's policy for bolt branches
 [tests]
 runner = "moon"
 
-[checkout]
-method = "git-worktree"
-
 [branches."bolt/*"]
 required = ["#suite"]
 parallel = 4
@@ -131,11 +128,9 @@ git switch -q bolt/s27
 # shellcheck disable=SC2016 # $SLUICE_CHECKOUT is the release command's, expanded when it runs
 sed -e 's|^runner = "moon"$|&\
 release = "test -d \\"$SLUICE_CHECKOUT\\" \&\& echo \\"$SLUICE_CHECKOUT\\" >> '"$ROOT"'/released.log"|' \
-  -e 's|^method = "git-worktree"$|&\
-ports = ["web"]\
-ports_from = 42000|' .config/sluice.toml >.config/sluice.toml.e2e
+  .config/sluice.toml >.config/sluice.toml.e2e
 mv .config/sluice.toml.e2e .config/sluice.toml
-printf '\n[preview]\ncommand = "true"\naddresses = { web = "https://{name.web}.localhost" }\n' >>.config/sluice.toml
+printf '\n[checkout]\nports = ["web"]\nports_from = 42000\n\n[preview]\ncommand = "true"\naddresses = { web = "https://{name.web}.localhost" }\n' >>.config/sluice.toml
 git commit -qam "a port, a release command and a preview for S27 and S30"
 git switch -q main
 

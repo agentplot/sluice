@@ -60,7 +60,10 @@ fn the_core_gives_the_profiles_a_policy_names_no_meaning_of_its_own() {
     for (runner, method) in [("fake", "fake"), ("another", "elsewhere")] {
         let policy = sluice_conformance::policy(false, "fail", 4)
             .replace("runner = \"fake\"", &format!("runner = \"{runner}\""))
-            .replace("method = \"fake\"", &format!("method = \"{method}\""));
+            .replace(
+                "[checkout]\n",
+                &format!("[checkout]\nmethod = \"{method}\"\n"),
+            );
         let h = Harness::new(&policy);
         h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
         let one = h.submit("unit/a");

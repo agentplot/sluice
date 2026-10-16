@@ -67,7 +67,6 @@ toolchain = ["devenv", "print-dev-env"]
 release = "scripts/preview-down"
 
 [checkout]
-method = "git-worktree"
 ports = ["web", "api", "emulator"]
 
 [preview]

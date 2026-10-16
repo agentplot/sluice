@@ -1356,8 +1356,9 @@ paths it may write that the branch's policy states").
 
 **Implements** `Checkout::materialize(name, rev) -> Place { name, path,
 tmp }` and `Checkout::release(name, passed)` in one profile, a detached
-git worktree (C.1; ADR 0013); `[checkout] method = "git-worktree"` names
-it, and any other method is refused with the reason. **Bears on** 25, 32
+git worktree (C.1; ADR 0013). `[checkout]` names no method: an older
+`method = "git-worktree"` is read as before (core.15), and any other
+method is refused with the reason. **Bears on** 25, 32
 to 35, S11; core.3, core.10, core.16; ADR 0010, ADR 0013.
 
 `materialize` makes `<common>/sluice/.tmp/<name>/` empty and returns it
@@ -1780,9 +1781,6 @@ sluice's own `.config/sluice.toml`:
 [tests]
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
-
-[checkout]
-method = "git-worktree"
 
 [[checkout.cache]]
 key = ["Cargo.lock", ".prototools"]
