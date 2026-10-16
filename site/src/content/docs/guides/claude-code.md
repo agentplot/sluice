@@ -81,6 +81,31 @@ hook already refuses a local update; the guard says why before git does,
 and covers a push to GitHub and a pull request merge, which that hook
 never sees. It needs `jq`, and lets everything through without it.
 
+## The queue in your session
+
+A second plugin, `sluice-board`, shows the queue inside the session:
+
+```
+/plugin install sluice-board --marketplace agentplot/sluice
+```
+
+While a branch has a queue, a line above the prompt reads like
+`sluice main · 3 queued · testing #12+#13 2m10s/15m · last #11 landed as 9ecc34a`,
+and the status line says where your own submissions stand. `/sluice` opens
+a pane with each branch's combinations under test, its queue with your
+submissions marked, and its recent landings, blames and conflicts, with the
+blamed tests' logs.
+
+When one of the session's submissions lands, fails or conflicts, a toast
+says so, and an idle session gets a turn telling it the outcome, which tests
+were blamed and where their logs are, so the agent can fix its work without
+being asked. The `wake` option in `/config` turns that turn off.
+
+It reads everything from `sluice overview --json --watch`, so it needs
+sluice 0.11 or later, and stays silent in a repository with no queue. It is a
+Claude Code mod, a newer and still-changing interface, which is why it is a
+plugin of its own.
+
 ## Worktrees
 
 Ask about worktrees or a bare repository and the plugin gives the layout

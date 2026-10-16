@@ -18,9 +18,9 @@ Read first: this change's proposal, design and specs; ADR 0023. Work inside
 
 ## 3. The board
 
-- [ ] 3.1 Add `plugins/sluice-board` (manifest, hooks module, state contract) and list it in the marketplace; verify `claude plugin validate plugins/sluice-board` and `tsc -p plugins/sluice-board`.
-- [ ] 3.2 Feed it from `sluice overview --json --watch`, falling back to polling; draw the band, the `/sluice` pane and the status line; verify `claude plugin test plugins/sluice-board` with a fixture document on `terminal` and `desktop`.
-- [ ] 3.3 Add the wake on `from.path`, once per outcome across reloads, behind a `wake` option; verify with a test that one blame starts one turn.
+- [x] 3.1 Add `plugins/sluice-board` (manifest, hooks module, state contract) and list it in the marketplace; verify `claude plugin validate plugins/sluice-board`, `claude plugin validate .` and `tsc` over the module and its tests with the types' tsconfig.
+- [x] 3.2 Feed it from `sluice overview --json --watch`, falling back to polling; draw the band, the `/sluice` pane and the status line; verify `claude plugin test plugins/sluice-board`: the band and the pane drawn from a fixture document on `terminal` and `desktop`, and the status line.
+- [x] 3.3 Add the wake on `from.path`, once per outcome across reloads, behind a `wake` option; verify with tests that one blame starts one turn naming the test and its log, and none with `wake` off.
 - [ ] 3.4 Try it live: two submissions to `main` tracked from testing to landed, and a failing branch's wake naming the blamed test; document it in `guides/claude-code.md`.
 
 ## 4. Drift and close
