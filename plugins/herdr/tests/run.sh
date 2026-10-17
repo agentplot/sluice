@@ -199,13 +199,16 @@ sleep 3
 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
 b=$!
 sleep 3
+# The second watcher's sources, before the first one wakes.
+theirs=$(cat "$S/run/$b"/*.pids 2>/dev/null)
+[ -n "$theirs" ] || fail "the second watcher started no source"
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
 sleep 3
 kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
 [ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
-n=$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")
-sleep 2
-[ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = "$n" ] || fail "the second watcher's source was ended and started again"
+for p in $theirs; do
+  kill -0 "$p" 2>/dev/null || fail "the first watcher's stop ended the second's source $p"
+done
 rm -f "$FAKE/hold"
 kill "$b" 2>/dev/null
 wait 2>/dev/null
