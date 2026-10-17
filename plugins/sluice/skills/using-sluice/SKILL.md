@@ -53,6 +53,16 @@ submit again to move it: a second submit from the same worktree replaces the
 first. On a pull-request branch, a waiting `sluice submit main` follows the
 pull request already open, so there it is the way to wait.
 
+A submission that sits at `queued` while another is testing is waiting its
+turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one
+on a branch with `batch = true`, which tests one run at a time. It also drops
+after failures, halving for each blamed submission and climbing back one per
+pass. The host's `[runs] max` caps every branch and every `sluice exec`
+together. Submitting again fixes none of these. If unrelated
+submissions keep failing the same check, read its log for a cause in the
+tests or the host, such as two runs writing the same directory, and tell the
+user.
+
 On a branch with `[branches."<pattern>".pull_requests]`, `submit` pushes your
 branch and opens or updates its pull request instead; the pull request joins
 the queue once its reviews and checks hold. See

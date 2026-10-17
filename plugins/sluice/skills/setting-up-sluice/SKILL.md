@@ -73,8 +73,52 @@ Then ask the user which branches sluice should gate (`main`; a family like
 The rules per branch (`required`, `parallel`, `batch`, `flaky`, `timeout`,
 `trust`) and `[landing] subject` are in the
 [configuration reference](https://agentplot.github.io/sluice/reference/configuration/#branchespattern-rules-per-target-branch).
-Defaults that suit most repositories: `flaky = "fail"`, `batch = false` on
-fast branches and `true` on slow ones, `parallel` 2 to 4.
+Leave `flaky = "fail"`.
+
+### Parallel, batch and the host's bound
+
+Never leave `parallel` and `batch` to their defaults unexamined: they decide
+how long agents wait and how much the host runs. Find out, for each gated
+branch:
+
+1. **How long its gate takes.** Time the required checks once, from CI's
+   history, the repository's own test script, or by running them.
+2. **How often submissions arrive.** Ask how many agents will submit to it.
+3. **What one run costs the host.** Tests that start containers, an
+   emulator or a database hold that stack for the whole run.
+
+Then choose, and tell the user why:
+
+| the branch | set |
+|---|---|
+| a gate of a few minutes | `batch = false`, `parallel = 2` to `4` |
+| a gate of 15 minutes or more, with several agents submitting | `batch = true`, `parallel = 4` to `8` |
+| failures expected to be common | `batch = false` |
+
+- `batch = false` tests every combination as it arrives, up to `parallel` at
+  once: each submission lands about one run after it was submitted, and it
+  costs one run per submission.
+- `batch = true` tests only the longest combination, one run at a time on the
+  branch. Submissions arriving meanwhile wait and form the next batch; no
+  timer collects them. A pass lands the whole batch; a failure costs a second
+  round, testing the shorter combinations, before the blamed submission is named.
+  `parallel` is then the largest batch.
+- One branch can't do both. Bolts and `main` can differ: `batch = false` on
+  `bolt/*` with a short gate, `batch = true` on `main` with the full one.
+- Set `timeout` to about twice the gate's usual time; the default is an hour.
+- Set the host's `[runs] max` (step 5) to how many runs the host holds at
+  once. It caps every branch together, and agents' `sluice exec` runs too.
+- Every run gets its own checkout and its own ports. Check the tests write
+  nothing outside the checkout (a fixed output directory, a lock file, a port
+  they choose themselves): two overlapping runs collide there and fail
+  unrelated submissions.
+
+After a failure sluice tests fewer at once, halving the number for each
+blamed submission and adding one back per pass; `sluice status <branch>`
+shows `testing N at once (up to M)`. A branch stuck at one is a branch whose
+submissions keep failing.
+[Parallel and batch](https://agentplot.github.io/sluice/guides/parallel-and-batch/)
+draws all of this.
 
 Complete starting points:
 [moon-minimal](references/examples/moon-minimal.sluice.toml),
