@@ -1656,6 +1656,84 @@ fn status_lists_the_worktrees_held() {
     assert_eq!(w["removed"], true);
 }
 
+/// Session-runs-1 clauses 92, 97, rule core.18: `sluice status --json`'s
+/// `worktrees[]` and `sluice overview --json`'s `sessions[]` carry the
+/// same `last_result`, beside the fields they had; `sluice status` says
+/// it on the worktree's line; a watch prints again when a run ends.
+#[test]
+fn status_and_overview_carry_a_worktrees_last_result() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let head = sluice_seams::Driver::session(&f.driver, "unit/a")
+        .unwrap()
+        .head;
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let (_, out) = sluice(&f, &["status", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let w = doc["worktrees"][0].clone();
+    let last = &w["last_result"];
+    assert_eq!(last["head"], head.0, "{w}");
+    assert_eq!(last["kind"], "checks", "{w}");
+    assert_eq!(last["outcome"], "pass", "{w}");
+    assert_eq!(last["recorded"], true, "{w}");
+    assert!(last["at"].is_string(), "{w}");
+    assert!(w["last_run"].is_string() && w["ports"].is_object(), "{w}");
+    assert_eq!(w["removed"], false, "{w}");
+    let (_, out) = sluice(&f, &["overview", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["sessions"][0], w, "{doc}");
+    let (_, out) = sluice(&f, &["status"]);
+    assert!(
+        out.contains(&format!("last result passed on {}, recorded", head.short())),
+        "{out}"
+    );
+
+    // A watch prints again when a run ends; this one unclean.
+    let between = |n: usize| {
+        if n == 2 {
+            f.world.dirty("unit/a", &["scratch"]);
+            exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
+    let mut out = Vec::new();
+    run(
+        cli,
+        f.seams(),
+        &support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        },
+        &(),
+        &(),
+        &f.clock,
+        &pause,
+        &mut out,
+    )
+    .unwrap();
+    let out = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(
+        second["sessions"][0]["last_result"]["recorded"], false,
+        "{second}"
+    );
+    let (_, out) = sluice(&f, &["status"]);
+    assert!(out.contains("last result passed on"), "{out}");
+    assert!(out.contains(", not recorded"), "{out}");
+}
+
 /// ADR 0024: a worktree that has checked out a branch sluice lands on, by
 /// its records or by a gate its policy gives it, is named in overview's
 /// `sessions[]`, in `sluice status` and by `sluice protect`'s output; a

@@ -22,8 +22,8 @@ config.
 
 ## 3. The CLI
 
-- [ ] 3.1 In `exec.rs`, call `Sluice::session_ended` on the lost and stopped paths; leave a refused run's result as it was; verify `crates/sluice/tests/exec.rs` (tools tier, real place and supervisor): `last_result` after a clean pass, an unclean pass (`recorded` false), `-- true` (`kind` `command`, `recorded` false), a timed-out run, a second run replacing the first, and none after `sluice release`.
-- [ ] 3.2 Add `last_result` to `worktree_json`, so `status --json`'s `worktrees[]` and `overview --json`'s `sessions[]` carry it, absent when `None`; add it to `write_worktrees`'s line (`last result passed on <short head>, recorded`, or `not recorded`, or `command exited 0`); verify in `crates/sluice/tests/cli.rs` over the fakes: both documents carry the same `last_result` with `last_run`, `ports` and `removed` unchanged, the text line, and `overview --json --watch` printing again when a run ends.
+- [x] 3.1 In `exec.rs`, call `Sluice::session_ended` on the lost and stopped paths; leave a refused run's result as it was; verify `crates/sluice/tests/exec.rs` (tools tier, real place and supervisor): `last_result` after a clean pass, an unclean pass (`recorded` false), `-- true` (`kind` `command`, `recorded` false), a timed-out run, a second run replacing the first, and none after `sluice release`.
+- [x] 3.2 Add `last_result` to `worktree_json`, so `status --json`'s `worktrees[]` and `overview --json`'s `sessions[]` carry it, absent when `None`; add it to `write_worktrees`'s line (`last result passed on <short head>, recorded`, or `not recorded`, or `command exited 0`); verify in `crates/sluice/tests/cli.rs` over the fakes: both documents carry the same `last_result` with `last_run`, `ports` and `removed` unchanged, the text line, and `overview --json --watch` printing again when a run ends.
 
 ## 4. Decisions and docs
 

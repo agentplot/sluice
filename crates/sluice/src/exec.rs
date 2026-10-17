@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
-use sluice_seams::{Outcome, Progress, Released, RunHandle, RunReport};
+use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport};
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
@@ -278,6 +278,12 @@ impl Exec<'_> {
             if !self.pause.pause() {
                 self.host.end_run(&run)?;
                 self.host.end_session(&worktree)?;
+                s.session_ended(
+                    &place.name,
+                    &session.head,
+                    command.is_some(),
+                    RunOutcome::Stopped,
+                )?;
                 say(out, json, "stopped: the run was ended; nothing recorded")?;
                 return Ok(STOPPED);
             }
@@ -286,6 +292,12 @@ impl Exec<'_> {
         let report = match progress {
             Progress::Finished(r) => r,
             _ => {
+                s.session_ended(
+                    &place.name,
+                    &session.head,
+                    command.is_some(),
+                    RunOutcome::Lost,
+                )?;
                 say(
                     out,
                     json,

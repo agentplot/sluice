@@ -1667,8 +1667,13 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
     for p in places {
         let ports: Vec<String> = p.ports.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let last = p.last_run.as_deref().unwrap_or("never");
+        let result = p
+            .last_result
+            .as_ref()
+            .map(|r| format!("  last result {}", last_result_text(r)))
+            .unwrap_or_default();
         let mut line = format!(
-            "  {:<ww$}  {:<bw$}  last run {last}  {}",
+            "  {:<ww$}  {:<bw$}  last run {last}{result}  {}",
             p.worktree.to_string_lossy(),
             p.branch,
             ports.join(" "),
@@ -1730,13 +1735,38 @@ fn sessions_json(places: &[SessionPlace], held: &[Held]) -> Vec<serde_json::Valu
     out
 }
 
-/// One worktree sluice holds, as `sluice status --json` lists it.
+/// How a worktree's last run ended, as `sluice status` says it: `passed
+/// on 1a2b3c4, recorded`, or a command's `command passed on 1a2b3c4`
+/// (session-runs-1 clauses 92, 97).
+fn last_result_text(r: &sluice_seams::LastResult) -> String {
+    use sluice_seams::{RunKind, RunOutcome};
+    let how = match r.outcome {
+        RunOutcome::Pass => "passed",
+        RunOutcome::Fail => "failed",
+        RunOutcome::TimedOut => "timed out",
+        RunOutcome::Lost => "lost",
+        RunOutcome::Stopped => "stopped",
+    };
+    let head = r.head.short();
+    match (r.kind, r.recorded) {
+        (RunKind::Command, _) => format!("command {how} on {head}"),
+        (RunKind::Checks, true) => format!("{how} on {head}, recorded"),
+        (RunKind::Checks, false) => format!("{how} on {head}, not recorded"),
+    }
+}
+
+/// One worktree sluice holds, as `sluice status --json` lists it; its
+/// `last_result` only once a run has ended there (97).
 fn worktree_json(p: &SessionPlace) -> serde_json::Value {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "worktree": p.worktree,
         "branch": p.branch,
         "ports": p.ports,
         "last_run": p.last_run,
         "removed": p.gone,
-    })
+    });
+    if let Some(r) = &p.last_result {
+        v["last_result"] = serde_json::json!(r);
+    }
+    v
 }
