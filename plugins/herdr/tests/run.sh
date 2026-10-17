@@ -273,15 +273,16 @@ fresh "watch: a source is known without ps's start times"
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 4 2>/dev/null &
+PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 w=$!
-within 20 '! kill -0 "$w" 2>/dev/null' &
-waiter=$!
-sleep 6
-rm -f "$FAKE/hold"
-wait "$waiter" 2>/dev/null
+# Three ticks at least, each starting with a look at herdr's panes, while
+# the source is held open.
+within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
 [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
   fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+rm -f "$FAKE/hold"
 pass
 
 fresh 'watch: a pid used again by another process is left alone'

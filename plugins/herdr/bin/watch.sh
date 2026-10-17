@@ -162,8 +162,14 @@ start() {
         eval "set -- $(printf '%s' "$argv" | jq -r 'map(@sh) | join(" ")')"
         exec "$@"
       ) &
-      remember $! "$run.pids"
-      wait
+      inner=$!
+      # Its identity once it has become the source's command: where only
+      # the command line tells processes apart, the fork's would not match.
+      (
+        sleep 1
+        remember "$inner" "$run.pids"
+      ) &
+      wait "$inner"
     } | while IFS= read -r line; do
       printf '%s\n' "$line" | sh "$root/bin/document.sh" "$name" "$where"
     done
