@@ -854,6 +854,14 @@ impl Branch for ReadOnce<'_> {
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         self.branch.move_to(branch, expected, to)
     }
+
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        self.branch.make(branch, at)
+    }
+
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        self.branch.remove(branch, expected)
+    }
 }
 
 /// `seams` with the branch read once, for one pass.

@@ -512,6 +512,14 @@ pub trait Branch {
     /// 45, 46: move the branch from exactly `expected` to `to`, all or
     /// nothing.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved>;
+
+    /// 45, 46, branches-1 104: make the branch at `at`, only while it is
+    /// absent; refused with what it holds when present.
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved>;
+
+    /// 45, 46, branches-1 105: remove the branch, only while it is at
+    /// `expected`.
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved>;
 }
 
 // ---------------------------------------------------------------------------

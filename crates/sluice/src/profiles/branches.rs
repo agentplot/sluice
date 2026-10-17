@@ -90,15 +90,20 @@ impl Branches {
         let Some(remote) = self.remote(branch)? else {
             return Ok(None);
         };
-        if let Some(p) = self.pushed.borrow().get(&remote) {
-            return Ok(Some(p.clone()));
+        Ok(Some(self.pushed(&remote, branch)?))
+    }
+
+    /// The pushed refs profile for `remote`, opened once.
+    fn pushed(&self, remote: &str, branch: &str) -> Result<Rc<PushedRefs>> {
+        if let Some(p) = self.pushed.borrow().get(remote) {
+            return Ok(p.clone());
         }
         let p = Rc::new(
-            PushedRefs::open_as(&self.dir, &remote, self.identity.clone())
+            PushedRefs::open_as(&self.dir, remote, self.identity.clone())
                 .with_context(|| format!("{branch}'s remote"))?,
         );
-        self.pushed.borrow_mut().insert(remote, p.clone());
-        Ok(Some(p))
+        self.pushed.borrow_mut().insert(remote.into(), p.clone());
+        Ok(p)
     }
 }
 
@@ -139,6 +144,22 @@ impl Branch for Branches {
         match self.route(branch)? {
             Some(p) => p.move_to(branch, expected, to),
             None => self.local.move_to(branch, expected, to),
+        }
+    }
+
+    /// A branch not yet made has no revision to read its remote from; the
+    /// policy at the revision it is made at names it.
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        match self.named(branch, at)? {
+            Some(remote) => self.pushed(&remote, branch)?.make(branch, at),
+            None => self.local.make(branch, at),
+        }
+    }
+
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        match self.route(branch)? {
+            Some(p) => p.remove(branch, expected),
+            None => self.local.remove(branch, expected),
         }
     }
 }

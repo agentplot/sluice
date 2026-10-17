@@ -226,7 +226,13 @@ fn a_refusal_under_json_is_an_error_document() {
     assert_eq!(code, CONFLICT, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["error"]["message"], "no branch bolt/none");
-    assert_eq!(v["error"]["next"], serde_json::json!(["sluice overview"]));
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([
+            "sluice branch create bolt/none --from main",
+            "sluice overview"
+        ])
+    );
 }
 
 /// What is asked about and does not exist is `not_found` under `--json`.

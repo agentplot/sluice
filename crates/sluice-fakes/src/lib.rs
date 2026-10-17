@@ -919,6 +919,25 @@ impl Branch for FakeBranch {
         }
         Ok(Moved::Moved)
     }
+
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        let mut inner = self.0 .0.borrow_mut();
+        if let Some(found) = inner.refs.get(branch) {
+            return Ok(Moved::Elsewhere(Some(found.clone())));
+        }
+        inner.refs.insert(branch.into(), at.clone());
+        Ok(Moved::Moved)
+    }
+
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        let mut inner = self.0 .0.borrow_mut();
+        let found = inner.refs.get(branch).cloned();
+        if found.as_ref() != Some(expected) {
+            return Ok(Moved::Elsewhere(found));
+        }
+        inner.refs.remove(branch);
+        Ok(Moved::Moved)
+    }
 }
 
 impl Tests for FakeTests {

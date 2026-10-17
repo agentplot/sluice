@@ -309,6 +309,44 @@ impl Branch for PushedRefs {
     /// leaves the landing for the next step to settle.
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let refspec = format!("{to}:refs/heads/{branch}");
+        let moved = self.leased(branch, expected.as_str(), &refspec)?;
+        if moved == Moved::Moved {
+            self.local.set(branch, to)?;
+        }
+        Ok(moved)
+    }
+
+    /// branches-1 104: push `at` as the branch, leased on its being absent
+    /// (`--force-with-lease=<ref>:` with nothing after the colon).
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        let refspec = format!("{at}:refs/heads/{branch}");
+        let moved = self.leased(branch, "", &refspec)?;
+        if moved == Moved::Moved {
+            self.local.set(branch, at)?;
+        }
+        Ok(moved)
+    }
+
+    /// branches-1 105: delete the remote's branch, leased on `expected`;
+    /// once it is gone, so are its local branch and remote-tracking ref.
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        let refspec = format!(":refs/heads/{branch}");
+        let moved = self.leased(branch, expected.as_str(), &refspec)?;
+        if moved == Moved::Moved {
+            self.local.delete_ref(&format!("refs/heads/{branch}"))?;
+            self.local.delete_ref(&self.tracking(branch))?;
+        }
+        Ok(moved)
+    }
+}
+
+impl PushedRefs {
+    /// Push `refspec`, accepted only while the remote's branch is
+    /// `expected`, or absent when `expected` is empty. A refusal is
+    /// reported with what the remote holds, never retried blind (rule
+    /// core.5); any other failure is an error, which leaves a landing for
+    /// the next step to settle.
+    fn leased(&self, branch: &str, expected: &str, refspec: &str) -> Result<Moved> {
         let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
         let out = self.remote_git(&[
             "push",
@@ -316,10 +354,9 @@ impl Branch for PushedRefs {
             "--no-verify",
             &lease,
             self.target(),
-            &refspec,
+            refspec,
         ])?;
         if out.status.success() {
-            self.local.set(branch, to)?;
             return Ok(Moved::Moved);
         }
         let report = String::from_utf8_lossy(&out.stdout);

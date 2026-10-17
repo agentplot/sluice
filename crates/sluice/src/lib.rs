@@ -5,6 +5,7 @@
 //! runs over the fakes in tests and over the real profiles that
 //! [`profiles`] binds.
 
+pub mod branch;
 pub mod exec;
 pub mod home;
 pub mod identity;
@@ -244,6 +245,12 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
+    /// Make or remove a branch sluice lands on, on its remote when its
+    /// policy names one (branches-1 104, 105).
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommand,
+    },
     /// sluice's identity on a forge.
     Forge {
         #[command(subcommand)]
@@ -380,6 +387,30 @@ fn intake(pulls: &dyn PullRequests, seams: Seams<'_>, clock: &dyn Clock, branch:
 }
 
 #[derive(Subcommand, Debug)]
+pub enum BranchCommand {
+    /// Make the branch at another branch's current revision, only if it
+    /// is absent and that revision's policy gives it a gate.
+    Create {
+        branch: String,
+        /// The branch sluice lands on to make it from.
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the branch, only once nothing is queued on it and its
+    /// revision has landed into another branch.
+    Delete {
+        branch: String,
+        /// The branch its work landed into.
+        #[arg(long, default_value = "main")]
+        into: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum ForgeCommand {
     /// Whether the host's [forge] identity is set up so only sluice may
     /// move the branch on its remote; exits 1 naming what is not.
@@ -454,7 +485,10 @@ impl Cli {
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
                 | Command::Preview { json, .. }
-                | Command::Previews { json },
+                | Command::Previews { json }
+                | Command::Branch {
+                    command: BranchCommand::Create { json, .. } | BranchCommand::Delete { json, .. },
+                },
             ) => *json,
             Some(_) => false,
         }
@@ -777,6 +811,7 @@ pub fn run(
             }
             Ok(0)
         }
+        Command::Branch { command } => branch::run(&s, command, out),
         Command::Forge {
             command: ForgeCommand::Check { branch },
         } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), out),
@@ -791,7 +826,7 @@ pub fn run(
     }
 }
 
-fn hashes(ids: &[u64]) -> String {
+pub(crate) fn hashes(ids: &[u64]) -> String {
     ids.iter()
         .map(|i| format!("#{i}"))
         .collect::<Vec<_>>()
@@ -812,7 +847,7 @@ fn combination(branch: &str, ids: &[u64]) -> String {
 pub(crate) fn no_branch(branch: &str, pushers: &dyn Pushers) -> Result<String> {
     Ok(match pushers.pusher(branch)? {
         Some(p) => format!(
-            "refused: {branch} is not on {r}; push it there first: git push {r} <revision>:refs/heads/{branch}",
+            "refused: {branch} is not on {r}; make it with sluice branch create {branch} --from main",
             r = p.remote
         ),
         None => format!("refused: no branch {branch}"),
@@ -855,7 +890,11 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
     match r {
         SubmitRefusal::Dirty(_) => vec![format!("sluice submit {branch}")],
         SubmitRefusal::Detached => vec![],
-        SubmitRefusal::NoBranch | SubmitRefusal::NotManaged => vec!["sluice overview".into()],
+        SubmitRefusal::NoBranch => vec![
+            format!("sluice branch create {branch} --from main"),
+            "sluice overview".into(),
+        ],
+        SubmitRefusal::NotManaged => vec!["sluice overview".into()],
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
     }
 }
