@@ -25,6 +25,12 @@ any event or popup that finds the lease older than 60 seconds.
 - **WHEN** the lease was last touched 90 seconds ago and a pane is created
 - **THEN** a new watcher starts and takes the lease
 
+#### Scenario: herdr stops
+
+- **WHEN** the herdr server the watcher was started from stops answering
+- **THEN** within two ticks the watcher and its sources stop and the lease
+  is released
+
 ### Requirement: Sources come from the user's configuration
 
 The watcher SHALL run each source in `sources.toml` in the plugin's config

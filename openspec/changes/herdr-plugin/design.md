@@ -125,7 +125,8 @@ herdr's log reader is not held open. The watcher writes its pid in the
 lease and touches it every tick; a second watcher that finds a live lease
 not its own exits. herdr 0.9.3 leaves the detached watcher running when
 the startup command ends; every event and every popup also runs
-`--ensure`, so a watcher that died is back at the next one.
+`--ensure`, so a watcher that died is back at the next one. It stops,
+with its sources, once its herdr server has not answered for two ticks.
 
 Repositories: each tick, `herdr pane list` gives every pane's
 `foreground_cwd` (else `cwd`); `git rev-parse --path-format=absolute

@@ -135,6 +135,14 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "the new watcher did not look for repositories"
 pass
 
+fresh 'watch: herdr gone'
+touch "$FAKE/down"
+began=$(date +%s)
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 10 2>/dev/null
+[ $(($(date +%s) - began)) -lt 6 ] || fail "the watcher kept going without herdr"
+[ -f "$HERDR_PLUGIN_STATE_DIR/watch.lease" ] && fail "the watcher left its lease"
+pass
+
 fresh 'watch: no configuration'
 doc >"$FAKE/overview-work.json"
 doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 12 '$work' queued)]" >"$FAKE/watch-work.jsonl"

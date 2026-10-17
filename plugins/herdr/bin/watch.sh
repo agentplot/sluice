@@ -155,7 +155,15 @@ look() {
 }
 
 i=0
+gone=0
 while [ "$ticks" -ne 0 ]; do
+  # The watcher lives as long as its herdr server: two ticks without an
+  # answer and it stops, with its sources.
+  if hd pane list >/dev/null 2>&1; then gone=0; else gone=$((gone + 1)); fi
+  if [ "$gone" -ge 2 ]; then
+    say "herdr does not answer; stopping"
+    exit 0
+  fi
   echo "$$ $(date +%s)" >"$lease"
   look
   sh "$root/bin/forecast.sh"
