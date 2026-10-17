@@ -185,6 +185,8 @@ in
   packages = [
     pkgs.git
     pkgs.jq
+    # Debian's /bin/sh, which the herdr plugin's tests also run under.
+    pkgs.dash
     pkgs.git-cliff
     proto
     worktrunk
