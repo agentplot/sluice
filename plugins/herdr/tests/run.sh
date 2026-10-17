@@ -671,9 +671,12 @@ fresh 'toasts: none when what was told cannot be kept'
 status_of 87 "$work" withdrawn '["t"]'
 status_of 53 "$work" withdrawn
 feed "$(doc)"
-chmod a-w "$S"/told.d/*
+# Unwritable even to root, as the containers run it: a file where the
+# repository's directory of told events was.
+for d in "$S"/told.d/*; do
+  rmdir "$d" && : >"$d"
+done
 for i in 1 2 3; do feed "$(doc "$blamed87 | $conflict53 | .branches[0].version = $i")"; done 2>"$t/err"
-chmod u+w "$S"/told.d/*
 hasnt 'notification show'
 [ "$(grep -c 'cannot record' "$t/err")" = 1 ] || fail "not logged once: $(cat "$t/err")"
 pass
