@@ -41,6 +41,9 @@ export default defineConfig({
         alt: 'sluice',
       },
       favicon: '/favicon.svg',
+      // The start page's hero, with the animated diagram; every other page
+      // keeps Starlight's.
+      components: { Hero: './src/components/Hero.astro' },
       // The brand of docs/brand: its colors and type over Starlight's.
       customCss: ['./src/styles/brand.css'],
       // The social card, a copy of docs/brand/social-preview.png.

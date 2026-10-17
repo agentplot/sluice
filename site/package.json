@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prebuild": "node scripts/adrs.mjs",
-    "predev": "node scripts/adrs.mjs",
+    "prebuild": "node scripts/adrs.mjs && node scripts/diagram.mjs",
+    "predev": "node scripts/adrs.mjs && node scripts/diagram.mjs",
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview"
