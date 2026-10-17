@@ -205,8 +205,13 @@ match. A push the remote refuses because someone else pushed is
 reported, and the next round tests again on the new revision. Only the
 branch is pushed: the state stays on the host. A branch without
 `remote` is a local branch, and a `remote` the repository has no remote
-of that name for lands nothing and says so. The guide
-[sluice on GitHub](/sluice/guides/github/) sets one up.
+of that name for lands nothing and says so. A branch must be on its
+remote before anything is submitted to it: `sluice branch create
+<branch> --from main` makes one there, such as a bolt, and a submission
+to a branch the remote lacks is refused saying so. A host with no local
+copy of the branch, only a fetched `origin/<branch>`, reads `remote` from
+the policy there. The guide [sluice on GitHub](/sluice/guides/github/)
+sets one up.
 
 ### `[branches."<pattern>".pull_requests]`
 
