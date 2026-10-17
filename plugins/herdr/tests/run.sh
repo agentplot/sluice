@@ -12,6 +12,12 @@ plugin=$(dirname "$here")
 # Under sluice's sandbox only SLUICE_TMP is writable beside the checkout.
 scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/sluice-herdr.XXXXXX")
 
+# A lease this run holds for a test, as a watcher of this plugin would, so
+# --ensure starts none and what the test asks of the watcher stays put.
+hold_lease() {
+  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")" >"$S/watch.lease"
+}
+
 # The pid holding a lease: the first word of its first line.
 holder_of() {
   head -1 "$1" 2>/dev/null | cut -d' ' -f1
@@ -150,8 +156,7 @@ status_of() {
 ## herdr-watch
 
 fresh 'watch: started twice'
-version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")
-printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$version" >"$S/watch.lease"
+hold_lease
 sh "$plugin/bin/watch.sh" --ensure || fail "ensure exited non-zero"
 sleep 1
 [ "$(holder_of "$S/watch.lease")" = $$ ] || fail "a second watcher took the lease"
@@ -464,6 +469,7 @@ HERDR_PLUGIN_CONTEXT_JSON=$ctx sh "$plugin/bin/status.sh" --once | grep -q '▶ 
 pass
 
 fresh 'status: a plain directory'
+hold_lease
 out=$(frame_of "$scratch/home" --once)
 printf '%s' "$out" | grep -q '^No sluice records in this repository.$' || fail "said: $out"
 echo "none $NOW" >"$S/probe/$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; sum "$1"' "$plugin/bin/x" "$(cd "$scratch/plain/.git" && pwd -P)")"
