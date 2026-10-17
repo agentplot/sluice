@@ -1,10 +1,12 @@
 # shellcheck shell=sh disable=SC2154 # common.sh sets state.
 # The lock every change to the watcher's lease is made under: a directory
-# holding its owner's pid, broken when that owner is gone. Sourced.
+# holding its owner's pid and when it took it. A lock is held for a moment
+# only, so one whose owner is gone, that has had no owner for three
+# seconds, or that is ten seconds old, is broken. Sourced.
 
 lock=$state/lease.lock
 
-# Take the lock; 1 when a live owner keeps it for three seconds.
+# Take the lock; 1 when it cannot be had.
 take_lock() {
   tries=0
   rounds=0
@@ -13,29 +15,29 @@ take_lock() {
     [ -d "$state" ] || return 1
     rounds=$((rounds + 1))
     [ "$rounds" -le 10 ] || return 1
-    owner=$(cat "$lock/pid" 2>/dev/null)
-    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-      # Its owner died holding it.
-      rm -rf "$lock"
-      continue
-    fi
-    tries=$((tries + 1))
-    if [ "$tries" -ge 3 ]; then
-      # Still no owner after three seconds: one died between taking it and
-      # writing its pid.
-      if [ -z "$owner" ]; then
+    owner=
+    since=
+    read -r owner since <"$lock/pid" 2>/dev/null
+    if [ -n "$owner" ]; then
+      if ! kill -0 "$owner" 2>/dev/null || [ $(($(date +%s) - ${since:-0})) -ge 10 ]; then
+        rm -rf "$lock"
+        continue
+      fi
+    else
+      tries=$((tries + 1))
+      if [ "$tries" -ge 3 ]; then
+        # One died between taking it and writing its pid.
         rm -rf "$lock"
         tries=0
         continue
       fi
-      return 1
     fi
     sleep 1
   done
-  echo $$ >"$lock/pid"
+  echo "$$ $(date +%s)" >"$lock/pid"
 }
 
 drop_lock() {
-  [ "$(cat "$lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$lock"
+  [ "$(cut -d' ' -f1 "$lock/pid" 2>/dev/null)" = $$ ] && rm -rf "$lock"
   return 0
 }

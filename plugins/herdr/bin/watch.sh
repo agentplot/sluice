@@ -18,33 +18,44 @@ term=${SLUICE_HERDR_LEASE:-60}
 every=$((term / 4))
 [ "$every" -ge 1 ] || every=1
 
+# The lease: the watcher's pid and when it last renewed, then the plugin
+# directory and version it runs, so a reinstall replaces it.
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/herdr-plugin.toml")
+
 fresh() {
   [ -f "$lease" ] || return 1
   read -r pid at <"$lease" || return 1
   [ $(($(date +%s) - at)) -lt "$term" ] && kill -0 "$pid" 2>/dev/null
 }
 
+# Fresh, and held by a watcher of this plugin directory and version.
+ours() {
+  fresh && [ "$(sed -n 2p "$lease")" = "$root" ] && [ "$(sed -n 3p "$lease")" = "$version" ]
+}
+
 holder() {
-  cut -d' ' -f1 "$lease" 2>/dev/null
+  head -1 "$lease" 2>/dev/null | cut -d' ' -f1
 }
 
 write_lease() {
-  echo "$$ $(date +%s)" >"$lease.tmp.$$" && mv -f "$lease.tmp.$$" "$lease"
+  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" >"$lease.tmp.$$" && mv -f "$lease.tmp.$$" "$lease"
 }
 
 # The tab-bar segment runs from the state directory, which outlives a
 # reinstall; the plugin's own directory does not.
+# Each file replaced in one step, since herdr may be running it.
 copy_segment() {
   mkdir -p "$state/segment/bin" "$state/segment/lib"
-  cp "$root/bin/segment.sh" "$state/segment/bin/segment.sh"
-  cp "$lib/common.sh" "$lib/words.jq" "$state/segment/lib/"
+  for f in bin/segment.sh lib/common.sh lib/words.jq; do
+    cp "$root/$f" "$state/segment/$f.tmp.$$" && mv -f "$state/segment/$f.tmp.$$" "$state/segment/$f"
+  done
 }
 
 case ${1:-} in
 --ensure)
   touch "$state/nudge"
-  fresh && exit 0
   copy_segment
+  ours && exit 0
   nohup sh "$root/bin/watch.sh" </dev/null >>"$state/watch.log" 2>&1 &
   exit 0
   ;;
@@ -55,10 +66,12 @@ ticks=-1
 
 # Take the lease, unless another watcher holds it.
 take_lock || exit 0
-if fresh; then
+if ours; then
   drop_lock
   exit 0
 fi
+# Another plugin directory or version's watcher gives way when it sees the
+# lease is no longer its own.
 write_lease
 drop_lock
 copy_segment

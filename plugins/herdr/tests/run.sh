@@ -12,12 +12,17 @@ plugin=$(dirname "$here")
 # Under sluice's sandbox only SLUICE_TMP is writable beside the checkout.
 scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/sluice-herdr.XXXXXX")
 
+# The pid holding a lease: the first word of its first line.
+holder_of() {
+  head -1 "$1" 2>/dev/null | cut -d' ' -f1
+}
+
 # A watcher a test started, through --ensure or itself, is ended with it:
 # only those whose lease is in this run's scratch directory.
 reap() {
   for l in "$scratch"/t*/state/watch.lease "$scratch"/t*/state/*/*/watch.lease; do
     [ -f "$l" ] || continue
-    p=$(cut -d' ' -f1 "$l")
+    p=$(holder_of "$l")
     [ -n "$p" ] && [ "$p" != $$ ] && kill "$p" 2>/dev/null
   done
   sleep 1
@@ -134,10 +139,11 @@ status_of() {
 ## herdr-watch
 
 fresh 'watch: started twice'
-echo "$$ $(date +%s)" >"$HERDR_PLUGIN_STATE_DIR/watch.lease"
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")
+printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$version" >"$HERDR_PLUGIN_STATE_DIR/watch.lease"
 sh "$plugin/bin/watch.sh" --ensure || fail "ensure exited non-zero"
 sleep 1
-[ "$(cut -d' ' -f1 "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = $$ ] || fail "a second watcher took the lease"
+[ "$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = $$ ] || fail "a second watcher took the lease"
 [ -s "$FAKE/sluice-calls" ] && fail "a second watcher ran sluice"
 pass
 
@@ -171,7 +177,7 @@ sleep 1
 if grep -q 'watching' "$HERDR_PLUGIN_STATE_DIR/watch.log" 2>/dev/null; then
   fail "a second watcher started during a long tick"
   # Only the one this test started, never another herdr's.
-  stray=$(cut -d" " -f1 "$HERDR_PLUGIN_STATE_DIR/watch.lease" 2>/dev/null)
+  stray=$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")
   [ -n "$stray" ] && [ "$stray" != "$first" ] && kill "$stray" 2>/dev/null
 fi
 pass
@@ -192,13 +198,33 @@ sleep 3
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
 sleep 3
 kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
-[ "$(cut -d" " -f1 "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
+[ "$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
 n=$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")
 sleep 2
 [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = "$n" ] || fail "the second watcher's source was ended and started again"
 rm -f "$FAKE/hold"
 kill "$b" 2>/dev/null
 wait 2>/dev/null
+pass
+
+fresh 'watch: a reinstalled plugin replaces its watcher'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+a=$!
+sleep 2
+# A reinstall is a new plugin directory, here with a segment that says so.
+again=$t/reinstalled
+cp -R "$plugin" "$again"
+echo '# reinstalled' >>"$again/bin/segment.sh"
+HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
+sleep 4
+kill -0 "$a" 2>/dev/null && fail "the old watcher kept running"
+[ "$(sed -n 2p "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$again" ] || fail "the lease is not the reinstalled watcher's: $(cat "$HERDR_PLUGIN_STATE_DIR/watch.lease")"
+grep -q '# reinstalled' "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh" || fail "the segment was not copied again"
+rm -f "$FAKE/hold"
+kill "$a" 2>/dev/null
 pass
 
 fresh 'watch: herdr gone'
