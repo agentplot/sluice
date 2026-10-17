@@ -44,3 +44,55 @@ fn help_and_version_exit_zero() {
         assert!(!out.stdout.is_empty(), "{args:?}");
     }
 }
+
+fn help(args: &[&str]) -> String {
+    let out = sluice(args);
+    assert_eq!(out.status.code(), Some(0), "{args:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
+    let text = help(&["submit", "--help"]);
+    for exit in [
+        "0    landed",
+        "1    failed",
+        "2    a conflict",
+        "3    sluice itself failed",
+        "64   a command line",
+        "130  stopped",
+    ] {
+        assert!(text.contains(exit), "{exit:?} in {text}");
+    }
+    assert!(!text.contains("--otel"), "{text}");
+}
+
+#[test]
+fn only_the_root_help_names_the_telemetry_flags() {
+    let text = help(&["--help"]);
+    for flag in [
+        "--otel ",
+        "--otel-service-name",
+        "--otel-logs ",
+        "--otel-logs-limit",
+    ] {
+        assert!(text.contains(flag), "{flag:?} in {text}");
+    }
+}
+
+#[test]
+fn a_command_still_takes_the_telemetry_flags() {
+    // Outside any repository: read past the command line, it fails as
+    // sluice (3), never as a flag it cannot read (64).
+    let dir = std::env::temp_dir();
+    let out = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .args(["submit", "main", "--check", "--otel-logs", "tail"])
+        .current_dir(&dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CEILING_DIRECTORIES", &dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+}
