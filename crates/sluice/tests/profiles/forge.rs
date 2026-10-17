@@ -385,12 +385,40 @@ fn forge_check_exits_by_what_it_finds() {
     let (code, said) = s.sluice(&["forge", "check", "main"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("no [forge] table"), "{said}");
+    let (code, said) = s.sluice(&["forge", "check", "main", "--json"]);
+    assert_eq!(code, 1, "{said}");
+    let doc: serde_json::Value = serde_json::from_str(&said).unwrap();
+    assert_eq!(
+        (&doc["branch"], &doc["ok"]),
+        (&json!("main"), &json!(false))
+    );
+    assert_eq!(doc["checks"][0]["ok"], false);
+    assert!(
+        doc["checks"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no [forge] table"),
+        "{said}"
+    );
 
     s.give_forge();
     let (code, said) = s.sluice(&["forge", "check"]);
     assert_eq!(code, 0, "{said}");
     assert!(
         said.contains(&format!("lets only app {APP} through")),
+        "{said}"
+    );
+    let (code, said) = s.sluice(&["forge", "check", "--json"]);
+    assert_eq!(code, 0, "{said}");
+    let doc: serde_json::Value = serde_json::from_str(&said).unwrap();
+    assert_eq!(doc["ok"], true);
+    let checks = doc["checks"].as_array().unwrap();
+    assert!(checks.iter().all(|c| c["ok"] == true), "{said}");
+    assert!(
+        checks.iter().any(|c| c["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("lets only app {APP} through"))),
         "{said}"
     );
 

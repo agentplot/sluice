@@ -126,72 +126,107 @@ impl Bound {
 /// `sluice forge check [<branch>]`: whether sluice's identity on the
 /// forge `branch`'s remote is on is set up so only sluice may move the
 /// branch there (C.4 pushed refs). `branch` defaults to the one checked
-/// out in `dir`. Says each thing checked; exits 1 when any fails.
-pub fn forge_check(dir: &Path, branch: Option<&str>, out: &mut dyn Write) -> Result<i32> {
-    let mut say = |ok: bool, what: &str| -> Result<()> {
-        writeln!(out, "{}  {what}", if ok { "ok    " } else { "failed" })?;
-        Ok(())
-    };
+/// out in `dir`. Says each thing checked, or with `json` one document of
+/// them; exits 1 when any fails.
+pub fn forge_check(
+    dir: &Path,
+    branch: Option<&str>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
     let branch = match branch {
         Some(b) => b.to_string(),
         None => checked_out(dir)?,
     };
+    let found = forge_findings(dir, &branch)?;
+    let ok = found.iter().all(|f| f.ok);
+    if json {
+        let checks: Vec<serde_json::Value> = found
+            .iter()
+            .map(|f| serde_json::json!({ "ok": f.ok, "message": f.what }))
+            .collect();
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({ "branch": branch, "ok": ok, "checks": checks })
+        )?;
+    } else {
+        for f in &found {
+            writeln!(
+                out,
+                "{}  {}",
+                if f.ok { "ok    " } else { "failed" },
+                f.what
+            )?;
+        }
+    }
+    Ok(if ok { 0 } else { 1 })
+}
+
+/// Each thing `sluice forge check` checks for `branch`, up to the first
+/// that stops the rest.
+fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding>> {
+    let mut found = Vec::new();
+    let mut said = |ok: bool, what: String| found.push(github::check::Finding { ok, what });
     let instance = match Instance::read() {
         Ok(i) => i,
         Err(e) => {
-            say(false, &format!("{e:#}"))?;
-            return Ok(1);
+            said(false, format!("{e:#}"));
+            return Ok(found);
         }
     };
     let Some(forge) = &instance.forge else {
-        say(
+        said(
             false,
-            "the host's config has no [forge] table: sluice pushes with this host's own credentials",
-        )?;
-        return Ok(1);
+            "the host's config has no [forge] table: sluice pushes with this host's own credentials"
+                .into(),
+        );
+        return Ok(found);
     };
     let branches = branches::Branches::open(dir)?;
-    let remote = match branches.remote(&branch)? {
+    let remote = match branches.remote(branch)? {
         Some(r) => Some(r),
         // A bolt not yet made is checked before it is: its rules on the
         // forge are read by name, and its remote from main's policy.
         None => {
-            let r = branches.remote_if_made_from(&branch, "main")?;
+            let r = branches.remote_if_made_from(branch, "main")?;
             if r.is_some() {
-                say(
+                said(
                     true,
-                    &format!("{branch} is not made yet; main's policy puts it on its remote"),
-                )?;
+                    format!("{branch} is not made yet; main's policy puts it on its remote"),
+                );
             }
             r
         }
     };
     let Some(remote) = remote else {
-        say(false, &format!("{branch}'s policy names no remote"))?;
-        return Ok(1);
+        said(false, format!("{branch}'s policy names no remote"));
+        return Ok(found);
     };
     let url = pushed_refs::remote_url(dir, &remote)?;
     let Some(repo) = github::Repo::from_url(&url) else {
-        say(
+        said(
             false,
-            &format!("{branch}'s remote {remote} ({url}) is on no forge sluice has an identity on"),
-        )?;
-        return Ok(1);
+            format!("{branch}'s remote {remote} ({url}) is on no forge sluice has an identity on"),
+        );
+        return Ok(found);
     };
     let app = match github::App::open(forge) {
         Ok(a) => a,
         Err(e) => {
-            say(false, &format!("{e:#}"))?;
-            return Ok(1);
+            said(false, format!("{e:#}"));
+            return Ok(found);
         }
     };
-    say(true, &format!("[forge] key {} reads", forge.key.display()))?;
+    said(true, format!("[forge] key {} reads", forge.key.display()));
     let operator = operator_token();
-    let found = github::check::check(&app, &repo, &branch, operator.as_deref());
-    for f in &found {
-        say(f.ok, &f.what)?;
-    }
-    Ok(if found.iter().all(|f| f.ok) { 0 } else { 1 })
+    found.extend(github::check::check(
+        &app,
+        &repo,
+        branch,
+        operator.as_deref(),
+    ));
+    Ok(found)
 }
 
 /// The branch checked out in `dir`.

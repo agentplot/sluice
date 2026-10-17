@@ -99,14 +99,15 @@ fn shim(program: &Path) -> String {
 
 /// Install sluice's hook in the repository holding `dir`, for `program`,
 /// keeping any hook already there by running it after sluice's. Writes
-/// nothing when sluice's hook for `program` is already in place.
-pub fn install(dir: &Path, program: &Path) -> Result<()> {
+/// nothing when sluice's hook for `program` is already in place, and says
+/// so with `false`.
+pub fn install(dir: &Path, program: &Path) -> Result<bool> {
     let hooks = hookdir(dir)?;
     std::fs::create_dir_all(&hooks)?;
     let hook = hooks.join(HOOK);
     let want = shim(program);
     match std::fs::read_to_string(&hook) {
-        Ok(have) if have == want => return Ok(()),
+        Ok(have) if have == want => return Ok(false),
         Ok(have) if have.lines().nth(1) == Some(MARKER) => {}
         Ok(_) => {
             let chained = hooks.join(CHAINED);
@@ -126,11 +127,12 @@ pub fn install(dir: &Path, program: &Path) -> Result<()> {
     std::fs::write(&tmp, want)?;
     std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
     std::fs::rename(&tmp, &hook)?;
-    Ok(())
+    Ok(true)
 }
 
-/// Take sluice's hook out, putting back the hook it chained.
-pub fn remove(dir: &Path) -> Result<()> {
+/// Take sluice's hook out, putting back the hook it chained; `false` when
+/// it was not in.
+pub fn remove(dir: &Path) -> Result<bool> {
     let hooks = hookdir(dir)?;
     let hook = hooks.join(HOOK);
     match std::fs::read_to_string(&hook) {
@@ -140,10 +142,10 @@ pub fn remove(dir: &Path) -> Result<()> {
             if chained.exists() {
                 std::fs::rename(&chained, &hook)?;
             }
-            Ok(())
+            Ok(true)
         }
         Ok(_) => bail!("{} is not sluice's hook", hook.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }
 }

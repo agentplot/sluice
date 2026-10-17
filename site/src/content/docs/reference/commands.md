@@ -12,18 +12,18 @@ sidebar:
 | `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it; `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. |
-| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
-| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
-| `sluice withdraw <id>` | Take a submission out of the queue. |
-| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. `--json` for scripts. |
+| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
+| `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
+| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
-| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. |
+| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
-| `sluice release <preview>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. |
+| `sluice release <preview>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. `--json` for scripts. |
 | `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
 | `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
-| `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. |
+| `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. `--json` for scripts. |
 
 ## `sluice exec`
 
@@ -371,6 +371,18 @@ JSON on stdout, one document in place of the one it would have printed:
 `kind` is `refused` (exit `2`), `not_found` (exit `1`) or `internal`
 (exit `3`, with the cause on stderr as well). `next` holds the commands
 that move it on, and is empty when there are none.
+
+The smaller commands print one line each under `--json`, and anything
+else they say goes to stderr:
+
+| Command | Document |
+|---|---|
+| `sluice step` | `{"branch","outcome","released","previews_released"}`: `outcome` is `stepped`, `busy` or `contended`; the two lists name the worktrees and previews the round released because they were gone or their command failed |
+| `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
+| `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
+| `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release |
+| `sluice protect` | `{"protection":"installed","changed","held"}`: `changed` is `false` when the hook was in place already, and `held` lists each worktree that has checked out a protected branch; with `--remove`, `{"protection":"removed","changed"}` |
+| `sluice forge check` | `{"branch","ok","checks"}`, each check with its `ok` and `message` |
 
 A submit following a pull request exits `1` as well when the pull
 request is closed without landing.

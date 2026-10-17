@@ -2,7 +2,7 @@
 
 use sluice_conformance::{shared, Harness, Rig};
 use sluice_core::records::{Event, State};
-use sluice_core::{AmendRefusal, Requester, WithdrawRefusal};
+use sluice_core::{AmendRefusal, Requester, WithdrawRefusal, Withdrew};
 
 /// satisfies: 1, 3, 30, 47
 #[test]
@@ -152,7 +152,18 @@ fn withdrawal_by_submitter_planner_or_operator_only() {
     assert_eq!(
         s.withdraw(one, &Requester::Session("agent-a".into()))
             .unwrap(),
-        Ok(())
+        Ok(Withdrew::Now)
+    );
+    // Asked again, it was withdrawn already; still not another's to ask.
+    assert_eq!(
+        s.withdraw(one, &Requester::Session("agent-a".into()))
+            .unwrap(),
+        Ok(Withdrew::Already)
+    );
+    assert_eq!(
+        s.withdraw(one, &Requester::Session("agent-b".into()))
+            .unwrap(),
+        Err(WithdrawRefusal::NotYours)
     );
     // Withdrawn while under test: its place is released and #2 is formed
     // again without it.

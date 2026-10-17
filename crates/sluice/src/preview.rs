@@ -53,6 +53,23 @@ pub fn tell_dropped(out: &mut dyn Write, json: bool, dropped: &[Dropped]) -> Res
     Ok(())
 }
 
+/// What was released because nobody could use it, as a JSON document
+/// lists it.
+pub fn dropped_json(dropped: &[Dropped]) -> Vec<serde_json::Value> {
+    dropped
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": d.name,
+                "branch": d.branch,
+                "released": d.error.is_none(),
+                "failed": d.failed.is_some(),
+                "error": d.error,
+            })
+        })
+        .collect()
+}
+
 /// One preview as `--json` prints it.
 pub(crate) fn preview_json(v: &PreviewView) -> serde_json::Value {
     let p = &v.place;
@@ -261,7 +278,13 @@ pub fn list(s: &Sluice<'_>, host: &dyn Host, json: bool, out: &mut dyn Write) ->
 /// `sluice release <preview>`: release a preview at its caller's asking
 /// (101; rule core.16). The name may be given whole, `preview/<rev>`, or
 /// as the revision.
-pub fn release(s: &Sluice<'_>, host: &dyn Host, preview: &str, out: &mut dyn Write) -> Result<i32> {
+pub fn release(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    preview: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
     let name = if preview.starts_with(sluice_core::preview::PREVIEW) {
         preview.to_string()
     } else {
@@ -276,16 +299,25 @@ pub fn release(s: &Sluice<'_>, host: &dyn Host, preview: &str, out: &mut dyn Wri
         .previews()?
         .into_iter()
         .find(|p| p.name == name);
-    if !s.release_preview(&name)? {
+    let released = s.release_preview(&name)?;
+    if released {
+        if let Some(p) = place {
+            host.end_session(&p.path.to_string_lossy())?;
+        }
+    }
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({ "preview": name, "released": released })
+        )?;
+    } else if released {
+        writeln!(
+            out,
+            "released {name}: its command's run ended, the release command run, its ports and names free"
+        )?;
+    } else {
         writeln!(out, "nothing to release")?;
-        return Ok(LANDED);
     }
-    if let Some(p) = place {
-        host.end_session(&p.path.to_string_lossy())?;
-    }
-    writeln!(
-        out,
-        "released {name}: its command's run ended, the release command run, its ports and names free"
-    )?;
     Ok(LANDED)
 }

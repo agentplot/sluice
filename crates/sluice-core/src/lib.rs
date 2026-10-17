@@ -29,7 +29,7 @@ use crate::records::{parse_lines, ResultLine};
 
 pub use ops::{
     Accepted, AmendRefusal, Forecast, Requester, Status, SubmitRefusal, SubmitRequest,
-    WithdrawRefusal,
+    WithdrawRefusal, Withdrew,
 };
 pub use step::{Round, Step};
 

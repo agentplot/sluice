@@ -29,7 +29,7 @@ use sluice_core::overview::{in_queue, Held};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
-    SubmitRequest, WithdrawRefusal,
+    SubmitRequest, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Rev, SessionPlace};
 use told::Kind;
@@ -189,6 +189,9 @@ pub enum Command {
     Step {
         /// The branch to run a round of.
         branch: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
     },
     /// Rounds for every branch with a queue, until stopped.
     #[command(after_help = "Examples:\n  $ sluice run\n  $ sluice run --rounds 1")]
@@ -239,6 +242,9 @@ pub enum Command {
         /// Who asks: `planner`, `operator`, or a session's agent.
         #[arg(long = "as", default_value = "planner")]
         by: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
     },
     /// Withdraw a submission.
     #[command(after_help = "Example:\n  $ sluice withdraw 42")]
@@ -248,6 +254,9 @@ pub enum Command {
         /// Who asks: `planner`, `operator`, or a session's agent.
         #[arg(long = "as", default_value = "operator")]
         by: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
     },
     /// Run the checks this worktree's head affects against a branch, or a
     /// command after `--`, under the host's bound, the worktree's ports
@@ -303,6 +312,9 @@ pub enum Command {
         /// The worktree to release.
         #[arg(long, default_value = ".")]
         worktree: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
     },
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
@@ -314,6 +326,9 @@ pub enum Command {
         /// Take it out instead.
         #[arg(long)]
         remove: bool,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
     },
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
@@ -502,6 +517,9 @@ pub enum ForgeCommand {
     Check {
         /// The branch; the one checked out here by default.
         branch: Option<String>,
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -571,6 +589,14 @@ impl Cli {
                 | Command::Exec { json, .. }
                 | Command::Preview { json, .. }
                 | Command::Previews { json }
+                | Command::Step { json, .. }
+                | Command::Amend { json, .. }
+                | Command::Withdraw { json, .. }
+                | Command::Release { json, .. }
+                | Command::Protect { json, .. }
+                | Command::Forge {
+                    command: ForgeCommand::Check { json, .. },
+                }
                 | Command::Branch {
                     command: BranchCommand::Create { json, .. } | BranchCommand::Delete { json, .. },
                 },
@@ -632,11 +658,29 @@ pub fn run(
                 out,
             )
         }
-        Command::Step { branch } => {
+        Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch);
             let round = s.round(&branch)?;
-            exec::tell_abandoned(out, false, &round.released)?;
-            preview::tell_dropped(out, false, &round.previews)?;
+            exec::tell_abandoned(out, json, &round.released)?;
+            preview::tell_dropped(out, json, &round.previews)?;
+            if json {
+                let outcome = match round.step {
+                    Step::Stepped => "stepped",
+                    Step::Busy => "busy",
+                    Step::Contended => "contended",
+                };
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::json!({
+                        "branch": branch,
+                        "outcome": outcome,
+                        "released": exec::abandoned_json(&round.released),
+                        "previews_released": preview::dropped_json(&round.previews),
+                    })
+                )?;
+                return Ok(0);
+            }
             let word = match round.step {
                 Step::Stepped => "stepped",
                 Step::Busy => "busy: another round holds the lock",
@@ -783,56 +827,96 @@ pub fn run(
             after,
             priority,
             by,
+            json,
         } => match s.amend(id, &requester(&by), after, priority)? {
+            Ok(()) if json => {
+                let sub = s.state(id)?.expect("a submission just amended");
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::json!({
+                        "id": id, "after": sub.after, "priority": sub.priority,
+                    })
+                )?;
+                Ok(0)
+            }
             Ok(()) => {
                 writeln!(out, "amended #{id}")?;
                 Ok(0)
             }
             Err(r) => {
-                let why = match r {
-                    AmendRefusal::NoSuchSubmission => no_submission(id),
-                    AmendRefusal::NotYours => {
-                        format!("#{id} is not {by}'s to change: {}", owner(&s, id)?)
+                let (why, next) = match r {
+                    AmendRefusal::NoSuchSubmission => {
+                        (no_submission(id), vec!["sluice overview".into()])
                     }
-                    AmendRefusal::UnderTest => format!(
-                        "#{id} is under test; its order is fixed: sluice status {id} \
-                         follows it, or sluice withdraw {id} takes it out"
+                    AmendRefusal::NotYours => (
+                        format!("#{id} is not {by}'s to change: {}", owner(&s, id)?),
+                        owner_next(&s, id, &format!("sluice amend {id}"))?,
                     ),
-                    AmendRefusal::NotQueued(st) => {
-                        format!("#{id} is {}, past changing: sluice status {id}", st.word())
-                    }
+                    AmendRefusal::UnderTest => (
+                        format!(
+                            "#{id} is under test; its order is fixed: sluice status {id} \
+                             follows it, or sluice withdraw {id} takes it out"
+                        ),
+                        vec![
+                            format!("sluice status {id}"),
+                            format!("sluice withdraw {id}"),
+                        ],
+                    ),
+                    AmendRefusal::NotQueued(st) => (
+                        format!("#{id} is {}, past changing: sluice status {id}", st.word()),
+                        vec![format!("sluice status {id}")],
+                    ),
                     AmendRefusal::UnknownAfter(ids) => {
                         let queue = match s.state(id)? {
                             Some(sub) => format!("sluice status {}", sub.branch),
                             None => "sluice overview".into(),
                         };
-                        format!(
+                        let text = format!(
                             "--after names no queued submission: {}; {queue} lists the queue",
                             hashes(&ids)
-                        )
+                        );
+                        (text, vec![queue])
                     }
                 };
-                writeln!(out, "refused: {why}")?;
+                told::tell(out, json, Kind::Refused, &format!("refused: {why}"), &next)?;
                 Ok(2)
             }
         },
-        Command::Withdraw { id, by } => match s.withdraw(id, &requester(&by))? {
-            Ok(()) => {
-                writeln!(out, "withdrew #{id}")?;
+        Command::Withdraw { id, by, json } => match s.withdraw(id, &requester(&by))? {
+            Ok(withdrew) => {
+                let already = withdrew == Withdrew::Already;
+                if json {
+                    let mut doc = serde_json::json!({ "id": id, "state": "withdrawn" });
+                    if already {
+                        doc["already"] = true.into();
+                    }
+                    writeln!(out, "{doc}")?;
+                } else if already {
+                    writeln!(out, "#{id} was already withdrawn")?;
+                } else {
+                    writeln!(out, "withdrew #{id}")?;
+                }
                 Ok(0)
             }
             Err(r) => {
-                let why = match r {
-                    WithdrawRefusal::NoSuchSubmission => no_submission(id),
-                    WithdrawRefusal::NotYours => {
-                        format!("#{id} is not {by}'s to withdraw: {}", owner(&s, id)?)
+                let (why, next) = match r {
+                    WithdrawRefusal::NoSuchSubmission => {
+                        (no_submission(id), vec!["sluice overview".into()])
                     }
-                    WithdrawRefusal::Final(st) => format!(
-                        "#{id} is {}, out of the queue already: sluice status {id}",
-                        st.word()
+                    WithdrawRefusal::NotYours => (
+                        format!("#{id} is not {by}'s to withdraw: {}", owner(&s, id)?),
+                        owner_next(&s, id, &format!("sluice withdraw {id}"))?,
+                    ),
+                    WithdrawRefusal::Final(st) => (
+                        format!(
+                            "#{id} is {}, out of the queue already: sluice status {id}",
+                            st.word()
+                        ),
+                        vec![format!("sluice status {id}")],
                     ),
                 };
-                writeln!(out, "refused: {why}")?;
+                told::tell(out, json, Kind::Refused, &format!("refused: {why}"), &next)?;
                 Ok(2)
             }
         },
@@ -872,27 +956,72 @@ pub fn run(
         Command::Previews { json } => preview::list(&s, host, json, out),
         Command::Release {
             preview: Some(name),
+            json,
             ..
-        } => preview::release(&s, host, &name, out),
+        } => preview::release(&s, host, &name, json, out),
         Command::Release {
             preview: None,
             worktree,
-        } => exec::release(&s, host, &worktree, false, out),
+            json,
+        } => {
+            let released = exec::release(&s, host, &worktree, json, out)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::json!({ "worktree": released.worktree, "released": released.released })
+                )?;
+            }
+            Ok(LANDED)
+        }
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)
         }
-        Command::Protect { remove } => {
+        Command::Protect { remove, json } => {
             let dir = std::env::current_dir()?;
             if remove {
-                protect::remove(&dir)?;
-                writeln!(out, "branch protection removed")?;
+                let removed = protect::remove(&dir)?;
+                if json {
+                    writeln!(
+                        out,
+                        "{}",
+                        serde_json::json!({ "protection": "removed", "changed": removed })
+                    )?;
+                } else {
+                    writeln!(out, "branch protection removed")?;
+                }
             } else {
-                protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
-                writeln!(out, "branch protection installed")?;
+                let installed =
+                    protect::install(&dir, &std::fs::canonicalize(std::env::current_exe()?)?)?;
                 // The hook guards the branch; a worktree holding it is
                 // only said, never moved (ADR 0024).
-                match s.held() {
+                let held = s.held();
+                if json {
+                    let held = match held {
+                        Ok(held) => held,
+                        Err(e) => {
+                            telemetry::warn(&format!(
+                                "warning: the worktrees could not be read: {e:#}"
+                            ));
+                            Vec::new()
+                        }
+                    };
+                    let held: Vec<serde_json::Value> = held
+                        .iter()
+                        .map(|h| serde_json::json!({ "worktree": h.worktree, "branch": h.branch }))
+                        .collect();
+                    writeln!(
+                        out,
+                        "{}",
+                        serde_json::json!({
+                            "protection": "installed", "changed": installed, "held": held,
+                        })
+                    )?;
+                    return Ok(0);
+                }
+                writeln!(out, "branch protection installed")?;
+                match held {
                     Ok(held) => write_held(&held, out)?,
                     Err(e) => writeln!(out, "warning: the worktrees could not be read: {e:#}")?,
                 }
@@ -901,8 +1030,8 @@ pub fn run(
         }
         Command::Branch { command } => branch::run(&s, command, out),
         Command::Forge {
-            command: ForgeCommand::Check { branch },
-        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), out),
+            command: ForgeCommand::Check { branch, json },
+        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), json, out),
         Command::Credential { operation } => {
             identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)
@@ -1241,6 +1370,19 @@ fn takes_pulls(s: &Sluice<'_>, branch: &str) -> Result<bool> {
 /// A refusal's words for a number that names no submission.
 fn no_submission(id: u64) -> String {
     format!("no submission {id}: sluice overview lists the queues")
+}
+
+/// The commands a refusal for another's submission `id` moves on with:
+/// `ask` again as its agent, or as the operator.
+fn owner_next(s: &Sluice<'_>, id: u64, ask: &str) -> Result<Vec<String>> {
+    let agent = match s.state(id)? {
+        Some(sub) => sub.from.agent,
+        None => "<agent>".into(),
+    };
+    Ok(vec![
+        format!("{ask} --as {agent}"),
+        format!("{ask} --as operator"),
+    ])
 }
 
 /// Who may ask for submission `id`'s change, for a refusal to say.
