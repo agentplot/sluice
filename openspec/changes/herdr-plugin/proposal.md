@@ -42,6 +42,8 @@ released.
   or the branch's version changes.
 - **Tab-bar segment.** A command for herdr's `tab_bar_right` printing the
   focused repository's queue in one line, worded as the board's band.
+- The Claude Code board's `/sluice` pane (`plugins/sluice-board`) heads
+  the same three groups TESTING, QUEUED and RECENT, so the two read alike.
 - A `setup` action that shows the snippets to add to herdr's config (the
   key, the sidebar rows, the tab-bar segment); the plugin edits no config.
 - Tests: a harness with stand-in `herdr` and `sluice` on `PATH` replaying
@@ -77,14 +79,16 @@ Out of scope, and what each waits on:
   token.
 
 ### Modified Capabilities
-<!-- none -->
+- `plugin-board`: the `/sluice` pane's groups are headed TESTING, QUEUED
+  and RECENT.
 
 ## Impact
 
 - New: `plugins/herdr/` (manifest, POSIX sh scripts, README, tests and
   recorded documents).
 - Changed: `moon.yml` gains the task `plugin-herdr`; the site's
-  `guides/herdr.md`.
+  `guides/herdr.md`; the board's pane in
+  `plugins/sluice-board/hooks/register.tsx` and its tests.
 - Nothing under `crates/` changes; no crate imports `plugins/` and nothing
   under `crates/` names herdr (core.1, ADR 0023). The plugin reads the queue
   only through `sluice overview` and `sluice status <id> --json`, and

@@ -180,7 +180,8 @@ durations `2m10s`, limits `15m`, combinations `main+#12+#13`, `▶ testing`,
 `formed, not running:`, `✓ 19:41 #11 landed as 9ecc34a`, `✗ … blamed on`,
 `⚠ … conflict ·`, `N worktrees held · N previews`; the segment is the
 board's band line. The popup groups them under TESTING, QUEUED and
-RECENT, in the order the board's pane draws them. Sidebar tokens round to
+RECENT, in the order the board's pane draws them, and the board's pane
+carries the same three headings. Sidebar tokens round to
 whole minutes (`3m/15m`), since they are refreshed every tick, not every
 second. The words are in one file, `lib/words.sh`, and the tests hold them
 to the board's fixture.
@@ -233,9 +234,3 @@ spec.
 
 New plugin; nothing to migrate. Rollback is `herdr plugin uninstall
 agentplot.sluice`; its tokens expire on their own.
-
-## Open Questions
-
-- Whether `sluice_q` should count every branch's submissions or only the
-  branch the workspace's panes submit to; the first is built, and the spec
-  says so.

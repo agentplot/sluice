@@ -12,8 +12,8 @@ bar, all read from the watcher's state.
 
 The `status` action SHALL open a popup for the focused pane's repository
 listing, per branch, TESTING (each combination under test with its tests
-and elapsed time against its limit), QUEUED (the submissions not under
-test) and RECENT (the latest landings, blames and conflicts), worded as the
+and elapsed time against its limit), QUEUED (the submissions in the queue
+with their states) and RECENT (the latest landings, blames and conflicts), worded as the
 Claude Code board's `/sluice` pane.
 
 #### Scenario: Testing
