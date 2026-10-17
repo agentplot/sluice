@@ -564,12 +564,16 @@ impl Places {
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
-        let blocks = self.blocks()?;
         if let Some(n) = block {
-            free_block(&blocks, n, &self.record(name))?;
+            free_block(&self.blocks()?, n, &self.record(name))?;
         }
-        // Under the lock `ran` writes under.
-        let _lock = lock_blocks(&blocks)?;
+        // A session's record is removed under the lock `ran` writes it
+        // under. Only a session's: a candidate's place, whose checks may run
+        // where the host's state cannot be written, never takes it.
+        let _lock = match crate::runs::is_session(name) {
+            true => Some(lock_blocks(&self.blocks()?)?),
+            false => None,
+        };
         match std::fs::remove_file(self.record(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
@@ -1398,6 +1402,25 @@ mod tests {
             outcome: RunOutcome::Pass,
             recorded: true,
         }
+    }
+
+    /// A candidate's place with no ports is released without touching the
+    /// host's blocks of ports, which its checks' sandbox may not reach.
+    #[test]
+    fn a_candidates_release_never_takes_the_hosts_lock() {
+        let root = std::env::temp_dir().join(format!("sluice-let-go-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("not-a-dir"), "").unwrap();
+        let places = Places::new(&root, Runs::new(&root, "sluice".into()))
+            .with_blocks(root.join("not-a-dir/blocks"));
+        let name = "try/main/90";
+        places
+            .write_record(name, &Made::new(Kind::Made, "worktree"))
+            .unwrap();
+        places.let_go(name, None).unwrap();
+        assert!(!places.record(name).exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// 95, 97: a result kept as a release removes the place's record waits
