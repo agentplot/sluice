@@ -81,11 +81,20 @@ pub enum AmendRefusal {
     UnknownAfter(Vec<u64>),
 }
 
+/// How a withdrawal went: done now, or done before (5, 48).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Withdrew {
+    Now,
+    /// Withdrawn already: it left the queue by withdrawal, so asking again
+    /// changes nothing and writes nothing.
+    Already,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WithdrawRefusal {
     NoSuchSubmission,
     NotYours,
-    /// Landed, landing or withdrawn already (5).
+    /// Landed or landing (5).
     Final(State),
 }
 
@@ -372,13 +381,25 @@ impl Sluice<'_> {
 
     /// 48, 5: withdraw a submission, by its submitter, its planner or the
     /// operator.
-    pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<(), WithdrawRefusal>> {
+    pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<Withdrew, WithdrawRefusal>> {
         let Some(branch) = self.find(id)? else {
             return Ok(Err(WithdrawRefusal::NoSuchSubmission));
         };
-        if let Some(s) = self.only_finished(&branch, id)? {
+        // Withdrawn or landed is final (5): answered from the records, with
+        // no lock taken and nothing written. One withdrawn already was asked
+        // for before, so asking again changes nothing.
+        let line = self.read_line(&branch)?;
+        let done = match line.subs.get(&id) {
+            Some(s) => (s.state == State::Withdrawn).then(|| s.clone()),
+            None if line.finished.contains_key(&id) => self.finished_sub(&branch, id)?,
+            None => None,
+        };
+        if let Some(s) = done {
             if !by.may_change(&s) {
                 return Ok(Err(WithdrawRefusal::NotYours));
+            }
+            if s.state == State::Withdrawn {
+                return Ok(Ok(Withdrew::Already));
             }
             return Ok(Err(WithdrawRefusal::Final(s.state)));
         }
@@ -388,6 +409,10 @@ impl Sluice<'_> {
             let s = l.sub(id)?.clone();
             if !by.may_change(&s) {
                 return Ok(Err(WithdrawRefusal::NotYours));
+            }
+            // Withdrawn since the read above.
+            if s.state == State::Withdrawn {
+                return Ok(Ok(Withdrew::Already));
             }
             if s.state.is_final() || s.state == State::Landing {
                 return Ok(Err(WithdrawRefusal::Final(s.state)));
@@ -399,7 +424,7 @@ impl Sluice<'_> {
                 at: now.clone(),
             });
             l.log(&now, Event::Withdrawn { id, by: by.word() });
-            Ok(Ok(()))
+            Ok(Ok(Withdrew::Now))
         })
     }
 

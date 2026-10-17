@@ -37,16 +37,22 @@ fn main() {
     // The forge check reads the host's config itself, and says what in it
     // is wrong rather than failing on it.
     if let Some(Command::Forge {
-        command: sluice::ForgeCommand::Check { branch },
+        command: sluice::ForgeCommand::Check { branch, json },
     }) = &cli.command
     {
         let code = std::env::current_dir()
             .map_err(anyhow::Error::from)
             .and_then(|dir| {
-                sluice::profiles::forge_check(&dir, branch.as_deref(), &mut std::io::stdout())
+                sluice::profiles::forge_check(
+                    &dir,
+                    branch.as_deref(),
+                    *json,
+                    &mut std::io::stdout(),
+                )
             })
             .unwrap_or_else(|e| {
                 eprintln!("sluice: {e:#}");
+                tell_json(*json, &e);
                 3
             });
         std::process::exit(code);

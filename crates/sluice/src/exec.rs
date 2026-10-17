@@ -100,6 +100,29 @@ pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -
     Ok(())
 }
 
+/// What a round or a run released because its worktree no longer exists,
+/// as a JSON document lists it.
+pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
+    released
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "worktree": a.worktree,
+                "branch": a.branch,
+                "released": a.released.is_some(),
+                "why": a.why,
+            })
+        })
+        .collect()
+}
+
+/// What `sluice release` did: the worktree, and whether it held anything
+/// to release.
+pub struct Release {
+    pub worktree: String,
+    pub released: bool,
+}
+
 /// `argv` as one `sh -c` command line, each word quoted where it needs it.
 pub fn shell_line(argv: &[String]) -> String {
     argv.iter()
@@ -413,7 +436,7 @@ pub fn release(
     dir: &str,
     json: bool,
     out: &mut dyn Write,
-) -> Result<i32> {
+) -> Result<Release> {
     let seams = s.seams();
     let adopted = match host.worktree(dir) {
         Ok(w) => seams.checkout.adopted(&w)?.map(|a| (w, a)),
@@ -421,7 +444,10 @@ pub fn release(
     };
     let Some((worktree, adopted)) = adopted else {
         say(out, json, "nothing to release")?;
-        return Ok(LANDED);
+        return Ok(Release {
+            worktree: dir.to_string(),
+            released: false,
+        });
     };
     let branch = &adopted.branch;
     let policy = match s.release_policy(branch) {
@@ -441,17 +467,22 @@ pub fn release(
         .checkout
         .release_session(&adopted.name, policy.as_ref())?;
     host.end_session(&worktree)?;
-    match released {
-        Released::Nothing => say(out, json, "nothing to release")?,
-        _ => say(
+    let released = !matches!(released, Released::Nothing);
+    if released {
+        say(
             out,
             json,
             &format!(
                 "released {worktree}: its runs ended, the release command run, its ports free"
             ),
-        )?,
+        )?;
+    } else {
+        say(out, json, "nothing to release")?;
     }
-    Ok(LANDED)
+    Ok(Release {
+        worktree: worktree.to_string(),
+        released,
+    })
 }
 
 fn passed(report: &RunReport) -> bool {

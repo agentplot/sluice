@@ -239,6 +239,12 @@ fn a_failed_preview_is_reported_and_released() {
     assert!(out.starts_with(&format!("released {name}: ")), "{out}");
     assert_eq!(sluice(&f, &["previews"]).1, "no previews\n");
     assert_eq!(sluice(&f, &["release", &name]).1, "nothing to release\n");
+    let (code, out) = sluice(&f, &["release", &name, "--json"]);
+    assert_eq!(code, LANDED);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+        serde_json::json!({"preview": name, "released": false})
+    );
 }
 
 /// 101: released by its revision; a preview that is up is never released
@@ -251,7 +257,12 @@ fn a_preview_is_released_only_when_asked() {
     let (code, _) = sluice(&f, &["step", BRANCH]);
     assert_eq!(code, 0);
     assert!(f.world.preview_releases().is_empty());
-    let (_, out) = sluice(&f, &["release", rev.as_str()]);
-    assert!(out.starts_with("released preview/"), "{out}");
+    let (_, out) = sluice(&f, &["release", rev.as_str(), "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        doc["preview"].as_str().unwrap().starts_with("preview/"),
+        "{out}"
+    );
+    assert_eq!(doc["released"], true);
     assert!(f.world.live_previews().is_empty());
 }

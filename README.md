@@ -187,15 +187,15 @@ branches, is walked through in [docs/examples](docs/examples/README.md).
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place and what to run next. `--json` for a status line. |
 | `sluice overview` | Every branch's queue at a glance, with the latest landings and blames. `--json` for tools; `--json --watch` prints it again on each change. |
 | `sluice run` | Work every branch's queue until stopped. |
-| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. |
-| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. |
-| `sluice withdraw <id>` | Take a submission out of the queue. |
-| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. `--json` for scripts. |
+| `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
+| `sluice withdraw <id>` | Take a submission out of the queue; one already withdrawn exits `0` and says so. `--json` for scripts. |
+| `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound; `-- <command>` runs a command instead. |
-| `sluice release` | Release this worktree: its release command, what its runs left running, its ports. |
+| `sluice release` | Release this worktree: its release command, what its runs left running, its ports. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
 | `sluice previews` | Every preview on the host, with its addresses and state. |
-| `sluice release <preview>` | Release a preview, by its name or its revision. |
+| `sluice release <preview>` | Release a preview, by its name or its revision. `--json` for scripts. |
 | `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`. |
 
 An agent names itself with `SLUICE_AGENT`. How many runs a host tests at

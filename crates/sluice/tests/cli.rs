@@ -811,13 +811,13 @@ fn amend_and_withdraw() {
         sluice(&f, &["withdraw", "1", "--as", "agent-a"]),
         (0, "withdrew #1\n".into())
     );
+    // 5, 48: it left the queue by withdrawal, so asking again is no
+    // change; still not another's to ask.
     assert_eq!(
         sluice(&f, &["withdraw", "1", "--as", "agent-a"]),
-        (
-            2,
-            "refused: #1 is withdrawn, out of the queue already: sluice status 1\n".into()
-        )
+        (0, "#1 was already withdrawn\n".into())
     );
+    assert_eq!(sluice(&f, &["withdraw", "1", "--as", "agent-b"]).0, 2);
     assert_eq!(
         sluice(&f, &["amend", "1", "--priority", "2"]),
         (
@@ -837,6 +837,144 @@ fn amend_and_withdraw() {
     assert_eq!(
         sluice(&f, &["amend", "3", "--after", "7"]).1,
         format!("refused: --after names no queued submission: #7; sluice status {BRANCH} lists the queue\n")
+    );
+}
+
+fn json(out: &str) -> serde_json::Value {
+    serde_json::from_str(out).unwrap_or_else(|e| panic!("{e}: {out}"))
+}
+
+/// `--json` on amend and withdraw: one document each, and a refusal is
+/// the error document with the commands its text names.
+#[test]
+fn amend_and_withdraw_under_json() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    let (code, out) = sluice(
+        &f,
+        &["amend", "2", "--priority", "3", "--after", "1", "--json"],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"id": 2, "after": [1], "priority": 3})
+    );
+
+    let (code, out) = sluice(
+        &f,
+        &["amend", "1", "--priority", "1", "--as", "agent-b", "--json"],
+    );
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"error": {
+            "kind": "refused",
+            "message": "#1 is not agent-b's to change: ask --as agent-a, its agent, or --as operator",
+            "next": ["sluice amend 1 --as agent-a", "sluice amend 1 --as operator"],
+        }})
+    );
+    let (code, out) = sluice(&f, &["amend", "99", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out)["error"]["next"],
+        serde_json::json!(["sluice overview"])
+    );
+
+    sluice(&f, &["step", BRANCH]);
+    let (code, out) = sluice(&f, &["amend", "1", "--priority", "1", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out)["error"]["next"],
+        serde_json::json!(["sluice status 1", "sluice withdraw 1"])
+    );
+
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-b", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out)["error"]["next"],
+        serde_json::json!([
+            "sluice withdraw 1 --as agent-a",
+            "sluice withdraw 1 --as operator"
+        ])
+    );
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-a", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"id": 1, "state": "withdrawn"})
+    );
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-a", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"id": 1, "state": "withdrawn", "already": true})
+    );
+    // Once a round has moved it to the finished records, the same.
+    sluice(&f, &["step", BRANCH]);
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-a", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(json(&out)["already"], true);
+    let (code, out) = sluice(&f, &["withdraw", "1", "--as", "agent-b", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(json(&out)["error"]["kind"], "refused");
+    let (code, out) = sluice(&f, &["withdraw", "99", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out)["error"]["message"],
+        "no submission 99: sluice overview lists the queues"
+    );
+}
+
+/// 5: a landed submission left the queue by landing, so it is never
+/// withdrawn, however often it is asked.
+#[test]
+fn a_landed_submission_is_not_withdrawn() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]).0,
+        LANDED
+    );
+    assert_eq!(
+        sluice(&f, &["withdraw", "1"]),
+        (
+            2,
+            "refused: #1 is landed, out of the queue already: sluice status 1\n".into()
+        )
+    );
+    let (code, out) = sluice(&f, &["withdraw", "1", "--json"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"error": {
+            "kind": "refused",
+            "message": "#1 is landed, out of the queue already: sluice status 1",
+            "next": ["sluice status 1"],
+        }})
+    );
+}
+
+/// `sluice step --json`: the round's outcome as one document.
+#[test]
+fn step_under_json() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["step", BRANCH, "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({
+            "branch": BRANCH, "outcome": "stepped", "released": [], "previews_released": [],
+        })
+    );
+    assert_eq!(
+        sluice(&f, &["step", BRANCH]),
+        (0, format!("{BRANCH}: stepped\n"))
     );
 }
 
@@ -1253,6 +1391,12 @@ fn release_runs_the_policys_release_command_once() {
 
     let (code, out) = release(&f, &["--worktree", "unit/a"]);
     assert_eq!((code, out.as_str()), (0, "nothing to release\n"));
+    let (code, out) = release(&f, &["--worktree", "unit/a", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"worktree": "unit/a", "released": false})
+    );
     assert_eq!(f.world.session_releases().len(), 1);
     // A worktree that never ran has nothing to release.
     let (code, out) = release(&f, &["--worktree", "unit/none"]);
@@ -1285,6 +1429,27 @@ fn release_falls_back_to_the_last_runs_command_and_says_so() {
         f.world.session_releases(),
         [("session/unit/a".to_string(), None)]
     );
+}
+
+/// `sluice release --json`: the worktree, and that it was released; what
+/// it says beside goes to stderr.
+#[test]
+fn release_under_json() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let (code, out) = release(&f, &["--worktree", "unit/a", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"worktree": "unit/a", "released": true})
+    );
+    assert_eq!(f.world.session_releases().len(), 1);
 }
 
 /// 95: `sluice exec --release` releases once its run ends, and the exit

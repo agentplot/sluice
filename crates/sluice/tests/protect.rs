@@ -237,7 +237,12 @@ fn a_hook_already_there_still_runs() {
     assert_eq!(out.status.code(), Some(128), "{}", text(&out));
 
     // Removing sluice's puts theirs back.
-    assert!(sl(&repo, &["protect", "--remove"]).status.success());
+    let out = sl(&repo, &["protect", "--remove", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap(),
+        serde_json::json!({"protection": "removed", "changed": true})
+    );
     assert_eq!(
         std::fs::read_to_string(hooks.join("reference-transaction")).unwrap(),
         theirs
@@ -290,6 +295,13 @@ fn installing_is_idempotent_and_follows_the_binary() {
     ));
     let modified = std::fs::metadata(&hook).unwrap().modified().unwrap();
     assert!(sl(&repo, &["protect"]).status.success());
+    // Under --json: already in place, and the worktree holding bolt/x.
+    let out = sl(&repo, &["protect", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["protection"], "installed");
+    assert_eq!(doc["changed"], false);
+    assert_eq!(doc["held"][0]["branch"], "bolt/x");
     assert_eq!(
         std::fs::metadata(&hook).unwrap().modified().unwrap(),
         modified
