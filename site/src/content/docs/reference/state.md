@@ -68,6 +68,14 @@ every repository on the host and never pushed:
                        and where its output is
 ```
 
+A checkout's name is written as one file name, each `/` of it as `%2F`
+(or `+2F` for a directory a test works in), so a worktree's whole path
+is one name. macOS and Linux allow a file name of 255 bytes, so a name
+longer than 246 once written is cut short. It keeps its first 160
+bytes, then `%~` (or `+~`) and 16 hex digits of the SHA-1 of the whole
+name. Each record carries the whole path or revision it is for,
+so nothing needs the file name read back.
+
 A preview's record is kept apart from the other checkouts' so that a
 sluice older than previews never reads one. A preview's command counts
 in `sessions/` while it runs, as an agent's run does.

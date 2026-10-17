@@ -26,6 +26,11 @@ struct Setup {
 
 impl Setup {
     fn new(name: &str) -> Setup {
+        Setup::at(name, "a")
+    }
+
+    /// A worktree at `rel` under the scratch directory for sessions.
+    fn at(name: &str, rel: &str) -> Setup {
         let repo = Repo::new(name);
         repo.write(".config/sluice.toml", POLICY);
         repo.write("check.sh", "echo checked >> \"$SLUICE_TMP/checked\"\n");
@@ -33,7 +38,7 @@ impl Setup {
         repo.git(&["commit", "-q", "-m", "sluice's policy"]);
         repo.git(&["branch", "bolt/x", "main"]);
         let sessions = Scratch::new(&format!("{name}-sessions"));
-        let worktree = sessions.path().join("a");
+        let worktree = sessions.path().join(rel);
         repo.git(&[
             "worktree",
             "add",
@@ -129,6 +134,74 @@ fn a_command_gets_the_worktrees_environment_and_its_exit() {
     assert!(s.sessions().is_empty(), "the run is no longer counted");
 }
 
+/// Every file name kept under `dir`, walked whole.
+fn file_names(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for e in entries {
+        let e = e.unwrap();
+        out.push(e.file_name().to_string_lossy().into_owned());
+        if e.file_type().unwrap().is_dir() {
+            out.extend(file_names(&e.path()));
+        }
+    }
+    out
+}
+
+/// 89, 26, rule core.11: a worktree whose path, written as one file name,
+/// is longer than any file name may be runs its checks, is recorded and
+/// is listed by its whole path, and every file name sluice keeps for it
+/// fits.
+#[test]
+fn exec_runs_from_a_worktree_at_a_long_path() {
+    let deep = ["a-rather-long-directory-name"; 10].join("/");
+    let s = Setup::at("exec-long", &deep);
+    let canon = std::fs::canonicalize(&s.worktree).unwrap();
+    assert!(canon.as_os_str().len() > 255, "{}", canon.display());
+    // Ports of its own, so the tests beside it that count theirs see none.
+    s.repo.write(
+        ".config/sluice.toml",
+        &POLICY.replace("\"41500\"", "\"43100\""),
+    );
+    s.repo.git(&["commit", "-q", "-am", "ports of its own"]);
+    s.repo.git(&["branch", "-f", "bolt/x", "main"]);
+
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        s.results().contains("\"outcome\":\"pass\""),
+        "{}",
+        s.results()
+    );
+    let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "echo $SLUICE_PORT_WEB"]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let out = s.sluice(&["status", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        doc["worktrees"][0]["worktree"],
+        canon.to_str().unwrap(),
+        "{doc}"
+    );
+    assert_eq!(doc["worktrees"][0]["removed"], false, "{doc}");
+
+    let mut names = file_names(&s.repo.dir().join(".git/sluice"));
+    names.extend(file_names(s.state.path()));
+    assert!(names.iter().any(|n| n.contains("%~")), "{names:?}");
+    for n in &names {
+        assert!(n.len() <= 255, "{n}");
+    }
+
+    let out = s.sluice(&["release"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["status", "--json"]);
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["worktrees"].as_array().map_or(0, Vec::len), 0, "{doc}");
+}
+
 /// 92: a clean worktree's run of the checks is recorded under its keys
 /// with its executor and host, as a run on its head from its worktree; a
 /// dirty one runs and records nothing.
@@ -200,10 +273,14 @@ fn the_next_exec_releases_a_removed_worktree() {
     .unwrap();
     s.repo.write(
         ".config/sluice.toml",
-        &POLICY.replace(
-            "[tests]\n",
-            &format!("[tests]\nrelease = \"sh {}\"\n", script.display()),
-        ),
+        // Ports of its own: a block it frees is free only if no test
+        // beside it probes the same ports at that moment.
+        &POLICY
+            .replace(
+                "[tests]\n",
+                &format!("[tests]\nrelease = \"sh {}\"\n", script.display()),
+            )
+            .replace("\"41500\"", "\"43200\""),
     );
     s.repo.git(&["commit", "-q", "-am", "a release command"]);
     s.repo.git(&["branch", "-f", "bolt/x", "main"]);

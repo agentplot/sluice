@@ -194,9 +194,7 @@ impl Pulls {
     /// that process takes the branch's pull requests in this round.
     fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
         std::fs::create_dir_all(&self.locks)?;
-        let path = self
-            .locks
-            .join(format!("{}.lock", branch.replace('/', "__")));
+        let path = self.locks.join(format!("{}.lock", lock_name(branch)));
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -1125,9 +1123,36 @@ impl Pulls {
     }
 }
 
+/// The file name of `branch`'s intake lock, before `.lock`: each `/`
+/// written `__`, and one too long for a file name shortened. A branch
+/// never holds `~`, which git forbids in a ref, so the mark is in no
+/// kept name; 250 bytes and `.lock` are the 255 a file name may hold.
+fn lock_name(branch: &str) -> String {
+    crate::runs::shortened(branch, branch.replace('/', "__"), "~", 250)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A branch's lock keeps its name when short; a long one is shortened
+    /// under the 255 bytes a file name may hold, and two long branches
+    /// that differ only at the end keep two locks.
+    #[test]
+    fn a_long_branchs_lock_name_is_shortened() {
+        assert_eq!(lock_name("bolt/concurrent-units"), "bolt__concurrent-units");
+        let edge = "a".repeat(250);
+        assert_eq!(lock_name(&edge), edge);
+        let long = "bolt/".repeat(60);
+        let (a, b) = (
+            lock_name(&format!("{long}a")),
+            lock_name(&format!("{long}b")),
+        );
+        assert!(a.len() + ".lock".len() <= 255, "{a}");
+        assert!(a.starts_with("bolt__bolt__") && a.contains('~'), "{a}");
+        assert_ne!(a, b);
+        assert_eq!(a, lock_name(&format!("{long}a")));
+    }
 
     #[test]
     fn places_and_markers() {
