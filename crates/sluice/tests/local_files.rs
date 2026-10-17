@@ -22,6 +22,7 @@ fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
     Changes {
         put: m(put),
         append: m(append),
+        ..Changes::default()
     }
 }
 
@@ -329,4 +330,53 @@ fn results_append_once_and_whole() {
         s.results().unwrap(),
         b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n{\"run\":4}\n"
     );
+}
+
+/// Finished-records-1 clauses 104, 105, 63: a submission moved to the
+/// finished records leaves every read of the live ones in the same write,
+/// is read by its name, and a crash part way through the move reads as
+/// the whole move.
+#[test]
+fn a_finished_submission_moves_out_of_the_live_records_all_or_nothing() {
+    let dir = Scratch::new("finished");
+    let s = LocalFiles::new(dir.path());
+    write(
+        &s,
+        "bolt/x",
+        changes(&[("submissions/3.json", "{\"id\":3}\n")], &[]),
+    );
+    let mut c = changes(&[(".finished/3.json", "{\"id\":3}\n")], &[]);
+    c.remove.insert("submissions/3.json".into());
+    write(&s, "bolt/x", c);
+    let read = s.read("bolt/x").unwrap();
+    assert!(
+        read.files.keys().all(|k| !k.contains('3')),
+        "{:?}",
+        read.files.keys()
+    );
+    assert_eq!(
+        s.read_finished("bolt/x", "3.json").unwrap().unwrap(),
+        b"{\"id\":3}\n"
+    );
+    assert_eq!(s.read_all_finished("bolt/x").unwrap().len(), 1);
+
+    // A crash after the pending write, before any file holds it.
+    let branch = dir.path().join("sluice/bolt/x");
+    std::fs::write(branch.join("submissions/4.json"), "{\"id\":4}\n").unwrap();
+    let at = s.read("bolt/x").unwrap().version;
+    let pending = format!(
+        r#"{{"version":{},"put":{{".finished/4.json":"{{\"id\":4}}\n"}},"append":{{}},"lengths":{{}},"remove":["submissions/4.json"]}}"#,
+        at + 1
+    );
+    std::fs::write(branch.join(".pending.json"), pending).unwrap();
+    let read = s.read("bolt/x").unwrap();
+    assert!(!read.files.contains_key("submissions/4.json"));
+    assert!(read.files.keys().all(|k| !k.starts_with(".finished")));
+    assert_eq!(
+        s.read_finished("bolt/x", "4.json").unwrap().unwrap(),
+        b"{\"id\":4}\n"
+    );
+    drop(s.lock("bolt/x").unwrap().unwrap());
+    assert!(!branch.join("submissions/4.json").exists());
+    assert!(branch.join(".finished/4.json").exists());
 }

@@ -302,7 +302,11 @@ pub fn state_and_status_read_the_records_with_no_step_running(h: &impl Rig) {
     let status = h.sluice().status(BRANCH).unwrap();
     assert_eq!(status.at, Some(h.tip()));
     assert_eq!(status.parallel, Some(4));
-    assert_eq!(status.submissions.len(), 1);
+    // Landed, it is among the finished records, read by its number
+    // (finished-records-1 clauses 104, 105).
+    assert!(status.submissions.is_empty());
+    assert_eq!(status.finished, 1);
+    assert_eq!(h.sluice().history(BRANCH).unwrap().len(), 1);
     let s = h.sluice().state(one).unwrap().unwrap();
     assert_eq!(s.state, State::Landed);
     assert_eq!(s.result.as_deref(), Some("passed"));
@@ -552,12 +556,22 @@ pub fn every_record_written_is_the_real_format_and_names_its_schema(h: &impl Rig
     let doc: BranchDoc = serde_json::from_slice(&files["branch.json"]).unwrap();
     assert_eq!(doc.schema, BRANCH_SCHEMA);
     for id in [one, two] {
-        let s: Submission =
-            serde_json::from_slice(&files[&format!("submissions/{id}.json")]).unwrap();
+        // Live, or among the finished records in the same form
+        // (finished-records-1 clause 104; 53).
+        let bytes = match files.get(&format!("submissions/{id}.json")) {
+            Some(b) => b.clone(),
+            None => h
+                .sluice()
+                .seams()
+                .state
+                .read_finished(BRANCH, &format!("{id}.json"))
+                .unwrap()
+                .expect("a finished submission"),
+        };
+        let s: Submission = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(s.schema, SUBMISSION_SCHEMA);
         // Readable as plain JSON by any reader.
-        let v: serde_json::Value =
-            serde_json::from_slice(&files[&format!("submissions/{id}.json")]).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(v["state"].is_string());
     }
     let log: Vec<LogLine> = parse_lines(&files["log.jsonl"]).unwrap();

@@ -257,8 +257,8 @@ readable with plain tools whether or not sluice is running:
 ```
 .git/sluice/bolt/concurrent-units/
   version              57: bumped on every write, so two rounds never both write
-  submissions/12.json
-  submissions/13.json
+  submissions/14.json  a submission still in the queue
+  .finished/12.json    one that landed or was withdrawn, moved out of the way
   log.jsonl            every submission, test run, result, blame and landing, in order
 .git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations

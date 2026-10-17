@@ -37,6 +37,29 @@ pub fn submission_file(id: u64) -> String {
     format!("submissions/{id}.json")
 }
 
+/// The live index of a branch's finished submissions, one line each.
+pub const FINISHED_INDEX: &str = "finished.jsonl";
+
+/// A finished submission's name under the finished records.
+pub fn finished_name(id: u64) -> String {
+    format!("{id}.json")
+}
+
+/// A finished submission's file, as a write puts it.
+pub fn finished_file(id: u64) -> String {
+    format!("{}/{}", sluice_seams::FINISHED, finished_name(id))
+}
+
+/// What the live records keep of a submission moved to the finished
+/// ones (finished-records-1 clause 104): enough to order a chain whose
+/// `after` names it (7) and to count a worktree's attempts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishedLine {
+    pub id: u64,
+    pub state: State,
+    pub worktree: String,
+}
+
 // ---------------------------------------------------------------------------
 // A submission
 // ---------------------------------------------------------------------------

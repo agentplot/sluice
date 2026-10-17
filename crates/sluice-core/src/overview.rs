@@ -325,16 +325,21 @@ impl Sluice<'_> {
         if let Some(s) = in_play(branches, here) {
             return Ok(Some(s.clone()));
         }
-        let mut read: BTreeMap<&str, BTreeMap<u64, Submission>> = BTreeMap::new();
+        let mut read: BTreeMap<&str, crate::line::Line> = BTreeMap::new();
         for (branch, id) in recent_ids(branches) {
-            let subs = match read.entry(branch) {
+            let line = match read.entry(branch) {
                 Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(e) => e.insert(self.read_line(branch)?.subs),
+                Entry::Vacant(e) => e.insert(self.read_line(branch)?),
             };
-            if let Some(s) = subs.get(&id) {
-                if here.made(&s.from) {
-                    return Ok(Some(s.clone()));
-                }
+            // Live, or moved to the finished records: one file then
+            // (finished-records-1 clause 105).
+            let s = match line.subs.get(&id) {
+                Some(s) => Some(s.clone()),
+                None if line.finished.contains_key(&id) => self.finished_sub(branch, id)?,
+                None => None,
+            };
+            if let Some(s) = s.filter(|s| here.made(&s.from)) {
+                return Ok(Some(s));
             }
         }
         Ok(None)

@@ -143,7 +143,7 @@ impl Setup {
     fn status(&self, branch: &str) -> String {
         let out = self
             .command(self.repo.dir())
-            .args(["status", branch, "--json"])
+            .args(["status", branch, "--json", "--all"])
             .output()
             .unwrap();
         let mut t = text(&out);
@@ -164,7 +164,7 @@ impl Setup {
     fn states(&self, branch: &str) -> Vec<String> {
         let out = self
             .command(self.repo.dir())
-            .args(["status", branch, "--json"])
+            .args(["status", branch, "--json", "--all"])
             .output()
             .unwrap();
         let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();

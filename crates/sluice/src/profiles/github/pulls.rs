@@ -326,6 +326,15 @@ impl Pulls {
             status = s.status(branch)?;
         }
         let log = Line::read_log(&s.seams().state.read(branch)?)?;
+        // Each open pull request's latest submission, finished or not: a
+        // head that landed is never submitted again (finished-records-1
+        // clause 105).
+        let open: Vec<String> = pulls
+            .iter()
+            .filter(|p| p.from_repo(&t.repo))
+            .map(|p| place(p.number))
+            .collect();
+        let latest = s.latest_of(branch, &open)?;
         let pushed = self.pushed(&t.remote)?;
         for p in pulls.iter().filter(|p| p.from_repo(&t.repo)) {
             self.known.borrow_mut().insert(
@@ -342,6 +351,7 @@ impl Pulls {
                 &pushed,
                 branch,
                 p,
+                latest.get(&place(p.number)),
                 &status.submissions,
                 &log,
                 &names,
@@ -362,12 +372,12 @@ impl Pulls {
         pushed: &PushedRefs,
         branch: &str,
         p: &Pull,
+        latest: Option<&Submission>,
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
     ) -> Result<Shown> {
         let here = place(p.number);
-        let latest = subs.iter().rev().find(|x| x.from.worktree == here);
         if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
             match e.state {
                 State::Withdrawn => {}
@@ -1021,8 +1031,7 @@ impl crate::PullRequests for Pulls {
             return Ok(Some(p.number));
         }
         // Landed and closed: its entry has this worktree's head.
-        Ok(s.status(branch)?
-            .submissions
+        Ok(s.history(branch)?
             .iter()
             .rev()
             .filter(|x| x.head == session.head)
@@ -1043,12 +1052,8 @@ impl crate::PullRequests for Pulls {
         let forge = self.forge(branch)?;
         let pull = forge.pull(&t.repo, n)?;
         let status = s.status(branch)?;
-        let latest = status
-            .submissions
-            .iter()
-            .rev()
-            .find(|x| x.from.worktree == place(n));
-        if let Some(e) = latest {
+        let latest = s.latest_of(branch, &[place(n)])?.remove(&place(n));
+        if let Some(e) = &latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
                 return Ok(Followed::Done(e.clone(), names(&status.submissions)));

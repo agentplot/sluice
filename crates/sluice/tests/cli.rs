@@ -457,11 +457,19 @@ fn status_lists_the_queue() {
         format!("  #3  testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3")
     );
 
+    // `--json` lists the queue, `--all` the history, the landed #1 read
+    // from the finished records (finished-records-1 clause 105).
     let (_, json) = sluice(&f, &["status", BRANCH, "--json"]);
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(v["submissions"].as_array().unwrap().len(), 3);
-    assert_eq!(v["submissions"][1]["state"], "failed");
+    assert_eq!(v["submissions"].as_array().unwrap().len(), 1);
     assert_eq!(v["depth"], 1);
+    let (_, json) = sluice(&f, &["status", BRANCH, "--json", "--all"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["submissions"].as_array().unwrap().len(), 3);
+    assert_eq!(v["submissions"][0]["state"], "landed");
+    assert_eq!(v["submissions"][1]["state"], "failed");
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+    assert!(!f.world.files(BRANCH).contains_key("submissions/1.json"));
 }
 
 /// `status <branch>` reads the branch at the revision its records last
@@ -478,6 +486,69 @@ fn status_reads_the_revision_the_records_saw() {
     let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["at"], seen.0);
+}
+
+/// Finished-records-1 clauses 104, 105: a landed submission leaves the
+/// live records in the write that tells its outcome, is read by its
+/// number, still counts as landed for an `after`, still counts toward
+/// its worktree's attempts, and is refused a change as before.
+#[test]
+fn a_landed_submission_moves_to_the_finished_records() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]).0,
+        LANDED
+    );
+    let files = f.world.files(BRANCH);
+    assert!(files.contains_key(".finished/1.json"), "{:?}", files.keys());
+    assert!(!files.contains_key("submissions/1.json"));
+    assert_eq!(
+        std::str::from_utf8(&files["finished.jsonl"]).unwrap(),
+        "{\"id\":1,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n"
+    );
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["state"], "landed");
+
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    assert_eq!(
+        sluice(
+            &f,
+            &["submit", BRANCH, "--worktree", "unit/b", "--after", "1"]
+        )
+        .0,
+        LANDED
+    );
+    work(&f, "unit/a", "agent-a", &[("plugin/c", Some("c"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (_, out) = sluice(&f, &["status", "3", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["attempt"], 2);
+
+    assert_eq!(
+        sluice(&f, &["withdraw", "1", "--as", "agent-b"]),
+        (
+            2,
+            "refused: #1 is not agent-b's to withdraw: ask --as agent-a, its agent, \
+             or --as operator\n"
+                .into()
+        )
+    );
+    assert_eq!(
+        sluice(&f, &["amend", "1", "--priority", "2"]),
+        (
+            2,
+            "refused: #1 is landed, past changing: sluice status 1\n".into()
+        )
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        out.contains(&format!(
+            "2 no longer in the queue: sluice status {BRANCH} --all"
+        )),
+        "{out}"
+    );
 }
 
 /// A branch that does not exist and has no records is said to be none,

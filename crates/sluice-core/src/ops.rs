@@ -2,9 +2,9 @@
 //! read a state (B.5, 47 to 49). None of these forms a candidate it
 //! keeps, runs a check or moves a branch (1; rule core.4).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sluice_seams::{Contested, Formed, Rev};
 
 use crate::line::Line;
@@ -107,7 +107,11 @@ pub struct Status {
     pub testing: usize,
     pub window: usize,
     pub parallel: Option<usize>,
+    /// The submissions in the branch's live records.
     pub submissions: Vec<Submission>,
+    /// How many have moved to its finished records, which
+    /// [`Sluice::history`] reads.
+    pub finished: usize,
 }
 
 impl Status {
@@ -119,7 +123,7 @@ impl Status {
 
     /// No such branch, and no records of one: nothing sluice lands on.
     pub fn is_unknown(&self) -> bool {
-        self.at.is_none() && self.submissions.is_empty()
+        self.at.is_none() && self.submissions.is_empty() && self.finished == 0
     }
 }
 
@@ -145,7 +149,7 @@ impl Sluice<'_> {
             .after
             .iter()
             .copied()
-            .filter(|a| !line.subs.contains_key(a))
+            .filter(|a| !line.has(*a))
             .collect();
         if !unknown.is_empty() {
             return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
@@ -160,6 +164,7 @@ impl Sluice<'_> {
                 .filter(|s| s.from.worktree == session.from.worktree)
                 .map(|s| s.id)
                 .collect();
+            let attempt = l.from_worktree(&session.from.worktree) as u32 + 1;
             let mut withdrew = Vec::new();
             for &old in &mine {
                 let s = l.sub_mut(old);
@@ -198,7 +203,7 @@ impl Sluice<'_> {
                     submitted: now.clone(),
                     after: req.after.clone(),
                     priority: req.priority,
-                    attempt: mine.len() as u32 + 1,
+                    attempt,
                     state: State::Queued,
                     tested: None,
                     result: None,
@@ -268,12 +273,7 @@ impl Sluice<'_> {
             priority: i64::MIN,
             after: Vec::new(),
         });
-        let landed: BTreeSet<u64> = line
-            .subs
-            .values()
-            .filter(|s| s.state == State::Landed)
-            .map(|s| s.id)
-            .collect();
+        let landed: BTreeSet<u64> = line.landed();
         let pinned: Vec<Vec<u64>> = line
             .doc
             .candidates
@@ -320,6 +320,13 @@ impl Sluice<'_> {
         let Some(branch) = self.find(id)? else {
             return Ok(Err(AmendRefusal::NoSuchSubmission));
         };
+        // Finished, it is past changing: refused as it was before it moved.
+        if let Some(s) = self.only_finished(&branch, id)? {
+            if !by.may_change(&s) {
+                return Ok(Err(AmendRefusal::NotYours));
+            }
+            return Ok(Err(AmendRefusal::NotQueued(s.state)));
+        }
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&branch)?;
         self.update(&branch, |l| {
@@ -337,7 +344,7 @@ impl Sluice<'_> {
                 let unknown: Vec<u64> = a
                     .iter()
                     .copied()
-                    .filter(|x| !l.subs.contains_key(x) || *x == id)
+                    .filter(|x| !l.has(*x) || *x == id)
                     .collect();
                 if !unknown.is_empty() {
                     return Ok(Err(AmendRefusal::UnknownAfter(unknown)));
@@ -369,6 +376,12 @@ impl Sluice<'_> {
         let Some(branch) = self.find(id)? else {
             return Ok(Err(WithdrawRefusal::NoSuchSubmission));
         };
+        if let Some(s) = self.only_finished(&branch, id)? {
+            if !by.may_change(&s) {
+                return Ok(Err(WithdrawRefusal::NotYours));
+            }
+            return Ok(Err(WithdrawRefusal::Final(s.state)));
+        }
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&branch)?;
         self.update(&branch, |l| {
@@ -395,7 +408,79 @@ impl Sluice<'_> {
         let Some(branch) = self.find(id)? else {
             return Ok(None);
         };
-        Ok(self.read_line(&branch)?.subs.remove(&id))
+        let mut line = self.read_line(&branch)?;
+        if let Some(s) = line.subs.remove(&id) {
+            return Ok(Some(s));
+        }
+        self.finished_sub(&branch, id)
+    }
+
+    /// Submission `id` of `branch` when it is among the finished records
+    /// alone, which nothing changes again.
+    fn only_finished(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
+        let line = self.read_line(branch)?;
+        if line.subs.contains_key(&id) || !line.finished.contains_key(&id) {
+            return Ok(None);
+        }
+        self.finished_sub(branch, id)
+    }
+
+    /// Finished-records-1 clause 105: a submission moved to the finished
+    /// records, read by its branch and number.
+    pub(crate) fn finished_sub(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
+        match self
+            .seams
+            .state
+            .read_finished(branch, &crate::records::finished_name(id))?
+        {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| {
+                format!("reading {branch}'s finished submission {id}")
+            })?)),
+        }
+    }
+
+    /// The latest submission from each of `worktrees` the branch has had,
+    /// live or finished, from one read of its live records and one file
+    /// each for those whose latest is finished.
+    pub fn latest_of(
+        &self,
+        branch: &str,
+        worktrees: &[String],
+    ) -> Result<BTreeMap<String, Submission>> {
+        let line = self.read_line(branch)?;
+        let mut out = BTreeMap::new();
+        for w in worktrees {
+            let live = line.subs.values().rfind(|s| &s.from.worktree == w);
+            let finished = line
+                .finished
+                .values()
+                .filter(|f| &f.worktree == w)
+                .map(|f| f.id)
+                .max();
+            let latest = match (live, finished) {
+                (Some(s), Some(f)) if f > s.id => self.finished_sub(branch, f)?,
+                (Some(s), _) => Some(s.clone()),
+                (None, Some(f)) => self.finished_sub(branch, f)?,
+                (None, None) => None,
+            };
+            if let Some(s) = latest {
+                out.insert(w.clone(), s);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every submission the branch has had, live and finished, in order:
+    /// its history, for a reader that asks for it.
+    pub fn history(&self, branch: &str) -> Result<Vec<Submission>> {
+        let mut all = self.read_line(branch)?.subs;
+        for (name, bytes) in self.seams.state.read_all_finished(branch)? {
+            let s: Submission = serde_json::from_slice(&bytes)
+                .with_context(|| format!("reading {branch}'s finished {name}"))?;
+            all.entry(s.id).or_insert(s);
+        }
+        Ok(all.into_values().collect())
     }
 
     /// 1: whether sluice guards `branch` at its revision `at`: the
@@ -466,6 +551,7 @@ impl Sluice<'_> {
                 .count(),
             window: line.doc.window,
             parallel,
+            finished: line.finished.len(),
             submissions: line.subs.into_values().collect(),
         })
     }

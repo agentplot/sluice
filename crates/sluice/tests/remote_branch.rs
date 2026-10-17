@@ -137,7 +137,7 @@ impl Setup {
     }
 
     fn status(&self) -> serde_json::Value {
-        let out = self.sluice(&["status", "main", "--json"]);
+        let out = self.sluice(&["status", "main", "--json", "--all"]);
         assert!(out.status.success(), "{}", text(&out));
         serde_json::from_slice(&out.stdout).unwrap()
     }

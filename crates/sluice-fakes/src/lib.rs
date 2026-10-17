@@ -1343,6 +1343,11 @@ impl Drop for FakeGuard<'_> {
     }
 }
 
+/// The name of `path` under the finished records, if it is one of them.
+fn finished_name(path: &str) -> Option<&str> {
+    path.strip_prefix(sluice_seams::FINISHED)?.strip_prefix('/')
+}
+
 impl State for FakeState {
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
         let mut inner = self.0 .0.borrow_mut();
@@ -1371,12 +1376,30 @@ impl State for FakeState {
                 files: l
                     .files
                     .iter()
-                    .filter(|(p, _)| *p != "version")
+                    .filter(|(p, _)| *p != "version" && finished_name(p).is_none())
                     .map(|(p, b)| (p.clone(), b.clone()))
                     .collect(),
             },
             None => Snapshot::default(),
         })
+    }
+
+    fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.read_all_finished(branch)?.remove(name))
+    }
+
+    fn read_all_finished(&self, branch: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .lines
+            .get(branch)
+            .map(|l| {
+                l.files
+                    .iter()
+                    .filter_map(|(p, b)| Some((finished_name(p)?.to_string(), b.clone())))
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     fn write(&self, branch: &str, read_at: u64, changes: Changes) -> Result<Written> {
@@ -1405,6 +1428,9 @@ impl State for FakeState {
         }
         for (path, bytes) in changes.append {
             line.files.entry(path).or_default().extend(bytes);
+        }
+        for path in changes.remove {
+            line.files.remove(&path);
         }
         line.version += 1;
         let v = line.version;
