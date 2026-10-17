@@ -649,7 +649,7 @@ pub fn flat_name(name: &str) -> String {
         Some(rest) => format!("%2E{rest}"),
         None => flat,
     };
-    shortened(name, flat, '%')
+    shortened(name, flat, "%~", KEPT)
 }
 
 /// A place's name as the one directory its checks work in, its checkout
@@ -669,7 +669,7 @@ pub fn dir_name(name: &str) -> String {
         Some(rest) => format!("+2E{rest}"),
         None => flat,
     };
-    shortened(name, flat, '+')
+    shortened(name, flat, "+~", KEPT)
 }
 
 /// The longest file name kept as it is: 255 bytes, the most macOS and
@@ -682,13 +682,14 @@ const KEPT: usize = 246;
 const START: usize = 160;
 
 /// `flat`, the file name `name` is written as, if it is no longer than
-/// `KEPT`; else its first `START` bytes, `escape` and `~`, and 16 hex
-/// digits of the SHA-1 of `name`. In a kept name `escape` is always
-/// followed by `2`, so no kept name is ever a shortened one, and the
-/// hash keeps two long names apart however little they differ. Nothing
-/// reads a name back from its file: each record carries its whole path.
-fn shortened(name: &str, flat: String, escape: char) -> String {
-    if flat.len() <= KEPT {
+/// `kept`; else its first `START` bytes, `mark`, and 16 hex digits of
+/// the SHA-1 of `name`. `mark` is in no kept name (in a kept `flat_name`
+/// a `%` is always followed by `2`, in a `dir_name` a `+`), so no kept
+/// name is ever a shortened one, and the hash keeps two long names apart
+/// however little they differ. Nothing reads a name back from its file:
+/// each record carries its whole path.
+pub fn shortened(name: &str, flat: String, mark: &str, kept: usize) -> String {
+    if flat.len() <= kept {
         return flat;
     }
     let mut end = START;
@@ -700,7 +701,7 @@ fn shortened(name: &str, flat: String, escape: char) -> String {
     let id = hasher
         .try_finalize()
         .expect("a place's name is no SHA-1 collision");
-    format!("{}{escape}~{}", &flat[..end], id.to_hex_with_len(16))
+    format!("{}{mark}{}", &flat[..end], id.to_hex_with_len(16))
 }
 
 /// How the run in `dir` ended, once its supervisor wrote it.
