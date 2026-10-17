@@ -87,6 +87,8 @@ say "watching (pid $$)"
   lock_owner=$(exec sh -c 'echo $PPID')
   while sleep "$every" && kill -0 $$ 2>/dev/null; do
     take_lock || continue
+    # The tests hold it a while, to catch the renewer holding it.
+    [ -n "${SLUICE_HERDR_LOCK_HOLD:-}" ] && sleep "$SLUICE_HERDR_LOCK_HOLD"
     if [ "$(holder)" = $$ ]; then write_lease; else
       drop_lock
       exit 0
@@ -113,7 +115,10 @@ done
 mkdir -p "$runs"
 
 stop() {
+  # Reaped as well as killed: dash leaves a zombie that kill -0 still finds,
+  # and the lock it may hold would wait out its ten seconds.
   kill "$renewer" 2>/dev/null
+  wait "$renewer" 2>/dev/null
   for f in "$runs"/*.pids; do
     [ -e "$f" ] || continue
     # shellcheck disable=SC2046

@@ -35,6 +35,14 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@localhost
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_ASKPASS SSH_ASKPASS
 unset HERDR_PLUGIN_CONTEXT_JSON HERDR_SOCKET_PATH HERDR_ENV
+# SLUICE_HERDR_SH names the shell every script runs under as `sh`, as
+# herdr runs them: dash, as Debian's /bin/sh is, or the system's.
+if [ -n "${SLUICE_HERDR_SH:-}" ]; then
+  mkdir -p "$scratch/sh"
+  ln -s "$(command -v "$SLUICE_HERDR_SH")" "$scratch/sh/sh"
+  export PATH="$scratch/sh:$PATH"
+fi
+echo "scripts run under $(command -v sh) -> $(readlink "$(command -v sh)" || echo itself)"
 export PATH="$here/fake:$PATH" HERDR_BIN_PATH="$here/fake/herdr" HERDR_PLUGIN_ROOT="$plugin"
 NOW=$(jq -n '"2026-10-16T19:45:10Z" | fromdateiso8601')
 export SLUICE_HERDR_NOW="$NOW"
@@ -203,7 +211,11 @@ sleep 3
 theirs=$(cat "$S/run/$b"/*.pids 2>/dev/null)
 [ -n "$theirs" ] || fail "the second watcher started no source"
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
-sleep 3
+# It gives way at its next second, or after a tick it was in the middle of.
+for i in 1 2 3 4 5 6 7 8; do
+  kill -0 "$a" 2>/dev/null || break
+  sleep 1
+done
 kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
 [ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
 for p in $theirs; do
@@ -264,17 +276,22 @@ done
 pass
 
 fresh 'watch: a renewer killed holding the lock'
-lease_lib='. "$HERDR_PLUGIN_ROOT/lib/common.sh"; . "$lib/lease.sh"'
-# A renewer, a subshell of its watcher, holds the lock under its own pid.
-sh -c "$lease_lib"'; ( lock_owner=$(exec sh -c "echo \$PPID"); take_lock; echo "$lock_owner" >"$1"; sleep 30 ) & sleep 8' _ "$t/renewer" "$plugin/bin/x" &
-watcher=$!
-sleep 1
-kill "$(cat "$t/renewer")"
+# The renewer holds the lock four seconds each time, so it is caught there.
+SLUICE_HERDR_LOCK_HOLD=4 SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+w=$!
+for i in 1 2 3 4 5 6 7 8; do
+  [ -f "$S/lease.lock/pid" ] && break
+  sleep 1
+done
+owner=$(cut -d' ' -f1 "$S/lease.lock/pid" 2>/dev/null)
+[ -n "$owner" ] || fail "the renewer never took the lock"
+[ "$owner" != "$w" ] || fail "the renewer holds the lock as its watcher"
+[ "$(ps -o ppid= -p "$owner" 2>/dev/null | tr -d ' ')" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
 began=$(date +%s)
-sh -c "$lease_lib"'; take_lock' _ "$plugin/bin/x" || fail "the lock could not be taken"
-[ $(($(date +%s) - began)) -lt 4 ] || fail "the lock of a renewer killed holding it held on"
-kill "$watcher" 2>/dev/null
-wait 2>/dev/null
+kill -TERM "$w"
+wait "$w" 2>/dev/null
+[ $(($(date +%s) - began)) -lt 5 ] || fail "stop waited on the lock its renewer held"
+[ -f "$S/watch.lease" ] && fail "stop left the lease"
 pass
 
 fresh 'watch: herdr gone'
