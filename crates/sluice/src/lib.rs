@@ -50,6 +50,44 @@ pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// The root's help: examples, and the telemetry flags every command takes,
+/// listed here alone so they do not repeat in each command's help.
+const ROOT_AFTER_HELP: &str = "\
+Examples:
+  $ sluice                  where this worktree stands
+  $ sluice submit main      land this worktree's head on main
+  $ sluice overview         every branch's queue
+
+Telemetry, taken by every command:
+      --otel                       Export traces and metrics over OTLP/HTTP, to
+                                   where the OTEL_EXPORTER_OTLP_* variables say
+                                   [env: SLUICE_OTEL=1|true|yes|on]
+      --otel-service-name <NAME>   The service the telemetry is reported as
+                                   [env: SLUICE_OTEL_SERVICE_NAME] [default: sluice]
+      --otel-logs <LOGS>           How much of a failed check's output is sent as
+                                   logs: off, summary (where it is kept, never
+                                   what it says) or tail (its end, scrubbed of
+                                   what reads as a secret)
+                                   [env: SLUICE_OTEL_LOGS] [default: summary]
+      --otel-logs-limit <BYTES>    The most of a failed check's output sent at
+                                   tail [env: SLUICE_OTEL_LOGS_LIMIT] [default: 8192]";
+
+/// `sluice submit --help`'s examples and exits; the exits are those of
+/// the reference's "Exit codes".
+const SUBMIT_AFTER_HELP: &str = "\
+Examples:
+  $ sluice submit main
+  $ sluice submit main --no-wait
+  $ sluice submit main --after 12,14 --priority 5
+
+Exit codes:
+  0    landed
+  1    failed: this submission was blamed, or its pull request closed
+  2    a conflict, or a refusal
+  3    sluice itself failed; the cause is on stderr
+  64   a command line sluice cannot read
+  130  stopped with Ctrl-C; the submission stays queued";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "sluice",
@@ -57,7 +95,8 @@ pub const VERSION: &str = match option_env!("SLUICE_VERSION") {
     about = "A merge queue for agents in worktrees.",
     long_about = "A merge queue for agents in worktrees.\n\n\
                   With no command, where this worktree stands: its submission, the \
-                  branches' queues, its place and what to run next.",
+                  branches' queues, its ports and what to run next.",
+    after_help = ROOT_AFTER_HELP,
     args_conflicts_with_subcommands = true
 )]
 pub struct Cli {
@@ -70,12 +109,15 @@ pub struct Cli {
     /// With no command: the worktree to show.
     #[arg(long, default_value = ".")]
     pub worktree: String,
+    // The telemetry flags are hidden, here and in every command, and
+    // listed in ROOT_AFTER_HELP instead.
     /// Export traces and metrics over OTLP/HTTP, to where the
     /// OTEL_EXPORTER_OTLP_* variables say.
     /// SLUICE_OTEL takes `1`, `true`, `yes` or `on`.
     #[arg(
         long,
         global = true,
+        hide = true,
         env = "SLUICE_OTEL",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
@@ -84,6 +126,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        hide = true,
         env = "SLUICE_OTEL_SERVICE_NAME",
         default_value = "sluice"
     )]
@@ -94,6 +137,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        hide = true,
         env = "SLUICE_OTEL_LOGS",
         value_enum,
         default_value = "summary"
@@ -103,6 +147,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        hide = true,
         env = "SLUICE_OTEL_LOGS_LIMIT",
         default_value_t = 8192
     )]
@@ -111,12 +156,15 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Submit this place's head to a branch, and wait for the outcome.
+    /// Submit this worktree's head to a branch, and wait for the outcome.
+    #[command(after_help = SUBMIT_AFTER_HELP)]
     Submit {
+        /// The branch to land on.
         branch: String,
         /// Submissions this one lands after.
         #[arg(long, value_delimiter = ',')]
         after: Vec<u64>,
+        /// Higher lands sooner; equal ones go in the order submitted.
         #[arg(long, default_value_t = 0)]
         priority: i64,
         /// Return once submitted.
@@ -129,15 +177,21 @@ pub enum Command {
         /// request, stands.
         #[arg(long)]
         status: bool,
-        /// The place to submit from.
+        /// The worktree to submit from.
         #[arg(long, default_value = ".")]
         worktree: String,
+        /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
     },
     /// One round of a branch's work, then exit.
-    Step { branch: String },
+    #[command(after_help = "Example:\n  $ sluice step main")]
+    Step {
+        /// The branch to run a round of.
+        branch: String,
+    },
     /// Rounds for every branch with a queue, until stopped.
+    #[command(after_help = "Examples:\n  $ sluice run\n  $ sluice run --rounds 1")]
     Run {
         /// Stop after this many rounds.
         #[arg(long)]
@@ -145,6 +199,7 @@ pub enum Command {
     },
     /// A branch's queue, or one submission; with neither, every worktree
     /// sluice holds ports or runs for.
+    #[command(after_help = "Examples:\n  $ sluice status main --all\n  $ sluice status 42 --json")]
     Status {
         /// A branch, or a submission's number.
         target: Option<String>,
@@ -152,13 +207,16 @@ pub enum Command {
         /// still in the queue. `--json` always lists every one.
         #[arg(long)]
         all: bool,
+        /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
     },
     /// Every branch's queue at a glance: its combinations under test, its
     /// submissions, its latest landings and blames, and the worktrees and
     /// previews held.
+    #[command(after_help = "Examples:\n  $ sluice overview\n  $ sluice overview --json --watch")]
     Overview {
+        /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
         /// Print the document again, as one line, each time it changes.
@@ -166,10 +224,16 @@ pub enum Command {
         watch: bool,
     },
     /// Change a queued submission's order, until it is under test.
+    #[command(
+        after_help = "Examples:\n  $ sluice amend 42 --after 40\n  $ sluice amend 42 --priority 5"
+    )]
     Amend {
+        /// The submission's number.
         id: u64,
+        /// Submissions this one lands after, in place of those it had.
         #[arg(long, value_delimiter = ',')]
         after: Option<Vec<u64>>,
+        /// Its new priority: higher lands sooner.
         #[arg(long)]
         priority: Option<i64>,
         /// Who asks: `planner`, `operator`, or a session's agent.
@@ -177,7 +241,9 @@ pub enum Command {
         by: String,
     },
     /// Withdraw a submission.
+    #[command(after_help = "Example:\n  $ sluice withdraw 42")]
     Withdraw {
+        /// The submission's number.
         id: u64,
         /// Who asks: `planner`, `operator`, or a session's agent.
         #[arg(long = "as", default_value = "operator")]
@@ -186,6 +252,7 @@ pub enum Command {
     /// Run the checks this worktree's head affects against a branch, or a
     /// command after `--`, under the host's bound, the worktree's ports
     /// and the branch's limits.
+    #[command(after_help = "Examples:\n  $ sluice exec main\n  $ sluice exec main -- cargo test")]
     Exec {
         /// The branch whose policy the run is held to.
         branch: String,
@@ -204,6 +271,9 @@ pub enum Command {
     },
     /// Bring up a running copy of a revision a branch has landed, at
     /// addresses a person opens; held until `sluice release <preview>`.
+    #[command(
+        after_help = "Examples:\n  $ sluice preview main 2eb676c\n  $ sluice preview main 2eb676c --wait --json"
+    )]
     Preview {
         /// The branch that landed it.
         branch: String,
@@ -217,6 +287,7 @@ pub enum Command {
         json: bool,
     },
     /// Every preview on this host, with its addresses and state.
+    #[command(after_help = "Examples:\n  $ sluice previews\n  $ sluice previews --json")]
     Previews {
         /// One JSON document on stdout.
         #[arg(long)]
@@ -225,6 +296,7 @@ pub enum Command {
     /// Release this worktree: run the policy's release command, end what
     /// its runs left running, free its ports. The worktree stays. Given a
     /// preview, release the preview.
+    #[command(after_help = "Examples:\n  $ sluice release\n  $ sluice release 2eb676c")]
     Release {
         /// A preview, by its name or its revision.
         preview: Option<String>,
@@ -237,6 +309,7 @@ pub enum Command {
     Supervise { dir: std::path::PathBuf },
     /// Install the hook that refuses updates to protected branches by
     /// anything but sluice; `submit`, `step` and `run` install it too.
+    #[command(after_help = "Examples:\n  $ sluice protect\n  $ sluice protect --remove")]
     Protect {
         /// Take it out instead.
         #[arg(long)]
@@ -245,13 +318,18 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
+    // branches-1 104, 105.
     /// Make or remove a branch sluice lands on, on its remote when its
-    /// policy names one (branches-1 104, 105).
+    /// policy names one.
+    #[command(
+        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main"
+    )]
     Branch {
         #[command(subcommand)]
         command: BranchCommand,
     },
     /// sluice's identity on a forge.
+    #[command(after_help = "Example:\n  $ sluice forge check main")]
     Forge {
         #[command(subcommand)]
         command: ForgeCommand,
@@ -390,21 +468,27 @@ fn intake(pulls: &dyn PullRequests, seams: Seams<'_>, clock: &dyn Clock, branch:
 pub enum BranchCommand {
     /// Make the branch at another branch's current revision, only if it
     /// is absent and that revision's policy gives it a gate.
+    #[command(after_help = "Example:\n  $ sluice branch create feature/x --from main")]
     Create {
+        /// The branch to make.
         branch: String,
         /// The branch sluice lands on to make it from.
         #[arg(long)]
         from: String,
+        /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
     },
     /// Remove the branch, only once nothing is queued on it and its
     /// revision has landed into another branch.
+    #[command(after_help = "Example:\n  $ sluice branch delete feature/x --into main")]
     Delete {
+        /// The branch to remove.
         branch: String,
         /// The branch its work landed into.
         #[arg(long, default_value = "main")]
         into: String,
+        /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
     },
@@ -414,6 +498,7 @@ pub enum BranchCommand {
 pub enum ForgeCommand {
     /// Whether the host's [forge] identity is set up so only sluice may
     /// move the branch on its remote; exits 1 naming what is not.
+    #[command(after_help = "Examples:\n  $ sluice forge check\n  $ sluice forge check main")]
     Check {
         /// The branch; the one checked out here by default.
         branch: Option<String>,
