@@ -6,7 +6,10 @@
 : "${HERDR_PLUGIN_STATE_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/herdr-agentplot.sluice}"
 : "${HERDR_PLUGIN_CONFIG_DIR:=${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/agentplot.sluice}"
 root=$HERDR_PLUGIN_ROOT
-state=$HERDR_PLUGIN_STATE_DIR
+# Each herdr server, told apart by its socket, has its own watcher, lease,
+# documents and tokens; the tab-bar copy is shared, at a path that lasts.
+base=$HERDR_PLUGIN_STATE_DIR
+state=$base/servers/$(printf '%s' "${HERDR_SOCKET_PATH:-none}" | cksum | cut -d' ' -f1)
 # shellcheck disable=SC2034 # read by the scripts that source this
 config=$HERDR_PLUGIN_CONFIG_DIR
 lib=$root/lib

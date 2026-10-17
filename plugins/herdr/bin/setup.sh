@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, base, state and config.
 # Show the snippets to add to herdr's config.toml: the key, the sidebar
 # rows and the tab-bar segment, with this plugin's paths filled in. It
 # edits nothing; on a terminal it waits for q or Escape.
@@ -45,7 +45,7 @@ rows = [
 # for the tab_bar_right list in your [ui] table.
 [ui]
 tab_bar_right = [
-  { type = "command", command = "sh '$state/segment/bin/segment.sh'", interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = "sh '$base/segment/bin/segment.sh'", interval_seconds = 5, timeout_seconds = 2 },
 ]
 
 Toasts need herdr's own to be on:

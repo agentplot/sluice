@@ -118,12 +118,24 @@ actions `status`, `dashboard`, `jump`, `setup`; panes `status` (popup,
 
 ### D3. The watcher and its lease
 
-`watch.sh --ensure` exits at once when `watch.lease` was touched in the
-last 60 s; otherwise it starts `nohup sh bin/watch.sh </dev/null
->>"$STATE/watch.log" 2>&1 &` and exits, so the startup command ends and
-herdr's log reader is not held open. The watcher writes its pid in the
-lease and touches it every tick; a second watcher that finds a live lease
-not its own exits. herdr 0.9.3 leaves the detached watcher running when
+Each herdr server, told apart by `HERDR_SOCKET_PATH`, has its own watcher
+and state, under `servers/<cksum of the socket>/` in the plugin's state
+directory; only the tab-bar copy is shared, at a path that lasts.
+
+`watch.lease` holds the watcher's pid and when it last renewed it, then
+the plugin directory and version the watcher runs. `watch.sh --ensure`
+copies the tab-bar segment again and exits when the lease is under 60 s
+old and names this directory and version; otherwise it starts `nohup sh
+bin/watch.sh </dev/null >>"$STATE/watch.log" 2>&1 &` and exits, so the
+startup command ends and herdr's log reader is not held open. A new
+watcher takes a lease that is stale or another directory's or version's
+(a reinstall), and the old one, seeing the lease is no longer its own,
+stops with its sources. A renewer renews the lease every quarter of its
+term, however long a tick takes. Every change to the lease is made under
+`lease.lock`, a directory holding its owner's pid and when it was taken;
+one whose owner is gone, with no owner for three seconds, or ten seconds
+old is broken. Each watcher keeps its sources under `run/<pid>/` and stops
+only those. herdr 0.9.3 leaves the detached watcher running when
 the startup command ends; every event and every popup also runs
 `--ensure`, so a watcher that died is back at the next one. It stops,
 with its sources, once its herdr server has not answered for two ticks.
@@ -154,7 +166,7 @@ command = ["my-overview-stream", "app"]   # any command printing overview lines
 A source without `each_repository` runs once, from the config directory.
 Each document is labelled by its own `host` and `repository`, and keyed by
 `<host>--<name>-<cksum of repository>`, where `name` is the repository's
-directory name without `.git`. State, all under `HERDR_PLUGIN_STATE_DIR`:
+directory name without `.git`. State, all in the server's state directory:
 - `docs/<key>.json`: the latest document, written to a temporary file and
   renamed, so a reader never sees half of one.
 - `paths.json`: submission id to `from.path`, per repository key, learned

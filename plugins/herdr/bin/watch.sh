@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, base, state and config.
 # The plugin's one watcher. `--ensure` starts it unless a watcher holds a
 # lease renewed in the last 60 s, and nudges it to look for repositories.
 # Running, it finds the repositories the panes are in, runs each source
@@ -45,9 +45,9 @@ write_lease() {
 # reinstall; the plugin's own directory does not.
 # Each file replaced in one step, since herdr may be running it.
 copy_segment() {
-  mkdir -p "$state/segment/bin" "$state/segment/lib"
+  mkdir -p "$base/segment/bin" "$base/segment/lib"
   for f in bin/segment.sh lib/common.sh lib/words.jq; do
-    cp "$root/$f" "$state/segment/$f.tmp.$$" && mv -f "$state/segment/$f.tmp.$$" "$state/segment/$f"
+    cp "$root/$f" "$base/segment/$f.tmp.$$" && mv -f "$base/segment/$f.tmp.$$" "$base/segment/$f"
   done
 }
 

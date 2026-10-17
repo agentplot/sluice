@@ -71,6 +71,9 @@ fresh() {
   mkdir -p "$t/state" "$t/config" "$t/fake"
   export HERDR_PLUGIN_STATE_DIR="$t/state" HERDR_PLUGIN_CONFIG_DIR="$t/config" FAKE="$t/fake"
   export SLUICE_HERDR_NOW="$NOW"
+  # This herdr server's state: the tests run with no socket.
+  S=$t/state/servers/$(printf none | cksum | cut -d' ' -f1)
+  mkdir -p "$S/docs" "$S/probe"
   : >"$FAKE/herdr-calls"
   : >"$FAKE/sluice-calls"
   panes front-none
@@ -140,28 +143,28 @@ status_of() {
 
 fresh 'watch: started twice'
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")
-printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$version" >"$HERDR_PLUGIN_STATE_DIR/watch.lease"
+printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$version" >"$S/watch.lease"
 sh "$plugin/bin/watch.sh" --ensure || fail "ensure exited non-zero"
 sleep 1
-[ "$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = $$ ] || fail "a second watcher took the lease"
+[ "$(holder_of "$S/watch.lease")" = $$ ] || fail "a second watcher took the lease"
 [ -s "$FAKE/sluice-calls" ] && fail "a second watcher ran sluice"
 pass
 
 fresh 'watch: watcher gone'
-echo "$$ $(($(date +%s) - 90))" >"$HERDR_PLUGIN_STATE_DIR/watch.lease"
+echo "$$ $(($(date +%s) - 90))" >"$S/watch.lease"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "the new watcher did not look for repositories"
 pass
 
 fresh 'watch: a lock left by a watcher that died'
-mkdir "$HERDR_PLUGIN_STATE_DIR/lease.lock"
-sh -c 'echo $$ >"$1/pid"' _ "$HERDR_PLUGIN_STATE_DIR/lease.lock"
+mkdir "$S/lease.lock"
+sh -c 'echo $$ >"$1/pid"' _ "$S/lease.lock"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "a dead watcher's lock stopped the next one"
 pass
 
 fresh 'watch: a lock with no owner'
-mkdir "$HERDR_PLUGIN_STATE_DIR/lease.lock"
+mkdir "$S/lease.lock"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "a lock with no owner stopped the watcher"
 pass
@@ -174,10 +177,10 @@ sleep 4
 SLUICE_HERDR_LEASE=3 sh "$plugin/bin/watch.sh" --ensure
 wait "$first"
 sleep 1
-if grep -q 'watching' "$HERDR_PLUGIN_STATE_DIR/watch.log" 2>/dev/null; then
+if grep -q 'watching' "$S/watch.log" 2>/dev/null; then
   fail "a second watcher started during a long tick"
   # Only the one this test started, never another herdr's.
-  stray=$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")
+  stray=$(holder_of "$S/watch.lease")
   [ -n "$stray" ] && [ "$stray" != "$first" ] && kill "$stray" 2>/dev/null
 fi
 pass
@@ -198,7 +201,7 @@ sleep 3
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
 sleep 3
 kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
-[ "$(holder_of "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
+[ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
 n=$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")
 sleep 2
 [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = "$n" ] || fail "the second watcher's source was ended and started again"
@@ -221,10 +224,21 @@ echo '# reinstalled' >>"$again/bin/segment.sh"
 HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
 sleep 4
 kill -0 "$a" 2>/dev/null && fail "the old watcher kept running"
-[ "$(sed -n 2p "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$again" ] || fail "the lease is not the reinstalled watcher's: $(cat "$HERDR_PLUGIN_STATE_DIR/watch.lease")"
+[ "$(sed -n 2p "$S/watch.lease")" = "$again" ] || fail "the lease is not the reinstalled watcher's: $(cat "$S/watch.lease")"
 grep -q '# reinstalled' "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh" || fail "the segment was not copied again"
 rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
+pass
+
+fresh 'watch: one watcher per herdr server'
+HERDR_SOCKET_PATH=/run/one.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+HERDR_SOCKET_PATH=/run/two.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+sleep 2
+n=0
+for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
+  [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
+done
+[ "$n" = 2 ] || fail "$n watchers for two herdr servers"
 pass
 
 fresh 'watch: herdr gone'
@@ -232,7 +246,7 @@ touch "$FAKE/down"
 began=$(date +%s)
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 10 2>/dev/null
 [ $(($(date +%s) - began)) -lt 6 ] || fail "the watcher kept going without herdr"
-[ -f "$HERDR_PLUGIN_STATE_DIR/watch.lease" ] && fail "the watcher left its lease"
+[ -f "$S/watch.lease" ] && fail "the watcher left its lease"
 pass
 
 fresh 'watch: no configuration'
@@ -241,7 +255,7 @@ doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 12 '$work' queue
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 [ "$(grep -c 'overview --watch --json' "$FAKE/sluice-calls")" = 1 ] || fail "watch ran other than once: $(cat "$FAKE/sluice-calls")"
 grep -q '^work: overview --watch --json' "$FAKE/sluice-calls" || fail "watch did not run in the repository with records"
-[ -n "$(ls "$HERDR_PLUGIN_STATE_DIR/docs/"*.json 2>/dev/null)" ] || fail "no document kept"
+[ -n "$(ls "$S/docs/"*.json 2>/dev/null)" ] || fail "no document kept"
 pass
 
 fresh "watch: a source of the user's"
@@ -254,7 +268,7 @@ EOF
 jq -n -c '{schema: "sluice/overview@1", host: "build", repository: "/srv/app.git", at: "2026-10-16T19:45:10Z", branches: [], sessions: [], previews: []}' >"$FAKE/stream.jsonl"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 [ "$(cat "$FAKE/stream-calls" 2>/dev/null)" = app ] || fail "the source did not run once with its argv"
-set -- "$HERDR_PLUGIN_STATE_DIR"/docs/build--app-*.json
+set -- "$S"/docs/build--app-*.json
 [ -e "$1" ] || fail "its document is not kept under its host and repository"
 grep -q 'overview --watch' "$FAKE/sluice-calls" && fail "the default source ran beside the user's"
 pass
@@ -277,9 +291,9 @@ pass
 
 fresh 'watch: two documents'
 feed "$(doc)" "$testing95" "$(doc '.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:45:00Z", event: "landed", ids: [95], to: "aaaaaaa"}]')"
-f=$(ls "$HERDR_PLUGIN_STATE_DIR"/docs/*.json)
+f=$(ls "$S"/docs/*.json)
 [ "$(jq -r '.branches[0].recent[0].ids[0]' "$f")" = 95 ] || fail "the state file is not the last document"
-set -- "$HERDR_PLUGIN_STATE_DIR"/docs/*.tmp.*
+set -- "$S"/docs/*.tmp.*
 [ -e "$1" ] && fail "a temporary file was left"
 pass
 
@@ -288,7 +302,7 @@ feed "$testing95"
 tokens
 has '--token sluice=#95 testing'
 feed "$(doc '.branches[0] |= del(.recent, .submissions, .candidates) | del(.sessions, .previews)')" 2>"$t/err"
-for f in "$HERDR_PLUGIN_STATE_DIR"/docs/*.paths; do
+for f in "$S"/docs/*.paths; do
   jq -e 'type == "object"' "$f" >/dev/null 2>&1 || fail "$(basename "$f") is no longer an object: $(cat "$f")"
 done
 tokens 2>>"$t/err"
@@ -298,7 +312,7 @@ pass
 
 fresh 'watch: a document it cannot read'
 feed "$testing95"
-f=$(ls "$HERDR_PLUGIN_STATE_DIR"/docs/*.json)
+f=$(ls "$S"/docs/*.json)
 cp "$f" "$t/before"
 cp "${f%.json}.paths" "$t/before.paths"
 feed "$(doc '.branches = "garbled"')" 2>"$t/err"
@@ -386,12 +400,12 @@ pass
 fresh 'status: a plain directory'
 out=$(frame_of "$scratch/home" --once)
 printf '%s' "$out" | grep -q '^No sluice records in this repository.$' || fail "said: $out"
-echo "none $NOW" >"$HERDR_PLUGIN_STATE_DIR/probe/$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; sum "$1"' "$plugin/bin/x" "$(cd "$scratch/plain/.git" && pwd -P)")"
+echo "none $NOW" >"$S/probe/$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; sum "$1"' "$plugin/bin/x" "$(cd "$scratch/plain/.git" && pwd -P)")"
 out=$(frame_of "$scratch/plain" --once)
 printf '%s' "$out" | grep -q '^No sluice records in this repository.$' || fail "in a repository without records it said: $out"
 out=$(frame_of "$other" --once)
 printf '%s' "$out" | grep -q '^Waiting for sluice' || fail "before the watcher read it, it said: $out"
-[ -n "$(ls "$HERDR_PLUGIN_STATE_DIR/want")" ] || fail "the watcher was not asked to read it"
+[ -n "$(ls "$S/want")" ] || fail "the watcher was not asked to read it"
 pass
 
 fresh 'status: the dashboard'
