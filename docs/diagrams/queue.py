@@ -14,10 +14,10 @@ HOLD = 97  # percent at which everything resets
 E = 0.6  # fade width, percent
 
 STYLE = """
-:root{--bg:#f6f7f8;--panel:#ffffff;--fg:#1d2329;--muted:#5b6670;--rule:#d6dbe0;
---accent:#1b6d8a;--soft:#e3eef3;--ok:#2e7d4f;--bad:#c0392b;--ink:#ffffff}
-@media (prefers-color-scheme:dark){:root{--bg:#141a1f;--panel:#1b2329;--fg:#e6ebef;
---muted:#9aa7b2;--rule:#2c3740;--accent:#6fc2de;--soft:#1f2f38;--ok:#6cc58f;--bad:#f08a7e;--ink:#0f1a20}}
+:root{--bg:#ebe9e2;--panel:#fbfaf7;--fg:#0e1116;--muted:#5d6370;--rule:#d5d2c8;
+--accent:#2b313c;--soft:#e0ddd4;--ok:#1f8a4c;--bad:#c0392b;--ink:#f2f1ec}
+@media (prefers-color-scheme:dark){:root{--bg:#14181f;--panel:#1b2029;--fg:#f2f1ec;
+--muted:#9a9fab;--rule:#2c323d;--accent:#c9cbd2;--soft:#232933;--ok:#45c27a;--bad:#f08a7e;--ink:#0e1116}}
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
 .mono,.bart{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .bg{fill:var(--bg)} .t{fill:var(--fg)} .m{fill:var(--muted)} .ok{fill:var(--ok)} .bad{fill:var(--bad)}

@@ -2,7 +2,14 @@
 
 One 16 s loop, CSS keyframes only, so it animates inside an <img> on GitHub.
 The blueprints book carries a copy at books/sluice/src/images/sluice.svg.
+
+With --scoped, the copy the site inlines into its start page (site/scripts/
+diagram.mjs): its classes, keyframes and ids are prefixed so they can't meet
+the page's, its colors hang off .sluice-diagram, and it follows the site's
+theme toggle (data-theme on <html>) rather than the reader's system setting.
+The colors are the brand's (docs/brand).
 """
+import re
 import sys
 
 T = 16  # seconds per loop
@@ -184,11 +191,14 @@ for i, (n, l1, l2, a, b) in enumerate(caps):
         f'<text class="t sm" x="{x+30}" y="408">{l1}</text>'
         f'<text class="t sm" x="{x+30}" y="425">{l2}</text></g>')
 
+LIGHT = ("--bg:#ebe9e2;--panel:#fbfaf7;--fg:#0e1116;--muted:#5d6370;--rule:#d5d2c8;"
+         "--accent:#2b313c;--soft:#e0ddd4;--ok:#1f8a4c;--bad:#c0392b;--ink:#f2f1ec")
+DARK = ("--bg:#14181f;--panel:#1b2029;--fg:#f2f1ec;--muted:#9a9fab;--rule:#2c323d;"
+        "--accent:#c9cbd2;--soft:#232933;--ok:#45c27a;--bad:#f08a7e;--ink:#0e1116")
+
 STYLE = """
-:root{--bg:#f6f7f8;--panel:#ffffff;--fg:#1d2329;--muted:#5b6670;--rule:#d6dbe0;
---accent:#1b6d8a;--soft:#e3eef3;--ok:#2e7d4f;--bad:#c0392b;--ink:#ffffff}
-@media (prefers-color-scheme:dark){:root{--bg:#141a1f;--panel:#1b2329;--fg:#e6ebef;
---muted:#9aa7b2;--rule:#2c3740;--accent:#6fc2de;--soft:#1f2f38;--ok:#6cc58f;--bad:#f08a7e;--ink:#0f1a20}}
+:root{LIGHT}
+@media (prefers-color-scheme:dark){:root{DARK}}
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
 .mono,.chipt,.pillt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .bg{fill:var(--bg)} .t{fill:var(--fg)} .m{fill:var(--muted)} .ok{fill:var(--ok)} .bad{fill:var(--bad)}
@@ -210,10 +220,11 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 .cap{animation:none!important;opacity:1}}
 """
 
+style = STYLE.replace("LIGHT", LIGHT).replace("DARK", DARK) + "".join(css)
 head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
 <title id="ttl">sluice: a merge queue for agents in worktrees</title>
 <desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates branch plus A, branch plus A plus B, and branch plus A plus B plus C, and tests them at once. Branch plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the branch without B, mostly replays from the cache, passes and lands. The branch moves only to what passed.</desc>
-<style>{STYLE}{"".join(css)}</style>
+<style>{style}</style>
 <rect class="bg" width="900" height="446" rx="10"/>
 <text class="h" x="20" y="32">sluice</text>
 <text class="m sm" x="80" y="32">a merge queue for agents in worktrees</text>
@@ -224,4 +235,29 @@ head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="
 <text class="hd" x="664" y="62">THE BRANCH</text>
 '''
 out = head + "\n".join(svg) + "\n</svg>\n"
-open(sys.argv[1], "w").write(out)
+
+
+def scoped(svg):
+    """The page's copy: every class, keyframe and id under sd-, scoped to .sluice-diagram."""
+    def css(m):
+        st = re.sub(r"\.(?=[a-zA-Z])", ".sd-", m.group(1))
+        st = re.sub(r"\bk-", "sd-k-", st)
+        st = st.replace(f":root{{{LIGHT}}}", f".sluice-diagram{{{LIGHT}}}")
+        st = st.replace(f"@media (prefers-color-scheme:dark){{:root{{{DARK}}}}}",
+                        f":root[data-theme='dark'] .sluice-diagram{{{DARK}}}")
+        st = st.replace("text{font-family:", ".sluice-diagram text{font-family:var(--sl-font),")
+        st = st.replace(".sd-mono,.sd-chipt,.sd-pillt{font-family:",
+                        ".sd-mono,.sd-chipt,.sd-pillt{font-family:var(--sl-font-mono),")
+        st = st.replace("{*{animation", "{.sluice-diagram *{animation")
+        return f"<style>{st}</style>"
+    svg = re.sub(r"<style>(.*?)</style>", css, svg, flags=re.S)
+    svg = re.sub(r'class="([^"]*)"', lambda m: 'class="' + " ".join(f"sd-{c}" for c in m.group(1).split()) + '"', svg)
+    svg = svg.replace('id="ttl"', 'id="sd-ttl"').replace('id="dsc"', 'id="sd-dsc"')
+    svg = svg.replace('aria-labelledby="ttl dsc"', 'aria-labelledby="sd-ttl sd-dsc"')
+    return svg.replace('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446"',
+                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" class="sluice-diagram"', 1)
+
+
+if "--scoped" in sys.argv:
+    out = scoped(out)
+open([a for a in sys.argv[1:] if a != "--scoped"][0], "w").write(out)
