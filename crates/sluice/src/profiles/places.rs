@@ -564,9 +564,12 @@ impl Places {
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
+        let blocks = self.blocks()?;
         if let Some(n) = block {
-            free_block(&self.blocks()?, n, &self.record(name))?;
+            free_block(&blocks, n, &self.record(name))?;
         }
+        // Under the lock `ran` writes under.
+        let _lock = lock_blocks(&blocks)?;
         match std::fs::remove_file(self.record(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
@@ -1144,9 +1147,15 @@ impl Checkout for Places {
     }
 
     fn ran(&self, name: &str, last: &LastResult) -> Result<()> {
+        // Under the host's lock that `let_go` removes a record under, so a
+        // release between the read and the write never writes a released
+        // place's record again, freed ports and all.
+        let _lock = lock_blocks(&self.blocks()?)?;
         let mut made = match self.read_record(name)? {
             Some(m) if m.kind == Kind::Session => m,
-            _ => bail!("place {name} is no session's"),
+            // Released meanwhile: there is no place to keep it on (95).
+            None => return Ok(()),
+            Some(_) => bail!("place {name} is no session's"),
         };
         made.last_result = Some(last.clone());
         self.write_record(name, &made)
@@ -1375,9 +1384,67 @@ impl Checkout for Places {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill, label, repository, slug};
+    use super::{fill, label, lock_blocks, repository, slug, Kind, Made, Places};
+    use crate::runs::Runs;
+    use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
     use std::collections::BTreeMap;
     use std::path::Path;
+
+    fn last() -> LastResult {
+        LastResult {
+            at: "2026-10-16T09:00:00Z".into(),
+            head: Rev("a".into()),
+            kind: RunKind::Checks,
+            outcome: RunOutcome::Pass,
+            recorded: true,
+        }
+    }
+
+    /// 95, 97: a result kept as a release removes the place's record waits
+    /// for the host's lock, and writes nothing once the record is gone, so a
+    /// released place is never written again.
+    #[test]
+    fn a_result_is_never_kept_on_a_released_place() {
+        let root = std::env::temp_dir().join(format!("sluice-ran-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let open = || {
+            Places::new(&root, Runs::new(&root, "sluice".into())).with_blocks(root.join("blocks"))
+        };
+        let places = open();
+        let name = format!("session/{}", root.join("wt").display());
+        let record = places.record(&name);
+
+        // No record: nothing to keep it on, and nothing made.
+        places.ran(&name, &last()).unwrap();
+        assert!(!record.exists());
+
+        let made = Made {
+            path: Some(root.join("wt")),
+            ..Made::new(Kind::Session, "session")
+        };
+        places.write_record(&name, &made).unwrap();
+        let held = lock_blocks(&root.join("blocks")).unwrap();
+        std::thread::scope(|s| {
+            let keeping = s.spawn(|| open().ran(&name, &last()));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                places
+                    .read_record(&name)
+                    .unwrap()
+                    .unwrap()
+                    .last_result
+                    .is_none(),
+                "kept without the lock"
+            );
+            // A release removes the record under the lock.
+            std::fs::remove_file(&record).unwrap();
+            drop(held);
+            keeping.join().unwrap().unwrap();
+        });
+        assert!(!record.exists(), "a released place's record written again");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.
     #[test]

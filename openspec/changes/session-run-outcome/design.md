@@ -141,8 +141,12 @@ run's.
 ### The seam
 
 `Checkout::ran(name, &LastResult)`: keep `LastResult` as the session
-place `name`'s last result, replacing any; an error for a name that is
-not a session's place. `SessionPlace.last_result: Option<LastResult>`.
+place `name`'s last result, replacing any; nothing for a place already
+released; an error for a candidate's or a preview's place. The place
+profile reads and writes the record under the host's lock it holds
+blocks of ports under, and removes a released place's record under the
+same lock, so a release between the read and the write never sees the
+record written again. `SessionPlace.last_result: Option<LastResult>`.
 One interface, implemented by the place profile and the fakes (rule
 core.2); the conformance suite covers it.
 

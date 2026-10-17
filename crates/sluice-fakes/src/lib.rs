@@ -1191,7 +1191,11 @@ impl Checkout for FakeCheckout {
     fn ran(&self, name: &str, last: &LastResult) -> Result<()> {
         let mut inner = self.0 .0.borrow_mut();
         if !inner.adopted.iter().any(|a| a == name) {
-            bail!("place {name} is no session's");
+            if inner.places.contains_key(name) {
+                bail!("place {name} is no session's");
+            }
+            // Released meanwhile: nothing to keep it on (95).
+            return Ok(());
         }
         inner.last_results.insert(name.into(), last.clone());
         let len = inner.results.len();
@@ -1546,7 +1550,8 @@ mod tests {
     }
 
     /// 97: a session place keeps its last run's result, the next replaces
-    /// it, its release removes it, and no other name takes one.
+    /// it, its release removes it and a result after the release is kept
+    /// nowhere, and a candidate's place takes none.
     #[test]
     fn a_session_place_keeps_its_last_result_until_released() {
         use sluice_seams::RunOutcome::{Fail, Pass};
@@ -1569,7 +1574,12 @@ mod tests {
         );
         f.checkout.release_session(&place.name, None).unwrap();
         assert!(f.checkout.session_places().unwrap().is_empty());
-        assert!(f.checkout.ran(&place.name, &last(Pass)).is_err());
+        f.checkout.ran(&place.name, &last(Pass)).unwrap();
+        assert!(f.checkout.session_places().unwrap().is_empty());
+        f.world.init("main", &[("x", "1")]);
+        f.checkout
+            .materialize("candidate-1", &f.world.tip("main"), &Settings::new())
+            .unwrap();
         assert!(f.checkout.ran("candidate-1", &last(Pass)).is_err());
     }
 }

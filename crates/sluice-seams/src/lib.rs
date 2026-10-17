@@ -246,7 +246,8 @@ pub trait Checkout {
 
     /// Session-runs-1 clause 97: keep `last` as how the session's place
     /// `name`'s last run ended, replacing any, until the place's release.
-    /// An error for a name that is no session's place.
+    /// Nothing for a place already released, whose record a release never
+    /// sees written again; an error for a candidate's or a preview's place.
     fn ran(&self, name: &str, last: &LastResult) -> Result<()>;
 
     /// Every worktree of the repository that has a branch checked out,

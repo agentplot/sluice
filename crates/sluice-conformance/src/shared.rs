@@ -822,11 +822,12 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
         .release_session(&name, None)
         .expect("the release runs");
     assert_eq!(held(h, "unit/a"), None);
-    assert!(s
-        .seams()
+    // A result kept after the release is kept nowhere.
+    s.seams()
         .checkout
         .ran(&name, &last_result_of(&passing))
-        .is_err());
+        .expect("nothing to keep it on");
+    assert_eq!(held(h, "unit/a"), None);
 }
 
 fn last_result_of(head: &Rev) -> LastResult {
