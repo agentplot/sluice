@@ -9,7 +9,9 @@ use sluice_core::records::{
 };
 use sluice_core::session::Recorded;
 use sluice_core::{Forecast, Sluice, SubmitRefusal};
-use sluice_seams::{Outcome, ReleasePolicy, Released, Told};
+use sluice_seams::{
+    LastResult, Outcome, ReleasePolicy, Released, Rev, RunKind, RunOutcome, SessionPlace, Told,
+};
 
 use crate::{Rig, BRANCH};
 
@@ -699,6 +701,230 @@ pub fn s27_a_sessions_place_stays_until_it_is_released(h: &impl Rig) {
             .unwrap(),
         Released::Nothing
     );
+}
+
+/// The session place listed for `worktree`, if any.
+fn held(h: &impl Rig, worktree: &str) -> Option<SessionPlace> {
+    let place = h.place(worktree);
+    h.sluice()
+        .session_places()
+        .expect("the place seam lists")
+        .into_iter()
+        .find(|p| p.worktree == std::path::Path::new(&place))
+}
+
+/// `worktree`'s last result, which it must have.
+fn last_result(h: &impl Rig, worktree: &str) -> LastResult {
+    held(h, worktree)
+        .and_then(|p| p.last_result)
+        .unwrap_or_else(|| panic!("{worktree} has no last result"))
+}
+
+fn expect_last(last: &LastResult, head: &Rev, kind: RunKind, outcome: RunOutcome, recorded: bool) {
+    assert_eq!(
+        (&last.head, last.kind, last.outcome, last.recorded),
+        (head, kind, outcome, recorded),
+        "{last:?}"
+    );
+}
+
+/// Session-runs-1 clauses 92, 97, rule core.18: every session run leaves
+/// on its place the head and outcome of its last run, and says recorded
+/// only of a clean run of the checks whose results are under their keys;
+/// a command's run and an unclean run never; the next run's start drops
+/// it, its end replaces it, and the release removes it.
+pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    assert_eq!(held(h, "unit/a"), None);
+    let (_, recorded) = h.session_run("unit/a");
+    assert!(matches!(recorded, Recorded::Written(_)), "{recorded:?}");
+    expect_last(
+        &last_result(h, "unit/a"),
+        &head,
+        RunKind::Checks,
+        RunOutcome::Pass,
+        true,
+    );
+
+    // A rerun whose every result is under its key already is recorded.
+    let (_, recorded) = h.session_run("unit/a");
+    assert_eq!(recorded, Recorded::Written(0));
+    expect_last(
+        &last_result(h, "unit/a"),
+        &head,
+        RunKind::Checks,
+        RunOutcome::Pass,
+        true,
+    );
+
+    // A clean run that fails is recorded, and replaces the pass.
+    h.fails_with("a:test", "a/lib", "a3");
+    let failing = h.work_on("unit/a", &head, &[("a/lib", Some("a3"))]);
+    h.session_run("unit/a");
+    expect_last(
+        &last_result(h, "unit/a"),
+        &failing,
+        RunKind::Checks,
+        RunOutcome::Fail,
+        true,
+    );
+
+    // An unclean run that passes is not.
+    let passing = h.work_on("unit/a", &failing, &[("a/lib", Some("a4"))]);
+    h.dirty("unit/a", &["a/scratch"]);
+    let before = h.results();
+    let (_, recorded) = h.session_run("unit/a");
+    assert_eq!(recorded, Recorded::NotClean);
+    assert_eq!(h.results(), before, "an unclean run records nothing");
+    expect_last(
+        &last_result(h, "unit/a"),
+        &passing,
+        RunKind::Checks,
+        RunOutcome::Pass,
+        false,
+    );
+
+    // Nor is a command that exits 0.
+    let (_, recorded) = h.session_exec("unit/a", Some("true"));
+    assert_eq!(recorded, Recorded::Nothing);
+    expect_last(
+        &last_result(h, "unit/a"),
+        &passing,
+        RunKind::Command,
+        RunOutcome::Pass,
+        false,
+    );
+
+    // A run that starts and never ends, its starter killed, shows none:
+    // the one before is not the last run.
+    let s = h.sluice();
+    let plan = s
+        .session_plan(BRANCH)
+        .expect("the plan reads")
+        .expect("the branch is managed");
+    s.seams()
+        .checkout
+        .adopt(
+            &h.place("unit/a"),
+            BRANCH,
+            &plan.policy.checkout,
+            "2026-10-16T09:30:00Z",
+        )
+        .expect("the place is equipped");
+    let listed = held(h, "unit/a").expect("held");
+    assert_eq!(listed.last_result, None, "{listed:?}");
+    assert_eq!(listed.last_run.as_deref(), Some("2026-10-16T09:30:00Z"));
+
+    // The release removes it.
+    let name = held(h, "unit/a").expect("held").name;
+    s.seams()
+        .checkout
+        .release_session(&name, None)
+        .expect("the release runs");
+    assert_eq!(held(h, "unit/a"), None);
+    // A result kept after the release is kept nowhere.
+    s.seams()
+        .checkout
+        .ran(&name, &last_result_of(&passing))
+        .expect("nothing to keep it on");
+    assert_eq!(held(h, "unit/a"), None);
+}
+
+fn last_result_of(head: &Rev) -> LastResult {
+    LastResult {
+        at: "2026-10-16T09:00:00Z".into(),
+        head: head.clone(),
+        kind: RunKind::Checks,
+        outcome: RunOutcome::Fail,
+        recorded: false,
+    }
+}
+
+/// Session-runs-1 clause 92, rule core.18: a worktree whose head or files
+/// change while its run of the checks runs records nothing under keys,
+/// and its result names the head the run started on, not recorded.
+pub fn a_worktree_that_changes_while_its_run_runs_records_nothing(h: &impl Rig) {
+    for (worktree, change) in [("unit/a", "commit"), ("unit/b", "edit")] {
+        let head = h.work(worktree, "agent", &[("a/lib", Some("a2"))]);
+        let s = h.sluice();
+        let place = h.place(worktree);
+        let plan = s
+            .session_plan(BRANCH)
+            .expect("the plan reads")
+            .expect("the branch is managed");
+        let session = s.seams().driver.session(&place).expect("a session");
+        let started = s
+            .start_session(&plan, &place, &session.head, None)
+            .expect("the run starts");
+        match change {
+            "commit" => {
+                h.work_on(worktree, &head, &[("a/lib", Some("a3"))]);
+            }
+            _ => h.dirty(worktree, &["a/scratch"]),
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let report = loop {
+            match s.seams().tests.progress(&started.run).expect("progress") {
+                sluice_seams::Progress::Finished(r) => break r,
+                sluice_seams::Progress::Running if std::time::Instant::now() < until => {
+                    std::thread::sleep(std::time::Duration::from_millis(50))
+                }
+                p => panic!("the run did not finish: {p:?}"),
+            }
+        };
+        let before = h.results();
+        let finished = s
+            .finish_session(&plan, &session, &started, false, &report)
+            .expect("the run finishes");
+        match (&finished.recorded, change) {
+            (Recorded::Changed { moved_to, paths }, "commit") => {
+                assert!(
+                    moved_to.is_some() && paths.is_empty(),
+                    "{moved_to:?} {paths:?}"
+                )
+            }
+            (Recorded::Changed { moved_to, paths }, _) => assert!(
+                moved_to.is_none() && paths.len() == 1 && paths[0].ends_with("a/scratch"),
+                "{moved_to:?} {paths:?}"
+            ),
+            (other, _) => panic!("{change}: {other:?}"),
+        }
+        assert_eq!(h.results(), before, "{change}: recorded under keys");
+        let last = last_result(h, worktree);
+        assert_eq!(
+            (&last.head, last.recorded),
+            (&head, false),
+            "{change}: {last:?}"
+        );
+    }
+}
+
+/// Session-runs-1 clause 97, rule core.18: a worktree's last result
+/// decides nothing. A clean run's recorded pass is replayed by its
+/// submission as it would be whatever the place says of a later run.
+pub fn a_last_result_decides_nothing(h: &impl Rig) {
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let (report, _) = h.session_run("unit/a");
+    let name = held(h, "unit/a").expect("held").name;
+    h.sluice()
+        .seams()
+        .checkout
+        .ran(&name, &last_result_of(&head))
+        .expect("the place keeps it");
+    let before = h.results().len();
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    let candidate: Vec<_> = h.results().into_iter().skip(before).collect();
+    for t in &report.tasks {
+        assert!(
+            candidate
+                .iter()
+                .any(|c| c.task == t.task && c.hash == t.hash && c.kind == ResultKind::Replayed),
+            "{} was not replayed: {candidate:?}",
+            t.task
+        );
+    }
 }
 
 /// Session-runs-1 clause 97: a session's place whose worktree no longer

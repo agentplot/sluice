@@ -17,9 +17,9 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
-    Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress, ReleasePolicy, Released,
-    Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace, Settings, Snapshot, Source,
-    State, Submitter, TaskLog, TaskResult, Tests, Written,
+    LastResult, Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress,
+    ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
+    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -113,6 +113,13 @@ struct Inner {
     adopted_for: BTreeMap<String, String>,
     /// When each session place's last run started.
     adopted_at: BTreeMap<String, String>,
+    /// How each session place's last run ended (97).
+    last_results: BTreeMap<String, LastResult>,
+    /// How long the results log was when each session place's last result
+    /// was kept.
+    results_when_ran: BTreeMap<String, usize>,
+    /// Keeping a session run's result fails.
+    keeping_fails: bool,
     /// Each session place released, and the `[tests] release` it was
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
@@ -388,6 +395,11 @@ impl World {
             .borrow_mut()
             .flaky
             .insert(task.into(), outcomes.iter().copied().collect());
+    }
+
+    /// Keeping a session run's result on its place fails from now.
+    pub fn keeping_fails(&self, fails: bool) {
+        self.0.borrow_mut().keeping_fails = fails;
     }
 
     /// `task` runs past any time limit.
@@ -688,6 +700,12 @@ impl World {
                 inner.checked_out.remove(worktree);
             }
         }
+    }
+
+    /// How long the results log was when the session place `name`'s last
+    /// result was kept.
+    pub fn results_when_ran(&self, name: &str) -> Option<usize> {
+        self.0.borrow().results_when_ran.get(name).copied()
     }
 
     /// The clock moves on by `by`.
@@ -1035,6 +1053,7 @@ impl FakeCheckout {
         inner.adopted.retain(|a| a != name);
         inner.adopted_for.remove(name);
         inner.adopted_at.remove(name);
+        inner.last_results.remove(name);
         if inner.places.remove(name).is_some() {
             inner.released.push(name.into());
             if passed {
@@ -1116,6 +1135,8 @@ impl Checkout for FakeCheckout {
             inner.adopted_for.insert(name.clone(), branch.into());
         }
         inner.adopted_at.insert(name.clone(), at.into());
+        // 97: a run under way has no result.
+        inner.last_results.remove(&name);
         Ok(Place {
             name: name.clone(),
             path: worktree.into(),
@@ -1168,9 +1189,28 @@ impl Checkout for FakeCheckout {
                     ports: BTreeMap::new(),
                     last_run: inner.adopted_at.get(name).cloned(),
                     gone: !inner.worktrees.contains_key(worktree),
+                    last_result: inner.last_results.get(name).cloned(),
                 }
             })
             .collect())
+    }
+
+    fn ran(&self, name: &str, last: &LastResult) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        if inner.keeping_fails {
+            bail!("the place's record could not be written");
+        }
+        if !inner.adopted.iter().any(|a| a == name) {
+            if inner.places.contains_key(name) {
+                bail!("place {name} is no session's");
+            }
+            // Released meanwhile: nothing to keep it on (95).
+            return Ok(());
+        }
+        inner.last_results.insert(name.into(), last.clone());
+        let len = inner.results.len();
+        inner.results_when_ran.insert(name.into(), len);
+        Ok(())
     }
 
     fn checked_out(&self) -> Result<Vec<CheckedOut>> {
@@ -1507,5 +1547,49 @@ mod tests {
         assert_eq!(f.tests.sessions().unwrap(), 2);
         f.world.kill_session("/w/a");
         assert_eq!(f.tests.sessions().unwrap(), 1);
+    }
+
+    fn last(outcome: sluice_seams::RunOutcome) -> LastResult {
+        LastResult {
+            at: "2026-10-16T09:00:00Z".into(),
+            head: Rev("a".into()),
+            kind: sluice_seams::RunKind::Checks,
+            outcome,
+            recorded: true,
+        }
+    }
+
+    /// 97: a session place keeps its last run's result, the next replaces
+    /// it, its release removes it and a result after the release is kept
+    /// nowhere, and a candidate's place takes none.
+    #[test]
+    fn a_session_place_keeps_its_last_result_until_released() {
+        use sluice_seams::RunOutcome::{Fail, Pass};
+        let f = Fakes::new();
+        f.world.session("/w/a", "a", &Rev("a".into()));
+        let place = f
+            .checkout
+            .adopt("/w/a", "main", &Settings::new(), "2026-10-16T08:59:00Z")
+            .unwrap();
+        assert_eq!(f.checkout.session_places().unwrap()[0].last_result, None);
+        f.checkout.ran(&place.name, &last(Pass)).unwrap();
+        assert_eq!(
+            f.checkout.session_places().unwrap()[0].last_result,
+            Some(last(Pass))
+        );
+        f.checkout.ran(&place.name, &last(Fail)).unwrap();
+        assert_eq!(
+            f.checkout.session_places().unwrap()[0].last_result,
+            Some(last(Fail))
+        );
+        f.checkout.release_session(&place.name, None).unwrap();
+        assert!(f.checkout.session_places().unwrap().is_empty());
+        f.checkout.ran(&place.name, &last(Pass)).unwrap();
+        assert!(f.checkout.session_places().unwrap().is_empty());
+        f.world.init("main", &[("x", "1")]);
+        f.checkout
+            .materialize("candidate-1", &f.world.tip("main"), &Settings::new())
+            .unwrap();
+        assert!(f.checkout.ran("candidate-1", &last(Pass)).is_err());
     }
 }

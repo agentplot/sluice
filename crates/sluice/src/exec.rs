@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
-use sluice_seams::{Outcome, Progress, Released, RunHandle, RunReport};
+use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport};
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
@@ -278,6 +278,12 @@ impl Exec<'_> {
             if !self.pause.pause() {
                 self.host.end_run(&run)?;
                 self.host.end_session(&worktree)?;
+                unkept(s.session_ended(
+                    &place.name,
+                    &session.head,
+                    command.is_some(),
+                    RunOutcome::Stopped,
+                ));
                 say(out, json, "stopped: the run was ended; nothing recorded")?;
                 return Ok(STOPPED);
             }
@@ -286,6 +292,12 @@ impl Exec<'_> {
         let report = match progress {
             Progress::Finished(r) => r,
             _ => {
+                unkept(s.session_ended(
+                    &place.name,
+                    &session.head,
+                    command.is_some(),
+                    RunOutcome::Lost,
+                ));
                 say(
                     out,
                     json,
@@ -303,24 +315,33 @@ impl Exec<'_> {
             place: place.clone(),
             run: run.clone(),
         };
-        let recorded =
-            match s.finish_session(&plan, &session, &started, command.is_some(), &report)? {
-                Recorded::Written(n) => {
-                    let head = session.head.short();
-                    let text = match n {
-                        0 => format!("recorded already under their keys for {head}"),
-                        1 => format!("recorded 1 result under its key for {head}"),
-                        n => format!("recorded {n} results under their keys for {head}"),
-                    };
-                    say(out, json, &text)?;
-                    true
-                }
-                Recorded::NotClean => {
-                    say(out, json, "not recorded: worktree is not clean")?;
-                    false
-                }
-                Recorded::Nothing => false,
-            };
+        let finished = s.finish_session(&plan, &session, &started, command.is_some(), &report)?;
+        unkept(finished.unkept.map_or(Ok(()), |e| Err(anyhow::anyhow!(e))));
+        let recorded = match finished.recorded {
+            Recorded::Written(n) => {
+                let head = session.head.short();
+                let text = match n {
+                    0 => format!("recorded already under their keys for {head}"),
+                    1 => format!("recorded 1 result under its key for {head}"),
+                    n => format!("recorded {n} results under their keys for {head}"),
+                };
+                say(out, json, &text)?;
+                true
+            }
+            Recorded::NotClean => {
+                say(out, json, "not recorded: worktree is not clean")?;
+                false
+            }
+            Recorded::Changed { moved_to, paths } => {
+                say(
+                    out,
+                    json,
+                    &changed_text(&session.head, moved_to.as_ref(), &paths),
+                )?;
+                false
+            }
+            Recorded::Nothing => false,
+        };
         let code = match &command {
             Some(_) => self
                 .host
@@ -485,8 +506,106 @@ pub fn release(
     })
 }
 
+/// Why a run in a worktree that changed while it ran was not recorded
+/// (92, rule core.18): the commit it moved to, and up to five of the paths
+/// beyond its head, which a check may have written itself.
+pub fn changed_text(
+    head: &sluice_seams::Rev,
+    moved_to: Option<&sluice_seams::Rev>,
+    paths: &[String],
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(to) = moved_to {
+        parts.push(format!(
+            "the worktree moved from {} to {} while the run ran",
+            head.short(),
+            to.short()
+        ));
+    }
+    if !paths.is_empty() {
+        let mut named = paths
+            .iter()
+            .take(5)
+            .map(|p| path_of(p))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if paths.len() > 5 {
+            named.push_str(&format!(" and {} more", paths.len() - 5));
+        }
+        parts.push(format!(
+            "after the run of {} the worktree holds {named} beyond its head; \
+             these may be the checks' own output, and if so, list them in .gitignore",
+            head.short()
+        ));
+    }
+    if parts.is_empty() {
+        parts.push(format!(
+            "the worktree could not be read after the run of {}",
+            head.short()
+        ));
+    }
+    format!("not recorded: {}", parts.join("; "))
+}
+
+/// A path of what a worktree holds beyond its head, without the status
+/// `git status --porcelain` puts before it.
+fn path_of(line: &str) -> &str {
+    let b = line.as_bytes();
+    if b.len() > 3 && b[2] == b' ' && b[..2].iter().all(|c| b" MTADRCU?!".contains(c)) {
+        &line[3..]
+    } else {
+        line
+    }
+}
+
+/// 97: a result that could not be kept on the worktree is said on stderr,
+/// and changes neither the run's exit nor what it printed.
+fn unkept(kept: Result<()>) {
+    if let Err(e) = kept {
+        eprintln!("warning: the run's result could not be kept on the worktree: {e:#}");
+    }
+}
+
 fn passed(report: &RunReport) -> bool {
     !report.timed_out
         && report.missing.is_empty()
         && report.tasks.iter().all(|t| t.outcome == Outcome::Pass)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::changed_text;
+    use sluice_seams::Rev;
+
+    /// 92: a run not recorded because its worktree changed names what
+    /// changed, up to five paths, and says a check may have written them.
+    #[test]
+    fn a_changed_worktree_is_named_without_blame() {
+        let head = Rev("1a2b3c4d5e".into());
+        let paths: Vec<String> = (1..=7).map(|n| format!("out/{n}.log")).collect();
+        assert_eq!(
+            changed_text(&head, None, &paths),
+            "not recorded: after the run of 1a2b3c4 the worktree holds out/1.log, out/2.log, \
+             out/3.log, out/4.log, out/5.log and 2 more beyond its head; these may be the \
+             checks' own output, and if so, list them in .gitignore"
+        );
+        assert_eq!(
+            changed_text(&head, None, &["?? out/1.log".to_string()]),
+            changed_text(&head, None, &paths[..1]),
+            "the status git puts before a path is left out"
+        );
+        assert_eq!(
+            changed_text(&head, None, &paths[..1]),
+            "not recorded: after the run of 1a2b3c4 the worktree holds out/1.log beyond its \
+             head; these may be the checks' own output, and if so, list them in .gitignore"
+        );
+        assert_eq!(
+            changed_text(&head, Some(&Rev("9f8e7d6c5b".into())), &[]),
+            "not recorded: the worktree moved from 1a2b3c4 to 9f8e7d6 while the run ran"
+        );
+        assert_eq!(
+            changed_text(&head, None, &[]),
+            "not recorded: the worktree could not be read after the run of 1a2b3c4"
+        );
+    }
 }

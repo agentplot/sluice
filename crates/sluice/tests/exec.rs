@@ -303,3 +303,95 @@ fn the_next_exec_releases_a_removed_worktree() {
         "{log}"
     );
 }
+
+/// Session-runs-1 clauses 92, 97, rule core.18: each run leaves on the
+/// worktree's entry in `sluice status --json` and `sluice overview --json`
+/// the head and outcome of the last run there, recorded only for a clean
+/// run of the checks; the next run replaces it and the release removes it.
+#[test]
+fn a_worktrees_last_result_says_its_head_outcome_and_whether_it_was_recorded() {
+    let s = Setup::new("exec-last-result");
+    let head = |s: &Setup| s.repo.git(&["rev-parse", "unit/a"]).trim().to_string();
+    let git = |args: &[&str]| {
+        let mut a = vec!["-C", s.worktree.to_str().unwrap()];
+        a.extend(args);
+        s.repo.git(&a)
+    };
+    let held = |s: &Setup| -> serde_json::Value {
+        let out = s.sluice(&["status", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        doc["worktrees"][0].clone()
+    };
+    let last = |s: &Setup| held(s)["last_result"].clone();
+    let expect = |s: &Setup, head: &str, kind: &str, outcome: &str, recorded: bool| {
+        let l = last(s);
+        assert_eq!(l["head"], head, "{l}");
+        assert_eq!(l["kind"], kind, "{l}");
+        assert_eq!(l["outcome"], outcome, "{l}");
+        assert_eq!(l["recorded"], recorded, "{l}");
+        assert!(l["at"].as_str().unwrap().starts_with("20"), "{l}");
+    };
+
+    // A clean pass, recorded; the overview lists the same.
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let passed = head(&s);
+    expect(&s, &passed, "checks", "pass", true);
+    let entry = held(&s);
+    for field in ["last_run", "ports", "removed", "worktree", "branch"] {
+        assert!(!entry[field].is_null(), "{field}: {entry}");
+    }
+    let out = s.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["sessions"][0], entry, "{doc}");
+    let out = s.sluice(&["status"]);
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        said.contains(&format!("last result passed on {}, recorded", &passed[..7])),
+        "{said}"
+    );
+
+    // A clean fail, recorded, replaces it.
+    std::fs::write(s.worktree.join("check.sh"), "exit 1\n").unwrap();
+    git(&["commit", "-q", "-am", "a failing check"]);
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    let failed = head(&s);
+    expect(&s, &failed, "checks", "fail", true);
+
+    // An unclean pass is not recorded.
+    std::fs::write(s.worktree.join("check.sh"), "true\n").unwrap();
+    git(&["commit", "-q", "-am", "a passing check"]);
+    std::fs::write(s.worktree.join("a.txt"), "changed").unwrap();
+    let before = s.results();
+    let out = s.sluice(&["exec", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.results(), before);
+    expect(&s, &head(&s), "checks", "pass", false);
+
+    // Nor is a command that exits 0.
+    let out = s.sluice(&["exec", "bolt/x", "--", "true"]);
+    assert!(out.status.success(), "{}", text(&out));
+    expect(&s, &head(&s), "command", "pass", false);
+    let out = s.sluice(&["status"]);
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(said.contains("last result command passed on"), "{said}");
+
+    // A run its time limit ends.
+    s.repo.write(
+        ".config/sluice.toml",
+        &POLICY.replace("timeout = \"1m\"", "timeout = \"1s\""),
+    );
+    s.repo.git(&["commit", "-q", "-am", "a short time limit"]);
+    s.repo.git(&["branch", "-f", "bolt/x", "main"]);
+    let out = s.sluice(&["exec", "bolt/x", "--", "sleep", "30"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    expect(&s, &head(&s), "command", "timed_out", false);
+
+    // The release removes it.
+    let out = s.sluice(&["release"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(held(&s).is_null(), "released");
+}
