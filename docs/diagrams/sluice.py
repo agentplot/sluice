@@ -245,7 +245,7 @@ def scoped(svg):
         st = st.replace(f":root{{{LIGHT}}}", f".sluice-diagram{{{LIGHT}}}")
         st = st.replace(f"@media (prefers-color-scheme:dark){{:root{{{DARK}}}}}",
                         f":root[data-theme='dark'] .sluice-diagram{{{DARK}}}")
-        st = st.replace("text{font-family:", ".sluice-diagram text{font-family:var(--sl-font),")
+        st = st.replace("text{font-family:", ":where(.sluice-diagram) text{font-family:var(--sl-font),")
         st = st.replace(".sd-mono,.sd-chipt,.sd-pillt{font-family:",
                         ".sd-mono,.sd-chipt,.sd-pillt{font-family:var(--sl-font-mono),")
         st = st.replace("{*{animation", "{.sluice-diagram *{animation")
