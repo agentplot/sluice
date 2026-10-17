@@ -7,7 +7,12 @@ lock=$state/lease.lock
 # Take the lock; 1 when a live owner keeps it for three seconds.
 take_lock() {
   tries=0
+  rounds=0
   while ! mkdir "$lock" 2>/dev/null; do
+    # Its state directory gone, or the lock fought over: give up.
+    [ -d "$state" ] || return 1
+    rounds=$((rounds + 1))
+    [ "$rounds" -le 10 ] || return 1
     owner=$(cat "$lock/pid" 2>/dev/null)
     if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
       # Its owner died holding it.

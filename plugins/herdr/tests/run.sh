@@ -11,7 +11,18 @@ plugin=$(dirname "$here")
 
 # Under sluice's sandbox only SLUICE_TMP is writable beside the checkout.
 scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/sluice-herdr.XXXXXX")
-trap 'rm -rf "$scratch"' EXIT
+
+# A watcher a test started, through --ensure or itself, is ended with it:
+# only those whose lease is in this run's scratch directory.
+reap() {
+  for l in "$scratch"/t*/state/watch.lease "$scratch"/t*/state/*/*/watch.lease; do
+    [ -f "$l" ] || continue
+    p=$(cut -d' ' -f1 "$l")
+    [ -n "$p" ] && [ "$p" != $$ ] && kill "$p" 2>/dev/null
+  done
+  sleep 1
+}
+trap 'reap; rm -rf "$scratch"' EXIT
 scratch=$(cd "$scratch" && pwd -P)
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
@@ -47,6 +58,7 @@ name=
 
 # A fresh state, config and stand-in directory for one test.
 fresh() {
+  reap
   name=$1
   failed_before=$failures
   count=$((count + 1))
@@ -146,6 +158,47 @@ fresh 'watch: a lock with no owner'
 mkdir "$HERDR_PLUGIN_STATE_DIR/lease.lock"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "a lock with no owner stopped the watcher"
+pass
+
+fresh 'watch: a long tick keeps the lease'
+echo 6 >"$FAKE/probe-sleep"
+SLUICE_HERDR_LEASE=3 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log" &
+first=$!
+sleep 4
+SLUICE_HERDR_LEASE=3 sh "$plugin/bin/watch.sh" --ensure
+wait "$first"
+sleep 1
+if grep -q 'watching' "$HERDR_PLUGIN_STATE_DIR/watch.log" 2>/dev/null; then
+  fail "a second watcher started during a long tick"
+  # Only the one this test started, never another herdr's.
+  stray=$(cut -d" " -f1 "$HERDR_PLUGIN_STATE_DIR/watch.lease" 2>/dev/null)
+  [ -n "$stray" ] && [ "$stray" != "$first" ] && kill "$stray" 2>/dev/null
+fi
+pass
+
+fresh 'watch: a watcher stops only its own sources'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+a=$!
+sleep 2
+# The first watcher stalls past its lease; a second takes over.
+kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
+sleep 3
+SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+b=$!
+sleep 3
+kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
+sleep 3
+kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
+[ "$(cut -d" " -f1 "$HERDR_PLUGIN_STATE_DIR/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
+n=$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")
+sleep 2
+[ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = "$n" ] || fail "the second watcher's source was ended and started again"
+rm -f "$FAKE/hold"
+kill "$b" 2>/dev/null
+wait 2>/dev/null
 pass
 
 fresh 'watch: herdr gone'

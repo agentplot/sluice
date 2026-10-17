@@ -13,11 +13,23 @@ set -u
 
 lease=$state/watch.lease
 tick=${SLUICE_HERDR_TICK:-15}
+# A lease is fresh for this long, and renewed four times as often.
+term=${SLUICE_HERDR_LEASE:-60}
+every=$((term / 4))
+[ "$every" -ge 1 ] || every=1
 
 fresh() {
   [ -f "$lease" ] || return 1
   read -r pid at <"$lease" || return 1
-  [ $(($(date +%s) - at)) -lt 60 ] && kill -0 "$pid" 2>/dev/null
+  [ $(($(date +%s) - at)) -lt "$term" ] && kill -0 "$pid" 2>/dev/null
+}
+
+holder() {
+  cut -d' ' -f1 "$lease" 2>/dev/null
+}
+
+write_lease() {
+  echo "$$ $(date +%s)" >"$lease.tmp.$$" && mv -f "$lease.tmp.$$" "$lease"
 }
 
 # The tab-bar segment runs from the state directory, which outlives a
@@ -47,19 +59,41 @@ if fresh; then
   drop_lock
   exit 0
 fi
-echo "$$ $(date +%s)" >"$lease"
+write_lease
 drop_lock
 copy_segment
 say "watching (pid $$)"
 
+# The lease is renewed on its own clock, however long a tick takes, for as
+# long as this watcher lives and holds it.
+(
+  while sleep "$every" && kill -0 $$ 2>/dev/null; do
+    take_lock || continue
+    if [ "$(holder)" = $$ ]; then write_lease; else
+      drop_lock
+      exit 0
+    fi
+    drop_lock
+  done
+) &
+renewer=$!
+
+# This watcher's sources, apart from any other's.
+runs=$state/run/$$
+mkdir -p "$runs"
+
 stop() {
-  for f in "$state"/run/*.pids; do
+  kill "$renewer" 2>/dev/null
+  for f in "$runs"/*.pids; do
     [ -e "$f" ] || continue
     # shellcheck disable=SC2046
     kill $(cat "$f") 2>/dev/null
-    rm -f "$f"
   done
-  [ "$(cut -d' ' -f1 "$lease" 2>/dev/null)" = $$ ] && rm -f "$lease"
+  rm -rf "$runs"
+  if take_lock; then
+    [ "$(holder)" = $$ ] && rm -f "$lease"
+    drop_lock
+  fi
 }
 trap 'stop; exit 0' INT TERM
 trap stop EXIT
@@ -116,7 +150,7 @@ look() {
     name=$(printf '%s' "$s" | jq -r .name)
     argv=$(printf '%s' "$s" | jq -c .command)
     if [ "$(printf '%s' "$s" | jq -r .each_repository)" != true ]; then
-      run=$state/run/$(sum "$name")
+      run=$runs/$(sum "$name")
       alive "$run" || {
         rm -f "$run.pids"
         start "$run" "$name" "" "$argv"
@@ -130,7 +164,7 @@ look() {
       [ -n "$line" ] || continue
       r=${line%%	*}
       t=${line#*	}
-      run=$state/run/$(sum "$name $r")
+      run=$runs/$(sum "$name $r")
       alive "$run" && continue
       rm -f "$run.pids"
       # Probed once, and again after five minutes or a nudge: a source runs
@@ -162,7 +196,6 @@ while [ "$ticks" -ne 0 ]; do
     say "herdr does not answer; stopping"
     exit 0
   fi
-  echo "$$ $(date +%s)" >"$lease"
   look
   sh "$root/bin/forecast.sh"
   sh "$root/bin/tokens.sh" --refresh
@@ -170,6 +203,7 @@ while [ "$ticks" -ne 0 ]; do
   [ "$ticks" -gt 0 ] && ticks=$((ticks - 1))
   if [ "$ticks" -eq 0 ]; then
     # A bounded run lets its sources finish before it stops.
+    kill "$renewer" 2>/dev/null
     wait
     sh "$root/bin/tokens.sh"
     break
@@ -179,7 +213,7 @@ while [ "$ticks" -ne 0 ]; do
   while [ "$i" -lt "$tick" ]; do
     sleep 1
     i=$((i + 1))
-    [ "$(cut -d' ' -f1 "$lease" 2>/dev/null)" = $$ ] || exit 0
+    [ "$(holder)" = $$ ] || exit 0
     if [ -f "$state/dirty" ]; then
       rm -f "$state/dirty"
       sh "$root/bin/tokens.sh"
