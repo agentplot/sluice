@@ -87,9 +87,16 @@ for e in $events; do
   n=$(digest "$(printf '%s' "$e" | jq -r .key)")
   if ! mkdir "$told/$n" 2>/dev/null; then
     [ -d "$told/$n" ] && continue
-    # Never dropped unsaid: told anyway, and the reason logged.
-    say "cannot record an event as told in $told; telling it anyway"
+    # Not told when it cannot be kept as told, or every document would
+    # tell it again: a toast missed is better than a stream of them. Said
+    # once, until it can be kept again.
+    if [ ! -f "$state/told-unwritable" ]; then
+      : >"$state/told-unwritable"
+      say "cannot record events as told in $told: no toasts until it can be written"
+    fi
+    continue
   fi
+  rm -f "$state/told-unwritable"
   branch=$(printf '%s' "$e" | jq -r .branch)
   kind=$(printf '%s' "$e" | jq -r .event.event)
   case $kind in
