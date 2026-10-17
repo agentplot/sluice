@@ -23,7 +23,6 @@ case "$*" in
   fi
   ;;
 "status "*" --json")
-  set -- $*
   cat "$FAKE/status-$2.json" 2>/dev/null || exit 1
   ;;
 "submit "*" --check --json")

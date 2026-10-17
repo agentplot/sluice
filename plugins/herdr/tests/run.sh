@@ -359,7 +359,7 @@ fresh 'status: two hosts'
 printf '%s\n' "$board" | sh "$plugin/bin/document.sh" local "$work"
 printf '%s\n' "$board" | jq -c '.host = "build" | .repository = "/srv/repo/.git"' | sh "$plugin/bin/document.sh" "build machine" ""
 frame_of "$work" --once >"$t/frame"
-grep -q "^$common on test\$\|^$common on mac-studio\$" "$t/frame" || fail "no block for this host"
+grep -q "^$common on test\$\|^$common on host-a\$" "$t/frame" || fail "no block for this host"
 grep -q '^/srv/repo/.git on build$' "$t/frame" || fail "no block for the other host"
 pass
 
@@ -388,7 +388,7 @@ feed "$testing95"
 printf '%s\n' "$board" | jq -c '.repository = "/srv/elsewhere.git"' | sh "$plugin/bin/document.sh" "build" ""
 printf 'a' | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 awk 'BEGIN{RS="\f"} NR==1' "$t/out" | grep -q elsewhere && fail "the first frame shows another repository"
-awk 'BEGIN{RS="\f"} NR==2' "$t/out" | grep -q '^/srv/elsewhere.git on mac-studio' || fail "a does not show every repository"
+awk 'BEGIN{RS="\f"} NR==2' "$t/out" | grep -q '^/srv/elsewhere.git on host-a' || fail "a does not show every repository"
 pass
 
 fresh "status: the focused pane from herdr's context"
@@ -442,7 +442,7 @@ seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
 grep -rqF "$plugin" "$HERDR_PLUGIN_STATE_DIR/segment" && fail "the copy names the plugin's directory"
 out=$(cd "$work" && env -u HERDR_PLUGIN_ROOT -u HERDR_PLUGIN_STATE_DIR sh "$seg")
 [ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
-feed "$(doc '.host = "mac-studio"')"
+feed "$(doc '.host = "host-a"')"
 out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
 pass
