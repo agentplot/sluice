@@ -172,6 +172,12 @@ printf 'ahead_check = false\ncommand = [\n  "a"]\n' >"$HERDR_PLUGIN_CONFIG_DIR/s
 got=$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; . "$lib/sources.sh"; read_sources' "$plugin/bin/x" 2>"$t/err")
 grep -q 'sources.toml:2:' "$t/err" || fail "the error does not name line 2: $(cat "$t/err")"
 [ "$(printf '%s' "$got" | jq -r '.sources[0].command | join(" ")')" = "sluice overview --watch --json" ] || fail "not the default: $got"
+for bad in 'each_repository = trueish' 'name = "a\q"' 'name = "a" "b"'; do
+  printf '[[sources]]\ncommand = ["x"]\n%s\n' "$bad" >"$HERDR_PLUGIN_CONFIG_DIR/sources.toml"
+  got=$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; . "$lib/sources.sh"; read_sources' "$plugin/bin/x" 2>"$t/err")
+  grep -q 'sources.toml:3:' "$t/err" || fail "$bad: the error does not name line 3: $(cat "$t/err")"
+  [ "$(printf '%s' "$got" | jq -r '.sources[0].command | join(" ")' 2>/dev/null)" = "sluice overview --watch --json" ] || fail "$bad: not the default: $got"
+done
 printf 'ahead_check = false # off\n[[sources]]\nname = "a \\"b\\""\ncommand = ["x", "y"]\neach_repository = true\n' >"$HERDR_PLUGIN_CONFIG_DIR/sources.toml"
 got=$(sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; . "$lib/sources.sh"; read_sources' "$plugin/bin/x")
 [ "$got" = '{"ahead_check":false,"sources":[{"name":"a \"b\"","command":["x","y"],"each_repository":true}]}' ] || fail "read as $got"

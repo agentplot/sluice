@@ -13,7 +13,14 @@ function string(s,   i, c) {
   if (substr(s, 1, 1) != "\"") return 0
   for (i = 2; i <= length(s); i++) {
     c = substr(s, i, 1)
-    if (c == "\\") { i++; continue }
+    if (c == "\\") {
+      # The escapes TOML and JSON share; any other is outside the subset.
+      c = substr(s, i + 1, 1)
+      if (c == "u" && substr(s, i + 2, 4) ~ /^[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$/) { i += 5; continue }
+      if (c == "" || index("\"\\btnfr", c) == 0) fail("an escape outside \\\" \\\\ \\b \\t \\n \\f \\r \\uXXXX")
+      i++
+      continue
+    }
     if (c == "\"") { str = substr(s, 1, i); rest = substr(s, i + 1); return 1 }
   }
   return 0
@@ -37,7 +44,7 @@ BEGIN { n = 0 }
   key = line
   sub(/[ \t]*=.*/, "", key)
   val = substr(line, RLENGTH + 1)
-  if (val ~ /^(true|false)/) {
+  if (val ~ /^(true|false)([ \t#]|$)/) {
     v = val; sub(/[^a-z].*$/, "", v)
     done(substr(val, length(v) + 1))
   } else if (string(val)) {
