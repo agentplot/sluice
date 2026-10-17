@@ -156,14 +156,14 @@ fn file_names(dir: &Path) -> Vec<String> {
 /// fits.
 #[test]
 fn exec_runs_from_a_worktree_at_a_long_path() {
-    let deep = vec!["a-rather-long-directory-name"; 10].join("/");
+    let deep = ["a-rather-long-directory-name"; 10].join("/");
     let s = Setup::at("exec-long", &deep);
     let canon = std::fs::canonicalize(&s.worktree).unwrap();
     assert!(canon.as_os_str().len() > 255, "{}", canon.display());
     // Ports of its own, so the tests beside it that count theirs see none.
     s.repo.write(
         ".config/sluice.toml",
-        &POLICY.replace("\"41500\"", "\"41600\""),
+        &POLICY.replace("\"41500\"", "\"43100\""),
     );
     s.repo.git(&["commit", "-q", "-am", "ports of its own"]);
     s.repo.git(&["branch", "-f", "bolt/x", "main"]);
@@ -280,7 +280,7 @@ fn the_next_exec_releases_a_removed_worktree() {
                 "[tests]\n",
                 &format!("[tests]\nrelease = \"sh {}\"\n", script.display()),
             )
-            .replace("\"41500\"", "\"41700\""),
+            .replace("\"41500\"", "\"43200\""),
     );
     s.repo.git(&["commit", "-q", "-am", "a release command"]);
     s.repo.git(&["branch", "-f", "bolt/x", "main"]);
