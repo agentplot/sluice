@@ -130,6 +130,19 @@ and releases in one go). See [references/exec.md](references/exec.md).
 `sluice release <preview>`. Queued heads and combinations under test are
 refused. See [references/previews.md](references/previews.md).
 
+## Branches
+
+A branch sluice lands on, such as a bolt, is made and deleted by sluice,
+never pushed or deleted by hand:
+
+```sh
+sluice branch create bolt/x --from main   # at main's revision, on its remote if the policy names one
+sluice branch delete bolt/x               # once it has landed into main and nothing is queued on it
+```
+
+Each refusal says why; `--into <branch>` names another branch the bolt
+landed into, and `--json` gives the revision made or deleted.
+
 ## Amend and withdraw
 
 ```sh

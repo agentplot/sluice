@@ -100,28 +100,28 @@ required = ["#check-fast"]
 remote = "origin"
 ```
 
-sluice makes no branch. Whatever starts a bolt pushes it to GitHub
-first, cut from GitHub's `main`, and cuts its agents' worktrees from
-`origin/bolt/<name>`:
+sluice makes the bolt there, at `main`'s revision on GitHub, and deletes
+it once it has landed on `main`:
 
-```sh
-git push origin origin/main:refs/heads/bolt/payments
+```console
+$ sluice branch create bolt/payments --from main
+created bolt/payments at 6ac0084c…, main's revision
+$ sluice branch delete bolt/payments --into main
+deleted bolt/payments, which was at 9f2e1d0a…, landed into main
 ```
 
-A submission to a bolt GitHub doesn't have yet is refused with `bolt/payments
-is not on origin; push it there first`. A host that has only fetched the
-bolt, with no local branch of it, submits to it all the same.
+Cut agents' worktrees from `origin/bolt/payments`. A host that has only
+fetched the bolt, with no local branch of it, submits to it all the same.
+A submission to a bolt GitHub doesn't have is refused, and the refusal
+says to make it with `sluice branch create`.
 
-Protect bolts with two rulesets on `bolt/*`. The first is the one above,
-for `bolt/*`: updates and force pushes restricted, sluice's app the only
-bypass. The second only restricts creations, and its bypass list holds
-whoever starts bolts. `sluice forge check bolt/payments` accepts that
-second ruleset's other bypasses, since they can make a bolt and never
-move it.
+Protect bolts as `main` is: one ruleset on `bolt/*` restricting
+creations, updates, deletions and force pushes, with sluice's app as
+its only bypass. `sluice forge check bolt/payments` checks it.
 
 Each host keeps its own queue for a bolt. The lease keeps every landing
 safe, but two hosts landing on one bolt land in the order their pushes
-reach GitHub.
+reach GitHub, and `sluice branch delete` sees only this host's queue.
 
 ## When `main` moves under the queue
 

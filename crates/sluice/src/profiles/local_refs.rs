@@ -69,21 +69,47 @@ impl LocalRefs {
     /// reported, never retried blind (24, rule core.5).
     fn edit(&self, branch: &str, expected: PreviousValue, to: &Rev) -> Result<Moved> {
         let new = self.id(to)?;
-        let edit = RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: format!("sluice: land on {branch}").into(),
-                },
-                expected,
-                new: Target::Object(new),
+        let change = Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: format!("sluice: land on {branch}").into(),
             },
-            name: full_name(branch)
+            expected,
+            new: Target::Object(new),
+        };
+        self.transact(&full_name(branch), change)
+    }
+
+    /// Remove the ref `name`, whatever it holds: a pushed branch's local
+    /// copies once the remote's is gone. Removing one that is absent does
+    /// nothing.
+    pub fn delete_ref(&self, name: &str) -> Result<()> {
+        if self.read_ref(name)?.is_none() {
+            return Ok(());
+        }
+        let change = Change::Delete {
+            expected: PreviousValue::Any,
+            log: RefLog::AndReference,
+        };
+        match self.transact(name, change)? {
+            Moved::Moved => Ok(()),
+            Moved::Elsewhere(_) => bail!("{name} could not be removed"),
+        }
+    }
+
+    /// One ref edit, as sluice; a ref found other than `change` expects is
+    /// reported, never retried blind.
+    fn transact(&self, name: &str, change: Change) -> Result<Moved> {
+        let edit = RefEdit {
+            change,
+            name: name
+                .to_string()
                 .try_into()
-                .map_err(|e| anyhow!("{branch} is not a branch name: {e}"))?,
+                .map_err(|e| anyhow!("{name} is not a ref name: {e}"))?,
             deref: false,
         };
+        let branch = name;
         let who = Self::signature(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -298,5 +324,32 @@ impl Branch for LocalRefs {
             PreviousValue::MustExistAndMatch(Target::Object(from)),
             to,
         )
+    }
+
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        match self.edit(branch, PreviousValue::MustNotExist, at) {
+            Ok(Moved::Moved) => Ok(Moved::Moved),
+            // A branch present is reported with what it holds, however the
+            // refusal came.
+            other => match self.read(branch)? {
+                Some(found) => Ok(Moved::Elsewhere(Some(found))),
+                None => other,
+            },
+        }
+    }
+
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        let from = self.id(expected)?;
+        let change = Change::Delete {
+            expected: PreviousValue::MustExistAndMatch(Target::Object(from)),
+            log: RefLog::AndReference,
+        };
+        match self.transact(&full_name(branch), change) {
+            Ok(Moved::Moved) => Ok(Moved::Moved),
+            other => match self.read(branch)? {
+                found if found.as_ref() != Some(expected) => Ok(Moved::Elsewhere(found)),
+                _ => other,
+            },
+        }
     }
 }

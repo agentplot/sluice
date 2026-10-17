@@ -192,6 +192,14 @@ impl Branch for RecordedRefs {
         }
         Ok(moved)
     }
+
+    fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
+        self.inner.make(branch, at)
+    }
+
+    fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
+        self.inner.remove(branch, expected)
+    }
 }
 
 /// The driver, with each session's agent named by the rig, and every

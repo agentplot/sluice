@@ -116,6 +116,10 @@ For a branch on GitHub, do these in this order, or a step is refused:
 4. Put the app in the bypass list, then remove every other entry.
 5. `sluice forge check <branch>`.
 
+A bolt pattern with `remote = "origin"` needs no push by hand: `sluice branch
+create bolt/<b> --from main` makes each bolt there as the app, and its
+ruleset restricts creations and deletions as well as updates.
+
 ## 6. Check it end to end
 
 1. Make a worktree on a new branch, commit a harmless change.

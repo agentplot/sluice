@@ -196,6 +196,7 @@ branches, is walked through in [docs/examples](docs/examples/README.md).
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
 | `sluice previews` | Every preview on the host, with its addresses and state. |
 | `sluice release <preview>` | Release a preview, by its name or its revision. |
+| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`. |
 
 An agent names itself with `SLUICE_AGENT`. How many runs a host tests at
 once is the host's own setting, in `~/.config/sluice/config.toml`:

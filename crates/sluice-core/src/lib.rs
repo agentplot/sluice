@@ -6,6 +6,7 @@
 //! (rule core.2), names no tool (rule core.1), and holds nothing between
 //! steps outside the records (rule core.14).
 
+pub mod branches;
 pub mod line;
 pub mod ops;
 pub mod order;

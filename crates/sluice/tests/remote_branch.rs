@@ -55,9 +55,19 @@ impl Setup {
     /// A repository whose `main` lives on `origin`, a bare repository,
     /// under a policy naming `remote`.
     fn new(name: &str, remote: &str) -> Setup {
+        Setup::with(name, &policy(remote))
+    }
+
+    /// As [`Setup::new`], with every branch in local refs: the policy
+    /// names no remote, though the repository has one.
+    fn local(name: &str) -> Setup {
+        Setup::with(name, &policy("").replace("remote = \"\"\n", ""))
+    }
+
+    fn with(name: &str, policy: &str) -> Setup {
         let repo = Repo::new(name);
         let seen = Scratch::new(&format!("{name}-seen"));
-        repo.write(".config/sluice.toml", &policy(remote));
+        repo.write(".config/sluice.toml", policy);
         repo.write("check.sh", &check(seen.path()));
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "sluice's policy"]);
@@ -404,20 +414,33 @@ fn an_unknown_remote_lands_nothing_and_is_named() {
 }
 
 /// A bolt whose policy names a remote that has no such branch is refused,
-/// saying where to make it; once it is pushed there, a submission to it
-/// lands on the remote.
+/// saying how to make it; sluice makes it there, a submission lands on it,
+/// and once the bolt has landed on `main` sluice deletes it there
+/// (branches-1 104, 105).
 #[test]
-fn a_bolt_not_on_its_remote_is_refused_until_pushed_there() {
-    let s = Setup::new("remote-bolt-missing", "origin");
+fn a_bolt_is_made_landed_on_and_deleted_on_its_remote() {
+    let s = Setup::new("remote-bolt-life", "origin");
     s.repo.git(&["branch", "bolt/x", "main"]);
     let out = s.submit_to("a", "bolt/x", "bolt/x");
     assert!(!out.status.success(), "{}", text(&out));
     assert!(
-        text(&out).contains("bolt/x is not on origin; push it there first"),
+        text(&out).contains("bolt/x is not on origin; make it with sluice branch create bolt/x"),
         "{}",
         text(&out)
     );
-    s.repo.git(&["push", "-q", "origin", "bolt/x"]);
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let made: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(made["created"], s.remote_main());
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), s.remote_main());
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("bolt/x is already there"),
+        "{}",
+        text(&out)
+    );
+
     let out = s
         .command(&s.sessions.path().join("a"))
         .args(["submit", "bolt/x", "--no-wait", "--json"])
@@ -428,6 +451,70 @@ fn a_bolt_not_on_its_remote_is_refused_until_pushed_there() {
     assert!(out.status.success(), "{}", text(&out));
     let bolt = remote_rev(&s, "refs/heads/bolt/x");
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
+
+    let out = s.sluice(&["branch", "delete", "bolt/x", "--into", "main"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("has not landed into main"),
+        "{}",
+        text(&out)
+    );
+
+    // The bolt lands on main, submitted from a branch at its revision.
+    let out = s.submit_to("land", "origin/bolt/x", "main");
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let out = s.sluice(&["branch", "delete", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!s
+        .remote_refs()
+        .iter()
+        .any(|r| r.starts_with("refs/heads/bolt/x ")));
+    for gone in ["refs/heads/bolt/x", "refs/remotes/origin/bolt/x"] {
+        let out = s.repo.git_raw(&["rev-parse", "--verify", "-q", gone]);
+        assert!(!out.status.success(), "{gone} is still here");
+    }
+}
+
+/// With no remote, sluice makes and deletes a bolt in local refs under
+/// the same rules (branches-1 104, 105; C.4 local refs).
+#[test]
+fn a_bolt_is_made_and_deleted_with_no_remote() {
+    let s = Setup::local("local-bolt-life");
+    let main = s.repo.rev("main");
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.repo.rev("bolt/x"), main);
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(!out.status.success(), "{}", text(&out));
+
+    let out = s.submit_to("a", "bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let bolt = s.repo.rev("bolt/x");
+    assert_ne!(bolt, main);
+    let out = s.sluice(&["branch", "delete", "bolt/x"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("has not landed into main"),
+        "{}",
+        text(&out)
+    );
+
+    let out = s.submit_to("land", "bolt/x", "main");
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["run", "--rounds", "8"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.sluice(&["branch", "delete", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s
+        .repo
+        .git_raw(&["rev-parse", "--verify", "-q", "refs/heads/bolt/x"]);
+    assert!(!out.status.success(), "bolt/x is still here");
+    assert_eq!(s.remote_main(), main, "nothing reached the remote");
 }
 
 /// A bolt another host made is on the remote and, here, only as its

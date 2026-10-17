@@ -21,6 +21,8 @@ sidebar:
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
 | `sluice release <preview>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. |
+| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
+| `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. |
 
 ## `sluice exec`
@@ -282,6 +284,39 @@ the pull request is open, and `wt submit main --status` reports its
 state later. `wt submit` removes the worktree only when the pull request
 lands; sent back, the worktree stays for the fix.
 
+## `sluice branch`
+
+sluice makes and deletes the branches it lands on, so nothing else has
+to write them. Each takes the branch's lock, so no round acts on it
+meanwhile, and each is one move from what it read, refused when the
+branch was elsewhere.
+
+`sluice branch create <branch> --from <other>` makes the branch at the
+other branch's current revision, fetched from its remote when it has
+one. Both must be branches sluice lands on: the policy at that revision
+gives each a gate, and the new branch lives where that policy's
+`remote` says. A branch already there is refused, and so is a name
+whose records still queue submissions.
+
+`sluice branch delete <branch>` deletes it, only when:
+
+- no submission on it is still queued or under test;
+- no landing on it is unfinished;
+- its revision is in `main`'s history, or the history of the branch
+  `--into` names.
+
+The deletion is leased on the revision it read, so a landing since,
+from any host, refuses it. Its records stay, and `sluice status
+<branch>` still reads them.
+
+```console
+$ sluice branch delete bolt/payments
+refused: #12 still queued on bolt/payments; wait for them to land, or withdraw them
+```
+
+Both exit `0` when done, `1` when a branch they name doesn't exist, and
+`2` on a refusal.
+
 ## `sluice forge check`
 
 Checks what the host's
@@ -289,9 +324,7 @@ Checks what the host's
 branch whose `remote` is on GitHub. The key reads and the app makes a
 token for the repository. The app may write the repository's contents
 and its workflows.
-Every ruleset on the branch lets the app through and nobody else, except
-one that only restricts creating the branch, which may let through
-whoever makes it, as [bolts on GitHub](/sluice/guides/github/#bolts-on-github) do. The branch is the one checked out where it
+Every ruleset on the branch lets the app through and nobody else. The branch is the one checked out where it
 runs unless it is named. It says each thing it checked, and exits `1`
 when any fails, naming which.
 
@@ -332,7 +365,7 @@ With `--json`, a command that cannot do what it was asked still prints
 JSON on stdout, one document in place of the one it would have printed:
 
 ```json
-{"error":{"kind":"refused","message":"no branch bolt/none","next":["sluice overview"]}}
+{"error":{"kind":"refused","message":"no branch bolt/none","next":["sluice branch create bolt/none --from main","sluice overview"]}}
 ```
 
 `kind` is `refused` (exit `2`), `not_found` (exit `1`) or `internal`
