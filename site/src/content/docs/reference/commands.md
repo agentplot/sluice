@@ -70,18 +70,35 @@ A worktree keeps its ports and what its runs left running until it is
 released, however long since its last run: sluice cannot tell an agent
 that is thinking from one that is gone. `sluice status` with no argument
 lists every worktree it holds in the repository, with its branch, its
-last run and its ports, so a person or a crew can release one with
-`sluice release --worktree <path>`. `--json` gives the same as one
-document, a `worktrees` list with `worktree`, `branch`, `last_run`,
-`ports` and `removed`.
+last run, how that run ended and its ports, so a person or a crew can
+release one with `sluice release --worktree <path>`. `--json` gives the
+same as one document, a `worktrees` list with `worktree`, `branch`,
+`last_run`, `ports`, `removed` and, once a run there has ended,
+`last_result`.
 
 ```console
 $ sluice status
 worktrees held until released:
-  /home/me/wt/unit-a  bolt/concurrent-units  last run 2026-10-14T09:12:40Z  SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
-  /home/me/wt/unit-b  bolt/concurrent-units  last run 2026-10-11T16:03:05Z  SLUICE_PORT_DB=20003 SLUICE_PORT_WEB=20002
+  /home/me/wt/unit-a  bolt/concurrent-units  last run 2026-10-14T09:12:40Z  last result passed on 1a2b3c4, recorded  SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
+  /home/me/wt/unit-b  bolt/concurrent-units  last run 2026-10-11T16:03:05Z  last result command failed on 5d6e7f8  SLUICE_PORT_DB=20003 SLUICE_PORT_WEB=20002
 release one with: sluice release --worktree <worktree>
 ```
+
+`last_result` says how the last `sluice exec` in the worktree ended:
+
+| field | |
+|---|---|
+| `at` | when it ended; `last_run` is when it started, so a `last_run` later than `at` means a run started since and has not ended |
+| `head` | the worktree's commit it ran on, in full |
+| `kind` | `checks`, or `command` for `sluice exec <branch> -- <command>` |
+| `outcome` | `pass`, `fail`, `timed_out`, `lost` (the run stopped without saying how it ended) or `stopped` (ended by its caller) |
+| `recorded` | its results are kept for their keys, so a submission of `head` reuses them. Never true for a command, or for a run with files changed and not committed. Never true for a run that timed out, was lost or was stopped |
+
+The next run replaces it, and `sluice release` removes it with the rest.
+A worktree's head is ready to submit when `kind` is `checks`, `outcome`
+is `pass`, `recorded` is true and `head` is the worktree's head now. Its
+files may have changed since; that is for the reader to check, since
+sluice reads nothing from the worktree to list it.
 
 A worktree that has checked out a branch sluice lands on is named
 too, whether sluice holds anything for it or not. sluice moves that
@@ -140,7 +157,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
-| `sessions[]` | the worktrees held, and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
+| `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
 
 `--json --watch` prints the document as one line at once, and again

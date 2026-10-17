@@ -32,7 +32,7 @@ readable with plain tools whether or not sluice is running.
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, caches,
                        the block of ports it holds on the host and, for a
-                       worktree, when its last run started
+                       worktree, when its last run started and how it ended
   .places/<checkout>/  a candidate's checkout, made for its run and removed after
   .previews/<preview>.json
                        a preview's record: its branch, revision, ports, names,

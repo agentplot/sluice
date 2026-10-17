@@ -27,6 +27,6 @@ config.
 
 ## 4. Decisions and docs
 
-- [ ] 4.1 Write the next free-numbered ADR: a session run's last result is kept on its place's record, not derived from the results log (the `same_as` dedupe, commands and unclean runs), and decides nothing; add it to `docs/adr/adrs.toml`; verify `bun run build` renders it.
-- [ ] 4.2 Document `last_result` on `site/src/content/docs/reference/commands.md` (the worktrees list, its console example and the overview's `sessions[]` row, with what "ready" needs: `kind` `checks`, `outcome` `pass`, `recorded`, and `head` the worktree's head) and the session place's record on `reference/state.md`; verify Vale reports no warning and `bun run build` passes.
+- [x] 4.1 Write the next free-numbered ADR: a session run's last result is kept on its place's record, not derived from the results log (the `same_as` dedupe, commands and unclean runs), and decides nothing; verify `bun run build` renders it.
+- [x] 4.2 Document `last_result` on `site/src/content/docs/reference/commands.md` (the worktrees list, its console example and the overview's `sessions[]` row, with what "ready" needs: `kind` `checks`, `outcome` `pass`, `recorded`, and `head` the worktree's head) and the session place's record on `reference/state.md`; verify Vale reports no warning and `bun run build` passes.
 - [ ] 4.3 Run `:#check-fast`, `:#check-tools`, `openspec validate session-run-outcome --strict` and `bun run build`; verify all pass.
