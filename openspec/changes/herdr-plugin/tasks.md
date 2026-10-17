@@ -44,7 +44,8 @@ user's own, and its config is the only one the README's snippets go into.
 
 ## 5. Close
 
-- [ ] 5.1 Try it live on a throwaway herdr linked to `plugins/herdr`, with the README's snippets in that session's config: `prefix+s` in a sluice repository shows its branches; a `sluice submit --no-wait` from a scratch worktree redraws from testing to landed with no key pressed; a toast for a blame; the pane token through testing, landed and fading; `prefix+s` outside any repository shows the message and `q` closes it; verify `herdr plugin log agentplot.sluice` shows no error.
+- [x] 5.1 Try it live on a throwaway herdr linked to `plugins/herdr`, with the README's snippets in that session's config: `prefix+s` in a sluice repository shows its branches; a `sluice submit --no-wait` from a scratch worktree redraws from testing to landed with no key pressed; a toast for a blame; the pane token through testing, landed and fading; `prefix+s` outside any repository shows the message and `q` closes it; verify `herdr plugin log agentplot.sluice` shows no error.
+  Tried by hand on 2026-10-17 in a throwaway herdr with Claude Code running in two worktrees: prefix+s popup, toasts for a landing away from its pane and for a blame, and the `$sluice` line under Agents.
 - [x] 5.2 Run `moon run ':#check-fast'` and `openspec validate herdr-plugin --strict`; verify both pass.
 
 ## Workflow follow-up
