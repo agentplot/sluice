@@ -1,0 +1,10 @@
+#!/bin/sh
+# A stand-in herdr: logs each call, answers the lists from the test's files.
+printf '%s\n' "$*" >>"$FAKE/herdr-calls"
+case "$1 $2" in
+"pane list") cat "$FAKE/panes.json" 2>/dev/null || echo '{"result":{"panes":[]}}' ;;
+"tab list") cat "$FAKE/tabs.json" 2>/dev/null || echo '{"result":{"tabs":[]}}' ;;
+"workspace list") cat "$FAKE/spaces.json" 2>/dev/null || echo '{"result":{"workspaces":[]}}' ;;
+"agent focus") [ ! -f "$FAKE/no-agent" ] ;;
+*) echo '{"result":{}}' ;;
+esac

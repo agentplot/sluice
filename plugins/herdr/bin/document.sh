@@ -1,0 +1,101 @@
+#!/bin/sh
+# shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
+# One sluice/overview@1 document in, on stdin, from the source named $1
+# run in the directory $2 (empty for a source run once): keep it as its
+# repository's latest, learn its submissions' worktrees, and raise a toast
+# for each landing, blame or conflict not yet told.
+set -u
+. "$(dirname "$0")/../lib/common.sh"
+. "$lib/panes.sh"
+
+source_name=${1:-local}
+dir=${2:-}
+doc=$(cat)
+printf '%s' "$doc" | jq -e '.schema == "sluice/overview@1"' >/dev/null 2>&1 || {
+  say "$source_name printed something that is not an overview document"
+  exit 0
+}
+host=$(printf '%s' "$doc" | jq -r .host)
+repository=$(printf '%s' "$doc" | jq -r .repository)
+key=$(key_of "$host" "$repository")
+printf '%s\n' "$doc" | put "$state/docs/$key.json"
+[ -n "$dir" ] && printf '%s\n' "$dir" | put "$state/docs/$key.dir"
+
+# Each submission's worktree and branch, kept while its id is in the
+# document; a finished one leaves submissions[] but stays in recent[].
+paths=$state/docs/$key.paths
+[ -f "$paths" ] || echo '{}' >"$paths"
+jq -c --argjson d "$doc" '
+  ([$d.branches[].recent[] | (.id // empty), (.ids // [])[]] | map(tostring)) as $recent
+  | (. + ([$d.branches[] | .branch as $b | .submissions[] | select(.from.path)
+          | {(.id | tostring): {path: .from.path, branch: $b}}] | add // {}))
+  | with_entries(select(.key as $k | ($recent | index($k)) or
+      ([$d.branches[].submissions[].id | tostring] | index($k))))' "$paths" | put "$paths"
+
+# A submission's worktree and blamed tests, read once from sluice when
+# the document did not carry them.
+learn() {
+  id=$1
+  known=$(jq -r --arg i "$id" '.[$i].path // empty' "$paths")
+  if [ -n "$known" ] && [ -f "$state/failed/$key-$id" ]; then return; fi
+  [ -n "$dir" ] || return 0
+  got=$(cd "$dir" && sluice status "$id" --json 2>/dev/null) || return 0
+  printf '%s' "$got" | jq -c '[.failed // [] | .[].task]' | put "$state/failed/$key-$id"
+  p=$(printf '%s' "$got" | jq -r '.from.path // empty')
+  if [ -n "$p" ]; then
+    jq -c --arg i "$id" --arg p "$p" --arg b "$(printf '%s' "$got" | jq -r .branch)" \
+      '. + {($i): {path: $p, branch: $b}}' "$paths" | put "$paths"
+  fi
+}
+
+told=$state/told/$key
+events=$(printf '%s' "$doc" | jqw -c 'include "words"; events')
+if [ ! -f "$told" ]; then
+  # First sight of the repository: what is already in recent[] is old.
+  printf '%s\n' "$events" | jq -r 'select(. != null) | .key' | put "$told"
+  touch "$state/dirty"
+  exit 0
+fi
+
+panes=
+old_ifs=$IFS
+IFS='
+'
+for e in $events; do
+  k=$(printf '%s' "$e" | jq -r .key)
+  grep -qxF "$k" "$told" && continue
+  printf '%s\n' "$k" >>"$told"
+  branch=$(printf '%s' "$e" | jq -r .branch)
+  kind=$(printf '%s' "$e" | jq -r .event.event)
+  case $kind in
+  blamed)
+    id=$(printf '%s' "$e" | jq -r .event.id)
+    learn "$id"
+    tests=$(jq -r 'join(", ")' "$state/failed/$key-$id" 2>/dev/null)
+    hd notification show "sluice: #$id blamed on $branch" \
+      --body "${tests:+$tests failed. }Run jump to go to its pane." >/dev/null 2>&1
+    ;;
+  conflict)
+    id=$(printf '%s' "$e" | jq -r .event.id)
+    learn "$id"
+    hd notification show "sluice: #$id conflicts on $branch" \
+      --body "$(printf '%s' "$e" | jq -r '.event.paths // [] | join(", ")')" >/dev/null 2>&1
+    ;;
+  landed)
+    [ -n "$panes" ] || panes=$(panes_json)
+    for id in $(printf '%s' "$e" | jq -r '.event.ids[]'); do
+      learn "$id"
+      p=$(jq -r --arg i "$id" '.[$i].path // empty' "$paths")
+      [ -n "$p" ] || continue
+      # Toasted only when its pane is open and not the one in front.
+      away=$(printf '%s' "$panes" | jq -r --arg p "$p" '
+        [.[] | select(.top == $p)] | if length == 0 then "none" elif any(.front) then "front" else "away" end')
+      [ "$away" = away ] || continue
+      hd notification show "sluice: #$id landed on $branch" \
+        --body "as $(printf '%s' "$e" | jq -r '.event.to[0:7]')" >/dev/null 2>&1
+    done
+    ;;
+  esac
+done
+IFS=$old_ifs
+touch "$state/dirty"

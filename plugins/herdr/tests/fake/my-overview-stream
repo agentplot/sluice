@@ -1,0 +1,4 @@
+#!/bin/sh
+# A user's own source: prints whatever the test left for it.
+printf '%s\n' "$*" >>"$FAKE/stream-calls"
+cat "$FAKE/stream.jsonl" 2>/dev/null

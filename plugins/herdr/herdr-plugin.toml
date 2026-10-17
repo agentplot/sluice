@@ -1,0 +1,65 @@
+id = "agentplot.sluice"
+name = "sluice"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "sluice's merge queue beside your agents: a status popup, toasts when a submission lands or is blamed, a line on each agent's row, and the queue in the tab bar."
+platforms = ["linux", "macos"]
+
+# One watcher for every view: it renews a lease, so starting it again is
+# cheap and does nothing while it runs.
+[[startup]]
+command = ["sh", "bin/watch.sh", "--ensure"]
+
+[[events]]
+on = "pane.created"
+command = ["sh", "bin/watch.sh", "--ensure"]
+
+[[events]]
+on = "worktree.created"
+command = ["sh", "bin/watch.sh", "--ensure"]
+
+[[actions]]
+id = "status"
+title = "sluice: the queue"
+contexts = ["global", "pane"]
+command = ["sh", "bin/open.sh", "status"]
+
+[[actions]]
+id = "dashboard"
+title = "sluice: the queue in its own tab"
+contexts = ["global"]
+command = ["sh", "bin/open.sh", "dashboard"]
+
+[[actions]]
+id = "jump"
+title = "sluice: jump to the blamed submission's pane"
+contexts = ["global", "pane"]
+command = ["sh", "bin/jump.sh"]
+
+[[actions]]
+id = "setup"
+title = "sluice: keys, sidebar rows and tab bar to add to your config"
+contexts = ["global"]
+command = ["sh", "bin/open.sh", "setup"]
+
+[[panes]]
+id = "status"
+title = "sluice"
+placement = "popup"
+width = "80%"
+height = "70%"
+command = ["sh", "bin/status.sh"]
+
+[[panes]]
+id = "dashboard"
+title = "sluice"
+placement = "tab"
+command = ["sh", "bin/status.sh", "--dashboard"]
+
+[[panes]]
+id = "setup"
+title = "sluice: setup"
+placement = "popup"
+width = "90%"
+height = "90%"
+command = ["sh", "bin/setup.sh"]

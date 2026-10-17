@@ -1,0 +1,22 @@
+#!/bin/sh
+# A stand-in sluice: logs each call with where it ran, and answers from
+# the test's files, keyed by the directory's name.
+here=$(basename "$PWD")
+printf '%s: %s\n' "$here" "$*" >>"$FAKE/sluice-calls"
+case "$*" in
+"overview --watch --json")
+  [ -f "$FAKE/watch-$here.jsonl" ] || exit 1
+  cat "$FAKE/watch-$here.jsonl"
+  ;;
+"overview --json")
+  if [ -f "$FAKE/overview-$here.json" ]; then cat "$FAKE/overview-$here.json"; else
+    printf '{"schema":"sluice/overview@1","host":"test","repository":"%s","at":"2026-10-16T19:45:10Z","branches":[],"sessions":[],"previews":[]}\n' "$PWD"
+  fi
+  ;;
+"status "*" --json")
+  set -- $*
+  cat "$FAKE/status-$2.json" 2>/dev/null || exit 1
+  ;;
+"submit "*" --check --json") cat "$FAKE/check.json" 2>/dev/null || echo '{"conflict":null}' ;;
+*) exit 2 ;;
+esac

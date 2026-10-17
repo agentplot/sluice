@@ -21,3 +21,9 @@ tasks:
     inputs: ['/plugins/sluice/scripts/**/*', '/plugins/sluice/tests/**/*', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # The herdr plugin's scripts against stand-in herdr and sluice.
+  plugin-herdr:
+    command: 'plugins/herdr/tests/run.sh'
+    inputs: ['/plugins/herdr/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
