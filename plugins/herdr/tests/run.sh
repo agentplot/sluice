@@ -135,6 +135,19 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
 grep -q "overview --json" "$FAKE/sluice-calls" || fail "the new watcher did not look for repositories"
 pass
 
+fresh 'watch: a lock left by a watcher that died'
+mkdir "$HERDR_PLUGIN_STATE_DIR/lease.lock"
+sh -c 'echo $$ >"$1/pid"' _ "$HERDR_PLUGIN_STATE_DIR/lease.lock"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
+grep -q "overview --json" "$FAKE/sluice-calls" || fail "a dead watcher's lock stopped the next one"
+pass
+
+fresh 'watch: a lock with no owner'
+mkdir "$HERDR_PLUGIN_STATE_DIR/lease.lock"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 >/dev/null 2>&1
+grep -q "overview --json" "$FAKE/sluice-calls" || fail "a lock with no owner stopped the watcher"
+pass
+
 fresh 'watch: herdr gone'
 touch "$FAKE/down"
 began=$(date +%s)

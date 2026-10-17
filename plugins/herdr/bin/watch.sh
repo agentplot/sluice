@@ -9,6 +9,7 @@ set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
 . "$lib/sources.sh"
+. "$lib/lease.sh"
 
 lease=$state/watch.lease
 tick=${SLUICE_HERDR_TICK:-15}
@@ -41,16 +42,13 @@ ticks=-1
 [ "${1:-}" = --ticks ] && ticks=$2
 
 # Take the lease, unless another watcher holds it.
-if mkdir "$state/lease.lock" 2>/dev/null; then
-  if fresh; then
-    rmdir "$state/lease.lock"
-    exit 0
-  fi
-  echo "$$ $(date +%s)" >"$lease"
-  rmdir "$state/lease.lock"
-else
+take_lock || exit 0
+if fresh; then
+  drop_lock
   exit 0
 fi
+echo "$$ $(date +%s)" >"$lease"
+drop_lock
 copy_segment
 say "watching (pid $$)"
 
