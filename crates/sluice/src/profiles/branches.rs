@@ -75,6 +75,25 @@ impl Branches {
         Ok(None)
     }
 
+    /// The remote `branch` would be made on from `from` (branches-1 104):
+    /// the one the policy at `from`'s revision names for it, `from` read
+    /// locally or, failing that, on a remote's tracking ref of it.
+    pub fn remote_if_made_from(&self, branch: &str, from: &str) -> Result<Option<String>> {
+        let mut rev = self.local.read(from)?;
+        if rev.is_none() {
+            for r in remotes(&self.dir)? {
+                rev = self.local.read_ref(&format!("refs/remotes/{r}/{from}"))?;
+                if rev.is_some() {
+                    break;
+                }
+            }
+        }
+        match rev {
+            Some(rev) => self.named(branch, &rev),
+            None => Ok(None),
+        }
+    }
+
     /// The remote the policy at `rev` names for `branch`.
     fn named(&self, branch: &str, rev: &Rev) -> Result<Option<String>> {
         let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {
