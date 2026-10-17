@@ -129,12 +129,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
             failed: c.failed.clone(),
         })
         .collect();
-    let submissions: Vec<Submission> = line
-        .subs
-        .values()
-        .filter(|s| !s.state.is_out())
-        .cloned()
-        .collect();
+    let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();
     Ok(BranchView {
         branch,
         at: line.doc.base.clone(),
@@ -255,6 +250,14 @@ pub fn counts(branches: &[BranchView]) -> Vec<BranchCount> {
             parallel: b.parallel,
         })
         .collect()
+}
+
+/// The submissions still in a chain, queued or under test, whose count is
+/// a branch's `depth`: what `sluice status <branch>` shows by default.
+pub fn in_queue<'a>(
+    subs: impl IntoIterator<Item = &'a Submission>,
+) -> impl Iterator<Item = &'a Submission> {
+    subs.into_iter().filter(|s| !s.state.is_out())
 }
 
 /// The worktree a home view is for: its path, and the branch it is on,

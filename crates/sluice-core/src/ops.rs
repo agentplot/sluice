@@ -110,6 +110,19 @@ pub struct Status {
     pub submissions: Vec<Submission>,
 }
 
+impl Status {
+    /// How many submissions are still in a chain, as the overview counts
+    /// a branch's `depth`.
+    pub fn depth(&self) -> usize {
+        crate::overview::in_queue(&self.submissions).count()
+    }
+
+    /// No such branch, and no records of one: nothing sluice lands on.
+    pub fn is_unknown(&self) -> bool {
+        self.at.is_none() && self.submissions.is_empty()
+    }
+}
+
 impl Sluice<'_> {
     /// 47, 1, 2, 3, 67: admit a head to a branch's queue, and nothing
     /// more.

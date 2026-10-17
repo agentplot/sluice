@@ -79,7 +79,7 @@ again. Details and every state: [references/verdicts.md](references/verdicts.md)
 ```sh
 sluice overview                 # every branch: depth, what is testing, latest landings and blames
 sluice overview --json          # sluice/overview@1, for scripts
-sluice status main              # one branch's submissions
+sluice status main              # one branch's queue; --all for every submission it has had
 ```
 
 A submission's `from.path` is the worktree it came from: filter
