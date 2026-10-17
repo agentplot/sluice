@@ -12,7 +12,8 @@ herdr 0.9.3 gives a plugin a manifest of actions, event hooks, panes and
 one-shot `[[startup]]` commands, and the whole herdr CLI as its API.
 Commands run with the plugin directory as working directory and get
 `HERDR_BIN_PATH`, `HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_CONFIG_DIR` and
-`HERDR_PLUGIN_CONTEXT_JSON` (the focused pane, its cwd). Startup commands
+`HERDR_PLUGIN_CONTEXT_JSON` (a flat object: `focused_pane_cwd`,
+`workspace_cwd`, the ids). Startup commands
 are not supervised and run again only on a server handoff. A popup
 receives every key, Escape included, and closes when its command exits.
 Key bindings, sidebar rows and tab-bar segments live only in the user's
@@ -91,15 +92,22 @@ plugins/herdr/
   herdr-plugin.toml
   README.md
   bin/watch.sh       the watcher: --ensure starts it if the lease is stale
-  bin/document.sh    one document in: state file, toasts, tokens
+  bin/document.sh    one document in: state file, toasts
+  bin/tokens.sh      the sidebar tokens
+  bin/forecast.sh    the ahead counts and forecasts (D7)
   bin/status.sh      the popup and the dashboard
   bin/segment.sh     the tab-bar segment
   bin/jump.sh        focus the culprit's pane
   bin/setup.sh       print the config snippets
-  lib/*.sh           sources.toml, repository names, wording, pane matching
+  bin/open.sh        open one of the plugin's panes
+  lib/common.sh      state, names of repositories, calling herdr
+  lib/sources.sh     sources.toml, with lib/toml.awk
+  lib/panes.sh       panes, their worktrees, the one in front, focusing
+  lib/words.jq       every word shown, and the tokens' rules
   tests/run.sh       the harness
   tests/fake/        herdr and sluice stand-ins
-  tests/docs/        recorded overview documents, one per line
+  tests/docs/        recorded documents, a recorded herdr context, the
+                     expected popup frame
 ```
 
 The manifest declares: `[[startup]]` `sh bin/watch.sh --ensure`; events
@@ -115,9 +123,9 @@ last 60 s; otherwise it starts `nohup sh bin/watch.sh </dev/null
 >>"$STATE/watch.log" 2>&1 &` and exits, so the startup command ends and
 herdr's log reader is not held open. The watcher writes its pid in the
 lease and touches it every tick; a second watcher that finds a live lease
-not its own exits. If herdr ends the startup command's process group with
-it, the first task finds out, and the watcher is instead started from the
-first event or popup (both run `--ensure`).
+not its own exits. herdr 0.9.3 leaves the detached watcher running when
+the startup command ends; every event and every popup also runs
+`--ensure`, so a watcher that died is back at the next one.
 
 Repositories: each tick, `herdr pane list` gives every pane's
 `foreground_cwd` (else `cwd`); `git rev-parse --path-format=absolute
@@ -183,7 +191,7 @@ board's band line. The popup groups them under TESTING, QUEUED and
 RECENT, in the order the board's pane draws them, and the board's pane
 carries the same three headings. Sidebar tokens round to
 whole minutes (`3m/15m`), since they are refreshed every tick, not every
-second. The words are in one file, `lib/words.sh`, and the tests hold them
+second. The words are in one file, `lib/words.jq`, and the tests hold them
 to the board's fixture.
 
 ### D7. The ahead tokens
