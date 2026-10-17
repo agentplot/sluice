@@ -15,9 +15,8 @@ When a run of `sluice exec` in a worktree ends, sluice SHALL keep its
 result with the worktree's held state: when it ended, the head it ran
 on, whether it ran the checks or a command, how it ended (`pass`,
 `fail`, `timed_out`, `lost` or `stopped`) and whether its results were
-recorded under their keys (session-runs-1 clauses 92, 97). The next run
-to end SHALL replace it, and the worktree's release SHALL remove it
-(95). A run refused before it started SHALL leave the result as it was.
+recorded under their keys (session-runs-1 clauses 92, 97). The
+worktree's release SHALL remove it (95).
 
 #### Scenario: A clean run of the checks that passes
 
@@ -39,6 +38,20 @@ to end SHALL replace it, and the worktree's release SHALL remove it
 - **WHEN** `sluice release` releases the worktree
 - **THEN** `sluice status --json` no longer lists it, and a run there
   after has a `last_result` only once it ends
+
+### Requirement: Only the last run's result is listed
+
+A run that starts SHALL drop the result of the run before, so a run
+under way, or one whose `sluice exec` was killed, shows none; its end
+SHALL leave its own. A run refused before it started SHALL leave the
+result as it was.
+
+#### Scenario: A killed run shows no result
+
+- **WHEN** a worktree's run of the checks passed, and a second
+  `sluice exec` there is killed before its run ends
+- **THEN** `sluice status --json` lists the worktree with the second
+  run's `last_run` and no `last_result`
 
 ### Requirement: Only a recorded run says recorded
 

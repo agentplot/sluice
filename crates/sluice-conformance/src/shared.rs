@@ -731,8 +731,8 @@ fn expect_last(last: &LastResult, head: &Rev, kind: RunKind, outcome: RunOutcome
 /// Session-runs-1 clauses 92, 97, rule core.18: every session run leaves
 /// on its place the head and outcome of its last run, and says recorded
 /// only of a clean run of the checks whose results are under their keys;
-/// a command's run and an unclean run never; the next run replaces it and
-/// the release removes it.
+/// a command's run and an unclean run never; the next run's start drops
+/// it, its end replaces it, and the release removes it.
 pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
     let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     assert_eq!(held(h, "unit/a"), None);
@@ -795,8 +795,27 @@ pub fn a_session_runs_last_result_says_whether_it_was_recorded(h: &impl Rig) {
         false,
     );
 
-    // The release removes it.
+    // A run that starts and never ends, its starter killed, shows none:
+    // the one before is not the last run.
     let s = h.sluice();
+    let plan = s
+        .session_plan(BRANCH)
+        .expect("the plan reads")
+        .expect("the branch is managed");
+    s.seams()
+        .checkout
+        .adopt(
+            &h.place("unit/a"),
+            BRANCH,
+            &plan.policy.checkout,
+            "2026-10-16T09:30:00Z",
+        )
+        .expect("the place is equipped");
+    let listed = held(h, "unit/a").expect("held");
+    assert_eq!(listed.last_result, None, "{listed:?}");
+    assert_eq!(listed.last_run.as_deref(), Some("2026-10-16T09:30:00Z"));
+
+    // The release removes it.
     let name = held(h, "unit/a").expect("held").name;
     s.seams()
         .checkout

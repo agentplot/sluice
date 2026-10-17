@@ -1217,6 +1217,9 @@ impl Checkout for Places {
             }
         };
         made.last_run = Some(at.into());
+        // 97: a run under way, or one whose starter was killed, has no
+        // result; the one before is not this run's.
+        made.last_result = None;
         self.write_record(&name, &made)?;
         let tmp = self.tmp(&name);
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;

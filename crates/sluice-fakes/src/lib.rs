@@ -1128,6 +1128,8 @@ impl Checkout for FakeCheckout {
             inner.adopted_for.insert(name.clone(), branch.into());
         }
         inner.adopted_at.insert(name.clone(), at.into());
+        // 97: a run under way has no result.
+        inner.last_results.remove(&name);
         Ok(Place {
             name: name.clone(),
             path: worktree.into(),

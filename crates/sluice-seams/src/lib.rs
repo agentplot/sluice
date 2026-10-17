@@ -96,7 +96,8 @@ pub struct SessionPlace {
     pub last_run: Option<String>,
     /// Its worktree no longer exists: the place is no session's (97).
     pub gone: bool,
-    /// How its last run ended, once one has (97).
+    /// How its last run ended, once one has and none has started since
+    /// (97).
     pub last_result: Option<LastResult>,
 }
 
@@ -217,7 +218,8 @@ pub trait Checkout {
     /// run, and a scratch directory kept across its runs. Nothing of the
     /// worktree is written, moved or removed (25). Its name begins
     /// `session/`, so it is never a candidate's. `at` is when the run
-    /// starts, kept as the place's last run (97).
+    /// starts, kept as the place's last run (97); the result of the run
+    /// before is dropped, so a run that never ends shows none.
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place>;
 
     /// 35, session-runs-1 clause 93: after a session's recorded run that

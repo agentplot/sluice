@@ -98,9 +98,9 @@ what replays read (37, 93), for a display. Rejected here.
 }
 ```
 
-- `at`: when the run ended. `last_run` stays the time it started (97),
-  so `last_run` later than `last_result.at` means a run started since,
-  and has not ended or ended without leaving one.
+- `at`: when the run ended. `last_run` stays the time it started (97).
+  A run's start drops the result of the one before, so a run under way,
+  or one whose starter was killed, has no `last_result`.
 - `head`: the worktree's head the run was given, full.
 - `kind`: `checks` or `command`.
 - `outcome`: `pass` when every check the run named reported and passed
@@ -133,8 +133,10 @@ may mark such a worktree separately.
 save, so a reader that sees `recorded: true` finds the lines (rule
 core.7's order). `exec` calls `Sluice::session_ended` on the lost and
 stopped paths, which have no report. A run refused before it started
-leaves none: nothing ran. A starter killed outright leaves the previous
-result, and `last_run` later than its `at` says so.
+leaves the result as it was: nothing ran. A run that starts drops the
+result of the one before as `adopt` writes its `last_run`, so a starter
+killed outright leaves no result rather than one that is not the last
+run's.
 
 ### The seam
 

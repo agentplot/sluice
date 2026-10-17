@@ -33,5 +33,5 @@ Option 2 is not true to what ran. The log skips a line equal to one it holds, co
 
 - `status --json`'s `worktrees[]` and `overview --json`'s `sessions[]` carry `last_result`, `{at, head, kind, outcome, recorded}`; `recorded` is true only for a clean run of the checks whose results are under their keys.
 - "Ready" is the consumer's rule: a recorded pass on the worktree's current head, which the consumer reads from the worktree. The overview reads no worktree.
-- Only the last run is kept; a starter killed outright leaves the one before, and `last_run` later than `last_result.at` says so.
+- Only the last run is kept. A run's start drops the result of the one before, so a run under way, or one whose starter was killed outright, shows no `last_result` beside its `last_run`.
 - The place seam has one more method for every place profile and the fakes to implement, and the conformance suite covers it.

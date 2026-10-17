@@ -88,7 +88,7 @@ release one with: sluice release --worktree <worktree>
 
 | field | |
 |---|---|
-| `at` | when it ended; `last_run` is when it started, so a `last_run` later than `at` means a run started since and has not ended |
+| `at` | when it ended; `last_run` is when it started. A run under way, or one whose `sluice exec` was killed, has no `last_result` |
 | `head` | the worktree's commit it ran on, in full |
 | `kind` | `checks`, or `command` for `sluice exec <branch> -- <command>` |
 | `outcome` | `pass`, `fail`, `timed_out`, `lost` (the run stopped without saying how it ended) or `stopped` (ended by its caller) |
