@@ -6,9 +6,9 @@ The herdr plugin is to show `checked 4m · ready` on an agent's pane when
 the last `sluice exec` in that worktree passed on the worktree's head,
 and the Claude Code board wants the same. Both read `sluice overview
 --json`, whose `sessions[]` gives a worktree's branch, ports and the time
-its last run started (session-runs-1 clause 97), but not how that run
-ended, on which revision, or whether its results were recorded under
-their keys (92). Nothing durable holds that today: the results log keeps
+its last run started, but not the head and outcome session-runs-1
+clause 97 lists, nor whether its results were recorded under their keys
+(92). Nothing durable holds that today: the results log keeps
 only clean runs of the checks and skips a line equal to one it has, so a
 fail after a pass on the same key leaves the pass as the newest line; a
 command's run and a run in a worktree holding more than its head leave
@@ -20,8 +20,9 @@ nothing at all.
   leaves its result on its worktree's held state: when it ended, the
   head it ran on, whether it ran the checks or a command, how it ended
   (`pass`, `fail`, `timed_out`, `lost`, `stopped`) and whether its
-  results were recorded under their keys. The next run replaces it; the
-  worktree's release removes it (95).
+  results were recorded under their keys (97). The next run replaces it;
+  the worktree's release removes it (95). A command's run and an unclean
+  run are listed with their outcome and never recorded under keys (92).
 - `sluice status --json`'s `worktrees[]` and `sluice overview --json`'s
   `sessions[]` gain `last_result`, that result, on every worktree that
   has one: `{at, head, kind, outcome, recorded}`. Fields are only
@@ -42,15 +43,6 @@ run, which the consumer reads from the worktree itself (see design);
 owns the home view; a run under way, which waits on the herdr plugin's
 own design for a running token; remote session runs (96), which wait on
 that clause's change.
-
-Open question for the operator (rule core.12): clause 97 lists each
-session place "with the time of its last run", and clause 92 says a
-command's run and an unclean run "record nothing". This change reads
-92's "records" as the records under keys, and keeps a run's result on
-the session's place as a fact about the host, beside its ports and the
-time of its last run. If that reading does not hold, 97 needs to say
-the listing carries the last run's result and whether it was recorded,
-before group 2 of the tasks is built.
 
 ## Capabilities
 

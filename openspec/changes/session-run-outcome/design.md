@@ -3,7 +3,9 @@
 ## Context
 
 See proposal.md for why. The clauses are session-runs-1 89 to 97
-(`agentplot/blueprints:design/sluice/proposals/session-runs-1.md`).
+(`agentplot/blueprints:design/sluice/proposals/session-runs-1.md`); 97
+lists each session place with the time, head and outcome of its last
+run, and 92's "records nothing" governs the records under keys alone.
 What exists:
 
 - `sluice exec` (`crates/sluice/src/exec.rs`) adopts the worktree
@@ -113,10 +115,17 @@ the user word for a check's outcome, and `last` alone would read as a
 second spelling of `last_run`. Absent when the place has had no run end
 since this change, as `last_run` is absent before a first run.
 
-What "ready" is stays the consumer's: `kind == "checks"`, `outcome ==
-"pass"`, `recorded`, and `head` equal to the worktree's head. A
-worktree whose files have changed since still has that head's recorded
-pass, which is what a submission of the head would replay (93).
+### The overview reads no worktree; "ready" is the consumer's
+
+The overview reads neither a worktree's head nor whether it holds more
+than its head: it lists what the last run left, and nothing it would
+have to read from each worktree on every `--watch` poll. "Ready" is the
+consumer's rule: a recorded pass on the worktree's current head, that is
+`kind == "checks"`, `outcome == "pass"`, `recorded`, and `head` equal to
+the head the consumer reads from the worktree it has open. A worktree
+whose files have changed since still has that head's recorded pass,
+which is what a submission of the head would replay (93); a consumer
+may mark such a worktree separately.
 
 ### Written after the results, and on every end
 
@@ -152,9 +161,3 @@ core.2); the conformance suite covers it.
 ## Migration Plan
 
 None: an existing record has no `last_result` until its next run ends.
-
-## Open Questions
-
-- Clause 97 and 92 as read here; see the proposal. The shape and tasks
-  stand either way; only whether group 2 may be built before an
-  amendment to 97 depends on it.
