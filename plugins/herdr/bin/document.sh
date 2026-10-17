@@ -57,13 +57,13 @@ learn() {
 }
 
 # An event is told once: making its directory is the test, so two
-# watchers never both toast it. The directory is named by the event itself,
-# its branch, kind, submissions and time, in base64 with / as _ and + as -,
-# and kept only while the event is still among the recent.
+# watchers never both toast it. The directory is named by a SHA-256 of the
+# event's branch, kind, submissions and time, and kept only while the event
+# is still among the recent.
 told=$state/told.d/$key
 mkdir -p "$state/told.d"
 events=$(printf '%s' "$doc" | jqw -c 'include "words"; events')
-names=$(printf '%s\n' "$events" | jq -r 'select(. != null) | .key | @base64' | tr '/+' '_-')
+names=$(printf '%s\n' "$events" | jq -r 'select(. != null) | .key' | while IFS= read -r k; do digest "$k"; done)
 forget_old() {
   for e in "$told"/*; do
     [ -d "$e" ] || continue
@@ -84,8 +84,12 @@ old_ifs=$IFS
 IFS='
 '
 for e in $events; do
-  n=$(printf '%s' "$e" | jq -r '.key | @base64' | tr '/+' '_-')
-  mkdir "$told/$n" 2>/dev/null || continue
+  n=$(digest "$(printf '%s' "$e" | jq -r .key)")
+  if ! mkdir "$told/$n" 2>/dev/null; then
+    [ -d "$told/$n" ] && continue
+    # Never dropped unsaid: told anyway, and the reason logged.
+    say "cannot record an event as told in $told; telling it anyway"
+  fi
   branch=$(printf '%s' "$e" | jq -r .branch)
   kind=$(printf '%s' "$e" | jq -r .event.event)
   case $kind in

@@ -576,12 +576,27 @@ fresh 'toasts: what is told is kept only while it is recent'
 status_of 53 "$work" withdrawn
 feed "$(doc "$blamed87 | $landed94")" "$(doc "$landed94 | $conflict53")"
 d=$(ls -d "$S"/told.d/*)
-got=$(for e in "$d"/*; do
-  printf '%s' "${e##*/}" | tr '_-' '/+' | base64 -d 2>/dev/null
-  echo
+got=$(for e in "$d"/*; do echo "${e##*/}"; done | sort)
+want=$(for k in 'main|conflict|53|2026-10-16T19:44:30Z' 'main|landed|94|2026-10-16T19:33:10Z'; do
+  sh -c '. "$HERDR_PLUGIN_ROOT/lib/common.sh"; digest "$1"' "$plugin/bin/x" "$k"
 done | sort)
-want=$(printf '%s\n' 'main|conflict|53|2026-10-16T19:44:30Z' 'main|landed|94|2026-10-16T19:33:10Z' | sort)
-[ "$got" = "$want" ] || fail "told holds: $got"
+[ "$got" = "$want" ] || fail "told holds: $got, not $want"
+pass
+
+fresh 'toasts: an event on a long branch, or of many submissions'
+long=$(printf 'b%.0s' $(seq 1 200))
+on_long=".branches[0].branch = \"$long\""
+many='.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:44:40Z", event: "landed", ids: [range(100; 161)], to: "aaaaaaa"}]'
+first=$(doc "$on_long")
+second=$(doc "$on_long | $blamed87 | $many")
+feed "$first" "$second" 2>"$t/err"
+has "notification show sluice: #87 blamed on $long"
+n=0
+for f in "$S"/told.d/*/*; do
+  [ "${#f}" -lt 400 ] || fail "a told name is ${#f} long"
+  n=$((n + 1))
+done
+[ "$n" = 2 ] || fail "not both events are recorded as told: $(cat "$t/err")"
 pass
 
 fresh 'toasts: first sight of a repository'

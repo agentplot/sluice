@@ -63,6 +63,25 @@ name_of() {
   basename "${1%/.git}" .git
 }
 
+# A fixed-length name for a string: SHA-256 by whichever tool the system
+# has (sha256sum on Linux and busybox, shasum or openssl on macOS), else
+# two checksums, said once in the log.
+digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$1" | openssl dgst -sha256 | sed 's/.*= *//'
+  else
+    if [ ! -f "$state/no-sha256" ]; then
+      : >"$state/no-sha256"
+      say "no sha256sum, shasum or openssl: told events are named by checksums, which two may share"
+    fi
+    echo "$(sum "$1")-$(sum "x$1")-${#1}"
+  fi
+}
+
 # Replace a file in one step, from stdin; nothing in, nothing replaced.
 put() {
   tmp="$1.tmp.$$"
