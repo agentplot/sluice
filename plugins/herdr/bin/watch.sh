@@ -110,6 +110,13 @@ remember() {
   printf '%s\t%s\n' "$1" "$(identity "$1")" >>"$2"
 }
 
+# A pid kept alone, at its fork, given its identity.
+settle() {
+  id=$(identity "$1")
+  awk -F '\t' -v p="$1" -v id="$id" '$1 == p && $2 == "pid:" p { print p "\t" id; next } { print }' "$2" >"$2.tmp.$$" &&
+    mv -f "$2.tmp.$$" "$2"
+}
+
 # Each process listed in a pids file that is still the one it recorded.
 listed() {
   while IFS='	' read -r p id; do
@@ -169,11 +176,13 @@ start() {
         exec "$@"
       ) &
       inner=$!
-      # Its identity once it has become the source's command: where only
+      # Its pid at once, so a stop in the next second still ends it; its
+      # identity once it has become the source's command, since where only
       # the command line tells processes apart, the fork's would not match.
+      printf '%s\tpid:%s\n' "$inner" "$inner" >>"$run.pids"
       (
-        sleep 1
-        remember "$inner" "$run.pids"
+        sleep "${SLUICE_HERDR_IDENTITY_DELAY:-1}"
+        settle "$inner" "$run.pids"
       ) &
       wait "$inner"
     } | while IFS= read -r line; do

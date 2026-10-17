@@ -29,9 +29,11 @@ identity() {
   echo "pid:$1"
 }
 
-# Whether pid $1 is alive and still the process recorded as $2.
+# Whether pid $1 is alive and still the process recorded as $2; one
+# recorded by its pid alone, in its first second, by that alone.
 same_process() {
-  [ -n "$1" ] && [ -n "$2" ] && kill -0 "$1" 2>/dev/null && [ "$(identity "$1")" = "$2" ]
+  [ -n "$1" ] && [ -n "$2" ] && kill -0 "$1" 2>/dev/null || return 1
+  [ "$2" = "pid:$1" ] || [ "$(identity "$1")" = "$2" ]
 }
 
 # The parent of a process.

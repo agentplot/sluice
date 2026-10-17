@@ -288,6 +288,21 @@ wait "$w" 2>/dev/null
 rm -f "$FAKE/hold"
 pass
 
+fresh 'watch: a watcher stopped in its source'"'"'s first second ends it'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# The source's identity is read only after ten seconds here.
+SLUICE_HERDR_IDENTITY_DELAY=10 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+w=$!
+within 15 'grep -q "^work: overview --watch --json" "$FAKE/sluice-calls"' || fail "no source started"
+kill -TERM "$w"
+wait "$w" 2>/dev/null
+within 5 '! pgrep -f "$here/fake/sluice overview --watch" >/dev/null' || fail "the source outlived its watcher"
+rm -f "$FAKE/hold"
+pkill -f "$here/fake/sluice overview --watch" 2>/dev/null
+pass
+
 fresh 'watch: a pid used again by another process is left alone'
 # After a reboot the state is still there, and the pid is someone else's.
 sleep 60 &
