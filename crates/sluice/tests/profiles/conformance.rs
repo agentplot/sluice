@@ -81,6 +81,10 @@ impl Checkout for RecordedPlaces {
         self.inner.session_places()
     }
 
+    fn ran(&self, name: &str, last: &sluice_seams::LastResult) -> Result<()> {
+        self.inner.ran(name, last)
+    }
+
     fn checked_out(&self) -> Result<Vec<sluice_seams::CheckedOut>> {
         self.inner.checked_out()
     }

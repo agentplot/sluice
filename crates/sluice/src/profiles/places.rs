@@ -61,8 +61,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, CheckedOut, Checkout, Limits, Place, PreviewPlace, ReleasePolicy, Released, Rev,
-    RunHandle, SessionPlace, Setting, Settings,
+    Adopted, CheckedOut, Checkout, LastResult, Limits, Place, PreviewPlace, ReleasePolicy,
+    Released, Rev, RunHandle, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -127,6 +127,10 @@ struct Made {
     /// A preview released because its command failed: what it printed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failed: Option<String>,
+    /// A session's place: how its last run ended (session-runs-1 clause
+    /// 97).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_result: Option<LastResult>,
 }
 
 impl Made {
@@ -145,6 +149,7 @@ impl Made {
             addresses: BTreeMap::new(),
             run: None,
             failed: None,
+            last_result: None,
         }
     }
 }
@@ -1131,10 +1136,20 @@ impl Checkout for Places {
                 branch: made.branch.unwrap_or_default(),
                 ports: made.ports,
                 last_run: made.last_run,
+                last_result: made.last_result,
             });
         }
         out.sort_by(|a, b| a.worktree.cmp(&b.worktree));
         Ok(out)
+    }
+
+    fn ran(&self, name: &str, last: &LastResult) -> Result<()> {
+        let mut made = match self.read_record(name)? {
+            Some(m) if m.kind == Kind::Session => m,
+            _ => bail!("place {name} is no session's"),
+        };
+        made.last_result = Some(last.clone());
+        self.write_record(name, &made)
     }
 
     fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {

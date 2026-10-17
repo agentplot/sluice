@@ -96,6 +96,47 @@ pub struct SessionPlace {
     pub last_run: Option<String>,
     /// Its worktree no longer exists: the place is no session's (97).
     pub gone: bool,
+    /// How its last run ended, once one has (97).
+    pub last_result: Option<LastResult>,
+}
+
+/// How a session's last run ended, kept on its place until the place's
+/// release (session-runs-1 clause 97). It decides nothing: no round, gate
+/// or replay reads it (rule core.18).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastResult {
+    /// When the run ended.
+    pub at: String,
+    /// The head the run was given.
+    pub head: Rev,
+    pub kind: RunKind,
+    pub outcome: RunOutcome,
+    /// Its results are under their keys (92): only a run of the checks in
+    /// a place holding exactly its head that did not hit its time limit.
+    pub recorded: bool,
+}
+
+/// What a session run ran (89).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunKind {
+    Checks,
+    Command,
+}
+
+/// How a session run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    /// Every check it named reported and passed, or the command exited 0.
+    Pass,
+    Fail,
+    /// Its time limit ended it (66).
+    TimedOut,
+    /// Its supervisor stopped before it reported (60).
+    Lost,
+    /// Its caller ended it.
+    Stopped,
 }
 
 /// A worktree of the repository with a branch checked out, as the place
@@ -197,8 +238,14 @@ pub trait Checkout {
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
 
     /// Session-runs-1 clause 97: every session's place the repository
-    /// holds, each with whether its worktree still exists.
+    /// holds, each with whether its worktree still exists and how its last
+    /// run ended.
     fn session_places(&self) -> Result<Vec<SessionPlace>>;
+
+    /// Session-runs-1 clause 97: keep `last` as how the session's place
+    /// `name`'s last run ended, replacing any, until the place's release.
+    /// An error for a name that is no session's place.
+    fn ran(&self, name: &str, last: &LastResult) -> Result<()>;
 
     /// Every worktree of the repository that has a branch checked out,
     /// with the branch and the revision it holds; a detached worktree is
