@@ -628,6 +628,14 @@ tokens
 has '--token sluice=#87 BLAMED · tests:t-cards'
 pass
 
+fresh "sidebar: blamed, a command runner's task"
+status_of 87 "$work" withdrawn '["sleep 15; test ! -f bad"]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 87 '$work' testing)]")" "$(doc "$blamed87")"
+tokens
+has '--token sluice=#87 BLAMED'
+hasnt 'BLAMED ·'
+pass
+
 fresh 'sidebar: a conflict'
 status_of 53 "$work" withdrawn
 feed "$(doc)" "$(doc "$conflict53")"

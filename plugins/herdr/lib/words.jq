@@ -112,7 +112,10 @@ def pane_token($w; $paths; $failed; $check; $now):
       | {at, id: ([.ids[] | . as $i | select($mine | index($i))] | max)} ] | sort_by(.at) | last as $landed
   | if ($live | length) > 0 then $live[0]
     elif $out and (($landed == null) or ($landed.id < $out.id)) then
-      if $out.event == "blamed" then "#\($out.id) BLAMED" + (($failed[$out.id | tostring] // []) | if length > 0 then " · " + join(", ") else "" end)
+      # Only a task with a plain name fits the line: a command runner's
+      # task is its whole command, which the popup still shows.
+      if $out.event == "blamed" then "#\($out.id) BLAMED" + (($failed[$out.id | tostring] // []) | map(select(test("^\\S{1,24}$")))
+          | if length > 0 then " · " + join(", ") else "" end)
       else "#\($out.id) CONFLICT" + (($out.paths // []) | if length > 0 then " · " + .[0] else "" end) end
     elif $check != null and ($check.count // 0) > 0 then
       "\($check.count) ahead" + (if $check.result == "clean" then " · clean"
