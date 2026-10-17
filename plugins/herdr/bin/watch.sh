@@ -93,8 +93,20 @@ say "watching (pid $$)"
 ) &
 renewer=$!
 
-# This watcher's sources, apart from any other's.
+# This watcher's sources, apart from any other's. A watcher killed outright
+# never ran its stop: its sources are ended here, and forgotten.
 runs=$state/run/$$
+for d in "$state"/run/*; do
+  [ -d "$d" ] || continue
+  p=${d##*/}
+  [ "$p" = $$ ] && continue
+  kill -0 "$p" 2>/dev/null && continue
+  for f in "$d"/*.pids; do
+    # shellcheck disable=SC2046
+    [ -e "$f" ] && kill $(cat "$f") 2>/dev/null
+  done
+  rm -rf "$d"
+done
 mkdir -p "$runs"
 
 stop() {

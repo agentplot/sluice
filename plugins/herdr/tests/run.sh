@@ -214,6 +214,24 @@ kill "$b" 2>/dev/null
 wait 2>/dev/null
 pass
 
+fresh "watch: a killed watcher's sources are ended"
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+# A watcher killed outright left a source running under its pid.
+sleep 60 &
+orphan=$!
+dead=$(sh -c 'echo $$')
+mkdir -p "$S/run/$dead"
+echo "$orphan" >"$S/run/$dead/x.pids"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+sleep 1
+if kill -0 "$orphan" 2>/dev/null; then
+  fail "the dead watcher's source still runs"
+  kill "$orphan"
+fi
+[ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
+pass
+
 fresh 'watch: a reinstalled plugin replaces its watcher'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
