@@ -151,7 +151,22 @@ pub fn forge_check(dir: &Path, branch: Option<&str>, out: &mut dyn Write) -> Res
         return Ok(1);
     };
     let branches = branches::Branches::open(dir)?;
-    let Some(remote) = branches.remote(&branch)? else {
+    let remote = match branches.remote(&branch)? {
+        Some(r) => Some(r),
+        // A bolt not yet made is checked before it is: its rules on the
+        // forge are read by name, and its remote from main's policy.
+        None => {
+            let r = branches.remote_if_made_from(&branch, "main")?;
+            if r.is_some() {
+                say(
+                    true,
+                    &format!("{branch} is not made yet; main's policy puts it on its remote"),
+                )?;
+            }
+            r
+        }
+    };
+    let Some(remote) = remote else {
         say(false, &format!("{branch}'s policy names no remote"))?;
         return Ok(1);
     };
