@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" width="900" height="500" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">Parallel and batch: a failure in each</title>
+<desc id="dsc">A, B and C are queued together on a branch whose tests take 20 minutes, and B breaks the build. With batch false, main plus A, plus A plus B and plus A plus B plus C are tested at once; at minute 20 A lands, B is blamed, the run with B in it is thrown away, and C is tested again on the new main, landing at minute 40. With batch true, only main plus A plus B plus C is tested; it fails at minute 20, so the two shorter combinations it skipped are tested; at minute 40 A lands and B is blamed, and C is tested again, landing at minute 60.</desc>
+<style>
+:root{--bg:#f6f7f8;--panel:#ffffff;--fg:#1d2329;--muted:#5b6670;--rule:#d6dbe0;
+--accent:#1b6d8a;--soft:#e3eef3;--ok:#2e7d4f;--bad:#c0392b;--ink:#ffffff}
+@media (prefers-color-scheme:dark){:root{--bg:#141a1f;--panel:#1b2329;--fg:#e6ebef;
+--muted:#9aa7b2;--rule:#2c3740;--accent:#6fc2de;--soft:#1f2f38;--ok:#6cc58f;--bad:#f08a7e;--ink:#0f1a20}}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
+.mono,.bart{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.bg{fill:var(--bg)} .t{fill:var(--fg)} .m{fill:var(--muted)} .ok{fill:var(--ok)} .bad{fill:var(--bad)}
+.b{font-weight:600} .h{font-size:17px;font-weight:700} .hd{font-size:12px;letter-spacing:.06em;fill:var(--muted)}
+.sm{font-size:13px} .xs{font-size:11.5px} .mono{font-size:12.5px}
+.panel{fill:var(--soft);stroke:none}
+.track{fill:var(--panel);stroke:var(--rule);stroke-width:1}
+.bar{transform-box:fill-box;transform-origin:left center}
+.bart{fill:var(--ink);font-size:11.5px;font-weight:600}
+.wait{stroke:var(--muted);stroke-width:2;stroke-dasharray:4 4;transform-box:fill-box;transform-origin:left center}
+.axis{stroke:var(--rule);stroke-width:1} .tick{fill:var(--muted);font-size:11px}
+.play{stroke:var(--accent);stroke-width:1.5;stroke-dasharray:3 3}
+.merge{fill:var(--ok)} .mergein{fill:var(--panel)}
+.badge{fill:var(--accent)} .badget{fill:var(--ink);font-size:12px;font-weight:700}
+.step{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round}
+.dot{fill:var(--accent)} .grid{stroke:var(--rule);stroke-width:1}
+.slot{fill:var(--panel);stroke:var(--rule);stroke-width:1.5} .used{fill:var(--accent)}
+@media (prefers-reduced-motion:reduce){*{animation-play-state:paused!important;animation-delay:-16.5s!important}
+.cap{animation:none!important;opacity:1}}
+@keyframes k1{0%{transform:scaleX(0);fill:var(--accent)} 2%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(1);fill:var(--accent)} 28.2065%{transform:scaleX(1);fill:var(--ok)} 97%{transform:scaleX(1);fill:var(--ok)} 100%{transform:scaleX(0);fill:var(--accent)}}.k1{animation:k1 18s linear infinite}@keyframes k2{0%{opacity:0} 27.6065%{opacity:0} 28.2065%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k2{animation:k2 18s linear infinite}@keyframes k3{0%{opacity:0} 27.6065%{opacity:0} 28.2065%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k3{animation:k3 18s linear infinite}@keyframes k4{0%{transform:scaleX(0);fill:var(--accent)} 2%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(1);fill:var(--accent)} 28.2065%{transform:scaleX(1);fill:var(--bad)} 97%{transform:scaleX(1);fill:var(--bad)} 100%{transform:scaleX(0);fill:var(--accent)}}.k4{animation:k4 18s linear infinite}@keyframes k5{0%{opacity:0} 27.6065%{opacity:0} 28.2065%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k5{animation:k5 18s linear infinite}@keyframes k6{0%{transform:scaleX(0);opacity:1} 2%{transform:scaleX(0);opacity:1} 27.8065%{transform:scaleX(1.000);opacity:1} 28.8065%{transform:scaleX(1.000);opacity:.25} 97%{transform:scaleX(1.000);opacity:.25} 100%{transform:scaleX(0);opacity:1}}.k6{animation:k6 18s linear infinite}@keyframes k7{0%{opacity:0} 27.6065%{opacity:0} 28.2065%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k7{animation:k7 18s linear infinite}@keyframes k8{0%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(0);fill:var(--accent)} 53.6129%{transform:scaleX(1);fill:var(--accent)} 54.0129%{transform:scaleX(1);fill:var(--ok)} 97%{transform:scaleX(1);fill:var(--ok)} 100%{transform:scaleX(0);fill:var(--accent)}}.k8{animation:k8 18s linear infinite}@keyframes k9{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k9{animation:k9 18s linear infinite}@keyframes k10{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k10{animation:k10 18s linear infinite}@keyframes k11{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k11{animation:k11 18s linear infinite}@keyframes k12{0%{transform:scaleX(0);fill:var(--accent)} 2%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(1);fill:var(--accent)} 28.2065%{transform:scaleX(1);fill:var(--bad)} 97%{transform:scaleX(1);fill:var(--bad)} 100%{transform:scaleX(0);fill:var(--accent)}}.k12{animation:k12 18s linear infinite}@keyframes k13{0%{opacity:0} 27.6065%{opacity:0} 28.2065%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k13{animation:k13 18s linear infinite}@keyframes k14{0%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(0);fill:var(--accent)} 53.6129%{transform:scaleX(1);fill:var(--accent)} 54.0129%{transform:scaleX(1);fill:var(--ok)} 97%{transform:scaleX(1);fill:var(--ok)} 100%{transform:scaleX(0);fill:var(--accent)}}.k14{animation:k14 18s linear infinite}@keyframes k15{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k15{animation:k15 18s linear infinite}@keyframes k16{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k16{animation:k16 18s linear infinite}@keyframes k17{0%{transform:scaleX(0);fill:var(--accent)} 27.8065%{transform:scaleX(0);fill:var(--accent)} 53.6129%{transform:scaleX(1);fill:var(--accent)} 54.0129%{transform:scaleX(1);fill:var(--bad)} 97%{transform:scaleX(1);fill:var(--bad)} 100%{transform:scaleX(0);fill:var(--accent)}}.k17{animation:k17 18s linear infinite}@keyframes k18{0%{opacity:0} 53.4129%{opacity:0} 54.0129%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k18{animation:k18 18s linear infinite}@keyframes k19{0%{transform:scaleX(0);fill:var(--accent)} 53.6129%{transform:scaleX(0);fill:var(--accent)} 79.4194%{transform:scaleX(1);fill:var(--accent)} 79.8194%{transform:scaleX(1);fill:var(--ok)} 97%{transform:scaleX(1);fill:var(--ok)} 100%{transform:scaleX(0);fill:var(--accent)}}.k19{animation:k19 18s linear infinite}@keyframes k20{0%{opacity:0} 79.2194%{opacity:0} 79.8194%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k20{animation:k20 18s linear infinite}@keyframes k21{0%{opacity:0} 79.2194%{opacity:0} 79.8194%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k21{animation:k21 18s linear infinite}@keyframes k22{0%{opacity:0} 79.2194%{opacity:0} 79.8194%{opacity:1} 97%{opacity:1} 97.6%{opacity:0} 100%{opacity:0}}.k22{animation:k22 18s linear infinite}@keyframes k23{0%{transform:translateX(0px)} 2%{transform:translateX(0px)} 82%{transform:translateX(620px)} 97%{transform:translateX(620px)} 100%{transform:translateX(0px)}}.k23{animation:k23 18s linear infinite}@keyframes k24{0%{opacity:0.35} 1.4%{opacity:0.35} 2%{opacity:1} 34%{opacity:1} 34.6%{opacity:0.35} 100%{opacity:0.35}}.k24{animation:k24 18s linear infinite}@keyframes k25{0%{opacity:0.35} 33.4%{opacity:0.35} 34%{opacity:1} 62%{opacity:1} 62.6%{opacity:0.35} 100%{opacity:0.35}}.k25{animation:k25 18s linear infinite}@keyframes k26{0%{opacity:0.35} 61.4%{opacity:0.35} 62%{opacity:1} 97%{opacity:1} 97.6%{opacity:0.35} 100%{opacity:0.35}}.k26{animation:k26 18s linear infinite}</style>
+<rect class="bg" width="900" height="500" rx="10"/>
+<text class="h" x="20" y="32">A failure in each mode</text>
+<text class="m sm" x="20" y="52">A, B and C are queued together, the gate takes 20 minutes, and B breaks the build.</text>
+<rect class="panel" x="16" y="66" width="868" height="150" rx="8"/>
+<text class="hd" x="34" y="86">BATCH = FALSE · PARALLEL = 4</text>
+<text class="t mono" x="34" y="111">main + A</text>
+<rect class="track" x="250.0" y="96" width="200.0" height="20" rx="4"/>
+<rect class="bar k1" x="250.0" y="96" width="200.0" height="20" rx="4"/>
+<text class="bart k2" x="258.0" y="110">passed · A lands</text>
+<g class="k3"><circle class="merge" cx="450.0" cy="106" r="7"/><circle class="mergein" cx="450.0" cy="106" r="3"/></g>
+<text class="t mono" x="34" y="137">main + A + B</text>
+<rect class="track" x="250.0" y="122" width="200.0" height="20" rx="4"/>
+<rect class="bar k4" x="250.0" y="122" width="200.0" height="20" rx="4"/>
+<text class="bart k5" x="258.0" y="136">failed · B is blamed</text>
+<text class="t mono" x="34" y="163">main + A + B + C</text>
+<rect class="track" x="250.0" y="148" width="200.0" height="20" rx="4"/>
+<rect class="bar k6" style="fill:var(--muted)" x="250.0" y="148" width="200.0" height="20" rx="4"/>
+<text class="m xs k7" x="258.0" y="162">thrown away: B is in it</text>
+<text class="t mono" x="34" y="189">main + C</text>
+<rect class="track" x="450.0" y="174" width="200.0" height="20" rx="4"/>
+<rect class="bar k8" x="450.0" y="174" width="200.0" height="20" rx="4"/>
+<text class="bart k9" x="458.0" y="188">passed · C lands</text>
+<g class="k10"><circle class="merge" cx="650.0" cy="184" r="7"/><circle class="mergein" cx="650.0" cy="184" r="3"/></g>
+<text class="b sm k11" x="560" y="86">B told at 20 min · C landed at 40 min</text>
+<rect class="panel" x="16" y="228" width="868" height="150" rx="8"/>
+<text class="hd" x="34" y="248">BATCH = TRUE · PARALLEL = 4</text>
+<text class="t mono" x="34" y="273">main + A + B + C</text>
+<rect class="track" x="250.0" y="258" width="200.0" height="20" rx="4"/>
+<rect class="bar k12" x="250.0" y="258" width="200.0" height="20" rx="4"/>
+<text class="bart k13" x="258.0" y="272">failed · which one?</text>
+<text class="t mono" x="34" y="299">main + A</text>
+<rect class="track" x="450.0" y="284" width="200.0" height="20" rx="4"/>
+<rect class="bar k14" x="450.0" y="284" width="200.0" height="20" rx="4"/>
+<text class="bart k15" x="458.0" y="298">passed · A lands</text>
+<g class="k16"><circle class="merge" cx="650.0" cy="294" r="7"/><circle class="mergein" cx="650.0" cy="294" r="3"/></g>
+<text class="t mono" x="34" y="325">main + A + B</text>
+<rect class="track" x="450.0" y="310" width="200.0" height="20" rx="4"/>
+<rect class="bar k17" x="450.0" y="310" width="200.0" height="20" rx="4"/>
+<text class="bart k18" x="458.0" y="324">failed · B is blamed</text>
+<text class="t mono" x="34" y="351">main + C</text>
+<rect class="track" x="650.0" y="336" width="200.0" height="20" rx="4"/>
+<rect class="bar k19" x="650.0" y="336" width="200.0" height="20" rx="4"/>
+<text class="bart k20" x="658.0" y="350">passed · C lands</text>
+<g class="k21"><circle class="merge" cx="850.0" cy="346" r="7"/><circle class="mergein" cx="850.0" cy="346" r="3"/></g>
+<text class="b sm k22" x="560" y="248">B told at 40 min · C landed at 60 min</text>
+<line class="axis" x1="250" y1="392" x2="870" y2="392"/>
+<line class="axis" x1="250.0" y1="392" x2="250.0" y2="397"/>
+<text class="tick" x="250.0" y="410" text-anchor="middle">0 min</text>
+<line class="axis" x1="350.0" y1="392" x2="350.0" y2="397"/>
+<text class="tick" x="350.0" y="410" text-anchor="middle">10 min</text>
+<line class="axis" x1="450.0" y1="392" x2="450.0" y2="397"/>
+<text class="tick" x="450.0" y="410" text-anchor="middle">20 min</text>
+<line class="axis" x1="550.0" y1="392" x2="550.0" y2="397"/>
+<text class="tick" x="550.0" y="410" text-anchor="middle">30 min</text>
+<line class="axis" x1="650.0" y1="392" x2="650.0" y2="397"/>
+<text class="tick" x="650.0" y="410" text-anchor="middle">40 min</text>
+<line class="axis" x1="750.0" y1="392" x2="750.0" y2="397"/>
+<text class="tick" x="750.0" y="410" text-anchor="middle">50 min</text>
+<line class="axis" x1="850.0" y1="392" x2="850.0" y2="397"/>
+<text class="tick" x="850.0" y="410" text-anchor="middle">60 min</text>
+<line class="play k23" x1="250" y1="66" x2="250" y2="392"/>
+<g class="cap k24"><circle class="badge" cx="32" cy="452" r="11"/><text class="badget" x="32" y="456" text-anchor="middle">1</text><text class="t sm" x="50" y="448">Parallel: the failure names B</text><text class="t sm" x="50" y="465">at once; the run behind it is wasted.</text></g>
+<g class="cap k25"><circle class="badge" cx="324" cy="452" r="11"/><text class="badget" x="324" y="456" text-anchor="middle">2</text><text class="t sm" x="342" y="448">Batch: the longest fails, so the</text><text class="t sm" x="342" y="465">shorter ones run to find who broke it.</text></g>
+<g class="cap k26"><circle class="badge" cx="616" cy="452" r="11"/><text class="badget" x="616" y="456" text-anchor="middle">3</text><text class="t sm" x="634" y="448">Either way, only B's agent is told,</text><text class="t sm" x="634" y="465">and C lands without B.</text></g>
+</svg>

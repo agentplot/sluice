@@ -160,9 +160,11 @@ another with no waiting. If `bolt/x + A + B` fails, B is blamed, A lands,
 and C is tested again as `bolt/x + A + C`. The higher the number, the
 faster a queue drains when things pass, and the more work is thrown away
 when something fails. After a failure sluice tests fewer at once, and
-builds back up to this number as things pass. (GitHub's merge queue calls
+builds back up to this number as things pass. With `batch = true`,
+`parallel` is the largest batch instead. (GitHub's merge queue calls
 this "maximum pull requests to build"; Mergify calls it "speculative
-checks".)
+checks".) [Parallel and batch](/sluice/guides/parallel-and-batch/) shows
+both over time and says which to choose.
 
 ### `batch`
 
@@ -170,8 +172,14 @@ Whether to test every combination or only the longest.
 
 | value | sluice tests | good for |
 |---|---|---|
-| `false` | every combination: `+A`, `+A+B`, `+A+B+C` | small, fast tests; a failure is pinned to one submission at once |
-| `true` | only the longest, `+A+B+C`; if it passes, all three land together; if it fails, the shorter ones are tested to find which submission broke it | slow tests, where running fewer combinations matters more than naming the blamed submission quickly |
+| `false` | every combination: `+A`, `+A+B`, `+A+B+C`, up to `parallel` at once | fast tests, and a host with room for several runs; each submission lands about one run after it was submitted, and a failure names its submission at once |
+| `true` | only the longest, `+A+B+C`, one run at a time; if it passes, all three land together; if it fails, the shorter ones are tested to find which submission broke it | slow tests, where running fewer combinations matters more than landing or blaming quickly |
+
+With `true`, the branch tests nothing else while a batch is under test.
+Submissions that arrive meanwhile wait, and the next batch is whatever
+queued up: no timer collects one. A branch can't test several batches
+at once; several branches can, sharing the host's
+[`[runs] max`](#runs).
 
 ### `flaky`
 

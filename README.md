@@ -134,11 +134,27 @@ runner = "command"          # or "moon", to run only what a change affects
 command = "make test"
 
 [branches.main]
-parallel = 4                # candidates under test at once
+parallel = 4                # combinations under test at once
+batch = false               # true for a slow suite: test only the longest
 ```
 
 sluice reads this file from the branch itself, never from a submission,
 so no submission can loosen the rules it is judged by.
+
+Leave `batch = false` when the tests take a few minutes: each submission
+is tested as soon as it arrives, on the bet that those ahead pass. Set
+`batch = true` when they take a quarter of an hour or more: sluice tests
+one combination of everything queued, lands all of it when that
+passes, and looks for the submission to blame only on a failure. A
+branch with `batch = true` tests one run at a time.
+
+<p align="center">
+  <img src="docs/diagrams/modes.svg" alt="Four submissions a minute apart on a 20-minute gate: with batch false, four runs at once land all four by minute 23; with batch true, two runs, one at a time, land them by minute 40" width="820">
+</p>
+
+[Parallel and batch](https://agentplot.github.io/sluice/guides/parallel-and-batch/)
+shows a failure in each, why a queue tests fewer at once after
+failures, and how the host's `[runs] max` caps them all.
 
 **2. Protect the branch**, once per repository:
 
