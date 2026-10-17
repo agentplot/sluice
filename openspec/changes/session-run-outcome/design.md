@@ -147,10 +147,12 @@ run's.
 `Checkout::ran(name, &LastResult)`: keep `LastResult` as the session
 place `name`'s last result, replacing any; nothing for a place already
 released; an error for a candidate's or a preview's place. The place
-profile reads and writes the record under the host's lock it holds
-blocks of ports under, and removes a released place's record under the
-same lock, so a release between the read and the write never sees the
-record written again. `SessionPlace.last_result: Option<LastResult>`.
+profile reads and writes the record under the repository's lock over
+session places' records, beside them in its git directory, and removes
+a released session place's record under the same lock, so a release
+between the read and the write never sees the record written again.
+The host's lock for blocks of ports is not used: a sandboxed check that
+releases a place may not write the host's state. `SessionPlace.last_result: Option<LastResult>`.
 One interface, implemented by the place profile and the fakes (rule
 core.2); the conformance suite covers it.
 
