@@ -1,0 +1,30 @@
+---
+// The animated diagram, inlined so it follows the site's theme toggle. The
+// copy is docs/diagrams/sluice.py --scoped, written by scripts/diagram.mjs.
+import svg from '../generated/sluice.svg?raw';
+---
+
+<figure class="diagram not-content">
+  <div class="frame" set:html={svg} />
+</figure>
+
+<style>
+  .diagram {
+    margin: 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    overflow: hidden;
+    box-shadow: 0 1.5rem 3rem -1.5rem rgb(0 0 0 / 0.45);
+  }
+  /* On a phone the diagram keeps a legible size and scrolls inside its frame. */
+  .frame {
+    overflow-x: auto;
+    line-height: 0;
+  }
+  .frame :global(svg) {
+    display: block;
+    width: 100%;
+    min-width: 40rem;
+    height: auto;
+  }
+</style>

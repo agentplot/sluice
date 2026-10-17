@@ -1,0 +1,19 @@
+---
+// The start page's four steps, side by side on a wide screen and stacked on
+// a phone. Each step is a <Step>, whose prose comes from the page so Vale
+// checks it.
+---
+
+<ol class="flow not-content"><slot /></ol>
+
+<style>
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 1rem;
+    padding: 0;
+    margin-block: 2rem;
+    list-style: none;
+    counter-reset: step;
+  }
+</style>

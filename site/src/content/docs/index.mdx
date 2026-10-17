@@ -4,10 +4,6 @@ description: A merge queue for agents working in parallel worktrees.
 template: splash
 hero:
   tagline: A merge queue for agents working in parallel worktrees. Agents submit. sluice tests each submission exactly as it would land, names the one that broke the build, and moves the branch only to code that passed.
-  image:
-    light: ../../assets/mark-light.svg
-    dark: ../../assets/mark-dark.svg
-    alt: sluice
   actions:
     - text: Install for Claude Code
       link: /sluice/guides/claude-code/
@@ -23,6 +19,8 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Flow from '../../components/Flow.astro';
+import Step from '../../components/Step.astro';
 
 ## Get started
 
@@ -62,21 +60,31 @@ sluice takes merging away from the agents. Each one finishes its work and
 everything queued ahead of it**, and lands it only if that exact
 combination passes.
 
+<Flow>
+  <Step kind="submit" title="Submit">
+    An agent finishes its work in its own worktree and submits it to a
+    branch. The submission joins that branch's queue. No agent merges.
+  </Step>
+  <Step kind="combine" title="Combine">
+    Each submission is tested on top of everything queued ahead of it:
+    the branch, plus every submission ahead, plus this one, checked out
+    fresh in its own worktree. Several combinations run at once.
+  </Step>
+  <Step kind="test" title="Blame one">
+    When a combination fails, sluice waits for a result on every
+    combination ahead, works out the one submission at fault and tells
+    only that agent, with the failing tests and their logs. The rest
+    are formed again without it, and the tests that already passed are
+    replayed, not run.
+  </Step>
+  <Step kind="land" title="Land">
+    A combination that passes lands as a merge commit carrying exactly
+    the tree that passed. A git hook refuses every other update to the
+    branch, and sluice moves it only from the revision it tested on.
+  </Step>
+</Flow>
+
 <CardGrid>
-  <Card title="Tested as it lands" icon="approve-check">
-    A combination is the branch, plus every submission ahead, plus this
-    one, checked out fresh in its own worktree. The commit that lands
-    carries exactly the tree that passed.
-  </Card>
-  <Card title="One culprit, one message" icon="comment">
-    When a combination fails, sluice works out the one submission at fault
-    and tells only that agent, with the failing tasks and their logs.
-    Everyone else's work keeps moving.
-  </Card>
-  <Card title="The branch only moves to green" icon="seti:git">
-    A git hook refuses every update to a protected branch except sluice's,
-    and sluice moves it only from the revision it tested on.
-  </Card>
   <Card title="Try what landed" icon="laptop">
     `sluice preview` brings a revision the branch landed up on your
     repository's own stack, at addresses a person opens, and keeps it

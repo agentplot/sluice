@@ -1,0 +1,65 @@
+---
+// The start page's hero: the name, the tagline, the actions and the
+// animated diagram. Every other page with a hero gets Starlight's own.
+import Default from '@astrojs/starlight/components/Hero.astro';
+import { LinkButton } from '@astrojs/starlight/components';
+import Diagram from './Diagram.astro';
+
+const route = Astro.locals.starlightRoute;
+const home = route.id === '';
+const { data } = route.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+---
+
+{
+  home ? (
+    <div class="home-hero">
+      <div class="copy">
+        <h1 id="_top" data-page-title set:html={title} />
+        {tagline && <p class="tagline" set:html={tagline} />}
+        <div class="actions">
+          {actions.map(({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+            <LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+              {text}
+            </LinkButton>
+          ))}
+        </div>
+      </div>
+      <Diagram />
+    </div>
+  ) : (
+    <Default />
+  )
+}
+
+<style>
+  .home-hero {
+    display: grid;
+    gap: 2.5rem;
+    padding-block: clamp(1.5rem, calc(0.5rem + 6vmin), 5rem) 1rem;
+  }
+  .copy {
+    display: grid;
+    gap: 1.25rem;
+    max-width: 46rem;
+  }
+  h1 {
+    font-family: var(--sluice-display);
+    font-size: clamp(var(--sl-text-4xl), calc(1rem + 6vw), 5.5rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--sl-color-white);
+  }
+  .tagline {
+    font-size: clamp(var(--sl-text-base), calc(0.5rem + 1.4vw), var(--sl-text-xl));
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 1.5rem;
+    align-items: center;
+  }
+</style>

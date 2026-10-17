@@ -1,0 +1,152 @@
+---
+// One of the start page's four steps: a small drawing of it, a numbered
+// title and the page's prose. `kind` picks the drawing.
+interface Props {
+  kind: 'submit' | 'combine' | 'test' | 'land';
+  title: string;
+}
+const { kind, title } = Astro.props;
+---
+
+<li class="step">
+  <svg viewBox="0 0 220 96" aria-hidden="true">
+    {
+      kind === 'submit' && (
+        <g>
+          {['A', 'B', 'C'].map((s, i) => (
+            <g>
+              <rect class="chip" x={18 + i * 44} y="34" width="34" height="28" rx="6" />
+              <text class="chipt" x={35 + i * 44} y="53" text-anchor="middle">{s}</text>
+            </g>
+          ))}
+          <path class="rule" d="M154 48 H194" />
+          <path class="rule" d="M186 40 L196 48 L186 56" />
+        </g>
+      )
+    }
+    {
+      kind === 'combine' &&
+        ['main + A', 'main + A + B', 'main + A + B + C'].map((t, i) => (
+          <g>
+            <rect class="row" x="14" y={10 + i * 27} width={110 + i * 44} height="22" rx="5" />
+            <text class="mono" x="24" y={25 + i * 27}>{t}</text>
+          </g>
+        ))
+    }
+    {
+      kind === 'test' &&
+        [['main + A', 'ok'], ['main + A + B', 'bad'], ['main + A + C', 'ok']].map(([t, r], i) => (
+          <g>
+            <rect class="track" x="14" y={10 + i * 27} width="192" height="22" rx="5" />
+            <rect class={`bar ${r}`} x="14" y={10 + i * 27} width={r === 'bad' ? 130 : 192} height="22" rx="5" />
+            <text class="mono on" x="24" y={25 + i * 27}>{t}</text>
+            <text class={`mark ${r}`} x="200" y={26 + i * 27} text-anchor="end">{r === 'ok' ? '✓' : '✗'}</text>
+          </g>
+        ))
+    }
+    {
+      kind === 'land' && (
+        <g>
+          <path class="rule" d="M30 62 H190" />
+          <circle class="commit" cx="40" cy="62" r="6" />
+          <circle class="merge" cx="110" cy="62" r="8" />
+          <circle class="merge" cx="180" cy="62" r="8" />
+          <text x="40" y="90" text-anchor="middle">before</text>
+          <text class="mono" x="110" y="90" text-anchor="middle">A</text>
+          <text class="mono" x="180" y="90" text-anchor="middle">C</text>
+          <rect class="chip" x="148" y="6" width="64" height="22" rx="11" />
+          <text class="chipt" x="180" y="21" text-anchor="middle">main</text>
+          <path class="rule" d="M180 30 V48" />
+        </g>
+      )
+    }
+  </svg>
+  <h3>{title}</h3>
+  <div class="prose"><slot /></div>
+</li>
+
+<style>
+  .step {
+    counter-increment: step;
+    display: grid;
+    align-content: start;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-gray-6);
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    max-height: 6rem;
+  }
+  h3 {
+    font-family: var(--sluice-display);
+    font-size: var(--sl-text-lg);
+    color: var(--sl-color-white);
+  }
+  h3::before {
+    content: counter(step) '  ';
+    color: var(--sl-color-accent);
+  }
+  .prose {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .prose :global(p + p) {
+    margin-top: 0.5rem;
+  }
+  .prose :global(code) {
+    font-size: 0.85em;
+  }
+  text {
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    fill: var(--sl-color-gray-2);
+  }
+  .chip {
+    fill: var(--sl-color-white);
+  }
+  .chipt {
+    fill: var(--sl-color-black);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .rule {
+    fill: none;
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .row,
+  .track {
+    fill: var(--sl-color-gray-5);
+  }
+  .bar.ok {
+    fill: var(--sl-color-accent-low);
+  }
+  .bar.bad {
+    fill: color-mix(in srgb, var(--sl-color-red) 30%, transparent);
+  }
+  .on {
+    fill: var(--sl-color-white);
+  }
+  .mark {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .mark.ok {
+    fill: var(--sl-color-accent);
+  }
+  .mark.bad {
+    fill: var(--sl-color-red);
+  }
+  .commit {
+    fill: var(--sl-color-gray-3);
+  }
+  .merge {
+    fill: var(--sl-color-accent);
+  }
+</style>
