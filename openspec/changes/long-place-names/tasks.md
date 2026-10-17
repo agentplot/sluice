@@ -8,7 +8,7 @@ tools: `moon run ':#check-tools'`.
 
 ## 1. The rule
 
-- [ ] 1.1 Make `flat_name` and `dir_name` in `crates/sluice/src/runs.rs` keep a name of at most 246 bytes as today and shorten a longer one to its first 160 bytes cut where a character ends, `%~` or `+~`, and 16 hex digits of the name's SHA-1 through `gix`; verify with the unit tests `a_name_that_fits_is_kept` and `a_long_name_is_shortened_and_distinct` and the existing `a_places_directory_holds_no_percent`.
+- [x] 1.1 Make `flat_name` and `dir_name` in `crates/sluice/src/runs.rs` keep a name of at most 246 bytes as today and shorten a longer one to its first 160 bytes cut where a character ends, `%~` or `+~`, and 16 hex digits of the name's SHA-1 through `gix`; verify with the unit tests `a_name_that_fits_is_kept` and `a_long_name_is_shortened_and_distinct` and the existing `a_places_directory_holds_no_percent`.
 
 ## 2. A worktree at a long path
 

@@ -641,14 +641,15 @@ fn numbered(parent: &Path) -> Result<Vec<(u64, PathBuf)>> {
 
 /// A place's name as one directory name: `/` and `%` written `%2F` and
 /// `%25`, so `sluice/try/bolt/x/1` is one directory and no two names
-/// share one.
+/// share one. One too long for a file name is shortened (`shortened`).
 pub fn flat_name(name: &str) -> String {
     assert!(!name.is_empty(), "a place has a name");
     let flat = name.replace('%', "%25").replace('/', "%2F");
-    match flat.strip_prefix('.') {
+    let flat = match flat.strip_prefix('.') {
         Some(rest) => format!("%2E{rest}"),
         None => flat,
-    }
+    };
+    shortened(name, flat, '%')
 }
 
 /// A place's name as the one directory its checks work in, its checkout
@@ -664,10 +665,42 @@ pub fn dir_name(name: &str) -> String {
         .replace('+', "+2B")
         .replace('%', "+25")
         .replace('/', "+2F");
-    match flat.strip_prefix('.') {
+    let flat = match flat.strip_prefix('.') {
         Some(rest) => format!("+2E{rest}"),
         None => flat,
+    };
+    shortened(name, flat, '+')
+}
+
+/// The longest file name kept as it is: 255 bytes, the most macOS and
+/// Linux allow, less the 9 of `.json.tmp`, the longest suffix sluice
+/// adds. Every name that worked before names were shortened fits, so
+/// its records are found where they are.
+const KEPT: usize = 246;
+
+/// How much of a shortened name's start is kept, for a person to read.
+const START: usize = 160;
+
+/// `flat`, the file name `name` is written as, if it is no longer than
+/// `KEPT`; else its first `START` bytes, `escape` and `~`, and 16 hex
+/// digits of the SHA-1 of `name`. In a kept name `escape` is always
+/// followed by `2`, so no kept name is ever a shortened one, and the
+/// hash keeps two long names apart however little they differ. Nothing
+/// reads a name back from its file: each record carries its whole path.
+fn shortened(name: &str, flat: String, escape: char) -> String {
+    if flat.len() <= KEPT {
+        return flat;
     }
+    let mut end = START;
+    while !flat.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(name.as_bytes());
+    let id = hasher
+        .try_finalize()
+        .expect("a place's name is no SHA-1 collision");
+    format!("{}{escape}~{}", &flat[..end], id.to_hex_with_len(16))
 }
 
 /// How the run in `dir` ended, once its supervisor wrote it.
@@ -709,7 +742,48 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::dir_name;
+    use super::{dir_name, flat_name};
+
+    /// A name that fits is written as it was before names were shortened.
+    #[test]
+    fn a_name_that_fits_is_kept() {
+        assert_eq!(flat_name("sluice/try/main/39"), "sluice%2Ftry%2Fmain%2F39");
+        assert_eq!(
+            flat_name("session//Users/me/wt/a"),
+            "session%2F%2FUsers%2Fme%2Fwt%2Fa"
+        );
+        assert_eq!(
+            dir_name("session//Users/me/wt/a"),
+            "session+2F+2FUsers+2Fme+2Fwt+2Fa"
+        );
+        // 246 bytes once written, the longest kept.
+        let edge = format!("session/{}", "a".repeat(236));
+        assert_eq!(flat_name(&edge).len(), 246);
+        assert_eq!(flat_name(&edge), edge.replace('/', "%2F"));
+    }
+
+    /// A name too long for a file name is shortened under the limit, to
+    /// its start and a hash: the same every time, different for two
+    /// names that differ only at the end, and never a kept name.
+    #[test]
+    fn a_long_name_is_shortened_and_distinct() {
+        let path = format!("session//Users/me/{}", "deep/".repeat(60));
+        let (a, b) = (format!("{path}a"), format!("{path}b"));
+        for f in [flat_name, dir_name] {
+            let (fa, fb) = (f(&a), f(&b));
+            assert!(fa.len() <= 246 && fb.len() <= 246, "{fa}");
+            assert_ne!(fa, fb);
+            assert_eq!(fa, f(&a));
+            assert!(fa.starts_with(&f("session//Users/me/deep")), "{fa}");
+            assert!(!fa.contains('/'));
+        }
+        assert!(flat_name(&a).contains("%~"));
+        assert!(dir_name(&a).contains("+~") && !dir_name(&a).contains('%'));
+        // A character of several bytes at the cut is kept whole.
+        let wide = format!("session/x{}", "é".repeat(200));
+        let start = format!("session%2Fx{}%~", "é".repeat(74));
+        assert!(flat_name(&wide).starts_with(&start), "{}", flat_name(&wide));
+    }
 
     /// A place's directory name holds no `%` and no `/`, and no two names
     /// share one.
