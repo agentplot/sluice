@@ -25,7 +25,7 @@ from the directories in `astro.config.mjs`:
 
 | directory | pages |
 |---|---|
-| `index.mdx` | the start page: why, install, quick start |
+| `index.mdx` | the start page: why, the four steps, install, quick start |
 | `guides/` | the walkthrough |
 | `reference/` | configuration, commands, state, telemetry |
 | `architecture/` | how sluice is built; the rules, mirrored from `docs/architecture/core.md` |
@@ -34,7 +34,21 @@ from the directories in `astro.config.mjs`:
 | `roadmap.md` | what is built and what is designed |
 
 The brand marks are copied from `docs/brand/` into `src/assets/` and
-`public/favicon.svg`.
+`public/favicon.svg`, and the social card into `public/og.png`.
+
+## The look and the start page
+
+| file | what |
+|---|---|
+| `src/styles/brand.css` | the brand's colors and type over Starlight's, in both themes |
+| `src/components/Hero.astro` | the start page's hero, with the animated diagram; other pages keep Starlight's |
+| `src/components/Diagram.astro` | the diagram, inlined from `src/generated/sluice.svg` |
+| `src/components/Flow.astro`, `Step.astro` | the start page's four steps; their prose is in `index.mdx` |
+
+`src/generated/sluice.svg` is **generated**, by `scripts/diagram.mjs`
+running `docs/diagrams/sluice.py --scoped` before every build and dev, and
+is not committed. Change the diagram in `sluice.py`, then regenerate
+`docs/diagrams/sluice.svg` for the README.
 
 ## Conventions
 
