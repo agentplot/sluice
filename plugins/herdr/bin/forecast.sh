@@ -30,7 +30,7 @@ EOF
   }
   paths='{}'
   for f in "$state"/docs/*.paths; do
-    [ -e "$f" ] && paths=$(jq -c --argjson a "$paths" '$a + .' "$f")
+    [ -e "$f" ] && paths=$(jq -c --argjson a "$paths" '$a + (objects // {})' "$f" 2>/dev/null || echo "$paths")
   done
   # Nothing to forecast while the worktree's token is about a submission.
   busy=$(jqw -n -r --argjson d "$d" --argjson p "$paths" --arg w "$top" --argjson now "$t" 'include "words";

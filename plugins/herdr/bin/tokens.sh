@@ -20,11 +20,12 @@ extra='{}'
 for f in "$state"/docs/*.json; do
   [ -e "$f" ] || continue
   k=$(basename "$f" .json)
-  p=$(cat "$state/docs/$k.paths" 2>/dev/null || echo '{}')
+  p=$(jq -c 'objects' "$state/docs/$k.paths" 2>/dev/null)
+  [ -n "$p" ] || p='{}'
   fl='{}'
   for g in "$state/failed/$k"-*; do
     [ -e "$g" ] || continue
-    fl=$(printf '%s' "$fl" | jq -c --arg i "${g##*-}" --slurpfile v "$g" '. + {($i): $v[0]}')
+    fl=$(printf '%s' "$fl" | jq -c --arg i "${g##*-}" --slurpfile v "$g" '. + {($i): ($v[0] | arrays)}' 2>/dev/null) || fl='{}'
   done
   extra=$(printf '%s' "$extra" | jq -c --arg r "$(jq -r .repository "$f")" --argjson p "$p" --argjson fl "$fl" \
     '.[$r] = {paths: ((.[$r].paths // {}) + $p), failed: ((.[$r].failed // {}) + $fl)}')

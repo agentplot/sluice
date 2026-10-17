@@ -10,9 +10,16 @@ set -u
 
 source_name=${1:-local}
 dir=${2:-}
-doc=$(cat)
-printf '%s' "$doc" | jq -e '.schema == "sluice/overview@1"' >/dev/null 2>&1 || {
-  say "$source_name printed something that is not an overview document"
+# Read as sluice/overview@1 with every list it may leave out made empty;
+# anything else is logged and the last good state kept.
+doc=$(jq -c -e 'select(.schema == "sluice/overview@1" and (.host | type) == "string"
+    and (.repository | type) == "string" and ((.branches // []) | type) == "array")
+  | .branches = [(.branches // [])[] | select(type == "object" and (.branch | type) == "string")
+      | .depth //= 0 | .recent = [(.recent // [])[] | objects]
+      | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
+      | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []]]
+  | .sessions //= [] | .previews //= []' 2>/dev/null) || {
+  say "$source_name printed a line it cannot read as an overview document; keeping the last good one"
   exit 0
 }
 host=$(printf '%s' "$doc" | jq -r .host)
@@ -24,13 +31,14 @@ printf '%s\n' "$doc" | put "$state/docs/$key.json"
 # Each submission's worktree and branch, kept while its id is in the
 # document; a finished one leaves submissions[] but stays in recent[].
 paths=$state/docs/$key.paths
-[ -f "$paths" ] || echo '{}' >"$paths"
-jq -c --argjson d "$doc" '
+jq -e 'type == "object"' "$paths" >/dev/null 2>&1 || echo '{}' >"$paths"
+learned=$(jq -c -e --argjson d "$doc" '
   ([$d.branches[].recent[] | (.id // empty), (.ids // [])[]] | map(tostring)) as $recent
   | (. + ([$d.branches[] | .branch as $b | .submissions[] | select(.from.path)
           | {(.id | tostring): {path: .from.path, branch: $b}}] | add // {}))
   | with_entries(select(.key as $k | ($recent | index($k)) or
-      ([$d.branches[].submissions[].id | tostring] | index($k))))' "$paths" | put "$paths"
+      ([$d.branches[].submissions[].id | tostring] | index($k))))' "$paths") &&
+  printf '%s\n' "$learned" | put "$paths"
 
 # A submission's worktree and blamed tests, read once from sluice when
 # the document did not carry them.
@@ -52,7 +60,7 @@ told=$state/told/$key
 events=$(printf '%s' "$doc" | jqw -c 'include "words"; events')
 if [ ! -f "$told" ]; then
   # First sight of the repository: what is already in recent[] is old.
-  printf '%s\n' "$events" | jq -r 'select(. != null) | .key' | put "$told"
+  printf '%s\n' "$events" | jq -r 'select(. != null) | .key' >"$told.tmp.$$" && mv -f "$told.tmp.$$" "$told"
   touch "$state/dirty"
   exit 0
 fi

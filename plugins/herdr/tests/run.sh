@@ -185,6 +185,30 @@ set -- "$HERDR_PLUGIN_STATE_DIR"/docs/*.tmp.*
 [ -e "$1" ] && fail "a temporary file was left"
 pass
 
+fresh 'watch: a document missing fields'
+feed "$testing95"
+tokens
+has '--token sluice=#95 testing'
+feed "$(doc '.branches[0] |= del(.recent, .submissions, .candidates) | del(.sessions, .previews)')" 2>"$t/err"
+for f in "$HERDR_PLUGIN_STATE_DIR"/docs/*.paths; do
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 || fail "$(basename "$f") is no longer an object: $(cat "$f")"
+done
+tokens 2>>"$t/err"
+has '--clear-token sluice'
+grep -q 'jq: error' "$t/err" && fail "jq failed: $(cat "$t/err")"
+pass
+
+fresh 'watch: a document it cannot read'
+feed "$testing95"
+f=$(ls "$HERDR_PLUGIN_STATE_DIR"/docs/*.json)
+cp "$f" "$t/before"
+cp "${f%.json}.paths" "$t/before.paths"
+feed "$(doc '.branches = "garbled"')" 2>"$t/err"
+cmp -s "$f" "$t/before" || fail "a document it cannot read replaced the last good one"
+cmp -s "${f%.json}.paths" "$t/before.paths" || fail "a document it cannot read changed the submissions learned"
+grep -q 'cannot read' "$t/err" || fail "nothing logged: $(cat "$t/err")"
+pass
+
 fresh 'watch: source exits'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"

@@ -60,10 +60,13 @@ name_of() {
   basename "${1%/.git}" .git
 }
 
-# Replace a file in one step, from stdin.
+# Replace a file in one step, from stdin; nothing in, nothing replaced.
 put() {
   tmp="$1.tmp.$$"
-  cat >"$tmp" && mv -f "$tmp" "$1"
+  if cat >"$tmp" && [ -s "$tmp" ]; then mv -f "$tmp" "$1"; else
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # Every document the watcher holds, as one array.
