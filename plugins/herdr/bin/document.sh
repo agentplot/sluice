@@ -57,14 +57,23 @@ learn() {
 }
 
 # An event is told once: making its directory is the test, so two
-# watchers never both toast it.
+# watchers never both toast it. The directory is named by the event itself,
+# its branch, kind, submissions and time, in base64 with / as _ and + as -,
+# and kept only while the event is still among the recent.
 told=$state/told.d/$key
 mkdir -p "$state/told.d"
 events=$(printf '%s' "$doc" | jqw -c 'include "words"; events')
+names=$(printf '%s\n' "$events" | jq -r 'select(. != null) | .key | @base64' | tr '/+' '_-')
+forget_old() {
+  for e in "$told"/*; do
+    [ -d "$e" ] || continue
+    printf '%s\n' "$names" | grep -qxF "${e##*/}" || rmdir "$e" 2>/dev/null
+  done
+}
 if mkdir "$told" 2>/dev/null; then
   # First sight of the repository: what is already in recent[] is old.
-  for k in $(printf '%s\n' "$events" | jq -r 'select(. != null) | .key | @base64'); do
-    mkdir "$told/$(sum "$k")" 2>/dev/null
+  for n in $names; do
+    mkdir "$told/$n" 2>/dev/null
   done
   touch "$state/dirty"
   exit 0
@@ -75,8 +84,8 @@ old_ifs=$IFS
 IFS='
 '
 for e in $events; do
-  k=$(printf '%s' "$e" | jq -r '.key | @base64')
-  mkdir "$told/$(sum "$k")" 2>/dev/null || continue
+  n=$(printf '%s' "$e" | jq -r '.key | @base64' | tr '/+' '_-')
+  mkdir "$told/$n" 2>/dev/null || continue
   branch=$(printf '%s' "$e" | jq -r .branch)
   kind=$(printf '%s' "$e" | jq -r .event.event)
   case $kind in
@@ -110,4 +119,5 @@ for e in $events; do
   esac
 done
 IFS=$old_ifs
+forget_old
 touch "$state/dirty"

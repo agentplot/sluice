@@ -551,6 +551,18 @@ done
 [ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 5 ] || fail "not one toast per blame: $(grep 'notification show' "$FAKE/herdr-calls")"
 pass
 
+fresh 'toasts: what is told is kept only while it is recent'
+status_of 53 "$work" withdrawn
+feed "$(doc "$blamed87 | $landed94")" "$(doc "$landed94 | $conflict53")"
+d=$(ls -d "$S"/told.d/*)
+got=$(for e in "$d"/*; do
+  printf '%s' "${e##*/}" | tr '_-' '/+' | base64 -d 2>/dev/null
+  echo
+done | sort)
+want=$(printf '%s\n' 'main|conflict|53|2026-10-16T19:44:30Z' 'main|landed|94|2026-10-16T19:33:10Z' | sort)
+[ "$got" = "$want" ] || fail "told holds: $got"
+pass
+
 fresh 'toasts: first sight of a repository'
 feed "$(doc "$blamed87 | $conflict53")"
 hasnt 'notification show'
