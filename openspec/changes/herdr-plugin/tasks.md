@@ -26,7 +26,7 @@ user's own, and its config is the only one the README's snippets go into.
 - [x] 2.2 Add the popup's loop: redraw on a changed state file and each second, `q`, Escape, `a`, and the messages outside a sluice repository and while waiting; verify tests driving keys on stdin (no terminal), and by hand that Escape closes the popup and the terminal's echo is restored.
 - [x] 2.3 Add the `dashboard` pane and `bin/segment.sh`, copied into the state directory by the startup command; verify tests for the segment's Queue and Empty scenarios and that the copy runs with the plugin directory gone.
 - [x] 2.4 Add `bin/setup.sh` and its popup, and the README's key, segment and dashboard sections; verify a test that setup's output holds the binding, the rows and the segment with the state directory's path, and that it writes nothing.
-- [ ] 2.5 Head the board's `/sluice` pane's groups TESTING, QUEUED and RECENT in `plugins/sluice-board/hooks/register.tsx`, in the order it draws them; verify `claude plugin test plugins/sluice-board` passes with a test that finds the three headings in order, and the existing tests still assert what they did.
+- [x] 2.5 Head the board's `/sluice` pane's groups TESTING, QUEUED and RECENT in `plugins/sluice-board/hooks/register.tsx`, in the order it draws them; verify `claude plugin test plugins/sluice-board` passes with a test that finds the three headings in order, and the existing tests still assert what they did.
 - [x] 2.6 Rewrite `site/src/content/docs/guides/herdr.md` from "not released yet" to installing, the popup, the dashboard, the segment and sources; verify Vale reports no warning and `bun run build` finds every link valid.
 
 ## 3. Toasts and the jump

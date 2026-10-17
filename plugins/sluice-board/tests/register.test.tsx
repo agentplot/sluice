@@ -84,6 +84,9 @@ test('the band and the pane show the queue on every surface', async ($, on) => {
     expect(await pane.find({ type: 'Text', text: /#13 testing\s+plugin-board claude\s+← you/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /3 submissions · 1 combination under test \(up to 4 at once\)/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /▶ testing main\+#12\+#13\s+2m10s \/ 15m/ })).toBeDefined()
+    // Headed as the herdr plugin's popup is.
+    const heads = await pane.findAll({ type: 'Text', text: /^(TESTING|QUEUED|RECENT)$/ })
+    expect(heads.map(h => h.text)).toEqual(['TESTING', 'QUEUED', 'RECENT'])
     const link = await pane.find({ type: 'Link' })
     expect(link?.props.href).toBe('https://github.com/agentplot/sluice/pull/41')
     await pane.unmount()

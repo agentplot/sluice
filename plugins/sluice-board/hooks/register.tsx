@@ -190,6 +190,8 @@ export const register: Register = (on, options) => {
               {b.branch} at {(b.at ?? 'nothing').slice(0, 7)} · {plural(b.depth, 'submission')} ·{' '}
               {plural(testing(b).length, 'combination')} under test{b.parallel ? ` (up to ${b.parallel} at once)` : ''}
             </Text>
+            {/* Headed as the herdr plugin's popup heads them. */}
+            {(testing(b).length > 0 || b.candidates.some(c => c.state === 'formed')) && <Text bold>TESTING</Text>}
             {testing(b).map(c => {
               const took = since(c.started, at)
               return (
@@ -213,6 +215,7 @@ export const register: Register = (on, options) => {
                   {'    '}formed, not running: {combination(b.branch, c.submissions)}
                 </Text>
               ))}
+            {b.submissions.length > 0 && <Text bold>QUEUED</Text>}
             {b.submissions.map(s => {
               const pull = pullOf(s.from.worktree)
               return (
@@ -228,6 +231,7 @@ export const register: Register = (on, options) => {
                 </Text>
               )
             })}
+            {b.recent.length > 0 && <Text bold>RECENT</Text>}
             {[...b.recent]
               .reverse()
               .slice(0, 5)
