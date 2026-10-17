@@ -263,6 +263,20 @@ done
 [ "$n" = 2 ] || fail "$n watchers for two herdr servers"
 pass
 
+fresh 'watch: a renewer killed holding the lock'
+lease_lib='. "$HERDR_PLUGIN_ROOT/lib/common.sh"; . "$lib/lease.sh"'
+# A renewer, a subshell of its watcher, holds the lock under its own pid.
+sh -c "$lease_lib"'; ( lock_owner=$(exec sh -c "echo \$PPID"); take_lock; echo "$lock_owner" >"$1"; sleep 30 ) & sleep 8' _ "$t/renewer" "$plugin/bin/x" &
+watcher=$!
+sleep 1
+kill "$(cat "$t/renewer")"
+began=$(date +%s)
+sh -c "$lease_lib"'; take_lock' _ "$plugin/bin/x" || fail "the lock could not be taken"
+[ $(($(date +%s) - began)) -lt 4 ] || fail "the lock of a renewer killed holding it held on"
+kill "$watcher" 2>/dev/null
+wait 2>/dev/null
+pass
+
 fresh 'watch: herdr gone'
 touch "$FAKE/down"
 began=$(date +%s)

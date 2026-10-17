@@ -82,6 +82,9 @@ say "watching (pid $$)"
 # The lease is renewed on its own clock, however long a tick takes, for as
 # long as this watcher lives and holds it.
 (
+  # Its own pid, so a renewer killed holding the lock frees it.
+  # shellcheck disable=SC2034 # read by take_lock and drop_lock
+  lock_owner=$(exec sh -c 'echo $PPID')
   while sleep "$every" && kill -0 $$ 2>/dev/null; do
     take_lock || continue
     if [ "$(holder)" = $$ ]; then write_lease; else
