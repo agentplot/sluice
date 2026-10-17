@@ -423,14 +423,26 @@ fn status_lists_the_queue() {
     );
     sluice(&f, &["step", BRANCH]);
 
+    // By default only the queue, with its count and what is left out.
     let (code, out) = sluice(&f, &["status", BRANCH]);
     assert_eq!(code, 0);
-    let lines: Vec<&str> = out.lines().collect();
     let tip = f.world.tip(BRANCH);
-    assert_eq!(
-        lines[0],
-        format!("{BRANCH} at {} · testing 1 at once (up to 4)", &tip.0[..7])
+    let header = format!(
+        "{BRANCH} at {} · 1 in the queue · testing 1 at once (up to 4)",
+        &tip.0[..7]
     );
+    assert_eq!(
+        out,
+        format!(
+            "{header}\n  #3  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3\n\
+             2 no longer in the queue: sluice status {BRANCH} --all\n"
+        )
+    );
+
+    let (code, out) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], header);
     assert_eq!(lines[1], "  #1  landed    crw-1-unit-1  unit/touches");
     assert!(lines[2]
         .starts_with("  #2  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "));
@@ -443,6 +455,36 @@ fn status_lists_the_queue() {
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(v["submissions"].as_array().unwrap().len(), 3);
     assert_eq!(v["submissions"][1]["state"], "failed");
+    assert_eq!(v["depth"], 1);
+}
+
+/// A branch that does not exist and has no records is said to be none,
+/// with the branches that have records, and exits 1.
+#[test]
+fn status_of_an_unknown_branch_says_so() {
+    let f = setup();
+    let (code, out) = sluice(&f, &["status", "nosuch"]);
+    assert_eq!(code, FAILED);
+    assert_eq!(out, "no branch nosuch, and no branch has records here\n");
+
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["status", "nosuch", "--json"]);
+    assert_eq!(code, FAILED);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "not_found");
+    assert_eq!(
+        v["error"]["message"],
+        format!("no branch nosuch; branches with records: {BRANCH}")
+    );
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice status {BRANCH}"), "sluice overview"])
+    );
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    assert!(!out.contains("no longer in the queue"), "{out}");
 }
 
 /// A landed #1, a blamed #2 and #3 under test, as `status_lists_the_queue`
@@ -656,15 +698,52 @@ fn amend_and_withdraw() {
     sluice(&f, &["step", BRANCH]);
     assert_eq!(
         sluice(&f, &["amend", "2", "--after", "1"]),
-        (2, "refused: #2 is under test; its order is fixed\n".into())
+        (
+            2,
+            "refused: #2 is under test; its order is fixed: sluice status 2 follows it, \
+             or sluice withdraw 2 takes it out\n"
+                .into()
+        )
     );
     assert_eq!(
         sluice(&f, &["withdraw", "1", "--as", "agent-b"]),
-        (2, "refused: #1 is not agent-b's to withdraw\n".into())
+        (
+            2,
+            "refused: #1 is not agent-b's to withdraw: ask --as agent-a, its agent, \
+             or --as operator\n"
+                .into()
+        )
     );
     assert_eq!(
         sluice(&f, &["withdraw", "1", "--as", "agent-a"]),
         (0, "withdrew #1\n".into())
+    );
+    assert_eq!(
+        sluice(&f, &["withdraw", "1", "--as", "agent-a"]),
+        (
+            2,
+            "refused: #1 is withdrawn, out of the queue already: sluice status 1\n".into()
+        )
+    );
+    assert_eq!(
+        sluice(&f, &["amend", "1", "--priority", "2"]),
+        (
+            2,
+            "refused: #1 is withdrawn, past changing: sluice status 1\n".into()
+        )
+    );
+    assert_eq!(
+        sluice(&f, &["withdraw", "99"]),
+        (
+            2,
+            "refused: no submission 99: sluice overview lists the queues\n".into()
+        )
+    );
+    work(&f, "unit/c", "agent-c", &[("plugin/c", Some("c"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/c", "--no-wait"]);
+    assert_eq!(
+        sluice(&f, &["amend", "3", "--after", "7"]).1,
+        format!("refused: --after names no queued submission: #7; sluice status {BRANCH} lists the queue\n")
     );
 }
 

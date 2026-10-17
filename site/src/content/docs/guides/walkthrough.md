@@ -295,13 +295,14 @@ Author: sluice <sluice@localhost>
 
 ```console
 $ sluice status bolt/concurrent-units
-bolt/concurrent-units at b7d2e94 · testing 2 at once (up to 4)
-  #12  landed    crw-1-unit-1  unit/touches
-  #13  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on e20a6f9
-  #14  testing   crw-1-unit-3  unit/forecast       bolt/concurrent-units + #14
+bolt/concurrent-units at b7d2e94 · 1 in the queue · testing 2 at once (up to 4)
+  #14  testing   crw-1-unit-3  unit/forecast   bolt/concurrent-units + #14
+2 no longer in the queue: sluice status bolt/concurrent-units --all
 ```
 
-`--json` gives the same for any other tool.
+It shows the submissions still in the queue; `--all` adds every one the
+branch has had, landed, failed and withdrawn. `--json` lists every one,
+with the queue's count as `depth`, for any other tool.
 
 A queued submission's order can be changed until it is under test:
 

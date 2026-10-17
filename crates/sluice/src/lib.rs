@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use sluice_core::overview::Held;
+use sluice_core::overview::{in_queue, Held};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
@@ -147,6 +147,10 @@ pub enum Command {
     Status {
         /// A branch, or a submission's number.
         target: Option<String>,
+        /// With a branch, every submission it has had, not only those
+        /// still in the queue. `--json` always lists every one.
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -555,7 +559,9 @@ pub fn run(
                 }
             }
         }
-        Command::Status { target: None, json } => {
+        Command::Status {
+            target: None, json, ..
+        } => {
             let places = s.session_places()?;
             let held = s.held()?;
             if json {
@@ -574,6 +580,7 @@ pub fn run(
         }
         Command::Status {
             target: Some(target),
+            all,
             json,
         } => match target.parse::<u64>() {
             Ok(id) => match s.state(id)? {
@@ -601,6 +608,23 @@ pub fn run(
             },
             Err(_) => {
                 let status = s.status(&target)?;
+                if status.is_unknown() {
+                    let known: Vec<String> = s.overview()?.into_iter().map(|b| b.branch).collect();
+                    let text = match known.as_slice() {
+                        [] => format!("no branch {target}, and no branch has records here"),
+                        _ => format!(
+                            "no branch {target}; branches with records: {}",
+                            known.join(", ")
+                        ),
+                    };
+                    let next: Vec<String> = known
+                        .iter()
+                        .map(|b| format!("sluice status {b}"))
+                        .chain(["sluice overview".to_string()])
+                        .collect();
+                    told::tell(out, json, Kind::NotFound, &text, &next)?;
+                    return Ok(FAILED);
+                }
                 if json {
                     writeln!(
                         out,
@@ -609,7 +633,22 @@ pub fn run(
                     )?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
-                    write_status(&status, pusher.as_ref(), &status.submissions, out)?;
+                    let shown: Vec<Submission> = if all {
+                        status.submissions.clone()
+                    } else {
+                        in_queue(&status.submissions).cloned().collect()
+                    };
+                    write_status(&status, pusher.as_ref(), &shown, out)?;
+                    let earlier = status.submissions.len() - shown.len();
+                    if shown.is_empty() {
+                        writeln!(out, "nothing in the queue")?;
+                    }
+                    if earlier > 0 {
+                        writeln!(
+                            out,
+                            "{earlier} no longer in the queue: sluice status {target} --all"
+                        )?;
+                    }
                 }
                 Ok(0)
             }
@@ -629,14 +668,26 @@ pub fn run(
             }
             Err(r) => {
                 let why = match r {
-                    AmendRefusal::NoSuchSubmission => format!("no submission {id}"),
-                    AmendRefusal::NotYours => format!("#{id} is not {by}'s to change"),
-                    AmendRefusal::UnderTest => {
-                        format!("#{id} is under test; its order is fixed")
+                    AmendRefusal::NoSuchSubmission => no_submission(id),
+                    AmendRefusal::NotYours => {
+                        format!("#{id} is not {by}'s to change: {}", owner(&s, id)?)
                     }
-                    AmendRefusal::NotQueued(st) => format!("#{id} is {}", st.word()),
+                    AmendRefusal::UnderTest => format!(
+                        "#{id} is under test; its order is fixed: sluice status {id} \
+                         follows it, or sluice withdraw {id} takes it out"
+                    ),
+                    AmendRefusal::NotQueued(st) => {
+                        format!("#{id} is {}, past changing: sluice status {id}", st.word())
+                    }
                     AmendRefusal::UnknownAfter(ids) => {
-                        format!("--after names no queued submission: {}", hashes(&ids))
+                        let queue = match s.state(id)? {
+                            Some(sub) => format!("sluice status {}", sub.branch),
+                            None => "sluice overview".into(),
+                        };
+                        format!(
+                            "--after names no queued submission: {}; {queue} lists the queue",
+                            hashes(&ids)
+                        )
                     }
                 };
                 writeln!(out, "refused: {why}")?;
@@ -650,9 +701,14 @@ pub fn run(
             }
             Err(r) => {
                 let why = match r {
-                    WithdrawRefusal::NoSuchSubmission => format!("no submission {id}"),
-                    WithdrawRefusal::NotYours => format!("#{id} is not {by}'s to withdraw"),
-                    WithdrawRefusal::Final(st) => format!("#{id} is {}", st.word()),
+                    WithdrawRefusal::NoSuchSubmission => no_submission(id),
+                    WithdrawRefusal::NotYours => {
+                        format!("#{id} is not {by}'s to withdraw: {}", owner(&s, id)?)
+                    }
+                    WithdrawRefusal::Final(st) => format!(
+                        "#{id} is {}, out of the queue already: sluice status {id}",
+                        st.word()
+                    ),
                 };
                 writeln!(out, "refused: {why}")?;
                 Ok(2)
@@ -1055,6 +1111,19 @@ fn takes_pulls(s: &Sluice<'_>, branch: &str) -> Result<bool> {
 
 /// `sluice submit --status`: where `worktree`'s last submission to
 /// `branch` stands.
+/// A refusal's words for a number that names no submission.
+fn no_submission(id: u64) -> String {
+    format!("no submission {id}: sluice overview lists the queues")
+}
+
+/// Who may ask for submission `id`'s change, for a refusal to say.
+fn owner(s: &Sluice<'_>, id: u64) -> Result<String> {
+    Ok(match s.state(id)? {
+        Some(sub) => format!("ask --as {}, its agent, or --as operator", sub.from.agent),
+        None => "ask --as its agent, or --as operator".into(),
+    })
+}
+
 fn submitted(
     s: &Sluice<'_>,
     worktree: &str,
@@ -1249,8 +1318,10 @@ fn write_status(
         .map_or(String::new(), |p| format!(" (up to {p})"));
     writeln!(
         out,
-        "{} at {at} · testing {} at once{up_to}",
-        status.branch, status.testing
+        "{} at {at} · {} in the queue · testing {} at once{up_to}",
+        status.branch,
+        status.depth(),
+        status.testing
     )?;
     match pusher {
         None => {}
@@ -1296,6 +1367,7 @@ fn status_json(status: &Status) -> serde_json::Value {
     serde_json::json!({
         "branch": status.branch,
         "at": status.at,
+        "depth": status.depth(),
         "testing": status.testing,
         "window": status.window,
         "parallel": status.parallel,

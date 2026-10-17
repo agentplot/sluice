@@ -78,8 +78,9 @@ agents run never finds it. `sluice status` says who pushes:
 
 ```console
 $ sluice status main
-main at 7c829a5 · testing 0 at once
+main at 7c829a5 · 0 in the queue · testing 0 at once
 pushed to origin as GitHub app 123456
+nothing in the queue
 ```
 
 ## 5. Make the app the ruleset's only bypass
