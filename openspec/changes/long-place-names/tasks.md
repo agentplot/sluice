@@ -17,4 +17,4 @@ tools: `moon run ':#check-tools'`.
 ## 3. Docs and gates
 
 - [x] 3.1 Say on `site/src/content/docs/reference/state.md` how a long checkout name is shortened and that each record carries its whole path; verify Vale reports no warning on it.
-- [ ] 3.2 Run `cargo test --workspace`, `moon run ':#check-fast'`, `moon run ':#check-tools'` and `openspec validate long-place-names --strict`; verify all pass.
+- [x] 3.2 Run `cargo test --workspace`, `moon run ':#check-fast'`, `moon run ':#check-tools'` and `openspec validate long-place-names --strict`; verify all pass.
