@@ -56,11 +56,16 @@ learn() {
   fi
 }
 
-told=$state/told/$key
+# An event is told once: making its directory is the test, so two
+# watchers never both toast it.
+told=$state/told.d/$key
+mkdir -p "$state/told.d"
 events=$(printf '%s' "$doc" | jqw -c 'include "words"; events')
-if [ ! -f "$told" ]; then
+if mkdir "$told" 2>/dev/null; then
   # First sight of the repository: what is already in recent[] is old.
-  printf '%s\n' "$events" | jq -r 'select(. != null) | .key' >"$told.tmp.$$" && mv -f "$told.tmp.$$" "$told"
+  for k in $(printf '%s\n' "$events" | jq -r 'select(. != null) | .key | @base64'); do
+    mkdir "$told/$(sum "$k")" 2>/dev/null
+  done
   touch "$state/dirty"
   exit 0
 fi
@@ -70,9 +75,8 @@ old_ifs=$IFS
 IFS='
 '
 for e in $events; do
-  k=$(printf '%s' "$e" | jq -r .key)
-  grep -qxF "$k" "$told" && continue
-  printf '%s\n' "$k" >>"$told"
+  k=$(printf '%s' "$e" | jq -r '.key | @base64')
+  mkdir "$told/$(sum "$k")" 2>/dev/null || continue
   branch=$(printf '%s' "$e" | jq -r .branch)
   kind=$(printf '%s' "$e" | jq -r .event.event)
   case $kind in

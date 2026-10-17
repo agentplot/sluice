@@ -495,6 +495,18 @@ feed "$(doc)" "$(doc "$blamed87")" "$(doc "$blamed87")"
 [ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 1 ] || fail "told twice: $(calls)"
 pass
 
+fresh 'toasts: two watchers tell an event once'
+feed "$(doc)"
+for i in 1 2 3 4 5; do
+  status_of "$((80 + i))" "$work" withdrawn '["t"]'
+  d=$(doc ".branches[0].recent += [{schema: \"sluice/log@1\", at: \"2026-10-16T19:44:0${i}Z\", event: \"blamed\", id: $((80 + i)), combination: \"c\"}]")
+  printf '%s\n' "$d" | sh "$plugin/bin/document.sh" local "$work" &
+  printf '%s\n' "$d" | sh "$plugin/bin/document.sh" local "$work" &
+  wait
+done
+[ "$(grep -c 'notification show' "$FAKE/herdr-calls")" = 5 ] || fail "not one toast per blame: $(grep 'notification show' "$FAKE/herdr-calls")"
+pass
+
 fresh 'toasts: first sight of a repository'
 feed "$(doc "$blamed87 | $conflict53")"
 hasnt 'notification show'
