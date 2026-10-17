@@ -38,6 +38,11 @@ lease_age_at_least() {
   [ $(($(date +%s) - $(head -1 "$S/watch.lease" | cut -d' ' -f2))) -ge "$1" ]
 }
 
+# One of lib/procs.sh's functions.
+procs() {
+  sh -c '. "$1/lib/procs.sh"; shift; "$@"' _ "$plugin" "$@"
+}
+
 # The pid holding a lease: the first word of its first line.
 holder_of() {
   head -1 "$1" 2>/dev/null | cut -d' ' -f1
@@ -254,7 +259,7 @@ sleep 60 &
 orphan=$!
 dead=$(sh -c 'echo $$')
 mkdir -p "$S/run/$dead"
-printf '%s\t%s\n' "$orphan" "$(ps -o lstart= -p "$orphan" | tr -s ' ')" >"$S/run/$dead/x.pids"
+printf '%s\t%s\n' "$orphan" "$(procs identity "$orphan")" >"$S/run/$dead/x.pids"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 sleep 1
 if kill -0 "$orphan" 2>/dev/null; then
@@ -264,13 +269,28 @@ fi
 [ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
 pass
 
+fresh "watch: a source is known without ps's start times"
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 4 2>/dev/null &
+w=$!
+within 20 '! kill -0 "$w" 2>/dev/null' &
+waiter=$!
+sleep 6
+rm -f "$FAKE/hold"
+wait "$waiter" 2>/dev/null
+[ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
+  fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+pass
+
 fresh 'watch: a pid used again by another process is left alone'
 # After a reboot the state is still there, and the pid is someone else's.
 sleep 60 &
 other_process=$!
 dead=$(sh -c 'echo $$')
 mkdir -p "$S/run/$dead"
-printf '%s\t%s\n' "$other_process" "Mon Jan  1 00:00:00 2001" >"$S/run/$dead/x.pids"
+printf '%s\t%s\n' "$other_process" "start:1" >"$S/run/$dead/x.pids"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 kill -0 "$other_process" 2>/dev/null || fail "a process that only has a recorded pid was killed"
 kill "$other_process" 2>/dev/null
@@ -319,7 +339,7 @@ done
 owner=$(cut -d' ' -f1 "$S/lease.lock/pid" 2>/dev/null)
 [ -n "$owner" ] || fail "the renewer never took the lock"
 [ "$owner" != "$w" ] || fail "the renewer holds the lock as its watcher"
-[ "$(ps -o ppid= -p "$owner" 2>/dev/null | tr -d ' ')" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
+[ "$(procs parent_of "$owner")" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
 began=$(date +%s)
 kill -TERM "$w"
 wait "$w" 2>/dev/null

@@ -10,6 +10,7 @@ set -u
 . "$lib/panes.sh"
 . "$lib/sources.sh"
 . "$lib/lease.sh"
+. "$lib/procs.sh"
 
 lease=$state/watch.lease
 tick=${SLUICE_HERDR_TICK:-15}
@@ -98,21 +99,15 @@ say "watching (pid $$)"
 ) &
 renewer=$!
 
-# A source's process is known by its pid and when it started, so a pid the
-# system has given to another process since (after a reboot, say) is never
-# taken for it.
-started() {
-  ps -o lstart= -p "$1" 2>/dev/null | tr -s ' '
-}
-
+# A source's process is kept with its identity (lib/procs.sh).
 remember() {
-  printf '%s\t%s\n' "$1" "$(started "$1")" >>"$2"
+  printf '%s\t%s\n' "$1" "$(identity "$1")" >>"$2"
 }
 
 # Each process listed in a pids file that is still the one it recorded.
 listed() {
-  while IFS='	' read -r p at; do
-    [ -n "$p" ] && [ -n "$at" ] && [ "$(started "$p")" = "$at" ] && echo "$p"
+  while IFS='	' read -r p id; do
+    same_process "$p" "$id" && echo "$p"
   done <"$1"
 }
 
