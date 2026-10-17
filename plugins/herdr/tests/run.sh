@@ -148,6 +148,7 @@ sh "$plugin/bin/watch.sh" --ensure || fail "ensure exited non-zero"
 sleep 1
 [ "$(holder_of "$S/watch.lease")" = $$ ] || fail "a second watcher took the lease"
 [ -s "$FAKE/sluice-calls" ] && fail "a second watcher ran sluice"
+[ -f "$S/dirty" ] || fail "a new pane waits a whole tick for its token"
 pass
 
 fresh 'watch: watcher gone'

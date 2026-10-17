@@ -64,7 +64,9 @@ whose worktree made the submission most recently blamed or in conflict.
 
 ## The sidebar
 
-Each agent's entry gains one row when its worktree has something to say:
+Each agent's entry gains one row when its worktree has something to say.
+herdr's Agents list shows only panes running an agent, so a plain shell
+shows no row:
 
 | The worktree | The row |
 |---|---|

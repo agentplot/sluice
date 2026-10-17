@@ -54,6 +54,8 @@ copy_segment() {
 case ${1:-} in
 --ensure)
   touch "$state/nudge"
+  # A pane just made gets its sidebar line within a second, not a tick.
+  touch "$state/dirty"
   copy_segment
   ours && exit 0
   nohup sh "$root/bin/watch.sh" </dev/null >>"$state/watch.log" 2>&1 &

@@ -24,8 +24,9 @@ type = "plugin_action"
 command = "agentplot.sluice.jump"
 description = "sluice: jump to the blamed submission's pane"
 
-# Each agent's entry gains a line when its worktree has something to say;
-# a blame or a conflict is red. These are herdr's own rows plus the last;
+# Each agent's entry gains a line when its worktree has something to say
+# (only panes running an agent are listed there); a blame or a conflict is
+# red. These are herdr's own rows plus the last;
 # add only the last to rows of your own.
 [ui.sidebar.agents]
 rows = [

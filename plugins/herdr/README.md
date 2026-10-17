@@ -28,7 +28,9 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
 - **Jump** (`agentplot.sluice.jump`): focus the pane whose worktree made
   the submission most recently blamed or in conflict. herdr's toasts take
   no click, so this is how a toast takes you to the pane.
-- **A line on each agent's sidebar entry**, the `$sluice` token:
+- **A line on each agent's sidebar entry**, the `$sluice` token. herdr's
+  Agents list shows only panes where it sees an agent running, so a plain
+  shell's pane gets the token but no line:
 
   | The worktree | The line |
   |---|---|
