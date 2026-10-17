@@ -449,6 +449,14 @@ has '--token sluice=3 ahead · clean'
 [ "$(grep -c 'work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "not one forecast: $(cat "$FAKE/sluice-calls")"
 pass
 
+fresh 'sidebar: ahead again after a landing'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 94 '$work' testing)]")" "$(doc "$landed94")"
+forecast
+tokens
+[ "$(grep -c 'work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "no forecast for a worktree whose last submission landed"
+has '--token sluice=3 ahead · clean'
+pass
+
 fresh 'sidebar: conflicts'
 echo '{"conflict":{"paths":["a.rs"],"with":[{"id":95,"from":{"agent":"x","worktree":"y"}}]}}' >"$FAKE/check.json"
 feed "$(doc)"
