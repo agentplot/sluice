@@ -408,6 +408,24 @@ printf '%s' "$out" | grep -q '^Waiting for sluice' || fail "before the watcher r
 [ -n "$(ls "$S/want")" ] || fail "the watcher was not asked to read it"
 pass
 
+fresh 'status: without sluice'
+mkdir -p "$t/bin"
+for c in git jq awk cksum; do ln -s "$(command -v "$c")" "$t/bin/$c"; done
+ln -s "$here/fake/herdr" "$t/bin/herdr"
+PATH="$t/bin:/usr/bin:/bin" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log"
+grep -q 'sluice is not on PATH' "$t/log" || fail "the log does not say so: $(cat "$t/log")"
+out=$(PATH="$t/bin:/usr/bin:/bin" frame_of "$work" --once)
+printf '%s' "$out" | grep -q 'sluice is not on PATH' || fail "the popup said: $out"
+pass
+
+fresh 'status: a sluice without overview'
+touch "$FAKE/old"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log"
+grep -q 'sluice 0.11.0 has no overview' "$t/log" || fail "the log does not say so: $(cat "$t/log")"
+out=$(frame_of "$work" --once)
+printf '%s' "$out" | grep -q 'sluice 0.11.0 has no overview' || fail "the popup said: $out"
+pass
+
 fresh 'status: the dashboard'
 feed "$testing95"
 printf '%s\n' "$board" | jq -c '.repository = "/srv/elsewhere.git"' | sh "$plugin/bin/document.sh" "build" ""

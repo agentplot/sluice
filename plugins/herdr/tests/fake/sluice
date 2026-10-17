@@ -3,6 +3,12 @@
 # the test's files, keyed by the directory's name.
 here=$(basename "$PWD")
 printf '%s: %s\n' "$here" "$*" >>"$FAKE/sluice-calls"
+# An older sluice, before overview.
+if [ -f "$FAKE/old" ] && [ "$1" = overview ]; then
+  echo "error: unrecognized subcommand 'overview'" >&2
+  exit 2
+fi
+[ "$*" = --version ] && echo "sluice 0.11.0" && exit 0
 case "$*" in
 "overview --watch --json")
   [ -f "$FAKE/watch-$here.jsonl" ] || exit 1

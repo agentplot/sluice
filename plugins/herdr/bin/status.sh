@@ -38,6 +38,8 @@ frame() {
     | sort_by(.repository, .host)')
   if [ "$(printf '%s' "$shown" | jq length)" -gt 0 ]; then
     printf '%s' "$shown" | jqw -r --argjson now "$t" --argjson color "$tty" 'include "words"; .[] | frame($now; $color)[]'
+  elif [ -n "$(sluice_problem)" ]; then
+    sluice_problem
   elif [ "$all" = true ]; then
     echo "No repository with sluice's records is open in a pane."
   elif [ -z "$repo" ]; then

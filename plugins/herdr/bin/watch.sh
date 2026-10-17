@@ -170,6 +170,10 @@ look() {
       }
       continue
     fi
+    if ! command -v sluice >/dev/null 2>&1; then
+      set_problem "$(sluice_problem)"
+      continue
+    fi
     old_ifs=$IFS
     IFS='
 '
@@ -187,13 +191,17 @@ look() {
         since=$(($(now) - $(cut -d' ' -f2 "$probe")))
         [ "$since" -lt 300 ] && [ ! "$state/nudge" -nt "$probe" ] && continue
       fi
-      if got=$(cd "$t" && sluice overview --json 2>/dev/null) &&
-        [ "$(printf '%s' "$got" | jq '(.branches | length) + (.sessions | length)' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
-        echo "records $(now)" >"$probe"
-        start "$run" "$name" "$t" "$argv"
-      else
-        echo "none $(now)" >"$probe"
+      if got=$(cd "$t" && sluice overview --json 2>"$state/probe.err"); then
+        set_problem ""
+        if [ "$(printf '%s' "$got" | jq '((.branches // []) | length) + ((.sessions // []) | length)' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+          echo "records $(now)" >"$probe"
+          start "$run" "$name" "$t" "$argv"
+          continue
+        fi
+      elif grep -q "unrecognized subcommand" "$state/probe.err"; then
+        set_problem "$(sluice --version 2>/dev/null | head -1) has no overview: the plugin needs sluice 0.12 or later."
       fi
+      echo "none $(now)" >"$probe"
     done
     IFS=$old_ifs
   done

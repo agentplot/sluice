@@ -72,6 +72,26 @@ put() {
   fi
 }
 
+# Why sluice cannot be asked here, or nothing: not on PATH, or, as the
+# watcher found, too old for overview.
+sluice_problem() {
+  if ! command -v sluice >/dev/null 2>&1; then
+    echo "sluice is not on PATH: install sluice 0.12 or later."
+    return
+  fi
+  cat "$state/problem" 2>/dev/null
+}
+
+# Note a problem with sluice for the popup, logging it once; none clears it.
+set_problem() {
+  if [ -z "$1" ]; then
+    rm -f "$state/problem"
+  elif [ "$(cat "$state/problem" 2>/dev/null)" != "$1" ]; then
+    printf '%s\n' "$1" >"$state/problem"
+    say "$1"
+  fi
+}
+
 # Every document the watcher holds, as one array.
 all_docs() {
   set -- "$state"/docs/*.json
