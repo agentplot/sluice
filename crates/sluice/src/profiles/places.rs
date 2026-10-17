@@ -597,7 +597,9 @@ impl Places {
     }
 
     /// The repository's lock over its session places' records, beside
-    /// them: held across keeping a result and across a release's removal.
+    /// them in its git directory, which every check that releases a place
+    /// may write: held across keeping a result and across a release's
+    /// removal.
     fn lock_records(&self) -> Result<File> {
         let root = self.root();
         std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
