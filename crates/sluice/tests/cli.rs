@@ -1734,6 +1734,33 @@ fn status_and_overview_carry_a_worktrees_last_result() {
     assert!(out.contains(", not recorded"), "{out}");
 }
 
+/// Session-runs-1 clause 97: a result that cannot be kept on the worktree
+/// changes neither the run's exit nor what it says; the warning is on
+/// stderr, and the worktree lists no result.
+#[test]
+fn a_result_not_kept_changes_nothing_of_the_run() {
+    let run = |keeping_fails: bool| {
+        let f = setup_releasing();
+        work(
+            &f,
+            "unit/a",
+            "agent-a",
+            &[("plugin/lib/plan.py", Some("p2"))],
+        );
+        f.world.keeping_fails(keeping_fails);
+        let ran = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+        let (_, out) = sluice(&f, &["status", "--json"]);
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        (ran, doc["worktrees"][0]["last_result"].clone())
+    };
+    let (kept, listed) = run(false);
+    assert_eq!(kept.0, 0, "{}", kept.1);
+    assert!(listed.is_object(), "{listed}");
+    let (unkept, listed) = run(true);
+    assert_eq!(unkept, kept, "the run's exit and output");
+    assert!(listed.is_null(), "{listed}");
+}
+
 /// ADR 0024: a worktree that has checked out a branch sluice lands on, by
 /// its records or by a gate its policy gives it, is named in overview's
 /// `sessions[]`, in `sluice status` and by `sluice protect`'s output; a

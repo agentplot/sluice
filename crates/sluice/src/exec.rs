@@ -278,12 +278,12 @@ impl Exec<'_> {
             if !self.pause.pause() {
                 self.host.end_run(&run)?;
                 self.host.end_session(&worktree)?;
-                s.session_ended(
+                unkept(s.session_ended(
                     &place.name,
                     &session.head,
                     command.is_some(),
                     RunOutcome::Stopped,
-                )?;
+                ));
                 say(out, json, "stopped: the run was ended; nothing recorded")?;
                 return Ok(STOPPED);
             }
@@ -292,12 +292,12 @@ impl Exec<'_> {
         let report = match progress {
             Progress::Finished(r) => r,
             _ => {
-                s.session_ended(
+                unkept(s.session_ended(
                     &place.name,
                     &session.head,
                     command.is_some(),
                     RunOutcome::Lost,
-                )?;
+                ));
                 say(
                     out,
                     json,
@@ -315,24 +315,25 @@ impl Exec<'_> {
             place: place.clone(),
             run: run.clone(),
         };
-        let recorded =
-            match s.finish_session(&plan, &session, &started, command.is_some(), &report)? {
-                Recorded::Written(n) => {
-                    let head = session.head.short();
-                    let text = match n {
-                        0 => format!("recorded already under their keys for {head}"),
-                        1 => format!("recorded 1 result under its key for {head}"),
-                        n => format!("recorded {n} results under their keys for {head}"),
-                    };
-                    say(out, json, &text)?;
-                    true
-                }
-                Recorded::NotClean => {
-                    say(out, json, "not recorded: worktree is not clean")?;
-                    false
-                }
-                Recorded::Nothing => false,
-            };
+        let finished = s.finish_session(&plan, &session, &started, command.is_some(), &report)?;
+        unkept(finished.unkept.map_or(Ok(()), |e| Err(anyhow::anyhow!(e))));
+        let recorded = match finished.recorded {
+            Recorded::Written(n) => {
+                let head = session.head.short();
+                let text = match n {
+                    0 => format!("recorded already under their keys for {head}"),
+                    1 => format!("recorded 1 result under its key for {head}"),
+                    n => format!("recorded {n} results under their keys for {head}"),
+                };
+                say(out, json, &text)?;
+                true
+            }
+            Recorded::NotClean => {
+                say(out, json, "not recorded: worktree is not clean")?;
+                false
+            }
+            Recorded::Nothing => false,
+        };
         let code = match &command {
             Some(_) => self
                 .host
@@ -495,6 +496,14 @@ pub fn release(
         worktree: worktree.to_string(),
         released,
     })
+}
+
+/// 97: a result that could not be kept on the worktree is said on stderr,
+/// and changes neither the run's exit nor what it printed.
+fn unkept(kept: Result<()>) {
+    if let Err(e) = kept {
+        eprintln!("warning: the run's result could not be kept on the worktree: {e:#}");
+    }
 }
 
 fn passed(report: &RunReport) -> bool {

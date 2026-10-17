@@ -118,6 +118,8 @@ struct Inner {
     /// How long the results log was when each session place's last result
     /// was kept.
     results_when_ran: BTreeMap<String, usize>,
+    /// Keeping a session run's result fails.
+    keeping_fails: bool,
     /// Each session place released, and the `[tests] release` it was
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
@@ -393,6 +395,11 @@ impl World {
             .borrow_mut()
             .flaky
             .insert(task.into(), outcomes.iter().copied().collect());
+    }
+
+    /// Keeping a session run's result on its place fails from now.
+    pub fn keeping_fails(&self, fails: bool) {
+        self.0.borrow_mut().keeping_fails = fails;
     }
 
     /// `task` runs past any time limit.
@@ -1190,6 +1197,9 @@ impl Checkout for FakeCheckout {
 
     fn ran(&self, name: &str, last: &LastResult) -> Result<()> {
         let mut inner = self.0 .0.borrow_mut();
+        if inner.keeping_fails {
+            bail!("the place's record could not be written");
+        }
         if !inner.adopted.iter().any(|a| a == name) {
             if inner.places.contains_key(name) {
                 bail!("place {name} is no session's");

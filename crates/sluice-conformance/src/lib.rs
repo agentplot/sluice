@@ -206,6 +206,8 @@ pub trait Rig {
         let recorded = s
             .finish_session(&plan, &session, &started, command.is_some(), &report)
             .expect("the session run records");
+        assert_eq!(recorded.unkept, None, "its result is kept");
+        let recorded = recorded.recorded;
         (report, recorded)
     }
 

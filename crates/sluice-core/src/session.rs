@@ -42,6 +42,15 @@ pub enum Recorded {
     Nothing,
 }
 
+/// A finished session run: what it recorded, and why its result could not
+/// be kept on its place, when it could not. Keeping it decides nothing, so
+/// a failure to keep it changes nothing else of the run (97).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Finished {
+    pub recorded: Recorded,
+    pub unkept: Option<String>,
+}
+
 /// A session's place released because its worktree no longer exists
 /// (session-runs-1 clause 97), as the round or run that released it
 /// reports it.
@@ -148,7 +157,7 @@ impl Sluice<'_> {
     /// Every finished run, recorded or not, then leaves how it ended on its
     /// place (97), after its results, so a reader that finds it recorded
     /// finds the results (rule core.7's order). It decides nothing (rule
-    /// core.18).
+    /// core.18), so a failure to keep it is given back, never raised.
     pub fn finish_session(
         &self,
         plan: &SessionPlan,
@@ -156,7 +165,7 @@ impl Sluice<'_> {
         started: &SessionStart,
         command: bool,
         report: &RunReport,
-    ) -> Result<Recorded> {
+    ) -> Result<Finished> {
         let recorded = self.record_finished(plan, session, started, command, report)?;
         let outcome = if report.timed_out {
             RunOutcome::TimedOut
@@ -165,18 +174,22 @@ impl Sluice<'_> {
         } else {
             RunOutcome::Fail
         };
-        self.leave_result(
-            &started.place.name,
-            &session.head,
-            command,
-            outcome,
-            matches!(recorded, Recorded::Written(_)),
-        )?;
-        Ok(recorded)
+        let unkept = self
+            .leave_result(
+                &started.place.name,
+                &session.head,
+                command,
+                outcome,
+                matches!(recorded, Recorded::Written(_)),
+            )
+            .err()
+            .map(|e| format!("{e:#}"));
+        Ok(Finished { recorded, unkept })
     }
 
     /// 97: a session run that ended with no report, lost or stopped, leaves
-    /// that on its place; it recorded nothing (92).
+    /// that on its place; it recorded nothing (92). An error says only that
+    /// it could not be kept, which changes nothing else of the run.
     pub fn session_ended(
         &self,
         place: &str,
