@@ -33,7 +33,7 @@ take_lock() {
     # Its state directory gone, or the lock fought over: give up.
     [ -d "$state" ] || return 1
     rounds=$((rounds + 1))
-    [ "$rounds" -le 10 ] || return 1
+    [ "$rounds" -le 15 ] || return 1
     owner=
     since=
     read -r owner since <"$lock/pid" 2>/dev/null
@@ -54,6 +54,10 @@ take_lock() {
     sleep 1
   done
   echo "$me $(date +%s)" >"$lock/pid"
+}
+
+holds_lock() {
+  [ "$(cut -d' ' -f1 "$lock/pid" 2>/dev/null)" = "${lock_owner:-$$}" ]
 }
 
 drop_lock() {

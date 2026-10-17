@@ -228,10 +228,13 @@ fresh 'watch: a watcher stops only its own sources'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+SLUICE_HERDR_LOCK_HOLD=3 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 a=$!
 within 15 'sources_of "$a" | grep -q .' || fail "the first watcher started no source"
-# The first watcher stalls past its lease; a second takes over.
+# The first watcher stalls past its lease, its renewer in the middle of
+# renewing it (holding the lock); a second takes over.
+within 15 '[ "$(procs parent_of "$(cut -d" " -f1 "$S/lease.lock/pid" 2>/dev/null)")" = "$a" ]' ||
+  fail "the first watcher's renewer was not caught holding the lock"
 kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
 within 10 'lease_age_at_least 3' || fail "the stalled watcher's lease did not go stale"
 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &

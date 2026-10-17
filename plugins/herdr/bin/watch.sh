@@ -38,8 +38,12 @@ holder() {
   head -1 "$lease" 2>/dev/null | cut -d' ' -f1
 }
 
+# Written only while the lock is still this process's: a renewer stalled
+# past its lease (a laptop asleep) may find another watcher has broken its
+# lock and taken the lease, and must not write over it.
 write_lease() {
-  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" >"$lease.tmp.$$" && mv -f "$lease.tmp.$$" "$lease"
+  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" >"$lease.tmp.$$" || return 1
+  if holds_lock; then mv -f "$lease.tmp.$$" "$lease"; else rm -f "$lease.tmp.$$"; fi
 }
 
 # The tab-bar segment runs from the state directory, which outlives a
@@ -88,9 +92,11 @@ say "watching (pid $$)"
   lock_owner=$(exec sh -c 'echo $PPID')
   while sleep "$every" && kill -0 $$ 2>/dev/null; do
     take_lock || continue
-    # The tests hold it a while, to catch the renewer holding it.
-    [ -n "${SLUICE_HERDR_LOCK_HOLD:-}" ] && sleep "$SLUICE_HERDR_LOCK_HOLD"
-    if [ "$(holder)" = $$ ]; then write_lease; else
+    if [ "$(holder)" = $$ ]; then
+      # The tests hold it a while here, to catch the renewer about to renew.
+      [ -n "${SLUICE_HERDR_LOCK_HOLD:-}" ] && sleep "$SLUICE_HERDR_LOCK_HOLD"
+      write_lease
+    else
       drop_lock
       exit 0
     fi
