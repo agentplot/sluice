@@ -7,6 +7,8 @@
 //! at the revision its records last saw, never fetched, so a reader that
 //! asks every second costs no remote a request.
 
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -288,10 +290,12 @@ pub fn in_play<'a>(branches: &'a [BranchView], here: Here<'_>) -> Option<&'a Sub
         .max_by_key(|s| s.id)
 }
 
-/// The submissions the branches' recent lines name, newest first.
-pub fn recent_ids(branches: &[BranchView]) -> Vec<u64> {
-    let mut named: Vec<(&str, u64)> = Vec::new();
+/// The submissions the branches' recent lines name, newest first, each
+/// with its branch.
+pub fn recent_ids(branches: &[BranchView]) -> Vec<(&str, u64)> {
+    let mut named: Vec<(&str, &str, u64)> = Vec::new();
     for b in branches {
+        let branch = b.branch.as_str();
         for r in &b.recent {
             let at = r["at"].as_str().unwrap_or("");
             match r["event"].as_str() {
@@ -301,29 +305,35 @@ pub fn recent_ids(branches: &[BranchView]) -> Vec<u64> {
                         .into_iter()
                         .flatten()
                         .filter_map(serde_json::Value::as_u64)
-                        .map(|id| (at, id)),
+                        .map(|id| (at, branch, id)),
                 ),
-                Some(_) => named.extend(r["id"].as_u64().map(|id| (at, id))),
+                Some(_) => named.extend(r["id"].as_u64().map(|id| (at, branch, id))),
                 None => {}
             }
         }
     }
-    named.sort_by(|a, b| b.cmp(a));
-    named.into_iter().map(|(_, id)| id).collect()
+    named.sort_by(|a, b| (b.0, b.2).cmp(&(a.0, a.2)));
+    named.into_iter().map(|(_, b, id)| (b, id)).collect()
 }
 
 impl Sluice<'_> {
     /// The worktree `here`'s submission, as the home view shows it: the
     /// latest still in a chain, else the latest the branches' recent
-    /// lines name. A read, as the overview is.
+    /// lines name. A read, as the overview is, of each branch's records
+    /// once at most, however many recent lines name it.
     pub fn home(&self, branches: &[BranchView], here: Here<'_>) -> Result<Option<Submission>> {
         if let Some(s) = in_play(branches, here) {
             return Ok(Some(s.clone()));
         }
-        for id in recent_ids(branches) {
-            if let Some(s) = self.state(id)? {
+        let mut read: BTreeMap<&str, BTreeMap<u64, Submission>> = BTreeMap::new();
+        for (branch, id) in recent_ids(branches) {
+            let subs = match read.entry(branch) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => e.insert(self.read_line(branch)?.subs),
+            };
+            if let Some(s) = subs.get(&id) {
                 if here.made(&s.from) {
-                    return Ok(Some(s));
+                    return Ok(Some(s.clone()));
                 }
             }
         }
@@ -409,7 +419,10 @@ mod tests {
                 ",\"event\":\"conflict\",\"id\":3",
             )],
         );
-        assert_eq!(recent_ids(&[a, b]), [5, 3, 2, 1]);
+        assert_eq!(
+            recent_ids(&[a, b]),
+            [("a", 5), ("b", 3), ("a", 2), ("a", 1)]
+        );
     }
 
     #[test]

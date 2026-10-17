@@ -458,6 +458,22 @@ fn status_lists_the_queue() {
     assert_eq!(v["depth"], 1);
 }
 
+/// `status <branch>` reads the branch at the revision its records last
+/// saw, as the overview does, and asks the branch itself nothing: a
+/// commit made since is shown by the next round (ADR 0026).
+#[test]
+fn status_reads_the_revision_the_records_saw() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    sluice(&f, &["step", BRANCH]);
+    let seen = f.world.tip(BRANCH);
+    f.world.hand_commit(BRANCH, &[("plugin/b", Some("b"))]);
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["at"], seen.0);
+}
+
 /// A branch that does not exist and has no records is said to be none,
 /// with the branches that have records, and exits 1.
 #[test]
