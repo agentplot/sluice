@@ -17,8 +17,12 @@ readable with plain tools whether or not sluice is running.
   bolt/concurrent-units/
     version            57: bumped on every write, so two rounds never both write
     branch.json        the queue's own state, one document
-    submissions/12.json
-    submissions/13.json
+    submissions/14.json
+                       a submission still in the queue, or blamed or conflicting
+    .finished/12.json  a submission landed or withdrawn, moved here unchanged
+                       once nothing still waits on it
+    finished.jsonl     one line for each submission in .finished/: its id,
+                       state and worktree
     log.jsonl          every submission, test run, result, blame and landing, in order
     lock               held by a round of this branch
   .logs/bolt/concurrent-units/<candidate>/<task>.log
@@ -101,6 +105,16 @@ many times this worktree has submitted to this branch. `from.worktree`
 is the branch the work was submitted from; `from.path` is the worktree
 itself, for a reader to match a submission to the session that made it.
 A submission written by an older sluice has no `path`.
+
+A submission that has landed or been withdrawn moves, unchanged, from
+`submissions/` to `.finished/` in the same write that tells its outcome,
+once no combination or landing still names it. A round, `sluice
+overview`, `sluice` alone and `sluice status <branch>` read only the
+branch's own record, `submissions/` and `finished.jsonl`, so they cost
+the size of the queue, not of the branch's history. `sluice status <id>`
+reads a finished submission's one file, and `sluice status <branch>
+--all` reads them all. Records written by an older sluice move on the
+branch's next write.
 
 A pull request's submission comes from `pull/<n>`, its number on
 GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",

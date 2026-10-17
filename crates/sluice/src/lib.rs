@@ -204,7 +204,7 @@ pub enum Command {
         /// A branch, or a submission's number.
         target: Option<String>,
         /// With a branch, every submission it has had, not only those
-        /// still in the queue. `--json` always lists every one.
+        /// still in the queue, as text or `--json`.
         #[arg(long)]
         all: bool,
         /// One JSON document on stdout.
@@ -744,21 +744,24 @@ pub fn run(
                     told::tell(out, json, Kind::NotFound, &text, &next)?;
                     return Ok(FAILED);
                 }
+                // The queue by default; its history, read from the finished
+                // records too, only when asked (finished-records-1 105).
+                let shown: Vec<Submission> = if all {
+                    s.history(&target)?
+                } else {
+                    in_queue(&status.submissions).cloned().collect()
+                };
                 if json {
                     writeln!(
                         out,
                         "{}",
-                        serde_json::to_string_pretty(&status_json(&status))?
+                        serde_json::to_string_pretty(&status_json(&status, &shown))?
                     )?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
-                    let shown: Vec<Submission> = if all {
-                        status.submissions.clone()
-                    } else {
-                        in_queue(&status.submissions).cloned().collect()
-                    };
                     write_status(&status, pusher.as_ref(), &shown, out)?;
-                    let earlier = status.submissions.len() - shown.len();
+                    let earlier =
+                        (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
                         writeln!(out, "nothing in the queue")?;
                     }
@@ -1257,13 +1260,19 @@ fn submitted(
 ) -> Result<i32> {
     let from = s.seams().driver.session(worktree)?.from;
     let status = s.status(branch)?;
-    let Some(sub) = status
-        .submissions
-        .iter()
-        .rev()
-        .find(|x| x.from.worktree == from.worktree)
-        .cloned()
-    else {
+    let latest = |subs: &[Submission]| {
+        subs.iter()
+            .rev()
+            .find(|x| x.from.worktree == from.worktree)
+            .cloned()
+    };
+    // The live records first; the branch's history only when they hold
+    // nothing from this worktree.
+    let found = match latest(&status.submissions) {
+        Some(sub) => Some(sub),
+        None => latest(&s.history(branch)?),
+    };
+    let Some(sub) = found else {
         let text = format!("nothing submitted from {} to {branch}", from.worktree);
         let next = [format!("sluice submit {branch}")];
         told::tell(out, json, Kind::NotFound, &text, &next)?;
@@ -1487,7 +1496,7 @@ fn write_status(
     Ok(())
 }
 
-fn status_json(status: &Status) -> serde_json::Value {
+fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value {
     serde_json::json!({
         "branch": status.branch,
         "at": status.at,
@@ -1495,7 +1504,7 @@ fn status_json(status: &Status) -> serde_json::Value {
         "testing": status.testing,
         "window": status.window,
         "parallel": status.parallel,
-        "submissions": status.submissions,
+        "submissions": submissions,
     })
 }
 

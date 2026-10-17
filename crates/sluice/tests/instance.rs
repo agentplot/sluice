@@ -207,7 +207,7 @@ mod bound {
         for b in BRANCHES {
             let out = s
                 .command(s.repo.dir())
-                .args(["status", b, "--json"])
+                .args(["status", b, "--json", "--all"])
                 .output()
                 .unwrap();
             let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();

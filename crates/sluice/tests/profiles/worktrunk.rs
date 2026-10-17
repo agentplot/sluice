@@ -284,7 +284,7 @@ fn check_writes_nothing() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     assert!(text(&out).contains("same.txt"), "{}", text(&out));
     assert_eq!(s.tip(), tip);
-    let status = s.sluice(&["status", "bolt/x", "--json"]);
+    let status = s.sluice(&["status", "bolt/x", "--json", "--all"]);
     let v: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(v["submissions"].as_array().unwrap().len(), 1, "{v}");
 }

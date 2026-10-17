@@ -761,12 +761,7 @@ impl Sluice<'_> {
             })
             .collect();
         let ids: BTreeSet<u64> = eligible.iter().map(|e| e.id).collect();
-        let landed: BTreeSet<u64> = line
-            .subs
-            .values()
-            .filter(|s| s.state == State::Landed)
-            .map(|s| s.id)
-            .collect();
+        let landed: BTreeSet<u64> = line.landed();
         let pinned: Vec<Vec<u64>> = line
             .doc
             .candidates

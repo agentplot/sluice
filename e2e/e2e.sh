@@ -247,7 +247,7 @@ submit() { # submit <session> <scenario> [flags...]: wt submit from the session'
   SLUICE_AGENT="e2e-$who" indir "$ROOT/places/$who" wt-submit "bolt/$s" --no-remove "$@"
 }
 id_of() { submit "$1" "$2" --no-wait --json | jq -r .id; }
-status() { indir "$REPO" sluice status "$@" --json; }
+status() { indir "$REPO" sluice status "$@" --json --all; }
 settle() { # settle <scenario>: rounds until nothing on the branch is queued or under test, for at most an hour
   local i=0
   while status "bolt/$1" | jq -e '[.submissions[] | select(.state == "queued" or .state == "testing")] | length > 0' >/dev/null; do

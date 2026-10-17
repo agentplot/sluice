@@ -160,7 +160,7 @@ impl<'a> Sluice<'a> {
     /// The branch that holds submission `id`.
     pub fn find(&self, id: u64) -> Result<Option<String>> {
         for b in self.seams.state.branches()? {
-            if self.read_line(&b)?.subs.contains_key(&id) {
+            if self.read_line(&b)?.has(id) {
                 return Ok(Some(b));
             }
         }

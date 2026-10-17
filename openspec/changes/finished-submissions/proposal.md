@@ -1,6 +1,8 @@
 # Proposal
 
-Status: awaiting the operator's ruling. Nothing here is built.
+Status: approved by the operator 2026-10-16. Part 1, finished
+submissions, is built; part 2, the log in parts, is not. The statement
+change is `agentplot/blueprints:design/sluice/proposals/finished-records-1.md`.
 
 ## Why
 
@@ -18,22 +20,24 @@ and every `sluice` with no command pays for the whole history.
 
 ## What Changes
 
-- A submission that is out of the queue (landed, failed, conflicting or
-  withdrawn) moves, in the write that takes it out, from
-  `submissions/<id>.json` to `finished/<id>.json`, unchanged in form
-  (53).
+- A submission that has landed or been withdrawn moves, in the write
+  that tells its outcome and once no combination or landing names it,
+  from `submissions/<id>.json` to `.finished/<id>.json`, unchanged in
+  form (53). A blamed or conflicting one stays live, since a withdrawal
+  or a resubmission still changes it. `finished.jsonl` keeps its id,
+  state and worktree among the live records, for ordering an `after`
+  and counting attempts.
 - The log is kept in segments: `log.jsonl` is the current one, and a
   write that would take it past a bound (1,000 lines) starts a new one,
   moving the old to `log/<n>.jsonl`. Its lines do not change.
 - The records seam's `read` returns the branch's live records:
-  `branch.json`, `submissions/`, the current log segment and the last
-  closed one. A new operation reads one finished submission, and another
-  the older log segments, for a reader that asks for history.
+  `branch.json`, `submissions/`, `finished.jsonl` and, until part 2, the
+  whole log. `read_finished` reads one finished submission and
+  `read_all_finished` every one, for a reader that asks for history.
 - `Changes` gains a removal, so a write can move a file all or nothing
   (63).
-- The core's `find(id)` stops reading every branch to find a
-  submission: a finished submission is found by its file, and a live one
-  by the live records it already reads.
+- The core's `find(id)` finds a submission by the live records and the
+  index, and `state(id)` reads a finished one's single file.
 - `sluice status <id>` of a finished submission and `sluice status
   <branch> --all`, as text or `--json`, read the finished records;
   everything else reads only the live ones. `status <branch> --json` lists only the queue
@@ -45,13 +49,12 @@ and every `sluice` with no command pays for the whole history.
 
 Clause 61 reads "given a branch, its records as last written". A read
 that leaves out finished entries changes it, so the statement changes
-first (rule core.12): 61 becomes the branch's live records as last
-written, and a new clause of B.7 reads one finished entry's records
-given its branch and number. 26 and 49 hold unchanged: every state and
-verdict stays readable by every host with sluice stopped, now by the
-second read. 53 holds: the files keep their form, only their place
-changes. A proposal file for the statement goes under
-`design/sluice/proposals/` in agentplot/blueprints once this is ruled.
+first (rule core.12): `finished-records-1.md` in agentplot/blueprints
+rewrites 61 as the branch's live records, and proposes 104 (the move),
+105 (reading a finished entry) and 106 (the log in parts). 26 and 49
+hold unchanged: every state and verdict stays readable by every host
+with sluice stopped, now by 105. 53 holds: the files keep their form,
+only their place changes.
 
 ## Not in this change
 

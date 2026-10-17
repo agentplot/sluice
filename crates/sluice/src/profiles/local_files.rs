@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Changes, Guard, Snapshot, State, TaskLog, Written, KEPT_LOGS};
+use sluice_seams::{Changes, Guard, Snapshot, State, TaskLog, Written, FINISHED, KEPT_LOGS};
 
 use crate::runs::flat_name;
 
@@ -44,6 +44,9 @@ struct Pending {
     append: BTreeMap<String, String>,
     /// Each appended log's length before the append.
     lengths: BTreeMap<String, u64>,
+    /// Files the write takes away, after it has put the rest.
+    #[serde(default)]
+    remove: BTreeSet<String>,
 }
 
 struct BranchGuard<'a> {
@@ -148,7 +151,21 @@ fn apply(dir: &Path, p: &Pending) -> Result<()> {
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
     }
+    // Last, so a crash before leaves the file both live and finished,
+    // which the pending write's replay makes finished alone.
+    for name in &p.remove {
+        match std::fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("removing {name}")),
+        }
+    }
     write_atomic(dir, VERSION, format!("{}\n", p.version).as_bytes())
+}
+
+/// The name of `path` under the finished records, if it is one of them.
+fn finished_name(path: &str) -> Option<&str> {
+    path.strip_prefix(FINISHED)?.strip_prefix('/')
 }
 
 /// One file replaced all or nothing: a temporary file beside it, synced,
@@ -276,16 +293,60 @@ impl State for LocalFiles {
         if let Ok(bytes) = std::fs::read(dir.join(PENDING)) {
             let p: Pending = serde_json::from_slice(&bytes).context("parsing a pending write")?;
             for (name, t) in &p.put {
-                files.insert(name.clone(), t.clone().into_bytes());
+                if finished_name(name).is_none() {
+                    files.insert(name.clone(), t.clone().into_bytes());
+                }
             }
             for (name, t) in &p.append {
                 let f = files.entry(name.clone()).or_default();
                 f.truncate(p.lengths.get(name).copied().unwrap_or(0) as usize);
                 f.extend_from_slice(t.as_bytes());
             }
+            for name in &p.remove {
+                files.remove(name);
+            }
             version = p.version;
         }
         Ok(Snapshot { version, files })
+    }
+
+    fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.read_all_finished(branch)?.remove(name))
+    }
+
+    fn read_all_finished(&self, branch: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+        let dir = self.dir(branch)?;
+        let here = dir.join(FINISHED);
+        let mut files = BTreeMap::new();
+        match std::fs::read_dir(&here) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with('.') || !entry.file_type()?.is_file() {
+                        continue;
+                    }
+                    let path = entry.path();
+                    files.insert(
+                        name,
+                        std::fs::read(&path)
+                            .with_context(|| format!("reading {}", path.display()))?,
+                    );
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("listing {}", here.display())),
+        }
+        // As `read`: a write a crash left part done is read as whole (51).
+        if let Ok(bytes) = std::fs::read(dir.join(PENDING)) {
+            let p: Pending = serde_json::from_slice(&bytes).context("parsing a pending write")?;
+            for (name, t) in &p.put {
+                if let Some(n) = finished_name(name) {
+                    files.insert(n.to_string(), t.clone().into_bytes());
+                }
+            }
+        }
+        Ok(files)
     }
 
     fn write(&self, branch: &str, read_at: u64, changes: Changes) -> Result<Written> {
@@ -319,6 +380,7 @@ impl State for LocalFiles {
                 .map(|(p, b)| Ok((p.clone(), text(b, &p)?)))
                 .collect::<Result<_>>()?,
             lengths,
+            remove: changes.remove,
         };
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         write_atomic(&dir, PENDING, &serde_json::to_vec(&pending)?)?;

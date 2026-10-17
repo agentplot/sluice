@@ -18,7 +18,7 @@
 //! a branch found elsewhere, a records write refused) is a value, never an
 //! error, because the core acts on it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -627,16 +627,26 @@ pub struct Snapshot {
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
-/// One write: whole files replaced, and bytes appended to logs.
+/// Where a branch's finished records are kept, beside its live ones and
+/// never in a `read` of them (finished-records-1 clause 104): a directory
+/// whose name no branch's can take, since a git branch's components never
+/// start with a dot.
+pub const FINISHED: &str = ".finished";
+
+/// One write: whole files replaced, bytes appended to logs, and files
+/// removed, all or nothing (63).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Changes {
     pub put: BTreeMap<String, Vec<u8>>,
     pub append: BTreeMap<String, Vec<u8>>,
+    /// Files the write takes away: a finished submission's live document,
+    /// as the same write puts it among the finished records.
+    pub remove: BTreeSet<String>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.put.is_empty() && self.append.is_empty()
+        self.put.is_empty() && self.append.is_empty() && self.remove.is_empty()
     }
 }
 
@@ -660,8 +670,17 @@ pub trait State {
     /// waits out a round rather than leave.
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>>;
 
-    /// 61: the branch's records, and the version they were read at.
+    /// 61: the branch's live records, and the version they were read at:
+    /// nothing under [`FINISHED`] (finished-records-1 clause 61).
     fn read(&self, branch: &str) -> Result<Snapshot>;
+
+    /// Finished-records-1 clause 105: one file of the branch's finished
+    /// records, by its name under [`FINISHED`], as last written.
+    fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Every file of the branch's finished records, by its name under
+    /// [`FINISHED`], for a reader that asks for the branch's history.
+    fn read_all_finished(&self, branch: &str) -> Result<BTreeMap<String, Vec<u8>>>;
 
     /// 62, 63: write all or nothing, only from the version read.
     fn write(&self, branch: &str, read_at: u64, changes: Changes) -> Result<Written>;

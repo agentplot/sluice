@@ -122,7 +122,7 @@ impl OnGitHub {
 
     /// `main`'s submissions.
     fn subs(&self) -> Vec<Value> {
-        let out = self.sluice(&["status", "main", "--json"]);
+        let out = self.sluice(&["status", "main", "--json", "--all"]);
         assert!(out.status.success(), "{}", text(&out));
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
         v["submissions"].as_array().cloned().unwrap_or_default()
