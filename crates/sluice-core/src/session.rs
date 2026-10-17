@@ -32,15 +32,20 @@ pub struct SessionStart {
 }
 
 /// What a finished session run left in the records (92).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recorded {
     /// This many results, under their keys.
     Written(usize),
     /// Nothing: the worktree held more than its head.
     NotClean,
     /// Nothing: the worktree's head or files changed while the run ran,
-    /// so what ran is not known to be its head (rule core.18).
-    Changed,
+    /// so what ran is not known to be its head (rule core.18): the head it
+    /// moved to, when it moved, and the paths it holds beyond its head;
+    /// neither when the worktree is gone.
+    Changed {
+        moved_to: Option<Rev>,
+        paths: Vec<String>,
+    },
     /// Nothing: a command, or a run that hit its time limit.
     Nothing,
 }
@@ -246,7 +251,18 @@ impl Sluice<'_> {
         // worktree gone, and what ran is not known to be that head.
         match self.seams.driver.session(&worktree) {
             Ok(now) if now.head == session.head && now.dirty.is_empty() => {}
-            _ => return Ok(Recorded::Changed),
+            Ok(now) => {
+                return Ok(Recorded::Changed {
+                    moved_to: (now.head != session.head).then_some(now.head),
+                    paths: now.dirty,
+                })
+            }
+            Err(_) => {
+                return Ok(Recorded::Changed {
+                    moved_to: None,
+                    paths: Vec::new(),
+                })
+            }
         }
         let n = self.record_session(plan, &session.head, &worktree, report)?;
         if passed(report) {

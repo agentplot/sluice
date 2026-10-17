@@ -876,7 +876,19 @@ pub fn a_worktree_that_changes_while_its_run_runs_records_nothing(h: &impl Rig) 
         let finished = s
             .finish_session(&plan, &session, &started, false, &report)
             .expect("the run finishes");
-        assert_eq!(finished.recorded, Recorded::Changed, "{change}");
+        match (&finished.recorded, change) {
+            (Recorded::Changed { moved_to, paths }, "commit") => {
+                assert!(
+                    moved_to.is_some() && paths.is_empty(),
+                    "{moved_to:?} {paths:?}"
+                )
+            }
+            (Recorded::Changed { moved_to, paths }, _) => assert!(
+                moved_to.is_none() && paths.len() == 1 && paths[0].ends_with("a/scratch"),
+                "{moved_to:?} {paths:?}"
+            ),
+            (other, _) => panic!("{change}: {other:?}"),
+        }
         assert_eq!(h.results(), before, "{change}: recorded under keys");
         let last = last_result(h, worktree);
         assert_eq!(
