@@ -762,6 +762,18 @@ mod tests {
         assert_eq!(flat_name(&edge), edge.replace('/', "%2F"));
     }
 
+    /// One byte past the longest kept name, a name is shortened.
+    #[test]
+    fn a_name_one_byte_too_long_is_shortened() {
+        let edge = format!("session/{}", "a".repeat(237));
+        assert_eq!(edge.replace('/', "%2F").len(), 247);
+        let flat = flat_name(&edge);
+        assert!(flat.len() <= 246 && flat.contains("%~"), "{flat}");
+        assert!(flat.starts_with("session%2Faaa"), "{flat}");
+        let dir = dir_name(&edge);
+        assert!(dir.len() <= 246 && dir.contains("+~"), "{dir}");
+    }
+
     /// A name too long for a file name is shortened under the limit, to
     /// its start and a hash: the same every time, different for two
     /// names that differ only at the end, and never a kept name.
