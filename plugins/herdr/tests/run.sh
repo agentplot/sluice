@@ -18,6 +18,26 @@ hold_lease() {
   printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$plugin" "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$plugin/herdr-plugin.toml")" >"$S/watch.lease"
 }
 
+# Wait up to $1 seconds for the shell condition $2, checking each second.
+within() {
+  n=$1
+  while [ "$n" -gt 0 ]; do
+    eval "$2" && return 0
+    sleep 1
+    n=$((n - 1))
+  done
+  eval "$2"
+}
+
+# The pids of the sources a watcher started.
+sources_of() {
+  cat "$S/run/$1"/*.pids 2>/dev/null | cut -f1
+}
+
+lease_age_at_least() {
+  [ $(($(date +%s) - $(head -1 "$S/watch.lease" | cut -d' ' -f2))) -ge "$1" ]
+}
+
 # The pid holding a lease: the first word of its first line.
 holder_of() {
   head -1 "$1" 2>/dev/null | cut -d' ' -f1
@@ -203,25 +223,20 @@ fresh 'watch: a watcher stops only its own sources'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
 touch "$FAKE/hold"
-SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 a=$!
-sleep 2
+within 15 'sources_of "$a" | grep -q .' || fail "the first watcher started no source"
 # The first watcher stalls past its lease; a second takes over.
 kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
-sleep 3
-SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+within 10 'lease_age_at_least 3' || fail "the stalled watcher's lease did not go stale"
+SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
 b=$!
-sleep 3
+within 30 '[ "$(holder_of "$S/watch.lease")" = "$b" ] && sources_of "$b" | grep -q .' ||
+  fail "the second watcher did not take over and start its source"
 # The second watcher's sources, before the first one wakes.
-theirs=$(cut -f1 "$S/run/$b"/*.pids 2>/dev/null)
-[ -n "$theirs" ] || fail "the second watcher started no source"
+theirs=$(sources_of "$b")
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
-# It gives way at its next second, or after a tick it was in the middle of.
-for i in 1 2 3 4 5 6 7 8; do
-  kill -0 "$a" 2>/dev/null || break
-  sleep 1
-done
-kill -0 "$a" 2>/dev/null && fail "the stalled watcher did not give way"
+within 15 '! kill -0 "$a" 2>/dev/null' || fail "the stalled watcher did not give way"
 [ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
 for p in $theirs; do
   kill -0 "$p" 2>/dev/null || fail "the first watcher's stop ended the second's source $p"
