@@ -12,7 +12,7 @@ tools: `moon run ':#check-tools'`.
 
 ## 2. A worktree at a long path
 
-- [ ] 2.1 Add `exec_runs_from_a_worktree_at_a_long_path` to `crates/sluice/tests/exec.rs`: a scratch repository, a worktree whose path is longer than 255 bytes, `sluice exec` from it passes, `sluice status --json` lists it by its whole path, and no file name under the repository's `sluice/` or the host's state is longer than 255 bytes; verify `cargo test -p sluice --features tools --test exec`.
+- [x] 2.1 Add `exec_runs_from_a_worktree_at_a_long_path` to `crates/sluice/tests/exec.rs`: a scratch repository, a worktree whose path is longer than 255 bytes, `sluice exec` from it passes, `sluice status --json` lists it by its whole path, and no file name under the repository's `sluice/` or the host's state is longer than 255 bytes; verify `cargo test -p sluice --features tools --test exec`.
 
 ## 3. Docs and gates
 
