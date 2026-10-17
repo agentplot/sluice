@@ -256,6 +256,12 @@ impl Runs {
                 break;
             }
             if let Some(status) = child.try_wait()? {
+                // A run whose command could not start ends between the
+                // read above and this one: its supervisor wrote the end
+                // and exited, which is the run's end, not a lost start.
+                if read_ended(&dir)?.is_some() {
+                    break;
+                }
                 bail!("the supervisor of {name} exited at once: {status}");
             }
             if Instant::now() >= until {

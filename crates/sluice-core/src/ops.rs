@@ -441,10 +441,16 @@ impl Sluice<'_> {
         })
     }
 
-    /// 26: a branch's queue as last written.
+    /// 26: a branch's queue as last written, at the revision its records
+    /// last saw, as the overview reads it (ADR 0026): a remote branch is
+    /// not fetched for a read. Only a branch whose records have seen no
+    /// revision yet is read from the branch itself.
     pub fn status(&self, branch: &str) -> Result<Status> {
         let line = self.read_line(branch)?;
-        let at = self.seams.branch.read(branch)?;
+        let at = match &line.doc.base {
+            Some(base) => Some(base.clone()),
+            None => self.seams.branch.read(branch)?,
+        };
         let parallel = match &at {
             Some(rev) => self.rules_at(branch, rev)?.map(|r| r.parallel),
             None => None,
