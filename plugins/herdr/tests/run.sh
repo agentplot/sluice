@@ -303,6 +303,20 @@ rm -f "$FAKE/hold"
 pkill -f "$here/fake/sluice overview --watch" 2>/dev/null
 pass
 
+fresh 'watch: a pid kept alone and used again is left alone'
+# A source that ended in its first second left only its pid, since taken
+# by another process.
+sleep 60 &
+other_process=$!
+dead=$(sh -c 'echo $$')
+mkdir -p "$S/run/$dead"
+printf '%s\tpid:%s\n' "$other_process" "$other_process" >"$S/run/$dead/x.pids"
+printf '%s\tpid:%s:%s\n' "$other_process" "$other_process" "$dead" >"$S/run/$dead/y.pids"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+kill -0 "$other_process" 2>/dev/null || fail "a process that only has a recorded pid was killed"
+kill "$other_process" 2>/dev/null
+pass
+
 fresh 'watch: a pid used again by another process is left alone'
 # After a reboot the state is still there, and the pid is someone else's.
 sleep 60 &

@@ -110,10 +110,13 @@ remember() {
   printf '%s\t%s\n' "$1" "$(identity "$1")" >>"$2"
 }
 
-# A pid kept alone, at its fork, given its identity.
+# A pid kept alone, at its fork, given its identity; dropped if it has
+# ended already, so the pid is never taken for whoever gets it next.
 settle() {
-  id=$(identity "$1")
-  awk -F '\t' -v p="$1" -v id="$id" '$1 == p && $2 == "pid:" p { print p "\t" id; next } { print }' "$2" >"$2.tmp.$$" &&
+  if kill -0 "$1" 2>/dev/null; then id=$(identity "$1"); else id=; fi
+  awk -F '\t' -v p="$1" -v id="$id" '
+    $1 == p && index($2, "pid:" p ":") == 1 { if (id != "") print p "\t" id; next }
+    { print }' "$2" >"$2.tmp.$$" &&
     mv -f "$2.tmp.$$" "$2"
 }
 
@@ -179,7 +182,8 @@ start() {
       # Its pid at once, so a stop in the next second still ends it; its
       # identity once it has become the source's command, since where only
       # the command line tells processes apart, the fork's would not match.
-      printf '%s\tpid:%s\n' "$inner" "$inner" >>"$run.pids"
+      group=$(exec sh -c 'echo $PPID')
+      printf '%s\tpid:%s:%s\n' "$inner" "$inner" "$group" >>"$run.pids"
       (
         sleep "${SLUICE_HERDR_IDENTITY_DELAY:-1}"
         settle "$inner" "$run.pids"

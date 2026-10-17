@@ -29,11 +29,17 @@ identity() {
   echo "pid:$1"
 }
 
-# Whether pid $1 is alive and still the process recorded as $2; one
-# recorded by its pid alone, in its first second, by that alone.
+# Whether pid $1 is alive and still the process recorded as $2. One
+# recorded by its pid alone, in its first second (pid:<pid>:<parent>), is
+# that process only while its parent is still the one recorded; a pid
+# recorded with no parent is no one's.
 same_process() {
   [ -n "$1" ] && [ -n "$2" ] && kill -0 "$1" 2>/dev/null || return 1
-  [ "$2" = "pid:$1" ] || [ "$(identity "$1")" = "$2" ]
+  case $2 in
+  "pid:$1:"*) [ "$(parent_of "$1")" = "${2##*:}" ] ;;
+  pid:*) return 1 ;;
+  *) [ "$(identity "$1")" = "$2" ] ;;
+  esac
 }
 
 # The parent of a process.
