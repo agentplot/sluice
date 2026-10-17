@@ -208,7 +208,7 @@ SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>
 b=$!
 sleep 3
 # The second watcher's sources, before the first one wakes.
-theirs=$(cat "$S/run/$b"/*.pids 2>/dev/null)
+theirs=$(cut -f1 "$S/run/$b"/*.pids 2>/dev/null)
 [ -n "$theirs" ] || fail "the second watcher started no source"
 kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
 # It gives way at its next second, or after a tick it was in the middle of.
@@ -234,13 +234,26 @@ sleep 60 &
 orphan=$!
 dead=$(sh -c 'echo $$')
 mkdir -p "$S/run/$dead"
-echo "$orphan" >"$S/run/$dead/x.pids"
+printf '%s\t%s\n' "$orphan" "$(ps -o lstart= -p "$orphan" | tr -s ' ')" >"$S/run/$dead/x.pids"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 sleep 1
 if kill -0 "$orphan" 2>/dev/null; then
   fail "the dead watcher's source still runs"
   kill "$orphan"
 fi
+[ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
+pass
+
+fresh 'watch: a pid used again by another process is left alone'
+# After a reboot the state is still there, and the pid is someone else's.
+sleep 60 &
+other_process=$!
+dead=$(sh -c 'echo $$')
+mkdir -p "$S/run/$dead"
+printf '%s\t%s\n' "$other_process" "Mon Jan  1 00:00:00 2001" >"$S/run/$dead/x.pids"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+kill -0 "$other_process" 2>/dev/null || fail "a process that only has a recorded pid was killed"
+kill "$other_process" 2>/dev/null
 [ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
 pass
 

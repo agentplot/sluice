@@ -98,6 +98,28 @@ say "watching (pid $$)"
 ) &
 renewer=$!
 
+# A source's process is known by its pid and when it started, so a pid the
+# system has given to another process since (after a reboot, say) is never
+# taken for it.
+started() {
+  ps -o lstart= -p "$1" 2>/dev/null | tr -s ' '
+}
+
+remember() {
+  printf '%s\t%s\n' "$1" "$(started "$1")" >>"$2"
+}
+
+# Each process listed in a pids file that is still the one it recorded.
+listed() {
+  while IFS='	' read -r p at; do
+    [ -n "$p" ] && [ -n "$at" ] && [ "$(started "$p")" = "$at" ] && echo "$p"
+  done <"$1"
+}
+
+end_listed() {
+  for p in $(listed "$1"); do kill "$p" 2>/dev/null; done
+}
+
 # This watcher's sources, apart from any other's. A watcher killed outright
 # never ran its stop: its sources are ended here, and forgotten.
 runs=$state/run/$$
@@ -107,8 +129,7 @@ for d in "$state"/run/*; do
   [ "$p" = $$ ] && continue
   kill -0 "$p" 2>/dev/null && continue
   for f in "$d"/*.pids; do
-    # shellcheck disable=SC2046
-    [ -e "$f" ] && kill $(cat "$f") 2>/dev/null
+    [ -e "$f" ] && end_listed "$f"
   done
   rm -rf "$d"
 done
@@ -120,9 +141,7 @@ stop() {
   kill "$renewer" 2>/dev/null
   wait "$renewer" 2>/dev/null
   for f in "$runs"/*.pids; do
-    [ -e "$f" ] || continue
-    # shellcheck disable=SC2046
-    kill $(cat "$f") 2>/dev/null
+    [ -e "$f" ] && end_listed "$f"
   done
   rm -rf "$runs"
   if take_lock; then
@@ -148,21 +167,18 @@ start() {
         eval "set -- $(printf '%s' "$argv" | jq -r 'map(@sh) | join(" ")')"
         exec "$@"
       ) &
-      echo $! >>"$run.pids"
+      remember $! "$run.pids"
       wait
     } | while IFS= read -r line; do
       printf '%s\n' "$line" | sh "$root/bin/document.sh" "$name" "$where"
     done
   ) &
-  echo $! >>"$run.pids"
+  remember $! "$run.pids"
 }
 
 alive() {
   [ -f "$1.pids" ] || return 1
-  while read -r p; do
-    kill -0 "$p" 2>/dev/null && return 0
-  done <"$1.pids"
-  return 1
+  [ -n "$(listed "$1.pids")" ]
 }
 
 # Sources and repositories, every tick.
