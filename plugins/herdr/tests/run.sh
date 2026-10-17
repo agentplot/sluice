@@ -569,6 +569,35 @@ done
 [ -s "$FAKE/herdr-calls" ] && fail "setup called herdr: $(calls)"
 pass
 
+fresh 'status: fields it does not know change nothing'
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+extra='.later = {"anything": 1} | .branches[0].candidates |= map(.tasks = [{"name": "x", "state": "running"}])'
+# The same documents read twice: as sluice prints them today, and with
+# fields a later sluice may add.
+for run in plain extra; do
+  fresh_state=$t/$run
+  mkdir -p "$fresh_state"
+  : >"$FAKE/herdr-calls"
+  if [ "$run" = extra ]; then e=$extra; else e=.; fi
+  one=$(doc "$e | .branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' testing)] | .branches[0].candidates = [{id: \"c1\", submissions: [95], revision: \"x\", state: \"testing\", started: \"2026-10-16T19:42:00Z\", limit: 900, targets: [\"#check-fast\"], executor: \"sandbox\", ran: 0, replayed: 0, failed: []}] | $e")
+  two=$(doc "$e | $blamed87")
+  {
+    HERDR_PLUGIN_STATE_DIR=$fresh_state feed "$(doc "$e")" "$one"
+    HERDR_PLUGIN_STATE_DIR=$fresh_state frame_of "$work" --once >"$t/$run.frame"
+    HERDR_PLUGIN_STATE_DIR=$fresh_state tokens
+    HERDR_PLUGIN_STATE_DIR=$fresh_state feed "$two"
+    HERDR_PLUGIN_STATE_DIR=$fresh_state tokens
+  } 2>>"$t/$run.err"
+  sed 's/--seq [0-9]*//' "$FAKE/herdr-calls" >"$t/$run.calls"
+done
+grep -q '"later"' "$t"/extra/servers/*/docs/*.json || fail "the extra fields were not kept"
+cmp -s "$t/plain.frame" "$t/extra.frame" || fail "the popup differs: $(diff "$t/plain.frame" "$t/extra.frame")"
+cmp -s "$t/plain.calls" "$t/extra.calls" || fail "the herdr calls differ: $(diff "$t/plain.calls" "$t/extra.calls")"
+grep -q 'notification show sluice: #87 blamed' "$t/extra.calls" || fail "no toast with the extra fields"
+grep -q 'token sluice=#95 testing' "$t/extra.calls" || fail "no token with the extra fields"
+[ -s "$t/extra.err" ] && fail "something was logged: $(cat "$t/extra.err")"
+pass
+
 ## herdr-toasts
 
 fresh 'toasts: blamed'
