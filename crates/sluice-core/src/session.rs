@@ -6,8 +6,8 @@
 
 use anyhow::{anyhow, Result};
 use sluice_seams::{
-    Place, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
-    Setting, Source,
+    LastResult, Place, ReleasePolicy, Released, Rev, RunHandle, RunKind, RunOutcome, RunReport,
+    RunRequest, Session, SessionPlace, Setting, Source,
 };
 
 use crate::policy::{Policy, Rules};
@@ -144,7 +144,72 @@ impl Sluice<'_> {
     /// A recorded run that passed saves the caches the policy declares from
     /// the place, as a passed candidate's place does (35), so a later
     /// candidate's place restores them and its runner replays (93).
+    ///
+    /// Every finished run, recorded or not, then leaves how it ended on its
+    /// place (97), after its results, so a reader that finds it recorded
+    /// finds the results (rule core.7's order). It decides nothing (rule
+    /// core.18).
     pub fn finish_session(
+        &self,
+        plan: &SessionPlan,
+        session: &Session,
+        started: &SessionStart,
+        command: bool,
+        report: &RunReport,
+    ) -> Result<Recorded> {
+        let recorded = self.record_finished(plan, session, started, command, report)?;
+        let outcome = if report.timed_out {
+            RunOutcome::TimedOut
+        } else if passed(report) {
+            RunOutcome::Pass
+        } else {
+            RunOutcome::Fail
+        };
+        self.leave_result(
+            &started.place.name,
+            &session.head,
+            command,
+            outcome,
+            matches!(recorded, Recorded::Written(_)),
+        )?;
+        Ok(recorded)
+    }
+
+    /// 97: a session run that ended with no report, lost or stopped, leaves
+    /// that on its place; it recorded nothing (92).
+    pub fn session_ended(
+        &self,
+        place: &str,
+        head: &Rev,
+        command: bool,
+        outcome: RunOutcome,
+    ) -> Result<()> {
+        self.leave_result(place, head, command, outcome, false)
+    }
+
+    fn leave_result(
+        &self,
+        place: &str,
+        head: &Rev,
+        command: bool,
+        outcome: RunOutcome,
+        recorded: bool,
+    ) -> Result<()> {
+        let last = LastResult {
+            at: self.now(),
+            head: head.clone(),
+            kind: if command {
+                RunKind::Command
+            } else {
+                RunKind::Checks
+            },
+            outcome,
+            recorded,
+        };
+        self.seams.checkout.ran(place, &last)
+    }
+
+    fn record_finished(
         &self,
         plan: &SessionPlan,
         session: &Session,
@@ -160,12 +225,7 @@ impl Sluice<'_> {
         }
         let worktree = started.place.path.to_string_lossy();
         let n = self.record_session(plan, &session.head, &worktree, report)?;
-        let passed = report.missing.is_empty()
-            && report
-                .tasks
-                .iter()
-                .all(|t| t.outcome == sluice_seams::Outcome::Pass);
-        if passed {
+        if passed(report) {
             self.seams.checkout.save_caches(
                 &started.place.name,
                 &session.head,
@@ -211,6 +271,17 @@ impl Sluice<'_> {
         }
         Ok(n)
     }
+}
+
+/// Every check the run named reported and passed, within its time limit:
+/// what `sluice exec` exits 0 on.
+fn passed(report: &RunReport) -> bool {
+    !report.timed_out
+        && report.missing.is_empty()
+        && report
+            .tasks
+            .iter()
+            .all(|t| t.outcome == sluice_seams::Outcome::Pass)
 }
 
 impl Sluice<'_> {

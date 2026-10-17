@@ -188,6 +188,60 @@ fn s26_a_clean_session_run_is_replayed_by_its_submission() {
     shared::s26_a_clean_session_run_is_replayed_by_its_submission(&Harness::bolt());
 }
 
+/// satisfies: 92, 97, core.18
+#[test]
+fn a_session_runs_last_result_says_whether_it_was_recorded() {
+    shared::a_session_runs_last_result_says_whether_it_was_recorded(&Harness::bolt());
+}
+
+/// satisfies: 37, 93, 97, core.18
+#[test]
+fn a_last_result_decides_nothing() {
+    shared::a_last_result_decides_nothing(&Harness::bolt());
+}
+
+/// satisfies: 66, 92, 97, core.7
+#[test]
+fn a_timed_out_lost_or_stopped_run_leaves_its_result_unrecorded() {
+    use sluice_seams::{RunKind, RunOutcome};
+    let h = Harness::bolt();
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let last = |h: &Harness| {
+        h.sluice().session_places().unwrap()[0]
+            .last_result
+            .clone()
+            .expect("a last result")
+    };
+
+    // A clean run's results are in the log before its result is kept.
+    h.session_run("unit/a");
+    assert!(!h.results().is_empty());
+    let len = h.w().results_log().len();
+    assert_eq!(h.w().results_when_ran("session/unit/a"), Some(len));
+
+    h.w().hangs("a:test");
+    let changed = h.work_on("unit/a", &head, &[("a/lib", Some("a3"))]);
+    let (report, recorded) = h.session_run("unit/a");
+    assert!(report.timed_out);
+    assert_eq!(recorded, sluice_core::session::Recorded::Nothing);
+    let l = last(&h);
+    assert_eq!(
+        (l.outcome, l.recorded, &l.head),
+        (RunOutcome::TimedOut, false, &changed)
+    );
+
+    let s = h.sluice();
+    for outcome in [RunOutcome::Lost, RunOutcome::Stopped] {
+        s.session_ended("session/unit/a", &changed, true, outcome)
+            .unwrap();
+        let l = last(&h);
+        assert_eq!(
+            (l.kind, l.outcome, l.recorded),
+            (RunKind::Command, outcome, false)
+        );
+    }
+}
+
 /// satisfies: S28, 92
 #[test]
 fn s28_a_dirty_session_run_records_nothing() {

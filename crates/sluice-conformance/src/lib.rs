@@ -174,6 +174,11 @@ pub trait Rig {
     /// place, against the branch, to its end, and what it recorded. The
     /// caller stands for the run `sluice exec` would count against the bound.
     fn session_run(&self, worktree: &str) -> (RunReport, Recorded) {
+        self.session_exec(worktree, None)
+    }
+
+    /// A session run of the checks, or of `command`, as `session_run`.
+    fn session_exec(&self, worktree: &str, command: Option<&str>) -> (RunReport, Recorded) {
         let s = self.sluice();
         let place = self.place(worktree);
         let plan = s
@@ -182,7 +187,7 @@ pub trait Rig {
             .expect("the branch is managed");
         let session = s.seams().driver.session(&place).expect("a session's place");
         let started = s
-            .start_session(&plan, &place, &session.head, None)
+            .start_session(&plan, &place, &session.head, command)
             .expect("the session run starts");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let report = loop {
@@ -199,7 +204,7 @@ pub trait Rig {
             }
         };
         let recorded = s
-            .finish_session(&plan, &session, &started, false, &report)
+            .finish_session(&plan, &session, &started, command.is_some(), &report)
             .expect("the session run records");
         (report, recorded)
     }

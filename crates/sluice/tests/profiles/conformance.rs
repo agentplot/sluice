@@ -625,4 +625,6 @@ scenarios! {
     s31_the_next_landings_preview_replaces_the_last: preview();
     s32_asking_again_gives_back_the_same_preview: preview();
     a_removed_worktrees_place_is_released_by_the_next_round: bolt();
+    a_session_runs_last_result_says_whether_it_was_recorded: bolt();
+    a_last_result_decides_nothing: cached();
 }
