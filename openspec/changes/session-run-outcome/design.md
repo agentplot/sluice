@@ -108,7 +108,11 @@ what replays read (37, 93), for a display. Rejected here.
   `fail` otherwise; `timed_out`; `lost`; `stopped`. `lost` and
   `stopped` have no report.
 - `recorded`: true exactly when `finish_session` returned `Written`,
-  including `Written(0)`, every result already under its key.
+  including `Written(0)`, every result already under its key. The core
+  reads the worktree again through the driver as the run ends; a head
+  or files changed since it started record nothing under keys
+  (`Recorded::Changed`; 92, rule core.18), and the result names the
+  head the run started on.
 
 The name is `last_result`, not `last`, beside `last_run`: `result` is
 the user word for a check's outcome, and `last` alone would read as a

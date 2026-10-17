@@ -840,6 +840,53 @@ fn last_result_of(head: &Rev) -> LastResult {
     }
 }
 
+/// Session-runs-1 clause 92, rule core.18: a worktree whose head or files
+/// change while its run of the checks runs records nothing under keys,
+/// and its result names the head the run started on, not recorded.
+pub fn a_worktree_that_changes_while_its_run_runs_records_nothing(h: &impl Rig) {
+    for (worktree, change) in [("unit/a", "commit"), ("unit/b", "edit")] {
+        let head = h.work(worktree, "agent", &[("a/lib", Some("a2"))]);
+        let s = h.sluice();
+        let place = h.place(worktree);
+        let plan = s
+            .session_plan(BRANCH)
+            .expect("the plan reads")
+            .expect("the branch is managed");
+        let session = s.seams().driver.session(&place).expect("a session");
+        let started = s
+            .start_session(&plan, &place, &session.head, None)
+            .expect("the run starts");
+        match change {
+            "commit" => {
+                h.work_on(worktree, &head, &[("a/lib", Some("a3"))]);
+            }
+            _ => h.dirty(worktree, &["a/scratch"]),
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let report = loop {
+            match s.seams().tests.progress(&started.run).expect("progress") {
+                sluice_seams::Progress::Finished(r) => break r,
+                sluice_seams::Progress::Running if std::time::Instant::now() < until => {
+                    std::thread::sleep(std::time::Duration::from_millis(50))
+                }
+                p => panic!("the run did not finish: {p:?}"),
+            }
+        };
+        let before = h.results();
+        let finished = s
+            .finish_session(&plan, &session, &started, false, &report)
+            .expect("the run finishes");
+        assert_eq!(finished.recorded, Recorded::Changed, "{change}");
+        assert_eq!(h.results(), before, "{change}: recorded under keys");
+        let last = last_result(h, worktree);
+        assert_eq!(
+            (&last.head, last.recorded),
+            (&head, false),
+            "{change}: {last:?}"
+        );
+    }
+}
+
 /// Session-runs-1 clause 97, rule core.18: a worktree's last result
 /// decides nothing. A clean run's recorded pass is replayed by its
 /// submission as it would be whatever the place says of a later run.

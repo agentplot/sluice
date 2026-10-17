@@ -194,6 +194,12 @@ fn a_session_runs_last_result_says_whether_it_was_recorded() {
     shared::a_session_runs_last_result_says_whether_it_was_recorded(&Harness::bolt());
 }
 
+/// satisfies: 92, 97, core.18
+#[test]
+fn a_worktree_that_changes_while_its_run_runs_records_nothing() {
+    shared::a_worktree_that_changes_while_its_run_runs_records_nothing(&Harness::bolt());
+}
+
 /// satisfies: 37, 93, 97, core.18
 #[test]
 fn a_last_result_decides_nothing() {

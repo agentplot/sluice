@@ -56,10 +56,12 @@ result as it was.
 ### Requirement: Only a recorded run says recorded
 
 `last_result.recorded` SHALL be true only for a run of the checks in a
-worktree holding exactly its head that did not hit its time limit,
-whose results are under their keys (92; rule core.18). A run of a
-command and a run in a worktree holding more than its head SHALL say
-`recorded` false, whatever their outcome.
+worktree holding exactly its head from the run's start to its end that
+did not hit its time limit, whose results are under their keys (92;
+rule core.18). A run of a command, a run in a worktree holding more
+than its head, and a run whose worktree's head or files changed while
+it ran SHALL say `recorded` false, whatever their outcome, and name the
+head the run started on.
 
 #### Scenario: An unclean worktree's passing run
 
@@ -67,6 +69,13 @@ command and a run in a worktree holding more than its head SHALL say
   file changed and not committed, and every check passes
 - **THEN** its `last_result` has `kind` `checks`, `outcome` `pass` and
   `recorded` false, and the results log has no line for the run
+
+#### Scenario: A commit while the run runs
+
+- **WHEN** a clean worktree's run of the checks starts on its head, and
+  a commit is made there before the run ends
+- **THEN** the results log has no line for the run, and its
+  `last_result` names the head it started on with `recorded` false
 
 #### Scenario: A command that exits 0
 

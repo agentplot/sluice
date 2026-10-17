@@ -627,4 +627,5 @@ scenarios! {
     a_removed_worktrees_place_is_released_by_the_next_round: bolt();
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: cached();
+    a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
 }

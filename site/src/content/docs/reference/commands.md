@@ -92,7 +92,7 @@ release one with: sluice release --worktree <worktree>
 | `head` | the worktree's commit it ran on, in full |
 | `kind` | `checks`, or `command` for `sluice exec <branch> -- <command>` |
 | `outcome` | `pass`, `fail`, `timed_out`, `lost` (the run stopped without saying how it ended) or `stopped` (ended by its caller) |
-| `recorded` | its results are kept for their keys, so a submission of `head` reuses them. Never true for a command, or for a run with files changed and not committed. Never true for a run that timed out, was lost or was stopped |
+| `recorded` | its results are kept for their keys, so a submission of `head` reuses them. Never true for a command, or for a run with files changed and not committed. Never true when a commit or an edit was made while it ran: it names the commit it started on. Never true for a run that timed out, was lost or was stopped |
 
 The next run replaces it, and `sluice release` removes it with the rest.
 A worktree's head is ready to submit when `kind` is `checks`, `outcome`

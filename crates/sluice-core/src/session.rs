@@ -38,6 +38,9 @@ pub enum Recorded {
     Written(usize),
     /// Nothing: the worktree held more than its head.
     NotClean,
+    /// Nothing: the worktree's head or files changed while the run ran,
+    /// so what ran is not known to be its head (rule core.18).
+    Changed,
     /// Nothing: a command, or a run that hit its time limit.
     Nothing,
 }
@@ -146,9 +149,10 @@ impl Sluice<'_> {
     }
 
     /// 92: what a finished session run records: the observed results of
-    /// a run of the checks in a worktree that holds exactly its head, and
-    /// nothing of a command, of a run that hit its time limit, or of a
-    /// worktree holding more.
+    /// a run of the checks in a worktree that holds exactly its head from
+    /// the run's start to its end, and nothing of a command, of a run that
+    /// hit its time limit, or of a worktree holding more or moved while it
+    /// ran. The result names the head the run started on.
     ///
     /// A recorded run that passed saves the caches the policy declares from
     /// the place, as a passed candidate's place does (35), so a later
@@ -237,6 +241,13 @@ impl Sluice<'_> {
             return Ok(Recorded::NotClean);
         }
         let worktree = started.place.path.to_string_lossy();
+        // 92, rule core.18: the worktree must still hold exactly the head
+        // the run started on; a commit or an edit while it ran, or a
+        // worktree gone, and what ran is not known to be that head.
+        match self.seams.driver.session(&worktree) {
+            Ok(now) if now.head == session.head && now.dirty.is_empty() => {}
+            _ => return Ok(Recorded::Changed),
+        }
         let n = self.record_session(plan, &session.head, &worktree, report)?;
         if passed(report) {
             self.seams.checkout.save_caches(

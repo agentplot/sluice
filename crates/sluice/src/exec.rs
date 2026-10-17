@@ -332,6 +332,17 @@ impl Exec<'_> {
                 say(out, json, "not recorded: worktree is not clean")?;
                 false
             }
+            Recorded::Changed => {
+                say(
+                    out,
+                    json,
+                    &format!(
+                        "not recorded: the worktree changed while the run of {} ran",
+                        session.head.short()
+                    ),
+                )?;
+                false
+            }
             Recorded::Nothing => false,
         };
         let code = match &command {
