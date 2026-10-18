@@ -45,6 +45,10 @@ part exists.
 - **[core.12]** A change that bears on a clause cites the clause by number; a clause that no longer holds is changed in the statement first, never worked around here.
 - **[core.13]** Nothing commercial, no pricing, tier or customer, appears in this repository.
 
+### The gate
+
+- **[core.21]** Every file the tree tracks is owned by a formatter the gate runs, or is excluded by name with its reason; every language with a linter is linted; every directory under `plugins/` and `site/` has a check-fast moon task that validates, type-checks and tests it.
+
 ## Details
 
 - **core.1** Rules out: the strings `moon`, `wt`, `worktrunk`, `devenv`, `herdr`, `gh`, `crew`, `flywheel` in any module outside a profile directory; an import of a profile from the core. Not ruled out: `git`, which section 9 of the statement fixes; `plugins/`, which no crate imports. Source: statement preamble and clause 52; ADRs 0003, 0023.
@@ -67,3 +71,4 @@ part exists.
 - **core.20** Rules out: a `read-tree`, `reset`, `checkout`, `switch` or rebase of a worktree that is no place of sluice's, after a landing or at any other time; a landing, a round or a submission refused or held because a worktree has its branch checked out. Not ruled out: moving the branch itself under such a worktree, which a landing does (45); naming the worktree in `sluice status`, `sluice overview` and `sluice protect`. Source: clauses 1, 25; ADRs 0018, 0024.
 - **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
 - **core.13** Rules out: a pricing table, a tier name, a customer name, a hosted-plan reference in any file. Source: ADR 0001.
+- **core.21** Rules out: a file type treefmt neither formats nor excludes; an exclude with no comment saying why; a plugin directory whose manifest, types or tests no moon task runs; a task in a change whose only verification is a command run by hand, unless the task says why the gate cannot run it. Not ruled out: the site's build, which is the Pages workflow's; the site's type check until a place holds the site's dependencies; `*.md` outside the site, which no gate reads. Source: ADR 0029.

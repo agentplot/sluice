@@ -67,7 +67,7 @@ formats.
 | `.worktreeinclude`, `*.gitkeep` | excluded | a list in gitignore syntax; empty markers |
 | `.claude/settings.json` | excluded | Claude Code rewrites it in its own layout when a setting changes |
 | `plugins/sluice-board/engine-types/**` | excluded | the engine's own declarations, copied whole (D6) |
-| `site/**/*.astro` | excluded | Biome formats only an `.astro` file's frontmatter, and only experimentally |
+| `site/**/*.astro` | excluded, from every formatter | Biome formats only an `.astro` file's frontmatter, and only experimentally |
 | `target/**`, `.devenv/**`, `.moon/cache/**` | excluded | build outputs and caches |
 
 The site's `.ts`, `.mjs` and `.css` are formatted and linted now: Biome

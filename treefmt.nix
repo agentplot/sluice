@@ -1,9 +1,37 @@
 _: {
+  # A tracked file no formatter claims and no exclude names fails the check
+  # (core.21): a new file type is decided in the change that adds it.
+  settings.on-unmatched = "fatal";
+
+  # What no formatter owns, each with its reason (core.21).
   settings.excludes = [
+    # Prose: the site's pages are Vale's (site:prose), and no formatter
+    # here rewraps prose.
     "*.md"
+    "*.mdx"
+    # Written by cargo, devenv and bun in their own layouts.
     "*.lock"
+    # Records as sluice writes them, kept byte for byte.
     "*.jsonl"
     "docs/examples/**"
+    # Drawn images and rendered diagrams; no formatter keeps them stable.
+    "*.svg"
+    "*.png"
+    # Test keys, kept byte for byte.
+    "*.pem"
+    # The page the social image is rendered from, kept as drawn; Biome's
+    # HTML support is experimental.
+    "docs/brand/social-preview.html"
+    # Vale's own configuration and word lists, which no formatter reads.
+    ".vale.ini"
+    "styles/config/vocabularies/**"
+    # A list in gitignore syntax, and empty markers.
+    ".worktreeinclude"
+    "*.gitkeep"
+    # The site's components: Biome formats only an .astro file's
+    # frontmatter, and only experimentally.
+    "site/**/*.astro"
+    # Build outputs and caches.
     "target/**"
     ".devenv/**"
     ".moon/cache/**"
@@ -93,7 +121,4 @@ _: {
   settings.formatter.ruff-format.pipeline = "python";
   settings.formatter.ruff-format.priority = 2;
 
-  # Biome formats only an .astro file's frontmatter, and only
-  # experimentally.
-  settings.formatter.biome.excludes = [ "site/**/*.astro" ];
 }

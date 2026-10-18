@@ -4,10 +4,11 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 # hold a commit to.
 tasks:
   # Every formatter treefmt.nix configures, writing nothing it would change
-  # and keeping no cache outside the tree.
+  # and keeping no cache outside the tree. It reads every tracked file: one
+  # that no formatter claims and no exclude names fails it (core.21).
   format:
     command: 'treefmt --ci'
-    inputs: ['/**/*.rs', '/**/*.nix', '/**/*.sh', '/**/*.toml', '/**/*.yml', '/**/*.yaml', '/**/*.ts', '/**/*.tsx', '/**/*.mjs', '/**/*.css', '/**/*.json', '/**/*.py', '/devenv.lock', '/.prototools']
+    inputs: ['/**/*']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
   lint:
