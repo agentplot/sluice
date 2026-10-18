@@ -41,7 +41,7 @@ formatter is its own commit, with no other change in it.
 
 ## 7. Integration
 
-- [ ] 7.1 Verify `devenv shell -- moon run ':#check-fast'` passes in the worktree, and the submission's `#check-fast` passes under sluice's sandbox executor with `root:plugin-board` and `root:plugin-manifests` among its runs (`sluice status <id>`).
+- [x] 7.1 Verify `devenv shell -- moon run ':#check-fast'` passes in the worktree, and the submission's `#check-fast` passes under sluice's sandbox executor with `root:plugin-board` and `root:plugin-manifests` among its runs (`sluice status <id>`).
 
 ## Workflow follow-up
 
