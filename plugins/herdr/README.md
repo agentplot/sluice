@@ -22,6 +22,11 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   shows every repository the plugin holds.
 - **The dashboard**: the same view in its own tab, every repository at
   once (`agentplot.sluice.dashboard`).
+- **Rows that act**: in the popup and the dashboard, Ctrl-click a
+  submission to go to its agent's pane, or a failed test's `log of` row to
+  open the log in a split. In the popup those rows are also numbered `[1]`
+  to `[9]`: press the number. A link only acts on a worktree or a log the
+  queue names, so a link printed by anything else does nothing.
 - **Toasts**: one when a submission is blamed or conflicts, always; one
   when a submission lands, only when its agent's pane is open and not the
   one you are looking at.

@@ -89,12 +89,17 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 /plugin install sluice-board --marketplace agentplot/sluice
 ```
 
-While a branch has a queue, a line above the prompt reads like
+While a branch has a queue, the band above the prompt reads like
 `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`,
 and the status line says where your own submissions stand. `/sluice` opens
 a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
 blamed tests' logs.
+
+Press a blame, or a failed test's `log of` row, to open it under its row:
+each failed test, its log path (press it to copy the path) and the log's
+last lines. Press it again to close it. The pane only shows: it never
+moves to another session or another agent's pane.
 
 With the moon runner, a combination under test also shows how many of
 its tasks have ended and a bar of the same, as in

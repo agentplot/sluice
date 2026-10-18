@@ -7,7 +7,7 @@
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
 
-import type { Mine, Outcome, Overview, OverviewTask } from "../types";
+import type { Mine, OpenedTest, Outcome, Overview, OverviewTask } from "../types";
 import {
   bandLines,
   combination,
@@ -46,6 +46,51 @@ const told = atom({ plugin: "sluice-board", key: "told" } as const, []);
 const isHidden = atom({ plugin: "sluice-board", key: "isHidden" } as const, false);
 const now = atom({ plugin: "sluice-board", key: "now" } as const, 0);
 const repo = atom({ plugin: "sluice-board", key: "repo" } as const, null);
+// Failures opened in place: their keys, and what each showed when opened.
+const opened = atom({ plugin: "sluice-board", key: "opened" } as const, []);
+const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
+
+type Detail = OpenedTest;
+
+/** What a failure shows opened: each failed test's log tail, read with `tail`. */
+async function open($: $, failed: { task: string; log?: string }[]): Promise<Detail[]> {
+  const out: Detail[] = [];
+  for (const f of failed) {
+    if (!f.log) {
+      out.push({ task: f.task, error: "no log was kept" });
+      continue;
+    }
+    const got = await $.process.run(["tail", "-n", "20", "--", f.log]).catch(() => null);
+    if (got && got.exitCode === 0)
+      out.push({ ...f, tail: got.stdout.split("\n").filter((l) => l !== "") });
+    else out.push({ ...f, error: (got?.stderr ?? "").trim() || "it could not be read" });
+  }
+  return out;
+}
+
+/** Open a failure in place, or fold it: it never leaves this pane. */
+async function toggle($: $, key: string, failed: () => Promise<{ task: string; log?: string }[]>) {
+  if ((await read($, opened)).includes(key)) {
+    await update($, opened, (list) => list.filter((k) => k !== key));
+    return;
+  }
+  const shown = await open($, await failed());
+  await update($, details, (all) => ({ ...all, [key]: shown }));
+  await update($, opened, (list) => [...list, key]);
+}
+
+/** The failed tests of a blamed submission, from sluice. */
+async function blamedTests($: $, id: number): Promise<{ task: string; log?: string }[]> {
+  const cwd = (await read($, mine)).root ?? undefined;
+  const got = await $.process
+    .run(["sluice", "status", String(id), "--json"], cwd ? { cwd } : undefined)
+    .catch(() => null);
+  try {
+    return got && got.exitCode === 0 ? (JSON.parse(got.stdout).failed ?? []) : [];
+  } catch {
+    return [];
+  }
+}
 
 type $ = EngineInterface;
 
@@ -212,6 +257,36 @@ export const register: Register = (on, options) => {
     await read($, now);
     if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
     const at = await $.clock.now();
+    const open_ = await read($, opened);
+    const shownOf = await read($, details);
+    // An opened failure, under its row: each test, its log, the log's tail.
+    const view = (k: string, shown: Detail[]) => (
+      <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
+        {shown.length === 0 && <Text dimColor>no failed tests recorded</Text>}
+        {shown.map((t) => (
+          <Box key={`${k}-${t.task}`} flexDirection="column">
+            <Text bold>{t.task}</Text>
+            {t.log && (
+              <Button
+                key={`${k}-${t.task}-copy`}
+                plain
+                onPress={() =>
+                  $.ui.copy({ text: t.log ?? "", surface: e.surface }).then(() => undefined)
+                }
+              >
+                <Text dimColor>{t.log} [copy]</Text>
+              </Button>
+            )}
+            {t.error && <Text color="red">cannot read it: {t.error}</Text>}
+            {(t.tail ?? []).map((l, n) => (
+              <Text key={`${k}-${t.task}-${n}`} dimColor wrap="truncate-end">
+                {l}
+              </Text>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    );
     return (
       <Box flexDirection="column">
         <Text dimColor>
@@ -289,6 +364,21 @@ export const register: Register = (on, options) => {
                 const mark = r.event === "landed" ? "✓" : r.event === "blamed" ? "✗" : "⚠";
                 const color =
                   r.event === "landed" ? "green" : r.event === "blamed" ? "red" : "yellow";
+                if (r.event === "blamed" && r.id !== undefined) {
+                  const id = r.id;
+                  const k = `blamed-${b.branch}-${id}-${r.at}`;
+                  return (
+                    <Box key={`recent-${b.branch}-${i}`} flexDirection="column">
+                      <Button key={k} plain onPress={() => toggle($, k, () => blamedTests($, id))}>
+                        <Text color={color}>
+                          {"  "}
+                          {mark} {r.at.slice(11, 16)} {recentWords(r)}
+                        </Text>
+                      </Button>
+                      {open_.includes(k) && view(k, shownOf[k] ?? [])}
+                    </Box>
+                  );
+                }
                 return (
                   <Text key={`recent-${b.branch}-${i}`} color={color}>
                     {"  "}
@@ -300,17 +390,17 @@ export const register: Register = (on, options) => {
               .filter((c) => c.failed.some((f) => f.log))
               .slice(-1)
               .flatMap((c) => c.failed.filter((f) => f.log))
-              .map((f) => (
-                <Button
-                  key={`log-${b.branch}-${f.task}`}
-                  plain
-                  onPress={() =>
-                    $.ui.copy({ text: f.log ?? "", surface: e.surface }).then(() => undefined)
-                  }
-                >
-                  {"    "}log of {f.task}: <Text dimColor>{f.log}</Text>
-                </Button>
-              ))}
+              .map((f) => {
+                const k = `log-${b.branch}-${f.task}`;
+                return (
+                  <Box key={`${k}-row`} flexDirection="column">
+                    <Button key={k} plain onPress={() => toggle($, k, async () => [f])}>
+                      {"    "}log of {f.task}: <Text dimColor>{f.log}</Text>
+                    </Button>
+                    {open_.includes(k) && view(k, shownOf[k] ?? [])}
+                  </Box>
+                );
+              })}
           </Box>
         ))}
         <Box marginTop={1}>

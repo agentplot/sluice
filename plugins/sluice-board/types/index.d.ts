@@ -86,6 +86,9 @@ export type Outcome = {
   paths?: string[];
 };
 
+/** A failed test as an opened failure shows it: its log's last lines, or why not. */
+export type OpenedTest = { task: string; log?: string; tail?: string[]; error?: string };
+
 declare module "claude-code" {
   interface PluginState {
     "sluice-board": {
@@ -96,6 +99,10 @@ declare module "claude-code" {
       now: number;
       /** `https://github.com/<owner>/<repo>` when origin is on GitHub. */
       repo: string | null;
+      /** The keys of the failures opened in place on the pane. */
+      opened: string[];
+      /** What each opened failure showed when it was opened. */
+      details: Record<string, OpenedTest[]>;
     };
   }
 }

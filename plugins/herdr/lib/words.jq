@@ -55,39 +55,61 @@ def paint($on; $code): if $on then "\u001b[\($code)m\(.)\u001b[0m" else . end;
 
 def pull_of: (capture("^pull/(?<n>[0-9]+)$") | .n) // null;
 
-# One document drawn as the board's /sluice pane draws it, under the
-# headings TESTING, QUEUED and RECENT.
-def frame($now; $color): . as $d
-  | [("\($d.repository) on \($d.host)" | paint($color; "2"))]
-  + (if ($d.branches | length) == 0 then ["No branch has a queue." | paint($color; "2")] else [] end)
+# The rows run-progress draws under a combination under test: none here.
+def candidate_rows($c): [];
+
+# One document's rows, as the board's /sluice pane draws them, under the
+# headings TESTING, QUEUED and RECENT: {text, kind, url?}. A row with a url
+# is a link: a submission to its worktree's pane, a failed test to its log.
+def rows($now; $color): . as $d
+  | def row($kind): {text: ., kind: $kind};
+  [("\($d.repository) on \($d.host)" | paint($color; "2") | row("heading"))]
+  + (if ($d.branches | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
   + [ $d.branches[] | . as $b | testing as $under
-      | ""
-      , ("\($b.branch) at \(($b.at // "nothing") | .[0:7]) · \(plural($b.depth; "submission")) · \(plural($under | length; "combination")) under test\(if $b.parallel then " (up to \($b.parallel) at once)" else "" end)" | paint($color; "1"))
+      | ("" | row("blank"))
+      , ("\($b.branch) at \(($b.at // "nothing") | .[0:7]) · \(plural($b.depth; "submission")) · \(plural($under | length; "combination")) under test\(if $b.parallel then " (up to \($b.parallel) at once)" else "" end)" | paint($color; "1") | row("heading"))
       , ( ($under + ($b.candidates | map(select(.state == "formed")))) as $shown
           | if ($shown | length) > 0 then
-              ("  TESTING" | paint($color; "1"))
-              , ($under[] | (.started | since($now)) as $took
+              ("  TESTING" | paint($color; "1") | row("heading"))
+              , ($under[] | . as $c | (.started | since($now)) as $took
                   | ("    ▶ testing \(.submissions | combination($b.branch))"
-                      + (if $took == null then "" else "  \($took | duration)" + (if .limit then " / \(.limit | limit)" else "" end) end) | paint($color; "33"))
-                  , ("        \(.targets | join(" "))\(if .executor then " · \(.executor)" else "" end)" | paint($color; "2")))
+                      + (if $took == null then "" else "  \($took | duration)" + (if .limit then " / \(.limit | limit)" else "" end) end) | paint($color; "33") | row("candidate"))
+                  , ("        \(.targets | join(" "))\(if .executor then " · \(.executor)" else "" end)" | paint($color; "2") | row("candidate"))
+                  , candidate_rows($c)[])
               , ($b.candidates[] | select(.state == "formed")
-                  | "        formed, not running: \(.submissions | combination($b.branch))" | paint($color; "2"))
+                  | "        formed, not running: \(.submissions | combination($b.branch))" | paint($color; "2") | row("candidate"))
             else empty end )
       , ( if ($b.submissions | length) > 0 then
-            ("  QUEUED" | paint($color; "1"))
+            ("  QUEUED" | paint($color; "1") | row("heading"))
             , ($b.submissions[] | (.from.worktree | pull_of) as $pull
-                | "    #\(.id) \(.state + "         " | .[0:9]) \(if $pull then "PR \($pull)" else .from.worktree end) \(.from.agent)")
+                | ("    #\(.id) \(.state + "         " | .[0:9]) \(if $pull then "PR \($pull)" else .from.worktree end) \(.from.agent)" | row("submission"))
+                  + (if .from.path then {url: "sluice-herdr:focus?path=\(.from.path | @uri)"} else {} end))
           else empty end )
       , ( if ($b.recent | length) > 0 then
-            ("  RECENT" | paint($color; "1"))
+            ("  RECENT" | paint($color; "1") | row("heading"))
             , ($b.recent | reverse | .[0:5][]
                 | (if .event == "landed" then ["✓", "32"] elif .event == "blamed" then ["✗", "31"] else ["⚠", "33"] end) as [$mark, $c]
-                | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c))
+                | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c) | row("event"))
             , ([$b.candidates[] | select(any(.failed[]; .log))] | last // empty
-                | .failed[] | select(.log) | "      log of \(.task): \(.log)")
+                | .failed[] | select(.log)
+                | ("      log of \(.task): \(.log)" | row("failure"))
+                  + {url: "sluice-herdr:log?path=\(.log | @uri)&task=\(.task | @uri)"})
           else empty end )
     ]
-  + ["", ("\($d.sessions | length) worktrees held · \($d.previews | length) previews" | paint($color; "2"))];
+  + [("" | row("blank")), ("\($d.sessions | length) worktrees held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
+
+# Rows with a url numbered 1 to 9, in the order drawn.
+def numbered: reduce .[] as $r ({n: 0, out: []};
+    if $r.url and .n < 9 then .n += 1 | .out += [$r + {n: .n}] else .out += [$r] end) | .out;
+
+# A row as a line: its number in the margin its indent leaves, and, with
+# $links, its text an OSC 8 link to its url.
+def line($links):
+  (if .n then "[\(.n)]" + (.text | .[3:]) else .text end) as $t
+  | if $links and .url then "\u001b]8;;\(.url)\u001b\\\($t)\u001b]8;;\u001b\\" else $t end;
+
+# One document drawn as lines, as before rows; the tab-bar and tests use it.
+def frame($now; $color): rows($now; $color) | map(.text);
 
 # --- The sidebar -------------------------------------------------------
 

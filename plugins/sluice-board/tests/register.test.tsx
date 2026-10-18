@@ -24,6 +24,26 @@ function blamed(): Overview {
   return d;
 }
 
+/** Every command the host ran, in order. */
+const ran: string[] = [];
+
+/** The fixture, with #9's blame and its failed test kept on a combination. */
+function blamedWithLog(log: string): Overview {
+  const d = overview();
+  d.branches[0]!.candidates.push({
+    id: "c40",
+    submissions: [9],
+    revision: "4f1c2aa0e1",
+    state: "failed",
+    targets: ["#check-fast"],
+    executor: "sandbox",
+    ran: 1,
+    replayed: 0,
+    failed: [{ task: "cli:test", log }],
+  });
+  return d;
+}
+
 /** A host where sluice answers from `docs`, streamed by --watch in turn. */
 function host(
   on: On,
@@ -34,6 +54,23 @@ function host(
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
+    ran.push(argv);
+    if (argv === `tail -n 20 -- ${LOG}`)
+      return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
+    if (argv === "sluice status 9 --json") {
+      return {
+        value: {
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 9, failed: [{ task: "cli:test", log: LOG }] }),
+          stderr: "",
+          ...WHOLE,
+        },
+      };
+    }
+    if (argv.startsWith("tail -n 20 -- "))
+      return {
+        value: { exitCode: 1, stdout: "", stderr: "tail: No such file or directory\n", ...WHOLE },
+      };
     if (argv === "git remote get-url origin") {
       return {
         value: {
@@ -211,4 +248,62 @@ test("the wake can be turned off", { options: { wake: false } }, async ($, on) =
   await clock.settle();
   expect(seen.prompts).toEqual([]);
   expect(seen.toasts).toContain("sluice: #13 was blamed");
+});
+
+test("a failure opens in place, folds, and moves no one", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = {
+    prompts: [] as string[],
+    toasts: [] as string[],
+    status: [] as (string | undefined)[],
+  };
+  host(on, [blamedWithLog(LOG)], seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  // The blamed submission: its test, its log and the log's last lines.
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "last line" })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: `${LOG} [copy]` })).toBeDefined();
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "last line" })).toBeUndefined();
+  // Nothing but sluice's own record and the log was read: no pane moved.
+  expect(ran).toEqual(["sluice status 9 --json", `tail -n 20 -- ${LOG}`]);
+  await pane.unmount();
+});
+
+test("a log it cannot read says why", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = {
+    prompts: [] as string[],
+    toasts: [] as string[],
+    status: [] as (string | undefined)[],
+  };
+  host(on, [blamedWithLog("/gone/cli:test.log")], seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  expect(
+    await pane.find({ type: "Text", text: /cannot read it: tail: No such file or directory/ }),
+  ).toBeDefined();
+  await pane.unmount();
 });

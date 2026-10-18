@@ -207,6 +207,23 @@ status_of() {
     '{schema: "sluice/submission@1", id: $id, branch: "main", from: {agent: "claude", worktree: "w", path: $p}, state: $s, failed: ($f | map({task: ., log: "/l/\(.).log"}))}' >"$FAKE/status-$1.json"
 }
 
+## the manifest
+
+fresh 'manifest: as herdr will read it'
+sh "$here/manifest.sh" >"$t/out" 2>&1 || fail "the plugin's own manifest: $(cat "$t/out")"
+# A copy of the plugin, broken three ways.
+cp -R "$plugin/bin" "$plugin/lib" "$t/"
+sed 's|bin/jump.sh|bin/nope.sh|; s|action = "open-link"|action = "gone"|' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"
+echo 'width = 80%' >>"$t/herdr-plugin.toml"
+if sh "$here/manifest.sh" "$t/herdr-plugin.toml" >"$t/out" 2>&1; then fail "a broken manifest passed"; fi
+grep -q 'runs bin/nope.sh, which is not in the plugin' "$t/out" || fail "a missing script not named: $(cat "$t/out")"
+grep -q 'a link handler names no action of this plugin: "gone"' "$t/out" || fail "an unknown action not named"
+grep -q 'a value herdr cannot read: width = 80%' "$t/out" || fail "an unreadable line not named"
+grep -v '^id = ' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"
+if sh "$here/manifest.sh" "$t/herdr-plugin.toml" >"$t/out" 2>&1; then fail "a manifest with no id passed"; fi
+grep -q ': no id$' "$t/out" || fail "the missing id not named: $(cat "$t/out")"
+pass
+
 ## herdr-watch
 
 fresh 'watch: started twice'
@@ -423,12 +440,15 @@ pass
 fresh 'watch: one watcher per herdr server'
 HERDR_SOCKET_PATH=/run/one.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
 HERDR_SOCKET_PATH=/run/two.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
-sleep 2
-n=0
-for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
-  [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
-done
-[ "$n" = 2 ] || fail "$n watchers for two herdr servers"
+# The live watchers, one per server's lease.
+live_watchers() {
+  n=0
+  for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
+    [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
+  done
+  echo "$n"
+}
+within 20 '[ "$(live_watchers)" = 2 ]' || fail "$(live_watchers) watchers for two herdr servers"
 pass
 
 fresh 'watch: a renewer killed holding the lock'
@@ -564,6 +584,107 @@ printf '%s\n' "$board" | sh "$plugin/bin/document.sh" local "$work"
 frame_of "$work" --once >"$t/frame"
 sed "s|$common|REPO|" "$t/frame" >"$t/got"
 diff -u "$here/docs/board.frame" "$t/got" >"$t/diff" || fail "the frame differs: $(cat "$t/diff")"
+pass
+
+fresh 'status: rows are links'
+weird="$scratch/a b&c"
+mkdir -p "$weird"
+blame_logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}]}]'
+both="[$(sub 95 '$work' testing), $(sub 96 "\"$weird\"" queued)]"
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = $both | $blame_logged | $blamed87")"
+out=$(SLUICE_HERDR_DIR=$work SLUICE_HERDR_LINKS=1 sh "$plugin/bin/status.sh" --once)
+e=$(printf '\033')
+printf '%s' "$out" | grep -qF "${e}]8;;sluice-herdr:focus?path=$(printf '%s' "$work" | jq -sRr @uri)${e}\\[1] #95" || fail "no focus link on #95: $(printf '%s' "$out" | cat -v)"
+printf '%s' "$out" | grep -qF "sluice-herdr:focus?path=$(printf '%s' "$weird" | jq -sRr @uri)" || fail "the odd path is not encoded"
+printf '%s' "$out" | grep -qF "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=cli%3Atest" || fail "no log link: $(printf '%s' "$out" | cat -v)"
+# The odd path comes back whole: no pane is in it, which the toast names.
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$weird" | jq -sRr @uri)"
+has "notification show sluice: no pane for $weird"
+out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --dashboard --once)
+printf '%s' "$out" | grep -q '\[1\]' && fail "the dashboard numbers its rows"
+pass
+
+fresh 'status: links to paths that are not ASCII'
+cafe="$scratch/café"
+mkdir -p "$cafe"
+logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "tést", log: "/logs/é/tést.log"}]}]'
+one="[$(sub 97 "\"$cafe\"" queued)]"
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = $one | $logged | $blamed87")"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sRr @uri)" 2>"$t/err"
+has "notification show sluice: no pane for $cafe"
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
+has '--env SLUICE_HERDR_LOG=/logs/é/tést.log --env SLUICE_HERDR_TASK=tést'
+# Again with gawk as awk in a UTF-8 locale, where a decoder not in the C
+# locale makes %C3%A9 two characters.
+if command -v gawk >/dev/null 2>&1; then
+  mkdir -p "$t/gawk"
+  ln -s "$(command -v gawk)" "$t/gawk/awk"
+  : >"$FAKE/herdr-calls"
+  PATH="$t/gawk:$PATH" LC_ALL=C.UTF-8 sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sRr @uri)" 2>>"$t/err"
+  has "notification show sluice: no pane for $cafe"
+  PATH="$t/gawk:$PATH" LC_ALL=C.UTF-8 HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
+  has '--env SLUICE_HERDR_LOG=/logs/é/tést.log'
+else
+  echo "note: $name: no gawk here, so the UTF-8 gawk case did not run"
+fi
+[ -s "$t/err" ] && fail "logged: $(cat "$t/err")"
+pass
+
+fresh 'status: a link focuses, opens, or is left alone'
+blame_logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}]}]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)] | $blame_logged")"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$other" | jq -sRr @uri)"
+has 'agent focus p2'
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=cli%3Atest"
+has 'plugin pane open --plugin agentplot.sluice --entrypoint log --placement split --direction right --target-pane p1 --env SLUICE_HERDR_LOG=/logs/c9/cli:test.log --env SLUICE_HERDR_TASK=cli:test'
+: >"$FAKE/herdr-calls"
+sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Fetc%2Fpasswd" 2>"$t/err"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=%2Felsewhere" 2>>"$t/err"
+sh "$plugin/bin/link.sh" "sluice-herdr:run?cmd=rm" 2>>"$t/err"
+hasnt 'plugin pane open'
+hasnt 'focus'
+[ "$(grep -c 'left alone\|not a link' "$t/err")" = 3 ] || fail "not each logged: $(cat "$t/err")"
+pass
+
+fresh 'status: the log split'
+seq 1 300 | sed 's/^/line /' >"$t/cli.log"
+out=$(printf q | SLUICE_HERDR_LOG=$t/cli.log SLUICE_HERDR_TASK=cli:test sh "$plugin/bin/log.sh")
+printf '%s\n' "$out" | grep -qx 'log of cli:test' || fail "no heading: $out"
+# Not a terminal: its last 200 lines, from line 101.
+printf '%s\n' "$out" | grep -qx 'line 101' || fail "the tail does not start at line 101"
+printf '%s\n' "$out" | grep -qx 'line 100' && fail "more than the last 200 lines"
+printf '%s\n' "$out" | grep -qx 'line 300' || fail "the tail misses the last line"
+# q closes it while its input is still open.
+mkfifo "$t/keys"
+{
+  printf 'xq'
+  sleep 8
+} >"$t/keys" &
+writer=$!
+began=$(date +%s)
+SLUICE_HERDR_LOG=$t/cli.log sh "$plugin/bin/log.sh" <"$t/keys" >/dev/null
+[ $(($(date +%s) - began)) -lt 5 ] || fail "q did not close it"
+kill "$writer" 2>/dev/null
+out=$(printf q | SLUICE_HERDR_LOG=/nowhere/cli.log sh "$plugin/bin/log.sh")
+printf '%s\n' "$out" | grep -qx 'cannot read /nowhere/cli.log' || fail "said: $out"
+pass
+
+fresh 'status: no control characters from a link or a document'
+logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}, {task: "evil\u001b]52;c;eA==\u0007", log: "/logs/c9/evil.log"}]}]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' testing)] | $logged | $blamed87")"
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=%1b]52;c;eA==%07"
+has '--env SLUICE_HERDR_TASK=cli:test'
+e=$(printf '\033')
+grep -q "$e" "$FAKE/herdr-calls" && fail "an escape reached herdr: $(cat -v "$FAKE/herdr-calls")"
+out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --once)
+printf '%s' "$out" | grep -q "$e" && fail "an escape reached the popup: $(printf '%s' "$out" | cat -v)"
+printf '%s' "$out" | grep -q 'log of evil\]52;c;eA==' || fail "the cleaned task is not shown: $out"
+pass
+
+fresh 'status: a number does what a click does'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)]")"
+printf '1' | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >/dev/null
+has 'agent focus p2'
 pass
 
 fresh 'status: two hosts'

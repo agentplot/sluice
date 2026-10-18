@@ -239,6 +239,9 @@ in
     pkgs.jq
     # Debian's /bin/sh, which the herdr plugin's tests also run under.
     pkgs.dash
+    # GNU awk, under which the herdr plugin's tests decode links in a UTF-8
+    # locale as Linux users' awk would.
+    pkgs.gawk
     pkgs.git-cliff
     proto
     worktrunk
