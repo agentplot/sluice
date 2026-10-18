@@ -207,6 +207,23 @@ status_of() {
     '{schema: "sluice/submission@1", id: $id, branch: "main", from: {agent: "claude", worktree: "w", path: $p}, state: $s, failed: ($f | map({task: ., log: "/l/\(.).log"}))}' >"$FAKE/status-$1.json"
 }
 
+## the manifest
+
+fresh 'manifest: as herdr will read it'
+sh "$here/manifest.sh" >"$t/out" 2>&1 || fail "the plugin's own manifest: $(cat "$t/out")"
+# A copy of the plugin, broken three ways.
+cp -R "$plugin/bin" "$plugin/lib" "$t/"
+sed 's|bin/jump.sh|bin/nope.sh|; s|action = "open-link"|action = "gone"|' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"
+echo 'width = 80%' >>"$t/herdr-plugin.toml"
+if sh "$here/manifest.sh" "$t/herdr-plugin.toml" >"$t/out" 2>&1; then fail "a broken manifest passed"; fi
+grep -q 'runs bin/nope.sh, which is not in the plugin' "$t/out" || fail "a missing script not named: $(cat "$t/out")"
+grep -q 'a link handler names no action of this plugin: "gone"' "$t/out" || fail "an unknown action not named"
+grep -q 'a value herdr cannot read: width = 80%' "$t/out" || fail "an unreadable line not named"
+grep -v '^id = ' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"
+if sh "$here/manifest.sh" "$t/herdr-plugin.toml" >"$t/out" 2>&1; then fail "a manifest with no id passed"; fi
+grep -q ': no id$' "$t/out" || fail "the missing id not named: $(cat "$t/out")"
+pass
+
 ## herdr-watch
 
 fresh 'watch: started twice'
