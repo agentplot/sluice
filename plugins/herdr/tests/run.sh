@@ -29,6 +29,19 @@ within() {
   eval "$2"
 }
 
+# Wait up to $2 seconds for process $1 to end, checking each second; say
+# how long it took in $took. A process is waited for, never slept on: under
+# a loaded gate, ending takes longer than any fixed sleep allows.
+ends_within() {
+  began=$(date +%s)
+  while kill -0 "$1" 2>/dev/null; do
+    took=$(($(date +%s) - began))
+    [ "$took" -ge "$2" ] && return 1
+    sleep 1
+  done
+  took=$(($(date +%s) - began))
+}
+
 # The pids of the sources a watcher started.
 sources_of() {
   cat "$S/run/$1"/*.pids 2>/dev/null | cut -f1
@@ -283,9 +296,8 @@ if needs_ps; then
   mkdir -p "$S/run/$dead"
   printf '%s\t%s\n' "$orphan" "$(procs identity "$orphan")" >"$S/run/$dead/x.pids"
   SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
-  sleep 1
-  if kill -0 "$orphan" 2>/dev/null; then
-    fail "the dead watcher's source still runs"
+  if ! ends_within "$orphan" 20; then
+    fail "the dead watcher's source still runs after ${took}s"
     kill "$orphan"
   fi
   [ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
@@ -397,10 +409,13 @@ again=$t/reinstalled
 cp -R "$plugin" "$again"
 echo '# reinstalled' >>"$again/bin/segment.sh"
 HERDR_PLUGIN_ROOT=$again SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$again/bin/watch.sh" --ensure
-sleep 4
-kill -0 "$a" 2>/dev/null && fail "the old watcher kept running"
-[ "$(sed -n 2p "$S/watch.lease")" = "$again" ] || fail "the lease is not the reinstalled watcher's: $(cat "$S/watch.lease")"
-grep -q '# reinstalled' "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh" || fail "the segment was not copied again"
+if ! ends_within "$a" 20; then
+  fail "the old watcher kept running after ${took}s"
+elif [ "$took" -gt 4 ]; then
+  echo "note: the old watcher took ${took}s to end"
+fi
+within 20 '[ "$(sed -n 2p "$S/watch.lease")" = "$again" ]' || fail "the lease is not the reinstalled watcher's: $(cat "$S/watch.lease")"
+within 20 'grep -q "# reinstalled" "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh"' || fail "the segment was not copied again"
 rm -f "$FAKE/hold"
 kill "$a" 2>/dev/null
 pass

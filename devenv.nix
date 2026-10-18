@@ -175,6 +175,58 @@ let
     installPhase = "install -Dm755 vale $out/bin/vale";
   };
 
+  # Claude Code, which plugin-board and plugin-manifests run: the release
+  # the board's engine-types were written by, so every host checks the
+  # plugins against one engine, and never the user's own `claude`, which
+  # may be a wrapper adding options `claude plugin test` refuses. Bump the
+  # version and the four checksums from the release's manifest.zst.json,
+  # and copy the board's engine-types again from a session of it
+  # (plugins/sluice-board/README.md).
+  claudeVersion = "2.1.296";
+  claudeAssets = {
+    aarch64-darwin = {
+      platform = "darwin-arm64";
+      sha256 = "26426aa3dcf41b0f554951766c3c583cf243345ca3d32fa590caf84685be5f97";
+    };
+    x86_64-darwin = {
+      platform = "darwin-x64";
+      sha256 = "6f1d6f926a303c423eb4815a01764165ed4375054bfa8ef6203e55fc806f50ac";
+    };
+    aarch64-linux = {
+      platform = "linux-arm64";
+      sha256 = "23aa91437a06eff80a65bfc32b0e4b5a6dda3e821019c543696c154274e56913";
+    };
+    x86_64-linux = {
+      platform = "linux-x64";
+      sha256 = "fac1d78be9446052ac084878c04c2648abb6b22d53279a685fa19ee517d74410";
+    };
+  };
+  claudeAsset = claudeAssets.${pkgs.stdenv.hostPlatform.system};
+  claude = pkgs.stdenvNoCC.mkDerivation {
+    pname = "claude-code";
+    version = claudeVersion;
+    src = pkgs.fetchurl {
+      url = "https://downloads.claude.ai/claude-code-releases/${claudeVersion}/${claudeAsset.platform}/claude.zst";
+      inherit (claudeAsset) sha256;
+    };
+    dontUnpack = true;
+    # The binary carries its program after the runtime; stripping drops it.
+    dontStrip = true;
+    nativeBuildInputs = [
+      pkgs.zstd
+      pkgs.makeBinaryWrapper
+    ]
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isElf [ pkgs.autoPatchelfHook ];
+    installPhase = ''
+      mkdir -p $out/bin
+      unzstd -q $src -o $out/bin/.claude
+      chmod 755 $out/bin/.claude
+      makeWrapper $out/bin/.claude $out/bin/claude \
+        --set DISABLE_AUTOUPDATER 1 \
+        --set DISABLE_INSTALLATION_CHECKS 1
+    '';
+  };
+
 in
 {
   # The system tools are this file's, pinned by devenv.lock; the application
@@ -191,6 +243,10 @@ in
     proto
     worktrunk
     vale
+    claude
+    # The board's type check (plugin-board); its engine-types ask for 5.4
+    # or later.
+    pkgs.typescript
     pkgs.bun
     # The stack acceptance test's browser test (ADR 0016): Playwright and
     # the one browser it drives, from Nix, read-only for the sandbox.

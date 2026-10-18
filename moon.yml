@@ -4,10 +4,11 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 # hold a commit to.
 tasks:
   # Every formatter treefmt.nix configures, writing nothing it would change
-  # and keeping no cache outside the tree.
+  # and keeping no cache outside the tree. It reads every tracked file: one
+  # that no formatter claims and no exclude names fails it (core.21).
   format:
     command: 'treefmt --ci'
-    inputs: ['/**/*.rs', '/**/*.nix', '/**/*.sh', '/**/*.toml', '/**/*.yml', '/**/*.yaml', '/devenv.lock', '/.prototools']
+    inputs: ['/**/*']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
   lint:
@@ -19,6 +20,19 @@ tasks:
   plugin-hooks:
     command: 'plugins/sluice/tests/hooks.sh'
     inputs: ['/plugins/sluice/scripts/**/*', '/plugins/sluice/tests/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
+  # The board mod: its manifest validated, its modules typed against the
+  # pinned Claude Code's engine-types, and its tests run by that engine.
+  plugin-board:
+    command: 'plugins/sluice-board/tests/check.sh'
+    inputs: ['/plugins/sluice-board/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
+  # The Claude Code marketplace and every plugin it lists, validated.
+  plugin-manifests:
+    command: 'plugins/check-manifests.sh'
+    inputs: ['/.claude-plugin/**/*', '/plugins/**/*', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
   # The herdr plugin's scripts against stand-in herdr and sluice, under sh
