@@ -18,7 +18,10 @@ doc=$(jq -c -e 'select(.schema == "sluice/overview@1" and (.host | type) == "str
       | .depth //= 0 | .recent = [(.recent // [])[] | objects]
       | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
       | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []]]
-  | .sessions //= [] | .previews //= []' 2>/dev/null) || {
+  | .sessions //= [] | .previews //= []
+  # Nothing a document says is shown with its control characters: a task or
+  # path holding an escape would reach the terminal as one.
+  | walk(if type == "string" then gsub("[[:cntrl:]]"; "") else . end)' 2>/dev/null) || {
   say "$source_name printed a line it cannot read as an overview document; keeping the last good one"
   exit 0
 }

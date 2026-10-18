@@ -60,6 +60,9 @@ EOF2
   focus_pane "$p" "$t" "$w"
   ;;
 log)
+  # The test's name from the document that names the log, never from the
+  # link, which any output can print with anything in it.
+  task=$(printf '%s' "$docs" | jq -r --arg p "$path" '[.[].branches[].candidates[].failed[] | select(.log == $p) | .task] | first // empty')
   named=$(printf '%s' "$docs" | jq -r --arg p "$path" '[.[].branches[].candidates[].failed[].log] | any(. == $p)')
   if [ "$named" != true ]; then
     say "a link to a log no combination's failed tests name, left alone: $path"
@@ -71,10 +74,10 @@ log)
   [ -n "$target" ] || target=${HERDR_PANE_ID:-}
   if [ -n "$target" ]; then
     hd plugin pane open --plugin agentplot.sluice --entrypoint log --placement split --direction right \
-      --target-pane "$target" --env "SLUICE_HERDR_LOG=$path" --env "SLUICE_HERDR_TASK=$(param task)" >/dev/null 2>&1
+      --target-pane "$target" --env "SLUICE_HERDR_LOG=$path" --env "SLUICE_HERDR_TASK=$task" >/dev/null 2>&1
   else
     hd plugin pane open --plugin agentplot.sluice --entrypoint log --placement split --direction right \
-      --env "SLUICE_HERDR_LOG=$path" --env "SLUICE_HERDR_TASK=$(param task)" >/dev/null 2>&1
+      --env "SLUICE_HERDR_LOG=$path" --env "SLUICE_HERDR_TASK=$task" >/dev/null 2>&1
   fi
   ;;
 esac

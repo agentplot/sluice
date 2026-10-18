@@ -596,7 +596,7 @@ feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = $one | $logged 
 sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sRr @uri)" 2>"$t/err"
 has "notification show sluice: no pane for $cafe"
 HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
-has '--env SLUICE_HERDR_LOG=/logs/é/tést.log'
+has '--env SLUICE_HERDR_LOG=/logs/é/tést.log --env SLUICE_HERDR_TASK=tést'
 [ -s "$t/err" ] && fail "logged: $(cat "$t/err")"
 pass
 
@@ -637,6 +637,18 @@ SLUICE_HERDR_LOG=$t/cli.log sh "$plugin/bin/log.sh" <"$t/keys" >/dev/null
 kill "$writer" 2>/dev/null
 out=$(printf q | SLUICE_HERDR_LOG=/nowhere/cli.log sh "$plugin/bin/log.sh")
 printf '%s\n' "$out" | grep -qx 'cannot read /nowhere/cli.log' || fail "said: $out"
+pass
+
+fresh 'status: no control characters from a link or a document'
+logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}, {task: "evil\u001b]52;c;eA==\u0007", log: "/logs/c9/evil.log"}]}]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' testing)] | $logged | $blamed87")"
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=%1b]52;c;eA==%07"
+has '--env SLUICE_HERDR_TASK=cli:test'
+e=$(printf '\033')
+grep -q "$e" "$FAKE/herdr-calls" && fail "an escape reached herdr: $(cat -v "$FAKE/herdr-calls")"
+out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --once)
+printf '%s' "$out" | grep -q "$e" && fail "an escape reached the popup: $(printf '%s' "$out" | cat -v)"
+printf '%s' "$out" | grep -q 'log of evil\]52;c;eA==' || fail "the cleaned task is not shown: $out"
 pass
 
 fresh 'status: a number does what a click does'

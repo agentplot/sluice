@@ -3,7 +3,9 @@
 # else its last 200 lines until q.
 set -u
 log=${SLUICE_HERDR_LOG:-}
-[ -n "${SLUICE_HERDR_TASK:-}" ] && printf 'log of %s\n\n' "$SLUICE_HERDR_TASK"
+# The test's name as shown, with no control characters.
+task=$(printf '%s' "${SLUICE_HERDR_TASK:-}" | tr -d '\000-\037\177')
+[ -n "$task" ] && printf 'log of %s\n\n' "$task"
 if [ ! -r "$log" ]; then
   echo "cannot read $log"
 elif command -v less >/dev/null 2>&1 && [ -t 1 ]; then
