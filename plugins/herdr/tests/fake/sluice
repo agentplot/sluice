@@ -1,0 +1,32 @@
+#!/bin/sh
+# A stand-in sluice: logs each call with where it ran, and answers from
+# the test's files, keyed by the directory's name.
+here=$(basename "$PWD")
+printf '%s: %s\n' "$here" "$*" >>"$FAKE/sluice-calls"
+# An older sluice, before overview.
+if [ -f "$FAKE/old" ] && [ "$1" = overview ]; then
+  echo "error: unrecognized subcommand 'overview'" >&2
+  exit 2
+fi
+[ "$*" = --version ] && echo "sluice 0.11.0" && exit 0
+case "$*" in
+"overview --watch --json")
+  [ -f "$FAKE/watch-$here.jsonl" ] || exit 1
+  cat "$FAKE/watch-$here.jsonl"
+  # Held open, as a real watch is, while the test wants it.
+  while [ -f "$FAKE/hold" ]; do sleep 1; done
+  ;;
+"overview --json")
+  [ -f "$FAKE/probe-sleep" ] && sleep "$(cat "$FAKE/probe-sleep")"
+  if [ -f "$FAKE/overview-$here.json" ]; then cat "$FAKE/overview-$here.json"; else
+    printf '{"schema":"sluice/overview@1","host":"test","repository":"%s","at":"2026-10-16T19:45:10Z","branches":[],"sessions":[],"previews":[]}\n' "$PWD"
+  fi
+  ;;
+"status "*" --json")
+  cat "$FAKE/status-$2.json" 2>/dev/null || exit 1
+  ;;
+"submit "*" --check --json")
+  [ -f "$FAKE/check-sleep" ] && sleep "$(cat "$FAKE/check-sleep")"
+  cat "$FAKE/check.json" 2>/dev/null || echo '{"conflict":null}' ;;
+*) exit 2 ;;
+esac

@@ -1,0 +1,17 @@
+REPO on host-a
+
+main at 9ecc34a · 3 submissions · 1 combination under test (up to 4 at once)
+  TESTING
+    ▶ testing main+#12+#13  2m10s / 15m
+        #check-fast #check-tools · sandbox
+  QUEUED
+    #12 testing   overview-docs claude
+    #13 testing   plugin-board claude
+    #14 queued    PR 41 herdr
+  RECENT
+    ✗ 19:42 #9 blamed on 4f1c2aa
+    ✓ 19:41 #11 landed as 9ecc34a
+
+0 worktrees held · 0 previews
+
+q close · j jump to the blamed submission's pane · a every repository

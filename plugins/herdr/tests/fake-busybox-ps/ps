@@ -1,0 +1,6 @@
+#!/bin/sh
+# A ps like busybox's: no lstart, no -p; it lists every process.
+case " $* " in
+*lstart* | *" -p "*) echo "ps: unknown option" >&2 && exit 1 ;;
+esac
+exec /bin/ps -A -o pid,args

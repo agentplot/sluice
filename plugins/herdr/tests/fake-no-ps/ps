@@ -1,0 +1,4 @@
+#!/bin/sh
+# A ps that cannot run, as in sluice's sandbox on macOS.
+echo "sh: /bin/ps: Operation not permitted" >&2
+exit 126
