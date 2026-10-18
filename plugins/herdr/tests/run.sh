@@ -365,7 +365,11 @@ printf '%s\tpid:%s:%s\n' "$orphan" "$orphan" "$dead" >"$S/run/$dead/y.pids"
 PATH="$here/fake-no-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log"
 kill -0 "$orphan" 2>/dev/null || fail "a pid that could not be checked was ended"
 kill "$orphan" 2>/dev/null
-[ "$(grep -c 'cannot tell an ended watcher' "$t/log")" = 1 ] || fail "not said once: $(cat "$t/log")"
+# Said where nothing can be read; with /proc (Linux) the pid-only lines
+# are simply no one's.
+if [ ! -r /proc/$$/stat ]; then
+  [ "$(grep -c 'cannot tell an ended watcher' "$t/log")" = 1 ] || fail "not said once: $(cat "$t/log")"
+fi
 pass
 
 fresh 'watch: a pid used again by another process is left alone'
