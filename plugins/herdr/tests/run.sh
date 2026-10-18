@@ -614,6 +614,19 @@ sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sR
 has "notification show sluice: no pane for $cafe"
 HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
 has '--env SLUICE_HERDR_LOG=/logs/é/tést.log --env SLUICE_HERDR_TASK=tést'
+# Again with gawk as awk in a UTF-8 locale, where a decoder not in the C
+# locale makes %C3%A9 two characters.
+if command -v gawk >/dev/null 2>&1; then
+  mkdir -p "$t/gawk"
+  ln -s "$(command -v gawk)" "$t/gawk/awk"
+  : >"$FAKE/herdr-calls"
+  PATH="$t/gawk:$PATH" LC_ALL=C.UTF-8 sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sRr @uri)" 2>>"$t/err"
+  has "notification show sluice: no pane for $cafe"
+  PATH="$t/gawk:$PATH" LC_ALL=C.UTF-8 HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
+  has '--env SLUICE_HERDR_LOG=/logs/é/tést.log'
+else
+  echo "note: $name: no gawk here, so the UTF-8 gawk case did not run"
+fi
 [ -s "$t/err" ] && fail "logged: $(cat "$t/err")"
 pass
 
