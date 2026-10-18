@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import type { Overview } from '../types'
-import { NOW, overview } from './fixture'
+import { NOW, overview, withTasks } from './fixture'
 
 const ROOT = '/work/sluice/plugin-board'
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false }
@@ -88,6 +88,27 @@ test('the band and the pane show the queue on every surface', async ($, on) => {
     expect(link?.props.href).toBe('https://github.com/agentplot/sluice/pull/41')
     await pane.unmount()
   }
+})
+
+test("a combination's tasks: the count and bar in the band, the list in the pane alone", async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.set(NOW)
+  const seen = { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] }
+  host(on, [withTasks()], seen)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+
+  const band = await $.ui.mount({ plugin: 'sluice-board', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: /testing main\+#12\+#13 3\/5 ▓▓▓▓▓▓░░░░ 2m10s\/15m/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /sluice:e2e/ })).toBeUndefined()
+  await band.unmount()
+
+  const pane = await $.ui.mount({ plugin: 'sluice-board', surface: 'terminal', component: 'Pane', props: PANE, requestId: 'sluice' })
+  expect(await pane.find({ type: 'Text', text: /▶ testing main\+#12\+#13\s+3\/5 ▓▓▓▓▓▓░░░░\s+2m10s \/ 15m/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /✓ sluice:test\s+1m48s/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /… sluice:e2e\s+running/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /· core:test\s+waiting/ })).toBeDefined()
+  await pane.unmount()
 })
 
 test("a blame of this session's submission starts one turn naming the test and its log", async ($, on) => {

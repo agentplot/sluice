@@ -7,7 +7,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Mine, Outcome, Overview } from '../types'
+import type { Mine, Outcome, Overview, OverviewTask } from '../types'
 import {
   bandLines,
   combination,
@@ -19,16 +19,25 @@ import {
   learn,
   limit,
   outcomes,
+  progress,
   recentKeys,
   recentWords,
   since,
   statusLine,
   submitted,
+  taskLines,
   testing,
   wakeText,
 } from './board'
 
 const PANE = 'sluice'
+const TASK_COLOR: Record<OverviewTask['state'], string | undefined> = {
+  passed: 'green',
+  replayed: 'green',
+  failed: 'red',
+  running: 'yellow',
+  waiting: undefined,
+}
 const NO_ONE: Mine = { root: null, ids: [], pulls: [] }
 
 const doc = atom({ plugin: 'sluice-board', key: 'doc' } as const, null)
@@ -196,6 +205,7 @@ export const register: Register = (on, options) => {
                 <Box key={`cand-${b.branch}-${c.id}`} flexDirection="column">
                   <Text color="yellow">
                     ▶ testing {combination(b.branch, c.submissions)}
+                    {progress(c) ? `  ${progress(c)}` : ''}
                     {took === undefined ? '' : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ''}`}
                   </Text>
                   <Text dimColor>
@@ -203,6 +213,16 @@ export const register: Register = (on, options) => {
                     {c.targets.join(' ')}
                     {c.executor ? ` · ${c.executor}` : ''}
                   </Text>
+                  {taskLines(c).map(t => (
+                    <Text
+                      key={`task-${b.branch}-${c.id}-${t.text}`}
+                      color={TASK_COLOR[t.state]}
+                      dimColor={t.state === 'waiting'}
+                    >
+                      {'    '}
+                      {t.text}
+                    </Text>
+                  ))}
                 </Box>
               )
             })}

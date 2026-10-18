@@ -19,6 +19,15 @@ export type OverviewSubmission = {
   failed?: { task: string; log?: string }[]
 }
 
+/** One task of a run under test, as its runner says while it goes. */
+export type OverviewTask = {
+  target: string
+  state: 'waiting' | 'running' | 'passed' | 'failed' | 'replayed'
+  started?: string
+  ended?: string
+  exit?: number
+}
+
 export type OverviewCandidate = {
   id: string
   submissions: number[]
@@ -31,6 +40,8 @@ export type OverviewCandidate = {
   ran: number
   replayed: number
   failed: { task: string; log?: string }[]
+  /** Present while the runner says how far its tasks have got. */
+  tasks?: OverviewTask[]
 }
 
 export type OverviewBranch = {

@@ -28,8 +28,8 @@ Fast tier: `moon run ':#check-fast'`. Real tools:
 
 ## 5. The Claude Code board
 
-- [ ] 5.1 Add `OverviewTask` and `tasks?` to `types/index.d.ts`; add `count`, `bar` and `taskLines` to `hooks/board.ts`; add the count and bar to the band and the pane and the task list to the pane in `register.tsx`; verify `claude plugin test plugins/sluice-board` with the fixture's combination given tasks.
-- [ ] 5.2 Describe the count, the bar and the task list in `guides/claude-code.md`; verify Vale reports nothing.
+- [x] 5.1 Add `OverviewTask` and `tasks?` to `types/index.d.ts`; add `count`, `bar` and `taskLines` to `hooks/board.ts`; add the count and bar to the band and the pane and the task list to the pane in `register.tsx`; verify `claude plugin test plugins/sluice-board` with the fixture's combination given tasks.
+- [x] 5.2 Describe the count, the bar and the task list in `guides/claude-code.md`; verify Vale reports nothing.
 
 ## 6. Land
 
