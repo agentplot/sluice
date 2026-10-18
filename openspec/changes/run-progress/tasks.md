@@ -18,8 +18,8 @@ Fast tier: `moon run ':#check-fast'`. Real tools:
 ## 3. The profiles
 
 - [x] 3.1 Keep the tasks under `.progress/` in `local_files`, written by rename and named as `.logs/` names; verify unit tests: put, replace, remove and read back, a branch with a slash, and no branch's `read` seeing them.
-- [ ] 3.2 Add `Meta.started` and `Checks::tasks`, with `Moon::tasks` reading the run's checkpoints and each planned target's `lastRun.json`, and the command runner giving none; verify unit tests from fixture output and records. Cover a start, an end, a cached end, a failed exit, a stale `lastRun.json` from before the run, colour codes, and a task's own output that looks like a checkpoint.
-- [ ] 3.3 Add `a_run_shows_each_task_as_it_ends` to `tests/profiles/moon.rs`: one task waits on a flag file while another ends, and the test reads `passed` and `running` before the flag and every task ended after it; verify `cargo test -p sluice --features tools --test moon`.
+- [x] 3.2 Add `Meta.started` and `Checks::tasks`, with `Moon::progress` reading the run's checkpoints and each planned target's `lastRun.json`, and the command runner giving none; verify unit tests from fixture output and records. Cover a start, an end, a cached end, a failed exit, a stale `lastRun.json` from before the run, colour codes, and a task's own output that looks like a checkpoint.
+- [x] 3.3 Add `a_run_shows_each_task_as_it_ends` to `tests/profiles/moon.rs`: one task waits on a flag file while another ends, and the test reads `passed` and `running` before the flag and every task ended after it; verify `cargo test -p sluice --features tools --test moon`.
 
 ## 4. The CLI and its reference
 

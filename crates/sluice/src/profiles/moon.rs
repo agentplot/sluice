@@ -20,13 +20,16 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
-use sluice_seams::{Outcome, Source, TaskResult};
+use sluice_seams::{Outcome, Source, TaskProgress, TaskResult, TaskState};
 
 use super::checks::{Context, Plan};
 use crate::runs::Ended;
 
 /// The run report, relative to the place.
 const REPORT: &str = ".moon/cache/runReport.json";
+
+/// What starts each of moon's checkpoint lines in a run's output.
+const CHECKPOINT: &str = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} ";
 
 /// The oldest moon the runner reads: 2.6 added `wait` and `cleanup`
 /// dependencies, which a repository's checks use to bring up what they
@@ -159,6 +162,57 @@ impl Moon {
         };
         let report: Value = serde_json::from_slice(&report).context("reading moon's run report")?;
         Ok(read_report(&report, targets, host))
+    }
+
+    /// ADR 0028: where each of `targets` has got in a run still going,
+    /// started at `started_ms` (milliseconds since the epoch), from what
+    /// moon writes as it goes. A task's end is its run record,
+    /// `.moon/cache/states/<project>/<task>/lastRun.json` in the place,
+    /// written at or after the run's start (C.2); its start, its time and
+    /// whether it was answered from the cache are moon's checkpoints in
+    /// the run's output. Never a result: the run report is (37, 38).
+    pub fn progress(
+        &self,
+        place: &Path,
+        output: &[u8],
+        targets: &[String],
+        started_ms: i64,
+    ) -> Vec<TaskProgress> {
+        let marks = checkpoints(output);
+        targets
+            .iter()
+            .map(|target| {
+                let mark = marks.get(target.as_str());
+                let ended = last_run(place, target).filter(|r| r.at >= started_ms);
+                let Some(r) = ended else {
+                    return TaskProgress {
+                        target: target.clone(),
+                        state: if mark.is_some() {
+                            TaskState::Running
+                        } else {
+                            TaskState::Waiting
+                        },
+                        started: None,
+                        ended: None,
+                        exit: None,
+                    };
+                };
+                let cached = mark.is_some_and(|m| m.cached);
+                let state = match (cached, r.exit) {
+                    (true, _) => TaskState::Replayed,
+                    (false, 0) => TaskState::Passed,
+                    (false, _) => TaskState::Failed,
+                };
+                let took = mark.and_then(|m| m.took).filter(|_| !cached);
+                TaskProgress {
+                    target: target.clone(),
+                    state,
+                    started: took.map(|ms| timestamp(r.at - ms)),
+                    ended: Some(timestamp(r.at)),
+                    exit: (!cached).then_some(r.exit),
+                }
+            })
+            .collect()
     }
 
     /// The tool versions the place's `.prototools` lists, installed. Only
@@ -334,6 +388,116 @@ fn read_report(report: &Value, targets: &[String], host: &str) -> Vec<TaskResult
     out
 }
 
+/// A task's run record as moon writes it when the task ends.
+struct LastRun {
+    exit: i32,
+    /// `lastRunTime`, milliseconds since the epoch.
+    at: i64,
+}
+
+fn last_run(place: &Path, target: &str) -> Option<LastRun> {
+    let (project, task) = target.split_once(':')?;
+    let path = place
+        .join(".moon/cache/states")
+        .join(project)
+        .join(task)
+        .join("lastRun.json");
+    let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    Some(LastRun {
+        exit: i32::try_from(v.get("exitCode")?.as_i64()?).ok()?,
+        at: v.get("lastRunTime")?.as_i64()?,
+    })
+}
+
+/// What moon's checkpoints said of one task: `▮▮▮▮ a:test (f8bf095b)` as
+/// it starts, `▮▮▮▮ a:test (1s 65ms, f8bf095b)` as it ends, and
+/// `▮▮▮▮ b:test (cached, b7d5ce19)` for a task answered from the cache,
+/// which has no start line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Mark {
+    cached: bool,
+    /// How long it took, in milliseconds, once it ended.
+    took: Option<i64>,
+}
+
+/// Each task moon's checkpoints name in a run's output. A task's own
+/// output is prefixed with its target, so no line of it is a checkpoint.
+fn checkpoints(output: &[u8]) -> BTreeMap<String, Mark> {
+    let mut out: BTreeMap<String, Mark> = BTreeMap::new();
+    for line in output.split(|b| *b == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        if !line.contains('\u{25AE}') {
+            continue;
+        }
+        let plain = plain(line);
+        let Some(rest) = plain.strip_prefix(CHECKPOINT) else {
+            continue;
+        };
+        let rest = rest.trim_end();
+        let Some((target, inner)) = rest.split_once(" (") else {
+            continue;
+        };
+        let Some(inner) = inner.strip_suffix(')') else {
+            continue;
+        };
+        let parts: Vec<&str> = inner.split(", ").collect();
+        let mark = out.entry(target.to_string()).or_default();
+        if parts.contains(&"cached") {
+            mark.cached = true;
+        }
+        if let Some(took) = parts.iter().find_map(|p| duration_ms(p)) {
+            mark.took = Some(took);
+        }
+    }
+    out
+}
+
+/// A line with its colour codes taken out: an escape, `[`, and
+/// everything up to its final letter.
+fn plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// One of moon's durations, `2m 3s`, `1s 65ms` or `1ms`, in milliseconds.
+fn duration_ms(text: &str) -> Option<i64> {
+    let mut total = 0.0;
+    for word in text.split(' ') {
+        let at = word.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+        let n: f64 = word[..at].parse().ok()?;
+        total += n * match &word[at..] {
+            "ms" => 1.0,
+            "s" => 1_000.0,
+            "m" => 60_000.0,
+            "h" => 3_600_000.0,
+            _ => return None,
+        };
+    }
+    Some(total.round() as i64)
+}
+
+fn timestamp(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +549,89 @@ mod tests {
                 ("c:test", "h3", Outcome::Fail, false),
             ]
         );
+    }
+
+    /// Checkpoints and run records as moon 2.6.1 writes them while a run
+    /// goes (ADR 0028; the change's design, D3).
+    #[test]
+    fn a_runs_tasks_from_its_checkpoints_and_run_records() {
+        let place =
+            std::env::temp_dir().join(format!("sluice-moon-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&place);
+        let record = |target: &str, exit: i32, at: i64| {
+            let (p, t) = target.split_once(':').unwrap();
+            let dir = place.join(".moon/cache/states").join(p).join(t);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("lastRun.json"),
+                format!(r#"{{"exitCode":{exit},"hash":"","lastRunTime":{at},"outputGlobsHash":"","target":"{target}"}}"#),
+            )
+            .unwrap();
+        };
+        let start = 1_792_341_193_000;
+        record("a:test", 0, start + 1_601);
+        record("b:test", 0, start + 5_000);
+        record("c:test", 3, start + 2_651);
+        // From a run before this one: no end of this run's.
+        record("d:test", 1, start - 60_000);
+        record("e:test", 0, start + 900);
+        let output = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} a:test (f8bf095b)\n\
+            \u{25AE}\u{25AE}\u{25AE}\u{25AE} c:test (3cf5763d)\n\
+            \u{1b}[2m\u{25AE}\u{25AE}\u{25AE}\u{25AE}\u{1b}[0m \u{1b}[1mf:test\u{1b}[0m (0a1b2c3d)\n\
+            a:test | \u{25AE}\u{25AE}\u{25AE}\u{25AE} g:test (1s, 99999999)\n\
+            \u{25AE}\u{25AE}\u{25AE}\u{25AE} a:test (1s 65ms, f8bf095b)\n\
+            \u{25AE}\u{25AE}\u{25AE}\u{25AE} e:test (cached, b7d5ce19)\n\
+            \u{25AE}\u{25AE}\u{25AE}\u{25AE} c:test (2s 108ms, 3cf5763d)\n";
+        let targets: Vec<String> = ["a:test", "c:test", "d:test", "e:test", "f:test", "g:test"]
+            .map(String::from)
+            .to_vec();
+        let got = Moon.progress(&place, output.as_bytes(), &targets, start);
+        let short: Vec<(&str, TaskState, Option<&str>, Option<&str>, Option<i32>)> = got
+            .iter()
+            .map(|t| {
+                (
+                    t.target.as_str(),
+                    t.state,
+                    t.started.as_deref(),
+                    t.ended.as_deref(),
+                    t.exit,
+                )
+            })
+            .collect();
+        assert_eq!(
+            short,
+            vec![
+                (
+                    "a:test",
+                    TaskState::Passed,
+                    Some("2026-10-18T16:33:13Z"),
+                    Some("2026-10-18T16:33:14Z"),
+                    Some(0)
+                ),
+                (
+                    "c:test",
+                    TaskState::Failed,
+                    Some("2026-10-18T16:33:13Z"),
+                    Some("2026-10-18T16:33:15Z"),
+                    Some(3)
+                ),
+                ("d:test", TaskState::Waiting, None, None, None),
+                (
+                    "e:test",
+                    TaskState::Replayed,
+                    None,
+                    Some("2026-10-18T16:33:13Z"),
+                    None
+                ),
+                ("f:test", TaskState::Running, None, None, None),
+                ("g:test", TaskState::Waiting, None, None, None),
+            ]
+        );
+        assert_eq!(duration_ms("2m 3s"), Some(123_000));
+        assert_eq!(duration_ms("1s 65ms"), Some(1_065));
+        assert_eq!(duration_ms("f8bf095b"), None);
+        assert_eq!(duration_ms("cached"), None);
+        std::fs::remove_dir_all(&place).unwrap();
     }
 
     #[test]

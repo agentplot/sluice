@@ -118,7 +118,7 @@ as sluice's supervisor has it:
 - **moon's `--log`** goes to stderr even with `--log-file`, so it
   would flood the run's output. It is not used.
 
-`Moon::tasks` takes the planned targets from the run's request, and
+`Moon::progress` takes the planned targets from the run's request, and
 reads the run's output and each target's `lastRun.json`:
 
 | Seen | State | Times |
@@ -128,8 +128,9 @@ reads the run's output and each target's `lastRun.json`:
 | a start checkpoint, no end | `running` | none: checkpoints carry no clock time |
 | nothing | `waiting` | none |
 
-Only a line that starts with the checkpoint mark and names a planned
-target counts, after colour codes are stripped. The run's start is
+moon writes a task's run record a moment before its end checkpoint, so
+an ended task can lack `started` until the next round. Only a line that
+starts with the checkpoint mark and names a planned target counts, after colour codes are stripped. The run's start is
 recorded in the run's request (`Meta.started`). The command runner
 returns no tasks, since its one task's state is the run's own.
 

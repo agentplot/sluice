@@ -104,6 +104,10 @@ struct Meta {
     targets: Vec<String>,
     executor: Enforced,
     host: String,
+    /// When the run started, in milliseconds since the epoch: a task's run
+    /// record from before it is no end of this run's (ADR 0028).
+    #[serde(default)]
+    started_ms: Option<i64>,
 }
 
 /// The check seam's profile, for the repository whose common dir is
@@ -629,6 +633,7 @@ impl Tests for Checks {
             targets: plan.targets,
             executor,
             host: hostname(),
+            started_ms: Some(chrono::Utc::now().timestamp_millis()),
         };
         self.runs.start(
             name,
@@ -702,8 +707,19 @@ impl Tests for Checks {
             .collect())
     }
 
-    fn tasks(&self, _run: &RunHandle) -> Result<Vec<TaskProgress>> {
-        Ok(Vec::new())
+    /// ADR 0028: the moon runner's tasks while the run goes; the command
+    /// runner's one task is the run itself, so it says nothing.
+    fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>> {
+        if !matches!(self.runs.state(&run.0)?, RunState::Running) {
+            return Ok(Vec::new());
+        }
+        let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
+            .with_context(|| format!("reading run {}", run.0))?;
+        let (Some(started), "moon") = (meta.started_ms, meta.runner.as_str()) else {
+            return Ok(Vec::new());
+        };
+        let out = std::fs::read(self.runs.dir(&run.0).join("out.log")).unwrap_or_default();
+        Ok(Moon.progress(&meta.place, &out, &meta.targets, started))
     }
 }
 
