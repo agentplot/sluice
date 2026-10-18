@@ -18,9 +18,12 @@ entry whose action logged its environment), driven through the socket's
   `link_handler_id`, and the focused pane's id and cwd.
 - A popup has no pane id, so `pane.link.activate` cannot reach one, and
   herdr's docs say a popup receives all terminal input. Whether a real
-  Ctrl-click inside a popup reaches the link handlers was not settled: the
-  probe's client on a pseudo-terminal did not render the popup's rows where
-  they could be clicked. Task 1.1 settles it.
+  Ctrl-click inside a popup reaches the link handlers cannot be found by a
+  script: a herdr client on a pseudo-terminal, sent SGR mouse events with
+  the Ctrl bit (with and without a hover first) over rows that were links
+  across their whole width, ran no handler even in a tiled pane, where
+  `pane.link.activate` does. Only a person's Ctrl-click answers it, in the
+  live try (task 4.1); the numbered keys of D3 do not wait on the answer.
 - `herdr plugin pane open` takes `--placement split`, `--direction`,
   `--target-pane` and `--env`, which is how the log split is opened.
 

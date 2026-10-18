@@ -9,7 +9,8 @@ herdr with its own `XDG_CONFIG_HOME` and session.
 
 ## 1. What herdr does in a popup
 
-- [ ] 1.1 On a throwaway herdr with a client on a pseudo-terminal, Ctrl-click an OSC 8 `sluice-herdr:` link inside a plugin popup (an SGR mouse event with the Ctrl bit, sent to the client), and record in design.md's Context whether the link handler ran; verify by the probe action's log.
+- [x] 1.1 On a throwaway herdr with a client on a pseudo-terminal, Ctrl-click an OSC 8 `sluice-herdr:` link inside a plugin popup (an SGR mouse event with the Ctrl bit, sent to the client), and record in design.md's Context whether the link handler ran; verify by the probe action's log.
+  Recorded 2026-10-18: the scripted client's Ctrl-clicks ran no handler even in a tiled pane (the control), so a script cannot answer it; a person's Ctrl-click in task 4.1 does. The gate cannot run this one: it needs a person's mouse on a real terminal.
 
 ## 2. herdr: rows as data, and links
 
@@ -26,7 +27,7 @@ herdr with its own `XDG_CONFIG_HOME` and session.
 
 ## 4. Close
 
-- [ ] 4.1 Try it live on a throwaway herdr with Claude Code in two worktrees: Ctrl-click a submission and a failure on the dashboard, the numbers in the popup, a failure expanded on the board; verify by hand and in the plugin's log.
+- [ ] 4.1 Try it live on a throwaway herdr with Claude Code in two worktrees: Ctrl-click a submission and a failure on the dashboard and in the popup (recording in design.md whether the popup's Ctrl-click reaches herdr), the numbers in the popup, a failure expanded on the board; verify by hand and in the plugin's log. By hand because the gate has no person's mouse; every behaviour it checks also has a test in plugin-herdr or plugin-board.
 - [ ] 4.2 Run `moon run ':#check-fast'` and `openspec validate clickable-rows --strict`; verify both pass, then land with `sluice submit main`.
 
 ## Workflow follow-up
