@@ -25,5 +25,21 @@ pull request.
 
 This is a mod: Claude Code's function-hooks API, early access. It is kept
 apart from the `sluice` plugin's skills so a Claude Code release that changes
-the API cannot take the skills with it. Tests: `claude plugin test
-plugins/sluice-board`.
+the API cannot take the skills with it.
+
+## Checks
+
+`moon run root:plugin-board` (check-fast) runs `tests/check.sh`:
+`claude plugin validate --strict`, `tsc -p` and `claude plugin test`, with
+the Claude Code and TypeScript `devenv.nix` pins, a scratch home and no
+network. `tsconfig.json` types the modules against `engine-types/`, the
+declarations the pinned Claude Code lays beside a mod it loads, so the gate
+and an editor read the same ones. The engine leaves a mod's own
+`tsconfig.json` alone; what it lays in `.claude-plugin/types/` ignores
+itself.
+
+To move the pin: change the version and the checksums in `devenv.nix`,
+start a session of that release with `claude --plugin-dir
+plugins/sluice-board`, and copy `.claude-plugin/types/claude-code` and
+`.claude-plugin/types/claude-code-tools` over `engine-types/`. The check
+fails, naming both, while the pin and the types' release differ.
