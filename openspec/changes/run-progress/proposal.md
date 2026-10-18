@@ -56,7 +56,7 @@ Out of scope:
 
 - **The seams:** `TaskProgress` and `TaskState`, `Tests::tasks`, and
   `State::progress` and `State::put_progress`.
-- **The core:** the round's poll records and sweeps the tasks;
+- **The core:** each round keeps and sweeps the tasks before it writes;
   `overview::branch_view` reads them into `CandidateView.tasks`.
 - **The profiles:**
   - `local_files` keeps tasks at `<common>/sluice/.progress/<branch>/<id>.json`;

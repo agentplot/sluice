@@ -71,10 +71,12 @@ entry's state or a verdict (26), nor a run (16), and B.2's `run` (37,
 
 ### D2. The round writes them
 
-The round's poll already asks the check seam after each run under test,
-under the branch's lock. For a run still going it now also calls
-`Tests::tasks(run)` and writes what comes back, when it differs from
-what is kept. At the end of the poll it removes the tasks of every
+The round already holds the branch's lock and asks the check seam after
+each run under test. Just before it writes, it calls `Tests::tasks(run)`
+for each candidate still under test, and keeps exactly what comes back
+when that differs from what is kept. An empty answer removes what was
+kept, so a lost run started again on the same candidate never shows the
+tasks of the run before. The round also removes the tasks of every
 candidate no longer under test: finished, lost or dropped alike. It is
 the core that writes, so no profile calls the records seam (rule
 core.2), and `sluice run` and `sluice step` behave alike (rule

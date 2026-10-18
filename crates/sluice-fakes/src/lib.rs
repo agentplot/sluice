@@ -19,7 +19,8 @@ use sluice_seams::{
     Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
     LastResult, Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress,
     ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskResult, Tests, Written,
+    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
+    Written,
 };
 
 /// A tree: path to content.
@@ -96,6 +97,10 @@ struct Inner {
     skip: BTreeSet<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
+    /// What each run says of its tasks while it goes, by run.
+    run_tasks: BTreeMap<usize, Vec<TaskProgress>>,
+    /// Asking after a run's tasks fails from now.
+    tasks_fail: bool,
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
@@ -140,6 +145,8 @@ struct Inner {
     crash_notify: bool,
     // the records
     lines: BTreeMap<String, Line>,
+    /// Each branch's candidates' tasks, kept beside its records.
+    progress: BTreeMap<String, BTreeMap<String, Vec<TaskProgress>>>,
     results: Vec<u8>,
     next_id: u64,
     crash_writes: usize,
@@ -433,6 +440,22 @@ impl World {
             }
         }
         assert!(any, "no run on {revision}");
+    }
+
+    /// The live run on `revision` says this of its tasks until it ends.
+    pub fn says_tasks(&self, revision: &Rev, tasks: &[TaskProgress]) {
+        let mut inner = self.0.borrow_mut();
+        let n = inner
+            .runs
+            .iter()
+            .rposition(|r| r.request.revision == *revision && r.live())
+            .unwrap_or_else(|| panic!("no live run on {revision}"));
+        inner.run_tasks.insert(n, tasks.to_vec());
+    }
+
+    /// Asking after a run's tasks fails from now.
+    pub fn tasks_fail(&self, fail: bool) {
+        self.0.borrow_mut().tasks_fail = fail;
     }
 
     pub fn complete_all(&self) {
@@ -1044,6 +1067,19 @@ impl Tests for FakeTests {
             })
             .collect())
     }
+
+    fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>> {
+        let inner = self.0 .0.borrow();
+        if inner.tasks_fail {
+            bail!("reading {}'s tasks failed", run.0);
+        }
+        let n: usize = run
+            .0
+            .strip_prefix("run-")
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| anyhow!("no run {}", run.0))?;
+        Ok(inner.run_tasks.get(&n).cloned().unwrap_or_default())
+    }
 }
 
 impl FakeCheckout {
@@ -1520,6 +1556,40 @@ impl State for FakeState {
                 }
             })
             .collect())
+    }
+
+    fn progress(&self, branch: &str) -> Result<BTreeMap<String, Vec<TaskProgress>>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .progress
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn put_progress(
+        &self,
+        branch: &str,
+        candidate: &str,
+        tasks: Option<&[TaskProgress]>,
+    ) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        // As a round's: kept under the branch's lock (rule core.14).
+        if !inner.lines.get(branch).is_some_and(|l| l.locked) {
+            bail!("keeping {branch}'s tasks without holding its lock");
+        }
+        let kept = inner.progress.entry(branch.into()).or_default();
+        match tasks {
+            Some(t) => {
+                kept.insert(candidate.into(), t.to_vec());
+            }
+            None => {
+                kept.remove(candidate);
+            }
+        }
+        Ok(())
     }
 }
 

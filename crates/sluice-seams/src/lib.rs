@@ -460,6 +460,43 @@ pub enum Progress {
     Lost,
 }
 
+/// Where one task of a run still going has got, as its runner tells it.
+/// No run and no result (16, 38): no verdict, gate, blame or result reads
+/// it (rules core.7, core.9; ADR 0028).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskProgress {
+    /// The task, as the runner names it.
+    pub target: String,
+    pub state: TaskState,
+    /// When it started, RFC 3339, where the runner says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// When it ended, RFC 3339, once it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<String>,
+    /// Its exit code, once it has ended and was run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskState {
+    Waiting,
+    Running,
+    Passed,
+    Failed,
+    /// Answered from the runner's cache, as the runner says (38).
+    Replayed,
+}
+
+impl TaskState {
+    /// Whether the task has ended, however.
+    pub fn ended(self) -> bool {
+        matches!(self, Self::Passed | Self::Failed | Self::Replayed)
+    }
+}
+
 pub trait Tests {
     /// 36, 37, 83: start the required checks the candidate affects since
     /// `request.since`, in a place, as one process group under the time
@@ -486,6 +523,11 @@ pub trait Tests {
     /// still exists: the run's own output for a task with none of its
     /// own. Only the end of a long output is kept.
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>>;
+
+    /// ADR 0028: where each task of a run still going has got, for a
+    /// person to read; empty when the runner says nothing until the run
+    /// ends. Never a result (37, 38).
+    fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
 }
 
 /// What one task printed in a run, or where it is kept.
@@ -751,4 +793,18 @@ pub trait State {
     /// running (26); the answer says where each is. Only the last
     /// `KEPT_LOGS` candidates of a branch keep theirs.
     fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>>;
+
+    /// ADR 0028: the tasks of each of the branch's candidates under test,
+    /// as last kept, by candidate. Beside the branch's records, never in
+    /// a `read` of them, and kept on the host that runs the candidate.
+    fn progress(&self, branch: &str) -> Result<BTreeMap<String, Vec<TaskProgress>>>;
+
+    /// Keep a candidate's tasks in place of those kept before, or, with
+    /// `None`, remove them. Moves no version (62).
+    fn put_progress(
+        &self,
+        branch: &str,
+        candidate: &str,
+        tasks: Option<&[TaskProgress]>,
+    ) -> Result<()>;
 }

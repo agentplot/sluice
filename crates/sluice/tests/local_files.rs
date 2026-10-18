@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use sluice::profiles::local_files::LocalFiles;
 use sluice_fakes::Fakes;
-use sluice_seams::{Changes, State, TaskLog, Written, KEPT_LOGS};
+use sluice_seams::{Changes, State, TaskLog, TaskProgress, TaskState, Written, KEPT_LOGS};
 use support::Scratch;
 
 fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
@@ -149,6 +149,53 @@ fn logs_are_kept_beside_the_records_and_only_the_last_ones() {
         .unwrap()
         .count();
     assert_eq!(kept, KEPT_LOGS);
+}
+
+/// ADR 0028: a run's tasks are kept beside the branch's records, under
+/// its lock, replaced whole and removed, and no read of the branch nor
+/// its version sees them.
+#[test]
+fn tasks_are_kept_beside_the_records_and_move_no_version() {
+    let dir = Scratch::new("progress");
+    let s = LocalFiles::new(dir.path());
+    let t = |target: &str, state: TaskState| TaskProgress {
+        target: target.into(),
+        state,
+        started: None,
+        ended: None,
+        exit: None,
+    };
+    let one = [t("a:test", TaskState::Running)];
+    assert!(s.put_progress("bolt/x", "c1", Some(&one)).is_err());
+    write(&s, "bolt/x", changes(&[("branch.json", "{}\n")], &[]));
+    {
+        let _g = s.lock("bolt/x").unwrap().unwrap();
+        s.put_progress("bolt/x", "c1", Some(&one)).unwrap();
+        let two = [
+            t("a:test", TaskState::Passed),
+            t("b:test", TaskState::Waiting),
+        ];
+        s.put_progress("bolt/x", "c2", Some(&two)).unwrap();
+        s.put_progress("bolt/x", "c2", Some(&two[..1])).unwrap();
+        let kept = s.progress("bolt/x").unwrap();
+        assert_eq!(kept["c1"], one);
+        assert_eq!(kept["c2"], two[..1]);
+        s.put_progress("bolt/x", "c1", None).unwrap();
+        s.put_progress("bolt/x", "c9", None).unwrap();
+    }
+    assert_eq!(
+        s.progress("bolt/x").unwrap().keys().collect::<Vec<_>>(),
+        ["c2"]
+    );
+    let r = s.read("bolt/x").unwrap();
+    assert_eq!(r.version, 1);
+    assert_eq!(r.files.keys().collect::<Vec<_>>(), ["branch.json"]);
+    assert_eq!(s.branches().unwrap(), ["bolt/x"]);
+    let file = dir.path().join("sluice/.progress/bolt/x/c2.json");
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    assert_eq!(doc["schema"], "sluice/progress@1");
+    assert_eq!(doc["tasks"][0]["state"], "passed");
+    assert!(s.progress("main").unwrap().is_empty());
 }
 
 #[test]

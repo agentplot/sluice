@@ -7,17 +7,17 @@ Fast tier: `moon run ':#check-fast'`. Real tools:
 
 ## 1. Decisions and rules
 
-- [ ] 1.1 Write ADR 0028; add the "Not ruled out" lines to core.7's and core.11's Details in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`; verify `openspec validate run-progress --strict` and Vale report nothing.
+- [x] 1.1 Write ADR 0028; add the "Not ruled out" lines to core.7's and core.11's Details in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`; verify `openspec validate run-progress --strict` and Vale report nothing.
 
 ## 2. The seams, the core and the fakes
 
-- [ ] 2.1 Add `TaskProgress` and `TaskState`, `Tests::tasks`, and `State::progress` and `State::put_progress`; implement them in `FakeTests` (scriptable per run, none by default) and `FakeState` (in memory), and add a shared scenario for both to `sluice-conformance`; verify `cargo check --workspace --all-targets --all-features`.
-- [ ] 2.2 In the round's poll, write a running candidate's tasks when they change, and remove the tasks of every candidate not under test; verify unit tests over the fakes. The tests check that tasks are kept while testing and gone once the run finishes or is lost. They also check that a task reading `failed` leaves a passing verdict and the results log as the finished run reports, that a write leaves the branch's version unchanged, and that an error from `tasks` fails no round.
-- [ ] 2.3 Give `CandidateView` its `tasks`, read in `Sluice::overview` and passed to `branch_view`; verify a unit test that only `starting` and `testing` candidates carry them.
+- [x] 2.1 Add `TaskProgress` and `TaskState`, `Tests::tasks`, and `State::progress` and `State::put_progress`; implement them in `FakeTests` (scriptable per run, none by default) and `FakeState` (in memory), and test them in `sluice-conformance/tests/progress.rs`; verify `cargo check --workspace --all-targets --all-features`.
+- [x] 2.2 In the round's poll, write a running candidate's tasks when they change, and remove the tasks of every candidate not under test; verify tests over the fakes. The tests check that tasks are kept while testing and gone once the run finishes or is lost, and gone when a lost run starts again and says nothing yet. They also check that a task reading `failed` leaves a passing verdict and the results log as the finished run reports, that a write leaves the branch's version unchanged, and that an error from `tasks` fails no round.
+- [x] 2.3 Give `CandidateView` its `tasks`, read in `Sluice::overview` and passed to `branch_view`; verify the progress tests over the fakes: a combination under test carries them, and one finished, lost or started again does not.
 
 ## 3. The profiles
 
-- [ ] 3.1 Keep the tasks under `.progress/` in `local_files`, written by rename and named as `.logs/` names; verify unit tests: put, replace, remove and read back, a branch with a slash, and no branch's `read` seeing them.
+- [x] 3.1 Keep the tasks under `.progress/` in `local_files`, written by rename and named as `.logs/` names; verify unit tests: put, replace, remove and read back, a branch with a slash, and no branch's `read` seeing them.
 - [ ] 3.2 Add `Meta.started` and `Checks::tasks`, with `Moon::tasks` reading the run's checkpoints and each planned target's `lastRun.json`, and the command runner giving none; verify unit tests from fixture output and records. Cover a start, an end, a cached end, a failed exit, a stale `lastRun.json` from before the run, colour codes, and a task's own output that looks like a checkpoint.
 - [ ] 3.3 Add `a_run_shows_each_task_as_it_ends` to `tests/profiles/moon.rs`: one task waits on a flag file while another ends, and the test reads `passed` and `running` before the flag and every task ended after it; verify `cargo test -p sluice --features tools --test moon`.
 

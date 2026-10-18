@@ -39,7 +39,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, Enforced, Limits, Network, Outcome, Place, Progress, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskLog, TaskResult, Tests,
+    RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -700,6 +700,10 @@ impl Tests for Checks {
                 }
             })
             .collect())
+    }
+
+    fn tasks(&self, _run: &RunHandle) -> Result<Vec<TaskProgress>> {
+        Ok(Vec::new())
     }
 }
 

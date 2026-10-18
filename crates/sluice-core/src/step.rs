@@ -463,6 +463,7 @@ impl Sluice<'_> {
             self.choose_starts(&mut line, &rules, &chain, &now)?;
         }
         derive_states(&mut line, &chain);
+        self.keep_tasks(&line)?;
         let queued = line.subs.values().filter(|s| !s.state.is_out()).count() as u64;
         let written = matches!(self.write(&line)?, Written::Written(_));
         if written {
@@ -473,6 +474,39 @@ impl Sluice<'_> {
             );
         }
         Ok(written)
+    }
+
+    /// ADR 0028: keep the tasks of each run still under test, as its
+    /// runner tells them, and drop those of every candidate no longer under
+    /// test. What is kept is what the runner says now. Beside the records,
+    /// read by no verdict (rules core.7, core.9): a runner that cannot say
+    /// leaves what was kept, and fails no round.
+    fn keep_tasks(&self, line: &Line) -> Result<()> {
+        let state = &self.seams.state;
+        let kept = state.progress(&line.branch)?;
+        let mut testing = BTreeSet::new();
+        for c in &line.doc.candidates {
+            let (CandidateState::Testing, Some(run)) = (c.state, c.run.as_ref()) else {
+                continue;
+            };
+            testing.insert(c.id.clone());
+            match self.seams.tests.tasks(run) {
+                Ok(tasks) if kept.get(&c.id).map(Vec::as_slice).unwrap_or_default() == tasks => {}
+                // A run started again on the candidate says nothing yet: the
+                // tasks of the run before go.
+                Ok(tasks) if tasks.is_empty() => state.put_progress(&line.branch, &c.id, None)?,
+                Ok(tasks) => state.put_progress(&line.branch, &c.id, Some(&tasks))?,
+                Err(e) => tracing::warn!(
+                    sluice.branch = %line.branch,
+                    sluice.candidate = %c.revision,
+                    "reading a run's tasks failed: {e:#}"
+                ),
+            }
+        }
+        for id in kept.keys().filter(|id| !testing.contains(*id)) {
+            state.put_progress(&line.branch, id, None)?;
+        }
+        Ok(())
     }
 
     /// Read every run that finished: record each check, pass and fail
