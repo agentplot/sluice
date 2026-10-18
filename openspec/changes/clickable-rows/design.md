@@ -104,8 +104,8 @@ expanded keys; an expanded failure shows under its row the test's name, its
 log path and its last 20 lines, read once with `tail -n 20` through
 `$.process.run` and kept in an atom until folded. A log that cannot be read
 shows the path and why. No button runs `herdr`, focuses a pane or starts
-another session. Copying a log path, which the board does today on a press,
-moves to a `c` on the expanded failure.
+another session. Copying a log path, which the board did on a press of the
+row, moves to a press of the path inside the opened failure.
 
 ### D6. Gates
 

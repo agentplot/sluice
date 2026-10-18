@@ -22,8 +22,8 @@ herdr with its own `XDG_CONFIG_HOME` and session.
 
 ## 3. The board: a failure opens in place
 
-- [ ] 3.1 Make blamed and `log of` rows Buttons that expand the failure with its test, log path and last 20 lines, a `c` to copy the path, and the unreadable-log case (design D5); verify `claude plugin test plugins/sluice-board` and the plugin-board gate task from `board-checks`, with tests for Expanded, A log it cannot read, and that no press runs a command other than `tail`.
-- [ ] 3.2 Describe it in `guides/claude-code.md`; verify Vale reports nothing.
+- [x] 3.1 Make blamed and `log of` rows Buttons that expand the failure with its test, log path and last 20 lines, a `c` to copy the path, and the unreadable-log case (design D5); verify `claude plugin test plugins/sluice-board` and the plugin-board gate task from `board-checks`, with tests for Expanded, A log it cannot read, and that no press runs a command other than `tail`.
+- [x] 3.2 Describe it in `guides/claude-code.md`; verify Vale reports nothing.
 
 ## 4. Close
 
