@@ -11,7 +11,6 @@ elif command -v less >/dev/null 2>&1 && [ -t 1 ]; then
 else
   tail -n 200 "$log"
 fi
-[ -t 0 ] || exit 0
 echo
 echo "q close"
 while :; do

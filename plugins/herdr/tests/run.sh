@@ -616,6 +616,29 @@ hasnt 'focus'
 [ "$(grep -c 'left alone\|not a link' "$t/err")" = 3 ] || fail "not each logged: $(cat "$t/err")"
 pass
 
+fresh 'status: the log split'
+seq 1 300 | sed 's/^/line /' >"$t/cli.log"
+out=$(printf q | SLUICE_HERDR_LOG=$t/cli.log SLUICE_HERDR_TASK=cli:test sh "$plugin/bin/log.sh")
+printf '%s\n' "$out" | grep -qx 'log of cli:test' || fail "no heading: $out"
+# Not a terminal: its last 200 lines, from line 101.
+printf '%s\n' "$out" | grep -qx 'line 101' || fail "the tail does not start at line 101"
+printf '%s\n' "$out" | grep -qx 'line 100' && fail "more than the last 200 lines"
+printf '%s\n' "$out" | grep -qx 'line 300' || fail "the tail misses the last line"
+# q closes it while its input is still open.
+mkfifo "$t/keys"
+{
+  printf 'xq'
+  sleep 8
+} >"$t/keys" &
+writer=$!
+began=$(date +%s)
+SLUICE_HERDR_LOG=$t/cli.log sh "$plugin/bin/log.sh" <"$t/keys" >/dev/null
+[ $(($(date +%s) - began)) -lt 5 ] || fail "q did not close it"
+kill "$writer" 2>/dev/null
+out=$(printf q | SLUICE_HERDR_LOG=/nowhere/cli.log sh "$plugin/bin/log.sh")
+printf '%s\n' "$out" | grep -qx 'cannot read /nowhere/cli.log' || fail "said: $out"
+pass
+
 fresh 'status: a number does what a click does'
 feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)]")"
 printf '1' | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >/dev/null
