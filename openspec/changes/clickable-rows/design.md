@@ -117,6 +117,11 @@ tasks: each task names the gate task that runs its tests.
 
 ## Risks / Trade-offs
 
+- [Four of plugin-herdr's tests read real processes' start times or
+  parents, which sluice's sandbox on macOS refuses `ps`] → there they print
+  `skip:` with ps's error and are counted as skipped; they run on Linux and
+  on macOS outside the sandbox. A known limit of the gate on macOS.
+
 - [Ctrl-click may not reach herdr from a popup] → the numbered keys of D3;
   the dashboard, a tiled pane, is where clicking is confirmed.
 - [A link is text anyone's output can print] → the action does only `focus`

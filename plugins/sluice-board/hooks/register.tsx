@@ -60,7 +60,7 @@ async function open($: $, failed: { task: string; log?: string }[]): Promise<Det
       out.push({ task: f.task, error: "no log was kept" });
       continue;
     }
-    const got = await $.process.run(["tail", "-n", "20", f.log]).catch(() => null);
+    const got = await $.process.run(["tail", "-n", "20", "--", f.log]).catch(() => null);
     if (got && got.exitCode === 0)
       out.push({ ...f, tail: got.stdout.split("\n").filter((l) => l !== "") });
     else out.push({ ...f, error: (got?.stderr ?? "").trim() || "it could not be read" });

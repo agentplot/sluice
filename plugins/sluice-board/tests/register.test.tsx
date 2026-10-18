@@ -55,7 +55,7 @@ function host(
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
     ran.push(argv);
-    if (argv === `tail -n 20 ${LOG}`)
+    if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
     if (argv === "sluice status 9 --json") {
       return {
@@ -67,7 +67,7 @@ function host(
         },
       };
     }
-    if (argv.startsWith("tail -n 20 "))
+    if (argv.startsWith("tail -n 20 -- "))
       return {
         value: { exitCode: 1, stdout: "", stderr: "tail: No such file or directory\n", ...WHOLE },
       };
@@ -278,7 +278,7 @@ test("a failure opens in place, folds, and moves no one", async ($, on) => {
   await pane.redraw();
   expect(await pane.find({ type: "Text", text: "last line" })).toBeUndefined();
   // Nothing but sluice's own record and the log was read: no pane moved.
-  expect(ran).toEqual(["sluice status 9 --json", `tail -n 20 ${LOG}`]);
+  expect(ran).toEqual(["sluice status 9 --json", `tail -n 20 -- ${LOG}`]);
   await pane.unmount();
 });
 
