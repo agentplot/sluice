@@ -62,6 +62,15 @@ _: {
     json.formatter.trailingCommas = "none";
     linter.rules.recommended = true;
   };
+  # ruff lints and formats the diagram scripts: its default rules, then
+  # its format.
+  programs.ruff-check.enable = true;
+  programs.ruff-format.enable = true;
+  settings.formatter.ruff-check.pipeline = "python";
+  settings.formatter.ruff-check.priority = 1;
+  settings.formatter.ruff-format.pipeline = "python";
+  settings.formatter.ruff-format.priority = 2;
+
   # Biome formats only an .astro file's frontmatter, and only
   # experimentally.
   settings.formatter.biome.excludes = [ "site/**/*.astro" ];

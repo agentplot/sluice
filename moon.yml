@@ -7,7 +7,7 @@ tasks:
   # and keeping no cache outside the tree.
   format:
     command: 'treefmt --ci'
-    inputs: ['/**/*.rs', '/**/*.nix', '/**/*.sh', '/**/*.toml', '/**/*.yml', '/**/*.yaml', '/**/*.ts', '/**/*.tsx', '/**/*.mjs', '/**/*.css', '/**/*.json', '/devenv.lock', '/.prototools']
+    inputs: ['/**/*.rs', '/**/*.nix', '/**/*.sh', '/**/*.toml', '/**/*.yml', '/**/*.yaml', '/**/*.ts', '/**/*.tsx', '/**/*.mjs', '/**/*.css', '/**/*.json', '/**/*.py', '/devenv.lock', '/.prototools']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
   lint:
