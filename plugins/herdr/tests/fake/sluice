@@ -27,6 +27,7 @@ case "$*" in
   ;;
 "submit "*" --check --json")
   [ -f "$FAKE/check-sleep" ] && sleep "$(cat "$FAKE/check-sleep")"
-  cat "$FAKE/check.json" 2>/dev/null || echo '{"conflict":null}' ;;
+  cat "$FAKE/check.json" 2>/dev/null || echo '{"conflict":null}'
+  ;;
 *) exit 2 ;;
 esac
