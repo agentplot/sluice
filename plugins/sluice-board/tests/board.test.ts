@@ -2,6 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   bandLines,
+  bar,
+  progress,
+  taskLines,
   githubBase,
   pullOf,
   duration,
@@ -14,7 +17,7 @@ import {
   wakeText,
 } from '../hooks/board'
 import type { Mine, Overview } from '../types'
-import { overview, NOW } from './fixture'
+import { overview, withTasks, NOW } from './fixture'
 
 const ME: Mine = { root: '/work/sluice/plugin-board', ids: [], pulls: [] }
 
@@ -31,6 +34,30 @@ describe('the band', () => {
     quiet.branches[0]!.candidates = []
     expect(bandLines(quiet, NOW)).toEqual([])
     expect(bandLines(null, NOW)).toEqual([])
+  })
+
+  test("a combination's tasks: how many have ended and a bar, never the tasks", () => {
+    expect(bandLines(withTasks(), NOW)).toEqual([
+      'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa',
+    ])
+  })
+
+  test('the bar fills a cell per tenth ended, rounded down', () => {
+    expect(bar(0, 5)).toBe('░░░░░░░░░░')
+    expect(bar(1, 3)).toBe('▓▓▓░░░░░░░')
+    expect(bar(5, 5)).toBe('▓▓▓▓▓▓▓▓▓▓')
+    expect(bar(0, 0)).toBe('░░░░░░░░░░')
+    expect(progress(overview().branches[0]!.candidates[0]!)).toBeNull()
+  })
+
+  test('the task list: ended in the order they ended, then running, then waiting', () => {
+    expect(taskLines(withTasks().branches[0]!.candidates[0]!).map(t => t.text)).toEqual([
+      '✓ sluice:test      1m48s',
+      '✓ site:prose    replayed',
+      '✓ sluice:tools     2m30s',
+      '… sluice:e2e     running',
+      '· core:test      waiting',
+    ])
   })
 
   test('durations', () => {

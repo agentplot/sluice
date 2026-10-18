@@ -15,7 +15,7 @@ use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
     Limits, Network, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Setting,
-    Settings, Source, Tests,
+    Settings, Source, TaskState, Tests,
 };
 use support::Repo;
 
@@ -166,6 +166,79 @@ fn the_tasks_a_range_affects() {
     );
     let r = finish(&c, &request(&repo, "p3", &fast, Some(&base)));
     assert_eq!(names(&r), ["alpha:test", "beta:test"]);
+}
+
+/// ADR 0028: while a run goes, its tasks read as moon writes them: one
+/// ended passes with its times, one started and not ended runs, and once
+/// the run has finished there is nothing to say, its report being the
+/// result (37, 38).
+#[test]
+fn a_run_shows_each_task_as_it_ends() {
+    let repo = workspace("moon-progress");
+    let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
+    change(
+        &repo,
+        &[
+            (
+                ".moon/workspace.yml",
+                &ws.replace("  gamma: 'gamma'\n", "  gamma: 'gamma'\n  slow: 'slow'\n"),
+            ),
+            (
+                "slow/moon.yml",
+                "tasks:\n  test:\n    command: 'sh wait.sh'\n    inputs: ['wait.sh']\n    tags: [check-fast]\n",
+            ),
+            (
+                "slow/wait.sh",
+                "while [ ! -f ../flag ]; do sleep 0.1; done\n",
+            ),
+            (".gitignore", ".moon/cache/\nflag\n"),
+        ],
+    );
+    let c = checks(&repo);
+    let req = request(&repo, "p1", &["alpha:test", "slow:test"], None);
+    let run = c.start(&req).unwrap();
+    let until = Instant::now() + Duration::from_secs(120);
+    let seen = loop {
+        let tasks = c.tasks(&run).unwrap();
+        let task = |t: &str| tasks.iter().find(|x| x.target == t);
+        // moon writes a task's run record a moment before its end
+        // checkpoint, which gives its start.
+        if task("alpha:test").is_some_and(|t| t.state == TaskState::Passed && t.started.is_some())
+            && task("slow:test").map(|t| t.state) == Some(TaskState::Running)
+        {
+            break tasks;
+        }
+        assert!(
+            Instant::now() < until,
+            "alpha:test never passed with slow:test running: {tasks:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let alpha = seen.iter().find(|t| t.target == "alpha:test").unwrap();
+    assert_eq!(alpha.exit, Some(0));
+    assert!(alpha.ended.is_some());
+    assert!(alpha.started <= alpha.ended);
+    assert!(matches!(c.progress(&run).unwrap(), Progress::Running));
+
+    std::fs::write(repo.dir().join("flag"), "").unwrap();
+    let until = Instant::now() + Duration::from_secs(120);
+    let report = loop {
+        match c.progress(&run).unwrap() {
+            Progress::Finished(r) => break r,
+            Progress::Lost => panic!("lost"),
+            Progress::Running => {}
+        }
+        assert!(Instant::now() < until, "the run never finished");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        tasks(&report),
+        [
+            ("alpha:test".into(), Outcome::Pass, false),
+            ("slow:test".into(), Outcome::Pass, false)
+        ]
+    );
+    assert!(c.tasks(&run).unwrap().is_empty());
 }
 
 /// 15, 37: a candidate that affects no required task runs nothing and

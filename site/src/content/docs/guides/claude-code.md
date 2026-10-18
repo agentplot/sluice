@@ -96,6 +96,14 @@ a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
 blamed tests' logs.
 
+With the moon runner, a combination under test also shows how many of
+its tasks have ended and a bar of the same, as in
+`testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. The pane lists each task
+below it: `✓` passed, `✗` failed, `…` running and `·` waiting, with how
+long each ended task took. Each round updates it, every few seconds
+while a submission waits, and it counts tasks, not the tests inside one.
+It shows only for combinations tested on this host.
+
 When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests
 were blamed and where their logs are, so the agent can fix its work without

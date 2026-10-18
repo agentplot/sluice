@@ -8,6 +8,7 @@
 //!   results.jsonl  .next-id  .lock
 //!   <branch>/  version  branch.json  submissions/<id>.json  log.jsonl
 //!              lock  .pending.json
+//!   .progress/<branch>/<candidate>.json   a run's tasks (ADR 0028)
 //! ```
 
 use std::cell::RefCell;
@@ -18,7 +19,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Changes, Guard, Snapshot, State, TaskLog, Written, FINISHED, KEPT_LOGS};
+use sluice_seams::{
+    Changes, Guard, Snapshot, State, TaskLog, TaskProgress, Written, FINISHED, KEPT_LOGS,
+};
 
 use crate::runs::flat_name;
 
@@ -26,6 +29,17 @@ const VERSION: &str = "version";
 const LOCK: &str = "lock";
 const PENDING: &str = ".pending.json";
 const RESULTS: &str = "results.jsonl";
+const PROGRESS: &str = ".progress";
+const PROGRESS_SCHEMA: &str = "sluice/progress@1";
+
+/// One candidate's tasks as kept: the candidate is named inside, since a
+/// long name's file is shortened.
+#[derive(Serialize, Deserialize)]
+struct Kept {
+    schema: String,
+    candidate: String,
+    tasks: Vec<TaskProgress>,
+}
 
 pub struct LocalFiles {
     root: PathBuf,
@@ -476,6 +490,67 @@ impl State for LocalFiles {
             }
         }
         Ok(kept)
+    }
+
+    fn progress(&self, branch: &str) -> Result<BTreeMap<String, Vec<TaskProgress>>> {
+        self.dir(branch)?;
+        let dir = self.root.join(PROGRESS).join(branch);
+        let mut out = BTreeMap::new();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(out),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+        };
+        for e in entries {
+            let path = e?.path();
+            let named = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if named.starts_with('.') || !named.ends_with(".json") {
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+            };
+            let kept: Kept = serde_json::from_slice(&bytes)
+                .with_context(|| format!("reading {}", path.display()))?;
+            out.insert(kept.candidate, kept.tasks);
+        }
+        Ok(out)
+    }
+
+    fn put_progress(
+        &self,
+        branch: &str,
+        candidate: &str,
+        tasks: Option<&[TaskProgress]>,
+    ) -> Result<()> {
+        // Beside the branch's records, as its kept logs are: no read of the
+        // branch sees them, and they move no version (ADR 0028). Kept by a
+        // round, under the branch's lock (rule core.14).
+        if !self.held.borrow().contains(branch) {
+            bail!("keeping {branch}'s tasks without holding its lock");
+        }
+        self.dir(branch)?;
+        let dir = self.root.join(PROGRESS).join(branch);
+        let name = format!("{}.json", flat_name(candidate));
+        match tasks {
+            Some(tasks) => {
+                let kept = Kept {
+                    schema: PROGRESS_SCHEMA.into(),
+                    candidate: candidate.into(),
+                    tasks: tasks.to_vec(),
+                };
+                let mut bytes = serde_json::to_vec_pretty(&kept)?;
+                bytes.push(b'\n');
+                write_atomic(&dir, &name, &bytes)
+            }
+            None => match std::fs::remove_file(dir.join(&name)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e).with_context(|| format!("removing {name}")),
+            },
+        }
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {

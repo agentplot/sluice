@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::Serialize;
-use sluice_seams::{Rev, Snapshot, Submitter};
+use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
@@ -41,6 +41,8 @@ pub struct BranchRead {
     pub rules: Option<Rules>,
     /// The executor `[executor] kind` names; `None` names none.
     pub executor: Option<String>,
+    /// Each candidate's tasks as last kept beside the records (ADR 0028).
+    pub progress: BTreeMap<String, Vec<TaskProgress>>,
 }
 
 /// One branch's part of the overview.
@@ -89,6 +91,10 @@ pub struct CandidateView {
     pub replayed: usize,
     /// Each failed check, with where its output is kept (20).
     pub failed: Vec<FailedTask>,
+    /// Where each task of its run has got, while it is under test and
+    /// its runner says (ADR 0028). Never a result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<Vec<TaskProgress>>,
 }
 
 /// One branch's part of the overview, from what was read of it.
@@ -98,6 +104,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         snapshot,
         rules,
         executor,
+        mut progress,
     } = read;
     let log = snapshot.files.get(LOG_FILE).cloned().unwrap_or_default();
     let line = Line::load(&branch, snapshot)?;
@@ -129,6 +136,9 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
             ran: c.ran,
             replayed: c.replayed,
             failed: c.failed.clone(),
+            tasks: matches!(c.state, CandidateState::Starting | CandidateState::Testing)
+                .then(|| progress.remove(&c.id))
+                .flatten(),
         })
         .collect();
     let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();
@@ -221,6 +231,7 @@ impl Sluice<'_> {
             };
             out.push(branch_view(BranchRead {
                 executor: policy.and_then(|p| p.limits.executor),
+                progress: self.seams.state.progress(&branch)?,
                 branch,
                 snapshot,
                 rules,

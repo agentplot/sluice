@@ -1,7 +1,7 @@
 // What the board shows, from `sluice overview --json` (sluice/overview@1):
 // pure functions over the document, so the tests need no sluice running.
 
-import type { Mine, Outcome, Overview, OverviewBranch, Recent } from '../types'
+import type { Mine, Outcome, Overview, OverviewBranch, OverviewCandidate, OverviewTask, Recent } from '../types'
 
 /** `2m10s`, `45s`, `1h03m`. */
 export function duration(seconds: number): string {
@@ -62,6 +62,58 @@ export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
+/** Whether a task has ended, however. */
+export function ended(t: OverviewTask): boolean {
+  return t.state === 'passed' || t.state === 'failed' || t.state === 'replayed'
+}
+
+/** Ten cells, one filled for each tenth of the tasks ended, rounded down. */
+export function bar(done: number, total: number): string {
+  const full = total > 0 ? Math.floor((10 * Math.min(done, total)) / total) : 0
+  return '▓'.repeat(full) + '░'.repeat(10 - full)
+}
+
+/** `3/5 ▓▓▓▓▓▓░░░░`: how many of a combination's tasks have ended, or null when its runner says nothing. */
+export function progress(c: OverviewCandidate): string | null {
+  if (!c.tasks || c.tasks.length === 0) return null
+  const done = c.tasks.filter(ended).length
+  return `${done}/${c.tasks.length} ${bar(done, c.tasks.length)}`
+}
+
+const MARK = { passed: '✓', replayed: '✓', failed: '✗', running: '…', waiting: '·' } as const
+
+/** What follows a task's name: how long it took once ended, else its state. */
+function taskDetail(t: OverviewTask): string {
+  if (t.state === 'replayed') return 'replayed'
+  if (t.state === 'running' || t.state === 'waiting') return t.state
+  const took = t.started && t.ended ? (Date.parse(t.ended) - Date.parse(t.started)) / 1000 : NaN
+  return Number.isNaN(took) ? t.state : duration(took)
+}
+
+/**
+ * The pane's task list: ended tasks in the order they ended, then running
+ * ones, then waiting ones, names padded and times right-aligned.
+ */
+export function taskLines(c: OverviewCandidate): { state: OverviewTask['state']; text: string }[] {
+  const tasks = c.tasks ?? []
+  const rank = (t: OverviewTask) => (ended(t) ? 0 : t.state === 'running' ? 1 : 2)
+  const order = tasks
+    .map((t, i) => ({ t, i }))
+    .sort(
+      (a, b) =>
+        rank(a.t) - rank(b.t) ||
+        (ended(a.t) ? Date.parse(a.t.ended ?? '') - Date.parse(b.t.ended ?? '') || 0 : 0) ||
+        a.i - b.i,
+    )
+    .map(x => x.t)
+  const name = Math.max(0, ...order.map(t => t.target.length))
+  const detail = Math.max(0, ...order.map(t => taskDetail(t).length))
+  return order.map(t => ({
+    state: t.state,
+    text: `${MARK[t.state]} ${t.target.padEnd(name)}  ${taskDetail(t).padStart(detail)}`,
+  }))
+}
+
 /** The band's line for one branch, or null when it has nothing to show. */
 export function branchLine(b: OverviewBranch, now: number): string | null {
   const under = testing(b)
@@ -71,7 +123,8 @@ export function branchLine(b: OverviewBranch, now: number): string | null {
     const took = since(c.started, now)
     const clock =
       took === undefined ? '' : ` ${duration(took)}${c.limit ? `/${limit(c.limit)}` : ''}`
-    parts.push(`testing ${combination(b.branch, c.submissions)}${clock}`)
+    const done = progress(c)
+    parts.push(`testing ${combination(b.branch, c.submissions)}${done ? ` ${done}` : ''}${clock}`)
   }
   const idle = waiting(b)
   if (idle.length > 0) parts.push(`${idle.map(i => `#${i}`).join(' ')} waiting`)

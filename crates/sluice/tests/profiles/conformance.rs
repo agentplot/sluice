@@ -32,7 +32,7 @@ use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
     Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
-    RunHandle, RunRequest, Session, Settings, TaskLog, Tests,
+    RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -159,6 +159,10 @@ impl Tests for RecordedChecks {
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         self.inner.logs(run, tasks)
+    }
+
+    fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>> {
+        self.inner.tasks(run)
     }
 }
 

@@ -48,3 +48,16 @@ export function overview(): Overview {
     previews: [],
   }
 }
+
+/** The same, with main's combination 3 of its 5 tasks through, as moon says. */
+export function withTasks(): Overview {
+  const doc = overview()
+  doc.branches[0]!.candidates[0]!.tasks = [
+    { target: 'sluice:tools', state: 'passed', started: '2026-10-16T19:42:30Z', ended: '2026-10-16T19:45:00Z', exit: 0 },
+    { target: 'sluice:test', state: 'passed', started: '2026-10-16T19:43:00Z', ended: '2026-10-16T19:44:48Z', exit: 0 },
+    { target: 'core:test', state: 'waiting' },
+    { target: 'sluice:e2e', state: 'running' },
+    { target: 'site:prose', state: 'replayed', ended: '2026-10-16T19:44:54Z' },
+  ]
+  return doc
+}

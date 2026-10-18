@@ -102,9 +102,15 @@ fn write_overview(
                 .started
                 .as_deref()
                 .map_or(String::new(), |t| format!(" since {t}"));
+            // ADR 0028: how many of its tasks have ended, where its runner
+            // says.
+            let ended = c.tasks.as_ref().map_or(String::new(), |t| {
+                let done = t.iter().filter(|t| t.state.ended()).count();
+                format!(" {done}/{}", t.len())
+            });
             writeln!(
                 out,
-                "  testing {}{since}",
+                "  testing {}{ended}{since}",
                 combination(&b.branch, &c.submissions)
             )?;
         }

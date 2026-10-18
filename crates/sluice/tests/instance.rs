@@ -79,15 +79,17 @@ mod bound {
     [branches.\"bolt/*\"]\nparallel = 4\ntimeout = \"1m\"\n";
 
     /// Each run marks itself alive in `alive/`, writes how many runs were
-    /// alive as it started and the `SLUICE_JOBS` it was given, holds long
-    /// enough for the others started in the same round to start, and leaves.
+    /// alive as it started and the `SLUICE_JOBS` it was given, holds until
+    /// another run is alive or 6 s have passed, so the others started in
+    /// the same round start beside it even on a loaded host, and leaves.
     fn check(seen: &Path) -> String {
         let seen = seen.display();
         format!(
             "mkdir -p {seen}/alive\n\
              touch {seen}/alive/$$\n\
              echo \"$(ls {seen}/alive | wc -l | tr -d ' ') $SLUICE_JOBS\" >> {seen}/starts\n\
-             sleep 2\n\
+             i=0; while [ \"$(ls {seen}/alive | wc -l | tr -d ' ')\" -lt 2 ] && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done\n\
+             sleep 1\n\
              rm {seen}/alive/$$\n"
         )
     }
