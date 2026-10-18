@@ -9,6 +9,7 @@ the page's, its colors hang off .sluice-diagram, and it follows the site's
 theme toggle (data-theme on <html>) rather than the reader's system setting.
 The colors are the brand's (docs/brand).
 """
+
 import re
 import sys
 
@@ -25,11 +26,21 @@ def kf(name, frames):
 def show(name, a, b, lo=0, hi=1):
     """Opacity hi inside [a, b], lo outside."""
     if a <= 0:
-        fr = [(0, f"opacity:{hi}"), (b, f"opacity:{hi}"), (b + E, f"opacity:{lo}"),
-              (100 - E, f"opacity:{lo}"), (100, f"opacity:{hi}")]
+        fr = [
+            (0, f"opacity:{hi}"),
+            (b, f"opacity:{hi}"),
+            (b + E, f"opacity:{lo}"),
+            (100 - E, f"opacity:{lo}"),
+            (100, f"opacity:{hi}"),
+        ]
     else:
-        fr = [(0, f"opacity:{lo}"), (a - E, f"opacity:{lo}"), (a, f"opacity:{hi}"),
-              (b, f"opacity:{hi}"), (min(b + E, 100), f"opacity:{lo}")]
+        fr = [
+            (0, f"opacity:{lo}"),
+            (a - E, f"opacity:{lo}"),
+            (a, f"opacity:{hi}"),
+            (b, f"opacity:{hi}"),
+            (min(b + E, 100), f"opacity:{lo}"),
+        ]
         if b + E < 100:
             fr.append((100, f"opacity:{lo}"))
     kf(name, fr)
@@ -46,48 +57,91 @@ svg = []
 add = svg.append
 
 # sessions -----------------------------------------------------------------
-sessions = [("A", "unit/auth", 80, 4, (6, 56), (58, 96), "landed", "ok"),
-            ("B", "unit/ledger", 170, 7, (9, 45), (46, 96), "told: pkg-x:test failed", "bad"),
-            ("C", "unit/export", 260, 10, (12, 80), (82, 96), "landed", "ok")]
+sessions = [
+    ("A", "unit/auth", 80, 4, (6, 56), (58, 96), "landed", "ok"),
+    ("B", "unit/ledger", 170, 7, (9, 45), (46, 96), "told: pkg-x:test failed", "bad"),
+    ("C", "unit/export", 260, 10, (12, 80), (82, 96), "landed", "ok"),
+]
 for s, branch, y, sub, wait, end, endtxt, endcol in sessions:
     add(f'<rect class="box sb{s}" x="20" y="{y}" width="200" height="72" rx="6"/>')
-    add(f'<text class="t b" x="34" y="{y+24}">agent {s}</text>')
-    add(f'<text class="m sm" x="34" y="{y+42}">worktree {branch}</text>')
+    add(f'<text class="t b" x="34" y="{y + 24}">agent {s}</text>')
+    add(f'<text class="m sm" x="34" y="{y + 42}">worktree {branch}</text>')
     anim(f"s{s}0", show(f"k-s{s}0", 0, sub))
     anim(f"s{s}1", show(f"k-s{s}1", *wait))
     anim(f"s{s}2", show(f"k-s{s}2", *end))
-    add(f'<text class="m xs s{s}0" x="34" y="{y+60}">building…</text>')
-    add(f'<text class="m xs s{s}1" x="34" y="{y+60}">submitted · waiting</text>')
-    add(f'<text class="xs {endcol} s{s}2" x="34" y="{y+60}">{endtxt}</text>')
+    add(f'<text class="m xs s{s}0" x="34" y="{y + 60}">building…</text>')
+    add(f'<text class="m xs s{s}1" x="34" y="{y + 60}">submitted · waiting</text>')
+    add(f'<text class="xs {endcol} s{s}2" x="34" y="{y + 60}">{endtxt}</text>')
     a, b = end
-    kf(f"k-sb{s}", [(0, "stroke:var(--rule)"), (a - E, "stroke:var(--rule)"),
-                    (a, f"stroke:var(--{endcol})"), (b, f"stroke:var(--{endcol})"),
-                    (b + E, "stroke:var(--rule)"), (100, "stroke:var(--rule)")])
+    kf(
+        f"k-sb{s}",
+        [
+            (0, "stroke:var(--rule)"),
+            (a - E, "stroke:var(--rule)"),
+            (a, f"stroke:var(--{endcol})"),
+            (b, f"stroke:var(--{endcol})"),
+            (b + E, "stroke:var(--rule)"),
+            (100, "stroke:var(--rule)"),
+        ],
+    )
     anim(f"sb{s}", f"k-sb{s}")
 
 # entry chips: fly from each session into the queue -------------------------
 chips = [("A", 360, 80, 4, 58), ("B", 400, 170, 7, 58), ("C", 440, 260, 10, 82)]
 for s, cx, sy, t0, gone in chips:
     dx, dy = 170 - cx, (sy + 8) - 72
-    kf(f"k-c{s}", [(0, f"transform:translate({dx}px,{dy}px);opacity:0"),
-                   (t0 - 1, f"transform:translate({dx}px,{dy}px);opacity:0"),
-                   (t0, f"transform:translate({dx}px,{dy}px);opacity:1"),
-                   (t0 + 6, "transform:translate(0px,0px);opacity:1"),
-                   (gone - E, "transform:translate(0px,0px);opacity:1"),
-                   (gone, "transform:translate(0px,0px);opacity:0"),
-                   (100, "transform:translate(0px,0px);opacity:0")])
+    kf(
+        f"k-c{s}",
+        [
+            (0, f"transform:translate({dx}px,{dy}px);opacity:0"),
+            (t0 - 1, f"transform:translate({dx}px,{dy}px);opacity:0"),
+            (t0, f"transform:translate({dx}px,{dy}px);opacity:1"),
+            (t0 + 6, "transform:translate(0px,0px);opacity:1"),
+            (gone - E, "transform:translate(0px,0px);opacity:1"),
+            (gone, "transform:translate(0px,0px);opacity:0"),
+            (100, "transform:translate(0px,0px);opacity:0"),
+        ],
+    )
     anim(f"c{s}", f"k-c{s}")
-    add(f'<g class="c{s}"><rect class="chip chipr{s}" x="{cx}" y="72" width="30" height="22" rx="4"/>'
-        f'<text class="chipt" x="{cx+15}" y="87" text-anchor="middle">{s}</text></g>')
-kf("k-chiprB", [(0, "fill:var(--accent)"), (44, "fill:var(--accent)"), (45, "fill:var(--bad)"),
-                (100, "fill:var(--bad)")])
+    add(
+        f'<g class="c{s}"><rect class="chip chipr{s}" x="{cx}" y="72" width="30" height="22" rx="4"/>'
+        f'<text class="chipt" x="{cx + 15}" y="87" text-anchor="middle">{s}</text></g>'
+    )
+kf(
+    "k-chiprB",
+    [
+        (0, "fill:var(--accent)"),
+        (44, "fill:var(--accent)"),
+        (45, "fill:var(--bad)"),
+        (100, "fill:var(--bad)"),
+    ],
+)
 anim("chiprB", "k-chiprB")
 
 # candidate rows -------------------------------------------------------------
 rows_y = [112, 192, 272]
-kf("k-row", [(0, "opacity:0"), (18, "opacity:0"), (21, "opacity:1"), (96, "opacity:1"), (100, "opacity:0")])
-kf("k-row2", [(0, "opacity:0"), (18, "opacity:0"), (21, "opacity:1"), (56, "opacity:1"),
-              (60, "opacity:.3"), (96, "opacity:.3"), (100, "opacity:0")])
+kf(
+    "k-row",
+    [
+        (0, "opacity:0"),
+        (18, "opacity:0"),
+        (21, "opacity:1"),
+        (96, "opacity:1"),
+        (100, "opacity:0"),
+    ],
+)
+kf(
+    "k-row2",
+    [
+        (0, "opacity:0"),
+        (18, "opacity:0"),
+        (21, "opacity:1"),
+        (56, "opacity:1"),
+        (60, "opacity:.3"),
+        (96, "opacity:.3"),
+        (100, "opacity:0"),
+    ],
+)
 anim("row", "k-row")
 anim("row2", "k-row2")
 
@@ -97,14 +151,18 @@ def row(i, cls, labels, statuses, barcls):
     add(f'<g class="{cls}">')
     add(f'<rect class="cand" x="282" y="{y}" width="352" height="62" rx="6"/>')
     for txt, c in labels:
-        add(f'<text class="t mono {c}" x="296" y="{y+24}">{txt}</text>')
+        add(f'<text class="t mono {c}" x="296" y="{y + 24}">{txt}</text>')
     for txt, col, c in statuses:
-        add(f'<text class="xs {col} {c}" x="620" y="{y+24}" text-anchor="end">{txt}</text>')
-    add(f'<rect class="track" x="296" y="{y+38}" width="324" height="10" rx="5"/>')
-    add(f'<rect class="bar {barcls}" x="296" y="{y+38}" width="324" height="10" rx="5"/>')
+        add(
+            f'<text class="xs {col} {c}" x="620" y="{y + 24}" text-anchor="end">{txt}</text>'
+        )
+    add(f'<rect class="track" x="296" y="{y + 38}" width="324" height="10" rx="5"/>')
+    add(
+        f'<rect class="bar {barcls}" x="296" y="{y + 38}" width="324" height="10" rx="5"/>'
+    )
     if i == 1:
-        add(f'<line class="strike" x1="290" y1="{y+20}" x2="410" y2="{y+20}"/>')
-    add('</g>')
+        add(f'<line class="strike" x1="290" y1="{y + 20}" x2="410" y2="{y + 20}"/>')
+    add("</g>")
 
 
 def status(cls, a, b):
@@ -112,45 +170,105 @@ def status(cls, a, b):
     return cls
 
 
-row(0, "row", [("branch + A", "")],
-    [("testing…", "m", status("r1a", 22, 36)), ("passed", "ok", status("r1b", 36, 56)),
-     ("landed", "ok", status("r1c", 56, 96))], "bar1")
-row(1, "row2", [("branch + A + B", "")],
-    [("testing…", "m", status("r2a", 22, 32)), ("failed: pkg-x:test", "bad", status("r2b", 32, 56)),
-     ("B removed: culprit", "bad", status("r2c", 56, 96))], "bar2")
-row(2, "row", [("branch + A + B + C", status("l3a", 0, 60)), ("branch + A + C", status("l3b", 62, 96))],
-    [("testing…", "m", status("r3a", 22, 42)), ("discarded: B is ahead", "m", status("r3b", 42, 62)),
-     ("re-formed · 9 of 11 replay", "m", status("r3c", 62, 70)), ("passed", "ok", status("r3d", 70, 80)),
-     ("landed", "ok", status("r3e", 80, 96))], "bar3")
-kf("k-strike", [(0, "opacity:0"), (56, "opacity:0"), (58, "opacity:1"), (100, "opacity:1")])
+row(
+    0,
+    "row",
+    [("branch + A", "")],
+    [
+        ("testing…", "m", status("r1a", 22, 36)),
+        ("passed", "ok", status("r1b", 36, 56)),
+        ("landed", "ok", status("r1c", 56, 96)),
+    ],
+    "bar1",
+)
+row(
+    1,
+    "row2",
+    [("branch + A + B", "")],
+    [
+        ("testing…", "m", status("r2a", 22, 32)),
+        ("failed: pkg-x:test", "bad", status("r2b", 32, 56)),
+        ("B removed: culprit", "bad", status("r2c", 56, 96)),
+    ],
+    "bar2",
+)
+row(
+    2,
+    "row",
+    [
+        ("branch + A + B + C", status("l3a", 0, 60)),
+        ("branch + A + C", status("l3b", 62, 96)),
+    ],
+    [
+        ("testing…", "m", status("r3a", 22, 42)),
+        ("discarded: B is ahead", "m", status("r3b", 42, 62)),
+        ("re-formed · 9 of 11 replay", "m", status("r3c", 62, 70)),
+        ("passed", "ok", status("r3d", 70, 80)),
+        ("landed", "ok", status("r3e", 80, 96)),
+    ],
+    "bar3",
+)
+kf(
+    "k-strike",
+    [(0, "opacity:0"), (56, "opacity:0"), (58, "opacity:1"), (100, "opacity:1")],
+)
 anim("strike", "k-strike")
 
-kf("k-bar1", [(0, "transform:scaleX(0);fill:var(--accent)"), (20, "transform:scaleX(0);fill:var(--accent)"),
-              (36, "transform:scaleX(1);fill:var(--accent)"), (37, "transform:scaleX(1);fill:var(--ok)"),
-              (96, "transform:scaleX(1);fill:var(--ok)"), (100, "transform:scaleX(0);fill:var(--accent)")])
-kf("k-bar2", [(0, "transform:scaleX(0);fill:var(--accent)"), (20, "transform:scaleX(0);fill:var(--accent)"),
-              (32, "transform:scaleX(.68);fill:var(--accent)"), (33, "transform:scaleX(.68);fill:var(--bad)"),
-              (96, "transform:scaleX(.68);fill:var(--bad)"), (100, "transform:scaleX(0);fill:var(--accent)")])
-kf("k-bar3", [(0, "transform:scaleX(0);fill:var(--accent);opacity:1"),
-              (20, "transform:scaleX(0);fill:var(--accent);opacity:1"),
-              (42, "transform:scaleX(.8);fill:var(--accent);opacity:1"),
-              (44, "transform:scaleX(.8);fill:var(--accent);opacity:.25"),
-              (61, "transform:scaleX(.8);fill:var(--accent);opacity:.25"),
-              (62, "transform:scaleX(0);fill:var(--accent);opacity:1"),
-              (64, "transform:scaleX(0);fill:var(--accent);opacity:1"),
-              (70, "transform:scaleX(1);fill:var(--accent);opacity:1"),
-              (71, "transform:scaleX(1);fill:var(--ok);opacity:1"),
-              (96, "transform:scaleX(1);fill:var(--ok);opacity:1"),
-              (100, "transform:scaleX(0);fill:var(--accent);opacity:1")])
+kf(
+    "k-bar1",
+    [
+        (0, "transform:scaleX(0);fill:var(--accent)"),
+        (20, "transform:scaleX(0);fill:var(--accent)"),
+        (36, "transform:scaleX(1);fill:var(--accent)"),
+        (37, "transform:scaleX(1);fill:var(--ok)"),
+        (96, "transform:scaleX(1);fill:var(--ok)"),
+        (100, "transform:scaleX(0);fill:var(--accent)"),
+    ],
+)
+kf(
+    "k-bar2",
+    [
+        (0, "transform:scaleX(0);fill:var(--accent)"),
+        (20, "transform:scaleX(0);fill:var(--accent)"),
+        (32, "transform:scaleX(.68);fill:var(--accent)"),
+        (33, "transform:scaleX(.68);fill:var(--bad)"),
+        (96, "transform:scaleX(.68);fill:var(--bad)"),
+        (100, "transform:scaleX(0);fill:var(--accent)"),
+    ],
+)
+kf(
+    "k-bar3",
+    [
+        (0, "transform:scaleX(0);fill:var(--accent);opacity:1"),
+        (20, "transform:scaleX(0);fill:var(--accent);opacity:1"),
+        (42, "transform:scaleX(.8);fill:var(--accent);opacity:1"),
+        (44, "transform:scaleX(.8);fill:var(--accent);opacity:.25"),
+        (61, "transform:scaleX(.8);fill:var(--accent);opacity:.25"),
+        (62, "transform:scaleX(0);fill:var(--accent);opacity:1"),
+        (64, "transform:scaleX(0);fill:var(--accent);opacity:1"),
+        (70, "transform:scaleX(1);fill:var(--accent);opacity:1"),
+        (71, "transform:scaleX(1);fill:var(--ok);opacity:1"),
+        (96, "transform:scaleX(1);fill:var(--ok);opacity:1"),
+        (100, "transform:scaleX(0);fill:var(--accent);opacity:1"),
+    ],
+)
 for b in ("bar1", "bar2", "bar3"):
     anim(b, f"k-{b}")
 
 # the failure goes to B's agent and no other ---------------------------------
 add('<path class="notify" d="M282,222 C250,222 250,208 222,208"/>')
-kf("k-notify", [(0, "stroke-dashoffset:80;opacity:0"), (44, "stroke-dashoffset:80;opacity:0"),
-                (44.5, "stroke-dashoffset:80;opacity:1"), (47, "stroke-dashoffset:0;opacity:1"),
-                (96, "stroke-dashoffset:0;opacity:1"), (97, "stroke-dashoffset:0;opacity:0"),
-                (100, "stroke-dashoffset:80;opacity:0")])
+kf(
+    "k-notify",
+    [
+        (0, "stroke-dashoffset:80;opacity:0"),
+        (44, "stroke-dashoffset:80;opacity:0"),
+        (44.5, "stroke-dashoffset:80;opacity:1"),
+        (47, "stroke-dashoffset:0;opacity:1"),
+        (96, "stroke-dashoffset:0;opacity:1"),
+        (97, "stroke-dashoffset:0;opacity:0"),
+        (100, "stroke-dashoffset:80;opacity:0"),
+    ],
+)
 anim("notify", "k-notify")
 
 # the branch ---------------------------------------------------------------------
@@ -159,42 +277,63 @@ add(f'<line class="edge" x1="{LX}" y1="340" x2="{LX}" y2="322"/>')
 add(f'<line class="edge eA" x1="{LX}" y1="312" x2="{LX}" y2="260"/>')
 add(f'<line class="edge eC" x1="{LX}" y1="242" x2="{LX}" y2="190"/>')
 add(f'<circle class="commit" cx="{LX}" cy="317" r="6"/>')
-add(f'<text class="m xs" x="{LX+14}" y="321">before</text>')
+add(f'<text class="m xs" x="{LX + 14}" y="321">before</text>')
 for s, y, a in (("A", 251, 56), ("C", 181, 80)):
     anim(f"m{s}", show(f"k-m{s}", a, 96))
-    add(f'<g class="m{s}"><circle class="merge" cx="{LX}" cy="{y}" r="8"/>'
+    add(
+        f'<g class="m{s}"><circle class="merge" cx="{LX}" cy="{y}" r="8"/>'
         f'<circle class="mergein" cx="{LX}" cy="{y}" r="3.5"/>'
-        f'<text class="t sm" x="{LX+16}" y="{y-2}">merge {s}</text>'
-        f'<text class="m xs" x="{LX+16}" y="{y+13}">verdict in trailers</text></g>')
+        f'<text class="t sm" x="{LX + 16}" y="{y - 2}">merge {s}</text>'
+        f'<text class="m xs" x="{LX + 16}" y="{y + 13}">verdict in trailers</text></g>'
+    )
 anim("eA", show("k-eA", 56, 96))
 anim("eC", show("k-eC", 80, 96))
-kf("k-head", [(0, "transform:translate(0px,0px)"), (56, "transform:translate(0px,0px)"),
-              (58, "transform:translate(0px,-66px)"), (80, "transform:translate(0px,-66px)"),
-              (82, "transform:translate(0px,-136px)"), (96, "transform:translate(0px,-136px)"),
-              (99, "transform:translate(0px,0px)"), (100, "transform:translate(0px,0px)")])
+kf(
+    "k-head",
+    [
+        (0, "transform:translate(0px,0px)"),
+        (56, "transform:translate(0px,0px)"),
+        (58, "transform:translate(0px,-66px)"),
+        (80, "transform:translate(0px,-66px)"),
+        (82, "transform:translate(0px,-136px)"),
+        (96, "transform:translate(0px,-136px)"),
+        (99, "transform:translate(0px,0px)"),
+        (100, "transform:translate(0px,0px)"),
+    ],
+)
 anim("head", "k-head")
-add(f'<g class="head"><rect class="pill" x="664" y="306" width="76" height="22" rx="11"/>'
-    f'<text class="pillt" x="702" y="321" text-anchor="middle">bolt/pay</text></g>')
-add(f'<text class="m xs" x="664" y="356">moved only by sluice, from the</text>')
-add(f'<text class="m xs" x="664" y="370">revision the candidate was formed on</text>')
+add(
+    '<g class="head"><rect class="pill" x="664" y="306" width="76" height="22" rx="11"/>'
+    '<text class="pillt" x="702" y="321" text-anchor="middle">bolt/pay</text></g>'
+)
+add('<text class="m xs" x="664" y="356">moved only by sluice, from the</text>')
+add('<text class="m xs" x="664" y="370">revision the candidate was formed on</text>')
 
 # captions -------------------------------------------------------------------
-caps = [("1", "Agents submit their work.", "None of them merges.", 2, 18),
-        ("2", "Each candidate is tested", "exactly as it would land.", 18, 42),
-        ("3", "A failure has one culprit,", "and only its agent is told.", 42, 56),
-        ("4", "The branch moves only", "to what passed.", 56, 92)]
+caps = [
+    ("1", "Agents submit their work.", "None of them merges.", 2, 18),
+    ("2", "Each candidate is tested", "exactly as it would land.", 18, 42),
+    ("3", "A failure has one culprit,", "and only its agent is told.", 42, 56),
+    ("4", "The branch moves only", "to what passed.", 56, 92),
+]
 for i, (n, l1, l2, a, b) in enumerate(caps):
     x = 20 + i * 218
-    anim(f"cap{n}", show(f"k-cap{n}", a, b, lo=.35))
-    add(f'<g class="cap cap{n}"><circle class="badge" cx="{x+12}" cy="412" r="11"/>'
-        f'<text class="badget" x="{x+12}" y="416" text-anchor="middle">{n}</text>'
-        f'<text class="t sm" x="{x+30}" y="408">{l1}</text>'
-        f'<text class="t sm" x="{x+30}" y="425">{l2}</text></g>')
+    anim(f"cap{n}", show(f"k-cap{n}", a, b, lo=0.35))
+    add(
+        f'<g class="cap cap{n}"><circle class="badge" cx="{x + 12}" cy="412" r="11"/>'
+        f'<text class="badget" x="{x + 12}" y="416" text-anchor="middle">{n}</text>'
+        f'<text class="t sm" x="{x + 30}" y="408">{l1}</text>'
+        f'<text class="t sm" x="{x + 30}" y="425">{l2}</text></g>'
+    )
 
-LIGHT = ("--bg:#ebe9e2;--panel:#fbfaf7;--fg:#0e1116;--muted:#5d6370;--rule:#d5d2c8;"
-         "--accent:#2b313c;--soft:#e0ddd4;--ok:#1f8a4c;--bad:#c0392b;--ink:#f2f1ec")
-DARK = ("--bg:#14181f;--panel:#1b2029;--fg:#f2f1ec;--muted:#9a9fab;--rule:#2c323d;"
-        "--accent:#c9cbd2;--soft:#232933;--ok:#45c27a;--bad:#f08a7e;--ink:#0e1116")
+LIGHT = (
+    "--bg:#ebe9e2;--panel:#fbfaf7;--fg:#0e1116;--muted:#5d6370;--rule:#d5d2c8;"
+    "--accent:#2b313c;--soft:#e0ddd4;--ok:#1f8a4c;--bad:#c0392b;--ink:#f2f1ec"
+)
+DARK = (
+    "--bg:#14181f;--panel:#1b2029;--fg:#f2f1ec;--muted:#9a9fab;--rule:#2c323d;"
+    "--accent:#c9cbd2;--soft:#232933;--ok:#45c27a;--bad:#f08a7e;--ink:#0e1116"
+)
 
 STYLE = """
 :root{LIGHT}
@@ -221,7 +360,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 """
 
 style = STYLE.replace("LIGHT", LIGHT).replace("DARK", DARK) + "".join(css)
-head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
+head = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446" role="img" aria-labelledby="ttl dsc">
 <title id="ttl">sluice: a merge queue for agents in worktrees</title>
 <desc id="dsc">Three agents, each in its own worktree, submit their work and never merge. sluice forms candidates branch plus A, branch plus A plus B, and branch plus A plus B plus C, and tests them at once. Branch plus A plus B fails, so B is the one culprit and only agent B is told. A lands as a merge commit; C is re-formed on the branch without B, mostly replays from the cache, passes and lands. The branch moves only to what passed.</desc>
 <style>{style}</style>
@@ -233,29 +372,45 @@ head = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="
 <text class="hd" x="282" y="62">SLUICE · QUEUE OF bolt/pay</text>
 <text class="m xs" x="296" y="88">entries</text>
 <text class="hd" x="664" y="62">THE BRANCH</text>
-'''
+"""
 out = head + "\n".join(svg) + "\n</svg>\n"
 
 
 def scoped(svg):
     """The page's copy: every class, keyframe and id under sd-, scoped to .sluice-diagram."""
+
     def css(m):
         st = re.sub(r"\.(?=[a-zA-Z])", ".sd-", m.group(1))
         st = re.sub(r"\bk-", "sd-k-", st)
         st = st.replace(f":root{{{LIGHT}}}", f".sluice-diagram{{{LIGHT}}}")
-        st = st.replace(f"@media (prefers-color-scheme:dark){{:root{{{DARK}}}}}",
-                        f":root[data-theme='dark'] .sluice-diagram{{{DARK}}}")
-        st = st.replace("text{font-family:", ":where(.sluice-diagram) text{font-family:var(--sl-font),")
-        st = st.replace(".sd-mono,.sd-chipt,.sd-pillt{font-family:",
-                        ".sd-mono,.sd-chipt,.sd-pillt{font-family:var(--sl-font-mono),")
+        st = st.replace(
+            f"@media (prefers-color-scheme:dark){{:root{{{DARK}}}}}",
+            f":root[data-theme='dark'] .sluice-diagram{{{DARK}}}",
+        )
+        st = st.replace(
+            "text{font-family:",
+            ":where(.sluice-diagram) text{font-family:var(--sl-font),",
+        )
+        st = st.replace(
+            ".sd-mono,.sd-chipt,.sd-pillt{font-family:",
+            ".sd-mono,.sd-chipt,.sd-pillt{font-family:var(--sl-font-mono),",
+        )
         st = st.replace("{*{animation", "{.sluice-diagram *{animation")
         return f"<style>{st}</style>"
-    svg = re.sub(r"<style>(.*?)</style>", css, svg, flags=re.S)
-    svg = re.sub(r'class="([^"]*)"', lambda m: 'class="' + " ".join(f"sd-{c}" for c in m.group(1).split()) + '"', svg)
+
+    svg = re.sub(r"<style>(.*?)</style>", css, svg, flags=re.DOTALL)
+    svg = re.sub(
+        r'class="([^"]*)"',
+        lambda m: 'class="' + " ".join(f"sd-{c}" for c in m.group(1).split()) + '"',
+        svg,
+    )
     svg = svg.replace('id="ttl"', 'id="sd-ttl"').replace('id="dsc"', 'id="sd-dsc"')
     svg = svg.replace('aria-labelledby="ttl dsc"', 'aria-labelledby="sd-ttl sd-dsc"')
-    return svg.replace('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446"',
-                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" class="sluice-diagram"', 1)
+    return svg.replace(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" width="900" height="446"',
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 446" class="sluice-diagram"',
+        1,
+    )
 
 
 if "--scoped" in sys.argv:
