@@ -60,6 +60,9 @@ reap() {
 }
 trap 'reap; rm -rf "$scratch"' EXIT
 scratch=$(cd "$scratch" && pwd -P)
+# git looks for a repository no higher than the scratch directory: the gate
+# runs the suite with it inside sluice's own bare repository.
+export GIT_CEILING_DIRECTORIES="$scratch"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost
