@@ -23,8 +23,8 @@ Fast tier: `moon run ':#check-fast'`. Real tools:
 
 ## 4. The CLI and its reference
 
-- [ ] 4.1 Print `3/5` in `sluice overview`'s text for a combination under test with tasks; add a cli.rs case over the fakes for the document's `tasks` and the text; verify `cargo test -p sluice --test cli overview`.
-- [ ] 4.2 Document `tasks` in `reference/commands.md`'s `sluice overview` section; verify Vale reports nothing.
+- [x] 4.1 Print `3/5` in `sluice overview`'s text for a combination under test with tasks; add a cli.rs case over the fakes for the document's `tasks` and the text; verify `cargo test -p sluice --test cli overview`.
+- [x] 4.2 Document `tasks` in `reference/commands.md`'s `sluice overview` section; verify Vale reports nothing.
 
 ## 5. The Claude Code board
 

@@ -141,7 +141,7 @@ and writes nothing, and it reads with no sluice running.
 ```console
 $ sluice overview
 bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
-  testing bolt/concurrent-units + #13 + #14 since 2026-10-16T09:16:44Z
+  testing bolt/concurrent-units + #13 + #14 3/5 since 2026-10-16T09:16:44Z
   2026-10-16T09:15:02Z  landed #12 as c41e8f2
   2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
 2 worktrees held · 0 previews
@@ -155,10 +155,20 @@ line or a script. Fields are only ever added to it.
 | `schema`, `host`, `repository`, `at` | the schema, the host's name, the repository's git directory, and when it was read |
 | `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing) |
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
+| `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
+
+A combination's `tasks` say how far its tests have got and decide
+nothing: its result is still read from the finished run. Each round
+updates them, about every 3 seconds while a submission waits, from
+what moon writes as each task ends, and they go once the combination
+is no longer under test. The text line's `3/5` counts the tasks that
+have ended. They are kept on the host that runs the combination, so
+another host shows none. The `command` runner has one test, the run
+itself, and gives none.
 
 `--json --watch` prints the document as one line at once, and again
 each time anything in it but `at` changes, reading about once a second

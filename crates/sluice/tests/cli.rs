@@ -690,6 +690,66 @@ fn overview_shows_every_branch_at_a_glance() {
     assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 since ")));
 }
 
+/// ADR 0028: a combination under test carries its run's tasks, as a
+/// round kept them, and its text line says how many have ended.
+#[test]
+fn overview_shows_a_combinations_tasks() {
+    use sluice_seams::{Rev, TaskProgress, TaskState};
+    let f = setup();
+    three_submissions(&f);
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let c = &v["branches"][0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["state"] == "testing")
+        .unwrap()
+        .clone();
+    assert!(c.get("tasks").is_none());
+    let task = |target: &str, state: TaskState, exit: Option<i32>| TaskProgress {
+        target: target.into(),
+        state,
+        started: exit.map(|_| "2026-10-18T12:00:00Z".into()),
+        ended: exit.map(|_| "2026-10-18T12:01:48Z".into()),
+        exit,
+    };
+    f.world.says_tasks(
+        &Rev::new(c["revision"].as_str().unwrap()),
+        &[
+            task("tests:t-cards", TaskState::Passed, Some(0)),
+            task("tests:t-batch-cards", TaskState::Running, None),
+            task("plugin:test", TaskState::Waiting, None),
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let c = v["branches"][0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["state"] == "testing")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        c["tasks"],
+        serde_json::json!([
+            {"target": "tests:t-cards", "state": "passed",
+             "started": "2026-10-18T12:00:00Z", "ended": "2026-10-18T12:01:48Z", "exit": 0},
+            {"target": "tests:t-batch-cards", "state": "running"},
+            {"target": "plugin:test", "state": "waiting"},
+        ])
+    );
+    let (_, text) = sluice(&f, &["overview"]);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with(&format!("  testing {BRANCH} + #3 1/3 since "))),
+        "{text}"
+    );
+}
+
 #[test]
 fn overview_of_a_repository_with_no_records_says_so() {
     let f = setup();
