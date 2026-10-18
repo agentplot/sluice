@@ -587,6 +587,19 @@ out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --dashboard --once)
 printf '%s' "$out" | grep -q '\[1\]' && fail "the dashboard numbers its rows"
 pass
 
+fresh 'status: links to paths that are not ASCII'
+cafe="$scratch/café"
+mkdir -p "$cafe"
+logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "tést", log: "/logs/é/tést.log"}]}]'
+one="[$(sub 97 "\"$cafe\"" queued)]"
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = $one | $logged | $blamed87")"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$cafe" | jq -sRr @uri)" 2>"$t/err"
+has "notification show sluice: no pane for $cafe"
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=$(printf '%s' "/logs/é/tést.log" | jq -sRr @uri)" 2>>"$t/err"
+has '--env SLUICE_HERDR_LOG=/logs/é/tést.log'
+[ -s "$t/err" ] && fail "logged: $(cat "$t/err")"
+pass
+
 fresh 'status: a link focuses, opens, or is left alone'
 blame_logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}]}]'
 feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)] | $blame_logged")"

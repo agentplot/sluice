@@ -13,7 +13,9 @@ url=${1:-${HERDR_PLUGIN_CLICKED_URL:-}}
 
 # One parameter of the link's query, percent-decoded.
 param() {
-  printf '%s' "${url#*\?}" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1 | awk '
+  # In the C locale, so a byte decoded is that byte, whatever the user's
+  # locale: gawk in UTF-8 would make %C3%A9 two characters.
+  printf '%s' "${url#*\?}" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1 | LC_ALL=C awk '
     BEGIN { for (i = 0; i < 256; i++) hex[sprintf("%02x", i)] = sprintf("%c", i) }
     { s = $0; out = ""
       while ((i = index(s, "%")) > 0) {
