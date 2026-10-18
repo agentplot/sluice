@@ -41,11 +41,18 @@ export default defineConfig({
         alt: 'sluice',
       },
       favicon: '/favicon.svg',
-      // The start page's hero, with the animated diagram; every other page
-      // keeps Starlight's.
-      components: { Hero: './src/components/Hero.astro' },
-      // The brand of docs/brand: its colors and type over Starlight's.
-      customCss: ['./src/styles/brand.css'],
+      // The family's header (its bar above Starlight's), footer and status
+      // banner, from @agentplot/site-theme; the start page's hero, with the
+      // animated diagram, is sluice's own.
+      components: {
+        Header: '@agentplot/site-theme/starlight/Header.astro',
+        Footer: '@agentplot/site-theme/starlight/Footer.astro',
+        Banner: '@agentplot/site-theme/starlight/Banner.astro',
+        Hero: './src/components/Hero.astro',
+      },
+      // The family's type, ink and accent, then the brand of docs/brand,
+      // whose exact greens are sluice's own.
+      customCss: ['@agentplot/site-theme/starlight.css', './src/styles/brand.css'],
       // The social card, a copy of docs/brand/social-preview.png.
       head: [
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://agentplot.github.io/sluice/og.png' } },
