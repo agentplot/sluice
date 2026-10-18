@@ -7,8 +7,8 @@ formatter is its own commit, with no other change in it.
 
 ## 1. The tools
 
-- [ ] 1.1 Pin Claude Code's native build in `devenv.nix` by version, with each platform's checksum from that release's `manifest.json`, on `packages`, beside proto and Vale (D4); verify `devenv shell -- claude --version` prints the pinned version and `devenv shell -- command -v claude` is the store path, not the user's wrapper.
-- [ ] 1.2 Add nixpkgs' `typescript` to `packages`; verify `devenv shell -- tsc --version` prints 5.4 or newer.
+- [x] 1.1 Pin Claude Code's native build in `devenv.nix` by version, with each platform's checksum from that release's `manifest.json`, on `packages`, beside proto and Vale (D4); verify `devenv shell -- claude --version` prints the pinned version and `devenv shell -- command -v claude` is the store path, not the user's wrapper.
+- [x] 1.2 Add nixpkgs' `typescript` to `packages`; verify `devenv shell -- tsc --version` prints 5.4 or newer (7.0.2 at this lock).
 
 ## 2. The board
 
