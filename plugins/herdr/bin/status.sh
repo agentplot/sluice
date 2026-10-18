@@ -28,6 +28,15 @@ name=
 [ -n "$repo" ] && name=$(name_of "$repo")
 
 [ -t 1 ] && tty=true || tty=false
+# Rows are OSC 8 links on a terminal (SLUICE_HERDR_LINKS=1 asks for them
+# anywhere); the popup numbers its link rows for keys, the dashboard, a
+# pane where herdr's Ctrl-click reaches them, does not.
+links=$tty
+[ "${SLUICE_HERDR_LINKS:-}" = 1 ] && links=true
+numbers=true
+[ "$all" = true ] && numbers=false
+links_file=$state/popup-links.$$
+trap 'rm -f "$links_file"' EXIT
 
 frame() {
   t=$(now)
@@ -37,7 +46,11 @@ frame() {
     if $all then . else map(select(.repository == $r or (.repository | repo_name) == $n)) end
     | sort_by(.repository, .host)')
   if [ "$(printf '%s' "$shown" | jq length)" -gt 0 ]; then
-    printf '%s' "$shown" | jqw -r --argjson now "$t" --argjson color "$tty" 'include "words"; .[] | frame($now; $color)[]'
+    drawn=$(printf '%s' "$shown" | jqw -c --argjson now "$t" --argjson color "$tty" --argjson numbers "$numbers" '
+      include "words";
+      [.[] | rows($now; $color)[]] | if $numbers then numbered else . end')
+    printf '%s' "$drawn" | jq -r '.[] | select(.n) | .url' >"$links_file"
+    printf '%s' "$drawn" | jqw -r --argjson links "$links" 'include "words"; .[] | line($links)'
   elif [ -n "$(sluice_problem)" ]; then
     sluice_problem
   elif [ "$all" = true ]; then
@@ -82,7 +95,7 @@ fi
 
 if [ -t 0 ]; then
   saved=$(stty -g)
-  trap 'stty "$saved"; printf "\033[?25h"' EXIT
+  trap 'stty "$saved"; printf "\033[?25h"; rm -f "$links_file"' EXIT
   trap 'exit 0' INT TERM HUP
   stty -icanon -echo min 0 time 10
   printf '\033[?25l\033[2J'
@@ -110,6 +123,14 @@ while :; do
   j)
     sh "$root/bin/jump.sh"
     exit 0
+    ;;
+  [1-9])
+    # What a Ctrl-click on the row numbered so would do.
+    url=$(sed -n "${key}p" "$links_file" 2>/dev/null)
+    if [ -n "$url" ]; then
+      sh "$root/bin/link.sh" "$url"
+      exit 0
+    fi
     ;;
   a)
     if [ "$all" = true ]; then all=false; else all=true; fi

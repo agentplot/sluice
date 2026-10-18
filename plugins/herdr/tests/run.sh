@@ -569,6 +569,46 @@ sed "s|$common|REPO|" "$t/frame" >"$t/got"
 diff -u "$here/docs/board.frame" "$t/got" >"$t/diff" || fail "the frame differs: $(cat "$t/diff")"
 pass
 
+fresh 'status: rows are links'
+weird="$scratch/a b&c"
+mkdir -p "$weird"
+blame_logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}]}]'
+both="[$(sub 95 '$work' testing), $(sub 96 "\"$weird\"" queued)]"
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = $both | $blame_logged | $blamed87")"
+out=$(SLUICE_HERDR_DIR=$work SLUICE_HERDR_LINKS=1 sh "$plugin/bin/status.sh" --once)
+e=$(printf '\033')
+printf '%s' "$out" | grep -qF "${e}]8;;sluice-herdr:focus?path=$(printf '%s' "$work" | jq -sRr @uri)${e}\\[1] #95" || fail "no focus link on #95: $(printf '%s' "$out" | cat -v)"
+printf '%s' "$out" | grep -qF "sluice-herdr:focus?path=$(printf '%s' "$weird" | jq -sRr @uri)" || fail "the odd path is not encoded"
+printf '%s' "$out" | grep -qF "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=cli%3Atest" || fail "no log link: $(printf '%s' "$out" | cat -v)"
+# The odd path comes back whole: no pane is in it, which the toast names.
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$weird" | jq -sRr @uri)"
+has "notification show sluice: no pane for $weird"
+out=$(SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" --dashboard --once)
+printf '%s' "$out" | grep -q '\[1\]' && fail "the dashboard numbers its rows"
+pass
+
+fresh 'status: a link focuses, opens, or is left alone'
+blame_logged='.branches[0].candidates = [{id: "c9", submissions: [9], revision: "x", state: "failed", targets: [], executor: null, ran: 1, replayed: 0, failed: [{task: "cli:test", log: "/logs/c9/cli:test.log"}]}]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)] | $blame_logged")"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=$(printf '%s' "$other" | jq -sRr @uri)"
+has 'agent focus p2'
+HERDR_PLUGIN_CONTEXT_JSON='{"focused_pane_id":"p1"}' sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Flogs%2Fc9%2Fcli%3Atest.log&task=cli%3Atest"
+has 'plugin pane open --plugin agentplot.sluice --entrypoint log --placement split --direction right --target-pane p1 --env SLUICE_HERDR_LOG=/logs/c9/cli:test.log --env SLUICE_HERDR_TASK=cli:test'
+: >"$FAKE/herdr-calls"
+sh "$plugin/bin/link.sh" "sluice-herdr:log?path=%2Fetc%2Fpasswd" 2>"$t/err"
+sh "$plugin/bin/link.sh" "sluice-herdr:focus?path=%2Felsewhere" 2>>"$t/err"
+sh "$plugin/bin/link.sh" "sluice-herdr:run?cmd=rm" 2>>"$t/err"
+hasnt 'plugin pane open'
+hasnt 'focus'
+[ "$(grep -c 'left alone\|not a link' "$t/err")" = 3 ] || fail "not each logged: $(cat "$t/err")"
+pass
+
+fresh 'status: a number does what a click does'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$other' testing)]")"
+printf '1' | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >/dev/null
+has 'agent focus p2'
+pass
+
 fresh 'status: two hosts'
 printf '%s\n' "$board" | sh "$plugin/bin/document.sh" local "$work"
 printf '%s\n' "$board" | jq -c '.host = "build" | .repository = "/srv/repo/.git"' | sh "$plugin/bin/document.sh" "build machine" ""

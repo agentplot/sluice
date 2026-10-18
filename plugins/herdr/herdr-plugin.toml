@@ -36,6 +36,19 @@ title = "sluice: jump to the blamed submission's pane"
 contexts = ["global", "pane"]
 command = ["sh", "bin/jump.sh"]
 
+# A row's link, from Ctrl-click on it (the link handler below).
+[[actions]]
+id = "open-link"
+title = "sluice: the pane or log a row names"
+contexts = ["global", "pane"]
+command = ["sh", "bin/link.sh"]
+
+[[link_handlers]]
+id = "rows"
+title = "sluice: a submission's pane, a failed test's log"
+pattern = "^sluice-herdr:(focus|log)\\?"
+action = "open-link"
+
 [[actions]]
 id = "setup"
 title = "sluice: keys, sidebar rows and tab bar to add to your config"
@@ -63,3 +76,9 @@ placement = "popup"
 width = "90%"
 height = "90%"
 command = ["sh", "bin/setup.sh"]
+
+[[panes]]
+id = "log"
+title = "sluice: log"
+placement = "split"
+command = ["sh", "bin/log.sh"]

@@ -50,9 +50,16 @@ Code plugin's `/sluice` pane, and the popup redraws as the queue moves.
 | `q`, Escape | close the popup |
 | `j` | jump to the pane of the submission blamed most recently |
 | `a` | switch between this repository and every one the plugin holds |
+| `1` to `9` | do what a Ctrl-click on the row numbered so does |
 
 The `dashboard` action opens the same view, every repository at once, in a
 tab of its own.
+
+In both, a submission and a failed test's `log of` row are links.
+Ctrl-click a submission to go to the pane of the agent that made it. Ctrl-click
+a failed test to open its log in a split beside the pane. A link acts only on
+a worktree or a log the queue names, so a link that some other output
+prints does nothing.
 
 ## Toasts and the jump
 
