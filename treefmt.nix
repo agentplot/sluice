@@ -2,12 +2,19 @@ _: {
   settings.excludes = [
     "*.md"
     "*.lock"
-    "*.json"
     "*.jsonl"
     "docs/examples/**"
     "target/**"
     ".devenv/**"
     ".moon/cache/**"
+    # Claude Code rewrites it in its own layout when a setting changes.
+    ".claude/settings.json"
+    # The engine's own declarations, copied whole from a session of the
+    # pinned Claude Code (plugins/sluice-board/README.md).
+    "plugins/sluice-board/engine-types/**"
+    # The herdr plugin's fixture documents and frames, compared byte for
+    # byte.
+    "plugins/herdr/tests/docs/**"
   ];
 
   programs.rustfmt.enable = true;
@@ -34,4 +41,28 @@ _: {
     type = "basic";
     retain_line_breaks_single = true;
   };
+
+  # Biome formats and lints the TypeScript, JavaScript, CSS and JSON in
+  # one pass (`biome check`), its recommended rules and nothing more; a
+  # lint error fails `treefmt --ci`. Its settings are here, not in a
+  # biome.json, since treefmt-nix hands Biome a generated one.
+  programs.biome.enable = true;
+  programs.biome.formatCommand = "check";
+  programs.biome.settings = {
+    formatter = {
+      indentStyle = "space";
+      indentWidth = 2;
+      lineWidth = 100;
+    };
+    javascript.formatter = {
+      quoteStyle = "double";
+      trailingCommas = "all";
+      semicolons = "always";
+    };
+    json.formatter.trailingCommas = "none";
+    linter.rules.recommended = true;
+  };
+  # Biome formats only an .astro file's frontmatter, and only
+  # experimentally.
+  settings.formatter.biome.excludes = [ "site/**/*.astro" ];
 }
