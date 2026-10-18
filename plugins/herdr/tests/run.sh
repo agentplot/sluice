@@ -101,6 +101,7 @@ other=$scratch/other
 failures=0
 failed_before=0
 count=0
+skips=0
 name=
 
 # A fresh state, config and stand-in directory for one test.
@@ -124,6 +125,18 @@ fresh() {
 fail() {
   failures=$((failures + 1))
   printf 'FAIL %s: %s\n' "$name" "$*"
+}
+
+# Whether a real ps (or /proc) can be read here, for the few tests that
+# need one; where not (sluice's sandbox on macOS), the test is skipped,
+# said and counted.
+ps_error=$(ps -o pid= -p $$ 2>&1 >/dev/null)
+if [ -r /proc/$$/stat ] || ps -o pid= -p $$ >/dev/null 2>&1; then ps_runs=true; else ps_runs=false; fi
+needs_ps() {
+  [ "$ps_runs" = true ] && return 0
+  echo "skip: $name: ps can't run here (${ps_error:-no output})"
+  skips=$((skips + 1))
+  return 1
 }
 
 pass() {
@@ -228,68 +241,74 @@ fi
 pass
 
 fresh 'watch: a watcher stops only its own sources'
-doc >"$FAKE/overview-work.json"
-doc >"$FAKE/watch-work.jsonl"
-touch "$FAKE/hold"
-SLUICE_HERDR_LOCK_HOLD=3 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
-a=$!
-within 15 'sources_of "$a" | grep -q .' || fail "the first watcher started no source"
-# The first watcher stalls past its lease, its renewer in the middle of
-# renewing it (holding the lock); a second takes over.
-within 15 '[ "$(procs parent_of "$(cut -d" " -f1 "$S/lease.lock/pid" 2>/dev/null)")" = "$a" ]' ||
-  fail "the first watcher's renewer was not caught holding the lock"
-kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
-within 10 'lease_age_at_least 3' || fail "the stalled watcher's lease did not go stale"
-SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
-b=$!
-within 30 '[ "$(holder_of "$S/watch.lease")" = "$b" ] && sources_of "$b" | grep -q .' ||
-  fail "the second watcher did not take over and start its source"
-# The second watcher's sources, before the first one wakes.
-theirs=$(sources_of "$b")
-kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
-within 15 '! kill -0 "$a" 2>/dev/null' || fail "the stalled watcher did not give way"
-[ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
-for p in $theirs; do
-  kill -0 "$p" 2>/dev/null || fail "the first watcher's stop ended the second's source $p"
-done
-rm -f "$FAKE/hold"
-kill "$b" 2>/dev/null
-wait 2>/dev/null
-pass
+if needs_ps; then
+  doc >"$FAKE/overview-work.json"
+  doc >"$FAKE/watch-work.jsonl"
+  touch "$FAKE/hold"
+  SLUICE_HERDR_LOCK_HOLD=3 SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+  a=$!
+  within 15 'sources_of "$a" | grep -q .' || fail "the first watcher started no source"
+  # The first watcher stalls past its lease, its renewer in the middle of
+  # renewing it (holding the lock); a second takes over.
+  within 15 '[ "$(procs parent_of "$(cut -d" " -f1 "$S/lease.lock/pid" 2>/dev/null)")" = "$a" ]' ||
+    fail "the first watcher's renewer was not caught holding the lock"
+  kill -STOP "$a" $(pgrep -P "$a") 2>/dev/null
+  within 10 'lease_age_at_least 3' || fail "the stalled watcher's lease did not go stale"
+  SLUICE_HERDR_LEASE=2 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+  b=$!
+  within 30 '[ "$(holder_of "$S/watch.lease")" = "$b" ] && sources_of "$b" | grep -q .' ||
+    fail "the second watcher did not take over and start its source"
+  # The second watcher's sources, before the first one wakes.
+  theirs=$(sources_of "$b")
+  kill -CONT "$a" $(pgrep -P "$a") 2>/dev/null
+  within 15 '! kill -0 "$a" 2>/dev/null' || fail "the stalled watcher did not give way"
+  [ "$(holder_of "$S/watch.lease")" = "$b" ] || fail "the lease is not the second watcher's"
+  for p in $theirs; do
+    kill -0 "$p" 2>/dev/null || fail "the first watcher's stop ended the second's source $p"
+  done
+  rm -f "$FAKE/hold"
+  kill "$b" 2>/dev/null
+  wait 2>/dev/null
+  pass
+fi
 
 fresh "watch: a killed watcher's sources are ended"
-doc >"$FAKE/overview-work.json"
-doc >"$FAKE/watch-work.jsonl"
-# A watcher killed outright left a source running under its pid.
-sleep 60 &
-orphan=$!
-dead=$(sh -c 'echo $$')
-mkdir -p "$S/run/$dead"
-printf '%s\t%s\n' "$orphan" "$(procs identity "$orphan")" >"$S/run/$dead/x.pids"
-SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
-sleep 1
-if kill -0 "$orphan" 2>/dev/null; then
-  fail "the dead watcher's source still runs"
-  kill "$orphan"
+if needs_ps; then
+  doc >"$FAKE/overview-work.json"
+  doc >"$FAKE/watch-work.jsonl"
+  # A watcher killed outright left a source running under its pid.
+  sleep 60 &
+  orphan=$!
+  dead=$(sh -c 'echo $$')
+  mkdir -p "$S/run/$dead"
+  printf '%s\t%s\n' "$orphan" "$(procs identity "$orphan")" >"$S/run/$dead/x.pids"
+  SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+  sleep 1
+  if kill -0 "$orphan" 2>/dev/null; then
+    fail "the dead watcher's source still runs"
+    kill "$orphan"
+  fi
+  [ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
+  pass
 fi
-[ -d "$S/run/$dead" ] && fail "the dead watcher's sources are still listed"
-pass
 
 fresh "watch: a source is known without ps's start times"
-doc >"$FAKE/overview-work.json"
-doc >"$FAKE/watch-work.jsonl"
-touch "$FAKE/hold"
-PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
-w=$!
-# Three ticks at least, each starting with a look at herdr's panes, while
-# the source is held open.
-within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
-[ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
-  fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
-kill "$w" 2>/dev/null
-wait "$w" 2>/dev/null
-rm -f "$FAKE/hold"
-pass
+if needs_ps; then
+  doc >"$FAKE/overview-work.json"
+  doc >"$FAKE/watch-work.jsonl"
+  touch "$FAKE/hold"
+  PATH="$here/fake-busybox-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+  w=$!
+  # Three ticks at least, each starting with a look at herdr's panes, while
+  # the source is held open.
+  within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+  [ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
+    fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+  kill "$w" 2>/dev/null
+  wait "$w" 2>/dev/null
+  rm -f "$FAKE/hold"
+  pass
+fi
 
 fresh 'watch: a watcher stopped in its source'"'"'s first second ends it'
 doc >"$FAKE/overview-work.json"
@@ -334,6 +353,19 @@ kill "$w" 2>/dev/null
 wait "$w" 2>/dev/null
 within 5 '! pgrep -f "$here/fake/sluice overview --watch" >/dev/null' || fail "the source outlived its watcher"
 rm -f "$FAKE/hold"
+pass
+
+fresh "watch: without ps, an ended watcher's sources are left alone"
+sleep 60 &
+orphan=$!
+dead=$(sh -c 'echo $$')
+mkdir -p "$S/run/$dead"
+printf '%s\tchild:pid:%s\n' "$orphan" "$orphan" >"$S/run/$dead/x.pids"
+printf '%s\tpid:%s:%s\n' "$orphan" "$orphan" "$dead" >"$S/run/$dead/y.pids"
+PATH="$here/fake-no-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>"$t/log"
+kill -0 "$orphan" 2>/dev/null || fail "a pid that could not be checked was ended"
+kill "$orphan" 2>/dev/null
+[ "$(grep -c 'cannot tell an ended watcher' "$t/log")" = 1 ] || fail "not said once: $(cat "$t/log")"
 pass
 
 fresh 'watch: a pid used again by another process is left alone'
@@ -381,23 +413,25 @@ done
 pass
 
 fresh 'watch: a renewer killed holding the lock'
-# The renewer holds the lock four seconds each time, so it is caught there.
-SLUICE_HERDR_LOCK_HOLD=4 SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
-w=$!
-for i in 1 2 3 4 5 6 7 8; do
-  [ -f "$S/lease.lock/pid" ] && break
-  sleep 1
-done
-owner=$(cut -d' ' -f1 "$S/lease.lock/pid" 2>/dev/null)
-[ -n "$owner" ] || fail "the renewer never took the lock"
-[ "$owner" != "$w" ] || fail "the renewer holds the lock as its watcher"
-[ "$(procs parent_of "$owner")" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
-began=$(date +%s)
-kill -TERM "$w"
-wait "$w" 2>/dev/null
-[ $(($(date +%s) - began)) -lt 5 ] || fail "stop waited on the lock its renewer held"
-[ -f "$S/watch.lease" ] && fail "stop left the lease"
-pass
+if needs_ps; then
+  # The renewer holds the lock four seconds each time, so it is caught there.
+  SLUICE_HERDR_LOCK_HOLD=4 SLUICE_HERDR_LEASE=4 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 30 2>/dev/null &
+  w=$!
+  for i in 1 2 3 4 5 6 7 8; do
+    [ -f "$S/lease.lock/pid" ] && break
+    sleep 1
+  done
+  owner=$(cut -d' ' -f1 "$S/lease.lock/pid" 2>/dev/null)
+  [ -n "$owner" ] || fail "the renewer never took the lock"
+  [ "$owner" != "$w" ] || fail "the renewer holds the lock as its watcher"
+  [ "$(procs parent_of "$owner")" = "$w" ] || fail "the lock's owner $owner is not the watcher's renewer"
+  began=$(date +%s)
+  kill -TERM "$w"
+  wait "$w" 2>/dev/null
+  [ $(($(date +%s) - began)) -lt 5 ] || fail "stop waited on the lock its renewer held"
+  [ -f "$S/watch.lease" ] && fail "stop left the lease"
+  pass
+fi
 
 fresh 'watch: herdr gone'
 touch "$FAKE/down"
@@ -884,7 +918,7 @@ pass
 
 echo
 if [ "$failures" -gt 0 ]; then
-  echo "$failures failed of $count"
+  echo "$failures failed of $((count - skips)), $skips skipped"
   exit 1
 fi
-echo "all $count passed"
+echo "all $((count - skips)) passed, $skips skipped"

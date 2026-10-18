@@ -135,13 +135,7 @@ settle() {
 # recorded. Where none can be checked, none is: an unknown pid is never
 # ended, and that is said once.
 listed() {
-  if [ "$knowable" = false ]; then
-    if [ "$unchecked" = false ]; then
-      unchecked=true
-      say "cannot tell an ended watcher's sources from other processes here (no ps, no /proc); left alone"
-    fi
-    return 0
-  fi
+  [ "$knowable" = true ] || return 0
   while IFS='	' read -r p id; do
     same_process "$p" "${id#child:}" && echo "$p"
   done <"$1"
@@ -174,6 +168,10 @@ for d in "$state"/run/*; do
   p=${d##*/}
   [ "$p" = $$ ] && continue
   kill -0 "$p" 2>/dev/null && continue
+  if [ "$knowable" = false ] && [ "$unchecked" = false ]; then
+    unchecked=true
+    say "cannot tell an ended watcher's sources from other processes here (no ps, no /proc); left alone"
+  fi
   for f in "$d"/*.pids; do
     [ -e "$f" ] && end_listed "$f"
   done
