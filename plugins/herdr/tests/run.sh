@@ -423,12 +423,15 @@ pass
 fresh 'watch: one watcher per herdr server'
 HERDR_SOCKET_PATH=/run/one.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
 HERDR_SOCKET_PATH=/run/two.sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
-sleep 2
-n=0
-for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
-  [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
-done
-[ "$n" = 2 ] || fail "$n watchers for two herdr servers"
+# The live watchers, one per server's lease.
+live_watchers() {
+  n=0
+  for l in "$HERDR_PLUGIN_STATE_DIR"/servers/*/watch.lease; do
+    [ -f "$l" ] && kill -0 "$(holder_of "$l")" 2>/dev/null && n=$((n + 1))
+  done
+  echo "$n"
+}
+within 20 '[ "$(live_watchers)" = 2 ]' || fail "$(live_watchers) watchers for two herdr servers"
 pass
 
 fresh 'watch: a renewer killed holding the lock'
