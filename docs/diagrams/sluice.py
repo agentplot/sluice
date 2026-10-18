@@ -415,4 +415,5 @@ def scoped(svg):
 
 if "--scoped" in sys.argv:
     out = scoped(out)
-open([a for a in sys.argv[1:] if a != "--scoped"][0], "w").write(out)
+with open(next(a for a in sys.argv[1:] if a != "--scoped"), "w") as f:
+    f.write(out)

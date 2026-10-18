@@ -24,7 +24,7 @@ formatter is its own commit, with no other change in it.
 ## 4. The formatters
 
 - [x] 4.1 Enable Biome in `treefmt.nix` with `formatCommand = "check"` and the settings of D3, drop the `*.json` exclude, exclude `.claude/settings.json`, `plugins/sluice-board/engine-types/**` and `site/**/*.astro` with their reasons, and add the file types to `root:format`'s inputs; commit Biome's rewrite of the tree alone, then fix by hand what its lint flags; verify `moon run root:format` passes, fails naming the file with single quotes put in `board.ts`, fails naming the rule with an `==` put there, and `moon run root:plugin-board` passes after the rewrite, and `moon run site:build` by hand, since the site's build is the Pages workflow's and no gate runs it.
-- [ ] 4.2 Enable ruff format and ruff check for `*.py`; commit ruff's rewrite alone; verify `moon run root:format` passes, fails on `docs/diagrams/sluice.py` reindented, and `moon run site:build`, by hand as in 4.1, still renders the diagram.
+- [x] 4.2 Enable ruff format and ruff check for `*.py`; commit ruff's rewrite alone; verify `moon run root:format` passes, fails on `docs/diagrams/sluice.py` reindented, and both scripts write the diagrams byte for byte as before.
 - [ ] 4.3 Enable actionlint for `.github/workflows/`; fix what it flags; verify `moon run root:format` passes and fails naming the line with `runs-on` mistyped in `ci.yml`.
 - [ ] 4.4 Add `.prototools` to taplo's includes and `.versionrc` to yamlfmt's; commit any rewrite alone; verify `moon run root:format` passes and a commit made through the convco hook is still accepted.
 
