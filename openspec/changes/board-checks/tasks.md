@@ -35,9 +35,9 @@ formatter is its own commit, with no other change in it.
 
 ## 6. The gate refuses an unclaimed file, and the rule
 
-- [ ] 6.1 Set `settings.on-unmatched = "fatal"` in `treefmt.nix`, exclude each file type D2 excludes not yet excluded, put a comment giving its reason above every exclude, and make `root:format`'s inputs every tracked file (`/**/*`); verify `moon run root:format` passes on the tree, fails naming `notes/plan.rst` with that file committed in a scratch worktree, and passes with a file added under `docs/examples/`.
-- [ ] 6.2 Add "### The gate" with core.21 and its Details to `docs/architecture/core.md` (D7), and its ADR under `docs/adr/` at the next free number, with `adrs.toml`'s tooling; verify the ADR renders on the site (`moon run site:build`) and `moon run site:prose` passes.
-- [ ] 6.3 In `openspec/config.yaml`, add the `rules.tasks` entry of D7, change "written in Rust" and "core.1 to core.17" as D7 says; verify `openspec instructions tasks --change board-checks` prints the new rule and `openspec validate board-checks --strict` passes.
+- [x] 6.1 Set `settings.on-unmatched = "fatal"` in `treefmt.nix`, exclude each file type D2 excludes not yet excluded, put a comment giving its reason above every exclude, and make `root:format`'s inputs every tracked file (`/**/*`); verify `moon run root:format` passes on the tree, fails naming `notes/plan.rst` with that file committed in a scratch worktree, and passes with a file added under `docs/examples/`.
+- [x] 6.2 Add "### The gate" with core.21 and its Details to `docs/architecture/core.md` (D7), and its ADR under `docs/adr/` at the next free number, with `adrs.toml`'s tooling; verify the ADR renders on the site (`moon run site:build`) and `moon run site:prose` passes.
+- [x] 6.3 In `openspec/config.yaml`, add the `rules.tasks` entry of D7, change "written in Rust" and "core.1 to core.17" as D7 says; verify `openspec instructions tasks --change board-checks` prints the new rule and `openspec validate board-checks --strict` passes.
 
 ## 7. Integration
 
