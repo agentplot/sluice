@@ -30,8 +30,8 @@ formatter is its own commit, with no other change in it.
 
 ## 5. The herdr plugin, applying once herdr-plugin is on main
 
-- [ ] 5.1 Add `plugins/herdr/tests/fake/*` and `plugins/herdr/tests/fake-*/*` to shellcheck's and shfmt's includes; fix what shellcheck flags; commit shfmt's rewrite alone; verify `moon run root:format` and `moon run root:plugin-herdr` pass.
-- [ ] 5.2 Exclude `plugins/herdr/lib/*.awk`, `plugins/herdr/lib/*.jq` and `plugins/herdr/tests/docs/**` in `treefmt.nix` with the reasons in D2; verify `moon run root:format` passes and `moon run root:plugin-herdr` fails with a syntax error put in `words.jq`.
+- [x] 5.1 Add `plugins/herdr/tests/fake/*` and `plugins/herdr/tests/fake-*/*` to shellcheck's and shfmt's includes; fix what shellcheck flags; commit shfmt's rewrite alone; verify `moon run root:format` and `moon run root:plugin-herdr` pass.
+- [x] 5.2 Exclude `plugins/herdr/lib/*.awk`, `plugins/herdr/lib/*.jq` and `plugins/herdr/tests/docs/**` in `treefmt.nix` with the reasons in D2; verify `moon run root:format` passes and `moon run root:plugin-herdr` fails with a syntax error put in `words.jq`.
 
 ## 6. The gate refuses an unclaimed file, and the rule
 

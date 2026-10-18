@@ -15,6 +15,11 @@ _: {
     # The herdr plugin's fixture documents and frames, compared byte for
     # byte.
     "plugins/herdr/tests/docs/**"
+    # The herdr plugin's awk and jq programs: no formatter or linter for
+    # either in the toolchain; plugin-herdr runs each under sh and dash, and
+    # a parse error fails it.
+    "plugins/herdr/lib/*.awk"
+    "plugins/herdr/lib/*.jq"
   ];
 
   programs.rustfmt.enable = true;
