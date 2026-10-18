@@ -105,30 +105,65 @@ say "watching (pid $$)"
 ) &
 renewer=$!
 
-# A source's process is kept with its identity (lib/procs.sh).
+# Whether this system lets a process be told apart from one given its pid
+# later: not where ps cannot run and there is no /proc (sluice's sandbox on
+# macOS, where ps is refused).
+if [ "$(identity $$)" = "pid:$$" ]; then knowable=false; else knowable=true; fi
+unchecked=false
+
+# A source's subshell, this watcher's own child, kept with its identity
+# (lib/procs.sh) for a later watcher to check. While this watcher lives it
+# needs none: an unreaped child keeps its pid, so kill -0 cannot mistake
+# another process for it.
 remember() {
-  printf '%s\t%s\n' "$1" "$(identity "$1")" >>"$2"
+  printf '%s\tchild:%s\n' "$1" "$(identity "$1")" >>"$2"
 }
 
 # A pid kept alone, at its fork, given its identity; dropped if it has
-# ended already, so the pid is never taken for whoever gets it next.
+# ended already, so the pid is never taken for whoever gets it next. Where
+# no identity can be read it stays as it was.
 settle() {
   if kill -0 "$1" 2>/dev/null; then id=$(identity "$1"); else id=; fi
+  [ "$id" = "pid:$1" ] && return 0
   awk -F '\t' -v p="$1" -v id="$id" '
     $1 == p && index($2, "pid:" p ":") == 1 { if (id != "") print p "\t" id; next }
     { print }' "$2" >"$2.tmp.$$" &&
     mv -f "$2.tmp.$$" "$2"
 }
 
-# Each process listed in a pids file that is still the one it recorded.
+# Each process in a dead watcher's pids file that is still the one it
+# recorded. Where none can be checked, none is: an unknown pid is never
+# ended, and that is said once.
 listed() {
+  if [ "$knowable" = false ]; then
+    if [ "$unchecked" = false ]; then
+      unchecked=true
+      say "cannot tell an ended watcher's sources from other processes here (no ps, no /proc); left alone"
+    fi
+    return 0
+  fi
   while IFS='	' read -r p id; do
-    same_process "$p" "$id" && echo "$p"
+    same_process "$p" "${id#child:}" && echo "$p"
   done <"$1"
 }
 
 end_listed() {
   for p in $(listed "$1"); do kill "$p" 2>/dev/null; done
+}
+
+# This watcher's own: its children by kill -0 alone; a source under one of
+# them by its identity, or, where none can be read, while that child lives.
+own_listed() {
+  child=false
+  while IFS='	' read -r p id; do
+    case $id in child:*) kill -0 "$p" 2>/dev/null && child=true ;; esac
+  done <"$1"
+  while IFS='	' read -r p id; do
+    case $id in
+    child:*) kill -0 "$p" 2>/dev/null && echo "$p" ;;
+    *) if same_process "$p" "$id" || { [ "$knowable" = false ] && [ "$child" = true ] && kill -0 "$p" 2>/dev/null; }; then echo "$p"; fi ;;
+    esac
+  done <"$1"
 }
 
 # This watcher's sources, apart from any other's. A watcher killed outright
@@ -152,7 +187,8 @@ stop() {
   kill "$renewer" 2>/dev/null
   wait "$renewer" 2>/dev/null
   for f in "$runs"/*.pids; do
-    [ -e "$f" ] && end_listed "$f"
+    [ -e "$f" ] || continue
+    for p in $(own_listed "$f"); do kill "$p" 2>/dev/null; done
   done
   rm -rf "$runs"
   if take_lock; then
@@ -198,7 +234,7 @@ start() {
 
 alive() {
   [ -f "$1.pids" ] || return 1
-  [ -n "$(listed "$1.pids")" ]
+  [ -n "$(own_listed "$1.pids")" ]
 }
 
 # Sources and repositories, every tick.

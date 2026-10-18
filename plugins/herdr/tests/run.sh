@@ -320,6 +320,22 @@ kill -0 "$other_process" 2>/dev/null || fail "a process that only has a recorded
 kill "$other_process" 2>/dev/null
 pass
 
+fresh 'watch: without ps, one source and it is ended'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# No ps that runs, and on macOS no /proc: nothing can be told by identity.
+PATH="$here/fake-no-ps:$PATH" SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>"$t/log" &
+w=$!
+within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "the watcher did not tick"
+[ "$(grep -c '^work: overview --watch --json' "$FAKE/sluice-calls")" = 1 ] ||
+  fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
+kill "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+within 5 '! pgrep -f "$here/fake/sluice overview --watch" >/dev/null' || fail "the source outlived its watcher"
+rm -f "$FAKE/hold"
+pass
+
 fresh 'watch: a pid used again by another process is left alone'
 # After a reboot the state is still there, and the pid is someone else's.
 sleep 60 &
