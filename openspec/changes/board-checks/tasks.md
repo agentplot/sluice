@@ -19,7 +19,7 @@ formatter is its own commit, with no other change in it.
 
 ## 3. The manifests
 
-- [ ] 3.1 Add `plugins/check-manifests.sh`, validating `.` and every plugin the marketplace lists with `claude plugin validate --strict` under the same `HOME` and environment as 2.2, and the check-fast task `root:plugin-manifests` (inputs `/.claude-plugin/**/*`, `/plugins/**/*`, `/devenv.nix`, `/devenv.lock`); verify `moon run root:plugin-manifests` passes, and fails naming the plugin with a marketplace entry pointed at a directory with no manifest.
+- [x] 3.1 Add `plugins/check-manifests.sh`, validating `.` and every plugin the marketplace lists with `claude plugin validate --strict` under the same `HOME` and environment as 2.2, and the check-fast task `root:plugin-manifests` (inputs `/.claude-plugin/**/*`, `/plugins/**/*`, `/devenv.nix`, `/devenv.lock`); verify `moon run root:plugin-manifests` passes, and fails naming the plugin with a marketplace entry pointed at a directory with no manifest.
 
 ## 4. The formatters
 
