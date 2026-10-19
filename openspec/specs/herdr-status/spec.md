@@ -10,9 +10,11 @@ bar, all read from the watcher's state.
 ### Requirement: The popup shows the focused repository's queue
 
 The `status` action SHALL open a popup for the focused pane's repository
-listing, per branch, TESTING (each combination under test with its tests
-and elapsed time against its limit), QUEUED (the submissions in the queue
-with their states) and RECENT (the latest landings, blames and conflicts), worded as the
+listing, per branch, TESTING (each combination under test with its tests,
+how many of its tasks have ended with a bar of ten cells when its document
+lists them, its elapsed time against its limit, and beneath it each task
+with its state), QUEUED (the submissions in the queue with their states)
+and RECENT (the latest landings, blames and conflicts), worded as the
 Claude Code board's `/sluice` pane.
 
 #### Scenario: Testing
@@ -25,6 +27,19 @@ Claude Code board's `/sluice` pane.
   `✓ 19:41 #11 landed as 9ecc34a` and `✗ 19:42 #9 blamed on 4f1c2aa` under
   RECENT
 
+#### Scenario: Testing, with tasks
+
+- **WHEN** that combination's document lists five tasks, three of them
+  ended and `sluice:e2e` running
+- **THEN** the popup shows `▶ testing main+#12+#13  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m`,
+  and under its tests the ended tasks in the order they ended with how long
+  each took, then `… sluice:e2e  running`, then the waiting task
+
+#### Scenario: A list it cannot read
+
+- **WHEN** a document's tasks include an entry with no target
+- **THEN** the popup leaves that entry out of the count and the list
+
 #### Scenario: Two hosts
 
 - **WHEN** the watcher holds documents for the repository from two hosts
@@ -34,8 +49,9 @@ Claude Code board's `/sluice` pane.
 ### Requirement: The popup redraws on change
 
 The popup SHALL redraw within a second of the watcher writing a new
-document for its repository, and SHALL keep its clocks current, without a
-key being pressed and without running a watch of its own.
+document for its repository, whether or not the branch's version moved,
+and SHALL keep its clocks current, without a key being pressed and without
+running a watch of its own.
 
 #### Scenario: A landing
 
@@ -43,6 +59,12 @@ key being pressed and without running a watch of its own.
   `#12` and `#13` landed
 - **THEN** within a second TESTING no longer lists them and RECENT shows
   the landing
+
+#### Scenario: A task ends
+
+- **WHEN** the popup is open and the watcher writes a document in which
+  only a task of the combination under test has ended
+- **THEN** within a second the count, the bar and the task's line show it
 
 ### Requirement: The popup's keys
 
@@ -86,15 +108,17 @@ showing every repository the watcher holds.
 ### Requirement: The tab-bar segment
 
 The plugin SHALL provide a command for herdr's `tab_bar_right` that prints
-one line for the focused pane's repository, worded as the board's band, and
-prints nothing while no branch there has a queue.
+one line for the focused pane's repository, worded as the board's band,
+with a combination's task count and bar and never its tasks, and prints
+nothing while no branch there has a queue.
 
 #### Scenario: Queue
 
 - **WHEN** the focused repository's `main` has 3 submissions with
-  `#12 + #13` testing for 130 s of 900 s
+  `#12 + #13` testing for 130 s of 900 s, three of its five tasks ended
 - **THEN** the segment prints `sluice main · 3 submissions · testing
-  main+#12+#13 2m10s/15m` followed by what is waiting and the last event
+  main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m` followed by what is waiting and
+  the last event
 
 #### Scenario: Empty
 
