@@ -180,8 +180,8 @@ let
   # by, so every host checks the plugins against one engine, and never the
   # user's own `claude`, which may be a wrapper adding options `claude
   # plugin test` refuses. Bump the version and the four checksums from the
-  # release's manifest.zst.json, and copy the board's engine-types again from a session of it
-  # (plugins/sluice-board/README.md).
+  # release's manifest.zst.json, and copy the board's engine-types again
+  # from a session of it (plugins/sluice-board/README.md).
   claudeVersion = "2.1.296";
   claudeAssets = {
     aarch64-darwin = {
@@ -247,8 +247,8 @@ in
     worktrunk
     vale
     claude
-    # The board's type check (plugin-board:typecheck); its engine-types ask for 5.4
-    # or later.
+    # The board's type check (plugin-board:typecheck); its engine-types
+    # ask for 5.4 or later.
     pkgs.typescript
     pkgs.bun
     # The stack acceptance test's browser test (ADR 0016): Playwright and
