@@ -786,12 +786,52 @@ printf '%s' "$first" | grep -q '^q close' || fail "the footer went: $first"
 # Room enough: every task listed, as before.
 printf q | LINES=60 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 awk 'BEGIN{RS="\f"} NR==1' "$t/out" | grep -q '^        · w9:test  *waiting$' || fail "with room the waiting tasks are not listed: $(cat "$t/out")"
-# Shorter still: RECENT's oldest go, then the bottom is cut and said.
+# Shorter still: the bottom is cut and said.
 printf q | LINES=12 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
 [ "$(printf '%s\n' "$first" | wc -l)" -le 12 ] || fail "the frame is taller than 12 lines: $first"
 printf '%s' "$first" | grep -q '^        ✗ a:failed ' || fail "at 12 lines the failed task went: $first"
-printf '%s' "$first" | grep -q '^… [0-9]* more lines$' || fail "the cut is not said: $first"
+printf '%s' "$first" | grep -q '^… [0-9]* more lines · ↓ scrolls$' || fail "the cut is not said: $first"
+pass
+
+fresh 'status: a tall frame scrolls'
+printf '%s\n' "$tall" | sh "$plugin/bin/document.sh" local "$work"
+# Down twice, Page Down twice, past the end, Up once, then q: six frames.
+printf '\033[B\033[B\033[6~\033[6~\033[Aq' | LINES=12 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+nth() { awk -v n="$1" 'BEGIN{RS="\f"} NR==n {sub(/^\n/, ""); print}' "$t/out"; }
+second=$(nth 3)
+printf '%s' "$second" | grep -q '^… 2 lines above · ↑ scrolls$' || fail "two lines down does not say so: $second"
+printf '%s' "$second" | grep -q '^… [0-9]* more lines$' || fail "the lines below are not said: $second"
+[ "$(printf '%s\n' "$second" | wc -l)" -le 12 ] || fail "a scrolled frame is taller than 12 lines: $second"
+last=$(nth 5)
+printf '%s' "$last" | grep -q 'more lines' && fail "the end of the rows still says more: $last"
+printf '%s' "$last" | grep -q '✓ 19:32 #82 landed' || fail "the last row is not reached: $last"
+[ "$(printf '%s\n' "$last" | wc -l)" -le 12 ] || fail "the last frame is taller than 12 lines: $last"
+above=$(printf '%s' "$last" | sed -n 's/^… \([0-9]*\) lines above.*/\1/p')
+up=$(nth 6)
+printf '%s' "$up" | grep -q "^… $((above - 1)) lines above" || fail "Up from the end does not move one line: $up"
+pass
+
+fresh 'status: a branch with nothing queued is left out'
+feed "$(printf '%s\n' "$board" | jq -c '.branches += [range(30) | {branch: "bolt/b\(.)", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}]')"
+out=$(frame_of "$work" --once)
+printf '%s' "$out" | grep -q 'bolt/b' && fail "an idle branch is shown: $out"
+printf '%s' "$out" | grep -q '^main at 9ecc34a' || fail "the busy branch went: $out"
+printf '%s' "$out" | grep -q '^30 other branches with nothing queued$' || fail "the idle branches are not counted: $out"
+feed "$(printf '%s\n' "$board" | jq -c '.branches |= map(.depth = 0 | .submissions = [] | .candidates = [] | .recent = [])')"
+out=$(frame_of "$work" --once)
+printf '%s' "$out" | grep -q '^No branch has a queue.$' || fail "with every branch idle it said: $out"
+printf '%s' "$out" | grep -q 'other branch' && fail "with every branch idle it counts them: $out"
+pass
+
+fresh 'status: an idle branch is shown a quarter of an hour after its last event'
+fresh_doc() { printf '%s\n' "$board" | jq -c --arg at "$1" '.branches += [{branch: "bolt/done", at: "1234567", depth: 0, submissions: [], candidates: [],
+  recent: [{schema: "sluice/log@1", at: $at, event: "landed", ids: [77], to: "abcdef0"}]}]'; }
+feed "$(fresh_doc 2026-10-16T19:40:00Z)"
+frame_of "$work" --once | grep -q '^bolt/done at 1234567' || fail "a landing five minutes old is not shown"
+feed "$(fresh_doc 2026-10-16T19:20:00Z)"
+out=$(frame_of "$work" --once)
+printf '%s' "$out" | grep -q 'bolt/done' && fail "a landing 25 minutes old is still shown: $out"
 pass
 
 fresh 'status: a pane outside git shows every repository'

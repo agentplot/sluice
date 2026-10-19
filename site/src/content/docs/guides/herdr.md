@@ -47,6 +47,9 @@ are each branch's combinations under test with their tests and elapsed
 time; under QUEUED, the submissions with their states; under RECENT, the
 latest landings, blames and conflicts. The words are those of the Claude
 Code plugin's `/sluice` pane, and the popup redraws as the queue moves.
+A branch with nothing queued is left out once a quarter hour has passed
+since its last landing, blame or conflict; one line counts the branches
+left out.
 
 When the task runner says how a combination's tasks are going, as moon
 does, the combination shows how many have ended and a bar, and its tasks
@@ -66,9 +69,9 @@ The tab bar and the sidebar show the count and the bar alone.
 
 When the popup is too short for all of it, each combination keeps its
 running and failed tasks and counts the rest, as in
-`… 18 passed, 10 waiting`. If that is not enough, the oldest of RECENT
-go. Only then is the bottom cut, and the popup says how much is not
-shown. Opened from a pane outside any git repository, the popup says so
+`… 18 passed, 10 waiting`. If it is still too tall, the popup shows
+what fits and says how many lines are above and below; the arrow keys
+and Page Up and Down scroll it. Opened from a pane outside any git repository, the popup says so
 and shows every repository the plugin holds.
 
 | Key | Does |
@@ -76,6 +79,7 @@ and shows every repository the plugin holds.
 | `q`, Escape | close the popup |
 | `j` | jump to the pane of the submission blamed most recently |
 | `a` | switch between this repository and every one the plugin holds |
+| ↑, ↓, Page Up, Page Down | scroll a view taller than the popup |
 | `1` to `9` | do what a Ctrl-click on the row numbered so does |
 
 The `dashboard` action opens the same view, every repository at once, in a

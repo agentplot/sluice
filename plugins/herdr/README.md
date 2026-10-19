@@ -23,8 +23,11 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   with their tests and time, the submissions queued, and recent landings,
   blames and conflicts, under TESTING, QUEUED and RECENT, in the same words
   as the Claude Code board's `/sluice` pane. It redraws as the queue moves.
+  A branch with nothing queued is left out, and counted on one line, once
+  a quarter hour has passed since its last landing, blame or conflict.
   `q` or Escape closes it, `j` jumps to the blamed submission's pane, `a`
-  shows every repository the plugin holds.
+  shows every repository the plugin holds, and the arrow keys and Page Up
+  and Down scroll it when it is taller than the popup.
 - **The dashboard**: the same view in its own tab, every repository at
   once (`agentplot.sluice.dashboard`).
 - **Rows that act**: in the popup and the dashboard, Ctrl-click a

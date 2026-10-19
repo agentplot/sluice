@@ -73,9 +73,18 @@ def recent_words: if .event == "landed" then "\((.ids // []) | map("#\(.)") | jo
   elif .event == "conflict" then "#\(.id) conflict · \((.paths // []) | join(", "))"
   else (.event | tostring) end;
 
+# Whether a branch has anything queued or under test; the rest are left out
+# of the band.
+def busy: .depth > 0 or (testing | length) > 0;
+
+# Whether the popup shows a branch: one busy, or whose last event is under
+# a quarter of an hour old, so a host with many idle branches shows its
+# queues and a landing is still seen once its queue is empty.
+def shown($now): busy or ((.recent | last | .at | since($now)) // 900) < 900;
+
 # The band's line for one branch, or null when it has nothing to show.
 def branch_line($now): . as $b | testing as $under
-  | if $b.depth == 0 and ($under | length) == 0 then null
+  | if ($b | busy | not) then null
     else ["sluice \($b.branch)", plural($b.depth; "submission")]
       + ($under | map((.started | since($now)) as $took
           | "testing \(.submissions | combination($b.branch))"
@@ -103,8 +112,8 @@ def candidate_rows($c; $color): $c | task_lines
 def rows($now; $color): . as $d
   | def row($kind): {text: ., kind: $kind};
   [("\($d.repository) on \($d.host)" | paint($color; "2") | row("heading"))]
-  + (if ($d.branches | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
-  + [ $d.branches[] | . as $b | testing as $under
+  + (if ([$d.branches[] | select(shown($now))] | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
+  + [ $d.branches[] | select(shown($now)) | . as $b | testing as $under
       | ("" | row("blank"))
       , ("\($b.branch) at \(($b.at // "nothing") | .[0:7]) · \(plural($b.depth; "submission")) · \(plural($under | length; "combination")) under test\(if $b.parallel then " (up to \($b.parallel) at once)" else "" end)" | paint($color; "1") | row("heading"))
       , ( ($under + ($b.candidates | map(select(.state == "formed")))) as $shown
@@ -136,6 +145,8 @@ def rows($now; $color): . as $d
                   + {url: "sluice-herdr:log?path=\(.log | @uri)&task=\(.task | @uri)"})
           else empty end )
     ]
+  + ([$d.branches[] | select(shown($now) | not)] | length | if . > 0 and . < ($d.branches | length)
+      then [("" | row("blank")), ((if . == 1 then "1 other branch" else "\(.) other branches" end) + " with nothing queued" | paint($color; "2") | row("heading"))] else [] end)
   + [("" | row("blank")), ("\($d.sessions | length) worktrees held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
 
 # --- Fitting rows to a height -----------------------------------------
@@ -154,24 +165,22 @@ def collapse_tasks($color):
       | .tasks = [] end)
   | .out;
 
-# $n of RECENT's entries gone, the oldest of every branch's first, and a
-# RECENT left with nothing under it gone with them.
-def drop_recent($n):
-  ([to_entries[] | select(.value.kind == "event") | {i: .key, age: .value.age}] | sort_by(-.age, -.i) | .[0:$n] | map(.i)) as $gone
-  | [to_entries[] | select(.key as $k | $gone | index($k) | not) | .value] as $rs
-  | [range($rs | length) as $i | $rs[$i]
-     | select(.kind != "recent" or ($rs[$i + 1].kind | . == "event" or . == "failure"))];
-
-# Rows in at most $height lines, or all of them when $height is null:
-# the task lists collapsed first, then RECENT's entries dropped, and only
-# then the bottom cut, with a line saying how many lines went.
-def fit($height; $color):
+# Rows in at most $height lines, or all of them when $height is null: the
+# task lists collapsed first, then a window of them from row $top on, with
+# a line saying how many lines are above it and one how many below. The
+# line above carries the window's top, kept within the rows, for the next
+# scroll to start from.
+def fit($height; $top; $color):
   if $height == null or length <= $height then .
-  else ([$height, 1] | max) as $h
+  else ([$height, 3] | max) as $h
     | collapse_tasks($color)
-    | if length <= $h then . else drop_recent(length - $h) end
     | if length <= $h then .
-      else .[0:$h - 1] + [{kind: "more", text: ("… \(length - $h + 1) more lines" | paint($color; "2"))}] end end;
+      else length as $n
+        | ([[$top, 0] | max, $n - $h + 1] | min) as $t
+        | if $t == 0 then .[0:$h - 1] + [{kind: "more", text: ("… \($n - $h + 1) more lines · ↓ scrolls" | paint($color; "2"))}]
+          else [{kind: "above", top: $t, text: ("… \($t) lines above · ↑ scrolls" | paint($color; "2"))}]
+            + if $t + $h - 1 >= $n then .[$t:]
+              else .[$t:$t + $h - 2] + [{kind: "more", text: ("… \($n - $t - $h + 2) more lines" | paint($color; "2"))}] end end end end;
 
 # Rows with a url numbered 1 to 9, in the order drawn.
 def numbered: reduce .[] as $r ({n: 0, out: []};
