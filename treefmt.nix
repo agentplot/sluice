@@ -44,8 +44,8 @@ _: {
     # byte.
     "plugins/herdr/tests/docs/**"
     # The herdr plugin's awk and jq programs: no formatter or linter for
-    # either in the toolchain; plugin-herdr runs each under sh and dash, and
-    # a parse error fails it.
+    # either in the toolchain; plugin-herdr's tests run each under sh and
+    # dash, and a parse error fails it.
     "plugins/herdr/lib/*.awk"
     "plugins/herdr/lib/*.jq"
   ];

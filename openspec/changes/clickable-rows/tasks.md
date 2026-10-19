@@ -14,10 +14,10 @@ herdr with its own `XDG_CONFIG_HOME` and session.
 
 ## 2. herdr: rows as data, and links
 
-- [x] 2.1 Make `frame()` in `lib/words.jq` return rows (`{text, url?, n?, kind}`) with a printer, and `candidate_rows(c)` returning `[]` (design D4); verify `root:plugin-herdr` under sh and dash, with `tests/docs/board.frame` unchanged but for the numbers.
-- [x] 2.2 Give submission and failure rows their `sluice-herdr:` URLs, printed as OSC 8 in the popup and the dashboard; verify tests that the frame's escape sequences carry the encoded paths, and that a path with spaces and `&` round-trips, in `root:plugin-herdr`.
-- [x] 2.3 Add the `open-link` action, the `[[link_handlers]]` entry, `bin/link.sh` with the checks of D2, the `log` pane and `bin/log.sh`; verify tests with the stand-in herdr: a focus link focuses the pane, a log link opens the split with the log's path, a link to a path no document names does nothing and is logged, a malformed URL is logged; all in `root:plugin-herdr`.
-- [x] 2.4 Number the popup's link rows and act on digits (D3); verify tests driving digits on stdin, in `root:plugin-herdr`.
+- [x] 2.1 Make `frame()` in `lib/words.jq` return rows (`{text, url?, n?, kind}`) with a printer, and `candidate_rows(c)` returning `[]` (design D4); verify `plugin-herdr:test-sh` and `plugin-herdr:test-dash`, with `tests/docs/board.frame` unchanged but for the numbers.
+- [x] 2.2 Give submission and failure rows their `sluice-herdr:` URLs, printed as OSC 8 in the popup and the dashboard; verify tests that the frame's escape sequences carry the encoded paths, and that a path with spaces and `&` round-trips, in `plugin-herdr:test-sh`.
+- [x] 2.3 Add the `open-link` action, the `[[link_handlers]]` entry, `bin/link.sh` with the checks of D2, the `log` pane and `bin/log.sh`; verify tests with the stand-in herdr: a focus link focuses the pane, a log link opens the split with the log's path, a link to a path no document names does nothing and is logged, a malformed URL is logged; all in `plugin-herdr:test-sh`.
+- [x] 2.4 Number the popup's link rows and act on digits (D3); verify tests driving digits on stdin, in `plugin-herdr:test-sh`.
 - [x] 2.5 Describe the rows in the README and `guides/herdr.md`; verify Vale (`site:prose`) reports nothing.
 
 ## 3. The board: a failure opens in place

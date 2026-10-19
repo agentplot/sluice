@@ -141,4 +141,5 @@ number, and the default source is used.
 
 `plugins/herdr/tests/run.sh` runs every script against stand-in `herdr`
 and `sluice` on scratch repositories; the repository's gate runs it as the
-moon task `root:plugin-herdr`.
+moon project `plugin-herdr`: `test-sh` under the system's sh, `test-dash`
+under dash where it is installed, and `manifest`, `tests/manifest.sh`.

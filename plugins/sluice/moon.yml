@@ -1,0 +1,17 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The Claude Code plugin: its skills, and its hooks in shell.
+language: 'bash'
+layer: 'application'
+
+tasks:
+  # The hooks on a scratch repository.
+  hooks:
+    command: 'bash tests/hooks.sh'
+    inputs: ['scripts/**/*', 'tests/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+  # The manifest and its skills, by the pinned Claude Code.
+  validate:
+    command: '../claude.sh plugin validate --strict .'
+    inputs: ['**/*', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]

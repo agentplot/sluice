@@ -175,12 +175,12 @@ let
     installPhase = "install -Dm755 vale $out/bin/vale";
   };
 
-  # Claude Code, which plugin-board and plugin-manifests run: the release
-  # the board's engine-types were written by, so every host checks the
-  # plugins against one engine, and never the user's own `claude`, which
-  # may be a wrapper adding options `claude plugin test` refuses. Bump the
-  # version and the four checksums from the release's manifest.zst.json,
-  # and copy the board's engine-types again from a session of it
+  # Claude Code, which the plugins' projects and root:marketplace run
+  # (plugins/claude.sh): the release the board's engine-types were written
+  # by, so every host checks the plugins against one engine, and never the
+  # user's own `claude`, which may be a wrapper adding options `claude
+  # plugin test` refuses. Bump the version and the four checksums from the
+  # release's manifest.zst.json, and copy the board's engine-types again from a session of it
   # (plugins/sluice-board/README.md).
   claudeVersion = "2.1.296";
   claudeAssets = {
@@ -247,7 +247,7 @@ in
     worktrunk
     vale
     claude
-    # The board's type check (plugin-board); its engine-types ask for 5.4
+    # The board's type check (plugin-board:typecheck); its engine-types ask for 5.4
     # or later.
     pkgs.typescript
     pkgs.bun

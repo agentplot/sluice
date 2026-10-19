@@ -16,29 +16,11 @@ tasks:
     inputs: ['/crates/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock', '/.prototools']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
-  # The Claude Code plugin's hooks on a scratch repository.
-  plugin-hooks:
-    command: 'plugins/sluice/tests/hooks.sh'
-    inputs: ['/plugins/sluice/scripts/**/*', '/plugins/sluice/tests/**/*', '/devenv.nix', '/devenv.lock']
-    tags: [check-fast]
-    options: {runFromWorkspaceRoot: true}
-  # The board mod: its manifest validated, its modules typed against the
-  # pinned Claude Code's engine-types, and its tests run by that engine.
-  plugin-board:
-    command: 'plugins/sluice-board/tests/check.sh'
-    inputs: ['/plugins/sluice-board/**/*', '/devenv.nix', '/devenv.lock']
-    tags: [check-fast]
-    options: {runFromWorkspaceRoot: true}
-  # The Claude Code marketplace and every plugin it lists, validated.
-  plugin-manifests:
-    command: 'plugins/check-manifests.sh'
-    inputs: ['/.claude-plugin/**/*', '/plugins/**/*', '/devenv.nix', '/devenv.lock']
-    tags: [check-fast]
-    options: {runFromWorkspaceRoot: true}
-  # The herdr plugin's scripts against stand-in herdr and sluice, under sh
-  # and dash.
-  plugin-herdr:
-    command: 'plugins/herdr/tests/shells.sh'
-    inputs: ['/plugins/herdr/**/*', '/devenv.nix', '/devenv.lock']
+  # The Claude Code marketplace, which spans the plugins: it validates, and
+  # every plugin it lists has a manifest. Each plugin's own checks are its
+  # project's (plugins/*/moon.yml).
+  marketplace:
+    command: 'plugins/check-marketplace.sh'
+    inputs: ['/.claude-plugin/**/*', '/plugins/*/.claude-plugin/plugin.json', '/plugins/check-marketplace.sh', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}

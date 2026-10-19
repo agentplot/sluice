@@ -1,0 +1,27 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The board mod. Every check runs the Claude Code and TypeScript devenv.nix
+# pins; no toolchain of moon's, which would fetch one inside the sandbox.
+language: 'typescript'
+layer: 'application'
+
+tasks:
+  # The engine-types were written by the pinned Claude Code.
+  engine-types:
+    command: 'bash tests/engine-types.sh'
+    inputs: ['engine-types/claude-code/index.d.ts', 'tests/engine-types.sh', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+  validate:
+    command: '../claude.sh plugin validate --strict .'
+    inputs: ['**/*', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+  # The modules and tests typed against engine-types (tsconfig.json).
+  typecheck:
+    command: 'tsc -p .'
+    inputs: ['hooks/**/*', 'types/**/*', 'tests/**/*', 'engine-types/**/*', 'tsconfig.json', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+  # The tests, run by the pinned engine.
+  test:
+    command: '../claude.sh plugin test .'
+    inputs: ['**/*', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
