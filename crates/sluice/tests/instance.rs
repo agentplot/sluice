@@ -106,6 +106,10 @@ mod bound {
         repo: Repo,
         sessions: Scratch,
         config: Scratch,
+        /// The host's state of its own: a session run alive on the host
+        /// running the test, its own `sluice exec` included, would count
+        /// toward the bound (rule core.18) and hold the runs to one.
+        state: Scratch,
     }
 
     impl Setup {
@@ -114,6 +118,7 @@ mod bound {
             support::isolated(&mut c)
                 .current_dir(dir)
                 .env("XDG_CONFIG_HOME", self.config.path())
+                .env("XDG_STATE_HOME", self.state.path())
                 .env_remove("SLUICE_AGENT")
                 .env_remove("SLUICE_OTEL")
                 .env_remove("GIT_DIR")
@@ -177,6 +182,7 @@ mod bound {
             repo,
             sessions: Scratch::new("instance-sessions"),
             config,
+            state: Scratch::new("instance-state"),
         };
         // Two submissions on each branch: six candidates want a run at once.
         for (n, b) in BRANCHES.iter().enumerate() {
