@@ -187,6 +187,12 @@ A test that has both passed and failed on identical code. `"fail"`
 treats it as failing, so the submission is blamed; `"pass"` lets it
 through.
 
+Under `"fail"`, a submit names such a test `failed: <test> (flaky)`. It
+says whether the test passed or failed in this run, when and on which
+combination the same inputs did otherwise, and where that run's log is
+kept. The same inputs fail whenever they're tested, so the way on is a
+change to what the test reads.
+
 ### `timeout`
 
 How long one combination's tests may run, for example `"20m"`. A run
