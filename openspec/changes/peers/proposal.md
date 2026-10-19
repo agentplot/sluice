@@ -19,7 +19,8 @@ lands before its clauses are in the statement (core.12).
 
 ## What Changes
 
-- **Records on the remote.** A branch with a `remote` keeps its
+- **Records on the remote.** A branch with a `remote`, in a policy
+  with a `[signers]` table, keeps its
   decisions under `refs/sluice/state/<branch>`, written with a leased
   push, and each signer's run records under `refs/sluice/runs/<signer>`,
   added to only by that signer. Submitted heads, open combinations,
