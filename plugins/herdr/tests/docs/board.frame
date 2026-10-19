@@ -2,8 +2,13 @@ REPO on host-a
 
 main at 9ecc34a · 3 submissions · 1 combination under test (up to 4 at once)
   TESTING
-    ▶ testing main+#12+#13  2m10s / 15m
+    ▶ testing main+#12+#13  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
         #check-fast #check-tools · sandbox
+        ✓ sluice:test      1m48s
+        ✓ site:prose    replayed
+        ✓ sluice:tools     2m30s
+        … sluice:e2e     running
+        · core:test      waiting
   QUEUED
 [1] #12 testing   overview-docs claude
 [2] #13 testing   plugin-board claude

@@ -45,6 +45,22 @@ time; under QUEUED, the submissions with their states; under RECENT, the
 latest landings, blames and conflicts. The words are those of the Claude
 Code plugin's `/sluice` pane, and the popup redraws as the queue moves.
 
+When the task runner says how a combination's tasks are going, as moon
+does, the combination shows how many have ended and a bar, and its tasks
+are listed beneath its tests:
+
+```
+    ▶ testing main+#12+#13  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
+        #check-fast #check-tools · sandbox
+        ✓ sluice:test      1m48s
+        ✓ site:prose    replayed
+        ✓ sluice:tools     2m30s
+        … sluice:e2e     running
+        · core:test      waiting
+```
+
+The tab bar and the sidebar show the count and the bar alone.
+
 | Key | Does |
 |---|---|
 | `q`, Escape | close the popup |
@@ -77,7 +93,7 @@ shows no row:
 
 | The worktree | The row |
 |---|---|
-| has a submission queued or under test | `#95 testing 3m/15m` |
+| has a submission queued or under test | `#95 testing 3m/15m`, `#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m` |
 | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards` |
 | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95` |
 | landed in the last 30 minutes | `#94 landed 12m` |

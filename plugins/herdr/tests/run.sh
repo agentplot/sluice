@@ -586,6 +586,29 @@ sed "s|$common|REPO|" "$t/frame" >"$t/got"
 diff -u "$here/docs/board.frame" "$t/got" >"$t/diff" || fail "the frame differs: $(cat "$t/diff")"
 pass
 
+fresh 'status: tasks redraw with the version unmoved'
+feed "$testing95"
+(
+  sleep 1
+  feed "$(printf '%s' "$testing95" | jq -c '.branches[0].candidates[0].tasks = [{target: "a:test", state: "passed",
+      started: "2026-10-16T19:42:00Z", ended: "2026-10-16T19:43:05Z", exit: 0}, {target: "b:test", state: "running"}]')"
+  printf x
+) | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
+second=$(awk 'BEGIN{RS="\f"} NR==2' "$t/out")
+printf '%s' "$first" | grep -q '░' && fail "a combination whose runner says nothing shows a bar: $first"
+printf '%s' "$second" | grep -q '▶ testing main+#95  1/2 ▓▓▓▓▓░░░░░  3m10s / 15m' || fail "the redraw does not count the tasks: $second"
+printf '%s' "$second" | grep -q '^        ✓ a:test    1m05s$' || fail "the redraw does not list a:test: $second"
+printf '%s' "$second" | grep -q '^        … b:test  running$' || fail "the redraw does not list b:test: $second"
+pass
+
+fresh 'status: a task list it cannot read is left out'
+feed "$(printf '%s' "$testing95" | jq -c '.branches[0].candidates[0].tasks = ["a:test", {state: "passed"}, {target: "c:test", state: "waiting"}]')"
+frame_of "$work" --once >"$t/frame"
+grep -q '▶ testing main+#95  0/1 ░░░░░░░░░░' "$t/frame" || fail "the bad tasks were counted: $(cat "$t/frame")"
+grep -q '^        · c:test  waiting$' "$t/frame" || fail "the good task is missing: $(cat "$t/frame")"
+pass
+
 fresh 'status: rows are links'
 weird="$scratch/a b&c"
 mkdir -p "$weird"
@@ -774,7 +797,7 @@ seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
 # The copy stands alone: nothing in it names the plugin's own directory.
 grep -rqF "$plugin" "$HERDR_PLUGIN_STATE_DIR/segment" && fail "the copy names the plugin's directory"
 out=$(cd "$work" && env -u HERDR_PLUGIN_ROOT -u HERDR_PLUGIN_STATE_DIR sh "$seg")
-[ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
+[ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
 feed "$(doc '.host = "host-a"')"
 out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
@@ -944,6 +967,12 @@ feed "$testing95"
 tokens
 has 'pane report-metadata p1 --source agentplot.sluice --seq'
 has '--ttl-ms 120000 --token sluice=#95 testing 3m/15m'
+pass
+
+fresh 'sidebar: testing, with tasks'
+feed "$(printf '%s' "$testing95" | jq -c '.branches[0].candidates[0].tasks = [{target: "a:test", state: "passed"}, {target: "b:test", state: "running"}]')"
+tokens
+has '--token sluice=#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m'
 pass
 
 fresh 'sidebar: blamed'

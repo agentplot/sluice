@@ -30,10 +30,11 @@ same, never the tasks themselves.
 ### Requirement: The pane opens on /sluice
 
 `/sluice` SHALL open a pane listing, per branch, how many submissions it
-holds and how many combinations are under test, each combination under test
-with its targets and elapsed time, the combinations formed and not running,
-the submissions with their states, each from a pull request linked to it on
-GitHub when the repository's `origin` is there, and recent landings and
+holds and how many combinations are under test; under TESTING each
+combination under test with its targets and elapsed time and the
+combinations formed and not running; under QUEUED the submissions with
+their states, each from a pull request linked to it on GitHub when the
+repository's `origin` is there; and under RECENT recent landings and
 blames with their log paths. A combination under test whose tasks are
 recorded SHALL show how many have ended of how many with the bar, and
 below it one line per task: ended tasks in the order they ended, then
@@ -44,6 +45,13 @@ failed, `…` running or `·` waiting, with an ended task's time.
 
 - **WHEN** the user runs `/sluice`
 - **THEN** a pane opens with those sections for every branch
+
+#### Scenario: Headed as the herdr popup is
+
+- **WHEN** the pane shows `main` testing `#12 + #13` with `#14` queued and a
+  recent blame
+- **THEN** the pane shows the headings TESTING, QUEUED and RECENT, in that
+  order, above those lines
 
 #### Scenario: A pull request's submission
 
