@@ -131,6 +131,37 @@ pub struct FailedTask {
     /// Where what it printed is kept (20).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
+    /// 19: its key held both a pass and a fail, which the branch's
+    /// `flaky` reads as failed; `None` for a task that failed on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flaky: Option<FlakyKey>,
+}
+
+/// A task read as failed for its key holding a pass and a fail (19): what
+/// this run observed, and the newest result recorded at the key that says
+/// otherwise (69).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlakyKey {
+    /// A pass when the failure is only the key's earlier fail.
+    pub here: Outcome,
+    pub other: Recorded,
+}
+
+/// A result recorded under a key (69), as a submitter is pointed at it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recorded {
+    pub outcome: Outcome,
+    pub at: String,
+    pub branch: String,
+    pub combination: Rev,
+    /// Session-runs-1 clause 92: the worktree of a session run; `None`
+    /// for a combination's run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    /// Where what that run printed is kept, when the branch's records
+    /// name it (20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
