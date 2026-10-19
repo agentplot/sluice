@@ -5,7 +5,7 @@
 Lets a branch's gate know who made a result when every host writes the
 state: a result counts only when a signer the policy names has signed
 it, and what it claims about how it ran counts only when that signer may
-claim it (many-hosts-3 clauses 78, 79, 108; amended 27, 28, 29, 69).
+claim it (78, 79, 108, 27, 28, 29, 69).
 
 ## ADDED Requirements
 
@@ -29,7 +29,7 @@ On a branch whose state is on the remote, `trust` SHALL list signer
 names and `confined = true` SHALL ask for confined results. A name that
 is no signer, or an executor kind, in that `trust` SHALL be refused with
 a message naming it. A remote branch with no `trust` SHALL trust no
-signer (amended 27, 28).
+signer (27, 28).
 
 #### Scenario: An executor kind on a remote branch
 - **WHEN** `[branches.main]` has `trust = ["sandbox"]` and `main`'s state is on the remote
@@ -44,7 +44,7 @@ A result SHALL count for a gate only when its record is signed by a
 signer the gate trusts and the signature verifies from the records and
 the policy alone. A record with no signature, or one by a signer the
 gate does not trust, SHALL never satisfy the gate, whatever its outcome
-(many-hosts-3 clause 78; amended 28).
+(78, 28).
 
 #### Scenario: Signed by a key the policy does not name
 - **WHEN** a result claiming a confined pass is signed by a key `main`'s policy does not list
@@ -59,7 +59,7 @@ A result's executor kind, whether it was confined, and its system SHALL
 be claims in its signed record. A result SHALL be read as confined only
 when its record claims it and its signer has `confined = true`, and as
 on a system only when its signer's `systems` include it. sluice SHALL
-never infer confinement (many-hosts-3 clause 79; amended 29).
+never infer confinement (79, 29).
 
 #### Scenario: An unconfined signer claims confinement
 - **WHEN** a result signed by `sessions`, whose table has `confined = false`, claims it was confined
@@ -90,7 +90,7 @@ owner may read it.
 ### Requirement: One host with its own files signs nothing
 On a branch whose state is in the host's own files, the results that
 host's sluice starts SHALL count unsigned, as that host's, and `trust`
-SHALL keep listing executor kinds as today (many-hosts-3 clause 78).
+SHALL keep listing executor kinds as today (78).
 
 #### Scenario: A local branch
 - **WHEN** a branch has no `remote` and `trust = ["sandbox"]`
@@ -101,7 +101,7 @@ A result the task runner answered from its cache SHALL count only when
 a signer the gate trusts has a pass recorded for the same key on the
 same system, or, on a branch in the host's own files, when that host
 recorded one. `cache` in `trust` SHALL be ignored with a warning naming
-this rule (many-hosts-3 clause 108).
+this rule (108).
 
 #### Scenario: A replay with no signed pass
 - **WHEN** the task runner replays `#check-fast` from its cache and no signer `main` trusts has a pass for that key on that system

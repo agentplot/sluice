@@ -5,7 +5,7 @@
 Uses GitHub Actions as a pool: a run no standing host can take starts a
 job on the runner its system names, and a job may advance a branch when
 no host is, so a submission lands with every host of its submitter off
-(many-hosts-3 clauses 88, 107, 111; C.2 launched, C.8).
+(88, 107, 111; C.2 launched, C.8).
 
 ## ADDED Requirements
 

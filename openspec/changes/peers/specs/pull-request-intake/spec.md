@@ -26,7 +26,7 @@ conditions SHALL be read from the branch's revision.
 A run on a pull request's head by a signer the branch trusts SHALL be
 recorded under its keys and systems as any run is, and a combination
 that shares a key on a system SHALL read that result without running
-the check again (15; many-hosts-3 clause 113).
+the check again (15, 113).
 
 #### Scenario: Passed before it was ready
 - **WHEN** a pull request's head passed `cli:build` on three systems on the pool, and it is submitted behind one submission that changes no input of `cli:build`

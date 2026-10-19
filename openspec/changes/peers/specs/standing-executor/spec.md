@@ -5,7 +5,7 @@
 Makes a host the operator runs, a box kept warm with its caches, take
 runs for the branches that trust its signer: `sluice run` watches the
 state on the remote and claims runs of its systems before any pool is
-started (many-hosts-3 clauses 88, 107).
+started (88, 107).
 
 ## ADDED Requirements
 

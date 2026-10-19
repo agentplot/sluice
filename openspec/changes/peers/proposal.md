@@ -7,15 +7,12 @@ the queue moves only while some sluice on that host is running, the
 checks run only there, and a shared branch's gate can't trust a run
 from any other machine, because nothing proves who made it. A
 repository that ships for several systems can't require a check on
-each of them. The design is drafted as `design/sluice/proposals/many-hosts-3.md`
-in agentplot/blueprints: sluice on many hosts as peers alone, with no
+each of them. The statement in agentplot/blueprints,
+`design/sluice/requirements.md`, now has sluice on many hosts as peers alone, with no
 central server, runs counted only through signers the policy names,
 systems per check, and the operator's own standing executors before
 any pool such as GitHub Actions. This change builds it, with the
 guides that make it usable on day one.
-
-The change waits on the operator's ruling on `many-hosts-3.md`: no code
-lands before its clauses are in the statement (core.12).
 
 ## What Changes
 

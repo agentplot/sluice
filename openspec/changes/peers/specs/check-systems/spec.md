@@ -5,7 +5,7 @@
 Lets a branch require a check to pass on each system the repository
 ships for: the policy names its systems, a branch names the systems each
 required check needs, and a combination's result is read over every
-check on every system named (many-hosts-3 clauses 85 to 87; amended 69).
+check on every system named (85 to 87, 69).
 
 ## ADDED Requirements
 
@@ -22,7 +22,7 @@ the table lacks SHALL be refused with a message naming it.
 ### Requirement: Every result records its system
 Every recorded result SHALL name the system it ran on. One check run on
 two systems SHALL be two results, and a pass on one system SHALL never
-stand for another (many-hosts-3 clause 85; amended 69).
+stand for another (85, 69).
 
 #### Scenario: One key on two systems
 - **WHEN** `cli:build` passes on `linux-x64` and has never run on `macos-arm64`
@@ -33,7 +33,7 @@ A branch's table SHALL accept `systems`, the systems every required
 check needs, and `[branches."<pattern>".systems_for]`, the systems one
 check needs in place of those. A combination SHALL pass only when every
 required check passes on every system named for it. A check with none
-named SHALL take one pass from any system (many-hosts-3 clause 86).
+named SHALL take one pass from any system (86).
 
 #### Scenario: A build on three systems
 - **WHEN** `main` has `systems = ["linux-x64"]` and `systems_for."cli:build" = ["linux-x64", "linux-arm64", "macos-arm64"]`
@@ -47,7 +47,7 @@ named SHALL take one pass from any system (many-hosts-3 clause 86).
 The lead SHALL open, for each combination, one run per system some
 required check needs, holding the checks that need that system. Checks
 needing no system SHALL go in one of those runs, or in a run any system
-may take when there is none (many-hosts-3 clause 86).
+may take when there is none (86).
 
 #### Scenario: Runs of one combination
 - **WHEN** a combination of `main` is opened under the policy above
@@ -57,8 +57,7 @@ may take when there is none (many-hosts-3 clause 86).
 A run SHALL be claimed only by a host whose system it is and whose
 signer may claim that system, or started on a pool that has a runner for
 it. A run that no live host or pool can take SHALL stay open, and the
-combination's `timeout` SHALL read it as not passed (66; many-hosts-3
-clause 87).
+combination's `timeout` SHALL read it as not passed (66, 87).
 
 #### Scenario: Nobody runs the system
 - **WHEN** a run needs `macos-arm64` and no host or pool lists it

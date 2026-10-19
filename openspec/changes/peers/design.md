@@ -2,12 +2,10 @@
 
 ## Context
 
-The design is `design/sluice/proposals/many-hosts-3.md` in
-agentplot/blueprints (branch `many-hosts-3`), cited here as
-many-hosts-3 with its clause numbers. Its clauses 72 to 82, 85 to 88,
-107 to 113 and its amendments to 27, 28, 29 and 69 are proposed, not
-ratified: by core.12 nothing here is built until the operator moves
-them into the statement. See proposal.md for why.
+The statement's clauses 72 to 82, 85 to 88 and 107 to 113, its
+amended 27, 28, 29 and 69, its rewritten Part C and its scenarios
+S17 to S20 and S40 to S42 are what this change builds. They are cited
+by number. See proposal.md for why.
 
 What exists today, and what this design builds on:
 
@@ -77,7 +75,7 @@ remote can count a result without a signer (78).
 
 ### D2. The layout under `refs/sluice/`
 
-As many-hosts-3 C.6 has it:
+As C.6 has it:
 
 | ref | written by | how |
 |---|---|---|

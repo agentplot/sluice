@@ -4,7 +4,7 @@
 
 Keeps a branch's state on its remote, under `refs/sluice/`, so every host
 that submits to the branch reads and writes the same state and none of
-them has to be running for the others to go on (many-hosts-3 clauses 80,
+them has to be running for the others to go on (80,
 82, 109; C.6 remote refs).
 
 ## ADDED Requirements
@@ -37,8 +37,7 @@ whose lease fails SHALL be refused and reported as written since
 ### Requirement: Each signer's runs have a ref of their own
 Every signer's run records SHALL be kept under `refs/sluice/runs/<signer>`
 and only added to. A write there SHALL never be refused because another
-signer wrote, and SHALL never wait on the branch's state (many-hosts-3
-clause 109).
+signer wrote, and SHALL never wait on the branch's state (109).
 
 #### Scenario: Two signers record at once
 - **WHEN** the `box` signer and the `forge` signer each record a result at the same moment
@@ -52,7 +51,7 @@ clause 109).
 From the moment a submission is written until it leaves sluice, its head
 SHALL be on the remote under `refs/sluice/heads/<oid>`. A combination
 SHALL be open to claims only while it is on the remote under
-`refs/sluice/combinations/<branch>/<id>` (many-hosts-3 clause 82). Each
+`refs/sluice/combinations/<branch>/<id>` (82). Each
 SHALL be removed from the remote once nothing needs it.
 
 #### Scenario: A head another host can test
@@ -76,7 +75,7 @@ combinations of a branch SHALL keep theirs.
 ### Requirement: The state is readable from any host while another is unreachable
 `sluice status`, `sluice overview` and every read of a submission SHALL
 read the branch's state from the remote, as it was last written, with
-no other host running (many-hosts-3 clause 80). When the remote cannot
+no other host running (80). When the remote cannot
 be reached, a read SHALL show the state last fetched and say it could
 not be refreshed.
 

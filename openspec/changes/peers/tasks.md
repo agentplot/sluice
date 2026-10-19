@@ -1,13 +1,12 @@
 # Tasks
 
-**Nothing here is built until the operator rules.** Clauses 72 to 82, 85
-to 88 and 107 to 113 of `design/sluice/proposals/many-hosts-3.md`
-(agentplot/blueprints), and its amendments to 27, 28, 29 and 69, are
-proposed, not ratified. By core.12, no task below starts until the
-operator has moved them into `design/sluice/requirements.md`. If the
-ratified text differs from the proposal, these artifacts change first.
+This change builds clauses 72 to 82, 85 to 88 and 107 to 113, the
+amended 27, 28, 29 and 69, Part C and scenarios S17 to S20 and S40 to
+S42 of the statement in agentplot/blueprints,
+`design/sluice/requirements.md`.
 
-Read first: this change's proposal, specs and design; many-hosts-3;
+Read first: this change's proposal, specs and design; those clauses
+and Part C;
 ADRs 0004, 0008, 0011, 0015, 0017, 0019, 0021 (pull requests);
 `docs/architecture/core.md`. Work inside `devenv shell`. Fast tier:
 `moon run ':#check-fast'`; real tools: `moon run ':#check-tools'`;
@@ -16,7 +15,7 @@ makes runs with no credential helper and no prompt.
 
 ## 1. Decisions and rules
 
-- [ ] 1.1 Confirm the statement holds 72 to 82, 85 to 88, 107 to 113 and the amended 27, 28, 29, 69 as this change reads them; note any difference in proposal.md and the specs before going on; verify `openspec validate peers --strict`.
+- [x] 1.1 Confirm the statement holds 72 to 82, 85 to 88, 107 to 113 and the amended 27, 28, 29, 69 as this change reads them, and C.6 holds design D1 and D9; verify `openspec validate peers --strict`.
 - [ ] 1.2 Write ADRs 0031 (remote refs records, the lead and the lease), 0032 (signed results: DSSE, in-toto, SSH and keyless), 0033 (a landing reads its verdict from signed results) and 0034 (the pool is the check seam's launched executor, GitHub its only profile, core.3); amend 0004, 0008 and 0015 as design D12 says; add them to `docs/adr/adrs.toml`; verify the site's decisions pages build and `site:prose` reports nothing.
 - [ ] 1.3 In `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`: drop core.11's server-profile exception; add the rule that a result counts only through a signer the policy names, never a record's executor field (78); add the rule that an instance claims nothing while it has checkouts to release (81); verify `site:prose` reports nothing.
 
@@ -26,7 +25,7 @@ makes runs with no credential helper and no prompt.
 
 ## 3. The policy and the host's config
 
-- [ ] 3.1 Parse `[systems]`, `[signers.<name>]` (one identity, kept as opaque settings; `confined`; `systems`) and `[pools.<name>]` (opaque to the core but for `signer` and the systems of its `runners`) in `crates/sluice-core/src/policy.rs`. Refuse each case the run-signing, check-systems and actions-pool specs refuse; verify unit tests per refusal and for the many-hosts-3 C.7 example parsing whole.
+- [ ] 3.1 Parse `[systems]`, `[signers.<name>]` (one identity, kept as opaque settings; `confined`; `systems`) and `[pools.<name>]` (opaque to the core but for `signer` and the systems of its `runners`) in `crates/sluice-core/src/policy.rs`. Refuse each case the run-signing, check-systems and actions-pool specs refuse; verify unit tests per refusal and for the C.7 example parsing whole.
 - [ ] 3.2 Give `Rules` `systems`, `systems_for` and `confined`; on a branch whose state is on the remote (a `remote`, and `[signers]` in the policy), read `trust` as signer names and refuse kinds and unknown names; read `cache` as absent with a warning; refuse `lease` or `alive` in a branch's table; verify unit tests, and that sluice's own `.config/sluice.toml` still parses with one warning.
 - [ ] 3.3 Read `[signing] signer` and `key` (refused unless `0600`), `[peers] lease` and `alive` (defaults 5m, 2m) and `[runs] systems` from the host's config in `crates/sluice/src/instance.rs`; refuse a system the host is not; verify unit tests.
 - [ ] 3.4 Document `[systems]`, `[signers]`, `[pools]`, `systems`, `systems_for`, `confined` and signer `trust`, and the host's `[signing]`, `[peers]` and `[runs] systems`, in `site/src/content/docs/reference/configuration.md`, with the C.7 example; verify `site:prose` reports nothing.

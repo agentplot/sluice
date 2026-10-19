@@ -5,7 +5,7 @@
 Decides which host runs which combination's checks when many hosts
 serve one branch: a host takes a run by recording a claim, earliest
 first, up to its own bound, and a claim lapses when its host stops
-(many-hosts-3 clauses 75 to 77, 81, 107).
+(75 to 77, 81, 107).
 
 ## ADDED Requirements
 
@@ -13,7 +13,7 @@ first, up to its own bound, and a claim lapses when its host stops
 The lead SHALL open combinations within the branch's `parallel` window
 and assign them to no host. A host SHALL run a combination's checks only
 after its claim on that run is written to the branch's state, and only
-while its bound has room (71; many-hosts-3 clause 75).
+while its bound has room (71, 75).
 
 #### Scenario: Two hosts reach for one run
 - **WHEN** hosts A and B both try to claim the same run from the same version of `main`'s state
@@ -25,8 +25,7 @@ while its bound has room (71; many-hosts-3 clause 75).
 
 ### Requirement: Runs are claimed earliest first
 A host SHALL NOT claim a later open combination of a chain while an
-earlier open combination of that chain is unclaimed (many-hosts-3
-clause 76).
+earlier open combination of that chain is unclaimed (76).
 
 #### Scenario: The first combination first
 - **WHEN** combinations #1 and #1+#2 of `main` are open and neither is claimed
@@ -46,8 +45,7 @@ left. Only that host SHALL write its ref.
 A claim SHALL lapse once a reader has seen its host's sign of life
 unchanged for the sign-of-life bound, never for the length of its run.
 A lapsed claim's run SHALL have no outcome, and a result reported under
-a claim its host no longer holds SHALL NOT be written (60; many-hosts-3
-clause 77).
+a claim its host no longer holds SHALL NOT be written (60, 77).
 
 #### Scenario: A host stops mid-run
 - **WHEN** host A claimed a run of `main` and is switched off
@@ -64,7 +62,7 @@ clause 77).
 ### Requirement: A returning host releases its checkouts before it claims
 A host SHALL claim nothing while a checkout it made belongs to a
 combination that has a result or is obsolete, or to a claim it no longer
-holds; it SHALL release those first (25, 34; many-hosts-3 clause 81).
+holds; it SHALL release those first (25, 34, 81).
 
 #### Scenario: Back after a lapse
 - **WHEN** host A returns with a checkout left from a lapsed claim, and the run has since passed on host B
@@ -74,7 +72,7 @@ holds; it SHALL release those first (25, 34; many-hosts-3 clause 81).
 The lead SHALL start a run on a pool only when no live host able to take
 it has room by its last sign of life: one of the run's system, whose
 signer the branch trusts. Among pools, the order the policy lists them
-SHALL decide (many-hosts-3 clause 107).
+SHALL decide (107).
 
 #### Scenario: The box has room
 - **WHEN** a run needs `linux-x64`, and the `box` host signs for `linux-x64`, is trusted by `main`, and has room

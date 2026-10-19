@@ -5,7 +5,7 @@
 Lets any host running sluice advance a branch whose state is on its
 remote, one at a time, and lets another take over when it stops or goes
 quiet, so a submission reaches its outcome with no host of its submitter
-running (many-hosts-3 clauses 72 to 74, 111).
+running (72 to 74, 111).
 
 ## ADDED Requirements
 
@@ -13,8 +13,7 @@ running (many-hosts-3 clauses 72 to 74, 111).
 Only the host named as the branch's lead in its state SHALL advance the
 branch. A host SHALL become the lead by a write to the branch's state
 naming it, and SHALL stop advancing the branch as soon as a write of its
-own is refused and the state it reads names another lead (many-hosts-3
-clause 72; 58).
+own is refused and the state it reads names another lead (72, 58).
 
 #### Scenario: The former lead stops after a takeover
 - **WHEN** host B takes `main` from host A, and host A then tries to write `main`'s state
@@ -25,7 +24,7 @@ A host with work to do on a branch SHALL take it once it has itself seen
 the branch's state unchanged for the lease. It SHALL measure the lease
 on its own clock from when it first read that version, never from a
 time another host wrote, and SHALL treat a stopped lead and a quiet one
-alike (many-hosts-3 clause 73).
+alike (73).
 
 #### Scenario: A lead that went quiet
 - **WHEN** `main`'s lead is alive but has written nothing for longer than the lease, and host B has a submission waiting on `main`
@@ -39,8 +38,7 @@ alike (many-hosts-3 clause 73).
 The lease and the bound on a host's sign of life SHALL be set in the
 host's config under `[peers]`, as `lease` and `alive`, one value each for
 every branch the host serves. A branch's policy SHALL NOT set either,
-and SHALL bound only how long a combination's checks may run (66;
-many-hosts-3 clause 74).
+and SHALL bound only how long a combination's checks may run (66, 74).
 
 #### Scenario: A policy that sets the lease
 - **WHEN** `.config/sluice.toml` has `lease = "1m"` under `[branches.main]`
@@ -64,7 +62,7 @@ at most once whichever host's push the remote accepts (S17).
 A submission to a branch whose state is on the remote SHALL push its
 head and write its entry to the remote's state, then wake a host or pool
 able to advance the branch. It SHALL reach its outcome with no host of
-its submitter running whenever one is (many-hosts-3 clause 111).
+its submitter running whenever one is (111).
 
 #### Scenario: Submit and close the laptop
 - **WHEN** a session submits to `main` and its host is switched off straight after
