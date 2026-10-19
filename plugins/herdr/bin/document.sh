@@ -17,7 +17,8 @@ doc=$(jq -c -e 'select(.schema == "sluice/overview@1" and (.host | type) == "str
   | .branches = [(.branches // [])[] | select(type == "object" and (.branch | type) == "string")
       | .depth //= 0 | .recent = [(.recent // [])[] | objects]
       | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
-      | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []]]
+      | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []
+          | .tasks = [(.tasks // [])[] | objects | select((.target | type) == "string")]]]
   | .sessions //= [] | .previews //= []
   # Nothing a document says is shown with its control characters: a task or
   # path holding an escape would reach the terminal as one.

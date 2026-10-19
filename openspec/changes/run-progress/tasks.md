@@ -37,5 +37,5 @@ Fast tier: `moon run ':#check-fast'`. Real tools:
 
 ## 7. herdr, after `herdr-plugin` lands
 
-- [ ] 7.1 Rebase onto main once it holds `plugins/herdr`. In `lib/words.jq`, add the count and bar to `branch_line`, `pane_token` and `frame()`, and the task list to `frame()` alone. Update `tests/docs/board.json` and `board.frame`, and the herdr spec's popup and sidebar requirements. Verify `moon run plugin-herdr` and `plugins/herdr/tests/shells.sh`.
+- [x] 7.1 Rebase onto main once it holds `plugins/herdr`. In `lib/words.jq`, add the count and bar to `branch_line`, `pane_token` and `frame()`, and the task list to `frame()` alone; `bin/document.sh` keeps only tasks with a target. Update `tests/docs/board.json` and `board.frame`, and the herdr spec's popup, redraw, segment and sidebar requirements. Verify `moon run plugin-herdr` and `plugins/herdr/tests/shells.sh`.
 - [ ] 7.2 Describe them in `guides/herdr.md`; verify Vale reports nothing; land with `sluice submit main`.
