@@ -16,7 +16,7 @@ Sources: rule core.21; the OpenSpec change `plugin-projects`; ADR 0029.
 
 `board-checks` put the plugins under the gate as four tasks of the root project, `plugin-hooks`, `plugin-board`, `plugin-manifests` and `plugin-herdr`, each a script bundling several checks. `.moon/workspace.yml` listed the crates, the site and the root, and no plugin. moon knew no plugin's language or files, and a failure named a script, not the check that failed.
 
-core.21 asked that each directory under `plugins/` and `site/` have a check-fast task that validates, type-checks and tests it. A root task running a script is such a task, so the rule passed what it was written to prevent: a part of the tree the workspace does not know.
+core.21 asked that each directory under `plugins/`, and `site/`, have a check-fast task that validates, type-checks and tests it. A root task running a script is such a task, so the rule passed what it was written to prevent: a part of the tree the workspace does not know.
 
 ## Considered options
 

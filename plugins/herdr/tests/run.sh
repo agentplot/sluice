@@ -209,8 +209,7 @@ status_of() {
 
 ## the manifest
 
-fresh 'manifest: as herdr will read it'
-sh "$here/manifest.sh" >"$t/out" 2>&1 || fail "the plugin's own manifest: $(cat "$t/out")"
+fresh 'manifest: a broken one refused'
 # A copy of the plugin, broken three ways.
 cp -R "$plugin/bin" "$plugin/lib" "$t/"
 sed 's|bin/jump.sh|bin/nope.sh|; s|action = "open-link"|action = "gone"|' "$plugin/herdr-plugin.toml" >"$t/herdr-plugin.toml"

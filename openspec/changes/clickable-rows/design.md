@@ -109,11 +109,13 @@ row, moves to a press of the path inside the opened failure.
 
 ### D6. Gates
 
-This change is built after `board-checks` lands: its Biome check, tsconfig
-and plugin-board gate task cover the board's new code and tests, and every
-new herdr script is in `plugin-herdr`'s test tasks' inputs already, by
-their `**/*` glob. Rule core.21, from `board-checks`, binds the
-tasks: each task names the gate task that runs its tests.
+This change is built after `board-checks` and `plugin-projects` land: its
+Biome check, tsconfig and the `plugin-board:typecheck` and
+`plugin-board:test` tasks cover the board's new code and tests, and every
+new herdr script is in the inputs of `plugin-herdr:test-sh` and
+`plugin-herdr:test-dash` already, by their `bin/**/*` and `lib/**/*`
+globs. Rule core.21 binds the tasks: each task names the moon task that
+runs its tests.
 
 ## Risks / Trade-offs
 

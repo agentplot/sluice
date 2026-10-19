@@ -13,5 +13,5 @@ tasks:
   # The manifest and its skills, by the pinned Claude Code.
   validate:
     command: '../claude.sh plugin validate --strict .'
-    inputs: ['**/*', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
+    inputs: ['.claude-plugin/**/*', 'hooks/**/*', 'scripts/**/*', 'skills/**/*', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
