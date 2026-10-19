@@ -183,6 +183,11 @@ fn a_flaky_failure_says_so() {
             .starts_with(failed_on),
         "{json}"
     );
+    let (_, status) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert!(
+        status.contains(&format!("tests:t-batch-cards (flaky) on {failed_on}")),
+        "{status}"
+    );
     let at = flaky["other"]["at"].as_str().unwrap();
     let this_log = v["failed"][0]["log"].as_str().unwrap();
 

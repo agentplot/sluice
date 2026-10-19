@@ -1686,7 +1686,15 @@ fn exit_for(sub: &Submission) -> i32 {
 fn detail(branch: &str, s: &Submission) -> String {
     match s.state {
         State::Failed => {
-            let tasks: Vec<&str> = s.failed.iter().map(|f| f.task.as_str()).collect();
+            // 19: as a waiting submit names it.
+            let tasks: Vec<String> = s
+                .failed
+                .iter()
+                .map(|f| match f.flaky {
+                    Some(_) => format!("{} (flaky)", f.task),
+                    None => f.task.clone(),
+                })
+                .collect();
             let what = if tasks.is_empty() {
                 s.result.clone().unwrap_or_default()
             } else {
