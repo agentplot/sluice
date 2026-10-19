@@ -18,6 +18,13 @@ names the one that broke the build, and moves the branch only to code that passe
 
 </div>
 
+<a href="plugins/sluice-board/">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="plugins/sluice-board/screenshots/board-dark.png">
+  <img src="plugins/sluice-board/screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="800">
+</picture>
+</a>
+
 ## Get started
 
 **With Claude Code.** At the prompt of a Claude Code session in a terminal:

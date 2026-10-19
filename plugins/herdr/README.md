@@ -2,6 +2,11 @@
 
 sluice's merge queue beside your agents in [herdr](https://herdr.dev).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/popup-dark.png">
+  <img src="screenshots/popup-light.png" alt="herdr with sluice's status popup over four Claude Code agents: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; each agent's line and the workspace's queue in the sidebar." width="800">
+</picture>
+
 ```sh
 herdr plugin install agentplot/sluice/plugins/herdr
 ```
