@@ -30,7 +30,8 @@ names the one that broke the build, and moves the branch only to code that passe
 **With Claude Code.** At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin install sluice --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice@sluice
 ```
 
 Then ask Claude to set sluice up in your repository. It installs the
