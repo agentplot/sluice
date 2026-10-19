@@ -95,7 +95,7 @@ def pull_of: (capture("^pull/(?<n>[0-9]+)$") | .n) // null;
 # The rows under a combination under test: its tasks, each painted by its state.
 def candidate_rows($c; $color): $c | task_lines
   | map(.state as $s | "        \(.text)" | paint($color; {passed: "32", replayed: "32", failed: "31", running: "33", waiting: "2"}[$s] // "2")
-    | {text: ., kind: "task"});
+    | {text: ., kind: "task", state: $s});
 
 # One document's rows, as the board's /sluice pane draws them, under the
 # headings TESTING, QUEUED and RECENT: {text, kind, url?}. A row with a url
@@ -126,10 +126,10 @@ def rows($now; $color): . as $d
                   + (if .from.path then {url: "sluice-herdr:focus?path=\(.from.path | @uri)"} else {} end))
           else empty end )
       , ( if ($b.recent | length) > 0 then
-            ("  RECENT" | paint($color; "1") | row("heading"))
-            , ($b.recent | reverse | .[0:5][]
+            ("  RECENT" | paint($color; "1") | row("recent"))
+            , ($b.recent | reverse | .[0:5] | to_entries[] | .key as $age | .value
                 | (if .event == "landed" then ["✓", "32"] elif .event == "blamed" then ["✗", "31"] else ["⚠", "33"] end) as [$mark, $c]
-                | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c) | row("event"))
+                | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c) | row("event") + {age: $age})
             , ([$b.candidates[] | select(any(.failed[]; .log))] | last // empty
                 | .failed[] | select(.log)
                 | ("      log of \(.task): \(.log)" | row("failure"))
@@ -137,6 +137,41 @@ def rows($now; $color): . as $d
           else empty end )
     ]
   + [("" | row("blank")), ("\($d.sessions | length) worktrees held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
+
+# --- Fitting rows to a height -----------------------------------------
+
+# Each combination's task list cut to its running and failed tasks, the
+# rest counted on one line: `… 18 passed, 4 waiting`.
+def collapse_tasks($color):
+  def kept: .state == "running" or .state == "failed";
+  def counted: map(select(kept | not) | .state | if . == "passed" or . == "replayed" then . else "waiting" end) as $gone
+    | if ($gone | length) == 0 then []
+      else [{kind: "task", state: "counted", text: ("        … " + ([("passed", "replayed", "waiting") as $k
+          | ($gone | map(select(. == $k)) | length) as $n | select($n > 0) | "\($n) \($k)"] | join(", ")) | paint($color; "2"))}] end;
+  reduce (.[], {kind: "end"}) as $r ({out: [], tasks: []};
+    if $r.kind == "task" then .tasks += [$r]
+    else .out += (.tasks | map(select(kept))) + (.tasks | counted) + (if $r.kind == "end" then [] else [$r] end)
+      | .tasks = [] end)
+  | .out;
+
+# $n of RECENT's entries gone, the oldest of every branch's first, and a
+# RECENT left with nothing under it gone with them.
+def drop_recent($n):
+  ([to_entries[] | select(.value.kind == "event") | {i: .key, age: .value.age}] | sort_by(-.age, -.i) | .[0:$n] | map(.i)) as $gone
+  | [to_entries[] | select(.key as $k | $gone | index($k) | not) | .value] as $rs
+  | [range($rs | length) as $i | $rs[$i]
+     | select(.kind != "recent" or ($rs[$i + 1].kind | . == "event" or . == "failure"))];
+
+# Rows in at most $height lines, or all of them when $height is null:
+# the task lists collapsed first, then RECENT's entries dropped, and only
+# then the bottom cut, with a line saying how many lines went.
+def fit($height; $color):
+  if $height == null or length <= $height then .
+  else ([$height, 1] | max) as $h
+    | collapse_tasks($color)
+    | if length <= $h then . else drop_recent(length - $h) end
+    | if length <= $h then .
+      else .[0:$h - 1] + [{kind: "more", text: ("… \(length - $h + 1) more lines" | paint($color; "2"))}] end end;
 
 # Rows with a url numbered 1 to 9, in the order drawn.
 def numbered: reduce .[] as $r ({n: 0, out: []};

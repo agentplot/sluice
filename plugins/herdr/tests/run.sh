@@ -763,6 +763,46 @@ printf '%s' "$out" | grep -q '^Waiting for sluice' || fail "before the watcher r
 [ -n "$(ls "$S/want")" ] || fail "the watcher was not asked to read it"
 pass
 
+# A combination of 30 tasks, crew's at the time: 18 passed, a:failed
+# failed, b:running running, 10 waiting; and 5 entries under RECENT.
+tall=$(printf '%s\n' "$board" | jq -c '.branches[0].candidates[0].tasks = (
+    [range(18) | {target: "p\(.):test", state: "passed", started: "2026-10-16T19:43:00Z", ended: "2026-10-16T19:43:\(10 + .)Z"}]
+    + [{target: "a:failed", state: "failed", started: "2026-10-16T19:43:00Z", ended: "2026-10-16T19:44:00Z"}, {target: "b:running", state: "running"}]
+    + [range(10) | {target: "w\(.):test", state: "waiting"}])
+  | .branches[0].recent += [range(3) | {schema: "sluice/log@1", at: "2026-10-16T19:3\(.):00Z", event: "landed", ids: [80 + .], to: "abcdef0"}]')
+
+fresh 'status: a tall frame fits the terminal'
+printf '%s\n' "$tall" | sh "$plugin/bin/document.sh" local "$work"
+printf q | LINES=20 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
+[ "$(printf '%s\n' "$first" | wc -l)" -le 20 ] || fail "the frame is taller than 20 lines: $first"
+printf '%s' "$first" | grep -q '^main at 9ecc34a · 3 submissions' || fail "the branch's heading went: $first"
+printf '%s' "$first" | grep -q '▶ testing main+#12+#13  19/30' || fail "the combination went: $first"
+printf '%s' "$first" | grep -q '^        ✗ a:failed ' || fail "the failed task went: $first"
+printf '%s' "$first" | grep -q '^        … b:running ' || fail "the running task went: $first"
+printf '%s' "$first" | grep -q '^        … 18 passed, 10 waiting$' || fail "the tasks are not counted: $first"
+printf '%s' "$first" | grep -q 'p0:test' && fail "a passed task is still listed: $first"
+printf '%s' "$first" | grep -q '^q close' || fail "the footer went: $first"
+# Room enough: every task listed, as before.
+printf q | LINES=60 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+awk 'BEGIN{RS="\f"} NR==1' "$t/out" | grep -q '^        · w9:test  *waiting$' || fail "with room the waiting tasks are not listed: $(cat "$t/out")"
+# Shorter still: RECENT's oldest go, then the bottom is cut and said.
+printf q | LINES=12 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
+[ "$(printf '%s\n' "$first" | wc -l)" -le 12 ] || fail "the frame is taller than 12 lines: $first"
+printf '%s' "$first" | grep -q '^        ✗ a:failed ' || fail "at 12 lines the failed task went: $first"
+printf '%s' "$first" | grep -q '^… [0-9]* more lines$' || fail "the cut is not said: $first"
+pass
+
+fresh 'status: a pane outside git shows every repository'
+hold_lease
+feed "$testing95"
+out=$(frame_of "$scratch/home" --once)
+printf '%s' "$out" | grep -qF "$scratch/home is in no git repository. Every repository held:" || fail "said: $out"
+printf '%s' "$out" | grep -q '▶ testing main+#95' || fail "the held repository is not shown: $out"
+printf '%s' "$out" | grep -q 'No sluice records' && fail "it still says no records: $out"
+pass
+
 fresh 'status: without sluice'
 mkdir -p "$t/bin"
 for c in git jq awk cksum; do ln -s "$(command -v "$c")" "$t/bin/$c"; done
