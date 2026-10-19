@@ -24,3 +24,17 @@ tasks:
     inputs: ['/.claude-plugin/**/*', '/plugins/*/.claude-plugin/plugin.json', '/plugins/check-marketplace.sh', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # The scene the plugins' screenshots are taken of, built --fast with the
+  # sluice built here and asserted, so a change to sluice that breaks it
+  # fails here and not at the next retake. It reads the tools it drives from
+  # outside the tree, so it never replays.
+  screenshots-scene:
+    command: 'bash plugins/screenshots-scene.sh --check'
+    tags: [check-e2e]
+    options: {runFromWorkspaceRoot: true, cache: false}
+  # The screenshots themselves (plugins/screenshots-capture.sh), run by hand
+  # in devenv shell: the gate cannot, since it drives a GUI terminal and a
+  # logged-in Claude Code. No tag puts it in a tier.
+  screenshots:
+    command: 'bash plugins/screenshots-capture.sh'
+    options: {runFromWorkspaceRoot: true, cache: false, runInCI: false}

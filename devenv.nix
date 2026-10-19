@@ -254,6 +254,9 @@ in
     # The stack acceptance test's browser test (ADR 0016): Playwright and
     # the one browser it drives, from Nix, read-only for the sandbox.
     pkgs.playwright-test
+    # The plugins' screenshots, optimized losslessly as they are taken
+    # (plugins/screenshots-capture.sh).
+    pkgs.oxipng
   ];
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
