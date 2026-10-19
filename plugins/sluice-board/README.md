@@ -29,10 +29,12 @@ the API cannot take the skills with it.
 
 ## Checks
 
-`moon run root:plugin-board` (check-fast) runs `tests/check.sh`:
-`claude plugin validate --strict`, `tsc -p` and `claude plugin test`, with
-the Claude Code and TypeScript `devenv.nix` pins, a scratch home and no
-network. `tsconfig.json` types the modules against `engine-types/`, the
+The board is the moon project `plugin-board`, whose check-fast tasks are
+`engine-types` (`tests/engine-types.sh`: the types' release is the pinned
+Claude Code's), `validate` (`claude plugin validate --strict`),
+`typecheck` (`tsc -p`) and `test` (`claude plugin test`), with the Claude
+Code and TypeScript `devenv.nix` pins, a scratch home (`plugins/claude.sh`)
+and no network. `tsconfig.json` types the modules against `engine-types/`, the
 declarations the pinned Claude Code lays beside a mod it loads, so the gate
 and an editor read the same ones. The engine leaves a mod's own
 `tsconfig.json` alone; what it lays in `.claude-plugin/types/` ignores

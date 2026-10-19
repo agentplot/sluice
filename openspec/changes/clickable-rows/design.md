@@ -111,8 +111,8 @@ row, moves to a press of the path inside the opened failure.
 
 This change is built after `board-checks` lands: its Biome check, tsconfig
 and plugin-board gate task cover the board's new code and tests, and every
-new herdr script is in `root:plugin-herdr`'s inputs already, by its
-`/plugins/herdr/**/*` glob. Rule core.21, from `board-checks`, binds the
+new herdr script is in `plugin-herdr`'s test tasks' inputs already, by
+their `**/*` glob. Rule core.21, from `board-checks`, binds the
 tasks: each task names the gate task that runs its tests.
 
 ## Risks / Trade-offs

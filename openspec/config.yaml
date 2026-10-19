@@ -39,3 +39,4 @@ rules:
   tasks:
     - Every task names its verification; site pages and ADRs land with the group that changes the behaviour they describe
     - A change that adds a language, a file type or a directory under plugins/ or site/ has a task that puts it under treefmt, its linter and a check-fast moon task (core.21); a verification is a moon task the gate runs, or the task says why it can only be run by hand
+    - A directory under plugins/ or site/ is a moon project of its own in .moon/workspace.yml, with its language declared and a task per check; none of its checks is a task of the root or another project (core.21)

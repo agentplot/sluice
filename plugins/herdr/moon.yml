@@ -1,0 +1,22 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# The herdr plugin: POSIX sh scripts, with awk and jq programs.
+language: 'bash'
+layer: 'application'
+
+tasks:
+  # herdr-plugin.toml as herdr will read it.
+  manifest:
+    command: 'sh tests/manifest.sh'
+    inputs: ['herdr-plugin.toml', 'bin/**/*', 'tests/manifest.sh']
+    tags: [check-fast]
+  # The scripts against stand-in herdr and sluice, under the system's sh.
+  test-sh:
+    command: 'sh tests/run.sh'
+    inputs: ['**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+  # The same under dash, where it is installed.
+  test-dash:
+    command: 'sh tests/dash.sh'
+    inputs: ['**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
