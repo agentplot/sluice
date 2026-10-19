@@ -8,7 +8,8 @@ sluice's queue inside a Claude Code session.
 </picture>
 
 ```
-/plugin install sluice-board --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice-board@sluice
 ```
 
 - **Band** above the prompt, while a branch has a queue:

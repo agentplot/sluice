@@ -15,10 +15,12 @@ describes.
 At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin install sluice --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice@sluice
 ```
 
-Answer `y` to add the marketplace, then choose the user scope to have it in
+The first line adds the repository's marketplace, named `sluice`; the
+second installs the plugin from it. Choose the user scope to have it in
 every session.
 
 ## Set up a repository
@@ -86,7 +88,7 @@ never sees. It needs `jq`, and lets everything through without it.
 A second plugin, `sluice-board`, shows the queue inside the session:
 
 ```
-/plugin install sluice-board --marketplace agentplot/sluice
+/plugin install sluice-board@sluice
 ```
 
 <a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
