@@ -3,7 +3,7 @@
 use sluice_seams::{Enforced, Outcome, RunReport, Source};
 
 use crate::policy::{Flaky, Rules};
-use crate::records::{FailedTask, ResultKind, ResultLine};
+use crate::records::{FailedTask, FlakyKey, Recorded, ResultKind, ResultLine};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
@@ -46,7 +46,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             Source::Ran { .. } => counts(&ResultKind::Ran, Some(&report.executor)),
             Source::Replayed { .. } => counts(&ResultKind::Replayed, None),
         };
-        let key = results
+        let recorded: Vec<&ResultLine> = results
             .iter()
             .filter(|r| r.task == t.task && r.hash == t.hash)
             .filter(|r| counts(&r.kind, r.executor.as_ref()))
@@ -54,6 +54,9 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
                 (ResultKind::Ran, Some(e)) => same_limits(e, &report.executor),
                 _ => true,
             })
+            .collect();
+        let key = recorded
+            .iter()
             .map(|r| r.outcome)
             .chain(this.then_some(t.outcome));
         let (mut pass, mut fail) = (false, false);
@@ -69,10 +72,27 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             _ => false,
         };
         if !passes {
+            // 19: read as failed for holding both outcomes, so the
+            // submitter is shown the result that contradicts this run's.
+            let flaky = (pass && fail)
+                .then(|| recorded.iter().rev().find(|r| r.outcome != t.outcome))
+                .flatten()
+                .map(|r| FlakyKey {
+                    here: t.outcome,
+                    other: Recorded {
+                        outcome: r.outcome,
+                        at: r.at.clone(),
+                        branch: r.branch.clone(),
+                        combination: r.combination.clone(),
+                        worktree: r.worktree.clone(),
+                        log: None,
+                    },
+                });
             failed.push(FailedTask {
                 task: t.task.clone(),
                 hash: t.hash.clone(),
                 log: None,
+                flaky,
             });
         }
     }
@@ -82,6 +102,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             task: task.clone(),
             hash: String::new(),
             log: None,
+            flaky: None,
         });
     }
     Verdict {
@@ -229,5 +250,42 @@ mod tests {
             Outcome::Fail,
         );
         assert!(!read(&run, &[same], &rules(&["sandbox"])).passed);
+    }
+
+    /// 19: a task read as failed for its key holding a pass and a fail
+    /// names what this run observed and the newest result that says
+    /// otherwise; one that failed on its own names neither.
+    #[test]
+    fn a_flaky_task_names_the_result_it_contradicts() {
+        let rules = rules(&["sandbox"]);
+        let run = report(Source::Ran { host: "h".into() }, enforced("sandbox", false));
+        let fail = |at: &str, on: &str| ResultLine {
+            at: at.into(),
+            combination: sluice_seams::Rev::new(on),
+            ..recorded(
+                ResultKind::Ran,
+                Some(enforced("sandbox", false)),
+                Outcome::Fail,
+            )
+        };
+        let v = read(&run, &[fail("t1", "c1"), fail("t2", "c2")], &rules);
+        assert!(!v.passed);
+        let k = v.failed[0].flaky.clone().expect("read as flaky");
+        assert_eq!(k.here, Outcome::Pass);
+        assert_eq!(
+            (k.other.outcome, k.other.at.as_str()),
+            (Outcome::Fail, "t2")
+        );
+        assert_eq!(k.other.combination, sluice_seams::Rev::new("c2"));
+
+        let failing = RunReport {
+            tasks: vec![TaskResult {
+                outcome: Outcome::Fail,
+                ..run.tasks[0].clone()
+            }],
+            ..run.clone()
+        };
+        let v = read(&failing, &[], &rules);
+        assert_eq!(v.failed[0].flaky, None);
     }
 }

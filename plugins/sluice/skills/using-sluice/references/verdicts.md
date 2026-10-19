@@ -60,6 +60,27 @@ with `flaky = "fail"`, then, once a host failure is recorded, submitting the
 same head again cannot land it. Fix the host, then submit
 with a change to the failing test's inputs, not a retry of the same commits.
 
+A test that failed only because its inputs failed before says so:
+
+```
+failed: checks:macbook-pro (flaky)
+  on main + #63 (a557c99)
+  checks:macbook-pro passed in this run and failed on the same inputs at 2026-10-17T15:28:04Z on 88de9be
+  log of this run: .git/sluice/.logs/main/c64/checks:macbook-pro.log
+  log of the run that failed: .git/sluice/.logs/main/c51/checks:macbook-pro.log
+  main reads a test that passed and failed on the same inputs as failed (flaky = "fail")
+the same inputs read failed whenever they are tested: submit again with a change to what checks:macbook-pro reads
+```
+
+In JSON, such a test's `failed[].flaky` holds `here`, this run's outcome,
+and `other`, the result that contradicts it: its `outcome`, `at`,
+`branch`, `combination` and, when kept, `log`.
+
+A pull request sent back is tested again only on new commits, or once it
+is marked a draft and then ready for review. A submit with no new commits
+says it ran nothing: `#63's head bd85bd4 was tested and blamed at …:
+nothing was queued or run again`, then the failure it was sent back for.
+
 ## Reading a conflict
 
 ```

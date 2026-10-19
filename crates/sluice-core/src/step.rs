@@ -33,8 +33,8 @@ use crate::line::Line;
 use crate::order::{self, Entry};
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    Candidate, CandidateState, ConflictRecord, Event, LandingCommitRecord, LandingIntent,
-    OutboxItem, ResultLine, State, Tested, ToldRecord,
+    Candidate, CandidateState, ConflictRecord, Event, FailedTask, LandingCommitRecord,
+    LandingIntent, OutboxItem, Recorded, ResultLine, State, Tested, ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
@@ -632,6 +632,24 @@ impl Sluice<'_> {
                             );
                         }
                     }
+                    // 19, 20: where the run a flaky task contradicts is
+                    // kept, when the records name it; a pointer, so one
+                    // that cannot be read holds up no verdict.
+                    for f in &mut v.failed {
+                        if let Some(k) = &mut f.flaky {
+                            k.other.log = match self.kept_log(line, &f.task, &k.other) {
+                                Ok(log) => log,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        sluice.branch = %line.branch,
+                                        sluice.candidate = %c.revision,
+                                        "reading where a flaky task's other run is kept failed: {e:#}"
+                                    );
+                                    None
+                                }
+                            };
+                        }
+                    }
                     let branch = line.branch.clone();
                     let branch = branch.as_str();
                     let x = line.candidate_mut(&c.id).expect("polled candidate");
@@ -1145,6 +1163,55 @@ impl Sluice<'_> {
 }
 
 impl Sluice<'_> {
+    /// Where `task`'s output in the recorded run `r` is kept, as its
+    /// branch's records name it: on the candidate that ran it, or on the
+    /// submission blamed for it, live or finished (20). A session run's is
+    /// on its place, not here.
+    fn kept_log(&self, line: &Line, task: &str, r: &Recorded) -> Result<Option<String>> {
+        if r.worktree.is_some() {
+            return Ok(None);
+        }
+        let on = &r.combination;
+        let other;
+        let line = if r.branch == line.branch {
+            line
+        } else {
+            other = self.read_line(&r.branch)?;
+            &other
+        };
+        let kept = |failed: &[FailedTask]| {
+            failed
+                .iter()
+                .find(|f| f.task == task)
+                .and_then(|f| f.log.clone())
+        };
+        // The same head on the same revision is the same combination, so
+        // a candidate of it may be this run's own, with nothing kept yet.
+        let held = line
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| &c.revision == on)
+            .find_map(|c| kept(&c.failed));
+        if held.is_some() {
+            return Ok(held);
+        }
+        let log = Line::read_log(&self.seams.state.read(&line.branch)?)?;
+        let blamed = log.iter().rev().find_map(|l| match &l.event {
+            Event::Blamed { id, combination } if combination == on => Some(*id),
+            _ => None,
+        });
+        let Some(id) = blamed else {
+            return Ok(None);
+        };
+        Ok(match line.subs.get(&id) {
+            Some(s) => kept(&s.failed),
+            None => self
+                .finished_sub(&line.branch, id)?
+                .and_then(|s| kept(&s.failed)),
+        })
+    }
+
     /// How long a candidate was under test: from the log's last `Testing`
     /// of it to `now`.
     fn tested_for(&self, branch: &str, revision: &Rev, now: &str) -> Result<Option<f64>> {

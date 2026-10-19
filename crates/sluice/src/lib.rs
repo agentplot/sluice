@@ -26,12 +26,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
-use sluice_core::records::{Event, State, Submission};
+use sluice_core::records::{Event, FailedTask, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
     SubmitRequest, WithdrawRefusal, Withdrew,
 };
-use sluice_seams::{Rev, SessionPlace};
+use sluice_seams::{Outcome, SessionPlace};
 use told::Kind;
 
 /// Exits of a waiting submit (walkthrough section 5).
@@ -1227,7 +1227,27 @@ fn submit(
             return still_queued(out);
         }
     };
-    report(s, &sub, &req.branch, &BTreeMap::new(), json, out)
+    report(
+        s,
+        &sub,
+        &req.branch,
+        &BTreeMap::new(),
+        Reached::Now,
+        json,
+        out,
+    )
+}
+
+/// Whose outcome a waiting submit ends with.
+#[derive(Clone, Copy)]
+enum Reached {
+    /// The submission it waited on: queued, tested, decided.
+    Now,
+    /// Pull request `n`'s submission on the same head, sent back before
+    /// this submit, which queued and ran nothing: a pull request sent
+    /// back is submitted again only on a new head, or once marked a draft
+    /// and then ready for review (pull-request-intake).
+    Before(u64),
 }
 
 /// A submission's outcome, as a waiting submit ends with it.
@@ -1236,6 +1256,7 @@ fn report(
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
+    reached: Reached,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -1252,27 +1273,61 @@ fn report(
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
         return Ok(exit_for(sub));
     }
-    let counts = |rev: &Rev| -> Result<(usize, usize)> {
-        let snap = sluice_seams::State::read(s_state(s), branch)?;
-        let log = sluice_core::line::Line::read_log(&snap)?;
-        let mut n = (0, 0);
-        for l in log {
-            match l.event {
-                Event::Ran { combination, .. } if combination == *rev => n.0 += 1,
-                Event::Replayed { combination, .. } if combination == *rev => n.1 += 1,
-                _ => {}
+    let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
+    match reached {
+        Reached::Now => {
+            if let Some(t) = &sub.tested {
+                // Only its last test: the same head on the same revision is
+                // the same combination, tested again on a resubmission.
+                let last = log.iter().rposition(|l| {
+                    matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
+                });
+                let (mut ran, mut replayed) = (0, 0);
+                for l in &log[last.unwrap_or(0)..] {
+                    match &l.event {
+                        Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
+                        Event::Replayed { combination, .. } if *combination == t.combination => {
+                            replayed += 1
+                        }
+                        _ => {}
+                    }
+                }
+                writeln!(
+                    out,
+                    "testing {} · {ran} tasks to run, {replayed} replayed",
+                    combination(&t.submissions)
+                )?;
             }
         }
-        Ok(n)
-    };
-    if let Some(t) = &sub.tested {
-        let (ran, replayed) = counts(&t.combination)?;
-        writeln!(
-            out,
-            "testing {} · {ran} tasks to run, {replayed} replayed",
-            combination(&t.submissions)
-        )?;
+        Reached::Before(n) => {
+            // When it was sent back: its last blame or conflict (17, 12).
+            let at = log
+                .iter()
+                .rev()
+                .find(|l| match &l.event {
+                    Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
+                    _ => false,
+                })
+                .map_or_else(|| "an earlier round".to_string(), |l| l.at.clone());
+            let what = if sub.state == State::Conflict {
+                "found conflicting"
+            } else {
+                "tested and blamed"
+            };
+            writeln!(
+                out,
+                "#{n}'s head {} was {what} at {at}: nothing was queued or run again",
+                sub.head.short()
+            )?;
+        }
     }
+    // How a pull request sent back on its head is tested again.
+    let same_commits = match reached {
+        Reached::Now => String::new(),
+        Reached::Before(n) => format!(
+            ", or mark #{n} a draft and then ready for review to test the same commits again"
+        ),
+    };
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -1282,20 +1337,34 @@ fn report(
             let t = sub.tested.clone().expect("a blamed submission was tested");
             // A check with no key was left without a result (15): not run,
             // most often behind a check that failed.
-            let tasks = |ran: bool| -> Vec<&str> {
-                sub.failed
-                    .iter()
-                    .filter(|f| f.hash.is_empty() != ran)
-                    .map(|f| f.task.as_str())
-                    .collect()
-            };
-            if sub.result.as_deref() == Some("timed out") {
+            let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
+            let not_run: Vec<&str> = sub
+                .failed
+                .iter()
+                .filter(|f| f.hash.is_empty())
+                .map(|f| f.task.as_str())
+                .collect();
+            // 19: read as failed for its key holding a pass and a fail.
+            let flaky: Vec<&str> = ran
+                .iter()
+                .filter(|f| f.flaky.is_some())
+                .map(|f| f.task.as_str())
+                .collect();
+            let timed_out = sub.result.as_deref() == Some("timed out");
+            if timed_out {
                 writeln!(out, "timed out")?;
-            } else if !tasks(true).is_empty() {
-                writeln!(out, "failed: {}", tasks(true).join(", "))?;
+            } else if !ran.is_empty() {
+                let named: Vec<String> = ran
+                    .iter()
+                    .map(|f| match f.flaky {
+                        Some(_) => format!("{} (flaky)", f.task),
+                        None => f.task.clone(),
+                    })
+                    .collect();
+                writeln!(out, "failed: {}", named.join(", "))?;
             }
-            if !tasks(false).is_empty() {
-                writeln!(out, "not run: {}", tasks(false).join(", "))?;
+            if !not_run.is_empty() {
+                writeln!(out, "not run: {}", not_run.join(", "))?;
             }
             writeln!(
                 out,
@@ -1321,16 +1390,60 @@ fn report(
                         .join(", ")
                 )?,
             }
-            // 20: where what each failed task printed is kept.
-            for f in sub.failed.iter().filter(|f| f.log.is_some()) {
+            // 20: where what each failed task printed is kept; for one read
+            // as flaky, the run it contradicts and where that is kept (19).
+            for f in &sub.failed {
+                let Some(k) = &f.flaky else {
+                    if let Some(at) = &f.log {
+                        writeln!(out, "  log of {}: {at}", f.task)?;
+                    }
+                    continue;
+                };
+                let word = |o: Outcome| match o {
+                    Outcome::Pass => "passed",
+                    Outcome::Fail => "failed",
+                };
+                let place = match &k.other.worktree {
+                    Some(w) => format!("in {w}"),
+                    None => format!("on {}", k.other.combination.short()),
+                };
                 writeln!(
                     out,
-                    "  log of {}: {}",
+                    "  {} {} in this run and {} on the same inputs at {} {place}",
                     f.task,
-                    f.log.as_deref().unwrap_or("")
+                    word(k.here),
+                    word(k.other.outcome),
+                    k.other.at
+                )?;
+                if let Some(at) = &f.log {
+                    writeln!(out, "  log of this run: {at}")?;
+                }
+                if let Some(at) = &k.other.log {
+                    writeln!(out, "  log of the run that {}: {at}", word(k.other.outcome))?;
+                }
+            }
+            if !flaky.is_empty() {
+                writeln!(
+                    out,
+                    "  {branch} reads a test that passed and failed on the same inputs as failed \
+                     (flaky = \"fail\")"
                 )?;
             }
-            writeln!(out, "fix it in your worktree and submit again")?;
+            if timed_out || !not_run.is_empty() || ran.len() > flaky.len() {
+                writeln!(
+                    out,
+                    "fix it in your worktree and submit again{same_commits}"
+                )?;
+            }
+            if !flaky.is_empty() {
+                writeln!(
+                    out,
+                    "the same inputs read failed whenever they are tested: submit again with a \
+                     change to what {} {}",
+                    flaky.join(", "),
+                    if flaky.len() == 1 { "reads" } else { "read" }
+                )?;
+            }
         }
         State::Conflict => {
             let c = sub.conflict.clone().expect("a conflicting submission");
@@ -1346,7 +1459,7 @@ fn report(
             }
             writeln!(
                 out,
-                "merge or rebase onto {} in your worktree and submit again",
+                "merge or rebase onto {} in your worktree and submit again{same_commits}",
                 branch
             )?;
         }
@@ -1470,6 +1583,22 @@ fn submit_pull(
             }
         }
     };
+    // A pull request already sent back on the head just pushed: intake
+    // submits it again only once it is marked a draft and then ready for
+    // review, so a decision on that submission is no run of this submit's.
+    let sent_back = if status {
+        None
+    } else {
+        let head = seams.driver.session(worktree)?.head;
+        match pulls.follow(seams, clock, branch, number)? {
+            Followed::Done(sub, _)
+                if sub.head == head && matches!(sub.state, State::Failed | State::Conflict) =>
+            {
+                Some(sub.id)
+            }
+            _ => None,
+        }
+    };
     let mut last: Option<(String, Vec<String>)> = None;
     loop {
         intake(pulls, seams, clock, branch);
@@ -1483,7 +1612,12 @@ fn submit_pull(
                     write_status(&s.status(branch)?, None, std::slice::from_ref(&sub), out)?;
                     return Ok(0);
                 }
-                return report(s, &sub, branch, &names, json, out);
+                let reached = if sent_back == Some(sub.id) {
+                    Reached::Before(number)
+                } else {
+                    Reached::Now
+                };
+                return report(s, &sub, branch, &names, reached, json, out);
             }
             Followed::Closed => {
                 writeln!(out, "#{number} was closed without landing")?;
@@ -1552,7 +1686,15 @@ fn exit_for(sub: &Submission) -> i32 {
 fn detail(branch: &str, s: &Submission) -> String {
     match s.state {
         State::Failed => {
-            let tasks: Vec<&str> = s.failed.iter().map(|f| f.task.as_str()).collect();
+            // 19: as a waiting submit names it.
+            let tasks: Vec<String> = s
+                .failed
+                .iter()
+                .map(|f| match f.flaky {
+                    Some(_) => format!("{} (flaky)", f.task),
+                    None => f.task.clone(),
+                })
+                .collect();
             let what = if tasks.is_empty() {
                 s.result.clone().unwrap_or_default()
             } else {

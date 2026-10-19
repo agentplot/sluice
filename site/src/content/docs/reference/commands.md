@@ -311,6 +311,22 @@ the pull request is open, and `wt submit main --status` reports its
 state later. `wt submit` removes the worktree only when the pull request
 lands; sent back, the worktree stays for the fix.
 
+A pull request sent back runs nothing more when submitted again with no
+new commits. sluice tests the same commits again only once the pull
+request is marked a draft and then ready for review. The submit says
+so, with the failure it was sent back for:
+
+```console
+$ wt submit main
+pushed unit/batch-review · updated #41: Batch review cards
+#41's head 8d41b6c was tested and blamed at 2026-10-11T09:21:50Z: nothing was queued or run again
+failed: tests:t-batch-cards
+  on main + #38 + #41 (e20a6f9)
+  #38 passed on its own, so the failure is from this submission
+  log of tests:t-batch-cards: .git/sluice/.logs/main/c7/tests:t-batch-cards.log
+fix it in your worktree and submit again, or mark #41 a draft and then ready for review to test the same commits again
+```
+
 ## `sluice branch`
 
 sluice makes and deletes the branches it lands on, so nothing else has
