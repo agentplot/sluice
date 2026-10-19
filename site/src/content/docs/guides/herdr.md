@@ -11,6 +11,9 @@ is waiting, and what landed or was blamed. Each submission is tied to the
 pane of the agent that made it. The plugin only reads; it never submits,
 withdraws or lands anything.
 
+<a class="screenshot-light" href="/sluice/screenshots/popup-light.webp"><img src="/sluice/screenshots/popup-light.webp" alt="herdr with the status popup over four Claude Code agents: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; each agent's line and the workspace's queue in the sidebar." width="1408" height="856" /></a>
+<a class="screenshot-dark" href="/sluice/screenshots/popup-dark.webp"><img src="/sluice/screenshots/popup-dark.webp" alt="herdr with the status popup over four Claude Code agents: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; each agent's line and the workspace's queue in the sidebar." width="1408" height="856" /></a>
+
 ## Install
 
 ```sh

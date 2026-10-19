@@ -12,6 +12,6 @@ tasks:
     tags: [check-fast]
   build:
     command: 'bun run build'
-    inputs: ['**/*', '/docs/adr/*.md', '/docs/diagrams/sluice.py']
+    inputs: ['**/*', '/docs/adr/*.md', '/docs/diagrams/sluice.py', '/plugins/*/screenshots/*.png']
     outputs: ['dist']
     options: {cache: false}
