@@ -38,17 +38,34 @@ numbers=true
 links_file=$state/popup-links.$$
 trap 'rm -f "$links_file"' EXIT
 
+# The frame in $1 lines at most, its footer's two among them, or in as
+# many as it takes when $1 is empty.
 frame() {
   t=$(now)
   docs=$(all_docs)
-  shown=$(printf '%s' "$docs" | jqw -c --argjson all "$all" --arg r "$repo" --arg n "$name" '
+  every=$all
+  note=
+  # A pane in no repository: every repository held, saying so.
+  if [ "$all" = false ] && [ -z "$repo" ] && [ "$(printf '%s' "$docs" | jq length)" -gt 0 ]; then
+    every=true
+    if [ -n "$dir" ]; then
+      note="$(printf '%s' "$dir" | tr -d '\000-\037\177') is in no git repository. Every repository held:"
+    else
+      note="The pane's folder is not known. Every repository held:"
+    fi
+  fi
+  height=null
+  [ -n "${1:-}" ] && height=$(($1 - 2))
+  shown=$(printf '%s' "$docs" | jqw -c --argjson all "$every" --arg r "$repo" --arg n "$name" '
     include "words";
     if $all then . else map(select(.repository == $r or (.repository | repo_name) == $n)) end
     | sort_by(.repository, .host)')
   if [ "$(printf '%s' "$shown" | jq length)" -gt 0 ]; then
-    drawn=$(printf '%s' "$shown" | jqw -c --argjson now "$t" --argjson color "$tty" --argjson numbers "$numbers" '
+    drawn=$(printf '%s' "$shown" | jqw -c --argjson now "$t" --argjson color "$tty" --argjson numbers "$numbers" \
+      --arg note "$note" --argjson height "$height" '
       include "words";
-      [.[] | rows($now; $color)[]] | if $numbers then numbered else . end')
+      (if $note == "" then [] else [{text: $note, kind: "heading"}, {text: "", kind: "blank"}] end)
+      + [.[] | rows($now; $color)[]] | fit($height; $color) | if $numbers then numbered else . end')
     printf '%s' "$drawn" | jq -r '.[] | select(.n) | .url' >"$links_file"
     printf '%s' "$drawn" | jqw -r --argjson links "$links" 'include "words"; .[] | line($links)'
   elif [ -n "$(sluice_problem)" ]; then
@@ -70,14 +87,29 @@ frame() {
   fi
 }
 
+# The terminal's height, read again at each draw since a pane is resized:
+# from the terminal itself, else terminfo, else LINES, else nothing.
+height() {
+  h=
+  if [ "$tty" = true ]; then
+    h=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f1)
+    [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null || h=$(tput lines 2>/dev/null)
+  fi
+  [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null || h=${LINES:-}
+  [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null || h=
+  echo "$h"
+}
+
+# A frame taller than the terminal would scroll it, and each redraw from
+# the top would leave another copy of the frame's head above: the frame is
+# fitted to the height, and its last line ends without a newline.
 draw() {
   if [ "$tty" = true ]; then
-    printf '\033[H'
     esc=$(printf '\033')
-    frame | sed "s/\$/${esc}[K/"
-    printf '\033[J'
+    out=$(frame "$(height)" | sed "s/\$/${esc}[K/")
+    printf '\033[H%s\033[J' "$out"
   else
-    frame
+    frame "$(height)"
     printf '\f\n'
   fi
 }
@@ -95,10 +127,12 @@ fi
 
 if [ -t 0 ]; then
   saved=$(stty -g)
-  trap 'stty "$saved"; printf "\033[?25h"; rm -f "$links_file"' EXIT
+  trap 'stty "$saved"; printf "\033[?7h\033[?25h"; rm -f "$links_file"' EXIT
   trap 'exit 0' INT TERM HUP
   stty -icanon -echo min 0 time 10
-  printf '\033[?25l\033[2J'
+  # No wrapping either: a line wider than the pane is cut at its edge
+  # rather than taking a second line.
+  printf '\033[?7l\033[?25l\033[2J'
 fi
 
 draw

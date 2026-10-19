@@ -61,6 +61,13 @@ are listed beneath its tests:
 
 The tab bar and the sidebar show the count and the bar alone.
 
+When the popup is too short for all of it, each combination keeps its
+running and failed tasks and counts the rest, as in
+`… 18 passed, 10 waiting`. If that is not enough, the oldest of RECENT
+go. Only then is the bottom cut, and the popup says how much is not
+shown. Opened from a pane outside any git repository, the popup says so
+and shows every repository the plugin holds.
+
 | Key | Does |
 |---|---|
 | `q`, Escape | close the popup |
