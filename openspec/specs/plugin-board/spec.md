@@ -52,6 +52,34 @@ blames with their log paths.
 - **THEN** #14's row links `PR 41` to
   `https://github.com/agentplot/sluice/pull/41`
 
+
+### Requirement: The band counts a combination's tasks
+
+A combination under test whose tasks are recorded SHALL show in the band
+how many have ended of how many and a ten-cell bar of the same, never the
+tasks themselves.
+
+#### Scenario: Testing with tasks
+
+- **WHEN** `main + #12 + #13` has 3 of its 5 tasks ended
+- **THEN** its part of the band reads
+  `testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`
+
+### Requirement: The pane lists a combination's tasks
+
+A combination under test whose tasks are recorded SHALL show in the pane
+how many have ended of how many with the bar, and below it one line per
+task: ended tasks in the order they ended, then running ones, then waiting
+ones, each marked `✓` passed or replayed, `✗` failed, `…` running or `·`
+waiting, with an ended task's time.
+
+#### Scenario: Tasks
+
+- **WHEN** a combination's tasks are `sluice:test` passed in 108 s,
+  `sluice:e2e` running and `core:test` waiting
+- **THEN** the pane lists `✓ sluice:test 1m48s`, `… sluice:e2e running`
+  and `· core:test waiting`, in that order, under the combination
+
 ### Requirement: A session is told its submission's outcome
 
 When a submission of the session's lands, fails or conflicts (its

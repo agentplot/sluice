@@ -11,12 +11,19 @@ where its worktree's work stands, and one on each workspace for its queue.
 The plugin SHALL set the token `sluice` on each pane whose worktree has a
 submission or commits ahead of its branch, choosing the first that holds:
 a live submission, an unanswered blame or conflict, commits ahead, a
-landing in the last 30 minutes; and SHALL clear it on every other pane.
+landing in the last 30 minutes; and SHALL clear it on every other pane. A
+submission under test SHALL show its combination's task count and bar when
+the document lists its tasks, and never the tasks themselves.
 
 #### Scenario: Testing
 
 - **WHEN** the pane's worktree made `#95`, under test for 3 minutes of 15
 - **THEN** the pane's token is `#95 testing 3m/15m`
+
+#### Scenario: Testing, with tasks
+
+- **WHEN** `#95`'s combination lists two tasks, one ended
+- **THEN** the pane's token is `#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m`
 
 #### Scenario: Blamed
 
