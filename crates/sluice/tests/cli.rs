@@ -7,6 +7,7 @@ use std::cell::Cell;
 use clap::Parser;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_fakes::Fakes;
+use sluice_seams::Outcome;
 
 const BRANCH: &str = "bolt/concurrent-units";
 
@@ -134,6 +135,88 @@ fn submit_fails_and_names_the_combination() {
         .unwrap()
         .contains("tests:t-batch-cards failed"));
     assert_eq!(lines[6], "fix it in your worktree and submit again");
+}
+
+/// 19, 20: a test read as failed only because its inputs failed before
+/// says it is flaky: that it passed in this run, when and on which
+/// combination the same inputs failed, how the branch reads that, and
+/// where both runs' logs are kept; and it sends the submitter to change
+/// the test's inputs, not to fix their worktree. `--json` carries the
+/// same.
+#[test]
+fn a_flaky_failure_says_so() {
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    let (code, first) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{first}");
+    let line = |out: &str, prefix: &str| -> String {
+        out.lines()
+            .find_map(|l| l.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("no {prefix:?} in {out}"))
+            .to_string()
+    };
+    let failed_on = line(&first, &format!("  on {BRANCH} + #1 ("));
+    let failed_on = failed_on.trim_end_matches(')');
+    let failed_log = line(&first, "  log of tests:t-batch-cards: ");
+
+    // The same head again: the test runs, passes, and its key now holds
+    // a pass and a fail, which the default policy reads as failed.
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{out}");
+    let (_, json) = sluice(&f, &["status", "2", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let flaky = &v["failed"][0]["flaky"];
+    assert_eq!(flaky["here"], "pass", "{json}");
+    assert_eq!(flaky["other"]["outcome"], "fail", "{json}");
+    assert_eq!(flaky["other"]["log"], failed_log.as_str(), "{json}");
+    assert!(
+        flaky["other"]["combination"]
+            .as_str()
+            .unwrap()
+            .starts_with(failed_on),
+        "{json}"
+    );
+    let at = flaky["other"]["at"].as_str().unwrap();
+    let this_log = v["failed"][0]["log"].as_str().unwrap();
+
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!("submission 2 to {BRANCH} · nothing queued ahead")
+    );
+    // The same combination as #1's: only this test of it is counted.
+    assert_eq!(
+        lines[1],
+        format!("testing {BRANCH} + #2 · 1 tasks to run, 1 replayed")
+    );
+    assert_eq!(lines[2], "failed: tests:t-batch-cards (flaky)");
+    assert!(lines[3].starts_with(&format!("  on {BRANCH} + #2 (")));
+    assert_eq!(
+        lines[4..],
+        [
+            format!(
+                "  tests:t-batch-cards passed in this run and failed on the same inputs \
+                 at {at} on {failed_on}"
+            ),
+            format!("  log of this run: {this_log}"),
+            format!("  log of the run that failed: {failed_log}"),
+            format!(
+                "  {BRANCH} reads a test that passed and failed on the same inputs as failed \
+                 (flaky = \"fail\")"
+            ),
+            "the same inputs read failed whenever they are tested: submit again with a change \
+             to what tests:t-batch-cards reads"
+                .to_string(),
+        ],
+        "{out}"
+    );
 }
 
 #[test]

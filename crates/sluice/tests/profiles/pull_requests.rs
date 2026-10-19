@@ -701,3 +701,58 @@ fn sent_back_keeps_the_worktree() {
     assert!(text(&out).contains("failed: sh check.sh"), "{}", text(&out));
     assert!(w.exists());
 }
+
+/// A submit again on the head of a pull request already sent back queues
+/// and runs nothing, since such a pull request is submitted again only on
+/// a new head or once marked a draft and then ready for review
+/// (pull-request-intake), and says so: when it was blamed, its failure
+/// again (20), and both ways on, never a test as if one had just run.
+#[test]
+fn submit_again_on_a_head_sent_back() {
+    let g = OnGitHub::new("pr-same-head", "");
+    let w = g.session("again", &[("broken", "x\n")]);
+    let out = g.wt_submit(&w, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let pull = g.gh.forge.by_ref("unit/again").unwrap().unwrap();
+    let n = pull.number;
+
+    let out = g.wt_submit(&w, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert_eq!(g.of(n).len(), 1, "nothing queued: {:?}", g.subs());
+    assert!(!said.contains("tasks to run"), "{said}");
+    let lines: Vec<&str> = said.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&format!("#{n}'s head ")))
+        .unwrap_or_else(|| panic!("{said}"));
+    let blamed = lines[at]
+        .strip_prefix(&format!(
+            "#{n}'s head {} was tested and blamed at ",
+            &pull.head[..7]
+        ))
+        .and_then(|l| l.strip_suffix(": nothing was queued or run again"))
+        .unwrap_or_else(|| panic!("{said}"));
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(blamed).is_ok(),
+        "{said}"
+    );
+    assert_eq!(lines[at + 1], "failed: sh check.sh", "{said}");
+    assert!(
+        lines[at + 2].starts_with(&format!("  on main + #{n} (")),
+        "{said}"
+    );
+    assert!(
+        lines[at + 3].starts_with("  log of sh check.sh: "),
+        "{said}"
+    );
+    assert_eq!(
+        lines[at + 4..],
+        [format!(
+            "fix it in your worktree and submit again, or mark #{n} a draft and then ready \
+             for review to test the same commits again"
+        )],
+        "{said}"
+    );
+    assert!(w.exists());
+}
