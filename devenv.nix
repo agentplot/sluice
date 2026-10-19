@@ -175,7 +175,7 @@ let
     installPhase = "install -Dm755 vale $out/bin/vale";
   };
 
-  # Claude Code, which the plugins' projects and root:marketplace run
+  # Claude Code, run by the plugins' projects and by root:marketplace
   # (plugins/claude.sh): the release the board's engine-types were written
   # by, so every host checks the plugins against one engine, and never the
   # user's own `claude`, which may be a wrapper adding options `claude
