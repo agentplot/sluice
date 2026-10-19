@@ -2,18 +2,19 @@
 
 ## ADDED Requirements
 
-### Requirement: Every plugin is a project of its own
+### Requirement: Every plugin, and the site, is a project of its own
 
-Each directory under `plugins/` SHALL be a moon project listed in
-`.moon/workspace.yml` with its language declared, and each of its checks
-SHALL be a check-fast task of that project, not of the root or another
-plugin's.
+Each directory under `plugins/`, and `site/`, SHALL be a moon project
+listed in `.moon/workspace.yml` with its language declared, and each of
+its checks SHALL be a check-fast task of that project, not of the root or
+another part's. The site's one check SHALL be its prose check,
+`site:prose`: it has no tests, and its build is the Pages workflow's.
 
 #### Scenario: Listing the projects
 
 - **WHEN** `moon query projects` runs in the repository
-- **THEN** it lists `plugin-sluice`, `plugin-board` and `plugin-herdr`
-  with the languages `bash`, `typescript` and `bash`
+- **THEN** it lists `plugin-sluice`, `plugin-board`, `plugin-herdr` and
+  `site` with the languages `bash`, `typescript`, `bash` and `typescript`
 
 #### Scenario: Listing the root's tasks
 
