@@ -53,3 +53,15 @@ h1#_top,
   font-weight: 700;
   font-size: var(--sl-text-xl);
 }
+
+/* The plugins' screenshots, a light and a dark frame each, each a link to
+   itself at full size: only the one for the site's theme shows. */
+:root[data-theme="light"] .screenshot-dark,
+:root[data-theme="dark"] .screenshot-light {
+  display: none;
+}
+.screenshot-light img,
+.screenshot-dark img {
+  width: 100%;
+  height: auto;
+}

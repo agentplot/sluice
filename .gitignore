@@ -12,3 +12,4 @@ devenv.local.nix
 /site/.astro/
 /site/src/content/docs/decisions/
 /site/src/generated/
+/site/public/screenshots/
