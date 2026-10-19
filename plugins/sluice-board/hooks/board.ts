@@ -122,10 +122,26 @@ export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"];
   }));
 }
 
+/** Whether a branch has anything queued or under test; the rest are left out of the band. */
+export function busy(b: OverviewBranch): boolean {
+  return b.depth > 0 || testing(b).length > 0;
+}
+
+/**
+ * Whether the pane shows a branch: one busy, or whose last event is under a
+ * quarter of an hour old, so a host with many idle branches shows its queues
+ * and a landing is still seen once its queue is empty.
+ */
+export function shown(b: OverviewBranch, now: number): boolean {
+  const last = b.recent[b.recent.length - 1];
+  const age = last ? since(last.at, now) : undefined;
+  return busy(b) || (age !== undefined && age < 900);
+}
+
 /** The band's line for one branch, or null when it has nothing to show. */
 export function branchLine(b: OverviewBranch, now: number): string | null {
+  if (!busy(b)) return null;
   const under = testing(b);
-  if (b.depth === 0 && under.length === 0) return null;
   const parts = [`sluice ${b.branch}`, plural(b.depth, "submission")];
   for (const c of under) {
     const took = since(c.started, now);

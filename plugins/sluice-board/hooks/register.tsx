@@ -22,6 +22,7 @@ import {
   pullOf,
   recentKeys,
   recentWords,
+  shown,
   since,
   statusLine,
   submitted,
@@ -257,6 +258,8 @@ export const register: Register = (on, options) => {
     await read($, now);
     if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
     const at = await $.clock.now();
+    const visible = d.branches.filter((b) => shown(b, at));
+    const quiet = d.branches.length - visible.length;
     const open_ = await read($, opened);
     const shownOf = await read($, details);
     // An opened failure, under its row: each test, its log, the log's tail.
@@ -292,8 +295,8 @@ export const register: Register = (on, options) => {
         <Text dimColor>
           {d.repository} on {d.host}
         </Text>
-        {d.branches.length === 0 && <Text dimColor>No branch has a queue.</Text>}
-        {d.branches.map((b) => (
+        {visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
+        {visible.map((b) => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>
             <Text bold>
               {b.branch} at {(b.at ?? "nothing").slice(0, 7)} · {plural(b.depth, "submission")} ·{" "}
@@ -403,6 +406,13 @@ export const register: Register = (on, options) => {
               })}
           </Box>
         ))}
+        {quiet > 0 && visible.length > 0 && (
+          <Box marginTop={1}>
+            <Text dimColor>
+              {quiet === 1 ? "1 other branch" : `${quiet} other branches`} with nothing queued
+            </Text>
+          </Box>
+        )}
         <Box marginTop={1}>
           <Text dimColor>
             {d.sessions.length} worktrees held · {d.previews.length} previews

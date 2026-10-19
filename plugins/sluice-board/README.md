@@ -17,7 +17,8 @@ sluice's queue inside a Claude Code session.
 - **`/sluice`** opens a pane: each branch's combinations under test, its
   submissions with this session's marked and each pull request linked to
   GitHub, and recent landings, blames and conflicts with the blamed tests'
-  logs (press one to copy its path).
+  logs (press one to copy its path). A branch with nothing queued is left
+  out once a quarter hour has passed since its last event.
 - **Status line**: `sluice: 3 submissions · yours #13 testing`.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and

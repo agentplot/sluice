@@ -175,6 +175,43 @@ test("the band and the pane show the queue on every surface", async ($, on) => {
   }
 });
 
+test("the pane leaves out branches with nothing queued and no event this quarter hour", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d = overview();
+  const idle = (branch: string, recent: Overview["branches"][number]["recent"]) => ({
+    ...d.branches[0]!,
+    branch,
+    depth: 0,
+    submissions: [],
+    candidates: [],
+    recent,
+  });
+  for (let i = 0; i < 30; i++) d.branches.push(idle(`bolt/b${i}`, []));
+  const landed = (at: string) => [
+    { schema: "sluice/log@1", at, event: "landed", ids: [77], to: "abcdef0" },
+  ];
+  d.branches.push(idle("bolt/done", landed("2026-10-16T19:40:00Z")));
+  d.branches.push(idle("bolt/old", landed("2026-10-16T19:20:00Z")));
+  host(on, [d], { prompts: [], toasts: [], status: [] });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(await pane.find({ type: "Text", text: /^main at / })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: /^bolt\/done at / })).toBeDefined();
+  expect(await pane.findAll({ type: "Text", text: /bolt\/(b\d|old)/ })).toEqual([]);
+  expect(
+    await pane.find({ type: "Text", text: "31 other branches with nothing queued" }),
+  ).toBeDefined();
+  await pane.unmount();
+});
+
 test("a combination's tasks: the count and bar in the band, the list in the pane alone", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
