@@ -68,6 +68,7 @@ path = "tests/profiles/conformance.rs"
 tools = []
 
 [dev-dependencies]
+sha2.workspace = true
 sluice-fakes = { path = "../sluice-fakes" }
 sluice-conformance = { path = "../sluice-conformance" }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

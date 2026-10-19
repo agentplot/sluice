@@ -21,7 +21,7 @@ makes runs with no credential helper and no prompt.
 
 ## 2. The key a signer computes (design D9)
 
-- [ ] 2.1 Establish how moon gives each task's hash for a revision without running any task, for the targets a run holds. Write what you find in design D9. If moon cannot, stop and ask the operator before group 5. Verify: a test in `tests/profiles/moon.rs` that reads the hashes of a scratch workspace's tasks, runs them, and finds the same hashes in the run's report.
+- [x] 2.1 Establish how a signer checks a reported key against the combination's tree without running a task, and write it in design D9; verify `a_key_is_checked_against_the_tree_without_running` in `tests/profiles/moon.rs` (check-tools): every key of a run is the sha256 of its manifest in moon's blob store, whose inputs and dependency keys the tree bears out.
 
 ## 3. The policy and the host's config
 
@@ -42,7 +42,7 @@ makes runs with no credential helper and no prompt.
 - [ ] 5.1 Add the in-toto statement and DSSE envelope types and the pre-authentication encoding in `crates/sluice/src/signing/` (design D5); verify unit tests against the DSSE specification's published test vector.
 - [ ] 5.2 Sign and verify with SSH keys (the `ssh-key` crate, `SSHSIG`, namespace `sluice-run`) against allowed-signers lines and files read from the branch's revision; verify unit tests with keys generated in the test, never committed: a good signature, a key not listed, a tampered statement, a wrong namespace.
 - [ ] 5.3 Verify a sigstore bundle from `actions/attest` with the `sigstore` crate, against the public-good and GitHub's trusted roots fetched by TUF and cached on the host, checking the certificate's workflow, ref, repository and issuer against `[signers.<name>] github`; verify unit tests over recorded bundles in `crates/sluice/tests/profiles/forge/`, under `*.json` fixtures excluded from formatting with their reason in `treefmt.nix`; a wrong ref, a wrong workflow, a pull request's ref; and a host with no cached root reading the result as unverified.
-- [ ] 5.4 Compute the keys of a combination's checks before signing, from task 2.1, and sign only outcomes whose keys match; verify a unit test where a report names a key of another combination and that result is dropped and logged.
+- [ ] 5.4 Check every reported key against the combination's tree before signing, as design D9 says: the manifest hashes to the key, names the task, every input's content is the tree's, every dependency key passes the same check; sign only keys that pass, and hand the manifests from the run to the signer (the place's cache on a box, an artifact beside the report on the pool); verify unit tests over manifests from fixture blobs: a key of another combination, an altered input, a manifest that does not hash to its key, a dependency marked `ignored`; each dropped and logged.
 
 ## 6. The remote refs records profile
 

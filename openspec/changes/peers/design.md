@@ -247,23 +247,40 @@ carry that reading (ADR 0006). A host that rewrites or deletes the state
 can delay or drop queued work, which the queue's entries' heads under
 `heads/` let an operator resubmit, but it cannot land anything.
 
-### D9. A signer signs only keys it computed itself
+### D9. A signer signs only keys it checked against the combination
 
 A result names its key, and a pass on a key satisfies every gate that
 trusts its signer (69). The checks run the combination's code, so a
 check could report a pass under another combination's key. The signer
-therefore computes each check's key from the combination's revision
-itself, in a step that runs none of its tasks: the sign job on the
-pool, the host's sluice outside the container on a box. It signs only
-outcomes whose keys match. A report naming any other key is dropped and
-logged. Within its own keys a check can still lie about its outcome,
-as a test that exits 0 can; that is the gate's reviewers' to catch, as
-today.
+therefore checks every reported key against the combination's tree
+before it signs, in a step that runs none of its tasks: the sign job on
+the pool, the host's sluice outside the container on a box (C.6).
 
-Task 2.1 establishes how the task runner gives a task's hash without
-running it. If it cannot, the work stops there for the operator's
-ruling, since without D9 a confined signer is no stronger than its
-least trusted check.
+moon makes that check possible without running anything (moon 2.6, the
+test `a_key_is_checked_against_the_tree_without_running`). A task's key
+is the sha256 of its hash manifest, which moon keeps in its blob store
+under the key (`.moon/cache/blobs/<2>/<62>`). The manifest names the
+task and every input with the sha256 of the file's content, and each
+dependency with its own key, or `ignored` when the dependency has no
+outputs and enters no key. The signer takes the manifest the run left
+for each reported key and signs that key only when:
+
+- the manifest hashes to the key;
+- it names the reported task;
+- every input it names holds that content in the combination's tree;
+- every dependency key it names passes the same check.
+
+A report whose key fails is dropped and logged. The run hands its
+manifests to the signer with its report: on a box, they are read from
+the place's cache; on the pool, the run job uploads them beside the
+report.
+
+What the check leaves to the combination's own configuration: the
+manifest's command, arguments, environment and toolchains. They come
+from the task's configuration on the combination's revision, which no
+other combination's key can stand in for unless its inputs are the same.
+Within its own keys a check can still lie about its outcome, as a test
+that exits 0 can; that is the gate's reviewers' to catch, as today.
 
 ### D10. Remote submit and moving a branch's state to the remote
 

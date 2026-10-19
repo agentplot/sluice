@@ -485,3 +485,69 @@ fn a_sandboxed_run_reads_as_an_open_one() {
     let second = finish(&c, &req);
     assert!(tasks(&second).iter().all(|t| t.2), "{:?}", tasks(&second));
 }
+
+/// Design D9 of the change `peers` (C.6): a task's key is the sha256 of
+/// its hash manifest, kept in moon's blob store under the key, and every
+/// input the manifest names carries the sha256 of the file's content.
+/// So a signer can check a reported key against the combination's tree
+/// without running a task: the manifest hashes to the key, names the
+/// task, and names inputs whose contents the tree holds; each dependency
+/// is a key the same check holds for, or `ignored` when the dependency
+/// has no outputs and so enters no key.
+#[test]
+fn a_key_is_checked_against_the_tree_without_running() {
+    use sha2::{Digest, Sha256};
+
+    let repo = workspace("moon-key-manifest");
+    let c = checks(&repo);
+    let report = finish(&c, &request(&repo, "p1", &["#check-fast"], None));
+    assert_eq!(report.tasks.len(), 2);
+    let hex = |b: &[u8]| -> String {
+        Sha256::digest(b)
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect()
+    };
+    let manifest = |key: &str| -> serde_json::Value {
+        let blob = repo
+            .dir()
+            .join(".moon/cache/blobs")
+            .join(&key[..2])
+            .join(&key[2..]);
+        let bytes = std::fs::read(&blob).unwrap_or_else(|_| panic!("no manifest for {key}"));
+        assert_eq!(hex(&bytes), key, "the manifest hashes to its key");
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()[0].clone()
+    };
+    fn check(
+        key: &str,
+        target: Option<&str>,
+        manifest: &dyn Fn(&str) -> serde_json::Value,
+        tree: &dyn Fn(&str) -> String,
+    ) {
+        let m = manifest(key);
+        if let Some(target) = target {
+            assert_eq!(m["target"], target);
+        }
+        let inputs = m["inputs"].as_object().unwrap();
+        assert!(!inputs.is_empty());
+        for (path, sum) in inputs {
+            assert_eq!(&tree(path), sum, "{path} as the tree holds it");
+        }
+        for (dep, k) in m["deps"].as_object().unwrap() {
+            match k.as_str().unwrap() {
+                "ignored" => {}
+                k => check(k, Some(dep), manifest, tree),
+            }
+        }
+    }
+    let tree = |path: &str| -> String {
+        let out = repo.git_raw(&["cat-file", "blob", &format!("HEAD:{path}")]);
+        assert!(out.status.success(), "{path} is in the tree");
+        hex(&out.stdout)
+    };
+    for t in &report.tasks {
+        check(&t.hash, Some(&t.task), &manifest, &tree);
+    }
+    let beta = report.tasks.iter().find(|t| t.task == "beta:test").unwrap();
+    assert_eq!(manifest(&beta.hash)["deps"]["alpha:test"], "ignored");
+}
