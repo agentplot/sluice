@@ -99,7 +99,8 @@ While a branch has a queue, the band above the prompt reads like
 and the status line says where your own submissions stand. `/sluice` opens
 a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
-blamed tests' logs.
+blamed tests' logs. A branch with nothing queued is left out once a
+quarter hour has passed since its last event.
 
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's

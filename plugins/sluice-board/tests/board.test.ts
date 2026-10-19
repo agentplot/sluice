@@ -11,6 +11,7 @@ import {
   progress,
   pullOf,
   recentKeys,
+  shown,
   statusLine,
   submitted,
   taskLines,
@@ -34,6 +35,16 @@ describe("the band", () => {
     quiet.branches[0]!.candidates = [];
     expect(bandLines(quiet, NOW)).toEqual([]);
     expect(bandLines(null, NOW)).toEqual([]);
+  });
+
+  test("a branch shown in the pane: busy, or an event under a quarter hour old", () => {
+    const b = overview().branches[0]!;
+    expect(shown(b, NOW)).toBe(true);
+    const idle = { ...b, depth: 0, candidates: [], submissions: [], recent: [] };
+    expect(shown(idle, NOW)).toBe(false);
+    const at = (s: string) => [{ schema: "sluice/log@1", at: s, event: "landed", ids: [1] }];
+    expect(shown({ ...idle, recent: at("2026-10-16T19:40:00Z") }, NOW)).toBe(true);
+    expect(shown({ ...idle, recent: at("2026-10-16T19:20:00Z") }, NOW)).toBe(false);
   });
 
   test("a combination's tasks: how many have ended and a bar, never the tasks", () => {
