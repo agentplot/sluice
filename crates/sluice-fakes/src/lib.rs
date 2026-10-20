@@ -106,6 +106,9 @@ struct Inner {
     host_limit: Option<usize>,
     /// The system the host's executor is, as `(os, arch)` (87).
     platform: (String, String),
+    /// Tasks whose reported keys the candidate's tree does not bear out
+    /// (design D9).
+    forged: BTreeSet<String>,
     /// Session runs on the host, by worktree, and whether each still runs.
     sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
@@ -478,6 +481,12 @@ impl World {
 
     pub fn host_limit(&self, limit: usize) {
         self.0.borrow_mut().host_limit = Some(limit);
+    }
+
+    /// From now, `task`'s reported key is one the candidate's tree does
+    /// not bear out, as a check that lies about its key reports it.
+    pub fn forges(&self, task: &str) {
+        self.0.borrow_mut().forged.insert(task.into());
     }
 
     /// The system the host's executor is, as `(os, arch)`: `linux` on
@@ -1075,6 +1084,16 @@ impl Tests for FakeTests {
 
     fn sessions(&self) -> Result<usize> {
         Ok(self.0 .0.borrow().sessions.values().filter(|r| **r).count())
+    }
+
+    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+        let inner = self.0 .0.borrow();
+        Ok(report
+            .tasks
+            .iter()
+            .filter(|t| !inner.forged.contains(&t.task))
+            .map(|t| t.task.clone())
+            .collect())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {

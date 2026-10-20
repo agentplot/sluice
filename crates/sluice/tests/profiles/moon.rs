@@ -555,3 +555,31 @@ fn a_key_is_checked_against_the_tree_without_running() {
     let beta = report.tasks.iter().find(|t| t.task == "beta:test").unwrap();
     assert_eq!(manifest(&beta.hash)["deps"]["alpha:test"], "ignored");
 }
+
+/// Design D9: the profile's `proven` keeps every task whose key the
+/// candidate's tree bears out, and drops one whose manifest was changed
+/// after the run, as a check that lies about its key would leave it.
+#[test]
+fn proven_drops_a_key_the_tree_does_not_bear_out() {
+    let repo = workspace("moon-proven");
+    let c = checks(&repo);
+    let (run, report) = finish_run(&c, &request(&repo, "p1", &["#check-fast"], None));
+    let mut all = c.proven(&run, &report).unwrap();
+    all.sort();
+    assert_eq!(all, ["alpha:test", "beta:test"]);
+    let alpha = report
+        .tasks
+        .iter()
+        .find(|t| t.task == "alpha:test")
+        .unwrap();
+    let blob = repo
+        .dir()
+        .join(".moon/cache/blobs")
+        .join(&alpha.hash[..2])
+        .join(&alpha.hash[2..]);
+    let forged = std::fs::read_to_string(&blob)
+        .unwrap()
+        .replace("alpha/value.txt", "alpha/other.txt");
+    std::fs::write(&blob, forged).unwrap();
+    assert_eq!(c.proven(&run, &report).unwrap(), ["beta:test"]);
+}

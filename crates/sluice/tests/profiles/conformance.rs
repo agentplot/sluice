@@ -161,6 +161,10 @@ impl Tests for RecordedChecks {
         self.inner.sessions()
     }
 
+    fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
+        self.inner.proven(run, report)
+    }
+
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         self.inner.logs(run, tasks)
     }

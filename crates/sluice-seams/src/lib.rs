@@ -537,6 +537,12 @@ pub trait Tests {
     /// bound and the records never hold it.
     fn sessions(&self) -> Result<usize>;
 
+    /// Design D9 (C.6): the tasks of a finished run whose keys the
+    /// candidate's tree bears out, read while its place still exists,
+    /// running nothing. A signer signs only these, so no check signs a
+    /// pass under a key it does not hold.
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
+
     /// 20: what each of `tasks` printed in a finished run, while its place
     /// still exists: the run's own output for a task with none of its
     /// own. Only the end of a long output is kept.
