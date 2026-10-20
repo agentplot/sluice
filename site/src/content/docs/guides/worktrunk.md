@@ -54,6 +54,17 @@ cache directory, a scratch database the agent made by hand. Under
 next `sluice exec` or round on the host releases a worktree removed
 without it, and `sluice status` lists every worktree held until then.
 
+**Dev servers.** A server started by `wt step tether`, or by a
+`post-start` hook and stopped by a `pre-remove` one, moves to sluice.
+The agent runs a script that brings it up and hands it off with
+`sluice exec <branch> -- <script>`, on its worktree's ports, and
+`[tests] release` stops it. tether ends only its command's process
+group, so a container the server started outlives it, and its port is
+whatever the command picked. The worktree gets ports and `SLUICE_PLACE`
+but no names, which only a preview gets: a script it shares with the
+preview defaults each name from `SLUICE_PLACE`, as
+[previews](/sluice/guides/previews/) shows.
+
 **The branch.** Every branch with a `[branches]` section in
 `.config/sluice.toml` is protected: `wt merge` into it is refused with
 the reason, like any other write that is not sluice's own.
