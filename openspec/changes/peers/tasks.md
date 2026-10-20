@@ -76,7 +76,7 @@ makes runs with no credential helper and no prompt.
 
 ## 11. Integration
 
-- [ ] 11.1 Keep S17 to S20, S41 and S42 in `crates/sluice-conformance/tests/peers.rs`, each test named for its scenario; run `:#check-fast`, `:#check-tools`, `:#check-e2e`, `openspec validate peers --strict` and the site build; verify every one passes and a one-host repository with no `[signers]` behaves as before (the existing suites unchanged).
+- [x] 11.1 Keep S17 to S20, S41 and S42 in `crates/sluice-conformance/tests/peers.rs`, each test named for its scenario; run `:#check-fast`, `:#check-tools`, `:#check-e2e`, `openspec validate peers --strict` and the site build; verify every one passes and a one-host repository with no `[signers]` behaves as before (the existing suites unchanged).
 
 ## Workflow follow-up
 
