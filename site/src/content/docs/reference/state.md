@@ -27,7 +27,7 @@ readable with plain tools whether or not sluice is running.
     lock               held by a round of this branch
   .logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-  caches/<bucket>/<key>/
+  .caches/<bucket>/<key>/
                        the [[checkout.cache]] entries, the last two keys of each
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, caches,
@@ -64,8 +64,9 @@ every repository on the host and never pushed:
   sessions/.lock       held while a run is counted against the bound
   sessions/<worktree>.json
                        each run an agent has going in its worktree: the
-                       worktree, its branch, its process, when it started
-                       and where its output is
+                       worktree, its branch, its process, when it started,
+                       where its output is, the command it runs and how far
+                       its tasks have got
 ```
 
 A checkout's name is written as one file name, each `/` of it as `%2F`
@@ -83,7 +84,9 @@ in `sessions/` while it runs, as an agent's run does.
 A block of ports is free again when the checkout named in it is gone.
 A file in `sessions/` counts against the bound for as long as its run
 is going. One whose run has ended holds nothing: the next run that
-starts removes it, and nothing counts it before then.
+starts removes it, and nothing counts it before then. Its `sluice exec`
+rewrites it as each task ends, for `sluice overview` to show; nothing
+that decides a result reads it.
 
 ## A branch whose state is on its remote
 
@@ -108,6 +111,8 @@ refs/sluice/logs/<branch>/<id>   what a failed combination's tests printed, for
                                  the last 20
 refs/sluice/hosts/<host>         a host's sign of life and the room it has, rewritten
                                  by that host alone
+refs/sluice/set-aside            the results `sluice set-aside` set aside, one file
+                                 each, only ever added to
 ```
 
 A write to a branch's state is a push that the remote takes only if the

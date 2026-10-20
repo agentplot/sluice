@@ -8,22 +8,27 @@ import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
 
 import type { Mine, OpenedTest, Outcome, Overview, OverviewTask } from "../types";
+import type { CheckRow } from "./board";
 import {
   bandLines,
+  checkRows,
   combination,
   duration,
   failedName,
   githubBase,
+  hostLine,
   hostsLine,
   isMine,
   learn,
   limit,
+  moving,
   outcomes,
   plural,
   progress,
   pullOf,
   recentKeys,
   recentWords,
+  shown,
   since,
   statusLine,
   submitted,
@@ -39,6 +44,13 @@ const TASK_COLOR: Record<OverviewTask["state"], string | undefined> = {
   failed: "red",
   running: "yellow",
   waiting: undefined,
+};
+// A check under way is plain, never the yellow of a combination under test.
+const CHECK_COLOR: Record<CheckRow["state"], string | undefined> = {
+  running: undefined,
+  passed: "green",
+  failed: "red",
+  ended: undefined,
 };
 const NO_ONE: Mine = { root: null, ids: [], pulls: [] };
 
@@ -186,13 +198,11 @@ export const register: Register = (on, options) => {
     await update($, repo, () => base);
     await take($, JSON.parse(probe.stdout) as Overview, cwd, wake);
     void feed($, cwd, wake);
-    // Elapsed times move while something is under test.
+    // Elapsed times move while something is under test or an agent's check
+    // goes, and a finished check leaves the pane a quarter hour on.
     $.clock.every(5000, async () => {
-      const d = await read($, doc);
-      if (d && d.branches.some((b) => testing(b).length > 0)) {
-        const t = await $.clock.now();
-        await update($, now, () => t);
-      }
+      const t = await $.clock.now();
+      if (moving(await read($, doc), t)) await update($, now, () => t);
     });
     return started;
   });
@@ -259,6 +269,11 @@ export const register: Register = (on, options) => {
     await read($, now);
     if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
     const at = await $.clock.now();
+    const visible = d.branches.filter((b) => shown(b, at));
+    const quiet = d.branches.length - visible.length;
+    const checks = checkRows(d, at);
+    const room = hostLine(d.room);
+    const held = d.sessions.filter((s) => s.ports !== undefined).length;
     const open_ = await read($, opened);
     const shownOf = await read($, details);
     // An opened failure, under its row: each test, its log, the log's tail.
@@ -294,8 +309,8 @@ export const register: Register = (on, options) => {
         <Text dimColor>
           {d.repository} on {d.host}
         </Text>
-        {d.branches.length === 0 && <Text dimColor>No branch has a queue.</Text>}
-        {d.branches.map((b) => (
+        {visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
+        {visible.map((b) => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>
             <Text bold>
               {b.branch} at {(b.at ?? "nothing").slice(0, 7)} · {plural(b.depth, "submission")} ·{" "}
@@ -405,9 +420,29 @@ export const register: Register = (on, options) => {
               })}
           </Box>
         ))}
+        {quiet > 0 && visible.length > 0 && (
+          <Box marginTop={1}>
+            <Text dimColor>
+              {quiet === 1 ? "1 other branch" : `${quiet} other branches`} with nothing queued
+            </Text>
+          </Box>
+        )}
+        {/* Agents' checks are load on the host, never submissions. */}
+        {(checks.length > 0 || room) && (
+          <Box flexDirection="column" marginTop={1}>
+            {checks.length > 0 && <Text bold>CHECKING</Text>}
+            {checks.map((c) => (
+              <Text key={`check-${c.key}`} color={CHECK_COLOR[c.state]}>
+                {"  "}
+                {c.text}
+              </Text>
+            ))}
+            {room && <Text dimColor>{room}</Text>}
+          </Box>
+        )}
         <Box marginTop={1}>
           <Text dimColor>
-            {d.sessions.length} worktrees held · {d.previews.length} previews
+            {plural(held, "worktree")} held · {d.previews.length} previews
             {(d.hosts ?? []).length > 0 ? ` · ${hostsLine(d.hosts ?? [])}` : ""}
           </Text>
         </Box>

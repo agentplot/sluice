@@ -4,7 +4,8 @@ Teaches Claude Code to install sluice, set a repository up for it, and land
 work through the queue instead of merging.
 
 ```
-/plugin install sluice --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice@sluice
 ```
 
 | skill | for |

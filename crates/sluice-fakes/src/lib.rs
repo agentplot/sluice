@@ -16,11 +16,11 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
-    LastResult, Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress,
-    ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
-    Written,
+    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, HostRun,
+    LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace,
+    Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session,
+    SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult,
+    Tests, Written,
 };
 
 /// A tree: path to content.
@@ -87,6 +87,8 @@ struct Inner {
     // the repository
     commits: BTreeMap<Rev, Commit>,
     refs: BTreeMap<String, Rev>,
+    /// The repository's HEAD: the first branch made, as `git init` names it.
+    head: Option<String>,
     moves: Vec<MoveRecord>,
     crash: Option<Crash>,
     // the check
@@ -95,6 +97,10 @@ struct Inner {
     flaky: BTreeMap<String, VecDeque<Outcome>>,
     hang: BTreeSet<String>,
     skip: BTreeSet<String>,
+    /// Checks a run leaves not run, with why (could-not-run-1 114).
+    cannot_run: BTreeMap<String, String>,
+    /// A run whose policy sets `[tests] ready` is refused (84).
+    not_ready: bool,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -128,8 +134,9 @@ struct Inner {
     wakes: Vec<String>,
     /// The signer the host's results are recorded as signed by (78).
     signer: Option<String>,
-    /// Session runs on the host, by worktree, and whether each still runs.
-    sessions: BTreeMap<String, bool>,
+    /// Session runs on the host, by worktree: whether each still runs, and
+    /// what its `sluice exec` kept of it (ADR 0035).
+    sessions: BTreeMap<String, (bool, HostRun)>,
     observed: Vec<(String, String, Outcome)>,
     host: String,
     // the place
@@ -172,6 +179,7 @@ struct Inner {
     /// Each branch's candidates' tasks, kept beside its records.
     progress: BTreeMap<String, BTreeMap<String, Vec<TaskProgress>>>,
     results: Vec<u8>,
+    set_asides: Vec<u8>,
     next_id: u64,
     crash_writes: usize,
     interfere: usize,
@@ -305,7 +313,21 @@ impl World {
             .collect();
         let rev = Self::put_commit(&mut inner, tree, vec![], &format!("init {branch}"));
         inner.refs.insert(branch.into(), rev.clone());
+        inner.head.get_or_insert_with(|| branch.into());
         rev
+    }
+
+    /// The repository's default branch, its HEAD, and its revision.
+    pub fn head(&self) -> Option<(String, Option<Rev>)> {
+        let inner = self.0.borrow();
+        let name = inner.head.clone()?;
+        let rev = inner.refs.get(&name).cloned();
+        Some((name, rev))
+    }
+
+    /// Name `branch` the repository's HEAD.
+    pub fn set_head(&self, branch: &str) {
+        self.0.borrow_mut().head = Some(branch.into());
     }
 
     /// A session's work: a commit on `on` changing `changes` (`None`
@@ -442,6 +464,22 @@ impl World {
     /// Runs leave `task` without a result, as a runner that skips it.
     pub fn skips(&self, task: &str) {
         self.0.borrow_mut().skip.insert(task.into());
+    }
+
+    /// Runs leave `task` not run, for `reason` (could-not-run-1 114);
+    /// `None` lets it run again.
+    pub fn cannot_run(&self, task: &str, reason: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match reason {
+            Some(r) => inner.cannot_run.insert(task.into(), r.into()),
+            None => inner.cannot_run.remove(task),
+        };
+    }
+
+    /// The host fails a policy's `[tests] ready` from now: a run whose
+    /// request sets it is refused before anything of it runs (84).
+    pub fn not_ready(&self, not_ready: bool) {
+        self.0.borrow_mut().not_ready = not_ready;
     }
 
     /// The next start finds its place made and stops before starting.
@@ -616,6 +654,7 @@ impl World {
                     docker: false,
                 },
                 missing: Vec::new(),
+                not_run: Vec::new(),
                 timed_out: false,
             };
         }
@@ -648,6 +687,7 @@ impl World {
                 docker: request.limits.docker,
             },
             missing: Vec::new(),
+            not_run: Vec::new(),
             timed_out: false,
         };
         for t in wanted {
@@ -663,6 +703,13 @@ impl World {
             }
             if inner.skip.contains(&t.name) {
                 report.missing.push(t.name.clone());
+                continue;
+            }
+            if let Some(reason) = inner.cannot_run.get(&t.name) {
+                report.not_run.push(NotRun {
+                    task: t.name.clone(),
+                    reason: reason.clone(),
+                });
                 continue;
             }
             if inner.hang.contains(&t.name) && request.limit.is_some() {
@@ -919,15 +966,37 @@ impl World {
     /// A session run on `worktree`, running or ended with its record
     /// left.
     pub fn session_run(&self, worktree: &str, running: bool) {
+        let run = HostRun {
+            worktree: worktree.into(),
+            branch: String::new(),
+            started: String::new(),
+            command: None,
+            tasks: Vec::new(),
+        };
         self.0
             .borrow_mut()
             .sessions
-            .insert(worktree.into(), running);
+            .insert(worktree.into(), (running, run));
+    }
+
+    /// A session run started on the host, as `sluice exec` records it.
+    pub fn begin_host_run(&self, run: HostRun) {
+        self.0
+            .borrow_mut()
+            .sessions
+            .insert(run.worktree.clone(), (true, run));
+    }
+
+    /// `worktree`'s session run's tasks, as its `sluice exec` keeps them.
+    pub fn session_tasks(&self, worktree: &str, tasks: &[TaskProgress]) {
+        if let Some((_, r)) = self.0.borrow_mut().sessions.get_mut(worktree) {
+            r.tasks = tasks.to_vec();
+        }
     }
 
     /// `worktree`'s session run has ended; its record is left behind.
     pub fn kill_session(&self, worktree: &str) {
-        if let Some(r) = self.0.borrow_mut().sessions.get_mut(worktree) {
+        if let Some((r, _)) = self.0.borrow_mut().sessions.get_mut(worktree) {
             *r = false;
         }
     }
@@ -1092,6 +1161,9 @@ impl Tests for FakeTests {
         ) {
             bail!("the open executor cannot keep a run off the network");
         }
+        if inner.not_ready && request.tests.contains_key("ready") {
+            bail!("the host is not ready: [tests] ready failed");
+        }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
         }
@@ -1169,7 +1241,26 @@ impl Tests for FakeTests {
     }
 
     fn sessions(&self) -> Result<usize> {
-        Ok(self.0 .0.borrow().sessions.values().filter(|r| **r).count())
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .sessions
+            .values()
+            .filter(|(r, _)| *r)
+            .count())
+    }
+
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .sessions
+            .values()
+            .filter(|(r, _)| *r)
+            .map(|(_, run)| run.clone())
+            .collect())
     }
 
     fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
@@ -1760,6 +1851,15 @@ impl State for FakeState {
         Ok(())
     }
 
+    fn set_asides(&self) -> Result<Vec<u8>> {
+        Ok(self.0 .0.borrow().set_asides.clone())
+    }
+
+    fn set_aside(&self, line: &[u8]) -> Result<()> {
+        self.0 .0.borrow_mut().set_asides.extend(line);
+        Ok(())
+    }
+
     fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>> {
         let mut inner = self.0 .0.borrow_mut();
         Ok(logs
@@ -1843,6 +1943,8 @@ mod tests {
             kind: sluice_seams::RunKind::Checks,
             outcome,
             recorded: true,
+            tasks: Vec::new(),
+            reused: None,
         }
     }
 

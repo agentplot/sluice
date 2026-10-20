@@ -3,22 +3,28 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   bandLines,
   bar,
+  checkRows,
   duration,
+  finishedWords,
   githubBase,
+  heldBack,
+  hostLine,
   hostsLine,
   isMine,
   learn,
+  moving,
   outcomes,
   progress,
   pullOf,
   recentKeys,
+  shown,
   statusLine,
   submitted,
   taskLines,
   wakeText,
 } from "../hooks/board";
 import type { Mine, Overview } from "../types";
-import { NOW, overview, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withTasks } from "./fixture";
 
 const ME: Mine = { root: "/work/sluice/plugin-board", ids: [], pulls: [] };
 
@@ -35,6 +41,16 @@ describe("the band", () => {
     quiet.branches[0]!.candidates = [];
     expect(bandLines(quiet, NOW)).toEqual([]);
     expect(bandLines(null, NOW)).toEqual([]);
+  });
+
+  test("a branch shown in the pane: busy, or an event under a quarter hour old", () => {
+    const b = overview().branches[0]!;
+    expect(shown(b, NOW)).toBe(true);
+    const idle = { ...b, depth: 0, candidates: [], submissions: [], recent: [] };
+    expect(shown(idle, NOW)).toBe(false);
+    const at = (s: string) => [{ schema: "sluice/log@1", at: s, event: "landed", ids: [1] }];
+    expect(shown({ ...idle, recent: at("2026-10-16T19:40:00Z") }, NOW)).toBe(true);
+    expect(shown({ ...idle, recent: at("2026-10-16T19:20:00Z") }, NOW)).toBe(false);
   });
 
   test("a combination's tasks: how many have ended and a bar, never the tasks", () => {
@@ -65,6 +81,134 @@ describe("the band", () => {
     expect(duration(45)).toBe("45s");
     expect(duration(130)).toBe("2m10s");
     expect(duration(3780)).toBe("1h03m");
+  });
+});
+
+describe("agents' checks", () => {
+  const BAND =
+    "sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa";
+
+  test("the band says when they hold the queue back, at the end of the branch's line", () => {
+    expect(bandLines(withChecks(), NOW)).toEqual([`${BAND} · 1 slot to an agent's checks`]);
+  });
+
+  test("two agents' checks are two slots", () => {
+    const d = withChecks();
+    d.room = { bound: 3, queue: 1, sessions: 2, reserve: 0 };
+    expect(bandLines(d, NOW)).toEqual([`${BAND} · 2 slots to agents' checks`]);
+  });
+
+  test("nothing of checks while the host has a run free", () => {
+    const d = withChecks();
+    d.room = { bound: 3, queue: 1, sessions: 1, reserve: 0 };
+    expect(bandLines(d, NOW)).toEqual([BAND]);
+    expect(statusLine(d, ME)).toBe("sluice: 3 submissions · yours #13 testing");
+  });
+
+  test("nothing of checks while the branch tests all its window does", () => {
+    const d = withChecks();
+    d.branches[0]!.window = 1;
+    expect(heldBack(d.branches[0]!, d.room)).toBe(false);
+    expect(bandLines(d, NOW)).toEqual([BAND]);
+  });
+
+  test("nothing of checks with nothing waiting, nor from a sluice with no room", () => {
+    const d = withChecks();
+    d.branches[0]!.submissions = d.branches[0]!.submissions.filter((s) => s.id !== 14);
+    expect(heldBack(d.branches[0]!, d.room)).toBe(false);
+    const old = withChecks();
+    delete old.room;
+    expect(bandLines(old, NOW)).toEqual([BAND]);
+    expect(hostLine(old.room)).toBeNull();
+  });
+
+  test("a submission whose combination passed waits on no run", () => {
+    const d = withChecks();
+    d.branches[0]!.submissions.find((s) => s.id === 14)!.state = "passed";
+    expect(heldBack(d.branches[0]!, d.room)).toBe(false);
+  });
+
+  test("the status line says it once", () => {
+    expect(statusLine(withChecks(), learn(withChecks(), ME))).toBe(
+      "sluice: 3 submissions · yours #13 testing · 1 slot to an agent's checks",
+    );
+  });
+
+  test("CHECKING: each check going or ended this quarter hour, never as testing", () => {
+    const rows = checkRows(withChecks(), NOW);
+    expect(rows.map((r) => r.text)).toEqual([
+      "fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s",
+      "e2e-stack → main make e2e 2m00s",
+      "done-ok → main 14 passed · reused when submitted",
+      "dirty → main 14 passed · not kept: uncommitted changes",
+      "broke → main 2 of 14 failed",
+    ]);
+    expect(rows.map((r) => r.state)).toEqual(["running", "running", "passed", "passed", "failed"]);
+    expect(rows.some((r) => /testing/.test(r.text))).toBe(false);
+  });
+
+  test("a check whose runner gives no tasks shows its time alone", () => {
+    const d = withChecks();
+    d.sessions = [
+      { worktree: "/w/plain", branch: "main", run: { started: "2026-10-16T19:45:00Z" } },
+    ];
+    expect(checkRows(d, NOW).map((r) => r.text)).toEqual(["plain → main 10s"]);
+  });
+
+  test("what a finished check is worth", () => {
+    const r = {
+      at: "2026-10-16T19:44:00Z",
+      head: "e20a6f9b48",
+      kind: "checks" as const,
+      outcome: "pass" as const,
+      recorded: true,
+    };
+    const passed = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ target: `t:${i}`, state: "passed" as const }));
+    // Recorded, but a gate that does not trust its executor.
+    expect(finishedWords({ ...r, tasks: passed(14), reused: false })).toBe("14 passed");
+    expect(finishedWords({ ...r, tasks: [{ target: "a", state: "replayed" }], reused: true })).toBe(
+      "1 passed · reused when submitted",
+    );
+    // A command's run, and one with no report.
+    expect(finishedWords({ ...r, kind: "command", recorded: false })).toBe("passed");
+    expect(finishedWords({ ...r, outcome: "timed_out", recorded: false })).toBe("timed out");
+    expect(finishedWords({ ...r, outcome: "lost", recorded: false })).toBe("lost");
+  });
+
+  test("the host line", () => {
+    expect(hostLine({ bound: 6, queue: 3, sessions: 1, reserve: 0 })).toBe(
+      "host: 4 of 6 runs · 3 queue · 1 agent",
+    );
+    expect(hostLine({ bound: 6, queue: 0, sessions: 2, reserve: 1 })).toBe(
+      "host: 2 of 6 runs · 2 agents",
+    );
+    expect(hostLine({ bound: 6, queue: 0, sessions: 0, reserve: 0 })).toBeNull();
+  });
+
+  test("times move while a check goes, and stop once none is left to show", () => {
+    const d = overview();
+    d.branches[0]!.candidates = [];
+    expect(moving(d, NOW)).toBe(false);
+    expect(moving(withChecks(), NOW)).toBe(true);
+    const later = Date.parse("2026-10-16T21:00:00Z");
+    const ended = withChecks();
+    ended.branches[0]!.candidates = [];
+    ended.sessions = ended.sessions.filter((s) => !s.run);
+    expect(moving(ended, later)).toBe(false);
+  });
+});
+
+describe("the branches' order", () => {
+  test("the band keeps the overview's order, whatever the names", () => {
+    const d = overview();
+    const main = d.branches[0]!;
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
+    expect(bandLines(d, NOW).map((l) => l.split(" · ")[0])).toEqual([
+      "sluice release",
+      "sluice bolt/a",
+      "sluice main",
+    ]);
   });
 });
 

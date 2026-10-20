@@ -49,8 +49,16 @@ trust = ["confined", "sandbox"]
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
 | `release` | a command | The release command: what removes what the tests handed to another process to keep, a container above all. It runs once a checkout is released, under the same executor, toolchain and environment as the tests, ports included, and for a worktree when `sluice release` runs in it ([ADR 0016](/sluice/decisions/0016/)). A list, the command first, or a string run by `sh -c`. |
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
+| `ready` | a command | Shows that the host can run the tests, e.g. `["docker", "info"]` for tests that need a container engine. It runs in the checkout under the same executor, toolchain and environment as the tests, within 60 seconds. When it fails before a run, the run is refused and nothing is recorded. When it fails after a run in which a test did not pass, those tests could not run: they have no result, and the combination is tested again. A list, the command first, or a string run by `sh -c`. |
+| `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result, as with `ready`. Unset, every exit but `0` is a fail. |
 
 Which tasks must pass is not here: it is set per branch.
+
+A combination whose tests could not run is tested again and blames
+nobody. After three runs in a row in which its tests could not run, its
+newest submission is blamed, and each test is named with why. A command
+given to `sluice exec` after `--` is held to neither `ready` nor
+`not_run`.
 
 ## `[checkout]`: where a combination is tested
 
@@ -265,7 +273,9 @@ Under `"fail"`, a submit names such a test `failed: <test> (flaky)`. It
 says whether the test passed or failed in this run, when and on which
 combination the same inputs did otherwise, and where that run's log is
 kept. The same inputs fail whenever they're tested, so the way on is a
-change to what the test reads.
+change to what the test reads. When the fail was the host's, not the
+test's, the operator can instead set it aside with `sluice set-aside`,
+and the same inputs read passed from their passes.
 
 ### `timeout`
 
@@ -423,8 +433,10 @@ submissions: an agent's run in its worktree waits rather than take one,
 and a submission's run starts whenever the bound has room. With the
 default, 0, agents' runs may hold the whole bound. A `reserved` at or
 above `max` leaves agents no run, and sluice refuses to start with the
-setting named. What the host records of its runs and ports is on the
-[state page](/sluice/reference/state/).
+setting named. `sluice overview --json` shows the bound, what holds it
+and the reserve as `room`, and its counts line says when agents' runs
+hold back a submission that would otherwise start. What the host records
+of its runs and ports is on the [state page](/sluice/reference/state/).
 
 ### `[forge]`
 

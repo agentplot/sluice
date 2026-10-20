@@ -14,7 +14,8 @@ _: {
     # Records as sluice writes them, kept byte for byte.
     "*.jsonl"
     "docs/examples/**"
-    # Drawn images and rendered diagrams; no formatter keeps them stable.
+    # Drawn images, rendered diagrams and the plugins' screenshots, captured
+    # terminal frames kept as shot; no formatter keeps them stable.
     "*.svg"
     "*.png"
     # Test keys, kept byte for byte.

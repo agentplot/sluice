@@ -55,9 +55,28 @@ the policy declares the cache, the same condition as between
 combinations. A worktree holding anything more runs the same tests,
 records nothing, and says `not recorded: worktree is not clean`.
 
+A test that could not run is listed as `could not run: <test>: <why>`
+and has no result, so nothing is recorded under its key. A test could
+not run when its program could not be started, when it exits with a code
+`[tests] not_run` names, or when the host failed `[tests] ready` after a
+run in which it did not pass. A host that fails `ready` before the run
+is refused it, and the command's output says why.
+
 `sluice exec <branch> -- <command>` runs any command the same way, with
 `SLUICE_CHECKOUT`, `SLUICE_TMP` and the ports in its environment, and
-exits with the command's exit code. It records nothing.
+exits with the command's exit code. It records nothing, and is held to
+neither `ready` nor `not_run`.
+
+Run suites through `sluice exec` so the agents on one host take turns
+under its bound rather than all running at once. A quick, narrow call,
+such as a type check or one unit test, can run directly.
+
+While it runs, `sluice overview` shows it as a check on the worktree,
+never as a submission: how many of its tasks have ended under the moon
+runner, or the command it runs, and when it started. Each check takes a
+run of the host's bound, so when the bound is full and a submission
+waits, the branch's counts line says how many runs the checks hold:
+`testing 2 at once (up to 3) · 1 slot to an agent's checks`.
 
 What a run starts and hands to another process, a container above all,
 stays up between runs, so the next run finds it. `sluice release` ends
@@ -93,6 +112,8 @@ release one with: sluice release --worktree <worktree>
 | `kind` | `checks`, or `command` for `sluice exec <branch> -- <command>` |
 | `outcome` | `pass`, `fail`, `timed_out`, `lost` (the run stopped without saying how it ended) or `stopped` (ended by its caller) |
 | `recorded` | its results are kept for their keys, so a submission of `head` reuses them. Never true for a command, or for a run with files changed and not committed. Never true when a commit or an edit was made while it ran: it names the commit it started on. Never true for a run that timed out, was lost or was stopped |
+| `tasks` | for a run of the checks that reported, each task as it ended: `target` and `state`, `passed`, `failed` or `replayed` |
+| `reused` | for a run of the checks that reported: true when `recorded` is, every check passed, and the branch's gate trusts the executor it ran under. A submission of `head` then replays its results rather than running them again |
 
 The next run replaces it, and `sluice release` removes it with the rest.
 A worktree's head is ready to submit when `kind` is `checks`, `outcome`
@@ -144,6 +165,8 @@ bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4
   testing bolt/concurrent-units + #13 + #14 3/5 since 2026-10-16T09:16:44Z
   2026-10-16T09:15:02Z  landed #12 as c41e8f2
   2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
+checking /home/me/wt/unit-a → bolt/concurrent-units 3/8 since 2026-10-16T09:17:02Z
+host: 2 of 4 runs · 1 queue · 1 agent
 2 worktrees held · 0 previews
 ```
 
@@ -153,13 +176,15 @@ line or a script. Fields are only ever added to it.
 | field | |
 |---|---|
 | `schema`, `host`, `repository`, `at` | the schema, the host's name, the repository's git directory, and when it was read |
-| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing) |
+| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing). They come in the order the default branch's policy names them |
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
+| `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
+| `room` | the host's runs: `bound`, `queue` (this repository's combinations under test), `sessions` (every `sluice exec` and preview command running on the host) and `reserve` (the part of the bound `[runs] reserved` keeps from `sluice exec`) |
 
 A combination's `tasks` say how far its tests have got and decide
 nothing: its result is still read from the finished run. Each round
@@ -169,6 +194,17 @@ is no longer under test. The text line's `3/5` counts the tasks that
 have ended. They are kept on the host that runs the combination, so
 another host shows none. The `command` runner has one test, the run
 itself, and gives none.
+
+A check's `run` comes from the host's own state, written by its `sluice
+exec` as each task ends, and goes when the run ends; its `last_result`
+then says what it is worth. Like a combination's tasks, it decides
+nothing.
+
+The branches come in the order of the `[branches]` tables of the
+policy on the default branch, the branch the repository's HEAD names.
+A pattern's branches stand together where the pattern does, in name
+order, and branches no table names come last. Each branch's gate is
+still its own policy's.
 
 `--json --watch` prints the document as one line at once, and again
 each time anything in it but `at` changes, reading about once a second
@@ -388,6 +424,27 @@ failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 [Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
 
+## `sluice set-aside`
+
+A test's fail that the host caused, not the test, still sits under the
+test's key, and a later pass makes the key read as flaky. On a branch
+whose `flaky` is `"fail"`, the same inputs then never pass. The operator
+who finds the cause on the host sets the fail aside:
+
+```console
+$ sluice set-aside cli:tools --at 2026-10-17T13:05:32Z --reason "OrbStack was down"
+set aside cli:tools 7272335f33f8 recorded at 2026-10-17T13:05:32Z on main 79b832d: OrbStack was down
+no gate reads it from now; its line stays in the results
+```
+
+`--at` is when the result was recorded, as a flaky failure names it.
+`--hash` gives the start of its key when two results of the test were
+recorded at once. The result's line stays in `results.jsonl`. The
+set-aside, with who made it and why, is kept in `set-aside.jsonl` beside
+it, and no branch reads the result again. An agent never sets aside a
+result; the Claude Code plugin refuses it. Under `--json`, the
+set-aside's record is printed.
+
 ## Exit codes
 
 | exit | meaning |
@@ -423,6 +480,7 @@ else they say goes to stderr:
 | `sluice step` | `{"branch","outcome","released","previews_released"}`: `outcome` is `stepped`, `busy` or `contended`; the two lists name the worktrees and previews the round released because they were gone or their command failed |
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
+| `sluice set-aside` | `{"schema","at","task","hash","run_at","branch","combination","reason","by"}`, the record kept |
 | `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release |
 | `sluice protect` | `{"protection":"installed","changed","held"}`: `changed` is `false` when the hook was in place already, and `held` lists each worktree that has checked out a protected branch; with `--remove`, `{"protection":"removed","changed"}` |
 | `sluice forge check` | `{"branch","ok","checks"}`, each check with its `ok` and `message` |
@@ -436,7 +494,7 @@ failed; `2` when the revision or the branch is refused; `130` when
 stopped while it waits.
 
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
-not run or timed out, `2` on a refusal, and `130` when stopped with
+not run, could not run or timed out, `2` on a refusal, and `130` when stopped with
 Ctrl-C, which ends the run. With a command, it exits with the command's
 code.
 

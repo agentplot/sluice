@@ -123,6 +123,19 @@ impl Branches {
         self.local.read_file(rev, path)
     }
 
+    /// Whether this host has fetched any branch's state from `remote`.
+    pub fn fetched_state(&self, remote: &str) -> Result<bool> {
+        let out = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&self.dir)
+            .args(["for-each-ref", "--count=1", "--format=%(refname)"])
+            .arg(format!("refs/sluice-fetched/{remote}/state/"))
+            .env_remove("GIT_DIR")
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        Ok(out.status.success() && !out.stdout.is_empty())
+    }
+
     /// The pushed refs profile for `remote`, as this binding reaches it.
     pub fn pushed_refs(&self, remote: &str) -> Result<Rc<PushedRefs>> {
         self.pushed(remote, remote)

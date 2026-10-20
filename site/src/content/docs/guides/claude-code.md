@@ -15,10 +15,12 @@ describes.
 At the prompt of a Claude Code session in a terminal:
 
 ```
-/plugin install sluice --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice@sluice
 ```
 
-Answer `y` to add the marketplace, then choose the user scope to have it in
+The first line adds the repository's marketplace, named `sluice`; the
+second installs the plugin from it. Choose the user scope to have it in
 every session.
 
 ## Set up a repository
@@ -86,15 +88,19 @@ never sees. It needs `jq`, and lets everything through without it.
 A second plugin, `sluice-board`, shows the queue inside the session:
 
 ```
-/plugin install sluice-board --marketplace agentplot/sluice
+/plugin install sluice-board@sluice
 ```
+
+<a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
+<a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 
 While a branch has a queue, the band above the prompt reads like
 `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`,
 and the status line says where your own submissions stand. `/sluice` opens
 a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
-blamed tests' logs.
+blamed tests' logs. A branch with nothing queued is left out once a
+quarter hour has passed since its last event.
 
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's
@@ -108,6 +114,21 @@ below it: `✓` passed, `✗` failed, `…` running and `·` waiting, with how
 long each ended task took. Each round updates it, every few seconds
 while a submission waits, and it counts tasks, not the tests inside one.
 It shows only for combinations tested on this host.
+
+Your agents' own runs of `sluice exec` are checks, not submissions, and
+the board shows them as load on the host, never in a branch's queue. A
+check takes one of the host's runs, the same runs combinations are tested
+in, so a busy host can test fewer combinations than a branch allows. When
+it does, the band ends that branch's line with `· 1 slot to an agent's
+checks`, and the status line says it once. The pane lists each check
+under CHECKING, one row per checkout and the branch it checks against:
+`fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, or the command it
+runs. A check that ended stays a quarter hour. `14 passed · reused when
+submitted` means the gate takes those passes when that commit is
+submitted, so its combination doesn't run them again; `not kept:
+uncommitted changes` means the checkout held more than its commit and
+nothing was kept. Under the rows, `host: 4 of 6 runs · 3 queue · 1 agent`
+says where the host's runs go.
 
 When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests

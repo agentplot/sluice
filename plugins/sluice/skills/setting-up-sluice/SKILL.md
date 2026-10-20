@@ -46,7 +46,7 @@ Find out what the repository already uses before writing anything:
 | `devenv.nix` / `devenv.yaml` | `toolchain = ["devenv", "print-dev-env"]` |
 | `flake.nix` with a dev shell, no devenv | `toolchain = ["nix", "print-dev-env"]` |
 | `.prototools` | moon and tools pinned by proto; sluice runs `proto install` for you |
-| tests that start docker, compose or testcontainers | `[executor] docker = true` and a `[tests] release` ([profiles/checkout.md](references/profiles/checkout.md)) |
+| tests that start docker, compose or testcontainers | `[executor] docker = true`, a `[tests] release`, and `[tests] ready = ["docker", "info"]` so a stopped engine leaves those tests unrun, not failed ([profiles/checkout.md](references/profiles/checkout.md)) |
 | tests that listen on ports | `[checkout] ports` ([profiles/checkout.md](references/profiles/checkout.md)) |
 | `.config/wt.toml`, `wt` on `PATH`, `wt merge` in scripts | worktrunk driver ([profiles/worktrunk.md](references/profiles/worktrunk.md)) |
 | `git remote get-url origin` on github.com, and the target branch lives there | `remote = "origin"` ([profiles/remote-branches.md](references/profiles/remote-branches.md)) |

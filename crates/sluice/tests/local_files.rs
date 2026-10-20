@@ -26,8 +26,10 @@ fn changes(put: &[(&str, &str)], append: &[(&str, &str)]) -> Changes {
     }
 }
 
+/// Waits for the lock: a child another test spawns holds a copy of the
+/// lock file until it execs, so a released lock may still read as held.
 fn write(s: &LocalFiles, branch: &str, c: Changes) -> Written {
-    let _g = s.lock(branch).unwrap().expect("lock");
+    let _g = s.wait_lock(branch).unwrap();
     let at = s.read(branch).unwrap().version;
     s.write(branch, at, c).unwrap()
 }
@@ -133,7 +135,7 @@ fn logs_are_kept_beside_the_records_and_only_the_last_ones() {
     assert_eq!(std::fs::read_to_string(&first[0].text).unwrap(), "one\n");
     assert_eq!(std::fs::read_to_string(&first[1].text).unwrap(), "two\n");
     {
-        let _g = s.lock("bolt/x").unwrap().unwrap();
+        let _g = s.wait_lock("bolt/x").unwrap();
         s.write("bolt/x", 0, changes(&[("branch.json", "{}\n")], &[]))
             .unwrap();
     }
@@ -169,7 +171,7 @@ fn tasks_are_kept_beside_the_records_and_move_no_version() {
     assert!(s.put_progress("bolt/x", "c1", Some(&one)).is_err());
     write(&s, "bolt/x", changes(&[("branch.json", "{}\n")], &[]));
     {
-        let _g = s.lock("bolt/x").unwrap().unwrap();
+        let _g = s.wait_lock("bolt/x").unwrap();
         s.put_progress("bolt/x", "c1", Some(&one)).unwrap();
         let two = [
             t("a:test", TaskState::Passed),
@@ -202,7 +204,7 @@ fn tasks_are_kept_beside_the_records_and_move_no_version() {
 fn two_writes_from_one_version() {
     let dir = Scratch::new("version");
     let s = LocalFiles::new(dir.path());
-    let _g = s.lock("bolt/x").unwrap().unwrap();
+    let _g = s.wait_lock("bolt/x").unwrap();
     assert_eq!(
         s.write("bolt/x", 0, changes(&[("branch.json", "{}\n")], &[]))
             .unwrap(),
@@ -270,7 +272,7 @@ fn a_crash_mid_write_reads_whole_and_finishes_once() {
         assert_eq!(read.files["log.jsonl"], expect_log.as_bytes(), "{stage}");
         assert_eq!(read.files["submissions/3.json"], b"{\"id\":3}\n", "{stage}");
 
-        drop(s.lock("bolt/x").unwrap().unwrap());
+        drop(s.wait_lock("bolt/x").unwrap());
         assert!(!branch.join(".pending.json").exists(), "{stage}");
         assert_eq!(
             std::fs::read_to_string(branch.join("version")).unwrap(),
@@ -334,7 +336,7 @@ fn branch_names_round_trip() {
     assert_eq!(s.branches().unwrap(), vec!["a/b/c", "bolt/x", "main"]);
     assert!(s.read("results.jsonl").is_err());
     assert!(s.lock("../x").is_err());
-    let _g = s.lock("main/inner").unwrap().unwrap();
+    let _g = s.wait_lock("main/inner").unwrap();
     assert!(s
         .write("main/inner", 0, changes(&[("branch.json", "{}\n")], &[]))
         .is_err());
@@ -423,7 +425,7 @@ fn a_finished_submission_moves_out_of_the_live_records_all_or_nothing() {
         s.read_finished("bolt/x", "4.json").unwrap().unwrap(),
         b"{\"id\":4}\n"
     );
-    drop(s.lock("bolt/x").unwrap().unwrap());
+    drop(s.wait_lock("bolt/x").unwrap());
     assert!(!branch.join("submissions/4.json").exists());
     assert!(branch.join(".finished/4.json").exists());
 }

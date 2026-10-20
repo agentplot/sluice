@@ -2,6 +2,7 @@
 // pure functions over the document, so the tests need no sluice running.
 
 import type {
+  LastResult,
   Mine,
   Outcome,
   Overview,
@@ -9,8 +10,10 @@ import type {
   OverviewCandidate,
   OverviewFailed,
   OverviewHost,
+  OverviewSession,
   OverviewTask,
   Recent,
+  Room,
 } from "../types";
 
 /** The hosts serving a remote: how many, their room, and any lapsed. */
@@ -95,8 +98,8 @@ export function bar(done: number, total: number): string {
   return "▓".repeat(full) + "░".repeat(10 - full);
 }
 
-/** `3/5 ▓▓▓▓▓▓░░░░`: how many of a combination's tasks have ended, or null when its runner says nothing. */
-export function progress(c: OverviewCandidate): string | null {
+/** `3/5 ▓▓▓▓▓▓░░░░`: how many of a run's tasks have ended, or null when its runner says nothing. */
+export function progress(c: { tasks?: OverviewTask[] }): string | null {
   if (!c.tasks || c.tasks.length === 0) return null;
   const done = c.tasks.filter(ended).length;
   return `${done}/${c.tasks.length} ${bar(done, c.tasks.length)}`;
@@ -136,10 +139,46 @@ export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"];
   }));
 }
 
+/** Whether a branch has anything queued or under test; the rest are left out of the band. */
+export function busy(b: OverviewBranch): boolean {
+  return b.depth > 0 || testing(b).length > 0;
+}
+
+/**
+ * Whether the pane shows a branch: one busy, or whose last event is under a
+ * quarter of an hour old, so a host with many idle branches shows its queues
+ * and a landing is still seen once its queue is empty.
+ */
+export function shown(b: OverviewBranch, now: number): boolean {
+  const last = b.recent[b.recent.length - 1];
+  const age = last ? since(last.at, now) : undefined;
+  return busy(b) || (age !== undefined && age < 900);
+}
+
+/**
+ * Whether agents' checks hold a branch's queue back: the host has no run
+ * free, checks hold at least one, and the branch has a submission queued
+ * while it tests fewer combinations than its window. False with no room,
+ * from a sluice older than it.
+ */
+export function heldBack(b: OverviewBranch, room: Room | undefined): boolean {
+  if (!room || room.sessions === 0) return false;
+  if (room.queue + room.sessions < room.bound) return false;
+  const queued = b.submissions.some((s) => s.state === "queued");
+  return queued && testing(b).length < b.window;
+}
+
+/** `1 slot to an agent's checks`: what holds the queue back, when it is checks. */
+export function checksWords(room: Room): string {
+  return room.sessions === 1
+    ? "1 slot to an agent's checks"
+    : `${room.sessions} slots to agents' checks`;
+}
+
 /** The band's line for one branch, or null when it has nothing to show. */
-export function branchLine(b: OverviewBranch, now: number): string | null {
+export function branchLine(b: OverviewBranch, now: number, room?: Room): string | null {
+  if (!busy(b)) return null;
   const under = testing(b);
-  if (b.depth === 0 && under.length === 0) return null;
   const parts = [`sluice ${b.branch}`, plural(b.depth, "submission")];
   for (const c of under) {
     const took = since(c.started, now);
@@ -152,13 +191,105 @@ export function branchLine(b: OverviewBranch, now: number): string | null {
   if (idle.length > 0) parts.push(`${idle.map((i) => `#${i}`).join(" ")} waiting`);
   const last = b.recent[b.recent.length - 1];
   if (last) parts.push(`last ${recentWords(last)}`);
+  if (room && heldBack(b, room)) parts.push(checksWords(room));
   return parts.join(" · ");
 }
 
-/** The band: one line per branch with a queue; empty when none has. */
+/** The band: one line per branch with a queue, in the overview's order; empty when none has. */
 export function bandLines(doc: Overview | null, now: number): string[] {
   if (!doc) return [];
-  return doc.branches.map((b) => branchLine(b, now)).filter((l): l is string => l !== null);
+  return doc.branches
+    .map((b) => branchLine(b, now, doc.room))
+    .filter((l): l is string => l !== null);
+}
+
+/** How long a finished check stays in the pane: as long as a recent event does. */
+const CHECK_SHOWN = 900;
+
+const OUTCOME_WORD: Record<LastResult["outcome"], string> = {
+  pass: "passed",
+  fail: "failed",
+  timed_out: "timed out",
+  lost: "lost",
+  stopped: "stopped",
+  not_run: "not run",
+};
+
+/**
+ * What a finished check is worth: `14 passed · reused when submitted` when
+ * the gate takes its passes, `· not kept: uncommitted changes` when the
+ * checkout held more than its head, `2 of 14 failed` when any failed.
+ */
+export function finishedWords(r: LastResult): string {
+  const tasks = r.tasks ?? [];
+  const failed = tasks.filter((t) => t.state === "failed").length;
+  if (failed > 0) return `${failed} of ${tasks.length} failed`;
+  const passed = tasks.filter((t) => t.state === "passed" || t.state === "replayed").length;
+  const words = tasks.length > 0 ? `${passed} passed` : OUTCOME_WORD[r.outcome];
+  if (r.outcome !== "pass") return words;
+  if (r.reused) return `${words} · reused when submitted`;
+  if (r.kind === "checks" && !r.recorded) return `${words} · not kept: uncommitted changes`;
+  return words;
+}
+
+/** A worktree's last path segment: the name an agent's checkout goes by. */
+function basename(path: string): string {
+  return (
+    path
+      .split("/")
+      .filter((s) => s !== "")
+      .pop() ?? path
+  );
+}
+
+/** One row of CHECKING: an agent's check going, or one that ended this quarter hour. */
+export type CheckRow = {
+  key: string;
+  state: "running" | "passed" | "failed" | "ended";
+  text: string;
+};
+
+function checkRow(s: OverviewSession, now: number): CheckRow | null {
+  const who = `${basename(s.worktree)} → ${s.branch}`;
+  if (s.run) {
+    const took = since(s.run.started, now);
+    const clock = took === undefined ? [] : [duration(took)];
+    const what = s.run.command ?? progress(s.run);
+    return {
+      key: s.worktree,
+      state: "running",
+      text: [who, ...(what ? [what] : []), ...clock].join(" "),
+    };
+  }
+  const r = s.last_result;
+  const age = r ? since(r.at, now) : undefined;
+  if (!r || age === undefined || age >= CHECK_SHOWN) return null;
+  const words = finishedWords(r);
+  return {
+    key: s.worktree,
+    state: r.outcome === "pass" ? "passed" : r.outcome === "fail" ? "failed" : "ended",
+    text: `${who} ${words}`,
+  };
+}
+
+/** CHECKING: agents' checks, as load on the host and never as submissions. */
+export function checkRows(doc: Overview, now: number): CheckRow[] {
+  return doc.sessions.map((s) => checkRow(s, now)).filter((r): r is CheckRow => r !== null);
+}
+
+/** `host: 4 of 6 runs · 3 queue · 1 agent`, or null while nothing counts against the bound. */
+export function hostLine(room: Room | undefined): string | null {
+  if (!room || room.queue + room.sessions === 0) return null;
+  const parts = [`host: ${room.queue + room.sessions} of ${room.bound} runs`];
+  if (room.queue > 0) parts.push(`${room.queue} queue`);
+  if (room.sessions > 0) parts.push(plural(room.sessions, "agent"));
+  return parts.join(" · ");
+}
+
+/** Whether times on the board move: a combination under test, or a check going or just ended. */
+export function moving(doc: Overview | null, now: number): boolean {
+  if (!doc) return false;
+  return doc.branches.some((b) => testing(b).length > 0) || checkRows(doc, now).length > 0;
 }
 
 /** Whether a submission is this session's. */
@@ -246,7 +377,11 @@ export function statusLine(doc: Overview | null, mine: Mine): string | undefined
   const own = doc.branches.flatMap((b) => b.submissions).filter((s) => isMine(s, mine));
   if (queued === 0 && own.length === 0) return undefined;
   const yours = own.map((s) => ` · yours #${s.id} ${s.state}`).join("");
-  return `sluice: ${plural(queued, "submission")}${yours}`;
+  const held =
+    doc.room && doc.branches.some((b) => heldBack(b, doc.room))
+      ? ` · ${checksWords(doc.room)}`
+      : "";
+  return `sluice: ${plural(queued, "submission")}${yours}${held}`;
 }
 
 /** The prompt that tells an idle session its submission's outcome. */

@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result};
 use sluice_core::policy::Policy;
-use sluice_core::records::{parse_lines, to_line, ResultLine};
+use sluice_core::records::{parse_lines, to_line, ResultLine, SetAside};
 use sluice_seams::{Changes, Guard, Rev, Setting, Snapshot, State, TaskLog, TaskProgress, Written};
 
 use super::branches::Branches;
@@ -101,6 +101,34 @@ impl Records {
             routed.as_ref().map(|r| r.remote().to_string()),
         );
         Ok(routed)
+    }
+
+    /// The remotes that may hold a branch's state: those the default
+    /// branch's policy, read here with no fetch, names for a branch while
+    /// it names signers, and those this host has fetched a state from
+    /// before. A repository with no signers asks no remote (C.6).
+    fn signed_remotes(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let common = self.branches.common_dir()?;
+        if let Some(default) = super::default_branch(&common)? {
+            if let Some((_, policy)) = self.branches.policy_of(&default)? {
+                if !policy.signers.is_empty() {
+                    for (_, rules) in &policy.branches {
+                        if let Some(r) = &rules.remote {
+                            if !out.contains(r) {
+                                out.push(r.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for remote in super::pushed_refs::remotes(self.branches.git_dir())? {
+            if !out.contains(&remote) && self.branches.fetched_state(&remote)? {
+                out.push(remote);
+            }
+        }
+        Ok(out)
     }
 
     /// `remote`'s profile, opened once, verifying the signers the policy
@@ -391,7 +419,7 @@ impl State for Records {
         let mut all = self.local.branches()?;
         if self.listed.borrow().is_none() {
             let mut found = Vec::new();
-            for remote in super::pushed_refs::remotes(self.branches.git_dir())? {
+            for remote in self.signed_remotes()? {
                 let p = self.branches.pushed_refs(&remote)?;
                 let out =
                     p.remote_git(&["ls-remote", "--refs", p.target(), "refs/sluice/state/*"])?;
@@ -452,6 +480,26 @@ impl State for Records {
             }
         }
         Ok(())
+    }
+
+    fn set_asides(&self) -> Result<Vec<u8>> {
+        let mut bytes = self.local.set_asides()?;
+        let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
+        for r in remotes {
+            bytes.extend(r.set_asides()?);
+        }
+        Ok(bytes)
+    }
+
+    /// Kept where the result's branch keeps its records, so every host
+    /// that reads the result reads it set aside (rule core.11).
+    fn set_aside(&self, line: &[u8]) -> Result<()> {
+        let aside: Vec<SetAside> = parse_lines(line)?;
+        let branch = aside.first().map(|a| a.branch.as_str()).unwrap_or_default();
+        match self.route(branch)? {
+            None => self.local.set_aside(line),
+            Some(r) => r.set_aside(line),
+        }
     }
 
     fn keep_logs(&self, branch: &str, candidate: &str, logs: &[TaskLog]) -> Result<Vec<TaskLog>> {

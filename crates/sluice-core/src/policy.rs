@@ -241,8 +241,10 @@ struct FileForm {
     checkout: BTreeMap<String, toml::Value>,
     #[serde(default)]
     executor: ExecutorForm,
+    /// Each key with where it is written, so the tables keep the order
+    /// the file gives them.
     #[serde(default)]
-    branches: BTreeMap<String, RulesForm>,
+    branches: BTreeMap<toml::Spanned<String>, RulesForm>,
     #[serde(default)]
     landing: LandingForm,
     preview: Option<PreviewForm>,
@@ -424,9 +426,12 @@ impl Policy {
         }
         pools.sort_by_key(|(start, _)| *start);
         let pools: Vec<Pool> = pools.into_iter().map(|(_, p)| p).collect();
+        let mut written: Vec<_> = form.branches.into_iter().collect();
+        written.sort_by_key(|(p, _)| p.span().start);
         let mut branches = Vec::new();
         let mut warnings = Vec::new();
-        for (pattern, r) in form.branches {
+        for (pattern, r) in written {
+            let pattern = pattern.into_inner();
             let d = Rules::default();
             let at = format!("[branches.\"{pattern}\"]");
             for (key, v) in [("lease", &r.lease), ("alive", &r.alive)] {
@@ -587,30 +592,37 @@ impl Policy {
     /// pattern with the most literal characters. `None` when no table
     /// names the branch, which is then not sluice's to land on.
     pub fn rules_for(&self, branch: &str) -> Result<Option<&Rules>> {
-        if let Some((_, r)) = self.branches.iter().find(|(p, _)| p == branch) {
-            return Ok(Some(r));
+        Ok(self.table_for(branch)?.map(|i| &self.branches[i].1))
+    }
+
+    /// Which of the `[branches]` tables, in the order written, gives
+    /// `branch` its gate, as `rules_for` chooses it.
+    pub fn table_for(&self, branch: &str) -> Result<Option<usize>> {
+        if let Some(i) = self.branches.iter().position(|(p, _)| p == branch) {
+            return Ok(Some(i));
         }
-        let mut best: Option<(usize, &String, &Rules)> = None;
+        let mut best: Option<(usize, usize)> = None;
         let mut tied = false;
-        for (p, r) in &self.branches {
+        for (i, (p, _)) in self.branches.iter().enumerate() {
             if !p.contains('*') || !glob(p, branch) {
                 continue;
             }
             let weight = p.chars().filter(|c| *c != '*').count();
             match best {
-                Some((w, _, _)) if w > weight => {}
-                Some((w, _, _)) if w == weight => tied = true,
+                Some((w, _)) if w > weight => {}
+                Some((w, _)) if w == weight => tied = true,
                 _ => {
-                    best = Some((weight, p, r));
+                    best = Some((weight, i));
                     tied = false;
                 }
             }
         }
         if tied {
-            let (_, p, _) = best.expect("a tie has a best");
+            let (_, i) = best.expect("a tie has a best");
+            let p = &self.branches[i].0;
             bail!("{branch} matches more than one [branches] pattern as closely as {p:?}");
         }
-        Ok(best.map(|(_, _, r)| r))
+        Ok(best.map(|(_, i)| i))
     }
 }
 
@@ -690,6 +702,8 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
                 xs.into_iter()
                     .map(|x| match x {
                         toml::Value::String(s) => Ok(s),
+                        // A number is its digits, as on its own.
+                        toml::Value::Integer(n) => Ok(n.to_string()),
                         other => bail!("{section} {k} must list strings, not {other}"),
                     })
                     .collect::<Result<_>>()?,
@@ -947,6 +961,20 @@ batch = true
         assert!(Policy::parse("[landing]\nsubject = \"#{id\"\n").is_err());
     }
 
+    /// ADR 0036: the tables in the order the file writes them, which the
+    /// overview lists branches by.
+    #[test]
+    fn keeps_the_branches_tables_in_the_order_written() {
+        let p = Policy::parse(
+            "[branches.zeta]\nrequired = []\n\
+             [branches.\"bolt/*\"]\nrequired = []\n\
+             [branches.alpha]\nrequired = []\n",
+        )
+        .unwrap();
+        let order: Vec<&str> = p.branches.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(order, ["zeta", "bolt/*", "alpha"]);
+    }
+
     /// 27 to 29: a gate names the results it trusts.
     #[test]
     fn reads_what_a_gate_trusts() {
@@ -1099,7 +1127,15 @@ batch = true
         assert!(Policy::parse("[executor]\ncpus = 2\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"lots\"\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"8\"\n").is_err());
-        assert!(Policy::parse("[tests]\nshell = [1]\n").is_err());
+        assert!(Policy::parse("[tests]\nshell = [1.5]\n").is_err());
+        // A number in a list is its digits, as on its own: `not_run`'s
+        // exits (could-not-run-1 114).
+        assert_eq!(
+            Policy::parse("[tests]\nnot_run = [77, 99]\n")
+                .unwrap()
+                .tests["not_run"],
+            Setting::List(vec!["77".into(), "99".into()])
+        );
         assert!(Policy::parse("[tests]\njobs = true\n").is_err());
         assert_eq!(
             Policy::parse("[checkout]\nports_from = 20000\n")

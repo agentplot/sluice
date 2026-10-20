@@ -1,6 +1,6 @@
 ---
 name: using-sluice
-description: Land work through sluice, the merge queue for agents in worktrees. Use in a repository with a `.config/sluice.toml` when work is to be submitted, landed, merged or queued, or when a sluice submission failed, conflicted or seems stuck. Covers `sluice submit` and `wt submit`, waiting on or checking a submission, reading a failure's blamed tests and logs, `sluice exec` for tests in the worktree, and `sluice preview`, `previews` and `release`.
+description: Land work through sluice, the merge queue for agents in worktrees. Use in a repository with a `.config/sluice.toml` when work is to be submitted, landed, merged or queued, or when a sluice submission failed, conflicted or seems stuck. Covers `sluice submit` and `wt submit`, waiting on or checking a submission, reading a failure's blamed tests and logs, `sluice exec` for tests in the worktree, a dev server or stack kept up in the worktree (in place of `wt step tether`), and `sluice preview`, `previews` and `release`.
 ---
 
 # Using sluice
@@ -98,7 +98,8 @@ it**; sluice has already checked the entries ahead passed on their own.
 1. Open the log path printed after `log of <task>:` (also
    `failed[].log` in `sluice status <id> --json`).
 2. Reproduce in your worktree with `sluice exec <branch>`, the same tests
-   under the same limits.
+   under the same limits. If `sluice exec` itself goes wrong, find out why
+   and tell the user; don't route around it.
 3. Fix, commit, submit again.
 
 A **conflict** names the paths and the submission it conflicts with. Merge
@@ -129,7 +130,9 @@ Pick the form by what you want from the run:
    It covers uncommitted edits, uses moon's cache, records nothing, and is
    the fast loop. Going through `sluice exec` rather than straight to moon
    shares the host's bound with the queue's runs and gives your worktree
-   ports no other worktree holds.
+   ports no other worktree holds. Run suites this way, so the sessions on
+   one host take turns rather than all running at once; a quick, narrow
+   call, such as a type check or one unit test, can run directly.
 2. **Before submitting**, to get the gate's own verdict early: commit, then
 
    ```sh
@@ -153,6 +156,16 @@ Name targets as `project:task` or a single tag, `#task-tag`.
 `sluice release` ends what your runs left up and frees the ports; release
 before removing a worktree by hand (`sluice exec <branch> --release` runs
 and releases in one go). See [references/exec.md](references/exec.md).
+
+## Servers in your worktree
+
+A dev server or stack you keep up while you work is started by
+`sluice exec <branch> -- <script>`, which brings it up on your ports, hands
+it off and exits, and stopped by `sluice release`; never by
+`wt step tether` or a worktrunk hook. Your worktree gets ports and
+`SLUICE_PLACE` but no `SLUICE_NAME_<NAME>`, which only a preview gets:
+default each name, `${SLUICE_NAME_WEB:-web-$SLUICE_PLACE}`. See
+[references/servers.md](references/servers.md).
 
 ## Previews
 

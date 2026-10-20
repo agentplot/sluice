@@ -123,6 +123,7 @@ pub fn read(
                 log: None,
                 flaky,
                 system: system.map(str::to_string),
+                not_run: None,
             });
         }
     }
@@ -134,6 +135,7 @@ pub fn read(
             log: None,
             flaky: None,
             system: system.map(str::to_string),
+            not_run: None,
         });
     }
     Verdict {
@@ -193,6 +195,7 @@ mod tests {
                 source,
             }],
             missing: Vec::new(),
+            not_run: Vec::new(),
             timed_out: false,
             executor,
         }

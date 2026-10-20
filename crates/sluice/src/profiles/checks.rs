@@ -18,6 +18,16 @@
 //! environment, the place's ports included, and removes what the checks
 //! handed to another process, a container engine's containers above all.
 //!
+//! `[tests] ready`, when set, says the host can run the checks (a
+//! container engine that answers, a service up): a list, the command
+//! first, or a string run by `sh -c`, run in the place under the run's
+//! executor, toolchain and environment. It runs before the run, and a host
+//! that fails it is refused the run (84); and again after a run in which a
+//! check did not pass, when its failing leaves those checks not run, with
+//! no result (could-not-run-1 114). `[tests] not_run`, a number or a list
+//! of them, names the exits by which a check says it could not run here.
+//! sluice names no tool either reads: they are the repository's.
+//!
 //! The policy's `[tests] runner` picks the runner, read from the branch's
 //! revision with the rest of `[tests]` (56):
 //!
@@ -38,13 +48,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, Limits, Network, Outcome, Place, Progress, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    log_tail, Enforced, HostRun, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
 use crate::instance::Instance;
-use crate::runs::{Ended, Request, RunState, Runs};
+use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
+
+/// How long `[tests] ready` may take.
+const READY_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 use crate::sessions::Sessions;
 
 /// What a run's place, environment and toolchain are, for a runner.
@@ -108,6 +121,19 @@ struct Meta {
     /// record from before it is no end of this run's (ADR 0028).
     #[serde(default)]
     started_ms: Option<i64>,
+    /// `[tests] ready` as it runs, under the executor, and as the policy
+    /// says it, to run again after the run (could-not-run-1 114).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ready: Option<Ready>,
+    /// `[tests] not_run`: exits by which a check says it could not run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    not_run: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Ready {
+    argv: Vec<String>,
+    shown: String,
 }
 
 /// A pool the binding hands this profile, to start runs on (88; ADR 0034).
@@ -172,6 +198,29 @@ impl Checks {
     /// The host's settings the profile was bound with.
     pub fn instance(&self) -> &Instance {
         &self.instance
+    }
+
+    /// `[tests] ready` after run `name`, run once and kept in the run's
+    /// directory, since a finished run's progress is read more than once.
+    fn ready_after(
+        &self,
+        name: &str,
+        ready: &Ready,
+        request: &Request,
+    ) -> std::result::Result<(), String> {
+        let kept = self.runs.dir(name).join("ready-after");
+        if let Ok(why) = std::fs::read_to_string(&kept) {
+            return if why.is_empty() { Ok(()) } else { Err(why) };
+        }
+        let got = run_to_end(
+            &ready.argv,
+            &request.cwd,
+            &request.env,
+            &self.runs.dir(name).join("ready-after.log"),
+            READY_LIMIT,
+        );
+        let _ = std::fs::write(&kept, got.as_ref().err().map_or("", String::as_str));
+        got
     }
 }
 
@@ -443,11 +492,31 @@ fn docker_sockets() -> Vec<PathBuf> {
 
 /// `[tests] release`: the command, or `None`.
 fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
-    match tests.get("release") {
+    command_setting(tests, "release")
+}
+
+/// A command `[tests]` names under `key`: a list, the command first, or a
+/// string run by `sh -c`.
+fn command_setting(tests: &Settings, key: &str) -> Result<Option<Vec<String>>> {
+    match tests.get(key) {
         None => Ok(None),
         Some(Setting::Text(t)) => Ok(Some(vec!["/bin/sh".into(), "-c".into(), t.clone()])),
         Some(Setting::List(xs)) if !xs.is_empty() => Ok(Some(xs.clone())),
-        Some(_) => bail!("[tests] release must be a string or a list, the command first"),
+        Some(_) => bail!("[tests] {key} must be a string or a list, the command first"),
+    }
+}
+
+/// `[tests] not_run`: a number or a list of them.
+fn not_run_exits(tests: &Settings) -> Result<Vec<i32>> {
+    let parse = |s: &str| {
+        s.parse::<i32>()
+            .with_context(|| format!("[tests] not_run lists exits, not {s:?}"))
+    };
+    match tests.get("not_run") {
+        None => Ok(Vec::new()),
+        Some(Setting::Text(t)) => Ok(vec![parse(t)?]),
+        Some(Setting::List(xs)) => xs.iter().map(|x| parse(x)).collect(),
+        Some(_) => bail!("[tests] not_run must be an exit or a list of them"),
     }
 }
 
@@ -583,6 +652,57 @@ impl Tests for Checks {
             toolchain: tool_argv.is_some().then_some(script.as_path()),
             jobs,
         };
+        let not_run = not_run_exits(&request.tests)?;
+        // 84, could-not-run-1 114: a host that is not ready is refused the
+        // run before the runner does anything.
+        let ready = match command_setting(&request.tests, "ready")? {
+            None => None,
+            Some(r) => {
+                let shown = match request.tests.get("ready") {
+                    Some(Setting::Text(t)) => t.clone(),
+                    _ => r.join(" "),
+                };
+                let r: Vec<&str> = r.iter().map(String::as_str).collect();
+                let mut argv = cx.argv(&r);
+                if kind == Kind::Sandbox {
+                    let canon =
+                        |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                    let profile = dir.join("ready.sb");
+                    std::fs::write(
+                        &profile,
+                        seatbelt(
+                            &[canon(&request.place.path), canon(&request.place.tmp)],
+                            &[],
+                            request.limits.network,
+                            &if request.limits.docker {
+                                docker_sockets()
+                            } else {
+                                Vec::new()
+                            },
+                            user_tmp().as_deref(),
+                        ),
+                    )?;
+                    argv.splice(
+                        0..0,
+                        [
+                            "/usr/bin/sandbox-exec".to_string(),
+                            "-f".into(),
+                            profile.to_string_lossy().into_owned(),
+                        ],
+                    );
+                }
+                if let Err(why) = run_to_end(
+                    &argv,
+                    &request.place.path,
+                    &env,
+                    &dir.join("ready.log"),
+                    READY_LIMIT,
+                ) {
+                    bail!("the host is not ready to run the checks: [tests] ready `{shown}` {why}");
+                }
+                Some(Ready { argv, shown })
+            }
+        };
         let plan = match runner.as_str() {
             "moon" => Moon.plan(&cx)?,
             "command" => {
@@ -592,7 +712,14 @@ impl Tests for Checks {
                     argv: Some(cx.argv(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
                     holds_processors: false,
-                    stamps: Vec::new(),
+                    // A command in a checkout that lists proto's tools may
+                    // run them, moon among them, and proto stamps each
+                    // toolchain it runs as used, as a moon run's does.
+                    stamps: if request.place.path.join(".prototools").exists() {
+                        vec![".last-used"]
+                    } else {
+                        Vec::new()
+                    },
                 }
             }
             other => bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\""),
@@ -656,6 +783,8 @@ impl Tests for Checks {
             executor,
             host: hostname(),
             started_ms: Some(chrono::Utc::now().timestamp_millis()),
+            ready,
+            not_run,
         };
         self.runs.start(
             name,
@@ -679,25 +808,66 @@ impl Tests for Checks {
             RunState::Lost => return Ok(Progress::Lost),
             RunState::Finished(e) => e,
         };
-        let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
+        let request = self.runs.request(&run.0)?;
+        let meta: Meta = serde_json::from_value(request.meta.clone())
             .with_context(|| format!("reading run {}", run.0))?;
-        let tasks = match meta.runner.as_str() {
-            "moon" => Moon.read(&meta.place, &meta.targets, &ended, &meta.host)?,
-            _ => command_result(&meta, &ended),
+        // Could-not-run-1 114: a runner that never started judged nothing.
+        let (mut tasks, mut not_run) = match &ended.error {
+            Some(e) => (
+                Vec::new(),
+                meta.targets
+                    .iter()
+                    .map(|t| NotRun {
+                        task: t.clone(),
+                        reason: e.clone(),
+                    })
+                    .collect(),
+            ),
+            None => match meta.runner.as_str() {
+                "moon" => Moon.read(&meta.place, &meta.targets, &meta.not_run, &meta.host)?,
+                _ => command_result(&meta, &ended),
+            },
         };
-        let missing = if ended.timed_out {
+        let mut missing: Vec<String> = if ended.timed_out {
             Vec::new()
         } else {
             meta.targets
                 .iter()
                 .filter(|t| !tasks.iter().any(|r| &r.task == *t))
+                .filter(|t| !not_run.iter().any(|n| &n.task == *t))
                 .cloned()
                 .collect()
         };
+        // Could-not-run-1 114: a host that stopped being ready leaves what
+        // did not pass unjudged; what passed stands.
+        let unpassed = !missing.is_empty() || tasks.iter().any(|t| t.outcome == Outcome::Fail);
+        let ready = meta.ready.as_ref().filter(|_| unpassed && !ended.timed_out);
+        if let Some(ready) = ready {
+            if let Err(why) = self.ready_after(&run.0, ready, &request) {
+                let reason = format!(
+                    "the host failed [tests] ready `{}` after the run: {why}",
+                    ready.shown
+                );
+                let (fails, passes): (Vec<_>, Vec<_>) =
+                    tasks.into_iter().partition(|t| t.outcome == Outcome::Fail);
+                tasks = passes;
+                not_run.extend(
+                    fails
+                        .into_iter()
+                        .map(|t| t.task)
+                        .chain(missing.drain(..))
+                        .map(|task| NotRun {
+                            task,
+                            reason: reason.clone(),
+                        }),
+                );
+            }
+        }
         Ok(Progress::Finished(RunReport {
             tasks,
             executor: meta.executor,
             missing,
+            not_run,
             timed_out: ended.timed_out,
         }))
     }
@@ -775,6 +945,21 @@ impl Tests for Checks {
         Ok(out)
     }
 
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        Ok(self
+            .host_sessions()?
+            .running()?
+            .into_iter()
+            .map(|r| HostRun {
+                worktree: r.worktree,
+                branch: r.branch,
+                started: r.started,
+                command: r.command,
+                tasks: r.tasks,
+            })
+            .collect())
+    }
+
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
         let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
             .with_context(|| format!("reading run {}", run.0))?;
@@ -812,12 +997,25 @@ impl Tests for Checks {
 
 /// The `command` runner's one check: its key is the command and the
 /// candidate, its outcome the exit; a run ended by its time limit
-/// observed nothing.
-fn command_result(meta: &Meta, ended: &Ended) -> Vec<TaskResult> {
+/// observed nothing, and an exit `[tests] not_run` names judged nothing
+/// (could-not-run-1 114).
+fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) {
     if ended.timed_out {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
-    meta.targets
+    if let Some(code) = ended.exit.filter(|c| meta.not_run.contains(c)) {
+        let not_run = meta
+            .targets
+            .iter()
+            .map(|t| NotRun {
+                task: t.clone(),
+                reason: not_run_reason(code),
+            })
+            .collect();
+        return (Vec::new(), not_run);
+    }
+    let tasks = meta
+        .targets
         .iter()
         .map(|t| TaskResult {
             task: t.clone(),
@@ -831,5 +1029,11 @@ fn command_result(meta: &Meta, ended: &Ended) -> Vec<TaskResult> {
                 host: meta.host.clone(),
             },
         })
-        .collect()
+        .collect();
+    (tasks, Vec::new())
+}
+
+/// Why a check that exited `code` could not run.
+pub fn not_run_reason(code: i32) -> String {
+    format!("exited {code}, which [tests] not_run names: it could not run here")
 }

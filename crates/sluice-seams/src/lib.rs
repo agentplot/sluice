@@ -115,6 +115,16 @@ pub struct LastResult {
     /// Its results are under their keys (92): only a run of the checks in
     /// a place holding exactly its head that did not hit its time limit.
     pub recorded: bool,
+    /// Each task of a run of the checks that reported, as it ended:
+    /// passed, failed or replayed (ADR 0035).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
+    /// Whether its passes are what the branch's gate takes when its head is
+    /// submitted: recorded, every check passed, and its executor trusted by
+    /// the gate read from the branch's revision (93, 56). Set for a run of
+    /// the checks that reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused: Option<bool>,
 }
 
 /// What a session run ran (89).
@@ -138,6 +148,8 @@ pub enum RunOutcome {
     Lost,
     /// Its caller ended it.
     Stopped,
+    /// Nothing failed and a check could not run (could-not-run-1 114).
+    NotRun,
 }
 
 /// A worktree of the repository with a branch checked out, as the place
@@ -478,6 +490,17 @@ pub struct TaskResult {
     pub source: Source,
 }
 
+/// A check a run did not judge: its program could not be started, it
+/// exited as the policy's `not_run` names, or the host failed `ready`
+/// after it (could-not-run-1 114). It has no outcome (60): no result
+/// under its key, and it is run again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotRun {
+    pub task: String,
+    /// Why, for the person told of it (20).
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunReport {
     pub tasks: Vec<TaskResult>,
@@ -486,6 +509,9 @@ pub struct RunReport {
     /// 15: required checks the run was to run that it left without a
     /// result: skipped, or never reached. None of them passes.
     pub missing: Vec<String>,
+    /// Checks the run did not judge (could-not-run-1 114): in neither
+    /// `tasks` nor `missing`.
+    pub not_run: Vec<NotRun>,
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
@@ -592,6 +618,11 @@ pub trait Tests {
     /// pass under a key it does not hold.
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
 
+    /// ADR 0035: the session runs running on this host, as `sessions`
+    /// counts them, each with what its `sluice exec` kept of it: for a
+    /// person to read, never a run or a result (rule core.18).
+    fn session_runs(&self) -> Result<Vec<HostRun>>;
+
     /// 20: what each of `tasks` printed in a finished run, while its place
     /// still exists: the run's own output for a task with none of its
     /// own. Only the end of a long output is kept.
@@ -601,6 +632,25 @@ pub trait Tests {
     /// person to read; empty when the runner says nothing until the run
     /// ends. Never a result (37, 38).
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
+}
+
+/// A session run going on the host (session-runs-1 clause 89), as the
+/// host's state keeps it beside its count (ADR 0035). It decides nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostRun {
+    /// The session's place, as its canonical path.
+    pub worktree: String,
+    /// The branch whose policy the run is held to.
+    pub branch: String,
+    /// When it started, RFC 3339.
+    pub started: String,
+    /// The command of a run of a command; `None` for a run of the checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Where each task has got, as its runner says; empty when it says
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
 }
 
 /// What one task printed in a run, or where it is kept.
@@ -952,6 +1002,13 @@ pub trait State {
 
     /// 69: append to the repository's results log.
     fn record_results(&self, lines: &[u8]) -> Result<()>;
+
+    /// Could-not-run-1 116: the results set aside, one JSON document per
+    /// line, beside the results log and never in it.
+    fn set_asides(&self) -> Result<Vec<u8>>;
+
+    /// Could-not-run-1 116: append one set-aside, under the records' lock.
+    fn set_aside(&self, line: &[u8]) -> Result<()>;
 
     /// 20: keep a failed candidate's task outputs, readable with no sluice
     /// running (26); the answer says where each is. Only the last

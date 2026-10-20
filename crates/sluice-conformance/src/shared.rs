@@ -837,6 +837,8 @@ fn last_result_of(head: &Rev) -> LastResult {
         kind: RunKind::Checks,
         outcome: RunOutcome::Fail,
         recorded: false,
+        tasks: Vec::new(),
+        reused: None,
     }
 }
 

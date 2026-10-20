@@ -365,6 +365,7 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
             docker: false,
         },
         missing: vec![],
+        not_run: vec![],
         timed_out: false,
     };
     assert_eq!(s.record_session(&plan, &head, "/w/a", &report).unwrap(), 1);

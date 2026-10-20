@@ -2,8 +2,14 @@
 
 sluice's queue inside a Claude Code session.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/board-dark.png">
+  <img src="screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="800">
+</picture>
+
 ```
-/plugin install sluice-board --marketplace agentplot/sluice
+/plugin marketplace add agentplot/sluice
+/plugin install sluice-board@sluice
 ```
 
 - **Band** above the prompt, while a branch has a queue:
@@ -11,8 +17,20 @@ sluice's queue inside a Claude Code session.
 - **`/sluice`** opens a pane: each branch's combinations under test, its
   submissions with this session's marked and each pull request linked to
   GitHub, and recent landings, blames and conflicts with the blamed tests'
-  logs (press one to copy its path).
-- **Status line**: `sluice: 3 submissions · yours #13 testing`.
+  logs (press one to copy its path). A branch with nothing queued is left
+  out once a quarter hour has passed since its last event. Branches come
+  in the order the policy names them.
+- **Agents' checks**: each `sluice exec` takes one of the host's runs, the
+  ones combinations are tested in. When checks hold a queue back, the
+  band's line for that branch ends `· 1 slot to an agent's checks`. The
+  pane lists every check under CHECKING, apart from the queue:
+  `fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, and for a quarter
+  hour after, what it is worth: `14 passed · reused when submitted` when
+  the gate takes its passes for that commit, `not kept: uncommitted
+  changes` when the checkout held more. Under them,
+  `host: 4 of 6 runs · 3 queue · 1 agent`.
+- **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
+  same `· 1 slot to an agent's checks` when checks hold the queue back.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.

@@ -25,7 +25,7 @@ use sluice_seams::{Branch, Checkout, Driver, Rev, State, Tests, Written};
 
 use crate::line::Line;
 use crate::policy::{Policy, Rules, POLICY_PATH};
-use crate::records::{parse_lines, ResultLine};
+use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
 
 pub use ops::{
     Accepted, AmendRefusal, Forecast, Requester, Status, SubmitRefusal, SubmitRequest,
@@ -191,8 +191,73 @@ impl<'a> Sluice<'a> {
         })
     }
 
+    /// 69: the results log less every result set aside (could-not-run-1
+    /// 116), which is what every gate reads; the lines themselves stay
+    /// (rule core.7).
     fn results(&self) -> Result<Vec<ResultLine>> {
-        parse_lines(&self.seams.state.results()?)
+        let all: Vec<ResultLine> = parse_lines(&self.seams.state.results()?)?;
+        let aside: Vec<SetAside> = parse_lines(&self.seams.state.set_asides()?)?;
+        Ok(all
+            .into_iter()
+            .filter(|r| !aside.iter().any(|a| r.set_aside_by(a)))
+            .collect())
+    }
+
+    /// Could-not-run-1 116: set aside the one result of `task` recorded at
+    /// `at` (and whose key starts with `hash`, when given), for `reason`,
+    /// by `by`. More than one such result is an error listing them, so the
+    /// operator names one.
+    pub fn set_aside(
+        &self,
+        task: &str,
+        at: &str,
+        hash: Option<&str>,
+        reason: &str,
+        by: &str,
+    ) -> Result<SetAside> {
+        if reason.trim().is_empty() {
+            bail!("a result is set aside with why: give a reason");
+        }
+        let found: Vec<ResultLine> = self
+            .results()?
+            .into_iter()
+            .filter(|r| r.task == task && r.at == at)
+            .filter(|r| match hash {
+                Some(h) => r.hash.starts_with(h),
+                None => true,
+            })
+            .collect();
+        let r = match found.as_slice() {
+            [] => bail!("no result of {task} recorded at {at} that is not already set aside"),
+            [r] => r.clone(),
+            many => bail!(
+                "{} results of {task} were recorded at {at}; name one by its key:\n{}",
+                many.len(),
+                many.iter()
+                    .map(|r| format!(
+                        "  {}  {:?} on {} {}",
+                        r.hash,
+                        r.outcome,
+                        r.branch,
+                        r.combination.short()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
+        let aside = SetAside {
+            schema: SET_ASIDE_SCHEMA.into(),
+            at: self.now(),
+            task: r.task,
+            hash: r.hash,
+            run_at: r.at,
+            branch: r.branch,
+            combination: r.combination,
+            reason: reason.trim().into(),
+            by: by.into(),
+        };
+        self.seams.state.set_aside(&to_line(&aside))?;
+        Ok(aside)
     }
 
     /// The branch that holds submission `id`.

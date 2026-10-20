@@ -16,6 +16,10 @@
 //! directory (`crate::runs`). One whose lock nobody holds is a run that
 //! ended, or a starter that died: it is never counted, and the next start
 //! drops it.
+//!
+//! While its run goes, the `sluice exec` that started it keeps on it the
+//! run's tasks, for a person to read (ADR 0035): no round, gate or replay
+//! reads them.
 
 use std::fs::File;
 use std::io::ErrorKind;
@@ -24,10 +28,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use sluice_seams::TaskProgress;
+
 use crate::runs::{flat_name, supervised};
 
 /// One session run on the host.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRun {
     /// The session's place, as its canonical path.
     pub worktree: String,
@@ -42,6 +48,12 @@ pub struct SessionRun {
     /// Its run directory: the run counts against the bound while a
     /// supervisor holds this directory's lock.
     pub run_dir: PathBuf,
+    /// The command of a run of a command; `None` for a run of the checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Where its tasks have got, as its `sluice exec` last kept them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
 }
 
 /// The host's lock over its session runs, held until dropped.
@@ -108,7 +120,7 @@ impl Sessions {
                 .with_context(|| format!("parsing {}", path.display()))?;
             out.push((path, run));
         }
-        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.sort_by(|a, b| a.1.worktree.cmp(&b.1.worktree));
         Ok(out)
     }
 
@@ -133,6 +145,27 @@ impl Sessions {
                 remove(&path)?;
             }
         }
+        self.write(run)
+    }
+
+    /// ADR 0035: keep `tasks` on the worktree's session run, under the
+    /// host's lock; nothing when none is recorded.
+    pub fn keep_tasks(&self, worktree: &str, tasks: &[TaskProgress]) -> Result<()> {
+        let _lock = self.lock()?;
+        let path = self.path(worktree);
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let mut run: SessionRun = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        run.tasks = tasks.to_vec();
+        self.write(&run)
+    }
+
+    /// `run`'s record, replaced whole in one step.
+    fn write(&self, run: &SessionRun) -> Result<()> {
         let path = self.path(&run.worktree);
         let tmp = self.dir.join(format!(".{}.tmp", flat_name(&run.worktree)));
         std::fs::write(&tmp, serde_json::to_vec_pretty(run)?)

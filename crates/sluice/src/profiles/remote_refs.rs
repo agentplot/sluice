@@ -38,6 +38,10 @@ use crate::signing::dsse::Envelope;
 use crate::signing::ssh;
 use crate::signing::statement::{Claims, Run, RunResult, Statement};
 
+/// Where the results set aside are kept, one file each (could-not-run-1
+/// 116).
+const SET_ASIDE: &str = "refs/sluice/set-aside";
+
 /// The file of a branch's state commit holding its version.
 const VERSION: &str = "version";
 
@@ -976,6 +980,32 @@ impl State for RemoteRefs {
             }
         }
         Ok(bytes)
+    }
+
+    /// Could-not-run-1 116: every result set aside on the remote, one file
+    /// each under `refs/sluice/set-aside`. A set-aside only stops a result
+    /// counting, so any host that submits may add one.
+    fn set_asides(&self) -> Result<Vec<u8>> {
+        let Some(commit) = self.fetch(SET_ASIDE)? else {
+            return Ok(Vec::new());
+        };
+        let mut bytes = Vec::new();
+        for (_, (_, b)) in self.tree(&commit)? {
+            bytes.extend(&b);
+            if !b.ends_with(b"\n") {
+                bytes.push(b'\n');
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn set_aside(&self, line: &[u8]) -> Result<()> {
+        let name = format!("{}.json", sha256_hex(line));
+        self.add(
+            SET_ASIDE,
+            &BTreeMap::from([(name, line.to_vec())]),
+            "a result set aside",
+        )
     }
 
     /// A run is signed by this host's key and added to its signer's ref;

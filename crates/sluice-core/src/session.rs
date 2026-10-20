@@ -6,8 +6,8 @@
 
 use anyhow::{anyhow, Result};
 use sluice_seams::{
-    LastResult, Place, ReleasePolicy, Released, Rev, RunHandle, RunKind, RunOutcome, RunReport,
-    RunRequest, Session, SessionPlace, Setting, Source,
+    LastResult, Outcome, Place, ReleasePolicy, Released, Rev, RunHandle, RunKind, RunOutcome,
+    RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress, TaskState,
 };
 
 use crate::policy::{Policy, Rules};
@@ -118,6 +118,10 @@ impl Sluice<'_> {
             Some(c) => {
                 tests.insert("runner".into(), Setting::Text("command".into()));
                 tests.insert("command".into(), Setting::Text(c.into()));
+                // Could-not-run-1 114: what readiness and a not-run exit
+                // say is of the checks; a command's exit is its own.
+                tests.remove("ready");
+                tests.remove("not_run");
                 Vec::new()
             }
         };
@@ -181,16 +185,31 @@ impl Sluice<'_> {
             RunOutcome::TimedOut
         } else if passed(report) {
             RunOutcome::Pass
-        } else {
+        } else if failed(report) {
             RunOutcome::Fail
+        } else {
+            RunOutcome::NotRun
         };
+        let written = matches!(recorded, Recorded::Written(_));
+        // ADR 0035: what the run is worth when its head is submitted (93):
+        // its passes, recorded, under an executor the gate trusts, read as
+        // a ran result is read (56, rule core.15).
+        let worth = (!command).then(|| Worth {
+            tasks: ended_tasks(report),
+            reused: written
+                && passed(report)
+                && plan
+                    .rules
+                    .trusts_run(&report.executor.kind, report.executor.confined),
+        });
         let unkept = self
             .leave_result(
                 &started.place.name,
                 &session.head,
                 command,
                 outcome,
-                matches!(recorded, Recorded::Written(_)),
+                written,
+                worth,
             )
             .err()
             .map(|e| format!("{e:#}"));
@@ -207,7 +226,7 @@ impl Sluice<'_> {
         command: bool,
         outcome: RunOutcome,
     ) -> Result<()> {
-        self.leave_result(place, head, command, outcome, false)
+        self.leave_result(place, head, command, outcome, false, None)
     }
 
     fn leave_result(
@@ -217,7 +236,12 @@ impl Sluice<'_> {
         command: bool,
         outcome: RunOutcome,
         recorded: bool,
+        worth: Option<Worth>,
     ) -> Result<()> {
+        let (tasks, reused) = match worth {
+            Some(w) => (w.tasks, Some(w.reused)),
+            None => (Vec::new(), None),
+        };
         let last = LastResult {
             at: self.now(),
             head: head.clone(),
@@ -228,6 +252,8 @@ impl Sluice<'_> {
             },
             outcome,
             recorded,
+            tasks,
+            reused,
         };
         self.seams.checkout.ran(place, &last)
     }
@@ -318,13 +344,44 @@ impl Sluice<'_> {
 
 /// Every check the run named reported and passed, within its time limit:
 /// what `sluice exec` exits 0 on.
+/// What a finished run of the checks is worth when its head is submitted
+/// (ADR 0035): its tasks as they ended, and whether the gate takes them.
+struct Worth {
+    tasks: Vec<TaskProgress>,
+    reused: bool,
+}
+
+/// Each task of a finished run as it ended: replayed, passed or failed.
+fn ended_tasks(report: &RunReport) -> Vec<TaskProgress> {
+    report
+        .tasks
+        .iter()
+        .map(|t| TaskProgress {
+            target: t.task.clone(),
+            state: match (&t.source, &t.outcome) {
+                (_, Outcome::Fail) => TaskState::Failed,
+                (Source::Replayed { .. }, Outcome::Pass) => TaskState::Replayed,
+                (Source::Ran { .. }, Outcome::Pass) => TaskState::Passed,
+            },
+            started: None,
+            ended: None,
+            exit: None,
+        })
+        .collect()
+}
+
 fn passed(report: &RunReport) -> bool {
-    !report.timed_out
-        && report.missing.is_empty()
-        && report
+    !report.timed_out && report.not_run.is_empty() && !failed(report)
+}
+
+/// A check failed on its own result, or was left without one (15); a
+/// check not run is neither (could-not-run-1 114).
+fn failed(report: &RunReport) -> bool {
+    !report.missing.is_empty()
+        || report
             .tasks
             .iter()
-            .all(|t| t.outcome == sluice_seams::Outcome::Pass)
+            .any(|t| t.outcome == sluice_seams::Outcome::Fail)
 }
 
 impl Sluice<'_> {

@@ -222,6 +222,22 @@ fn signed_runs_are_read_verified_on_another_host() {
         .is_empty());
 }
 
+/// Could-not-run-1 116, rule core.11: a result set aside on one host is
+/// read set aside on every host, and two set-asides at once both stay.
+#[test]
+fn a_set_aside_is_read_on_another_host() {
+    let (a, _bare, b) = two_hosts("rr-aside");
+    let ha = host(&a, BTreeMap::new(), None);
+    let hb = host(&b, BTreeMap::new(), None);
+    ha.set_aside(b"{\"task\":\"a:test\"}").unwrap();
+    hb.set_aside(b"{\"task\":\"b:test\"}").unwrap();
+    for h in [&ha, &hb] {
+        let text = String::from_utf8(h.set_asides().unwrap()).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.contains("a:test") && text.contains("b:test"), "{text}");
+    }
+}
+
 /// 109: two hosts of one signer each add their runs, and neither loses
 /// the other's.
 #[test]

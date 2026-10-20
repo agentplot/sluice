@@ -178,7 +178,20 @@ fn the_tasks_a_range_affects() {
 /// result (37, 38).
 #[test]
 fn a_run_shows_each_task_as_it_ends() {
-    let repo = workspace("moon-progress");
+    shows_each_task_as_it_ends("moon-progress", |_| "p1".into());
+}
+
+/// ADR 0035: a session's run, which takes a new run name in its place each
+/// time (session-runs-1 clause 94), reads its tasks as a combination's do.
+#[test]
+fn a_session_run_shows_each_task_as_it_ends() {
+    shows_each_task_as_it_ends("moon-session-progress", |repo| {
+        format!("session/{}", repo.dir().display())
+    });
+}
+
+fn shows_each_task_as_it_ends(name: &str, place: impl Fn(&Repo) -> String) {
+    let repo = workspace(name);
     let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
     change(
         &repo,
@@ -199,7 +212,7 @@ fn a_run_shows_each_task_as_it_ends() {
         ],
     );
     let c = checks(&repo);
-    let req = request(&repo, "p1", &["alpha:test", "slow:test"], None);
+    let req = request(&repo, &place(&repo), &["alpha:test", "slow:test"], None);
     let run = c.start(&req).unwrap();
     let until = Instant::now() + Duration::from_secs(120);
     let seen = loop {
@@ -243,6 +256,92 @@ fn a_run_shows_each_task_as_it_ends() {
         ]
     );
     assert!(c.tasks(&run).unwrap().is_empty());
+}
+
+/// ADR 0028, 20: a project whose id holds a `/` keeps its tasks' run
+/// records and logs where moon names them, `group-many/<task>`; each
+/// ended task reads with its times and exit, and a failed one's log is
+/// its own, not the run's.
+#[test]
+fn a_project_whose_id_holds_a_slash() {
+    let repo = workspace("moon-slash");
+    let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
+    change(
+        &repo,
+        &[
+            (
+                ".moon/workspace.yml",
+                &ws.replace(
+                    "  gamma: 'gamma'\n",
+                    "  gamma: 'gamma'\n  group/many: 'group/many'\n",
+                ),
+            ),
+            (
+                "group/many/moon.yml",
+                "tasks:\n  pass:\n    command: 'true'\n  fail:\n    command: 'sh fail.sh'\n  wait:\n    command: 'sh wait.sh'\n",
+            ),
+            ("group/many/fail.sh", "echo 'fail: broken'\nexit 3\n"),
+            (
+                "group/many/wait.sh",
+                "while [ ! -f ../../flag ]; do sleep 0.1; done\n",
+            ),
+            (".gitignore", ".moon/cache/\nflag\n"),
+        ],
+    );
+    let c = checks(&repo);
+    let targets = ["group/many:fail", "group/many:pass", "group/many:wait"];
+    let req = request(&repo, "p1", &targets, None);
+    let run = c.start(&req).unwrap();
+    let until = Instant::now() + Duration::from_secs(120);
+    let seen = loop {
+        let tasks = c.tasks(&run).unwrap();
+        let task = |t: &str| tasks.iter().find(|x| x.target == t);
+        let ended = |t: &str, state| {
+            task(t).is_some_and(|t| t.state == state && t.started.is_some() && t.ended.is_some())
+        };
+        if ended("group/many:pass", TaskState::Passed)
+            && ended("group/many:fail", TaskState::Failed)
+            && task("group/many:wait").map(|t| t.state) == Some(TaskState::Running)
+        {
+            break tasks;
+        }
+        assert!(
+            Instant::now() < until,
+            "group/many's tasks never ended with group/many:wait running: {tasks:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let exit = |t: &str| seen.iter().find(|x| x.target == t).unwrap().exit;
+    assert_eq!(exit("group/many:pass"), Some(0));
+    assert_eq!(exit("group/many:fail"), Some(3));
+
+    std::fs::write(repo.dir().join("flag"), "").unwrap();
+    let until = Instant::now() + Duration::from_secs(120);
+    let report = loop {
+        match c.progress(&run).unwrap() {
+            Progress::Finished(r) => break r,
+            Progress::Lost => panic!("lost"),
+            Progress::Running => {}
+        }
+        assert!(Instant::now() < until, "the run never finished");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        tasks(&report),
+        [
+            ("group/many:fail".into(), Outcome::Fail, false),
+            ("group/many:pass".into(), Outcome::Pass, false),
+            ("group/many:wait".into(), Outcome::Pass, false)
+        ]
+    );
+    // The run's own output holds the line too, prefixed with the target;
+    // only the task's own log starts with its stream.
+    let logs = c.logs(&run, &["group/many:fail".into()]).unwrap();
+    assert!(
+        logs[0].text.starts_with("--- stdout ---\n") && logs[0].text.contains("fail: broken"),
+        "{}",
+        logs[0].text
+    );
 }
 
 /// 15, 37: a candidate that affects no required task runs nothing and
@@ -326,6 +425,31 @@ fn a_failure_and_its_dependent() {
         .unwrap();
     assert!(logs[0].text.contains("alpha: broken"), "{}", logs[0].text);
     assert!(!logs[1].text.is_empty());
+}
+
+/// could-not-run-1 114: a task that exits as the policy's `not_run`
+/// says could not run here, so no fail is recorded under its key; its
+/// dependent, never run, is missing as before.
+#[test]
+fn a_task_that_could_not_run_records_no_fail() {
+    let repo = workspace("moon-not-run");
+    let c = checks(&repo);
+    change(&repo, &[("alpha/test.sh", "exit 77\n")]);
+    let mut req = request(&repo, "p1", &["#check-fast"], None);
+    req.tests
+        .insert("not_run".into(), Setting::List(vec!["77".into()]));
+    let r = finish(&c, &req);
+    assert!(
+        !r.tasks
+            .iter()
+            .any(|t| t.task == "alpha:test" && t.outcome == Outcome::Fail),
+        "recorded as failed: {:?}",
+        r.tasks
+    );
+    assert_eq!(r.not_run.len(), 1, "{:?}", r.not_run);
+    assert_eq!(r.not_run[0].task, "alpha:test");
+    assert!(r.not_run[0].reason.contains("exited 77"));
+    assert_eq!(r.missing, ["beta:test"]);
 }
 
 /// 70: with no verified revision every required task runs; two tags run

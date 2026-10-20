@@ -3,7 +3,8 @@
 # The status popup, and with --dashboard the same view in its own tab:
 # the focused pane's repository's queue, read from the watcher's state and
 # redrawn as it changes. Keys: q or Escape closes, j jumps to the culprit's
-# pane, a switches between this repository and every one held.
+# pane, a switches between this repository and every one held, the arrows
+# and Page Up and Down scroll a frame taller than the pane.
 # --once prints one frame and exits.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
@@ -36,7 +37,11 @@ links=$tty
 numbers=true
 [ "$all" = true ] && numbers=false
 links_file=$state/popup-links.$$
-trap 'rm -f "$links_file"' EXIT
+trap 'rm -f "$links_file" "$top_file"' EXIT
+# The first row drawn, moved by the scroll keys; each frame keeps it
+# within its rows and says where it stopped.
+top=0
+top_file=$state/popup-top.$$
 
 # The frame in $1 lines at most, its footer's two among them, or in as
 # many as it takes when $1 is empty.
@@ -62,11 +67,12 @@ frame() {
     | sort_by(.repository, .host)')
   if [ "$(printf '%s' "$shown" | jq length)" -gt 0 ]; then
     drawn=$(printf '%s' "$shown" | jqw -c --argjson now "$t" --argjson color "$tty" --argjson numbers "$numbers" \
-      --arg note "$note" --argjson height "$height" '
+      --arg note "$note" --argjson height "$height" --argjson top "$top" '
       include "words";
       (if $note == "" then [] else [{text: $note, kind: "heading"}, {text: "", kind: "blank"}] end)
-      + [.[] | rows($now; $color)[]] | fit($height; $color) | if $numbers then numbered else . end')
+      + [.[] | rows($now; $color)[]] | fit($height; $top; $color) | if $numbers then numbered else . end')
     printf '%s' "$drawn" | jq -r '.[] | select(.n) | .url' >"$links_file"
+    printf '%s' "$drawn" | jq -r '[.[] | select(.kind == "above") | .top] | first // 0' >"$top_file"
     printf '%s' "$drawn" | jqw -r --argjson links "$links" 'include "words"; .[] | line($links)'
   elif [ -n "$(sluice_problem)" ]; then
     sluice_problem
@@ -106,12 +112,19 @@ height() {
 draw() {
   if [ "$tty" = true ]; then
     esc=$(printf '\033')
-    out=$(frame "$(height)" | sed "s/\$/${esc}[K/")
+    h=$(height)
+    page=$((${h:-12} - 4))
+    [ "$page" -gt 0 ] || page=1
+    out=$(frame "$h" | sed "s/\$/${esc}[K/")
     printf '\033[H%s\033[J' "$out"
   else
-    frame "$(height)"
+    h=$(height)
+    page=$((${h:-12} - 4))
+    [ "$page" -gt 0 ] || page=1
+    frame "$h"
     printf '\f\n'
   fi
+  top=$(cat "$top_file" 2>/dev/null || echo 0)
 }
 
 # A repository the watcher has not read yet: ask it to.
@@ -127,12 +140,13 @@ fi
 
 if [ -t 0 ]; then
   saved=$(stty -g)
-  trap 'stty "$saved"; printf "\033[?7h\033[?25h"; rm -f "$links_file"' EXIT
+  trap 'stty "$saved"; printf "\033[?1007l\033[?1049l\033[?7h\033[?25h"; rm -f "$links_file" "$top_file"' EXIT
   trap 'exit 0' INT TERM HUP
   stty -icanon -echo min 0 time 10
   # No wrapping either: a line wider than the pane is cut at its edge
-  # rather than taking a second line.
-  printf '\033[?7l\033[?25l\033[2J'
+  # rather than taking a second line. The alternate screen, with its
+  # wheel sent as arrow keys where the terminal can, so the wheel scrolls.
+  printf '\033[?1049h\033[?1007h\033[?7l\033[?25l\033[2J'
 fi
 
 draw
@@ -147,12 +161,25 @@ while :; do
   case $key in
   q) exit 0 ;;
   "$(printf '\033')")
-    # Escape alone closes; an arrow key's bytes follow at once.
-    [ -t 0 ] || exit 0
-    stty time 1
-    more=$(dd bs=8 count=1 2>/dev/null)
-    stty time 10
+    # Escape alone closes; an arrow key's bytes follow at once. Off a
+    # terminal, a key's two bytes after its escape are read as one.
+    if [ -t 0 ]; then
+      stty time 1
+      more=$(dd bs=64 count=1 2>/dev/null)
+      stty time 10
+    else
+      more=$(dd bs=1 count=2 2>/dev/null)
+      case $more in "[5" | "[6") more=$more$(dd bs=1 count=1 2>/dev/null) ;; esac
+    fi
     [ -z "$more" ] && exit 0
+    # The wheel sends several arrows at once: each one is a line.
+    case $more in
+    *A*) top=$((top - $(printf '%s' "$more" | tr -cd A | wc -c))) ;;
+    *B*) top=$((top + $(printf '%s' "$more" | tr -cd B | wc -c))) ;;
+    *5~*) top=$((top - page)) ;;
+    *6~*) top=$((top + page)) ;;
+    esac
+    [ "$top" -ge 0 ] || top=0
     ;;
   j)
     sh "$root/bin/jump.sh"
@@ -168,6 +195,7 @@ while :; do
     ;;
   a)
     if [ "$all" = true ]; then all=false; else all=true; fi
+    top=0
     ;;
   esac
   draw

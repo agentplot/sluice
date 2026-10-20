@@ -105,22 +105,36 @@ previews. Routing the name to the port is your command's job. With
 #!/bin/sh
 # scripts/preview-up: the stack, handed to the container engine, and a route per name
 set -eu
+web="${SLUICE_NAME_WEB:-web-$SLUICE_PLACE}"
+api="${SLUICE_NAME_API:-api-$SLUICE_PLACE}"
 docker compose -p "$SLUICE_PLACE" up -d --wait
-portless alias "$SLUICE_NAME_WEB" "$SLUICE_PORT_WEB"
-portless alias "$SLUICE_NAME_API" "$SLUICE_PORT_API"
+portless alias "$web" "$SLUICE_PORT_WEB"
+portless alias "$api" "$SLUICE_PORT_API"
 ```
 
 ```sh
 #!/bin/sh
 # scripts/preview-down: safe to run again, and on a stack that never came up
+web="${SLUICE_NAME_WEB:-web-$SLUICE_PLACE}"
+api="${SLUICE_NAME_API:-api-$SLUICE_PLACE}"
 docker compose -p "$SLUICE_PLACE" down -v || true
-portless alias --remove "$SLUICE_NAME_WEB" || true
-portless alias --remove "$SLUICE_NAME_API" || true
+portless alias --remove "$web" || true
+portless alias --remove "$api" || true
 ```
 
 `[tests] release` is the preview's release command. It runs when the
 preview is released, with the same environment, and removes what the
 command handed off.
+
+Only a preview is given names. `[tests] release` is every place's
+release command, so it also runs after each candidate's checks and when
+an agent's worktree is released, where no `SLUICE_NAME_<NAME>` is set.
+Each script defaults its names from `SLUICE_PLACE`, one DNS label unique
+on the host, so the release works there too. The same defaults let an
+agent bring the stack up in its own worktree with
+`sluice exec <branch> -- scripts/preview-up`, on its worktree's ports,
+and `sluice release` take it down. A fixed default, such as `web-shop`,
+would give every worktree one name, each route replacing the last.
 
 ## The life of a preview
 

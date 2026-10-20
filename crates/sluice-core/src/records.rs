@@ -15,12 +15,15 @@
 //! the log's (`log`). See `docs/plans/phase-1-questions.md`.
 
 use serde::{Deserialize, Serialize};
-use sluice_seams::{Contested, Enforced, Outcome, Rev, RunHandle, Submitter, TaskLog, Told};
+use sluice_seams::{
+    Contested, Enforced, NotRun, Outcome, Rev, RunHandle, Submitter, TaskLog, Told,
+};
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
 pub const BRANCH_SCHEMA: &str = "sluice/branch@1";
 pub const LOG_SCHEMA: &str = "sluice/log@1";
 pub const RESULT_SCHEMA: &str = "sluice/result@1";
+pub const SET_ASIDE_SCHEMA: &str = "sluice/set-aside@1";
 
 fn log_schema() -> String {
     LOG_SCHEMA.into()
@@ -139,6 +142,11 @@ pub struct FailedTask {
     /// the policy names no systems.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Could-not-run-1 115: the check could not run in as many runs in a
+    /// row as the bound, and why it last could not; `None` for a check
+    /// with a result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_run: Option<String>,
 }
 
 /// A task read as failed for its key holding a pass and a fail (19): what
@@ -333,6 +341,14 @@ pub struct Candidate {
     pub ran: usize,
     #[serde(default)]
     pub replayed: usize,
+    /// Could-not-run-1 115: its runs in a row that left a check not run
+    /// and failed none on its own result.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub not_run_runs: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A candidate as records written before runs per system hold it: one
@@ -360,6 +376,8 @@ struct CandidateForm {
     ran: usize,
     #[serde(default)]
     replayed: usize,
+    #[serde(default)]
+    not_run_runs: u32,
 }
 
 impl From<CandidateForm> for Candidate {
@@ -395,6 +413,7 @@ impl From<CandidateForm> for Candidate {
             every_check: f.every_check,
             ran: f.ran,
             replayed: f.replayed,
+            not_run_runs: f.not_run_runs,
         }
     }
 }
@@ -645,9 +664,13 @@ pub enum Event {
         combination: Rev,
         host: String,
     },
-    /// A run whose executor stopped before reporting: no outcome (60).
+    /// A run whose executor stopped before reporting, or that left checks
+    /// not run and failed none on its own result: no outcome (60,
+    /// could-not-run-1 114). The candidate runs again.
     Lost {
         combination: Rev,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        not_run: Vec<NotRun>,
     },
     /// 108: replays no trusted pass proved, so the checks run again with
     /// no replay.
@@ -712,6 +735,26 @@ pub enum Event {
 pub enum ResultKind {
     Ran,
     Replayed,
+}
+
+/// Could-not-run-1 116: the operator's record that one recorded result
+/// did not judge its check, and why. The result's own line stays (rule
+/// core.7); from the set-aside on, no gate reads it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetAside {
+    pub schema: String,
+    /// When it was set aside.
+    pub at: String,
+    pub task: String,
+    pub hash: String,
+    /// When the result was recorded: with its task, hash, branch and
+    /// combination, the result it names.
+    pub run_at: String,
+    pub branch: String,
+    pub combination: Rev,
+    pub reason: String,
+    /// Who set it aside, `user@host`.
+    pub by: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -781,6 +824,15 @@ impl ResultLine {
             system: system.map(str::to_string),
             signer: None,
         }
+    }
+
+    /// Whether `aside` sets this result aside (could-not-run-1 116).
+    pub fn set_aside_by(&self, aside: &SetAside) -> bool {
+        self.task == aside.task
+            && self.hash == aside.hash
+            && self.at == aside.run_at
+            && self.branch == aside.branch
+            && self.combination == aside.combination
     }
 
     /// Two lines record one observation: a write repeated after a crash.

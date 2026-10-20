@@ -31,6 +31,7 @@ use tracing::{info, info_span};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
+use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, FailedTask, LandingCommitRecord,
@@ -39,6 +40,10 @@ use crate::records::{
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
+
+/// Could-not-run-1 115: the deployment's bound on a candidate's runs in a
+/// row that leave a check not run and fail none on its own result.
+pub const NOT_RUN_BOUND: u32 = 3;
 
 /// A round: how its step went, the session places it released because
 /// their worktrees no longer exist (session-runs-1 clause 97), and the
@@ -726,6 +731,7 @@ impl Sluice<'_> {
                             now,
                             Event::Lost {
                                 combination: c.revision.clone(),
+                                not_run: Vec::new(),
                             },
                         );
                     }
@@ -755,6 +761,7 @@ impl Sluice<'_> {
                                 log: None,
                                 flaky: None,
                                 system: r.system.clone(),
+                                not_run: None,
                             }));
                         }
                     }
@@ -881,6 +888,42 @@ impl Sluice<'_> {
         // report holding none of them is no pass.
         if c.every_check && !checks.is_empty() && report.tasks.is_empty() {
             v.passed = false;
+        }
+        // Could-not-run-1 114, 115: checks the run did not judge have no
+        // outcome. With nothing failed on its own result, the run is open
+        // again and nobody is blamed, up to the bound; past it, or beside a
+        // check that failed, each is named with why.
+        if !report.not_run.is_empty() {
+            let x = line.candidate_mut(&c.id).expect("polled candidate");
+            if v.failed.is_empty() && !v.timed_out {
+                x.not_run_runs += 1;
+                if x.not_run_runs < NOT_RUN_BOUND {
+                    let xr = &mut x.runs[i];
+                    xr.state = RunState::Open;
+                    xr.run = None;
+                    xr.host = None;
+                    if let Some(p) = xr.place.take() {
+                        line.doc.release.push(p);
+                    }
+                    line.log(
+                        now,
+                        Event::Lost {
+                            combination: c.revision.clone(),
+                            not_run: report.not_run.clone(),
+                        },
+                    );
+                    return Ok(());
+                }
+            }
+            v.passed = false;
+            v.failed.extend(report.not_run.iter().map(|n| FailedTask {
+                task: n.task.clone(),
+                hash: String::new(),
+                log: None,
+                flaky: None,
+                system: system.map(str::to_string),
+                not_run: Some(n.reason.clone()),
+            }));
         }
         // 20: what the failed tasks printed, kept while the place still
         // holds it.
@@ -1075,6 +1118,7 @@ impl Sluice<'_> {
                         every_check: false,
                         ran: 0,
                         replayed: 0,
+                        not_run_runs: 0,
                     });
                     prev = rev.clone();
                     ids.push(cid);
@@ -1412,16 +1456,23 @@ impl Sluice<'_> {
     /// session runs. A session run belongs to the host, not to a branch an
     /// instance serves, so every branch's runs count against it.
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
-        let mut under = self.seams.tests.sessions()?;
+        Ok(self.room(reserved)?.for_sessions())
+    }
+
+    /// 71, session-runs-1 clauses 89 and 91: the host's bound and what
+    /// counts against it, as `session_capacity` decides on it, for a
+    /// person to read (ADR 0035).
+    pub fn room(&self, reserved: usize) -> Result<Room> {
+        let mut queue = 0;
         for b in self.seams.state.branches()? {
-            under += self.held_here(&self.read_line(&b)?);
+            queue += self.held_here(&self.read_line(&b)?);
         }
-        Ok(self
-            .seams
-            .tests
-            .bound()?
-            .saturating_sub(reserved)
-            .saturating_sub(under))
+        Ok(Room {
+            bound: self.seams.tests.bound()?,
+            queue,
+            sessions: self.seams.tests.sessions()?,
+            reserve: reserved,
+        })
     }
 
     /// 13, 14, 71: start candidates up to the window, and their runs this
@@ -1895,6 +1946,7 @@ impl Sluice<'_> {
                                     &now,
                                     Event::Lost {
                                         combination: c.revision.clone(),
+                                        not_run: Vec::new(),
                                     },
                                 );
                             }
