@@ -58,6 +58,8 @@ pub struct Records {
     signing: Option<instance::Signing>,
     remotes: RefCell<BTreeMap<String, Rc<RemoteRefs>>>,
     routes: RefCell<BTreeMap<String, Option<String>>>,
+    /// The branches whose state is on a remote, once listed.
+    listed: RefCell<Option<Vec<String>>>,
 }
 
 impl Records {
@@ -70,6 +72,7 @@ impl Records {
             signing,
             remotes: RefCell::default(),
             routes: RefCell::default(),
+            listed: RefCell::default(),
         }
     }
 
@@ -244,6 +247,27 @@ impl State for Records {
         }
     }
 
+    fn publish_head(&self, branch: &str, head: &Rev) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.publish_head(branch, head),
+        }
+    }
+
+    fn unpublish_head(&self, branch: &str, head: &Rev) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.unpublish_head(branch, head),
+        }
+    }
+
+    fn fetch_heads(&self, branch: &str) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.fetch_heads(branch),
+        }
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         match self.route(branch)? {
             None => Ok(None),
@@ -309,14 +333,34 @@ impl State for Records {
         }
     }
 
+    /// Every branch with records: this host's own, and every branch whose
+    /// state is on one of the repository's remotes, read once (80).
     fn branches(&self) -> Result<Vec<String>> {
         let mut all = self.local.branches()?;
-        let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
-        for r in remotes {
-            for b in r.branches()? {
-                if !all.contains(&b) {
-                    all.push(b);
+        if self.listed.borrow().is_none() {
+            let mut found = Vec::new();
+            for remote in super::pushed_refs::remotes(self.branches.git_dir())? {
+                let p = self.branches.pushed_refs(&remote)?;
+                let out =
+                    p.remote_git(&["ls-remote", "--refs", p.target(), "refs/sluice/state/*"])?;
+                if !out.status.success() {
+                    // A remote out of reach lists nothing here; a branch
+                    // already routed is read as last fetched (80).
+                    continue;
                 }
+                found.extend(
+                    String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .filter_map(|l| l.split('\t').nth(1))
+                        .filter_map(|r| r.strip_prefix("refs/sluice/state/"))
+                        .map(str::to_string),
+                );
+            }
+            *self.listed.borrow_mut() = Some(found);
+        }
+        for b in self.listed.borrow().iter().flatten() {
+            if !all.contains(b) {
+                all.push(b.clone());
             }
         }
         all.sort();

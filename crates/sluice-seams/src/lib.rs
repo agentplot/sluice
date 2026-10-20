@@ -810,6 +810,23 @@ pub trait State {
         Ok(())
     }
 
+    /// 82: make a submitted head fetchable by every host that may run its
+    /// checks or keep its branch, before its submission is written.
+    fn publish_head(&self, _branch: &str, _head: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: a head whose submission has left the queue.
+    fn unpublish_head(&self, _branch: &str, _head: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: fetch every head submitted to the branch from another host, so
+    /// combinations of them can be formed here.
+    fn fetch_heads(&self, _branch: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// The submissions this host had queued on the branch in its own
     /// records, when the branch's records moved to the remote and another
     /// host's queue was there first (design D10): each a submission's

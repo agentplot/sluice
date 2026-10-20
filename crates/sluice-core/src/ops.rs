@@ -169,6 +169,8 @@ impl Sluice<'_> {
         if !unknown.is_empty() {
             return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
         }
+        // 82: the head is fetchable by every host before it is submitted.
+        self.seams.state.publish_head(&req.branch, &session.head)?;
         let id = self.seams.state.allocate_id()?;
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&req.branch)?;

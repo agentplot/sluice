@@ -1,0 +1,187 @@
+//! sluice on two hosts sharing one remote, end to end through the CLI:
+//! a branch whose policy names signers keeps its state on the remote, a
+//! session on one host submits and goes away, and the other host lands
+//! the submission (C.6; 72, 78, 82, 111). A bare repository on this host
+//! is the remote. Needs git, so it is in the check-tools tier.
+
+#![cfg(feature = "tools")]
+
+#[path = "support/mod.rs"]
+mod support;
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use ssh_key::{Algorithm, LineEnding, PrivateKey};
+use support::{Repo, Scratch};
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// One host: its clone of the remote, its own config and state, and its
+/// signing key.
+struct Host {
+    repo: Repo,
+    config: Scratch,
+    state: Scratch,
+    sessions: Scratch,
+}
+
+impl Host {
+    fn new(repo: Repo, name: &str, signer: &str, key: &PrivateKey) -> Host {
+        let config = Scratch::new(&format!("{name}-config"));
+        let path = config.path().join("signing");
+        key.write_openssh_file(&path, LineEnding::LF).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+        std::fs::write(
+            config.path().join("sluice/config.toml"),
+            format!(
+                "[signing]\nsigner = \"{signer}\"\nkey = {:?}\n",
+                path.display().to_string()
+            ),
+        )
+        .unwrap();
+        Host {
+            repo,
+            state: Scratch::new(&format!("{name}-state")),
+            sessions: Scratch::new(&format!("{name}-sessions")),
+            config,
+        }
+    }
+
+    fn command(&self, dir: &Path) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        support::isolated(&mut c)
+            .current_dir(dir)
+            .env("XDG_CONFIG_HOME", self.config.path())
+            .env("XDG_STATE_HOME", self.state.path())
+            .env_remove("SLUICE_AGENT")
+            .env_remove("SLUICE_OTEL")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null());
+        c
+    }
+
+    fn sluice(&self, args: &[&str]) -> Output {
+        self.command(self.repo.dir()).args(args).output().unwrap()
+    }
+
+    /// A session on `unit/<name>` off `main`, one commit of its own,
+    /// submitted to `main` without waiting; returns its id.
+    fn submit(&self, name: &str) -> u64 {
+        let dir: PathBuf = self.sessions.path().join(name);
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("unit/{name}"),
+            dir.to_str().unwrap(),
+            "main",
+        ]);
+        std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
+        let git = |args: &[&str]| {
+            let mut a = vec!["-C", dir.to_str().unwrap()];
+            a.extend(args);
+            self.repo.git(&a)
+        };
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", name]);
+        let out = self
+            .command(&dir)
+            .args(["submit", "main", "--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["id"].as_u64().unwrap()
+    }
+
+    fn state_of(&self, id: u64) -> String {
+        let out = self.sluice(&["status", &id.to_string(), "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["state"].as_str().unwrap().to_string()
+    }
+}
+
+fn line(principal: &str, k: &PrivateKey) -> String {
+    format!("{principal} {}", k.public_key().to_openssh().unwrap())
+}
+
+/// 111, 82, 78: a session's host submits and stops; another host, with no
+/// session of its own, lands the submission, signing its run; the first
+/// host reads it landed from the remote when it is back.
+#[test]
+fn a_submission_lands_by_another_host() {
+    let (ka, kb) = (
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+    );
+    let a = Repo::new("peers-a");
+    a.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+             [signers.a]\nssh = \"{}\"\n\n[signers.b]\nssh = \"{}\"\n\n\
+             [branches.main]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = [\"a\", \"b\"]\n",
+            line("a", &ka),
+            line("b", &kb)
+        ),
+    );
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "sluice's policy"]);
+    let origin = a.bare_origin();
+    let b = Repo::clone_of(origin.path(), "peers-b");
+    let host_a = Host::new(a, "peers-a", "a", &ka);
+    let host_b = Host::new(b, "peers-b", "b", &kb);
+
+    let id = host_a.submit("x");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let out = host_b.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        if host_b.state_of(id) == "landed" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never landed: {}",
+            host_b.state_of(id)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(host_a.state_of(id), "landed");
+    // The landing is on the remote's branch, made by the other host.
+    let landed = support::git_command()
+        .arg("--git-dir")
+        .arg(origin.path())
+        .args(["log", "-1", "--format=%s", "main"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&landed.stdout).contains(&format!("#{id}")));
+    // The head is gone from the remote by the round after its submission
+    // landed (82).
+    let out = host_b.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let heads = support::git_command()
+        .arg("--git-dir")
+        .arg(origin.path())
+        .args(["for-each-ref", "refs/sluice/heads/"])
+        .output()
+        .unwrap();
+    assert!(
+        heads.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&heads.stdout)
+    );
+}

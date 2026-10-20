@@ -310,6 +310,31 @@ impl RemoteRefs {
         Ok(())
     }
 
+    /// Remove `name` from the remote when it holds it.
+    fn delete_if_present(&self, name: &str) -> Result<()> {
+        let spec = format!(":{name}");
+        let out = self.pushed.remote_git(&[
+            "push",
+            "--porcelain",
+            "--no-verify",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if out.status.success() || said.contains("does not exist") {
+            return Ok(());
+        }
+        bail!(
+            "removing {name} from {} failed: {}",
+            self.remote(),
+            refusal(&out)
+        )
+    }
+
     /// Add `files` to the ref `name`, on top of whatever it holds, again
     /// on top of what another host added first (design D2).
     fn add(&self, name: &str, files: &BTreeMap<String, Vec<u8>>, message: &str) -> Result<()> {
@@ -574,6 +599,62 @@ impl State for RemoteRefs {
         self.own.wait_lock(branch)
     }
 
+    fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
+        let spec = format!("{head}:refs/sluice/heads/{head}");
+        let out = self.pushed.remote_git(&[
+            "push",
+            "--porcelain",
+            "--no-verify",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "pushing the head {head} to {} failed: {}",
+                self.remote(),
+                refusal(&out)
+            );
+        }
+        Ok(())
+    }
+
+    /// Only a head the last fetch of heads found on the remote is removed,
+    /// so a round removes each once.
+    fn unpublish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
+        let name = format!("refs/sluice/heads/{head}");
+        let fetched = self.fetched(&name);
+        if self.pushed.read_ref(&fetched)?.is_none() {
+            return Ok(());
+        }
+        self.delete(&name)?;
+        self.git_ok(&["update-ref", "-d", &fetched])?;
+        Ok(())
+    }
+
+    fn fetch_heads(&self, _branch: &str) -> Result<()> {
+        let spec = format!(
+            "+refs/sluice/heads/*:refs/sluice-fetched/{}/heads/*",
+            self.remote()
+        );
+        let out = self.pushed.remote_git(&[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--prune",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "fetching the submitted heads from {} failed: {}",
+                self.remote(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         let path = self.observation(branch)?;
         match std::fs::read(&path) {
@@ -677,6 +758,20 @@ impl State for RemoteRefs {
             return Ok(Written::Refused);
         }
         self.read.borrow_mut().remove(branch);
+        // 82: a submission moved to the finished records has left sluice,
+        // and its head with it.
+        let prefix = format!("{FINISHED}/");
+        for (path, bytes) in &changes.put {
+            if !path.starts_with(&prefix) || !path.ends_with(".json") {
+                continue;
+            }
+            let head = serde_json::from_slice::<serde_json::Value>(bytes)
+                .ok()
+                .and_then(|v| v["head"].as_str().map(str::to_string));
+            if let Some(head) = head {
+                self.delete_if_present(&format!("refs/sluice/heads/{head}"))?;
+            }
+        }
         Ok(Written::Written(version))
     }
 

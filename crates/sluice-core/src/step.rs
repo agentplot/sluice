@@ -527,6 +527,24 @@ impl Sluice<'_> {
         line.doc.window = line.doc.window.clamp(1, rules.parallel);
 
         let adopted = self.adopt_left_behind(&mut line, &now)?;
+        // 82: heads submitted from other hosts, fetched to be formed here;
+        // and the heads of submissions out of the queue removed.
+        self.seams.state.fetch_heads(branch)?;
+        let queued: BTreeSet<&Rev> = line
+            .subs
+            .values()
+            .filter(|s| !s.state.is_out())
+            .map(|s| &s.head)
+            .collect();
+        let gone: BTreeSet<Rev> = line
+            .subs
+            .values()
+            .filter(|s| s.state.is_out() && !queued.contains(&s.head))
+            .map(|s| s.head.clone())
+            .collect();
+        for head in &gone {
+            self.seams.state.unpublish_head(branch, head)?;
+        }
         self.poll(&mut line, &rules, home.as_deref(), &now)?;
         let chain = loop {
             let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
