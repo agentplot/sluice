@@ -317,7 +317,7 @@ with plain tools whether or not sluice is running:
   log.jsonl            every submission, test run, result, blame and landing, in order
 .git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-.git/sluice/caches/    the [[checkout.cache]] entries, the last two keys of each
+.git/sluice/.caches/   the [[checkout.cache]] entries, the last two keys of each
 .git/sluice/results.jsonl
                        every test result of the repository, with its executor
 ```
