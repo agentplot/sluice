@@ -40,6 +40,21 @@ They add a row under each agent in the sidebar, the queue on each
 workspace's row and the queue in the tab bar, and turn `[ui.toast]` on for
 toasts. Then run `herdr server reload-config`.
 
+The tab bar's entry names a copy of the plugin's segment script from
+`$HOME`:
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 2 },
+]
+```
+
+herdr runs the command through `/bin/sh -lc`, which fills in each host's
+home directory. So one `config.toml` serves a Mac and a Linux box alike,
+wherever herdr keeps its state below the home directory, as it does by
+default. The setup action prints the command for the host it runs on.
+
 ## The status popup
 
 `prefix+s` opens the queue of the focused pane's repository. Under TESTING

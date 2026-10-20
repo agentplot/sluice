@@ -116,7 +116,7 @@ rows = [
 
 [ui]
 tab_bar_right = [
-  { type = "command", command = "sh '<state directory>/segment/bin/segment.sh'", interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 2 },
 ]
 
 [ui.toast]
@@ -126,7 +126,10 @@ delivery = "herdr"
 The sidebar rows above are herdr's own plus one; if you have rows of your
 own, add only the `$sluice` row. Toasts need `[ui.toast]` delivery on. The
 tab-bar command runs a copy the plugin keeps in its state directory, so it
-survives a reinstall; `setup` prints its path.
+survives a reinstall. herdr runs the command through `/bin/sh -lc`, which
+fills in each host's `$HOME`, so one `config.toml` serves a Mac and a
+Linux box alike wherever herdr keeps its state below the home directory,
+as it does by default. `setup` prints the command for the host it runs on.
 
 ## Sources
 

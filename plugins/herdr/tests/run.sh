@@ -961,13 +961,35 @@ pass
 
 fresh 'status: setup shows, never edits'
 before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
-out=$(sh "$plugin/bin/setup.sh" </dev/null)
+# A state directory outside the home directory is named whole.
+out=$(HOME=$scratch/home sh "$plugin/bin/setup.sh" </dev/null)
 for want in 'key = "prefix+s"' 'command = "agentplot.sluice.status"' '"$sluice"' '"$sluice_q"' \
   "sh '$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh'"; do
   printf '%s' "$out" | grep -qF -- "$want" || fail "setup does not show $want"
 done
 [ "$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)" = "$before" ] || fail "setup wrote a file"
 [ -s "$FAKE/herdr-calls" ] && fail "setup called herdr: $(calls)"
+pass
+
+fresh 'status: one tab-bar line for every host'
+lines=
+for h in mac box; do
+  home=$t/$h
+  st=$home/.local/state/herdr/plugins/agentplot.sluice
+  mkdir -p "$st"
+  printf '%s\n' "$board" | jq -c --arg r "$common" --arg h "$h" '.repository = $r | .branches[0].branch = "main-\($h)"' |
+    HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/document.sh" local "$work"
+  HOME=$home HERDR_PLUGIN_STATE_DIR=$st SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+  line=$(HOME=$home HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/setup.sh" </dev/null | grep 'type = "command"')
+  lines="$lines$line
+"
+  cmd=$(printf '%s' "$line" | sed -n "s/.*command = '\(.*\)', interval_seconds.*/\1/p")
+  [ "$cmd" = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"' ] || fail "on $h setup printed: $line"
+  # As herdr runs it: through a login shell, in the focused pane's directory.
+  out=$(cd "$work" && env -u HERDR_PLUGIN_ROOT -u HERDR_PLUGIN_STATE_DIR HOME="$home" /bin/sh -lc "$cmd")
+  case $out in "sluice main-$h · 3 submissions · "*) ;; *) fail "on $h the line printed: $out" ;; esac
+done
+[ "$(printf '%s' "$lines" | sort -u | wc -l)" -eq 1 ] || fail "the hosts' lines differ: $lines"
 pass
 
 fresh 'status: fields it does not know change nothing'
