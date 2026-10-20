@@ -143,14 +143,15 @@ export function shown(b: OverviewBranch, now: number): boolean {
 
 /**
  * Whether agents' checks hold a branch's queue back: the host has no run
- * free, checks hold at least one, and the branch has a submission waiting
+ * free, checks hold at least one, and the branch has a submission queued
  * while it tests fewer combinations than its window. False with no room,
  * from a sluice older than it.
  */
 export function heldBack(b: OverviewBranch, room: Room | undefined): boolean {
   if (!room || room.sessions === 0) return false;
   if (room.queue + room.sessions < room.bound) return false;
-  return waiting(b).length > 0 && testing(b).length < b.window;
+  const queued = b.submissions.some((s) => s.state === "queued");
+  return queued && testing(b).length < b.window;
 }
 
 /** `1 slot to an agent's checks`: what holds the queue back, when it is checks. */

@@ -121,6 +121,12 @@ describe("agents' checks", () => {
     expect(hostLine(old.room)).toBeNull();
   });
 
+  test("a submission whose combination passed waits on no run", () => {
+    const d = withChecks();
+    d.branches[0]!.submissions.find((s) => s.id === 14)!.state = "passed";
+    expect(heldBack(d.branches[0]!, d.room)).toBe(false);
+  });
+
   test("the status line says it once", () => {
     expect(statusLine(withChecks(), learn(withChecks(), ME))).toBe(
       "sluice: 3 submissions · yours #13 testing · 1 slot to an agent's checks",
