@@ -599,3 +599,68 @@ fn s19_a_pools_jobs_land_the_work_with_no_box() {
     }
     assert_eq!(h.sub(one).state, State::Landed);
 }
+
+/// satisfies: 78, 79, 28, 29; S18: results signed by a signer the shared
+/// branch does not name settle nothing there; a confinement claim counts
+/// only from a signer that may make it.
+#[test]
+fn s18_a_signer_the_gate_does_not_trust_settles_nothing() {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\nconfined = true\n",
+    ) + "\n[branches.\"bolt/y\"]\nrequired = [\"#gate\"]\nremote = \"origin\"\ntrust = [\"sessions\"]\n\
+         \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\nconfined = true\n\
+         \n[signers.sessions]\nssh = \"s ssh-ed25519 BBBB\"\nconfined = false\n";
+    let h = Harness::new(&p);
+    h.w().init(
+        "bolt/y",
+        &[
+            (".config/sluice.toml", &p),
+            ("a/lib", "a1"),
+            ("b/lib", "b1"),
+            ("c/lib", "c1"),
+        ],
+    );
+    // On bolt/x, whose gate trusts only box and only confined results, a
+    // host signing as sessions settles nothing: the combination never
+    // passes, and the branch is left as it was.
+    h.w().signs_as("sessions");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let sessions = || {
+        h.w().be_host("s");
+        h.sluice().as_peer(Peer {
+            name: "s".into(),
+            lease: Duration::from_secs(300),
+            alive: Duration::from_secs(120),
+            signer: Some("sessions".into()),
+            systems: None,
+        })
+    };
+    for _ in 0..4 {
+        sessions().step(BRANCH).unwrap();
+    }
+    assert_ne!(h.sub(one).state, State::Landed);
+    assert!(h.w().moves().is_empty());
+    assert!(claims(&h).is_empty());
+
+    // On bolt/y, which trusts sessions and asks for no confinement, the
+    // same host's results land the work, read as they are: unconfined.
+    let head = h.w().work(&h.w().tip("bolt/y"), &[("a/lib", Some("a2"))]);
+    h.w().session("unit/y", "agent-y", &head);
+    let s = sessions();
+    let y = s
+        .submit(&sluice_core::SubmitRequest {
+            worktree: "unit/y".into(),
+            branch: "bolt/y".into(),
+            after: vec![],
+            priority: 0,
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+    for _ in 0..6 {
+        sessions().step("bolt/y").unwrap();
+    }
+    assert_eq!(sessions().state(y).unwrap().unwrap().state, State::Landed);
+}
