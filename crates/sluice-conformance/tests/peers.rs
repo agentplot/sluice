@@ -487,3 +487,115 @@ fn s42_a_replay_no_trusted_signer_proved_runs_again() {
     assert!(h.w().requests().iter().any(|r| !r.replay));
     assert!(h.w().observed().len() > ran);
 }
+
+/// Two systems, a box that signs for `linux-x64` and a forge pool with a
+/// runner for each, both trusted.
+fn with_pool() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\", \"forge\"]\nremote = \"origin\"\nsystems = [\"linux-x64\", \"macos-arm64\"]\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\nsystems = [\"linux-x64\"]\n\
+         \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+         \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n\
+         runners = { linux-x64 = \"ubuntu-24.04\", macos-arm64 = \"macos-15\" }\n\
+         \n[systems]\nlinux-x64 = { os = \"linux\", arch = \"x86_64\" }\n\
+         macos-arm64 = { os = \"macos\", arch = \"aarch64\" }\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+fn signer<'a>(h: &'a Harness, name: &str, signer: &str) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.w().signs_as(signer);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some(signer.into()),
+        systems: None,
+    })
+}
+
+/// satisfies: 107, 88; S41; the run-claims spec's "The box has room" and
+/// "The box is full"
+#[test]
+fn s41_a_box_with_room_comes_before_the_pool() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    assert_eq!(h.w().wakes(), [BRANCH]);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    let launched: Vec<(Option<String>, String)> = h
+        .w()
+        .launches()
+        .iter()
+        .map(|l| (l.system.clone(), l.runner.clone()))
+        .collect();
+    // The box takes linux-x64; only macos-arm64, which no box runs, goes
+    // to the pool.
+    assert_eq!(launched, [(Some("macos-arm64".into()), "macos-15".into())]);
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    assert!(claims(&h).contains(&"box".to_string()));
+
+    // A full box: the pool takes linux-x64 too.
+    let h = with_pool();
+    h.w().hold_runs(true);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().host_limit(0);
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    h.w().host_limit(4);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    assert_eq!(h.w().launches().len(), 2);
+}
+
+/// satisfies: 88, 111, 77; S19: every host of the submitter is off; the
+/// pool's jobs run each system and the work lands; a job its pool lost
+/// lapses and the run is started again.
+#[test]
+fn s19_a_pools_jobs_land_the_work_with_no_box() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let lead = || as_signer(&h, "lead", None);
+    lead().step(BRANCH).unwrap();
+    let first: Vec<String> = h.w().launches().iter().map(|l| l.claim.clone()).collect();
+    assert_eq!(first.len(), 2);
+    // The macOS job is lost before it reports.
+    h.w().end_job(&first[1]);
+    lead().step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Lapsed { host, .. } if *host == first[1])));
+    assert_eq!(h.w().launches().len(), 3);
+    // Each job the pool is given runs under its claim and reports; a
+    // macOS job that replays keys only Linux proved runs them again (108).
+    h.w().hold_runs(false);
+    for _ in 0..6 {
+        let jobs: Vec<String> = h
+            .w()
+            .launches()
+            .iter()
+            .map(|l| l.claim.clone())
+            .filter(|c| *c != first[1])
+            .collect();
+        for c in &jobs {
+            let job = signer(&h, c, "forge");
+            for _ in 0..2 {
+                job.step(BRANCH).unwrap();
+            }
+        }
+        lead().step(BRANCH).unwrap();
+        if h.sub(one).state == State::Landed {
+            break;
+        }
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+}

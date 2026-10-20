@@ -564,6 +564,7 @@ impl Sluice<'_> {
         };
         if !self.choose_landing(&mut line, &rules, &chain, &now)? {
             self.choose_starts(&mut line, &rules, home.as_deref(), &chain, &now)?;
+            self.launch_on_pools(&mut line, &rules, home.as_deref(), &chain, &now)?;
         }
         derive_states(&mut line, &chain);
         self.keep_tasks(&line)?;
@@ -669,6 +670,12 @@ impl Sluice<'_> {
     /// core.7, core.9). A candidate has its verdict once every run of it
     /// has one, over every check on every system its gate names (86).
     fn poll(&self, line: &mut Line, rules: &Rules, home: Option<&str>, now: &str) -> Result<()> {
+        let pools = match &line.doc.base {
+            Some(base) if rules.signed => {
+                self.policy_at(base)?.map(|p| p.pools).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
         let testing: Vec<Candidate> = line
             .doc
             .candidates
@@ -682,7 +689,7 @@ impl Sluice<'_> {
                     // 77: another instance's claim, open again once its
                     // host has shown no sign of life for the bound.
                     let host = r.host.clone().expect("another's run names its host");
-                    if r.state.held() && self.lapsed(&host, now)? {
+                    if r.state.held() && self.lapsed(&host, now, &pools, rules.remote.as_deref())? {
                         let x = line.candidate_mut(&c.id).expect("polled candidate");
                         let xr = &mut x.runs[i];
                         xr.state = RunState::Open;
@@ -1642,9 +1649,147 @@ impl Sluice<'_> {
         Ok(())
     }
 
+    /// 88, 107: start on a pool each open run of a candidate under test
+    /// that no live instance able to take it has room for by its last sign
+    /// of life, the policy's pools tried in order; the job's start is its
+    /// claim.
+    fn launch_on_pools(
+        &self,
+        line: &mut Line,
+        rules: &Rules,
+        home: Option<&str>,
+        chain: &[String],
+        now: &str,
+    ) -> Result<()> {
+        if !rules.signed {
+            return Ok(());
+        }
+        let Some(base) = line.doc.base.clone() else {
+            return Ok(());
+        };
+        let Some(policy) = self.policy_at(&base)? else {
+            return Ok(());
+        };
+        if policy.pools.is_empty() {
+            return Ok(());
+        }
+        let mut rooms: Vec<(Option<String>, Option<String>, u64)> = Vec::new();
+        for (host, (_, beat)) in self.seams.state.beats()? {
+            if host == self.peer.name
+                || host.starts_with("pool/")
+                || self.lapsed(&host, now, &[], None)?
+            {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_slice(&beat).unwrap_or_default();
+            let room = v["bound"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(v["held"].as_u64().unwrap_or(0));
+            rooms.push((
+                v["signer"].as_str().map(str::to_string),
+                v["system"].as_str().map(str::to_string),
+                room,
+            ));
+        }
+        let trusted = |signer: &str| {
+            rules
+                .claims
+                .get(signer)
+                .is_some_and(|(confined, _)| !rules.confined || *confined)
+        };
+        let mut lead_room = self.capacity(line)?;
+        let open: Vec<(String, usize)> = chain
+            .iter()
+            .filter_map(|id| line.candidate(id))
+            .filter(|c| c.state.under_test())
+            .flat_map(|c| {
+                c.runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.state == RunState::Open && r.host.is_none())
+                    .map(|(i, _)| (c.id.clone(), i))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (id, i) in open {
+            let run = line.candidate(&id).expect("a chain's candidate").runs[i].clone();
+            // 107: a live instance that may take it, with room, comes first.
+            if self.claimable(&run, home, rules) && lead_room > 0 {
+                lead_room -= 1;
+                continue;
+            }
+            let taker = rooms.iter_mut().find(|(signer, system, room)| {
+                *room > 0
+                    && signer.as_deref().is_some_and(&trusted)
+                    && (run.system.is_none() || *system == run.system)
+            });
+            if let Some(t) = taker {
+                t.2 -= 1;
+                continue;
+            }
+            let pool = policy.pools.iter().find_map(|p| {
+                if !trusted(&p.signer) {
+                    return None;
+                }
+                let runner = match &run.system {
+                    Some(s) => p.runners.get(s).cloned(),
+                    None => p.runners.values().next().cloned(),
+                }?;
+                Some((p, runner))
+            });
+            let Some((pool, runner)) = pool else {
+                continue;
+            };
+            let place = self.next_place(line);
+            let claim = format!("pool/{}/{}", pool.name, line.doc.next_place - 1);
+            let c = line.candidate(&id).expect("a chain's candidate").clone();
+            self.seams.tests.launch(&sluice_seams::Launch {
+                pool: pool.name.clone(),
+                kind: pool.kind.clone(),
+                runner,
+                remote: rules.remote.clone(),
+                branch: line.branch.clone(),
+                candidate: c.id.clone(),
+                combination: c.revision.clone(),
+                system: run.system.clone(),
+                claim: claim.clone(),
+            })?;
+            let x = line.candidate_mut(&id).expect("a chain's candidate");
+            let r = &mut x.runs[i];
+            r.state = RunState::Starting;
+            r.host = Some(claim.clone());
+            r.place = Some(place);
+            line.log(
+                now,
+                Event::Claimed {
+                    combination: c.revision.clone(),
+                    system: run.system.clone(),
+                    host: claim,
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// 77: whether `host` has shown no sign of life for the bound, by this
-    /// host's own observation of its beats.
-    fn lapsed(&self, host: &str, now: &str) -> Result<bool> {
+    /// host's own observation of its beats; a pool's job, by its pool
+    /// (88).
+    fn lapsed(
+        &self,
+        host: &str,
+        now: &str,
+        pools: &[crate::policy::Pool],
+        remote: Option<&str>,
+    ) -> Result<bool> {
+        if let Some(rest) = host.strip_prefix("pool/") {
+            let name = rest.split('/').next().unwrap_or_default();
+            return match pools.iter().find(|p| p.name == name) {
+                Some(p) => Ok(!self.seams.tests.job_alive(&p.kind, host, remote)?),
+                // A pool the policy no longer names runs nothing for it.
+                None => Ok(true),
+            };
+        }
         let marker = self
             .seams
             .state

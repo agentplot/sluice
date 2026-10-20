@@ -415,6 +415,24 @@ pub struct RunRequest {
     pub system: Option<String>,
 }
 
+/// 88, 107: a run started on a pool: one job, on the runner its system
+/// names, whose start is its claim. The pool's kind and settings are the
+/// policy's `[pools.<name>]` table, which the core does not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    pub pool: String,
+    pub kind: (String, Setting),
+    pub runner: String,
+    /// The git remote the branch lives on, which the pool's jobs fetch from.
+    pub remote: Option<String>,
+    pub branch: String,
+    pub candidate: String,
+    pub combination: Rev,
+    pub system: Option<String>,
+    /// The claim the job runs under: the host its results are reported as.
+    pub claim: String,
+}
+
 /// The operating system and processor architecture an executor runs on,
 /// as the toolchain names them (85): `linux`, `macos`; `x86_64`,
 /// `aarch64`.
@@ -534,6 +552,30 @@ pub trait Tests {
     /// 87: the system this instance's executor runs on, so a run is taken
     /// only where its system is.
     fn platform(&self) -> Result<Platform>;
+
+    /// 88, 107: start one job on a pool for a run no standing host can
+    /// take; its start is its claim (ADR 0034).
+    fn launch(&self, launch: &Launch) -> Result<()> {
+        anyhow::bail!("no pool is bound for {}", launch.pool)
+    }
+
+    /// 77, 88: whether the job under `claim` that pool `kind` was given
+    /// still runs or waits to; one its pool finished, cancelled or lost
+    /// without a report is a lapsed claim.
+    fn job_alive(
+        &self,
+        _kind: &(String, Setting),
+        _claim: &str,
+        _remote: Option<&str>,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// 111: ask a pool to advance `branch`, when work is written that no
+    /// live instance will take. A wake that is lost loses nothing (59).
+    fn wake(&self, _kind: &(String, Setting), _branch: &str, _remote: Option<&str>) -> Result<()> {
+        Ok(())
+    }
 
     /// Session-runs-1 clause 89: how many session runs are running on this
     /// host, each counting against the bound. A session run is the

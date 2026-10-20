@@ -245,6 +245,28 @@ impl Sluice<'_> {
                 withdrew,
             })
         })?;
+        // 111: work on a branch whose records are on its remote may be
+        // taken by no instance now running: the first pool is asked to
+        // advance the branch. A wake that is lost delays it and loses
+        // nothing (59).
+        if let Some(policy) = self.policy_at(&tip)? {
+            let rules = policy.rules_for(&req.branch)?.cloned();
+            if let (Some(rules), Some(pool)) = (rules, policy.pools.first()) {
+                if rules.signed {
+                    if let Err(e) =
+                        self.seams
+                            .tests
+                            .wake(&pool.kind, &req.branch, rules.remote.as_deref())
+                    {
+                        tracing::warn!(
+                            sluice.branch = %req.branch,
+                            "waking the pool {} failed: {e:#}",
+                            pool.name
+                        );
+                    }
+                }
+            }
+        }
         Ok(Ok(accepted))
     }
 

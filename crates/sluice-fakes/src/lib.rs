@@ -120,6 +120,12 @@ struct Inner {
     beats: BTreeMap<String, (u64, Vec<u8>)>,
     /// Each host's view of every other host's beats (77).
     seen_beats: BTreeMap<(String, String), (String, String)>,
+    /// Every run started on a pool, in order (88).
+    launches: Vec<sluice_seams::Launch>,
+    /// The pool jobs that ended, by claim (77, 88).
+    jobs_ended: BTreeSet<String>,
+    /// Every branch a pool was woken for, in order (111).
+    wakes: Vec<String>,
     /// The signer the host's results are recorded as signed by (78).
     signer: Option<String>,
     /// Session runs on the host, by worktree, and whether each still runs.
@@ -522,6 +528,21 @@ impl World {
     /// What is still left behind on `branch`.
     pub fn left_behind(&self, branch: &str) -> usize {
         self.0.borrow().left.get(branch).map_or(0, Vec::len)
+    }
+
+    /// Every run started on a pool.
+    pub fn launches(&self) -> Vec<sluice_seams::Launch> {
+        self.0.borrow().launches.clone()
+    }
+
+    /// The pool's job under `claim` has ended: lost, cancelled, or done.
+    pub fn end_job(&self, claim: &str) {
+        self.0.borrow_mut().jobs_ended.insert(claim.into());
+    }
+
+    /// Every branch a pool was woken for.
+    pub fn wakes(&self) -> Vec<String> {
+        self.0.borrow().wakes.clone()
     }
 
     /// From now, `task`'s reported key is one the candidate's tree does
@@ -1113,6 +1134,30 @@ impl Tests for FakeTests {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
+    }
+
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()> {
+        self.0 .0.borrow_mut().launches.push(launch.clone());
+        Ok(())
+    }
+
+    fn job_alive(
+        &self,
+        _kind: &(String, sluice_seams::Setting),
+        claim: &str,
+        _remote: Option<&str>,
+    ) -> Result<bool> {
+        Ok(!self.0 .0.borrow().jobs_ended.contains(claim))
+    }
+
+    fn wake(
+        &self,
+        _kind: &(String, sluice_seams::Setting),
+        branch: &str,
+        _remote: Option<&str>,
+    ) -> Result<()> {
+        self.0 .0.borrow_mut().wakes.push(branch.into());
+        Ok(())
     }
 
     fn platform(&self) -> Result<sluice_seams::Platform> {
