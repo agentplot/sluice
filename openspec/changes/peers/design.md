@@ -2,9 +2,10 @@
 
 ## Context
 
-The statement's clauses 72 to 82, 85 to 88 and 107 to 113, its
+The statement's clauses 72 to 82, 85 to 88 and 107 to 112, its
 amended 27, 28, 29 and 69, its rewritten Part C and its scenarios
-S17 to S20 and S40 to S42 are what this change builds. They are cited
+S17 to S20, S41 and S42 are what this change builds; the
+`actions-pool` change builds the pool's jobs, 113 and S40. They are cited
 by number. See proposal.md for why.
 
 What exists today, and what this design builds on:
@@ -40,9 +41,9 @@ What exists today, and what this design builds on:
 - Every decision a peer makes is recomputable from the refs on the
   remote and the policy on the branch's revision (core.11, core.14).
 - A pass any trusted signer recorded is reusable by every combination
-  and branch that shares its key and system, the pull request's head
-  included (69, 113).
-- The guides that make the GitHub Actions path usable land with it.
+  and branch that shares its key and system (69).
+- The guides that make standing executors and systems usable land
+  with it.
 
 **Non-Goals:**
 
@@ -162,25 +163,9 @@ claim and the time.
   verified against the policy's allowed-signers lines. No `ssh-keygen`
   process; one key file named by the host's `[signing] key`, refused
   unless mode `0600` (as `[forge] key`).
-- **GitHub signers** sign keylessly: the signing job calls
-  `actions/attest` with the statement's subjects and predicate, which
-  signs through the sigstore instance GitHub uses for the repository:
-  the public-good instance for a public repository, GitHub's own for a
-  private one, so a private repository's names never reach a public log.
-  The bundle is stored as the run's file. sluice verifies both kinds of
-  bundle, in the GitHub profile:
-  - a public-good bundle, which carries one transparency-log entry, with
-    the `sigstore` crate against the public-good trusted root;
-  - a bundle of GitHub's own instance, which carries no log entry and an
-    RFC 3161 timestamp in its place, by sluice's own checks: the
-    certificate chains to GitHub's Fulcio root, the timestamp is signed
-    by GitHub's timestamp authority and falls within the certificate's
-    validity, and the certificate's key signed the envelope's
-    pre-authentication encoding. `sigstore` 0.14 refuses a bundle with
-    no log entry, so it cannot take this one.
-  Both trusted roots are fetched by TUF and cached on the host. Either
-  way, the certificate's workflow identity (`<repo>/<workflow>@<ref>`)
-  and issuer are checked against `[signers.<name>] github`.
+- **GitHub signers** sign keylessly through `actions/attest`. Their
+  verification is the `actions-pool` change's; until it lands, a
+  `github` signer's records count for nothing.
 - *Alternatives:* sluice signing keylessly itself with sigstore-rs. It
   speaks only the public-good instance and would publish a private
   repository's workflow names. Public repositories alone, or forge jobs
@@ -222,47 +207,8 @@ system, claim id) and the Actions jobs API. It is the only profile, so
 core.3 wants an ADR saying why one is enough (ADR 0034). The lead
 launches only after D4 finds no live host with room for the run (107).
 
-`sluice init actions` writes two workflows from templates kept in
-`crates/sluice/src/profiles/github/workflows/`:
-
-- `sluice.yml`, on `workflow_dispatch`, `schedule` (every 15 minutes,
-  the backstop of 111) and `workflow_run` of `sluice-pr.yml`. A **round**
-  job takes a branch and runs rounds until the branch is idle or until
-  50 minutes, short of the job's limit (D3 lease). A **run** job has
-  `permissions: contents: read` and no environment: it fetches the
-  combination's ref, runs the checks under the task runner, and uploads
-  the run's report as an artifact. A **sign** job, `needs: run`, runs no
-  code of the combination: it computes the keys (D9), signs, and pushes
-  `runs/forge`. Only the round and sign jobs use the `sluice`
-  environment, which holds the app's key and admits only the signer's
-  `ref`.
-- `sluice-pr.yml`, on `pull_request`: a run job per system for the
-  head, with no secrets and no `id-token`. Its report is signed by
-  `sluice.yml`'s `workflow_run` sign job, whose identity is the
-  workflow on `main`, so a pull request that edits either file signs as
-  nothing the policy names (113).
-
-The jobs call `sluice job`, which the workflows are written around:
-
-- `sluice job round --branch <b>` leads the branch under one name for
-  every round job of the pool, `pool/<pool>/round`, so a scheduled job
-  goes on from the last one with no lease to wait out; the workflow's
-  `concurrency` keeps one per branch at a time. It runs rounds until the
-  branch has nothing to do, or 50 minutes have gone.
-- `sluice job run --claim <c> --branch <b>` makes the claimed run's
-  checkout from the combination's ref, runs its checks, and writes the
-  run's report and moon's manifests for its keys to a directory the job
-  uploads. It records nothing and holds no key.
-- `sluice job sign --claim <c> --branch <b> --from <dir>` keeps only the
-  keys the combination's tree bears out (D9) and writes the run's
-  statement; `actions/attest` signs it; `sluice job record` adds the
-  bundle to `refs/sluice/runs/<signer>` and reports the run's outcome
-  under its claim, as a standing host reports its own.
-
-The checks never share a job with the identity token or the key
-(actions-pool spec). Splitting run from sign costs one job start per
-run. *Alternative:* one job per run with `id-token: write`. Any check
-could then ask for the token and sign a pass for any key.
+The workflows that run rounds, runs and signing as jobs, `sluice job`
+and `sluice init actions` are the `actions-pool` change's.
 
 ### D8. A landing re-reads its verdict from signed results
 
@@ -330,8 +276,6 @@ passes, unsigned, do not move: each check runs once more under a signer.
   signer, the branch's lead and how long since its last write, and each
   host's room by its sign of life. A host with no `[signing]` on a peer
   branch is told so on every run.
-- The pull request shows `sluice / <check> (<system>)` per required
-  check and system, beside `sluice`.
 - `trust = ["cache"]` is read without `cache`, with a warning: refusing
   it would refuse the policy on `bolt/*`'s current revision (core.15),
   as in D1.
@@ -357,22 +301,10 @@ remote trusts its host's unsigned runs).
   write per round step as today; hosts poll at `alive`, not faster; a
   round coalesces its writes; the conformance suite counts pushes per
   scenario.
-- [Contention on `runs/forge`] Twenty parallel sign jobs racing one
-  ref retry several times. → The re-push is cheap and bounded; if it is
-  not enough, signers' refs gain a per-host suffix under the same name,
-  a change to D2 alone.
-- [Trusted roots] Verifying a keyless signature needs sigstore's
-  trusted root, fetched by TUF at least once. → Cached on the host; a
-  host that cannot fetch it reads forge results as unverified and says
-  why, never as passes.
 - [The state is writable by every submitter] A session can rewrite or
   delete `state/<branch>`. → D8: no landing without signed passes; heads
   stay under `heads/` to resubmit; `sluice status` names the host that
   last wrote the state.
-- [A round job's lifetime] An Actions job may be stopped at its time
-  limit mid-round. → It is a lead that went quiet (72, 73): the next job
-  or host takes over after the lease, and a landing it started settles
-  from the remote (remote-branch).
 - [Upgrading] An older sluice on one host and a newer one on another
   share a peer branch. → The state's documents carry a schema version;
   an older binary that reads a newer one refuses to write and says to
@@ -383,9 +315,8 @@ remote trusts its host's unsigned runs).
 1. Ship the binary. Nothing changes for a policy without `[signers]`
    (D1); `cache` in `trust` reads as a warning.
 2. Per repository: give each standing host a `[signing]` key and add its
-   public half to the policy; run `sluice init actions` for the forge
-   pool; land one change that adds `[signers]`, `[systems]`, `[pools]`
-   and rewrites `trust` to signer names. The next round moves the
+   public half to the policy; land one change that adds `[signers]`
+   and `[systems]` and rewrites `trust` to signer names. The next round moves the
    branch's state to the remote (D10).
 3. Rollback: land a policy without `[signers]`. Branches go back to the
    host's own files; the remote state stays, unread, until the operator
@@ -393,8 +324,8 @@ remote trusts its host's unsigned runs).
 
 ## Open Questions
 
-- The default `lease` and `alive` (5m, 2m) and the schedule's 15 minutes
-  are first guesses, to be tuned once the pool runs on sluice itself.
+- The default `lease` and `alive` (5m, 2m) are first guesses, to be
+  tuned once peers run on sluice itself.
 - Whether `sluice overview` should list hosts of other repositories that
   share a box. The `hosts/` refs are per repository, so the view needs
   one read per repository.

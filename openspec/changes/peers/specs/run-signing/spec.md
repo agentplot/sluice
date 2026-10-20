@@ -69,8 +69,10 @@ never infer confinement (79, 29).
 Every result recorded on a branch whose state is on the remote SHALL be
 an in-toto statement in a DSSE envelope: one subject per check, its key and
 system, its contents the outcome, the claims, the combination, the
-claim it ran under and the time. A `github` signer SHALL sign keylessly
-with the job's workload identity; an `ssh` signer with its SSH key.
+claim it ran under and the time. An `ssh` signer SHALL sign with its
+SSH key. A record whose signature sluice cannot verify, a `github`
+signer's included until sluice verifies keyless signatures, SHALL count
+for nothing.
 
 #### Scenario: A box's result
 - **WHEN** the `box` host records a pass of `cli:build` on `linux-x64`
@@ -108,7 +110,7 @@ this rule (108).
 - **THEN** the replay counts for nothing and the check runs (S42)
 
 #### Scenario: A replay with one
-- **WHEN** the `forge` signer recorded a pass for the key on `linux-x64`, and `main` trusts `forge` and needs `linux-x64`
+- **WHEN** the `box` signer recorded a pass for the key on `linux-x64`, and `main` trusts `box` and needs `linux-x64`
 - **THEN** a replay of that key on `linux-x64` counts
 
 #### Scenario: An old policy

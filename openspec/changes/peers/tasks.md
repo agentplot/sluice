@@ -1,8 +1,8 @@
 # Tasks
 
-This change builds clauses 72 to 82, 85 to 88 and 107 to 113, the
-amended 27, 28, 29 and 69, Part C and scenarios S17 to S20 and S40 to
-S42 of the statement in agentplot/blueprints,
+This change builds clauses 72 to 82, 85 to 88 and 107 to 112, the
+amended 27, 28, 29 and 69, Part C but its launched executor's jobs and
+C.8, and scenarios S17 to S20, S41 and S42 of the statement in agentplot/blueprints,
 `design/sluice/requirements.md`.
 
 Read first: this change's proposal, specs and design; those clauses
@@ -41,7 +41,6 @@ makes runs with no credential helper and no prompt.
 
 - [x] 5.1 Add the in-toto statement and DSSE envelope types and the pre-authentication encoding in `crates/sluice/src/signing/` (design D5); verify unit tests against the DSSE specification's published test vector.
 - [x] 5.2 Sign and verify with SSH keys (the `ssh-key` crate, `SSHSIG`, namespace `sluice-run`) against allowed-signers lines and files read from the branch's revision; verify unit tests with keys generated in the test, never committed: a good signature, a key not listed, a tampered statement, a wrong namespace.
-- [ ] 5.3 Verify a sigstore bundle from `actions/attest` in the GitHub profile, as design D5 says: a public-good bundle with the `sigstore` crate, a bundle of GitHub's own instance by sluice's checks of the certificate chain, the RFC 3161 timestamp and the envelope's signature; both trusted roots fetched by TUF and cached on the host; checking the certificate's workflow, ref, repository and issuer against `[signers.<name>] github`; verify unit tests over recorded bundles in `crates/sluice/tests/profiles/forge/`, under `*.json` fixtures excluded from formatting with their reason in `treefmt.nix`; a wrong ref, a wrong workflow, a pull request's ref; and a host with no cached root reading the result as unverified.
 - [x] 5.4 Check a reported key against the combination's tree as design D9 says, `moon::check_key`, and give the check seam `proven`: the tasks of a finished run whose keys the tree bears out (a command runner's always); verify unit tests over manifests built as moon builds them (a key of another combination, an altered manifest, a key named for another task, a dependency the tree does not bear out, a dependency marked `ignored`), and `proven_drops_a_key_the_tree_does_not_bear_out` against real moon.
 
 ## 6. The remote refs records profile
@@ -62,7 +61,7 @@ makes runs with no credential helper and no prompt.
 - [x] 8.1 Publish a combination open to claims to `refs/sluice/combinations/<branch>/<id>` before it is opened, fetch them on every host that may claim or lead, and remove one once it has a result or is dropped (82); name the host that claims each run in the branch's state, earliest first and only with room; let a host that does not lead claim, run and report its own runs, signing what `proven` keeps, and release its own checkout; rewrite `refs/sluice/hosts/<host>` with each round of a host that does not lead; lapse a claim by the reader's own observation of the host's beat; refuse a report under a lapsed claim; release a host's leftover checkouts before it claims (`made` on the checkout seam); name a host by `[peers] name`, its host name by default; verify conformance tests over the fakes for every run-claims scenario and S20 (`sluice-conformance/tests/peers.rs`), and `a_run_is_claimed_and_run_by_the_other_host` in `tests/peers.rs` (check-tools).
 - [x] 8.2 Make `sluice run` with `[signing]` a standing executor: it serves every branch with records, a remote's included, and on a branch another host keeps it claims, runs and signs runs as 8.1 does; it refuses to start when `[runs] systems` names a system whose `os` and `arch` the host is not, and claims only runs of those systems; verify `a_host_claims_only_runs_of_its_systems` and `a_host_naming_a_system_it_is_not_is_refused` over the fakes, `a_host_the_gate_does_not_trust_claims_nothing`, and `a_run_is_claimed_and_run_by_the_other_host` in `tests/peers.rs` with `sluice run` as the other host.
 - [x] 8.3 Show the hosts serving a remote in `sluice overview`, by their last sign of life: signer, system, runs held, room and a lapse, in its text and its JSON `hosts`; add `OverviewHost` and a hosts line to the board; verify `the_overview_shows_hosts_their_room_and_a_lapse` over the fakes and the board's `hosts` test, with `moon run plugin-board:test plugin-board:typecheck plugin-board:validate`.
-- [x] 8.4 Write `site/src/content/docs/guides/executors-and-systems.md`: one host as today, a warm executor on a box, signers and what each may claim, a session host's signer for bolts, choosing systems per check, the overview of hosts. Remove `site/src/content/docs/many-hosts/` and its sidebar entry in `site/astro.config.*`, and repoint every link to it. Verify `site:prose` reports no error; the Pages build checks the links once 10.7's guide is written.
+- [x] 8.4 Write `site/src/content/docs/guides/executors-and-systems.md`: one host as today, a warm executor on a box, signers and what each may claim, a session host's signer for bolts, choosing systems per check, the overview of hosts. Remove `site/src/content/docs/many-hosts/` and its sidebar entry in `site/astro.config.*`, and repoint every link to it. Verify `site:prose` reports no error; and the site build passes its link check.
 
 ## 9. Landing from signed results
 
@@ -70,28 +69,18 @@ makes runs with no credential helper and no prompt.
 - [x] 9.2 On a branch whose state is on the remote, prove a replay only through a pass a signer the gate trusts signed for its key and system, and drop a reopened run's claim so it runs again; verify `verdict.rs` unit tests and `s42_a_replay_no_trusted_signer_proved_runs_again` over the fakes.
 - [x] 9.3 Update the using-sluice skill (`plugins/sluice/skills/using-sluice/SKILL.md`): submitting to a peer branch and closing the laptop, reading a result's system and signer, a host with no signing key; verify `moon run plugin-sluice:validate`.
 
-## 10. The GitHub Actions pool
+## 10. Pools
 
 - [x] 10.1 Add the check seam's launched side (`launch`, `job_alive`, `wake`) to `crates/sluice-seams` and the fakes; the lead starts on a pool, the policy's in order, each open run no live instance able to take it has room for by its last sign of life (107), its claim the job's; a pool's claim lapses when its pool says its job no longer runs (88); a submission to a branch whose records are on its remote wakes the first pool (111); verify `s41_a_box_with_room_comes_before_the_pool` and `s19_a_pools_jobs_land_the_work_with_no_box` over the fakes.
 - [x] 10.2 Implement the pool in the GitHub profile, `github/actions.rs`, handed to the check profile by the binding: a run is a `workflow_dispatch` of the pool's workflow on its signer's branch with the run's runner and claim; a job is alive while a queued or running run of the workflow is titled `sluice <claim>`; a wake dispatches a round; verify `the_pools_calls` in `tests/profiles/forge.rs` against the fake API.
-- [ ] 10.3 Write the templates of `sluice.yml` (round, run and sign jobs, `schedule`, `workflow_run`) and `sluice-pr.yml` in `crates/sluice/src/profiles/github/workflows/`, with the `sluice` environment on the round and sign jobs only and no `id-token` on run jobs, the run job uploading its report and moon's manifests and the sign job signing only what `proven` keeps, as designs D7 and D9 say; add that directory to actionlint's includes in `treefmt.nix`; verify `root:format` passes on them.
-- [ ] 10.4 Add `sluice init actions`: write both workflows, add `[signers.forge]` and `[pools.forge]` when absent, leave a differing file unless `--force`, print what to set on GitHub; add `sluice job round` and `sluice job sign` for the workflows to call; verify `cli.rs` cases over a scratch repository for each actions-pool `init` scenario.
-- [ ] 10.5 Extend `sluice forge check` with the workflow, the dispatch permission, the environment's branch rule and the forge signer; verify `tests/profiles/forge.rs` cases for each forge-identity scenario.
-- [ ] 10.6 Try it by hand on a scratch repository on GitHub, as the gate cannot reach GitHub: submit, switch the host off, see a round job land the submission, a run on `macos-15`, a cancelled job run again, and a pull request that edits the workflow sign as nothing; record the run links in the PR description.
-- [ ] 10.7 Write `site/src/content/docs/guides/github-actions.md`: the app and its environment, `sluice init actions`, the signers, submit and close the laptop, reading the checks on a pull request, the cost of the pool and how standing executors come first; update `reference/commands.md` for `sluice init actions`, `sluice job` and `sluice forge check`; update the setting-up-sluice skill's forge and executor choices; update README's Get started and Quick start for the pool; verify `site:prose` reports nothing and `moon run plugin-sluice:validate`. README is outside every gate (core.21 Details): read it through once by hand.
 
-## 11. Pull requests
+## 11. Integration
 
-- [ ] 11.1 Record a pull request's head runs from `sluice-pr.yml`, signed by `sluice.yml`'s sign job, and read them by key in its combination; refuse `pull_requests.checks` naming sluice's own; verify conformance tests for S40 and each pull-request-intake scenario.
-- [ ] 11.2 Post `sluice / <check> (<system>)` per required check per system beside `sluice`, with outcome and signer; verify `tests/profiles/pull_requests.rs` cases for each pull-request-status scenario.
-- [ ] 11.3 Update `site/src/content/docs/guides/pull-requests.md` for head runs and the checks per system; verify `site:prose` reports nothing.
-
-## 12. Integration
-
-- [ ] 12.1 Add S17 to S20 and S40 to S42 to `crates/sluice-conformance/tests/scenarios.rs`; run `:#check-fast`, `:#check-tools`, `:#check-e2e`, `openspec validate peers --strict` and the site build; verify every one passes and a one-host repository with no `[signers]` behaves as before (the existing suites unchanged).
+- [ ] 11.1 Keep S17 to S20, S41 and S42 in `crates/sluice-conformance/tests/peers.rs`, each test named for its scenario; run `:#check-fast`, `:#check-tools`, `:#check-e2e`, `openspec validate peers --strict` and the site build; verify every one passes and a one-host repository with no `[signers]` behaves as before (the existing suites unchanged).
 
 ## Workflow follow-up
 
 - Land with `sluice submit main` from this worktree.
-- Adopting peers on sluice itself is the operator's: a `[signing]` key on each standing host, `sluice init actions`, and one landing that adds `[signers]`, `[systems]` and `[pools]` and rewrites `trust` on `main` and `bolt/*`.
+- Adopting peers on sluice itself is the operator's: a `[signing]` key on each standing host, and one landing that adds `[signers]` and `[systems]` and rewrites `trust` on `main` and `bolt/*`.
+- GitHub Actions as a pool follows in the `actions-pool` change.
 - Archive with `/opsx:archive peers` once landed.

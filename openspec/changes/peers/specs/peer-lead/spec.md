@@ -79,4 +79,4 @@ reads it to advance the branch (59).
 
 #### Scenario: The wake is lost
 - **WHEN** a submission's wake fails to reach any host or pool
-- **THEN** the submission stays queued in `main`'s state, and the next scheduled job or `sluice run` that reads `main` advances it
+- **THEN** the submission stays queued in `main`'s state, and the next `sluice run` or waiting `sluice submit` that reads `main` advances it

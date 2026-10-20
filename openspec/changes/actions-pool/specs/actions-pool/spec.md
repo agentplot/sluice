@@ -9,17 +9,6 @@ no host is, so a submission lands with every host of its submitter off
 
 ## ADDED Requirements
 
-### Requirement: The policy lists pools in order
-The policy SHALL accept `[pools.<name>]` tables, each with a `github`
-workflow path, the `signer` its jobs sign as, and `runners`, the runner
-label for each system it runs. A pool whose `signer` is not a `github`
-signer, or whose runners name a system its signer may not claim, SHALL
-be refused. The order written SHALL be the order pools are tried (107).
-
-#### Scenario: A runner for a system the signer may not claim
-- **WHEN** `[pools.forge] signer = "forge"` has a runner for `macos-arm64` and `[signers.forge] systems` lacks it
-- **THEN** the policy is refused, naming `pools.forge` and `macos-arm64`
-
 ### Requirement: sluice init actions writes the workflows
 `sluice init actions` SHALL write the workflows the policy's GitHub pool
 names into `.github/workflows/`, add the pool and its signer to the

@@ -11,8 +11,10 @@ each of them. The statement in agentplot/blueprints,
 `design/sluice/requirements.md`, now has sluice on many hosts as peers alone, with no
 central server, runs counted only through signers the policy names,
 systems per check, and the operator's own standing executors before
-any pool such as GitHub Actions. This change builds it, with the
-guides that make it usable on day one.
+any pool such as GitHub Actions. This change builds it on the
+operator's own hosts, signing with SSH keys, with the guides that make
+it usable on day one. GitHub Actions as a pool, keyless signing and the
+pull request's checks per system follow in the `actions-pool` change.
 
 ## What Changes
 
@@ -34,8 +36,9 @@ guides that make it usable on day one.
 - **Signers.** The policy names signers and what each may claim:
   executor kind, confinement, systems. A run counts only when a signer
   the gate trusts signed its record, an in-toto statement in a DSSE
-  envelope; a forge job signs keylessly with its workload identity,
-  any other signer with an SSH key the policy lists (78, 79). One host
+  envelope signed with an SSH key the policy lists (78, 79). The
+  policy also accepts a `github` identity, whose records count once
+  `actions-pool` verifies them. One host
   with local files signs nothing. `trust` lists signer names, and
   `confined = true` replaces `trust = ["confined"]`. A replay counts only
   when a trusted signer signed a pass for its key and system;
@@ -48,32 +51,24 @@ guides that make it usable on day one.
 - **Standing executors and pools.** `sluice run` on a host whose own
   settings make it a standing executor watches the records and claims
   runs of its systems. A pool the policy lists, in order, gets a run
-  only when no standing executor able to take it has room (88, 107).
-  The GitHub Actions pool starts one job per run on the runner its
-  system names; a job may also run a round. Work no live instance will
-  take is woken through the pool's dispatch, with a schedule as the
-  backstop (111).
-- **`sluice init actions`** writes the workflow, checks the app's
-  permissions and the signer, and `sluice forge check` warns when the
-  workflow and the policy disagree.
-- **Pull requests.** A run on a pull request's head, by a trusted
-  signer, is recorded under its keys and systems, and a candidate that
-  shares a key reads it without running again (113). The `sluice`
-  check run stays, and sluice posts one more per required check per
-  system, with its outcome and signer. `pull_requests.checks` names
-  other systems' checks only.
+  only when no standing executor able to take it has room (88, 107):
+  the check seam gains a launched side, and the GitHub profile
+  dispatches the pool's workflow and reads whether its job still runs.
+  A submission to a branch whose records are on its remote wakes the
+  first pool (111).
 - **Guides, in this change.** A guide to executors and systems (one
-  host, a warm executor on a box, a pool, signers, choosing systems per
-  check); a guide to the GitHub Actions path (`sluice init actions`,
-  the app, the signers, submit and close the laptop, reading the pull
-  request's checks); the parallel and batch guide's section on how
-  systems multiply runs; the configuration reference, the setting-up
-  and using skills, and the README.
+  host, a warm executor on a box, signers and what each may claim,
+  choosing systems per check, the overview of hosts); the parallel and
+  batch guide's section on how systems multiply runs; the configuration
+  and state references; the setting-up and using skills; and the
+  README.
 - ADRs: signers replace the cache's write credential as trust (amends
   0004); one deployment, peers (amends 0008); a branch with no remote
   trusts its own host's unsigned runs (amends 0015).
 
-Out of scope, each its own later change: signing the verdict a landing
+Out of scope, each its own later change: GitHub Actions as a pool, with
+keyless signing, `sluice init actions` and the pull request's checks
+(`actions-pool`); signing the verdict a landing
 carries for releasers and deployers (waits on this change's signers);
 a pool on a forge other than GitHub; reusing a key proven in another
 repository; `sluice exec --remote` (session-runs-1, 96), which waits on
@@ -89,7 +84,8 @@ this change's remote submit.
   deployment's lease, and rounds run by any instance.
 - `run-claims`: claims on runs, earliest first, up to a host's bound;
   lapsing with the holder's sign of life; releasing a returning host's
-  places before it claims.
+  places before it claims; the policy's pools, in order, after the
+  standing hosts.
 - `run-signing`: signers in the policy, signed run records and their
   claims, verifying them from the records alone, and replays counted
   through signed passes.
@@ -97,21 +93,11 @@ this change's remote submit.
   and reading a candidate's verdict over every check on every system.
 - `standing-executor`: a host's own settings making `sluice run` an
   executor of named systems that watches the records and claims runs.
-- `actions-pool`: GitHub Actions as a pool: the workflow `sluice init
-  actions` writes, one job per run on its system's runner, rounds run
-  in a job, the wake and the schedule.
 
 ### Modified Capabilities
 - `remote-branch`: sluice pushes its records, submitted heads and open
   combinations to the remote under `refs/sluice/`, beside landing
   commits.
-- `pull-request-intake`: runs on a request's head count toward its
-  candidate; `checks` names other systems' checks.
-- `pull-request-status`: one check run per required check per system,
-  beside the `sluice` check run.
-- `forge-identity`: `sluice forge check` covers the pool's workflow,
-  the app's permission to dispatch it and to write `refs/sluice/`, and
-  the forge signer.
 
 ## Impact
 
@@ -120,12 +106,11 @@ this change's remote submit.
   signers, systems, pools, `confined`; `trust = ["cache"]` and kinds on
   remote branches refused with a message naming the change.
 - `crates/sluice`: the moon profile records each run's system; a
-  signing module (DSSE, SSH signatures, sigstore keyless) behind the
-  executor; the GitHub profile gains the Actions pool, dispatch, check
-  runs per check and system, and `sluice init actions`; `sluice run`
+  signing module (DSSE, SSH signatures) behind the executor; the
+  GitHub profile gains the pool's dispatch and job status; `sluice run`
   gains standing-executor mode.
-- Dependencies: a DSSE and in-toto implementation and sigstore's
-  verification, both in Rust, chosen in the design.
+- Dependencies: `ssh-key` for SSH signatures; DSSE and in-toto are
+  written in `crates/sluice`.
 - Policies: switchboard-kit's and sluice's own `.config/sluice.toml`
   move from executor kinds to signers when they gain a remote.
 - Site, README and both plugin skills, as listed under guides.
