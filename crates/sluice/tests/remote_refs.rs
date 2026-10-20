@@ -173,7 +173,7 @@ fn lines(ls: &[ResultLine]) -> Vec<u8> {
 
 /// 78, 109: a host signs its runs and adds them to its signer's ref;
 /// another host reads them verified, by signer, and a record no listed key
-/// signed counts as nothing. A replay stays on the host that saw it.
+/// signed counts as nothing.
 #[test]
 fn signed_runs_are_read_verified_on_another_host() {
     let (a, _bare, b) = two_hosts("rr-signed");
@@ -195,7 +195,15 @@ fn signed_runs_are_read_verified_on_another_host() {
         BTreeMap::from([("box".into(), allowed("exec@build-1", &box_key))]),
         None,
     );
-    let read: Vec<ResultLine> = parse_lines(&hb.results().unwrap()).unwrap();
+    let all: Vec<ResultLine> = parse_lines(&hb.results().unwrap()).unwrap();
+    // The replay is signed with its run, as a replay (108; core.9).
+    assert!(all.iter().any(|l| l.kind == ResultKind::Replayed
+        && l.task == "c:test"
+        && l.signer.as_deref() == Some("box")));
+    let read: Vec<ResultLine> = all
+        .into_iter()
+        .filter(|l| l.kind == ResultKind::Ran)
+        .collect();
     assert_eq!(read.len(), 2);
     assert!(read.iter().all(|l| l.signer.as_deref() == Some("box")
         && l.host.as_deref() == Some("exec@build-1")
@@ -212,9 +220,6 @@ fn signed_runs_are_read_verified_on_another_host() {
     assert!(parse_lines::<ResultLine>(&hc.results().unwrap())
         .unwrap()
         .is_empty());
-    // The replay is the recording host's alone (core.9).
-    let mine: Vec<ResultLine> = parse_lines(&ha.results().unwrap()).unwrap();
-    assert!(mine.iter().any(|l| l.kind == ResultKind::Replayed));
 }
 
 /// 109: two hosts of one signer each add their runs, and neither loses

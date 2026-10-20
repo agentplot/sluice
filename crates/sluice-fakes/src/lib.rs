@@ -1707,11 +1707,9 @@ impl State for FakeState {
             return Ok(());
         };
         // As the remote refs profile reads a run back: signed by the host's
-        // signer, a replay kept unsigned (core.9).
+        // signer, a replay as a replay (core.9).
         for mut l in sluice_core::records::parse_lines::<sluice_core::records::ResultLine>(lines)? {
-            if l.kind == sluice_core::records::ResultKind::Ran {
-                l.signer = Some(signer.clone());
-            }
+            l.signer = Some(signer.clone());
             inner.results.extend(sluice_core::records::to_line(&l));
         }
         Ok(())

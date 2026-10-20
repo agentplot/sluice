@@ -1291,6 +1291,39 @@ impl Sluice<'_> {
                 return Ok(false);
             }
             let deepest = &cands[n - 1];
+            // Design D8: on a branch whose records any host may write, a
+            // landing reads its verdict again from the signed results.
+            if rules.signed {
+                let results = self.results()?;
+                let judged: BTreeSet<&String> = cands[..n]
+                    .iter()
+                    .map(|c| {
+                        if c.state == CandidateState::Passed {
+                            &c.id
+                        } else {
+                            &deepest.id
+                        }
+                    })
+                    .collect();
+                let mut unsigned = Vec::new();
+                for id in judged {
+                    let c = line.candidate(id).expect("a chain's candidate");
+                    if !signed_pass(c, &results, rules) {
+                        unsigned.push((c.id.clone(), c.revision.clone()));
+                    }
+                }
+                if !unsigned.is_empty() {
+                    for (id, combination) in unsigned {
+                        let c = line.candidate_mut(&id).expect("a chain's candidate");
+                        c.state = CandidateState::Formed;
+                        c.runs.clear();
+                        c.opened = None;
+                        c.failed.clear();
+                        line.log(now, Event::Unsigned { combination });
+                    }
+                    return Ok(false);
+                }
+            }
             let subject = self
                 .policy_at(&base)?
                 .map(|p| p.landing_subject)
@@ -1947,6 +1980,46 @@ impl Sluice<'_> {
             .find(|l| matches!(&l.event, Event::Testing { combination, .. } if combination == revision))
             .and_then(|l| seconds_between(&l.at, now)))
     }
+}
+
+/// Design D8: whether the signed results bear out that `c` passed: every
+/// run of it has a result a signer the gate trusts signed for this very
+/// combination, each read as passing, a replay only through a trusted pass
+/// signed for its key on its system (108).
+fn signed_pass(c: &Candidate, results: &[ResultLine], rules: &Rules) -> bool {
+    use crate::records::ResultKind;
+    let trusted = |r: &ResultLine| {
+        r.signer.as_deref().is_some_and(|s| {
+            let confined = r.executor.as_ref().is_some_and(|e| e.confined);
+            rules.trusts_signed(s, confined, r.system.as_deref())
+        })
+    };
+    let proven = |task: &str, hash: &str, system: Option<&str>| {
+        results.iter().any(|p| {
+            p.kind == ResultKind::Ran
+                && p.outcome == sluice_seams::Outcome::Pass
+                && p.task == task
+                && p.hash == hash
+                && p.system.as_deref() == system
+                && trusted(p)
+        })
+    };
+    c.runs.iter().all(|run| {
+        let mine: Vec<&ResultLine> = results
+            .iter()
+            .filter(|r| r.combination == c.revision && trusted(r))
+            .filter(|r| run.system.is_none() || r.system == run.system)
+            .collect();
+        !mine.is_empty()
+            && mine.iter().all(|r| match (r.kind, r.outcome) {
+                (ResultKind::Replayed, _) => proven(&r.task, &r.hash, r.system.as_deref()),
+                (ResultKind::Ran, sluice_seams::Outcome::Pass) => true,
+                (ResultKind::Ran, sluice_seams::Outcome::Fail) => {
+                    rules.flaky == crate::policy::Flaky::Pass
+                        && proven(&r.task, &r.hash, r.system.as_deref())
+                }
+            })
+    })
 }
 
 /// Whether a branch has anything a lead would do: a submission in the

@@ -382,3 +382,43 @@ fn the_overview_shows_hosts_their_room_and_a_lapse() {
     assert!(hosts[0].lapsed);
     assert_eq!(hosts[0].room, 0);
 }
+
+/// Design D8, rule core.22: a passing verdict written into the state with
+/// no signed results behind it lands nothing; the combination is tested
+/// again.
+#[test]
+fn a_verdict_the_state_alone_holds_lands_nothing() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let lead = on(&h, "a");
+    lead.step(BRANCH).unwrap();
+    // A host that can write the state forges a pass.
+    let state = lead.seams().state;
+    let snap = state.read(BRANCH).unwrap();
+    let mut line = sluice_core::line::Line::load(BRANCH, snap).unwrap();
+    for c in &mut line.doc.candidates {
+        c.state = sluice_core::records::CandidateState::Passed;
+        for r in &mut c.runs {
+            r.state = sluice_core::records::RunState::Passed;
+            r.place = None;
+            r.run = None;
+        }
+    }
+    let at = line.version;
+    {
+        let _g = state.lock(BRANCH).unwrap().unwrap();
+        assert!(matches!(
+            state.write(BRANCH, at, line.changes()).unwrap(),
+            sluice_seams::Written::Written(_)
+        ));
+    }
+    on(&h, "a").step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Unsigned { .. })));
+    assert_ne!(h.sub(one).state, State::Landed);
+    assert!(h.w().moves().is_empty());
+}

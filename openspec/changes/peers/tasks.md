@@ -66,7 +66,7 @@ makes runs with no credential helper and no prompt.
 
 ## 9. Landing from signed results
 
-- [ ] 9.1 Read a combination's checks again from the trusted signers' runs before a landing intent, and land only on a pass, as design D8 says; verify a conformance test where the state holds a passing verdict with no signed results behind it and nothing lands, and S18.
+- [x] 9.1 Before a landing on a branch whose records are on its remote, read the combination's checks again from the signed results, as design D8 says: every run has results a trusted signer signed for this combination, each passing, a replay only through a trusted pass signed for its key; a verdict the state alone holds lands nothing, is logged `unsigned`, and is tested again; sign a replay with its run, as a replay; verify `a_verdict_the_state_alone_holds_lands_nothing` over the fakes and `signed_runs_are_read_verified_on_another_host` in `tests/remote_refs.rs`, through `moon run ':#check-fast' ':#check-tools'`.
 - [ ] 9.2 On a branch whose state is on the remote, prove a replay only through a pass a signer the gate trusts signed for its key and system; verify `verdict.rs` unit tests and a conformance test for S42 over signed results.
 - [ ] 9.3 Update the using-sluice skill (`plugins/sluice/skills/using-sluice/SKILL.md`): submitting to a peer branch and closing the laptop, reading a result's system and signer, a host with no signing key; verify `moon run plugin-sluice:validate`.
 

@@ -53,6 +53,11 @@ pub struct RunResult {
     pub check: String,
     pub key: String,
     pub outcome: Outcome,
+    /// Answered from the task runner's cache, not run: no observation of
+    /// the signer's, which counts only through a pass signed for its key
+    /// (108; rule core.9).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replayed: bool,
 }
 
 /// 79: what the signer claims of the run; each counts only when the
@@ -123,11 +128,13 @@ mod tests {
                     check: "cli:build".into(),
                     key: "6de6b709".into(),
                     outcome: Outcome::Pass,
+                    replayed: false,
                 },
                 RunResult {
                     check: "cli:test".into(),
                     key: "4863a9af".into(),
                     outcome: Outcome::Fail,
+                    replayed: false,
                 },
             ],
             claims: Claims {

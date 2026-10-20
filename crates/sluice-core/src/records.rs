@@ -627,6 +627,11 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
+    /// Design D8: a candidate the records said passed, with no signed
+    /// results to bear it out; it is tested again and lands nothing.
+    Unsigned {
+        combination: Rev,
+    },
     /// 75: an instance claimed one of a candidate's runs.
     Claimed {
         combination: Rev,

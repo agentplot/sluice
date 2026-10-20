@@ -527,7 +527,11 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
         .map(|r| ResultLine {
             schema: RESULT_SCHEMA.into(),
             at: run.at.clone(),
-            kind: ResultKind::Ran,
+            kind: if r.replayed {
+                ResultKind::Replayed
+            } else {
+                ResultKind::Ran
+            },
             task: r.check.clone(),
             hash: r.key.clone(),
             outcome: r.outcome,
@@ -576,6 +580,7 @@ fn statements(lines: &[ResultLine]) -> Vec<Statement> {
                         check: l.task.clone(),
                         key: l.hash.clone(),
                         outcome: l.outcome,
+                        replayed: l.kind == ResultKind::Replayed,
                     })
                     .collect(),
                 claims: Claims {
@@ -978,15 +983,19 @@ impl State for RemoteRefs {
     /// recorded, and the round says so (78).
     fn record_results(&self, lines: &[u8]) -> Result<()> {
         let lines: Vec<ResultLine> = parse_lines(lines)?;
-        let (ran, replayed): (Vec<_>, Vec<_>) =
-            lines.into_iter().partition(|l| l.kind == ResultKind::Ran);
-        if !replayed.is_empty() {
-            let mut bytes = Vec::new();
-            for l in &replayed {
-                bytes.extend(to_line(l));
-            }
-            self.own.record_results(&bytes)?;
-        }
+        // A replay is signed with the run it came in, as a replay: the
+        // signer saw it answered from the cache, and it counts only
+        // through a pass signed for its key (108; rule core.9).
+        let executor = lines.iter().find_map(|l| l.executor.clone());
+        let ran: Vec<ResultLine> = lines
+            .into_iter()
+            .map(|mut l| {
+                if l.executor.is_none() {
+                    l.executor = executor.clone();
+                }
+                l
+            })
+            .collect();
         if ran.is_empty() {
             return Ok(());
         }
