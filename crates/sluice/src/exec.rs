@@ -370,6 +370,14 @@ impl Exec<'_> {
         if report.timed_out {
             return say(out, json, "timed out");
         }
+        // Could-not-run-1 114: no outcome, so nothing of it is recorded.
+        for n in &report.not_run {
+            say(
+                out,
+                json,
+                &format!("could not run: {}: {}", n.task, n.reason),
+            )?;
+        }
         if command {
             return Ok(());
         }
@@ -393,6 +401,13 @@ impl Exec<'_> {
             let n = report.tasks.len();
             let tasks = if n == 1 { "task" } else { "tasks" };
             say(out, json, &format!("passed: {n} {tasks}"))?;
+        }
+        if !report.not_run.is_empty() {
+            say(
+                out,
+                json,
+                "nothing was recorded for a test that could not run: once the host can run it, run again",
+            )?;
         }
         Ok(())
     }
@@ -437,6 +452,7 @@ impl Exec<'_> {
                 "branch": self.branch,
                 "tasks": tasks,
                 "missing": missing,
+                "not_run": report.map(|r| r.not_run.as_slice()).unwrap_or_default(),
                 "timed_out": timed_out.unwrap_or(false),
                 "ports": ports,
                 "exit": code,
@@ -569,6 +585,7 @@ fn unkept(kept: Result<()>) {
 fn passed(report: &RunReport) -> bool {
     !report.timed_out
         && report.missing.is_empty()
+        && report.not_run.is_empty()
         && report.tasks.iter().all(|t| t.outcome == Outcome::Pass)
 }
 
