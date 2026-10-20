@@ -6,6 +6,18 @@
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 
+# The segment's command as a TOML string. herdr runs it through
+# `/bin/sh -lc`, which fills in each host's $HOME, so a state directory
+# below the home directory is named from $HOME: one line then serves every
+# host whose herdr keeps its state at the same place below it.
+home=${HOME:-}
+home=${home%/}
+if [ -n "$home" ] && [ "${base#"$home"/}" != "$base" ]; then
+  segment="'sh \"\$HOME/${base#"$home"/}/segment/bin/segment.sh\"'"
+else
+  segment="\"sh '$base/segment/bin/segment.sh'\""
+fi
+
 cat <<EOF
 sluice for herdr: add these to herdr's config.toml yourself (or to
 whatever generates it), then run \`herdr server reload-config\`.
@@ -46,7 +58,7 @@ rows = [
 # for the tab_bar_right list in your [ui] table.
 [ui]
 tab_bar_right = [
-  { type = "command", command = "sh '$base/segment/bin/segment.sh'", interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = $segment, interval_seconds = 5, timeout_seconds = 2 },
 ]
 
 Toasts need herdr's own to be on:

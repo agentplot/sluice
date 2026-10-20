@@ -64,8 +64,9 @@ every repository on the host and never pushed:
   sessions/.lock       held while a run is counted against the bound
   sessions/<worktree>.json
                        each run an agent has going in its worktree: the
-                       worktree, its branch, its process, when it started
-                       and where its output is
+                       worktree, its branch, its process, when it started,
+                       where its output is, the command it runs and how far
+                       its tasks have got
 ```
 
 A checkout's name is written as one file name, each `/` of it as `%2F`
@@ -83,7 +84,9 @@ in `sessions/` while it runs, as an agent's run does.
 A block of ports is free again when the checkout named in it is gone.
 A file in `sessions/` counts against the bound for as long as its run
 is going. One whose run has ended holds nothing: the next run that
-starts removes it, and nothing counts it before then.
+starts removes it, and nothing counts it before then. Its `sluice exec`
+rewrites it as each task ends, for `sluice overview` to show; nothing
+that decides a result reads it.
 
 ## A submission
 

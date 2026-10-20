@@ -21,6 +21,8 @@ fn run(worktree: &str, run_dir: &Path) -> SessionRun {
         pid: std::process::id(),
         started: "2026-10-14T09:00:00Z".into(),
         run_dir: run_dir.to_path_buf(),
+        command: None,
+        tasks: Vec::new(),
     }
 }
 
@@ -124,6 +126,34 @@ fn a_session_run_is_written_read_and_ended() {
     assert_eq!(s.running().unwrap(), vec![b]);
     // Ending one never recorded is nothing.
     s.end("/work/none").unwrap();
+}
+
+/// ADR 0035: a running session run's tasks are kept on its record, the
+/// rest of it as it was; keeping them for a run not recorded is nothing.
+#[test]
+fn a_session_runs_tasks_are_kept_on_its_record() {
+    use sluice_seams::{TaskProgress, TaskState};
+    let dir = Scratch::new("sessions");
+    let s = Sessions::new(dir.path().join("sessions"));
+    let (da, _la) = supervised(dir.path(), "run-a");
+    let mut a = run("/work/a", &da);
+    a.command = Some("make e2e".into());
+    {
+        let held = s.lock().unwrap();
+        s.begin(&held, &a).unwrap();
+    }
+    let tasks = vec![TaskProgress {
+        target: "web:test".into(),
+        state: TaskState::Running,
+        started: None,
+        ended: None,
+        exit: None,
+    }];
+    s.keep_tasks("/work/a", &tasks).unwrap();
+    a.tasks = tasks;
+    assert_eq!(s.running().unwrap(), vec![a]);
+    s.keep_tasks("/work/none", &[]).unwrap();
+    assert_eq!(s.running().unwrap().len(), 1);
 }
 
 /// 89, core.14: a session run whose supervisor let go of its run

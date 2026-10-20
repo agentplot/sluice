@@ -308,8 +308,10 @@ submissions: an agent's run in its worktree waits rather than take one,
 and a submission's run starts whenever the bound has room. With the
 default, 0, agents' runs may hold the whole bound. A `reserved` at or
 above `max` leaves agents no run, and sluice refuses to start with the
-setting named. What the host records of its runs and ports is on the
-[state page](/sluice/reference/state/).
+setting named. `sluice overview --json` shows the bound, what holds it
+and the reserve as `room`, and its counts line says when agents' runs
+hold back a submission that would otherwise start. What the host records
+of its runs and ports is on the [state page](/sluice/reference/state/).
 
 ### `[forge]`
 

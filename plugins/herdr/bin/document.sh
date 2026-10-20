@@ -19,7 +19,11 @@ doc=$(jq -c -e 'select(.schema == "sluice/overview@1" and (.host | type) == "str
       | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
       | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []
           | .tasks = [(.tasks // [])[] | objects | select((.target | type) == "string")]]]
-  | .sessions //= [] | .previews //= []
+  | .sessions = [(.sessions // [])[] | objects | select((.worktree | type) == "string")
+      | if (.run | type) == "object" then .run.tasks = [(.run.tasks // [])[] | objects | select((.target | type) == "string")] else del(.run) end
+      | if (.last_result | type) == "object" then .last_result.tasks = [(.last_result.tasks // [])[] | objects | select((.target | type) == "string")] else del(.last_result) end]
+  | if (.room | type) == "object" and (.room.bound | type) == "number" then . else del(.room) end
+  | .previews //= []
   # Nothing a document says is shown with its control characters: a task or
   # path holding an escape would reach the terminal as one.
   | walk(if type == "string" then gsub("[[:cntrl:]]"; "") else . end)' 2>/dev/null) || {

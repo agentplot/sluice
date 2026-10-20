@@ -16,11 +16,11 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
-    LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace, Progress,
-    ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
-    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
-    Written,
+    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, HostRun,
+    LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace,
+    Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session,
+    SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult,
+    Tests, Written,
 };
 
 /// A tree: path to content.
@@ -87,6 +87,8 @@ struct Inner {
     // the repository
     commits: BTreeMap<Rev, Commit>,
     refs: BTreeMap<String, Rev>,
+    /// The repository's HEAD: the first branch made, as `git init` names it.
+    head: Option<String>,
     moves: Vec<MoveRecord>,
     crash: Option<Crash>,
     // the check
@@ -108,8 +110,9 @@ struct Inner {
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
-    /// Session runs on the host, by worktree, and whether each still runs.
-    sessions: BTreeMap<String, bool>,
+    /// Session runs on the host, by worktree: whether each still runs, and
+    /// what its `sluice exec` kept of it (ADR 0035).
+    sessions: BTreeMap<String, (bool, HostRun)>,
     observed: Vec<(String, String, Outcome)>,
     host: String,
     // the place
@@ -285,7 +288,21 @@ impl World {
             .collect();
         let rev = Self::put_commit(&mut inner, tree, vec![], &format!("init {branch}"));
         inner.refs.insert(branch.into(), rev.clone());
+        inner.head.get_or_insert_with(|| branch.into());
         rev
+    }
+
+    /// The repository's default branch, its HEAD, and its revision.
+    pub fn head(&self) -> Option<(String, Option<Rev>)> {
+        let inner = self.0.borrow();
+        let name = inner.head.clone()?;
+        let rev = inner.refs.get(&name).cloned();
+        Some((name, rev))
+    }
+
+    /// Name `branch` the repository's HEAD.
+    pub fn set_head(&self, branch: &str) {
+        self.0.borrow_mut().head = Some(branch.into());
     }
 
     /// A session's work: a commit on `on` changing `changes` (`None`
@@ -867,15 +884,37 @@ impl World {
     /// A session run on `worktree`, running or ended with its record
     /// left.
     pub fn session_run(&self, worktree: &str, running: bool) {
+        let run = HostRun {
+            worktree: worktree.into(),
+            branch: String::new(),
+            started: String::new(),
+            command: None,
+            tasks: Vec::new(),
+        };
         self.0
             .borrow_mut()
             .sessions
-            .insert(worktree.into(), running);
+            .insert(worktree.into(), (running, run));
+    }
+
+    /// A session run started on the host, as `sluice exec` records it.
+    pub fn begin_host_run(&self, run: HostRun) {
+        self.0
+            .borrow_mut()
+            .sessions
+            .insert(run.worktree.clone(), (true, run));
+    }
+
+    /// `worktree`'s session run's tasks, as its `sluice exec` keeps them.
+    pub fn session_tasks(&self, worktree: &str, tasks: &[TaskProgress]) {
+        if let Some((_, r)) = self.0.borrow_mut().sessions.get_mut(worktree) {
+            r.tasks = tasks.to_vec();
+        }
     }
 
     /// `worktree`'s session run has ended; its record is left behind.
     pub fn kill_session(&self, worktree: &str) {
-        if let Some(r) = self.0.borrow_mut().sessions.get_mut(worktree) {
+        if let Some((r, _)) = self.0.borrow_mut().sessions.get_mut(worktree) {
             *r = false;
         }
     }
@@ -1088,7 +1127,26 @@ impl Tests for FakeTests {
     }
 
     fn sessions(&self) -> Result<usize> {
-        Ok(self.0 .0.borrow().sessions.values().filter(|r| **r).count())
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .sessions
+            .values()
+            .filter(|(r, _)| *r)
+            .count())
+    }
+
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .sessions
+            .values()
+            .filter(|(r, _)| *r)
+            .map(|(_, run)| run.clone())
+            .collect())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {
@@ -1668,6 +1726,8 @@ mod tests {
             kind: sluice_seams::RunKind::Checks,
             outcome,
             recorded: true,
+            tasks: Vec::new(),
+            reused: None,
         }
     }
 

@@ -31,6 +31,7 @@ use tracing::{info, info_span};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
+use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, FailedTask, LandingCommitRecord,
@@ -1104,9 +1105,16 @@ impl Sluice<'_> {
     /// session runs. A session run belongs to the host, not to a branch an
     /// instance serves, so every branch's runs count against it.
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
-        let mut under = self.seams.tests.sessions()?;
+        Ok(self.room(reserved)?.for_sessions())
+    }
+
+    /// 71, session-runs-1 clauses 89 and 91: the host's bound and what
+    /// counts against it, as `session_capacity` decides on it, for a
+    /// person to read (ADR 0035).
+    pub fn room(&self, reserved: usize) -> Result<Room> {
+        let mut queue = 0;
         for b in self.seams.state.branches()? {
-            under += self
+            queue += self
                 .read_line(&b)?
                 .doc
                 .candidates
@@ -1114,12 +1122,12 @@ impl Sluice<'_> {
                 .filter(|c| c.state.under_test())
                 .count();
         }
-        Ok(self
-            .seams
-            .tests
-            .bound()?
-            .saturating_sub(reserved)
-            .saturating_sub(under))
+        Ok(Room {
+            bound: self.seams.tests.bound()?,
+            queue,
+            sessions: self.seams.tests.sessions()?,
+            reserve: reserved,
+        })
     }
 
     /// 13, 14, 71: start candidates up to the window, and up to what the

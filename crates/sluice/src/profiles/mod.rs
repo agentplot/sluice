@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::identity::Identity;
 use crate::instance::Instance;
@@ -229,6 +229,22 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
     Ok(found)
 }
 
+/// The repository's default branch: the branch its common directory's
+/// HEAD names, a bare repository's or the main checkout's. `None` when
+/// HEAD names no branch.
+pub(crate) fn default_branch(common: &Path) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(common)
+        .args(["symbolic-ref", "--short", "-q", "HEAD"])
+        .env_remove("GIT_DIR")
+        .stdin(Stdio::null())
+        .output()
+        .context("running git")?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((out.status.success() && !name.is_empty()).then_some(name))
+}
+
 /// The branch checked out in `dir`.
 fn checked_out(dir: &Path) -> Result<String> {
     let out = Command::new("git")
@@ -295,6 +311,10 @@ impl crate::exec::Host for Bound {
         self.tests.host_sessions()?.end(worktree)
     }
 
+    fn session_tasks(&self, worktree: &str, tasks: &[sluice_seams::TaskProgress]) -> Result<()> {
+        self.tests.host_sessions()?.keep_tasks(worktree, tasks)
+    }
+
     fn run_dir(&self, run: &sluice_seams::RunHandle) -> Option<PathBuf> {
         Some(self.tests.runs().dir(&run.0))
     }
@@ -322,5 +342,27 @@ impl crate::exec::Host for Bound {
 
     fn repository(&self) -> Result<String> {
         Ok(self.branch.common_dir()?.to_string_lossy().into_owned())
+    }
+
+    fn default_branch(&self) -> Result<Option<sluice_core::overview::OrderFrom>> {
+        let common = self.branch.common_dir()?;
+        let Some(branch) = default_branch(&common)? else {
+            return Ok(None);
+        };
+        // Its revision here, never fetched: the overview reads it only when
+        // the branch has no records.
+        let out = Command::new("git")
+            .arg("--git-dir")
+            .arg(&common)
+            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+            .arg(format!("refs/heads/{branch}^{{commit}}"))
+            .env_remove("GIT_DIR")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()?;
+        let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let local =
+            (out.status.success() && !full.is_empty()).then(|| sluice_seams::Rev::new(full));
+        Ok(Some(sluice_core::overview::OrderFrom { branch, local }))
     }
 }

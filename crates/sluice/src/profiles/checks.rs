@@ -48,8 +48,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    log_tail, Enforced, HostRun, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -690,7 +690,14 @@ impl Tests for Checks {
                     argv: Some(cx.argv(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
                     holds_processors: false,
-                    stamps: Vec::new(),
+                    // A command in a checkout that lists proto's tools may
+                    // run them, moon among them, and proto stamps each
+                    // toolchain it runs as used, as a moon run's does.
+                    stamps: if request.place.path.join(".prototools").exists() {
+                        vec![".last-used"]
+                    } else {
+                        Vec::new()
+                    },
                 }
             }
             other => bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\""),
@@ -849,6 +856,21 @@ impl Tests for Checks {
 
     fn sessions(&self) -> Result<usize> {
         Ok(self.host_sessions()?.running()?.len())
+    }
+
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        Ok(self
+            .host_sessions()?
+            .running()?
+            .into_iter()
+            .map(|r| HostRun {
+                worktree: r.worktree,
+                branch: r.branch,
+                started: r.started,
+                command: r.command,
+                tasks: r.tasks,
+            })
+            .collect())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {

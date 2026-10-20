@@ -311,6 +311,24 @@ fn the_sandbox_holds_writes_and_the_network() {
     );
     assert!(!outside.join("escaped").exists());
 
+    // A command in a checkout that lists proto's tools may stamp them as
+    // used where they are installed, as a moon run may; nothing else
+    // outside is opened to it.
+    let stamp = format!("touch {}/.last-used", outside.display());
+    assert_eq!(
+        sandboxed("p7", &stamp, None).tasks[0].outcome,
+        Outcome::Fail
+    );
+    std::fs::write(repo.dir().join(".prototools"), "").unwrap();
+    assert_eq!(
+        sandboxed("p8", &stamp, None).tasks[0].outcome,
+        Outcome::Pass
+    );
+    assert_eq!(
+        sandboxed("p9", &escape, None).tasks[0].outcome,
+        Outcome::Fail
+    );
+
     let connect = format!("/usr/bin/nc -z -w 2 127.0.0.1 {port}");
     assert_eq!(
         sandboxed("p3", &connect, Some(Network::Denied)).tasks[0].outcome,

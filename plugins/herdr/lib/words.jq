@@ -82,8 +82,23 @@ def busy: .depth > 0 or (testing | length) > 0;
 # queues and a landing is still seen once its queue is empty.
 def shown($now): busy or ((.recent | last | .at | since($now)) // 900) < 900;
 
-# The band's line for one branch, or null when it has nothing to show.
-def branch_line($now): . as $b | testing as $under
+# --- Agents' checks ---------------------------------------------------
+
+# Whether agents' checks hold back this branch's queue, by the document's
+# $room: the host has no free run, a session run holds one, and the branch
+# has a submission queued while fewer of its combinations are under test
+# than its window. One whose combination passed waits on no run. Nothing
+# without a room: an older sluice gives none.
+def held_back($room): $room != null and ($room.sessions // 0) > 0
+  and (($room.queue // 0) + $room.sessions) >= ($room.bound // 0)
+  and any(.submissions[]; .state == "queued") and (testing | length) < (.window // 0);
+
+def held_words($room): if $room.sessions == 1 then "1 slot to an agent's checks"
+  else "\($room.sessions) slots to agents' checks" end;
+
+# The band's line for one branch, or null when it has nothing to show,
+# saying so at its end when agents' checks hold its queue back.
+def branch_line($now; $room): . as $b | testing as $under
   | if ($b | busy | not) then null
     else ["sluice \($b.branch)", plural($b.depth; "submission")]
       + ($under | map((.started | since($now)) as $took
@@ -92,10 +107,11 @@ def branch_line($now): . as $b | testing as $under
             + (if $took == null then "" else " \($took | duration)" + (if .limit then "/\(.limit | limit)" else "" end) end)))
       + ($b | waiting | if length > 0 then [(map("#\(.)") | join(" ")) + " waiting"] else [] end)
       + ($b.recent | if length > 0 then ["last \(.[-1] | recent_words)"] else [] end)
+      + (if $b | held_back($room) then [held_words($room)] else [] end)
       | join(" · ") end;
 
 # The tab-bar segment: every branch with a queue, on one line.
-def segment($now): [.[] | .branches[] | branch_line($now) | select(. != null)] | join("  |  ");
+def segment($now): [.[] | .room as $room | .branches[] | branch_line($now; $room) | select(. != null)] | join("  |  ");
 
 def paint($on; $code): if $on then "\u001b[\($code)m\(.)\u001b[0m" else . end;
 
@@ -106,10 +122,46 @@ def candidate_rows($c; $color): $c | task_lines
   | map(.state as $s | "        \(.text)" | paint($color; {passed: "32", replayed: "32", failed: "31", running: "33", waiting: "2"}[$s] // "2")
     | {text: ., kind: "task", state: $s});
 
+# The last part of a worktree's path, its name in a row.
+def base_name: sub("/+$"; "") | split("/") | last;
+
+# How a finished check ended, from its last_result: what its passes are
+# worth when its head is submitted, or how many of its tasks failed. A run
+# that listed no tasks, a command's, says only how it ended.
+def result_words: (.tasks // []) as $t
+  | ([$t[] | select(.state == "passed" or .state == "replayed")] | length) as $p
+  | ([$t[] | select(.state == "failed")] | length) as $f
+  | if $f > 0 then "\($f) of \($t | length) failed"
+    elif .outcome != "pass" then {fail: "failed", timed_out: "timed out", lost: "lost", stopped: "stopped", not_run: "not run"}[.outcome] // (.outcome | tostring)
+    elif ($t | length) == 0 then "passed"
+    else "\($p) passed" + (if .reused then " · reused when submitted"
+      elif .kind == "checks" and (.recorded | not) then " · not kept: uncommitted changes"
+      else "" end) end;
+
+# The CHECKING rows: each worktree with a check under way, or one that ended
+# within a quarter of an hour, as load on the host, never as a submission.
+def check_rows($now; $color): [ .sessions[]
+  | select(.run or (((.last_result.at | since($now)) // 900) < 900))
+  | "    \(.worktree | base_name) → \(.branch) " as $who
+  | if .run then .run
+      | ((.started | since($now)) // 0 | duration) as $took
+      | {text: ($who + (progress // .command // "" | if . == "" then "" else . + " " end) + $took), kind: "check"}
+    else .last_result | (if .outcome == "pass" then "32" else "31" end) as $c
+      | {text: ($who + result_words | paint($color; $c)), kind: "check"} end ];
+
+# `host: 4 of 6 runs · 3 queue · 1 agent`: the runs counted against the
+# host's bound, or null while none is.
+def host_line: .room as $r
+  | if $r == null or (($r.queue // 0) + ($r.sessions // 0)) == 0 then null
+    else (["host: \(($r.queue // 0) + ($r.sessions // 0)) of \($r.bound) runs"]
+      + (if ($r.queue // 0) > 0 then ["\($r.queue) queue"] else [] end)
+      + (if ($r.sessions // 0) > 0 then [plural($r.sessions; "agent")] else [] end)) | join(" · ") end;
+
 # One document's rows, as the board's /sluice pane draws them, under the
 # headings TESTING, QUEUED and RECENT: {text, kind, url?}. A row with a url
 # is a link: a submission to its worktree's pane, a failed test to its log.
 def rows($now; $color): . as $d
+  | ($d | check_rows($now; $color)) as $checks | ($d | host_line) as $host
   | def row($kind): {text: ., kind: $kind};
   [("\($d.repository) on \($d.host)" | paint($color; "2") | row("heading"))]
   + (if ([$d.branches[] | select(shown($now))] | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
@@ -147,7 +199,12 @@ def rows($now; $color): . as $d
     ]
   + ([$d.branches[] | select(shown($now) | not)] | length | if . > 0 and . < ($d.branches | length)
       then [("" | row("blank")), ((if . == 1 then "1 other branch" else "\(.) other branches" end) + " with nothing queued" | paint($color; "2") | row("heading"))] else [] end)
-  + [("" | row("blank")), ("\($d.sessions | length) worktrees held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
+  + (if ($checks | length) > 0 or $host then [("" | row("blank"))] else [] end)
+  + (if ($checks | length) > 0 then [("CHECKING" | paint($color; "1") | row("heading"))] + $checks else [] end)
+  + (if $host then [("  " + $host | paint($color; "2") | row("heading"))] else [] end)
+  # A worktree held is one sluice gave ports; one that only has a branch
+  # sluice lands on checked out holds nothing.
+  + [("" | row("blank")), ("\(plural([$d.sessions[] | select(.ports)] | length; "worktree")) held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
 
 # --- Fitting rows to a height -----------------------------------------
 
@@ -192,9 +249,6 @@ def line($links):
   (if .n then "[\(.n)]" + (.text | .[3:]) else .text end) as $t
   | if $links and .url then "\u001b]8;;\(.url)\u001b\\\($t)\u001b]8;;\u001b\\" else $t end;
 
-# One document drawn as lines, as before rows; the tab-bar and tests use it.
-def frame($now; $color): rows($now; $color) | map(.text);
-
 # --- The sidebar -------------------------------------------------------
 
 def minutes: "\(. / 60 | floor)m";
@@ -216,6 +270,7 @@ def pane_token($w; $paths; $failed; $check; $now):
   | [ $docs[].branches[].recent[] | select(.event == "landed")
       | select(any(.ids[]; . as $i | $mine | index($i)))
       | {at, id: ([.ids[] | . as $i | select($mine | index($i))] | max)} ] | sort_by(.at) | last as $landed
+  | [ $docs[].sessions[] | select(.worktree == $w and .run) | .run ] | first as $run
   | if ($live | length) > 0 then $live[0]
     elif $out and (($landed == null) or ($landed.id < $out.id)) then
       # Only a task with a plain name fits the line: a command runner's
@@ -223,6 +278,9 @@ def pane_token($w; $paths; $failed; $check; $now):
       if $out.event == "blamed" then "#\($out.id) BLAMED" + (($failed[$out.id | tostring] // []) | map(select(test("^\\S{1,24}$")))
           | if length > 0 then " · " + join(", ") else "" end)
       else "#\($out.id) CONFLICT" + (($out.paths // []) | if length > 0 then " · " + .[0] else "" end) end
+    elif $run then "checking " + ($run | if (.tasks // []) | length > 0
+        then "\([.tasks[] | select(ended)] | length)/\(.tasks | length)"
+        else (.started | since($now)) // 0 | minutes end)
     elif $check != null and ($check.count // 0) > 0 then
       "\($check.count) ahead" + (if $check.result == "clean" then " · clean"
         elif $check.result == "conflicts" then " · conflicts " + (if ($check.with | length) > 0 then ($check.with | map("#\(.)") | join(" ")) else $check.branch end)

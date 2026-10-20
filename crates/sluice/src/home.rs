@@ -13,6 +13,8 @@ use sluice_core::records::{State, Submission};
 use sluice_core::Sluice;
 use sluice_seams::{SessionPlace, Submitter};
 
+use crate::exec::Host;
+
 /// The commands that follow from where the worktree stands.
 fn next(from: Option<&Submitter>, sub: Option<&Submission>) -> Vec<String> {
     let Some(from) = from else {
@@ -53,9 +55,20 @@ fn submission_json(s: &Submission) -> serde_json::Value {
     })
 }
 
-pub fn run(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let branches = s.overview()?;
+pub fn run(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    worktree: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let branches = s.overview(host.default_branch()?.as_ref())?;
     let counts = counts(&branches);
+    let room = s.room(host.reserved())?;
+    let held: Vec<String> = branches
+        .iter()
+        .map(|b| crate::overview::held_back(Some(&room), b))
+        .collect();
     // Outside a worktree the driver knows, there is no session to show.
     let from = s.seams().driver.session(worktree).ok().map(|x| x.from);
     let path = from.as_ref().and_then(|f| f.path.clone());
@@ -99,6 +112,7 @@ pub fn run(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> R
             from.as_ref(),
             sub.as_ref(),
             &counts,
+            &held,
             place.as_ref(),
             &next,
             out,
@@ -111,6 +125,7 @@ fn write_home(
     from: Option<&Submitter>,
     sub: Option<&Submission>,
     counts: &[BranchCount],
+    held: &[String],
     place: Option<&SessionPlace>,
     next: &[String],
     out: &mut dyn Write,
@@ -149,13 +164,13 @@ fn write_home(
     if counts.is_empty() {
         writeln!(out, "no branch has records here")?;
     }
-    for c in counts {
+    for (c, held) in counts.iter().zip(held) {
         let up_to = c
             .parallel
             .map_or(String::new(), |p| format!(" (up to {p})"));
         writeln!(
             out,
-            "{}: {} in the queue · testing {} at once{up_to}",
+            "{}: {} in the queue · testing {} at once{up_to}{held}",
             c.branch, c.depth, c.testing
         )?;
     }
