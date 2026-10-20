@@ -862,7 +862,10 @@ and its status mapping is `tests/suite:89-94`.
 ### Per-task run records: `<place>/.moon/cache/states/<project>/<task>/`
 
 `lastRun.json`, `stdout.log`, `stderr.log` (crew prints the logs of a
-failed task, `tests/suite:101-105`):
+failed task, `tests/suite:101-105`). Each id is made a file name by
+moon's `encode_component` (`@` and `*` dropped, `/` and `:` made `-`,
+`-` and `.` trimmed from either end), so `cdk/archetypes:test` keeps its
+in `states/cdk-archetypes/test/`:
 
 ```json
 {"exitCode":0,"hash":"687fab2c…4ad9","lastRunTime":1791753037223,"target":"tests:t-after"}

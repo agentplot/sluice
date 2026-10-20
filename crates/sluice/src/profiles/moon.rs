@@ -15,7 +15,7 @@
 //! inside the executor.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -122,12 +122,11 @@ impl Moon {
         })
     }
 
-    /// What a task printed, as moon keeps it in the place:
-    /// `.moon/cache/states/<project>/<task>/{stdout,stderr}.log`. `None`
-    /// when moon kept neither, as for a task it never ran.
+    /// What a task printed, as moon keeps it in the place: `stdout.log`
+    /// and `stderr.log` in its state directory (`state_dir`). `None` when
+    /// moon kept neither, as for a task it never ran.
     pub fn log(&self, place: &Path, target: &str) -> Option<Vec<u8>> {
-        let (project, task) = target.split_once(':')?;
-        let dir = place.join(".moon/cache/states").join(project).join(task);
+        let dir = state_dir(place, target)?;
         let mut text = Vec::new();
         for stream in ["stdout", "stderr"] {
             if let Ok(b) = std::fs::read(dir.join(format!("{stream}.log"))) {
@@ -170,7 +169,7 @@ impl Moon {
     /// ADR 0028: where each of `targets` has got in a run still going,
     /// started at `started_ms` (milliseconds since the epoch), from what
     /// moon writes as it goes. A task's end is its run record,
-    /// `.moon/cache/states/<project>/<task>/lastRun.json` in the place,
+    /// `lastRun.json` in its state directory (`state_dir`) in the place,
     /// written at or after the run's start (C.2); its start, its time and
     /// whether it was answered from the cache are moon's checkpoints in
     /// the run's output. Never a result: the run report is (37, 38).
@@ -419,17 +418,39 @@ struct LastRun {
 }
 
 fn last_run(place: &Path, target: &str) -> Option<LastRun> {
-    let (project, task) = target.split_once(':')?;
-    let path = place
-        .join(".moon/cache/states")
-        .join(project)
-        .join(task)
-        .join("lastRun.json");
+    let path = state_dir(place, target)?.join("lastRun.json");
     let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     Some(LastRun {
         exit: i32::try_from(v.get("exitCode")?.as_i64()?).ok()?,
         at: v.get("lastRunTime")?.as_i64()?,
     })
+}
+
+/// Where moon keeps a task's run record and logs in a place:
+/// `.moon/cache/states/<project>/<task>/`, each id made a file name as
+/// moon 2.6's `encode_component` makes it: `@` and `*` dropped, `/` and
+/// `:` made `-`, and `-` and `.` trimmed from either end. So
+/// `cdk/archetypes:test` keeps its in `cdk-archetypes/test/`. `None` for
+/// what is no target.
+fn state_dir(place: &Path, target: &str) -> Option<PathBuf> {
+    let encode = |id: &str| {
+        let mut out = String::with_capacity(id.len());
+        for c in id.chars() {
+            match c {
+                '@' | '*' => {}
+                '/' | ':' => out.push('-'),
+                c => out.push(c),
+            }
+        }
+        out.trim_matches(['-', '.']).to_string()
+    };
+    let (project, task) = target.split_once(':')?;
+    Some(
+        place
+            .join(".moon/cache/states")
+            .join(encode(project))
+            .join(encode(task)),
+    )
 }
 
 /// What moon's checkpoints said of one task: `▮▮▮▮ a:test (f8bf095b)` as
@@ -593,8 +614,7 @@ mod tests {
             std::env::temp_dir().join(format!("sluice-moon-progress-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&place);
         let record = |target: &str, exit: i32, at: i64| {
-            let (p, t) = target.split_once(':').unwrap();
-            let dir = place.join(".moon/cache/states").join(p).join(t);
+            let dir = state_dir(&place, target).unwrap();
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("lastRun.json"),
@@ -666,6 +686,24 @@ mod tests {
         assert_eq!(duration_ms("f8bf095b"), None);
         assert_eq!(duration_ms("cached"), None);
         std::fs::remove_dir_all(&place).unwrap();
+    }
+
+    /// moon 2.6.1's own names, as `encode_component` makes them.
+    #[test]
+    fn state_dirs_as_moon_names_them() {
+        let dir = |target: &str| {
+            state_dir(Path::new("/p"), target)
+                .map(|d| d.strip_prefix("/p/.moon/cache/states").unwrap().to_owned())
+        };
+        assert_eq!(dir("a:test"), Some("a/test".into()));
+        assert_eq!(
+            dir("cdk/archetypes:test"),
+            Some("cdk-archetypes/test".into())
+        );
+        assert_eq!(dir("@scope/pkg:build"), Some("scope-pkg/build".into()));
+        assert_eq!(dir("a:lint/fix"), Some("a/lint-fix".into()));
+        assert_eq!(dir(".x.:test"), Some("x/test".into()));
+        assert_eq!(dir("notarget"), None);
     }
 
     #[test]
