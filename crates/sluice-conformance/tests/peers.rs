@@ -422,3 +422,68 @@ fn a_verdict_the_state_alone_holds_lands_nothing() {
     assert_ne!(h.sub(one).state, State::Landed);
     assert!(h.w().moves().is_empty());
 }
+
+/// satisfies: 108, 78; S42: a key whose only pass was signed by a signer
+/// the gate does not trust replays for nothing, and the check runs.
+#[test]
+fn s42_a_replay_no_trusted_signer_proved_runs_again() {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\n",
+    ) + "\n[branches.\"bolt/y\"]\nrequired = [\"#gate\"]\nremote = \"origin\"\ntrust = [\"sessions\"]\n\
+         \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+         \n[signers.sessions]\nssh = \"s ssh-ed25519 BBBB\"\n";
+    let h = Harness::new(&p);
+    let other = "bolt/y";
+    h.w().init(
+        other,
+        &[
+            (".config/sluice.toml", &p),
+            ("a/lib", "a1"),
+            ("b/lib", "b1"),
+            ("c/lib", "c1"),
+        ],
+    );
+    // The work passes on bolt/y, signed by the sessions' signer.
+    h.w().signs_as("sessions");
+    let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
+    h.w().session("unit/y", "agent-y", &head);
+    let sessions = Sluice::new(h.sluice().seams(), &h.f.clock).as_peer(Peer {
+        name: "s".into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("sessions".into()),
+        systems: None,
+    });
+    let y = sessions
+        .submit(&sluice_core::SubmitRequest {
+            worktree: "unit/y".into(),
+            branch: other.into(),
+            after: vec![],
+            priority: 0,
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+    for _ in 0..6 {
+        sessions.step(other).unwrap();
+    }
+    assert_eq!(sessions.state(y).unwrap().unwrap().state, State::Landed);
+    let ran = h.w().observed().len();
+
+    // The same work on bolt/x, whose gate trusts only box: the runner
+    // replays every key, no box pass proves them, and they run again.
+    h.w().signs_as("box");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..8 {
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Unproven { .. })));
+    assert!(h.w().requests().iter().any(|r| !r.replay));
+    assert!(h.w().observed().len() > ran);
+}

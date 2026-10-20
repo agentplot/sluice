@@ -711,6 +711,7 @@ impl Sluice<'_> {
                         let xr = &mut x.runs[i];
                         xr.state = RunState::Open;
                         xr.run = None;
+                        xr.host = None;
                         if let Some(p) = xr.place.take() {
                             line.doc.release.push(p);
                         }
@@ -850,6 +851,7 @@ impl Sluice<'_> {
             let xr = &mut x.runs[i];
             xr.state = RunState::Open;
             xr.run = None;
+            xr.host = None;
             xr.no_replay = true;
             if let Some(p) = xr.place.take() {
                 line.doc.release.push(p);
