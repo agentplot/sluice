@@ -94,6 +94,40 @@ impl Branches {
         }
     }
 
+    /// The policy `branch` is routed by, and the revision it was read at:
+    /// the local branch's, or a remote's tracking ref of it, as
+    /// [`Branches::remote`] reads it.
+    pub fn policy_of(&self, branch: &str) -> Result<Option<(Rev, Policy)>> {
+        let mut at = self.local.read(branch)?;
+        if at.is_none() {
+            for r in remotes(&self.dir)? {
+                at = self.local.read_ref(&format!("refs/remotes/{r}/{branch}"))?;
+                if at.is_some() {
+                    break;
+                }
+            }
+        }
+        let Some(rev) = at else {
+            return Ok(None);
+        };
+        let Some(bytes) = self.local.read_file(&rev, POLICY_PATH)? else {
+            return Ok(None);
+        };
+        let policy = Policy::parse(std::str::from_utf8(&bytes)?)
+            .with_context(|| format!("{branch}'s policy at {rev}"))?;
+        Ok(Some((rev, policy)))
+    }
+
+    /// A file of a revision's tree.
+    pub fn file_at(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
+        self.local.read_file(rev, path)
+    }
+
+    /// The pushed refs profile for `remote`, as this binding reaches it.
+    pub fn pushed_refs(&self, remote: &str) -> Result<Rc<PushedRefs>> {
+        self.pushed(remote, remote)
+    }
+
     /// The remote the policy at `rev` names for `branch`.
     fn named(&self, branch: &str, rev: &Rev) -> Result<Option<String>> {
         let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {

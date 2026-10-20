@@ -140,6 +140,9 @@ pub struct Rules {
     pub systems: Vec<String>,
     /// The systems one check must pass on, in place of `systems` (86).
     pub systems_for: BTreeMap<String, Vec<String>>,
+    /// On a branch whose records are on its remote, what each signer it
+    /// trusts may claim (79): whether confined, and its systems.
+    pub claims: BTreeMap<String, (bool, Option<Vec<String>>)>,
     /// The git remote the branch lives on (C.4, C.7): read by fetch and
     /// landed by a leased push. `None` for a local branch.
     pub remote: Option<String>,
@@ -167,6 +170,23 @@ impl Rules {
     /// 28: whether a ran result's executor satisfies the gate.
     pub fn trusts_run(&self, kind: &str, confined: bool) -> bool {
         self.trust.iter().any(|t| t == kind) || (confined && self.trusts("confined"))
+    }
+
+    /// 78, 79: whether a result signed by `signer`, claiming `confined`
+    /// on `system`, counts for a branch whose records are on its remote:
+    /// the branch trusts the signer, and every claim it relies on is one
+    /// the signer may make.
+    pub fn trusts_signed(&self, signer: &str, confined: bool, system: Option<&str>) -> bool {
+        let Some((may_confine, systems)) = self.claims.get(signer) else {
+            return false;
+        };
+        if self.confined && !(confined && *may_confine) {
+            return false;
+        }
+        match (system, systems) {
+            (Some(s), Some(list)) => list.iter().any(|x| x == s),
+            _ => true,
+        }
     }
 
     /// Whether `trust` lists `what`.
@@ -205,6 +225,7 @@ impl Default for Rules {
             confined: false,
             systems: Vec::new(),
             systems_for: BTreeMap::new(),
+            claims: BTreeMap::new(),
             remote: None,
             pull_requests: None,
         }
@@ -499,6 +520,17 @@ impl Policy {
                     checks: p.checks,
                 }),
             };
+            let claims = if signed {
+                trust
+                    .iter()
+                    .map(|n| {
+                        let s = &signers[n];
+                        (n.clone(), (s.confined, s.systems.clone()))
+                    })
+                    .collect()
+            } else {
+                BTreeMap::new()
+            };
             branches.push((
                 pattern,
                 Rules {
@@ -512,6 +544,7 @@ impl Policy {
                     confined,
                     systems: systems_all,
                     systems_for,
+                    claims,
                     remote: r.remote,
                     pull_requests,
                 },

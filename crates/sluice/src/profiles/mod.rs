@@ -14,6 +14,8 @@ pub mod local_refs;
 pub mod moon;
 pub mod places;
 pub mod pushed_refs;
+pub mod records;
+pub mod remote_refs;
 pub mod worktrunk;
 
 use std::io::Write;
@@ -33,7 +35,7 @@ pub struct Bound {
     pub tests: checks::Checks,
     pub branch: branches::Branches,
     pub driver: Drivers,
-    pub state: local_files::LocalFiles,
+    pub state: records::Records,
     /// The pull request driver, which also takes pull requests in.
     pub pulls: Rc<github::pulls::Pulls>,
 }
@@ -87,9 +89,15 @@ impl Bound {
             branch.git_dir(),
             &common,
             forge,
-            identity,
+            identity.clone(),
         ));
-        let state = local_files::LocalFiles::new(&common);
+        // C.6: a branch's records are on its remote when its policy names
+        // signers, and this host's own files otherwise.
+        let state = records::Records::new(
+            &common,
+            branches::Branches::open_as(dir, identity.clone())?,
+            instance.signing.clone(),
+        );
         let jobs = instance.jobs();
         Ok(Bound {
             // A session's place's release command is the check seam's to

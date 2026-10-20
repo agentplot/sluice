@@ -647,7 +647,18 @@ impl Sluice<'_> {
         let _span = span.enter();
         let mut results = self.results()?;
         let mut fresh = Vec::new();
+        // Design D9 (C.6): on a branch whose records are on its remote, a
+        // result is recorded signed, and only for a key the candidate's
+        // tree bears out.
+        let proven: Option<Vec<String>> = if rules.signed {
+            Some(self.seams.tests.proven(run, &report)?)
+        } else {
+            None
+        };
         for t in &report.tasks {
+            if proven.as_ref().is_some_and(|p| !p.contains(&t.task)) {
+                continue;
+            }
             let event = match &t.source {
                 Source::Ran { host } => Event::Ran {
                     combination: c.revision.clone(),
@@ -684,7 +695,12 @@ impl Sluice<'_> {
                 bytes.extend(crate::records::to_line(l));
             }
             self.seams.state.record_results(&bytes)?;
-            results.extend(fresh);
+            if rules.signed {
+                // 78: what counts is what the records hold signed.
+                results = self.results()?;
+            } else {
+                results.extend(fresh);
+            }
         }
         let mut v = verdict::read(&report, &results, rules, system, home);
         // 108: a replay no trusted pass proved counts for nothing, and the

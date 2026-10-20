@@ -48,6 +48,17 @@ pub fn read(
     let flaky = rules.flaky;
     let trusted = |e: &Enforced| rules.trusts_run(&e.kind, e.confined);
     let on_system = |r: &ResultLine| r.system.as_deref().or(unnamed) == system;
+    // 78, 79: on a branch whose records are on its remote, a result counts
+    // through its signer and the claims that signer may make, and this
+    // run's own report counts once it is recorded signed.
+    let counts = |r: &ResultLine| match (rules.signed, &r.executor) {
+        (true, Some(e)) => r
+            .signer
+            .as_deref()
+            .is_some_and(|s| rules.trusts_signed(s, e.confined, r.system.as_deref().or(unnamed))),
+        (false, Some(e)) => trusted(e) && same_limits(e, &report.executor),
+        (_, None) => false,
+    };
     let mut failed = Vec::new();
     let mut unproven = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
@@ -56,16 +67,12 @@ pub fn read(
             .iter()
             .filter(|r| r.task == t.task && r.hash == t.hash && r.kind == ResultKind::Ran)
             .filter(|r| on_system(r))
-            .filter(|r| {
-                r.executor
-                    .as_ref()
-                    .is_some_and(|e| trusted(e) && same_limits(e, &report.executor))
-            })
+            .filter(|r| counts(r))
             .collect();
         let this = match t.source {
             Source::Ran { .. } => {
                 ran += 1;
-                trusted(&report.executor)
+                !rules.signed && trusted(&report.executor)
             }
             Source::Replayed { .. } => {
                 replayed += 1;
@@ -205,6 +212,7 @@ mod tests {
             combination: sluice_seams::Rev::new("c"),
             worktree: None,
             system: None,
+            signer: None,
         }
     }
 

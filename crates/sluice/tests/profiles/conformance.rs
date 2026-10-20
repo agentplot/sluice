@@ -23,8 +23,8 @@ use anyhow::Result;
 use sluice::instance::Instance;
 use sluice::profiles::branches::Branches;
 use sluice::profiles::checks::Checks;
-use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::places::Places;
+use sluice::profiles::records::Records;
 use sluice::profiles::Bound;
 use sluice::profiles::Drivers;
 use sluice_conformance::{policy, shared, Rig, BRANCH};
@@ -253,7 +253,9 @@ struct Real {
     tests: RecordedChecks,
     branch: RecordedRefs,
     driver: Sessions,
-    state: LocalFiles,
+    state: Records,
+    /// The shared remote, for a rig whose records are on it.
+    _origin: Option<Scratch>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -287,7 +289,30 @@ fn real_policy(policy: &str) -> String {
 impl Real {
     /// `bolt/x` holding the three projects under `policy`, its runner moon.
     fn new(name: &str, policy: &str) -> Real {
+        Real::open(name, policy, false)
+    }
+
+    /// As [`Real::new`], `bolt/x` on a bare `origin` and its records there,
+    /// under a policy naming this host's signer `box` and trusting it
+    /// alone; this host signs with its own key (C.6; 78).
+    fn peers(name: &str, policy: &str) -> Real {
+        Real::open(name, policy, true)
+    }
+
+    fn open(name: &str, policy: &str, peers: bool) -> Real {
         let repo = Repo::new(name);
+        let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .unwrap();
+        let policy = if peers {
+            let line = format!("box {}", key.public_key().to_openssh().unwrap());
+            policy.replace(
+                "trust = [\"open\", \"sandbox\", \"container\"]\n",
+                "trust = [\"box\"]\nremote = \"origin\"\n",
+            ) + &format!("\n[signers.box]\nssh = \"{line}\"\nconfined = true\n")
+        } else {
+            policy.to_string()
+        };
+        let policy = policy.as_str();
         let rules = repo.dir().join(".git/rig-rules");
         std::fs::write(&rules, "").unwrap();
         repo.write(".config/sluice.toml", &real_policy(policy));
@@ -314,6 +339,18 @@ impl Real {
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "three projects"]);
         repo.git(&["branch", BRANCH]);
+        let origin = peers.then(|| repo.bare_origin());
+        let signing = peers.then(|| {
+            let path = repo.dir().join(".git/rig-signing");
+            key.write_openssh_file(&path, ssh_key::LineEnding::LF)
+                .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            sluice::instance::Signing {
+                signer: "box".into(),
+                key: path,
+            }
+        });
 
         let bound = Bound::open_with(
             repo.dir(),
@@ -323,7 +360,7 @@ impl Real {
                 reserved: 0,
                 processors: 4,
                 forge: None,
-                signing: None,
+                signing,
                 peers: Default::default(),
                 systems: None,
             },
@@ -362,6 +399,7 @@ impl Real {
             },
             state,
             _blocks: blocks,
+            _origin: origin,
         }
     }
 
@@ -643,4 +681,24 @@ scenarios! {
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: cached();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
+}
+
+/// Each scenario of `shared` with the branch's records on its remote and
+/// every result signed by this host (C.6; 78, 109; ADR 0031).
+macro_rules! peers_scenarios {
+    ($($test:ident => $name:ident: $policy:expr;)*) => {$(
+        #[test]
+        fn $test() {
+            shared::$name(&Real::peers(stringify!($test), &$policy));
+        }
+    )*};
+}
+
+peers_scenarios! {
+    peers_s1 => s1_two_heads_pass_and_land_in_order: bolt();
+    peers_s3 => s3_the_second_fails_and_only_its_session_hears: bolt();
+    peers_s4 => s4_the_first_fails_and_the_second_is_formed_again_without_it: bolt();
+    peers_s9 => s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped: batch();
+    peers_recorded => every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass: bolt();
+    peers_state_read => state_and_status_read_the_records_with_no_step_running: bolt();
 }

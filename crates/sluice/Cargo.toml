@@ -71,6 +71,7 @@ path = "tests/profiles/conformance.rs"
 tools = []
 
 [dev-dependencies]
+ssh-key.workspace = true
 rand_core.workspace = true
 sluice-fakes = { path = "../sluice-fakes" }
 sluice-conformance = { path = "../sluice-conformance" }

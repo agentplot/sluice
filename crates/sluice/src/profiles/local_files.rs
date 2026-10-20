@@ -81,8 +81,14 @@ impl LocalFiles {
     /// The records of the repository whose common git directory is
     /// `common`.
     pub fn new(common: &Path) -> Self {
+        LocalFiles::at(common.join("sluice"))
+    }
+
+    /// Records under `root`, for what a host keeps of a remote's records:
+    /// its locks, its runs' tasks and the logs it kept.
+    pub fn at(root: PathBuf) -> Self {
         LocalFiles {
-            root: common.join("sluice"),
+            root,
             held: RefCell::new(BTreeSet::new()),
         }
     }

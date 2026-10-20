@@ -701,6 +701,11 @@ pub struct ResultLine {
     /// systems is read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// 78: the signer whose signature over it verified, as the records
+    /// seam read it from the remote; `None` for one host's own results,
+    /// which count unsigned on a branch kept in its own files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
 }
 
 impl ResultLine {
@@ -735,6 +740,7 @@ impl ResultLine {
             combination: combination.clone(),
             worktree: worktree.map(str::to_string),
             system: system.map(str::to_string),
+            signer: None,
         }
     }
 

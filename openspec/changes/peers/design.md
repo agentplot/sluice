@@ -167,15 +167,27 @@ claim and the time.
   signs through the sigstore instance GitHub uses for the repository:
   the public-good instance for a public repository, GitHub's own for a
   private one, so a private repository's names never reach a public log.
-  The bundle is stored as the run's file. sluice verifies it with the
-  `sigstore` crate against that instance's trusted root, fetched by TUF
-  and cached on the host, and checks the certificate's workflow identity
-  (`<repo>/<workflow>@<ref>`) and issuer against `[signers.<name>]
-  github`.
+  The bundle is stored as the run's file. sluice verifies both kinds of
+  bundle, in the GitHub profile:
+  - a public-good bundle, which carries one transparency-log entry, with
+    the `sigstore` crate against the public-good trusted root;
+  - a bundle of GitHub's own instance, which carries no log entry and an
+    RFC 3161 timestamp in its place, by sluice's own checks: the
+    certificate chains to GitHub's Fulcio root, the timestamp is signed
+    by GitHub's timestamp authority and falls within the certificate's
+    validity, and the certificate's key signed the envelope's
+    pre-authentication encoding. `sigstore` 0.14 refuses a bundle with
+    no log entry, so it cannot take this one.
+  Both trusted roots are fetched by TUF and cached on the host. Either
+  way, the certificate's workflow identity (`<repo>/<workflow>@<ref>`)
+  and issuer are checked against `[signers.<name>] github`.
 - *Alternatives:* sluice signing keylessly itself with sigstore-rs. It
   speaks only the public-good instance and would publish a private
-  repository's workflow names. GPG signatures: a second key system for
-  operators who already have SSH keys.
+  repository's workflow names. Public repositories alone, or forge jobs
+  signing with an SSH key from the `sluice` environment: each leaves
+  private repositories without keyless signing. `gh attestation verify`:
+  every verifying host would need `gh`. GPG signatures: a second key
+  system for operators who already have SSH keys.
 
 DSSE and in-toto are a few serde types and the pre-authentication
 encoding, written in `crates/sluice`, not a dependency. Verification
