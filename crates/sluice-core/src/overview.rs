@@ -254,7 +254,7 @@ impl Sluice<'_> {
 /// ADR 0035): the bound, the repository's candidates under test, the
 /// host's session runs, and the part of the bound session runs never take.
 /// It decides nothing; `session_capacity` reads the same numbers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Room {
     pub bound: usize,
     pub queue: usize,
@@ -268,6 +268,19 @@ impl Room {
         self.bound
             .saturating_sub(self.reserve)
             .saturating_sub(self.queue + self.sessions)
+    }
+
+    /// ADR 0035: how many runs agents' checks hold while they hold a
+    /// branch's queue back: the host has no free run, a session run holds
+    /// one, and the branch has `queued` submissions while fewer than its
+    /// `window` of candidates are under test. `None` when they hold
+    /// nothing back.
+    pub fn held_by_checks(&self, queued: usize, testing: usize, window: usize) -> Option<usize> {
+        (self.sessions > 0
+            && self.queue + self.sessions >= self.bound
+            && queued > 0
+            && testing < window)
+            .then_some(self.sessions)
     }
 }
 
@@ -538,6 +551,25 @@ mod tests {
             names(&v),
             ["aside", "bolt/a", "bolt/b", "main", "release", "scratch"]
         );
+    }
+
+    /// ADR 0035: checks hold a branch back only with the host full, a
+    /// check holding a run, and the branch with room in its window for a
+    /// submission queued.
+    #[test]
+    fn checks_hold_a_queue_back_only_when_they_take_its_room() {
+        let room = |bound, queue, sessions| Room {
+            bound,
+            queue,
+            sessions,
+            reserve: 0,
+        };
+        assert_eq!(room(3, 2, 1).held_by_checks(1, 2, 3), Some(1));
+        assert_eq!(room(4, 2, 2).held_by_checks(1, 2, 3), Some(2));
+        assert_eq!(room(4, 2, 1).held_by_checks(1, 2, 3), None, "a free run");
+        assert_eq!(room(3, 3, 0).held_by_checks(1, 3, 4), None, "no check");
+        assert_eq!(room(3, 2, 1).held_by_checks(0, 2, 3), None, "none queued");
+        assert_eq!(room(3, 2, 1).held_by_checks(1, 2, 2), None, "window full");
     }
 
     #[test]

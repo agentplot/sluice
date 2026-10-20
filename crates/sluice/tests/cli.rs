@@ -1401,6 +1401,55 @@ fn exec_never_takes_the_reserve() {
     assert_eq!(code, LANDED);
 }
 
+/// ADR 0035: with the host full and an agent's check holding a run, a
+/// branch with a submission queued and room in its window says so on its
+/// counts line, in the overview, `sluice status` and the home view; once
+/// the check ends, none of them does.
+#[test]
+fn the_counts_say_when_agents_checks_hold_the_queue_back() {
+    let f = setup();
+    f.world.host_limit(2);
+    f.world.session_run("/w/agent", true);
+    work(
+        &f,
+        "unit/touches",
+        "crw-1-unit-1",
+        &[("plugin/lib/plan.py", Some("touched"))],
+    );
+    work(
+        &f,
+        "unit/cards",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("cards 2"))],
+    );
+    f.world.hold_runs(true);
+    for w in ["unit/touches", "unit/cards"] {
+        sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    }
+    sluice(&f, &["run", "--rounds", "2"]);
+    let clause = "testing 1 at once (up to 4) · 1 slot to an agent's checks";
+
+    let (_, text) = sluice(&f, &["overview"]);
+    assert!(text.lines().next().unwrap().ends_with(clause), "{text}");
+    assert!(
+        text.contains("\nhost: 2 of 2 runs · 1 queue · 1 agent\n"),
+        "{text}"
+    );
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(text.lines().next().unwrap().ends_with(clause), "{text}");
+    let (_, text) = sluice(&f, &[]);
+    assert!(
+        text.contains(&format!("{BRANCH}: 2 in the queue · {clause}\n")),
+        "{text}"
+    );
+
+    f.world.kill_session("/w/agent");
+    for args in [&["overview"][..], &["status", BRANCH], &[]] {
+        let (_, text) = sluice(&f, args);
+        assert!(!text.contains("checks"), "{text}");
+    }
+}
+
 /// The overview's document, as a fake host with `reserved` reads it.
 fn overview_doc(f: &Fakes, reserved: usize) -> serde_json::Value {
     let cli = Cli::try_parse_from(["sluice", "overview", "--json"]).unwrap();
@@ -1441,12 +1490,14 @@ fn overview_shows_an_agents_check_and_the_hosts_room() {
         exit: None,
     };
     let seen = RefCell::new(None);
+    let text = RefCell::new(String::new());
     let version = f.world.version(BRANCH);
     let pause = Then(Cell::new(0), |n| {
         match n {
             1 => f.world.says_tasks(&head, &[task(TaskState::Running)]),
             2 => {
                 *seen.borrow_mut() = Some(overview_doc(&f, 1));
+                *text.borrow_mut() = sluice(&f, &["overview"]).1;
                 f.world.complete(&head);
             }
             _ => {}
@@ -1472,6 +1523,12 @@ fn overview_shows_an_agents_check_and_the_hosts_room() {
         version,
         "no branch's version moved"
     );
+    let text = text.into_inner();
+    assert!(
+        text.contains(&format!("\nchecking unit/a → {BRANCH} 0/1 since ")),
+        "{text}"
+    );
+    assert!(!text.contains("testing unit/a"), "{text}");
 
     let after = overview_doc(&f, 0);
     let w = &after["sessions"][0];

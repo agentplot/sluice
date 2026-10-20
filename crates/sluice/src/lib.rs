@@ -789,7 +789,14 @@ pub fn run(
                 Some(sub) => {
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
-                    write_status(&s.status(&branch)?, pusher.as_ref(), &[sub], out)?;
+                    let room = s.room(host.reserved())?;
+                    write_status(
+                        &s.status(&branch)?,
+                        pusher.as_ref(),
+                        &[sub],
+                        Some(&room),
+                        out,
+                    )?;
                     Ok(0)
                 }
             },
@@ -828,7 +835,8 @@ pub fn run(
                     )?;
                 } else {
                     let pusher = pushers.pusher(&target)?;
-                    write_status(&status, pusher.as_ref(), &shown, out)?;
+                    let room = s.room(host.reserved())?;
+                    write_status(&status, pusher.as_ref(), &shown, Some(&room), out)?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
@@ -1635,7 +1643,7 @@ fn submitted(
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
     } else {
-        write_status(&status, None, &[sub], out)?;
+        write_status(&status, None, &[sub], None, out)?;
     }
     Ok(0)
 }
@@ -1708,7 +1716,13 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
-                    write_status(&s.status(branch)?, None, std::slice::from_ref(&sub), out)?;
+                    write_status(
+                        &s.status(branch)?,
+                        None,
+                        std::slice::from_ref(&sub),
+                        None,
+                        out,
+                    )?;
                     return Ok(0);
                 }
                 let reached = if sent_back == Some(sub.id) {
@@ -1827,15 +1841,22 @@ fn write_status(
     status: &Status,
     pusher: Option<&Pusher>,
     subs: &[Submission],
+    room: Option<&sluice_core::overview::Room>,
     out: &mut dyn Write,
 ) -> Result<()> {
     let at = status.at.as_ref().map_or("nothing", |r| r.short());
     let up_to = status
         .parallel
         .map_or(String::new(), |p| format!(" (up to {p})"));
+    let queued = status
+        .submissions
+        .iter()
+        .filter(|s| s.state == sluice_core::records::State::Queued)
+        .count();
+    let held = overview::held_clause(room, queued, status.testing, status.window);
     writeln!(
         out,
-        "{} at {at} · {} in the queue · testing {} at once{up_to}",
+        "{} at {at} · {} in the queue · testing {} at once{up_to}{held}",
         status.branch,
         status.depth(),
         status.testing

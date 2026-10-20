@@ -71,6 +71,13 @@ Run suites through `sluice exec` so the agents on one host take turns
 under its bound rather than all running at once. A quick, narrow call,
 such as a type check or one unit test, can run directly.
 
+While it runs, `sluice overview` shows it as a check on the worktree,
+never as a submission: how many of its tasks have ended under the moon
+runner, or the command it runs, and when it started. Each check takes a
+run of the host's bound, so when the bound is full and a submission
+waits, the branch's counts line says how many runs the checks hold:
+`testing 2 at once (up to 3) · 1 slot to an agent's checks`.
+
 What a run starts and hands to another process, a container above all,
 stays up between runs, so the next run finds it. `sluice release` ends
 it. `wt submit` releases the worktree before worktrunk removes it; on
@@ -105,6 +112,8 @@ release one with: sluice release --worktree <worktree>
 | `kind` | `checks`, or `command` for `sluice exec <branch> -- <command>` |
 | `outcome` | `pass`, `fail`, `timed_out`, `lost` (the run stopped without saying how it ended) or `stopped` (ended by its caller) |
 | `recorded` | its results are kept for their keys, so a submission of `head` reuses them. Never true for a command, or for a run with files changed and not committed. Never true when a commit or an edit was made while it ran: it names the commit it started on. Never true for a run that timed out, was lost or was stopped |
+| `tasks` | for a run of the checks that reported, each task as it ended: `target` and `state`, `passed`, `failed` or `replayed` |
+| `reused` | for a run of the checks that reported: true when `recorded` is, every check passed, and the branch's gate trusts the executor it ran under. A submission of `head` then replays its results rather than running them again |
 
 The next run replaces it, and `sluice release` removes it with the rest.
 A worktree's head is ready to submit when `kind` is `checks`, `outcome`
@@ -156,6 +165,8 @@ bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4
   testing bolt/concurrent-units + #13 + #14 3/5 since 2026-10-16T09:16:44Z
   2026-10-16T09:15:02Z  landed #12 as c41e8f2
   2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
+checking /home/me/wt/unit-a → bolt/concurrent-units 3/8 since 2026-10-16T09:17:02Z
+host: 2 of 4 runs · 1 queue · 1 agent
 2 worktrees held · 0 previews
 ```
 
@@ -165,13 +176,15 @@ line or a script. Fields are only ever added to it.
 | field | |
 |---|---|
 | `schema`, `host`, `repository`, `at` | the schema, the host's name, the repository's git directory, and when it was read |
-| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing) |
+| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing). They come in the order the default branch's policy names them |
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
+| `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
+| `room` | the host's runs: `bound`, `queue` (this repository's combinations under test), `sessions` (every `sluice exec` and preview command running on the host) and `reserve` (the part of the bound `[runs] reserved` keeps from `sluice exec`) |
 
 A combination's `tasks` say how far its tests have got and decide
 nothing: its result is still read from the finished run. Each round
@@ -181,6 +194,17 @@ is no longer under test. The text line's `3/5` counts the tasks that
 have ended. They are kept on the host that runs the combination, so
 another host shows none. The `command` runner has one test, the run
 itself, and gives none.
+
+A check's `run` comes from the host's own state, written by its `sluice
+exec` as each task ends, and goes when the run ends; its `last_result`
+then says what it is worth. Like a combination's tasks, it decides
+nothing.
+
+The branches come in the order of the `[branches]` tables of the
+policy on the default branch, the branch the repository's HEAD names.
+A pattern's branches stand together where the pattern does, in name
+order, and branches no table names come last. Each branch's gate is
+still its own policy's.
 
 `--json --watch` prints the document as one line at once, and again
 each time anything in it but `at` changes, reading about once a second

@@ -7,8 +7,8 @@ use std::io::Write;
 
 use anyhow::Result;
 use chrono::SecondsFormat;
-use sluice_core::overview::{BranchView, OVERVIEW_SCHEMA};
-use sluice_core::records::CandidateState;
+use sluice_core::overview::{BranchView, Room, OVERVIEW_SCHEMA};
+use sluice_core::records::{CandidateState, State};
 use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
@@ -99,15 +99,17 @@ fn write_overview(
     if branches.is_empty() {
         writeln!(out, "no branch has records here")?;
     }
+    let room: Option<Room> = serde_json::from_value(doc["room"].clone()).ok();
     for b in branches {
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
         let up_to = b
             .parallel
             .map_or(String::new(), |p| format!(" (up to {p})"));
+        let held = held_back(room.as_ref(), b);
         writeln!(
             out,
-            "{} at {at} · {} in the queue · testing {testing} at once{up_to}",
+            "{} at {at} · {} in the queue · testing {testing} at once{up_to}{held}",
             b.branch, b.depth
         )?;
         for c in &b.candidates {
@@ -135,6 +137,44 @@ fn write_overview(
         }
     }
     let sessions = doc["sessions"].as_array().map_or(&[][..], Vec::as_slice);
+    // ADR 0035: agents' checks, as load on the host, never as submissions.
+    for w in sessions {
+        let run = &w["run"];
+        if run.is_null() {
+            continue;
+        }
+        let what = match (run["command"].as_str(), run["tasks"].as_array()) {
+            (Some(c), _) => format!(" {c}"),
+            (None, Some(t)) => {
+                let done = t
+                    .iter()
+                    .filter(|t| {
+                        matches!(t["state"].as_str(), Some("passed" | "failed" | "replayed"))
+                    })
+                    .count();
+                format!(" {done}/{}", t.len())
+            }
+            (None, None) => String::new(),
+        };
+        writeln!(
+            out,
+            "checking {} → {}{what} since {}",
+            w["worktree"].as_str().unwrap_or(""),
+            w["branch"].as_str().unwrap_or(""),
+            run["started"].as_str().unwrap_or("")
+        )?;
+    }
+    if let Some(r) = room.filter(|r| r.queue + r.sessions > 0) {
+        let agents = if r.sessions == 1 { "agent" } else { "agents" };
+        writeln!(
+            out,
+            "host: {} of {} runs · {} queue · {} {agents}",
+            r.queue + r.sessions,
+            r.bound,
+            r.queue,
+            r.sessions
+        )?;
+    }
     let held = sessions.iter().filter(|w| w.get("ports").is_some()).count();
     let previews = doc["previews"].as_array().map_or(0, Vec::len);
     if held + previews > 0 {
@@ -150,6 +190,28 @@ fn write_overview(
         }
     }
     Ok(())
+}
+
+/// ADR 0035: the clause a branch's counts line ends with when agents'
+/// checks hold its queue back; empty otherwise.
+pub fn held_back(room: Option<&Room>, b: &BranchView) -> String {
+    let queued = b
+        .submissions
+        .iter()
+        .filter(|s| s.state == State::Queued)
+        .count();
+    let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
+    held_clause(room, queued, testing, b.window)
+}
+
+/// The clause for `queued` submissions, `testing` candidates and a
+/// `window`, as [`Room::held_by_checks`] decides it.
+pub fn held_clause(room: Option<&Room>, queued: usize, testing: usize, window: usize) -> String {
+    match room.and_then(|r| r.held_by_checks(queued, testing, window)) {
+        None => String::new(),
+        Some(1) => " · 1 slot to an agent's checks".into(),
+        Some(n) => format!(" · {n} slots to agents' checks"),
+    }
 }
 
 /// One recent log line, as text.

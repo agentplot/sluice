@@ -64,6 +64,11 @@ pub fn run(
 ) -> Result<i32> {
     let branches = s.overview(host.default_branch()?.as_ref())?;
     let counts = counts(&branches);
+    let room = s.room(host.reserved())?;
+    let held: Vec<String> = branches
+        .iter()
+        .map(|b| crate::overview::held_back(Some(&room), b))
+        .collect();
     // Outside a worktree the driver knows, there is no session to show.
     let from = s.seams().driver.session(worktree).ok().map(|x| x.from);
     let path = from.as_ref().and_then(|f| f.path.clone());
@@ -107,6 +112,7 @@ pub fn run(
             from.as_ref(),
             sub.as_ref(),
             &counts,
+            &held,
             place.as_ref(),
             &next,
             out,
@@ -119,6 +125,7 @@ fn write_home(
     from: Option<&Submitter>,
     sub: Option<&Submission>,
     counts: &[BranchCount],
+    held: &[String],
     place: Option<&SessionPlace>,
     next: &[String],
     out: &mut dyn Write,
@@ -157,13 +164,13 @@ fn write_home(
     if counts.is_empty() {
         writeln!(out, "no branch has records here")?;
     }
-    for c in counts {
+    for (c, held) in counts.iter().zip(held) {
         let up_to = c
             .parallel
             .map_or(String::new(), |p| format!(" (up to {p})"));
         writeln!(
             out,
-            "{}: {} in the queue · testing {} at once{up_to}",
+            "{}: {} in the queue · testing {} at once{up_to}{held}",
             c.branch, c.depth, c.testing
         )?;
     }
