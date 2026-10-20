@@ -55,7 +55,7 @@ makes runs with no credential helper and no prompt.
 
 - [x] 7.1 Name the branch's lead in its state; a step on a branch whose records are on its remote proceeds only for the lead, taking the branch when no one holds it, or when this host has itself seen the version stand for the lease and there is work (`Step::Led` otherwise, `Took` logged); keep the version a host saw and when in its own state directory; give the CLI's `Sluice` the host's name and `[peers] lease`; verify `sluice-conformance/tests/peers.rs` over the fakes for each peer-lead scenario, S17 included.
 - [x] 7.2 Push a submitted head to `refs/sluice/heads/<oid>` before its submission is written, fetch every submitted head before forming, and remove a head once its submission leaves the queue or moves to the finished records (82); a waiting `sluice submit` keeps running rounds as before, and reads `led` while another host keeps the branch; verify `a_submission_lands_by_another_host` in `tests/peers.rs` (check-tools): a session on one host submits with `--no-wait`, the other host lands it signed, the first reads it landed, and its head is gone.
-- [ ] 7.3 Document the lead and the lease under `[peers]` in the configuration reference and in `reference/commands.md`'s `sluice submit` and `sluice run`; verify `site:prose` reports nothing.
+- [x] 7.3 Document the lead and the lease under `[peers]` in the configuration reference and in `reference/commands.md`'s `sluice submit` and `sluice run`; verify `site:prose` reports nothing.
 
 ## 8. Claims, hosts and the standing executor
 
