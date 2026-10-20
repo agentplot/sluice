@@ -185,9 +185,8 @@ top of it:
 
 ## GitHub Actions as sluice's executor
 
-This guide runs sluice's tests on your machine. A separate design runs
-them, and sluice's rounds, as GitHub Actions jobs instead, with the
-queue kept in the repository: see
-[GitHub Actions](/sluice/many-hosts/github-actions/). It uses pull
-requests exactly as this guide does, and changes only where the work
-runs.
+This guide runs sluice's tests on your machine. [GitHub
+Actions](/sluice/guides/github-actions/) runs them, and sluice's rounds,
+as GitHub Actions jobs instead, with the queue kept on GitHub. It uses
+pull requests exactly as this guide does, and changes only where the
+work runs.

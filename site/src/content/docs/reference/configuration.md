@@ -91,7 +91,7 @@ never decides a result.
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
 | | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
-| | `"container"` | The tests run in a container from the image the policy names. Designed for [many hosts](/sluice/many-hosts/peers/); not built. |
+| | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
 | `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. |

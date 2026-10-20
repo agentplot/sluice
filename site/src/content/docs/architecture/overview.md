@@ -45,7 +45,7 @@ Nothing behaves differently because of which one ran it.
 
 | seam | what the core asks of it | profiles |
 |---|---|---|
-| **the checkout** | a clean checkout of exactly one combination, unique and stable for the life of its run, released when the result is read | a detached git worktree ([ADR 0013](/sluice/decisions/0013/)); a container, designed for [many hosts](/sluice/many-hosts/peers/) |
+| **the checkout** | a clean checkout of exactly one combination, unique and stable for the life of its run, released when the result is read | a detached git worktree ([ADR 0013](/sluice/decisions/0013/)); a container, planned for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)) |
 | **the check** | which tasks a combination affects; a run of them in a checkout, each task with its key, outcome and whether it was replayed; and the run held to the limits the policy states, by an executor that reports what it enforced ([ADR 0012](/sluice/decisions/0012/)) | moon, or one command; executors `open`, `sandbox` (Seatbelt on macOS; bubblewrap and Landlock on Linux, planned) and `container` |
 | **the branch** | its current revision; a merge tree of the branch and a head; a move from an expected revision to a new one, refused if the branch is elsewhere; protection against every other writer | local refs, with a `reference-transaction` hook; pushed refs on a forge, with the forge's protection and sluice's identity the only bypass |
 | **the driver** | submit, withdraw, amend, state, and telling the agent the outcome | `sluice submit` from any shell; `wt submit` through worktrunk; a tool's own merge stage calling the same |

@@ -3,8 +3,9 @@ title: Roadmap
 description: What is built, and what is designed and not yet built.
 ---
 
-Each host runs its own queue today. sluice lands its own `main` this
-way, gated on every test tier in a sandbox.
+Each host runs its own queue until a policy names signers; then hosts
+share one queue on the git remote. sluice lands its own `main` on one
+host, gated on every test tier in a sandbox.
 
 ## Built
 
@@ -18,20 +19,12 @@ way, gated on every test tier in a sandbox.
 | An agent's own test runs, under the host's bound | ✓ | ✓ |
 | Previews of what a branch landed, held until released | ✓ | ✓ |
 | Telemetry over OTLP, opt-in | ✓ | ✓ |
+| Many hosts sharing one queue on the git remote, with signed results: [executors and systems](/sluice/guides/executors-and-systems/) | ✓ | ✓ |
+| A check required on several systems | ✓ | ✓ |
+| GitHub Actions as a pool of machines: [GitHub Actions](/sluice/guides/github-actions/) | ✓ | ✓ |
 
 ## Designed, not built
 
 - **Sandboxed checks on Linux**, with bubblewrap and Landlock, and memory
   and core limits by cgroup
   ([ADR 0012](/sluice/decisions/0012/)).
-- **Several hosts sharing one branch's queue**, as peers coordinating
-  through the git remote or through a central server:
-  [many hosts](/sluice/many-hosts/overview/).
-- **Checks on several architectures**, where a branch names the systems
-  each test must pass on: [architectures](/sluice/many-hosts/architectures/).
-- **A GitHub Actions hybrid** for repositories that stay on GitHub, as an
-  adoption path: [GitHub Actions](/sluice/many-hosts/github-actions/).
-
-The many-hosts design is under review in
-[agentplot/blueprints](https://github.com/agentplot/blueprints) and
-nothing of it binds the code until it is ratified there.
