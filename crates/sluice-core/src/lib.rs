@@ -91,6 +91,9 @@ pub struct Peer {
     /// 78: the signer this host's results are signed by, where it has a
     /// signing key; it claims runs only of branches that trust it.
     pub signer: Option<String>,
+    /// 87: the systems this host runs, by the policy's names; `None` for
+    /// the one system it is.
+    pub systems: Option<Vec<String>>,
 }
 
 impl Default for Peer {
@@ -100,6 +103,7 @@ impl Default for Peer {
             lease: std::time::Duration::from_secs(300),
             alive: std::time::Duration::from_secs(120),
             signer: None,
+            systems: None,
         }
     }
 }

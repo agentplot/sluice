@@ -1545,7 +1545,7 @@ impl Sluice<'_> {
     /// on its remote, signed by a signer the gate trusts for what the gate
     /// needs.
     fn claimable(&self, run: &SystemRun, home: Option<&str>, rules: &Rules) -> bool {
-        if run.state != RunState::Open || run.host.is_some() || !ours(run, home) {
+        if run.state != RunState::Open || run.host.is_some() || !self.runs_system(run, home) {
             return false;
         }
         if !rules.signed {
@@ -1563,6 +1563,48 @@ impl Sluice<'_> {
                 (Some(s), Some(list)) => list.iter().any(|x| x == s),
                 _ => true,
             }
+    }
+
+    /// 87: whether this host runs `run`'s system: any run for no system,
+    /// and one for the system it is, or one of those its `[runs] systems`
+    /// names.
+    fn runs_system(&self, run: &SystemRun, home: Option<&str>) -> bool {
+        match (&self.peer.systems, run.system.as_deref()) {
+            (_, None) => true,
+            (Some(list), Some(s)) => list.iter().any(|x| x == s),
+            (None, Some(_)) => ours(run, home),
+        }
+    }
+
+    /// 87: refuse a host whose `[runs] systems` names a system it is not,
+    /// by the policy of any branch with records.
+    pub fn check_host_systems(&self) -> Result<()> {
+        let Some(names) = &self.peer.systems else {
+            return Ok(());
+        };
+        let p = self.seams.tests.platform()?;
+        for b in self.seams.state.branches()? {
+            let Some(tip) = self.seams.branch.read(&b)? else {
+                continue;
+            };
+            let Some(policy) = self.policy_at(&tip)? else {
+                continue;
+            };
+            for n in names {
+                if let Some(s) = policy.systems.get(n) {
+                    if s.os != p.os || s.arch != p.arch {
+                        bail!(
+                            "[runs] systems names {n}, which is {} on {}; this host is {} on {}",
+                            s.os,
+                            s.arch,
+                            p.os,
+                            p.arch
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 77: whether `host` has shown no sign of life for the bound, by this

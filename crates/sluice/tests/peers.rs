@@ -159,7 +159,8 @@ fn refs_under(origin: &Scratch, prefix: &str) -> String {
 }
 
 /// 75, 82, 78: the host that keeps the branch signs as no one its gate
-/// trusts, so the other host claims the run, fetches the combination,
+/// trusts, so the other host's `sluice run`, a standing executor, claims
+/// the run, fetches the combination,
 /// runs it and signs it, and the first lands it.
 #[test]
 fn a_run_is_claimed_and_run_by_the_other_host() {
@@ -172,8 +173,11 @@ fn a_run_is_claimed_and_run_by_the_other_host() {
     );
     let deadline = Instant::now() + Duration::from_secs(90);
     while host_a.state_of(id) != "landed" {
-        for h in [&host_b, &host_a] {
-            let out = h.sluice(&["step", "main"]);
+        for (h, args) in [
+            (&host_b, ["run", "--rounds", "1"]),
+            (&host_a, ["step", "main", "--json"]),
+        ] {
+            let out = h.sluice(&args);
             if !out.status.success() {
                 let refs = h
                     .repo

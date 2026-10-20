@@ -284,6 +284,7 @@ impl crate::exec::Host for Bound {
             lease: i.peers.lease,
             alive: i.peers.alive,
             signer: i.signing.as_ref().map(|s| s.signer.clone()),
+            systems: i.systems.clone(),
         }
     }
 

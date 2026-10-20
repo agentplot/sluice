@@ -694,6 +694,7 @@ pub fn run(
         }
         Command::Run { rounds } => {
             let s = s.serving(Serves::Every);
+            s.check_host_systems()?;
             let mut n = 0;
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch

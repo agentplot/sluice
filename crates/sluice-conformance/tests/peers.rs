@@ -28,6 +28,7 @@ fn on<'a>(h: &'a Harness, name: &str) -> Sluice<'a> {
         lease: Duration::from_secs(300),
         alive: Duration::from_secs(120),
         signer: Some("box".into()),
+        systems: None,
     })
 }
 
@@ -144,6 +145,7 @@ fn as_signer<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a>
         lease: Duration::from_secs(300),
         alive: Duration::from_secs(120),
         signer: signer.map(str::to_string),
+        systems: None,
     })
 }
 
@@ -285,4 +287,74 @@ fn a_long_run_keeps_its_claim_while_its_host_shows_it_is_alive() {
     }
     assert!(!h.events().iter().any(|e| matches!(e, Event::Lapsed { .. })));
     assert_eq!(runs(&h)[0].0.as_deref(), Some("b"));
+}
+
+/// The peers policy with two systems, `main`'s required checks needing
+/// both.
+fn two_systems() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\nsystems = [\"linux-x64\", \"macos-arm64\"]\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\n[systems]\n\
+         linux-x64 = { os = \"linux\", arch = \"x86_64\" }\n\
+         macos-arm64 = { os = \"macos\", arch = \"aarch64\" }\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+fn with_systems<'a>(h: &'a Harness, name: &str, systems: &[&str]) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("box".into()),
+        systems: Some(systems.iter().map(|s| s.to_string()).collect()),
+    })
+}
+
+/// satisfies: 87; the standing-executor spec's "A box for one system"
+#[test]
+fn a_host_claims_only_runs_of_its_systems() {
+    let h = two_systems();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    with_systems(&h, "box", &["linux-x64"])
+        .step(BRANCH)
+        .unwrap();
+    let held: Vec<(Option<String>, Option<String>)> = {
+        let s = h.sluice();
+        let line =
+            sluice_core::line::Line::load(BRANCH, s.seams().state.read(BRANCH).unwrap()).unwrap();
+        line.doc.candidates[0]
+            .runs
+            .iter()
+            .map(|r| (r.system.clone(), r.host.clone()))
+            .collect()
+    };
+    assert_eq!(
+        held,
+        [
+            (Some("linux-x64".into()), Some("box".into())),
+            (Some("macos-arm64".into()), None)
+        ]
+    );
+}
+
+/// satisfies: 87; the standing-executor spec's "A system the host is not"
+#[test]
+fn a_host_naming_a_system_it_is_not_is_refused() {
+    let h = two_systems();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    let err = with_systems(&h, "box", &["macos-arm64"])
+        .check_host_systems()
+        .unwrap_err();
+    assert!(err.to_string().contains("macos-arm64"), "{err}");
+    with_systems(&h, "box", &["linux-x64"])
+        .check_host_systems()
+        .unwrap();
 }
