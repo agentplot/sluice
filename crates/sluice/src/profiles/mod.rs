@@ -79,6 +79,7 @@ impl Bound {
             Some(f) => Some(Rc::new(github::App::open(f)?)),
             None => None,
         };
+        let app_for_pool = app.clone();
         let identity = app
             .clone()
             .map(|a| (a as Rc<dyn Identity>, program.clone()));
@@ -109,7 +110,17 @@ impl Bound {
             .with_release(Box::new(move |place, tests, limits, dir| {
                 checks::release_request(place, tests, limits, jobs, dir)
             })),
-            tests: checks::Checks::new(&common, program, instance),
+            tests: {
+                let checks = checks::Checks::new(&common, program, instance);
+                // 88: with sluice's app, GitHub Actions is the pool this
+                // host can start runs on; the binding hands it over (core.2).
+                match &app_for_pool {
+                    Some(app) => {
+                        checks.with_pool(Box::new(github::actions::Actions::new(app.clone(), dir)))
+                    }
+                    None => checks,
+                }
+            },
             branch,
             driver: Drivers {
                 worktrunk: worktrunk::Worktrunk,

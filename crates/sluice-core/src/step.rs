@@ -1744,9 +1744,15 @@ impl Sluice<'_> {
             let place = self.next_place(line);
             let claim = format!("pool/{}/{}", pool.name, line.doc.next_place - 1);
             let c = line.candidate(&id).expect("a chain's candidate").clone();
+            let signer = policy
+                .signers
+                .get(&pool.signer)
+                .map(|s| s.identity.clone())
+                .expect("a pool's signer is one the policy names");
             self.seams.tests.launch(&sluice_seams::Launch {
                 pool: pool.name.clone(),
                 kind: pool.kind.clone(),
+                signer,
                 runner,
                 remote: rules.remote.clone(),
                 branch: line.branch.clone(),

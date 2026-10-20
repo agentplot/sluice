@@ -4,6 +4,7 @@
 //! repository and buys an installation token for it, which only sluice's
 //! own git calls are given (`docs/adr/0019`).
 
+pub mod actions;
 pub mod app;
 pub mod check;
 pub mod fake;

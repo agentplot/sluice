@@ -110,11 +110,25 @@ struct Meta {
     started_ms: Option<i64>,
 }
 
+/// A pool the binding hands this profile, to start runs on (88; ADR 0034).
+pub trait Launcher {
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()>;
+    fn job_alive(
+        &self,
+        kind: &(String, Setting),
+        claim: &str,
+        remote: Option<&str>,
+    ) -> Result<bool>;
+    fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()>;
+}
+
 /// The check seam's profile, for the repository whose common dir is
 /// `common`.
 pub struct Checks {
     runs: Runs,
     instance: Instance,
+    /// The pool this host can start runs on, where the binding gave one.
+    pool: Option<Box<dyn Launcher>>,
     /// The host's session runs, when not the host's own directory.
     sessions: Option<Sessions>,
 }
@@ -126,7 +140,14 @@ impl Checks {
             runs: Runs::new(common, program),
             instance,
             sessions: None,
+            pool: None,
         }
+    }
+
+    /// The same profile, starting runs on `pool` (88).
+    pub fn with_pool(mut self, pool: Box<dyn Launcher>) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// The same profile, keeping the host's session runs under `dir`.
@@ -683,6 +704,38 @@ impl Tests for Checks {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.instance.bound)
+    }
+
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()> {
+        match &self.pool {
+            Some(p) => p.launch(launch),
+            None => anyhow::bail!(
+                "this host has no pool of kind {} for {}: name the app it reaches GitHub as under [forge]",
+                launch.kind.0,
+                launch.pool
+            ),
+        }
+    }
+
+    fn job_alive(
+        &self,
+        kind: &(String, Setting),
+        claim: &str,
+        remote: Option<&str>,
+    ) -> Result<bool> {
+        match &self.pool {
+            Some(p) => p.job_alive(kind, claim, remote),
+            // A host that cannot ask the pool reads its jobs as running:
+            // a claim lapses only by what is known of it (77).
+            None => Ok(true),
+        }
+    }
+
+    fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()> {
+        match &self.pool {
+            Some(p) => p.wake(kind, branch, remote),
+            None => Ok(()),
+        }
     }
 
     fn platform(&self) -> Result<sluice_seams::Platform> {

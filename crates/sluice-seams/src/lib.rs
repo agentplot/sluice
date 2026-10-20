@@ -422,6 +422,9 @@ pub struct RunRequest {
 pub struct Launch {
     pub pool: String,
     pub kind: (String, Setting),
+    /// The identity of the signer its jobs sign as: where a forge's job
+    /// runs from.
+    pub signer: (String, Setting),
     pub runner: String,
     /// The git remote the branch lives on, which the pool's jobs fetch from.
     pub remote: Option<String>,
