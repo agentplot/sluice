@@ -10,8 +10,8 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 2. Seams, core and fakes
 
-- [ ] 2.1 `sluice-seams`: `NotRun`, `RunReport::not_run`, `RunOutcome::NotRun`, and `State::set_asides` and `State::set_aside`. Verify `cargo check --workspace --all-targets --all-features`.
-- [ ] 2.2 `sluice-core`:
+- [x] 2.1 `sluice-seams`: `NotRun`, `RunReport::not_run`, `RunOutcome::NotRun`, and `State::set_asides` and `State::set_aside`. Verify `cargo check --workspace --all-targets --all-features`.
+- [x] 2.2 `sluice-core`:
   - the poll forms a candidate again on not run, up to three runs in a row, and then fails it with each check that could not run and why;
   - `FailedTask::not_run` and `Event::Lost::not_run`;
   - `finish_session` gives `NotRun`;
@@ -20,7 +20,7 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
   - `policy.rs` accepts integers in a list.
 
   Verify the core's unit tests.
-- [ ] 2.3 `sluice-fakes`: `cannot_run(task, reason)`, `not_ready(bool)` and set-asides kept in memory. Conformance tests in `tests/verdicts.rs` and `tests/scenarios.rs`:
+- [x] 2.3 `sluice-fakes`: `cannot_run(task, reason)`, `not_ready(bool)` and set-asides kept in memory. Conformance tests in `tests/verdicts.rs` and `tests/scenarios.rs`:
   - a not-run check is recorded nowhere;
   - the next pass reads passed;
   - three runs in a row blame, with the reason;
@@ -34,9 +34,9 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 3. Profiles and CLI
 
-- [ ] 3.1 `checks.rs`: `ready` before a run (refuses) and after (fails and missing become not run, its answer kept in the run's directory); `not_run` exits; `Ended.error` gives not run. `moon.rs`: a task's `exitCode` from the report. Verify group 1's tests pass with `sluice exec main -- cargo test -p sluice --test checks -- --skip sandbox` and `sluice exec main -- cargo test -p sluice --features tools --test moon`.
-- [ ] 3.2 `local_files.rs`: `set-aside.jsonl` under the records' lock. Verify a unit test.
-- [ ] 3.3 CLI:
+- [x] 3.1 `checks.rs`: `ready` before a run (refuses) and after (fails and missing become not run, its answer kept in the run's directory); `not_run` exits; `Ended.error` gives not run. `moon.rs`: a task's `exitCode` from the report. Verify group 1's tests pass with `sluice exec main -- cargo test -p sluice --test checks -- --skip sandbox` and `sluice exec main -- cargo test -p sluice --features tools --test moon`.
+- [x] 3.2 `local_files.rs`: `set-aside.jsonl` under the records' lock. Verify a unit test.
+- [x] 3.3 CLI:
   - `sluice set-aside`;
   - `sluice exec` prints each check that could not run, and exits 1;
   - `status` and `submit` name a check that could not run, and why.
@@ -45,12 +45,12 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 4. Plugin, policy and inputs
 
-- [ ] 4.1 `plugins/sluice/scripts/guard.sh` refuses `sluice set-aside`. Verify a case in `plugins/sluice/tests/hooks.sh` (`plugin-sluice:hooks`).
-- [ ] 4.2 `.config/sluice.toml` gets `ready = ["docker", "info"]` under `[tests]`. `cli:e2e` and `root:screenshots-scene` get explicit inputs. Verify `moon query tasks` shows the inputs, and `sluice exec main` passes.
+- [x] 4.1 `plugins/sluice/scripts/guard.sh` refuses `sluice set-aside`. Verify a case in `plugins/sluice/tests/hooks.sh` (`plugin-sluice:hooks`).
+- [x] 4.2 `.config/sluice.toml` gets `ready = ["docker", "info"]` under `[tests]`. `cli:e2e` and `root:screenshots-scene` get explicit inputs. Verify `moon query tasks` shows the inputs, and `sluice exec main` passes.
 
 ## 5. Decisions, rules and docs
 
-- [ ] 5.1 Add:
+- [x] 5.1 Add:
   - ADR 0031, a run that did not judge its check has no outcome;
   - core.7's Details "Not ruled out";
   - the site's results and policy pages;
