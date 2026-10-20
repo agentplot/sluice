@@ -882,6 +882,83 @@ out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
 pass
 
+# The board with agents' checks: e2e-run running a command, fix-cards its
+# checks with 3 of 8 tasks ended, plugin-board's ended 2 minutes ago with
+# 14 passed and reused, stale's 45 minutes ago, and a worktree that only
+# has main checked out; two of the host's six runs are agents'.
+checks_board=$(printf '%s\n' "$board" | jq -c '.room = {bound: 6, queue: 1, sessions: 2, reserve: 0}
+  | .sessions = [
+      {worktree: "/work/sluice/e2e-run", branch: "main", ports: {}, last_run: "2026-10-16T19:44:40Z", removed: false,
+       run: {started: "2026-10-16T19:44:40Z", command: "./scripts/e2e.sh"}},
+      {worktree: "/work/sluice/fix-cards", branch: "main", ports: {web: "4310"}, last_run: "2026-10-16T19:44:00Z", removed: false,
+       run: {started: "2026-10-16T19:44:00Z",
+             tasks: ([range(3) | {target: "t\(.):test", state: "passed"}] + [range(5) | {target: "w\(.):test", state: "waiting"}])}},
+      {worktree: "/work/sluice/plugin-board", branch: "main", ports: {}, last_run: "2026-10-16T19:40:00Z", removed: false,
+       last_result: {at: "2026-10-16T19:43:10Z", head: "abc1234", kind: "checks", outcome: "pass", recorded: true, reused: true,
+                     tasks: [range(14) | {target: "p\(.):test", state: "passed"}]}},
+      {worktree: "/work/sluice/stale", branch: "main", ports: {},
+       last_result: {at: "2026-10-16T19:00:00Z", head: "abc1234", kind: "checks", outcome: "pass", recorded: true, reused: true}},
+      {worktree: "/work/sluice/held", branch: "main", holds_queued_branch: "main"}]')
+
+fresh "status: agents' checks are load on the host"
+printf '%s\n' "$checks_board" | jq -c --arg repo "$common" '.repository = $repo' | sh "$plugin/bin/document.sh" local "$work"
+frame_of "$work" --once >"$t/frame"
+sed "s|$common|REPO|" "$t/frame" >"$t/got"
+diff -u "$here/docs/checks.frame" "$t/got" >"$t/diff" || fail "the frame differs: $(cat "$t/diff")"
+grep -Eq 'testing.*e2e-run|#.*fix-cards' "$t/frame" && fail "a check is shown as a submission or as testing: $(cat "$t/frame")"
+pass
+
+fresh 'status: a finished check says what it is worth'
+finished() {
+  # $1 the last_result's fields, as jq
+  feed "$(printf '%s\n' "$checks_board" | jq -c --arg repo "$common" ".repository = \$repo | .sessions[2].last_result |= ($1)")"
+  frame_of "$work" --once | grep '^    plugin-board → main '
+}
+out=$(finished '.recorded = false | .reused = false')
+[ "$out" = '    plugin-board → main 14 passed · not kept: uncommitted changes' ] || fail "not kept reads: $out"
+out=$(finished '.reused = false')
+[ "$out" = '    plugin-board → main 14 passed' ] || fail "kept, not reused, reads: $out"
+out=$(finished '.outcome = "fail" | .reused = false | .tasks[0:2] |= map(.state = "failed")')
+[ "$out" = '    plugin-board → main 2 of 14 failed' ] || fail "a failure reads: $out"
+out=$(finished '.kind = "command" | .outcome = "fail" | .recorded = false | del(.reused, .tasks)')
+[ "$out" = '    plugin-board → main failed' ] || fail "a command's failure reads: $out"
+pass
+
+fresh 'status: the band says when checks hold the queue back'
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
+band='sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa'
+segment_with() {
+  # $1 the document's changes, as jq
+  feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $1")"
+  (cd "$work" && sh "$seg")
+}
+out=$(segment_with '.branches[0].window = 2 | .room = {bound: 2, queue: 1, sessions: 1, reserve: 0}')
+[ "$out" = "$band · 1 slot to an agent's checks" ] || fail "held back by one check it printed: $out"
+out=$(segment_with '.branches[0].window = 2 | .room = {bound: 3, queue: 1, sessions: 2, reserve: 0}')
+[ "$out" = "$band · 2 slots to agents' checks" ] || fail "held back by two checks it printed: $out"
+out=$(segment_with '.branches[0].window = 2 | .room = {bound: 3, queue: 1, sessions: 1, reserve: 0}')
+[ "$out" = "$band" ] || fail "with a run free it printed: $out"
+out=$(segment_with '.room = {bound: 2, queue: 1, sessions: 1, reserve: 0}')
+[ "$out" = "$band" ] || fail "with the window full it printed: $out"
+pass
+
+fresh "status: branches keep the overview's order"
+feed "$(printf '%s\n' "$board" | jq -c '.branches = [(.branches[0] | .branch = "release"),
+  {branch: "bolt/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
+out=$(frame_of "$work" --once)
+[ "$(printf '%s\n' "$out" | sed -n -E 's/^(release|main) at .*/\1/p' | tr '\n' ' ')" = 'release main ' ] ||
+  fail "the branches are not in the document's order: $out"
+printf '%s' "$out" | grep -q '^1 other branch with nothing queued$' || fail "the idle branch is not counted: $out"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+case $out in "sluice release · "*"  |  sluice main · "*) ;; *) fail "the segment is not in the document's order: $out" ;; esac
+printf '\033[B\033[Bq' | LINES=12 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
+third=$(awk 'BEGIN{RS="\f"} NR==3 {sub(/^\n/, ""); print}' "$t/out")
+printf '%s' "$third" | grep -q '^… 2 lines above · ↑ scrolls$' || fail "it does not scroll: $third"
+[ "$(printf '%s\n' "$third" | wc -l)" -le 12 ] || fail "a scrolled frame is taller than 12 lines: $third"
+pass
+
 fresh 'status: setup shows, never edits'
 before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
 out=$(sh "$plugin/bin/setup.sh" </dev/null)
@@ -1052,6 +1129,36 @@ fresh 'sidebar: testing, with tasks'
 feed "$(printf '%s' "$testing95" | jq -c '.branches[0].candidates[0].tasks = [{target: "a:test", state: "passed"}, {target: "b:test", state: "running"}]')"
 tokens
 has '--token sluice=#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m'
+pass
+
+checking='{worktree: $work, branch: "main", ports: {}, run: {started: "2026-10-16T19:43:10Z",
+  tasks: [{target: "a:test", state: "passed"}, {target: "b:test", state: "running"}, {target: "c:test", state: "waiting"}]}}'
+
+fresh 'sidebar: checking'
+feed "$(doc ".sessions = [$checking]")"
+tokens
+has '--token sluice=checking 1/3'
+hasnt 'testing'
+pass
+
+fresh 'sidebar: checking a command'
+feed "$(doc ".sessions = [$checking | .run = {started: .run.started, command: \"make e2e\"}]")"
+tokens
+has '--token sluice=checking 2m'
+pass
+
+fresh 'sidebar: a submission comes before a check'
+feed "$(printf '%s' "$testing95" | jq -c --arg work "$work" ".sessions = [$checking]")"
+tokens
+has '--token sluice=#95 testing 3m/15m'
+pass
+
+fresh 'sidebar: a blame comes before a check'
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 87 '$work' testing)]")" "$(doc "$blamed87 | .sessions = [$checking]")"
+tokens
+has '--token sluice=#87 BLAMED · tests:t-cards'
+hasnt 'checking'
 pass
 
 fresh 'sidebar: blamed'

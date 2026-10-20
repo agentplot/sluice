@@ -49,7 +49,8 @@ latest landings, blames and conflicts. The words are those of the Claude
 Code plugin's `/sluice` pane, and the popup redraws as the queue moves.
 A branch with nothing queued is left out once a quarter hour has passed
 since its last landing, blame or conflict; one line counts the branches
-left out.
+left out. Branches come in the order the repository's
+`.config/sluice.toml` names them.
 
 When the task runner says how a combination's tasks are going, as moon
 does, the combination shows how many have ended and a bar, and its tasks
@@ -65,7 +66,38 @@ are listed beneath its tests:
         · core:test      waiting
 ```
 
-The tab bar and the sidebar show the count and the bar alone.
+The tab bar and the sidebar show the count and its ten-cell bar alone.
+
+## Agents' checks
+
+An agent that runs its checks with `sluice exec` takes one of the runs the
+host's bound allows, the same runs the queue's combinations start under.
+The popup shows those checks under CHECKING, after the branches, as load
+on the host rather than as submissions: a check waits in no queue and
+lands nothing.
+
+```
+CHECKING
+    e2e-run → main ./scripts/e2e.sh 30s
+    fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s
+    plugin-board → main 14 passed · reused when submitted
+  host: 3 of 6 runs · 1 queue · 2 agents
+```
+
+Each row names the worktree and the branch its checks are held to. A check
+under way shows how many of its tasks have ended, or the command it runs.
+A check that ended in the last quarter hour says what it is worth. `14
+passed · reused when submitted` means the branch's gate takes those passes
+once that head is submitted, so the combination it joins replays them
+rather than running them again. `not kept: uncommitted changes` means the
+worktree held more than its head, so nothing was recorded. The host line
+counts the runs against the bound: the queue's combinations and the
+agents' checks, those of other repositories on the host included.
+
+When the host has no run free while a submission waits, and agents' checks
+hold some of those runs, the tab bar's line ends with
+`· 1 slot to an agent's checks`. That is why a queue tests fewer
+combinations at once than its window allows.
 
 When the popup is too short for all of it, each combination keeps its
 running and failed tasks and counts the rest, as in
@@ -109,6 +141,7 @@ shows no row:
 |---|---|
 | has a submission queued or under test | `#95 testing 3m/15m`, `#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m` |
 | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards` |
+| is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
 | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95` |
 | landed in the last 30 minutes | `#94 landed 12m` |
 

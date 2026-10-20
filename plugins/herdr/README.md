@@ -25,6 +25,18 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   as the Claude Code board's `/sluice` pane. It redraws as the queue moves.
   A branch with nothing queued is left out, and counted on one line, once
   a quarter hour has passed since its last landing, blame or conflict.
+  Branches come in the order the repository's `.config/sluice.toml` names
+  them, as `sluice overview` gives them.
+- **Agents' checks**, under CHECKING in the popup: each worktree whose
+  agent is running `sluice exec`, with how many of its tasks have ended
+  (`fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s`), and one that finished in the
+  last quarter hour with what it is worth: `14 passed · reused when
+  submitted` when the branch's gate takes those passes once that head is
+  submitted, `not kept: uncommitted changes` when the worktree held more
+  than its head. Under it, the host's runs: `host: 4 of 6 runs · 3 queue
+  · 1 agent`. A check is load on the host, never a submission: it waits
+  in no queue and lands nothing, but it takes one of the runs the queue's
+  combinations are started under.
   `q` or Escape closes it, `j` jumps to the blamed submission's pane, `a`
   shows every repository the plugin holds, and the arrow keys and Page Up
   and Down scroll it when it is taller than the popup.
@@ -49,6 +61,7 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   |---|---|
   | has a submission queued or under test | `#95 testing 3m/15m` |
   | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards`, `#53 CONFLICT · a.rs` |
+  | is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
   | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95` |
   | landed in the last 30 minutes | `#94 landed 12m` |
   | none of these | no line |
@@ -61,7 +74,9 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   (`4 submissions`, every branch counted).
 - **The tab bar**: the focused repository's queue on one line, as the
   board's band says it: `sluice main · 3 submissions · testing
-  main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa`.
+  main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa`. When
+  agents' checks hold the queue back, the host has no run free while a
+  submission waits, and the line ends `· 1 slot to an agent's checks`.
 
 Every token is set again at least every 15 seconds and expires after two
 minutes, so nothing stale stays if the plugin stops.
