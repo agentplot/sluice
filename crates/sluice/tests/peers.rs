@@ -44,7 +44,7 @@ impl Host {
         std::fs::write(
             config.path().join("sluice/config.toml"),
             format!(
-                "[signing]\nsigner = \"{signer}\"\nkey = {:?}\n",
+                "[signing]\nsigner = \"{signer}\"\nkey = {:?}\n\n[peers]\nname = \"{name}\"\n",
                 path.display().to_string()
             ),
         )
@@ -118,22 +118,21 @@ fn line(principal: &str, k: &PrivateKey) -> String {
     format!("{principal} {}", k.public_key().to_openssh().unwrap())
 }
 
-/// 111, 82, 78: a session's host submits and stops; another host, with no
-/// session of its own, lands the submission, signing its run; the first
-/// host reads it landed from the remote when it is back.
-#[test]
-fn a_submission_lands_by_another_host() {
+/// Two hosts over one bare remote, under a policy naming each one's
+/// signer and trusting those in `trust`; the first host's and the
+/// second's, and the remote.
+fn two_hosts(name: &str, trust: &str) -> (Host, Host, Scratch) {
     let (ka, kb) = (
         PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
         PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
     );
-    let a = Repo::new("peers-a");
+    let a = Repo::new(&format!("{name}-a"));
     a.write(
         ".config/sluice.toml",
         &format!(
             "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
              [signers.a]\nssh = \"{}\"\n\n[signers.b]\nssh = \"{}\"\n\n\
-             [branches.main]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = [\"a\", \"b\"]\n",
+             [branches.main]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = {trust}\n",
             line("a", &ka),
             line("b", &kb)
         ),
@@ -141,9 +140,74 @@ fn a_submission_lands_by_another_host() {
     a.git(&["add", "-A"]);
     a.git(&["commit", "-q", "-m", "sluice's policy"]);
     let origin = a.bare_origin();
-    let b = Repo::clone_of(origin.path(), "peers-b");
-    let host_a = Host::new(a, "peers-a", "a", &ka);
-    let host_b = Host::new(b, "peers-b", "b", &kb);
+    let b = Repo::clone_of(origin.path(), &format!("{name}-b"));
+    (
+        Host::new(a, &format!("{name}-a"), "a", &ka),
+        Host::new(b, &format!("{name}-b"), "b", &kb),
+        origin,
+    )
+}
+
+fn refs_under(origin: &Scratch, prefix: &str) -> String {
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(origin.path())
+        .args(["for-each-ref", "--format=%(refname)", prefix])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// 75, 82, 78: the host that keeps the branch signs as no one its gate
+/// trusts, so the other host claims the run, fetches the combination,
+/// runs it and signs it, and the first lands it.
+#[test]
+fn a_run_is_claimed_and_run_by_the_other_host() {
+    let (host_a, host_b, origin) = two_hosts("claims", "[\"b\"]");
+    let id = host_a.submit("x");
+    let out = host_a.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        refs_under(&origin, "refs/sluice/combinations/").contains("refs/sluice/combinations/main/")
+    );
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while host_a.state_of(id) != "landed" {
+        for h in [&host_b, &host_a] {
+            let out = h.sluice(&["step", "main"]);
+            if !out.status.success() {
+                let refs = h
+                    .repo
+                    .git(&["for-each-ref", "--format=%(objectname) %(refname)"]);
+                let doc = String::from_utf8_lossy(
+                    &h.repo
+                        .git_raw(&["show", "refs/sluice-fetched/origin/state/main:branch.json"])
+                        .stdout,
+                )
+                .into_owned();
+                panic!("{}\nrefs:\n{refs}\nstate:\n{doc}", text(&out));
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never landed: {}",
+            host_a.state_of(id)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(refs_under(&origin, "refs/sluice/runs/").contains("refs/sluice/runs/b"));
+    assert!(!refs_under(&origin, "refs/sluice/runs/").contains("refs/sluice/runs/a"));
+    assert!(refs_under(&origin, "refs/sluice/hosts/").lines().count() >= 1);
+    let out = host_a.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(refs_under(&origin, "refs/sluice/combinations/"), "");
+}
+
+/// 111, 82, 78: a session's host submits and stops; another host, with no
+/// session of its own, lands the submission, signing its run; the first
+/// host reads it landed from the remote when it is back.
+#[test]
+fn a_submission_lands_by_another_host() {
+    let (host_a, host_b, origin) = two_hosts("peers", "[\"a\", \"b\"]");
 
     let id = host_a.submit("x");
     let deadline = Instant::now() + Duration::from_secs(60);

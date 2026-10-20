@@ -85,6 +85,12 @@ pub struct Sluice<'a> {
 pub struct Peer {
     pub name: String,
     pub lease: std::time::Duration,
+    /// 77: how long a host's sign of life may stand before its claims
+    /// lapse.
+    pub alive: std::time::Duration,
+    /// 78: the signer this host's results are signed by, where it has a
+    /// signing key; it claims runs only of branches that trust it.
+    pub signer: Option<String>,
 }
 
 impl Default for Peer {
@@ -92,6 +98,8 @@ impl Default for Peer {
         Peer {
             name: "this-host".into(),
             lease: std::time::Duration::from_secs(300),
+            alive: std::time::Duration::from_secs(120),
+            signer: None,
         }
     }
 }

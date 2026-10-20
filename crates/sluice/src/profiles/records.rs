@@ -268,6 +268,58 @@ impl State for Records {
         }
     }
 
+    fn beat(&self, host: &str, beat: &[u8]) -> Result<()> {
+        let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
+        for r in remotes {
+            r.beat(host, beat)?;
+        }
+        Ok(())
+    }
+
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        let mut all = BTreeMap::new();
+        let remotes: Vec<Rc<RemoteRefs>> = self.remotes.borrow().values().cloned().collect();
+        for r in remotes {
+            all.extend(r.beats()?);
+        }
+        Ok(all)
+    }
+
+    fn observed_beat(&self, host: &str) -> Result<Option<(String, String)>> {
+        match self.shared() {
+            Some(r) => r.observed_beat(host),
+            None => Ok(None),
+        }
+    }
+
+    fn observe_beat(&self, host: &str, marker: &str, at: &str) -> Result<()> {
+        match self.shared() {
+            Some(r) => r.observe_beat(host, marker, at),
+            None => Ok(()),
+        }
+    }
+
+    fn publish_candidate(&self, branch: &str, id: &str, rev: &Rev) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.publish_candidate(branch, id, rev),
+        }
+    }
+
+    fn unpublish_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.unpublish_candidate(branch, id),
+        }
+    }
+
+    fn fetch_candidates(&self, branch: &str) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.fetch_candidates(branch),
+        }
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         match self.route(branch)? {
             None => Ok(None),

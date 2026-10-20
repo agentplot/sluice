@@ -114,6 +114,12 @@ struct Inner {
     left: BTreeMap<String, Vec<Vec<u8>>>,
     /// What each host last saw of each branch, by host and branch (73).
     seen: BTreeMap<(String, String), (u64, String)>,
+    /// The host that made each candidate's place (81).
+    place_host: BTreeMap<String, String>,
+    /// Each host's last sign of life: a count of its beats, and the beat.
+    beats: BTreeMap<String, (u64, Vec<u8>)>,
+    /// Each host's view of every other host's beats (77).
+    seen_beats: BTreeMap<(String, String), (String, String)>,
     /// The signer the host's results are recorded as signed by (78).
     signer: Option<String>,
     /// Session runs on the host, by worktree, and whether each still runs.
@@ -1220,6 +1226,8 @@ impl Checkout for FakeCheckout {
         }
         inner.places.insert(name.into(), rev.clone());
         inner.made.push(name.into());
+        let host = inner.host.clone();
+        inner.place_host.insert(name.into(), host);
         Ok(Place {
             name: name.into(),
             path: format!("/fake/places/{name}").into(),
@@ -1342,6 +1350,16 @@ impl Checkout for FakeCheckout {
         }
         inner.saved.push(name.into());
         Ok(())
+    }
+
+    fn made(&self) -> Result<Vec<String>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .places
+            .keys()
+            .filter(|p| inner.place_host.get(*p) == Some(&inner.host))
+            .cloned()
+            .collect())
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
@@ -1498,6 +1516,39 @@ fn finished_name(path: &str) -> Option<&str> {
 }
 
 impl State for FakeState {
+    fn beat(&self, host: &str, beat: &[u8]) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let n = inner.beats.get(host).map_or(0, |(n, _)| n + 1);
+        inner.beats.insert(host.into(), (n, beat.to_vec()));
+        Ok(())
+    }
+
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .beats
+            .iter()
+            .map(|(h, (n, b))| (h.clone(), (n.to_string(), b.clone())))
+            .collect())
+    }
+
+    fn observed_beat(&self, host: &str) -> Result<Option<(String, String)>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .seen_beats
+            .get(&(inner.host.clone(), host.to_string()))
+            .cloned())
+    }
+
+    fn observe_beat(&self, host: &str, marker: &str, at: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let key = (inner.host.clone(), host.to_string());
+        inner.seen_beats.insert(key, (marker.into(), at.into()));
+        Ok(())
+    }
+
     fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
         let inner = self.0 .0.borrow();
         Ok(inner

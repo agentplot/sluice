@@ -278,9 +278,12 @@ impl crate::exec::Host for Bound {
     }
 
     fn peer(&self) -> sluice_core::Peer {
+        let i = self.tests.instance();
         sluice_core::Peer {
-            name: checks::hostname(),
-            lease: self.tests.instance().peers.lease,
+            name: i.peers.name.clone().unwrap_or_else(checks::hostname),
+            lease: i.peers.lease,
+            alive: i.peers.alive,
+            signer: i.signing.as_ref().map(|s| s.signer.clone()),
         }
     }
 

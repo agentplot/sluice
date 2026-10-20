@@ -212,6 +212,10 @@ pub trait Checkout {
     /// read: only such a place's declared caches are saved (35).
     fn release(&self, name: &str, passed: bool) -> Result<()>;
 
+    /// 81: every candidate's place this host made and has not released,
+    /// by name: what a returning host releases before it claims again.
+    fn made(&self) -> Result<Vec<String>>;
+
     /// Session-runs-1 clause 90: a session's own place, `worktree`, taken
     /// as found for a session run held to `branch`'s policy: its ports,
     /// held from its first run until its release and the same on every
@@ -797,6 +801,30 @@ pub trait State {
         None
     }
 
+    /// 77, 107: rewrite this host's sign of life, `beat` its document:
+    /// its signer, its systems and the room it has. Only this host writes
+    /// its own.
+    fn beat(&self, _host: &str, _beat: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    /// 77: every host's last sign of life, by host: something that changes
+    /// with every beat, and the beat's document.
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        Ok(BTreeMap::new())
+    }
+
+    /// 77: the beat of `host` this host last saw, and when it first saw
+    /// it, by its own clock.
+    fn observed_beat(&self, _host: &str) -> Result<Option<(String, String)>> {
+        Ok(None)
+    }
+
+    /// Note that this host first saw `host`'s beat `marker` at `at`.
+    fn observe_beat(&self, _host: &str, _marker: &str, _at: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// 73: the version of the branch's records this host last saw, and
     /// when it first saw it, by its own clock; kept on this host alone,
     /// so it decides nothing but when to try taking the branch.
@@ -824,6 +852,22 @@ pub trait State {
     /// 82: fetch every head submitted to the branch from another host, so
     /// combinations of them can be formed here.
     fn fetch_heads(&self, _branch: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: make a candidate open to claims fetchable by every host that
+    /// may claim it, before it is opened.
+    fn publish_candidate(&self, _branch: &str, _id: &str, _rev: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: a candidate no longer open to claims.
+    fn unpublish_candidate(&self, _branch: &str, _id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: fetch the branch's candidates open to claims, to run them here.
+    fn fetch_candidates(&self, _branch: &str) -> Result<()> {
         Ok(())
     }
 

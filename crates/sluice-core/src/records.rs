@@ -263,6 +263,10 @@ pub struct SystemRun {
     /// The checks it runs.
     pub checks: Vec<String>,
     pub state: RunState,
+    /// 75: the instance whose claim holds it, on a branch whose records
+    /// are on its remote; `None` on a branch kept in one host's files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,6 +380,7 @@ impl From<CandidateForm> for Candidate {
                 place: f.place,
                 run: f.run,
                 no_replay: false,
+                host: None,
             });
         }
         Candidate {
@@ -621,6 +626,19 @@ pub enum Event {
         by: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
+    },
+    /// 75: an instance claimed one of a candidate's runs.
+    Claimed {
+        combination: Rev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        host: String,
+    },
+    /// 77: a claim whose host showed no sign of life for the bound: its
+    /// run has no outcome and is open again.
+    Lapsed {
+        combination: Rev,
+        host: String,
     },
     /// A run whose executor stopped before reporting: no outcome (60).
     Lost {

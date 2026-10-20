@@ -67,6 +67,10 @@ impl Checkout for RecordedPlaces {
         Ok(place)
     }
 
+    fn made(&self) -> Result<Vec<String>> {
+        self.inner.made()
+    }
+
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         self.inner.release(name, passed)?;
         self.log.borrow_mut().released.push(name.into());

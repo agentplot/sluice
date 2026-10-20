@@ -95,6 +95,9 @@ impl Sluice<'_> {
             return Ok(Step::Busy);
         };
         if !self.keeps(branch)? {
+            // 75: another instance keeps the branch; this one takes, runs
+            // and reports runs of its own.
+            info_span!("sluice.claim").in_scope(|| self.execute(branch))?;
             round.record("sluice.step", "led");
             return Ok(Step::Led);
         }
@@ -164,7 +167,7 @@ impl Sluice<'_> {
             .flat_map(|c| {
                 c.runs
                     .iter()
-                    .filter(|r| r.state == RunState::Starting)
+                    .filter(|r| r.state == RunState::Starting && self.mine(r))
                     .filter_map(|r| r.place.clone().map(|p| (c.id.clone(), p)))
             })
             .collect();
@@ -305,7 +308,12 @@ impl Sluice<'_> {
                             c.on = intent.to.clone();
                             if c.submissions.is_empty() {
                                 if c.state.under_test() {
-                                    release.extend(c.places().cloned());
+                                    release.extend(
+                                        c.runs
+                                            .iter()
+                                            .filter(|r| self.mine(r))
+                                            .filter_map(|r| r.place.clone()),
+                                    );
                                 }
                                 return false;
                             }
@@ -416,7 +424,7 @@ impl Sluice<'_> {
                 c.runs
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| r.state == RunState::Starting)
+                    .filter(|(_, r)| r.state == RunState::Starting && self.mine(r))
                     .map(|(i, _)| (c.clone(), i))
                     .collect::<Vec<_>>()
             })
@@ -530,6 +538,8 @@ impl Sluice<'_> {
         // 82: heads submitted from other hosts, fetched to be formed here;
         // and the heads of submissions out of the queue removed.
         self.seams.state.fetch_heads(branch)?;
+        // A candidate another lead formed is fetched to be tested here.
+        self.seams.state.fetch_candidates(branch)?;
         let queued: BTreeSet<&Rev> = line
             .subs
             .values()
@@ -624,7 +634,7 @@ impl Sluice<'_> {
             let runs: Vec<&RunHandle> = c
                 .runs
                 .iter()
-                .filter(|r| r.state == RunState::Testing)
+                .filter(|r| r.state == RunState::Testing && self.mine(r))
                 .filter_map(|r| r.run.as_ref())
                 .collect();
             if !c.state.under_test() || runs.is_empty() {
@@ -668,6 +678,27 @@ impl Sluice<'_> {
             .collect();
         for c in testing {
             for (i, r) in c.runs.iter().enumerate() {
+                if !self.mine(r) {
+                    // 77: another instance's claim, open again once its
+                    // host has shown no sign of life for the bound.
+                    let host = r.host.clone().expect("another's run names its host");
+                    if r.state.held() && self.lapsed(&host, now)? {
+                        let x = line.candidate_mut(&c.id).expect("polled candidate");
+                        let xr = &mut x.runs[i];
+                        xr.state = RunState::Open;
+                        xr.host = None;
+                        xr.place = None;
+                        xr.run = None;
+                        line.log(
+                            now,
+                            Event::Lapsed {
+                                combination: c.revision.clone(),
+                                host,
+                            },
+                        );
+                    }
+                    continue;
+                }
                 if r.state != RunState::Testing {
                     continue;
                 }
@@ -954,6 +985,8 @@ impl Sluice<'_> {
         } else {
             CandidateState::Passed
         };
+        // 82: a candidate with a verdict is open to no claim.
+        self.seams.state.unpublish_candidate(&line.branch, id)?;
         let x = line.candidate_mut(id).expect("judged candidate");
         x.state = state;
         let word = x.result_word().to_string();
@@ -1051,13 +1084,23 @@ impl Sluice<'_> {
         // 24).
         let held: BTreeSet<&String> = ids.iter().collect();
         let mut release = Vec::new();
+        let mut dropped = Vec::new();
         line.doc.candidates.retain(|c| {
             let keep = held.contains(&c.id);
             if !keep && c.state.under_test() {
-                release.extend(c.places().cloned());
+                release.extend(
+                    c.runs
+                        .iter()
+                        .filter(|r| self.mine(r))
+                        .filter_map(|r| r.place.clone()),
+                );
+                dropped.push(c.id.clone());
             }
             keep
         });
+        for id in dropped {
+            self.seams.state.unpublish_candidate(&line.branch, &id)?;
+        }
         line.doc.release.extend(release);
 
         // Attribute (17, 18): the newest submission of the first failed
@@ -1310,23 +1353,11 @@ impl Sluice<'_> {
     /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
         let sessions = self.seams.tests.sessions()?;
-        let mut under = sessions
-            + line
-                .doc
-                .candidates
-                .iter()
-                .map(Candidate::held)
-                .sum::<usize>();
+        let mut under = sessions + self.held_here(line);
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
-                    under += self
-                        .read_line(&b)?
-                        .doc
-                        .candidates
-                        .iter()
-                        .map(Candidate::held)
-                        .sum::<usize>();
+                    under += self.held_here(&self.read_line(&b)?);
                 }
             }
         }
@@ -1341,13 +1372,7 @@ impl Sluice<'_> {
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
         let mut under = self.seams.tests.sessions()?;
         for b in self.seams.state.branches()? {
-            under += self
-                .read_line(&b)?
-                .doc
-                .candidates
-                .iter()
-                .map(Candidate::held)
-                .sum::<usize>();
+            under += self.held_here(&self.read_line(&b)?);
         }
         Ok(self
             .seams
@@ -1377,7 +1402,7 @@ impl Sluice<'_> {
                 c.runs
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| r.state == RunState::Open && ours(r, home))
+                    .filter(|(_, r)| self.claimable(r, home, rules))
                     .map(|(i, _)| (c.id.clone(), i))
                     .collect::<Vec<_>>()
             })
@@ -1388,9 +1413,11 @@ impl Sluice<'_> {
             }
             room -= 1;
             let place = self.next_place(line);
+            let host = rules.signed.then(|| self.peer.name.clone());
             let c = line.candidate_mut(&id).expect("a chain's candidate");
             c.runs[i].state = RunState::Starting;
             c.runs[i].place = Some(place.clone());
+            c.runs[i].host = host;
             let c = c.clone();
             line.log(
                 now,
@@ -1447,7 +1474,7 @@ impl Sluice<'_> {
         let every_known = line.doc.verified;
         for id in start {
             let mut runs = open_runs(rules, home);
-            let mine = runs.iter().position(|r| ours(r, home));
+            let mine = runs.iter().position(|r| self.claimable(r, home, rules));
             // A candidate this host would run starts only with room for it.
             if mine.is_some() && room == 0 {
                 break;
@@ -1458,10 +1485,22 @@ impl Sluice<'_> {
                     let place = self.next_place(line);
                     runs[i].state = RunState::Starting;
                     runs[i].place = Some(place.clone());
+                    runs[i].host = rules.signed.then(|| self.peer.name.clone());
                     place
                 }
                 None => String::new(),
             };
+            if rules.signed {
+                // 82: open to claims only once every host can fetch it.
+                let rev = line
+                    .candidate(&id)
+                    .expect("a chain's candidate")
+                    .revision
+                    .clone();
+                self.seams
+                    .state
+                    .publish_candidate(&line.branch, &id, &rev)?;
+            }
             let c = line.candidate_mut(&id).expect("a chain's candidate");
             c.state = CandidateState::Testing;
             c.runs = runs;
@@ -1483,6 +1522,248 @@ impl Sluice<'_> {
             );
         }
         Ok(())
+    }
+
+    /// Whether `run` is this instance's: its claim names it, or the
+    /// branch keeps no claims (75).
+    fn mine(&self, run: &SystemRun) -> bool {
+        run.host.as_deref().is_none_or(|h| h == self.peer.name)
+    }
+
+    /// Runs holding a place on this host, in `line`.
+    fn held_here(&self, line: &Line) -> usize {
+        line.doc
+            .candidates
+            .iter()
+            .flat_map(|c| &c.runs)
+            .filter(|r| r.state.held() && self.mine(r))
+            .count()
+    }
+
+    /// 75, 79, 87, 107: whether this instance may take `run`: open and
+    /// unclaimed, of the system it is, and, on a branch whose records are
+    /// on its remote, signed by a signer the gate trusts for what the gate
+    /// needs.
+    fn claimable(&self, run: &SystemRun, home: Option<&str>, rules: &Rules) -> bool {
+        if run.state != RunState::Open || run.host.is_some() || !ours(run, home) {
+            return false;
+        }
+        if !rules.signed {
+            return true;
+        }
+        let Some(signer) = &self.peer.signer else {
+            return false;
+        };
+        let Some((may_confine, systems)) = rules.claims.get(signer) else {
+            return false;
+        };
+        let system = run.system.as_deref().or(home);
+        (!rules.confined || *may_confine)
+            && match (system, systems) {
+                (Some(s), Some(list)) => list.iter().any(|x| x == s),
+                _ => true,
+            }
+    }
+
+    /// 77: whether `host` has shown no sign of life for the bound, by this
+    /// host's own observation of its beats.
+    fn lapsed(&self, host: &str, now: &str) -> Result<bool> {
+        let marker = self
+            .seams
+            .state
+            .beats()?
+            .remove(host)
+            .map(|(m, _)| m)
+            .unwrap_or_default();
+        match self.seams.state.observed_beat(host)? {
+            Some((m, since)) if m == marker => Ok(
+                seconds_between(&since, now).is_some_and(|s| s >= self.peer.alive.as_secs_f64())
+            ),
+            _ => {
+                self.seams.state.observe_beat(host, &marker, now)?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// 75, 77, 81: what an instance that does not keep `branch` does for
+    /// it: shows it is alive, releases the places it made that no claim of
+    /// its own holds, reports its runs that ended, and claims open runs it
+    /// may take, earliest first, up to its bound, then starts them.
+    fn execute(&self, branch: &str) -> Result<()> {
+        let Some(tip) = self.seams.branch.read(branch)? else {
+            return Ok(());
+        };
+        let Some(rules) = self.rules_at(branch, &tip)? else {
+            return Ok(());
+        };
+        if !rules.signed {
+            return Ok(());
+        }
+        let home = self.home_system(&tip)?;
+        let me = self.peer.name.clone();
+        let line = self.read_line(branch)?;
+        let beat = serde_json::json!({
+            "host": me,
+            "signer": self.peer.signer,
+            "system": home,
+            "held": self.held_here(&line),
+            "bound": self.seams.tests.bound()?,
+            "at": self.now(),
+        });
+        self.seams.state.beat(&me, beat.to_string().as_bytes())?;
+
+        // 81: a place made here that no claim of this host's holds.
+        let held: BTreeSet<String> = line
+            .doc
+            .candidates
+            .iter()
+            .flat_map(|c| &c.runs)
+            .filter(|r| r.host.as_deref() == Some(me.as_str()) && r.state.held())
+            .filter_map(|r| r.place.clone())
+            .collect();
+        let prefix = format!("sluice/try/{branch}/");
+        for p in self.seams.checkout.made()? {
+            if p.starts_with(&prefix) && !held.contains(&p) {
+                self.seams.checkout.release(&p, false)?;
+            }
+        }
+
+        // This host's runs that ended, reported while its claim holds.
+        let mine: Vec<(Candidate, usize)> = line
+            .doc
+            .candidates
+            .iter()
+            .filter(|c| c.state.under_test())
+            .flat_map(|c| {
+                c.runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| {
+                        r.state == RunState::Testing && r.host.as_deref() == Some(me.as_str())
+                    })
+                    .map(|(i, _)| (c.clone(), i))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (c, i) in mine {
+            let handle = c.runs[i].run.clone().expect("a testing run has a handle");
+            let place = c.runs[i].place.clone();
+            match self.seams.tests.progress(&handle)? {
+                Progress::Running => {}
+                Progress::Lost => {
+                    self.update(branch, |l| {
+                        let now = self.now();
+                        if let Some(x) = l.candidate_mut(&c.id) {
+                            let r = &mut x.runs[i];
+                            if r.host.as_deref() == Some(me.as_str())
+                                && r.state == RunState::Testing
+                            {
+                                r.state = RunState::Open;
+                                r.host = None;
+                                r.place = None;
+                                r.run = None;
+                                l.log(
+                                    &now,
+                                    Event::Lost {
+                                        combination: c.revision.clone(),
+                                    },
+                                );
+                            }
+                        }
+                        Ok(())
+                    })?;
+                    if let Some(p) = place {
+                        self.seams.checkout.release(&p, false)?;
+                    }
+                }
+                Progress::Finished(report) => {
+                    let mut passed = false;
+                    self.update(branch, |l| {
+                        let now = self.now();
+                        let Some(x) = l.candidate(&c.id).cloned() else {
+                            return Ok(());
+                        };
+                        let r = &x.runs[i];
+                        // 77: a report under a claim this host no longer
+                        // holds is never written.
+                        if r.host.as_deref() != Some(me.as_str()) || r.state != RunState::Testing {
+                            return Ok(());
+                        }
+                        self.finish_run(
+                            l,
+                            &x,
+                            i,
+                            &handle,
+                            report.clone(),
+                            &rules,
+                            home.as_deref(),
+                            &now,
+                        )?;
+                        passed = l
+                            .candidate(&c.id)
+                            .is_some_and(|y| y.runs[i].state == RunState::Passed);
+                        // This host releases its own place below.
+                        if let Some(p) = &place {
+                            l.doc.release.retain(|q| q != p);
+                            l.doc.passed.retain(|q| q != p);
+                        }
+                        Ok(())
+                    })?;
+                    if let Some(p) = place {
+                        self.seams.checkout.release(&p, passed)?;
+                    }
+                }
+            }
+        }
+
+        // 75, 76, 71: claims, earliest first, up to this host's bound, of
+        // candidates fetched from the remote (82).
+        self.seams.state.fetch_candidates(branch)?;
+        let mut room = self.capacity(&self.read_line(branch)?)?;
+        while room > 0 {
+            let claimed = self.update(branch, |l| {
+                let now = self.now();
+                let next = l
+                    .doc
+                    .candidates
+                    .iter()
+                    .filter(|c| c.state.under_test())
+                    .flat_map(|c| {
+                        c.runs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, r)| self.claimable(r, home.as_deref(), &rules))
+                            .map(|(i, _)| (c.id.clone(), i))
+                    })
+                    .next();
+                let Some((id, i)) = next else {
+                    return Ok(false);
+                };
+                let place = self.next_place(l);
+                let c = l.candidate_mut(&id).expect("a candidate");
+                let r = &mut c.runs[i];
+                r.state = RunState::Starting;
+                r.host = Some(me.clone());
+                r.place = Some(place);
+                let system = r.system.clone();
+                let combination = c.revision.clone();
+                l.log(
+                    &now,
+                    Event::Claimed {
+                        combination,
+                        system,
+                        host: me.clone(),
+                    },
+                );
+                Ok(true)
+            })?;
+            if !claimed {
+                break;
+            }
+            room -= 1;
+        }
+        self.perform_starts(branch)
     }
 
     /// The name of the next place on the branch.
@@ -1543,6 +1824,7 @@ fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
         place: None,
         run: None,
         no_replay: false,
+        host: None,
     };
     if by.is_empty() {
         return vec![run(None, any)];

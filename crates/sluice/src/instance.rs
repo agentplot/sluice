@@ -66,7 +66,7 @@ pub struct Signing {
 }
 
 /// The host's `[peers]` table (72 to 74, 77).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Peers {
     /// How long a branch's records stand unwritten before another
     /// instance may take it (72, 73).
@@ -74,6 +74,9 @@ pub struct Peers {
     /// How often this host shows it is alive; a claim lapses after it
     /// passes with no sign (77).
     pub alive: Duration,
+    /// What this host is called among the hosts of a remote; its host
+    /// name when unset.
+    pub name: Option<String>,
 }
 
 impl Default for Peers {
@@ -81,6 +84,7 @@ impl Default for Peers {
         Peers {
             lease: Duration::from_secs(300),
             alive: Duration::from_secs(120),
+            name: None,
         }
     }
 }
@@ -122,6 +126,7 @@ struct SigningForm {
 struct PeersForm {
     lease: Option<String>,
     alive: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -197,9 +202,15 @@ impl Instance {
                 }
             }
         };
+        if let Some(n) = &form.peers.name {
+            if n.is_empty() || n.contains(['/', ' ']) {
+                bail!("[peers] name {n:?} must be one word with no /");
+            }
+        }
         let peers = Peers {
             lease: duration(form.peers.lease, "lease", d.lease)?,
             alive: duration(form.peers.alive, "alive", d.alive)?,
+            name: form.peers.name,
         };
         if peers.alive >= peers.lease {
             bail!(

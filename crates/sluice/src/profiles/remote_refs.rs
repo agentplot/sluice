@@ -463,6 +463,16 @@ impl RemoteRefs {
 }
 
 impl RemoteRefs {
+    /// Where this host keeps what it last saw of `host`'s beats (77).
+    fn beat_observation(&self, host: &str) -> PathBuf {
+        self.pushed
+            .git_dir()
+            .join("sluice-remote")
+            .join(self.remote())
+            .join("beats")
+            .join(format!("{}.json", host.replace('/', "%2F")))
+    }
+
     /// Where this host keeps what it last saw of `branch` (73).
     fn observation(&self, branch: &str) -> Result<PathBuf> {
         state_ref(branch)?;
@@ -648,6 +658,152 @@ impl State for RemoteRefs {
         if !out.status.success() {
             bail!(
                 "fetching the submitted heads from {} failed: {}",
+                self.remote(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+
+    /// 77: `refs/sluice/hosts/<host>`, rewritten by that host alone.
+    fn beat(&self, host: &str, beat: &[u8]) -> Result<()> {
+        let blob = self.blob(beat)?;
+        let commit = self.commit(
+            &BTreeMap::from([("beat.json".to_string(), blob)]),
+            None,
+            &format!("{host} is alive"),
+        )?;
+        let spec = format!("+{commit}:refs/sluice/hosts/{host}");
+        let out = self.pushed.remote_git(&[
+            "push",
+            "--porcelain",
+            "--no-verify",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "showing {host} alive on {} failed: {}",
+                self.remote(),
+                refusal(&out)
+            );
+        }
+        Ok(())
+    }
+
+    /// Every host's last beat: its commit, which changes with every beat,
+    /// and its document.
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        let spec = format!(
+            "+refs/sluice/hosts/*:refs/sluice-fetched/{}/hosts/*",
+            self.remote()
+        );
+        let out = self.pushed.remote_git(&[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--prune",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "reading hosts' signs of life from {} failed: {}",
+                self.remote(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let prefix = format!("refs/sluice-fetched/{}/hosts/", self.remote());
+        let listed =
+            self.git_ok(&["for-each-ref", "--format=%(objectname) %(refname)", &prefix])?;
+        let mut out = BTreeMap::new();
+        for line in String::from_utf8_lossy(&listed).lines() {
+            let Some((oid, name)) = line.split_once(' ') else {
+                continue;
+            };
+            let Some(host) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let beat = self
+                .tree(oid)?
+                .remove("beat.json")
+                .map(|(_, b)| b)
+                .unwrap_or_default();
+            out.insert(host.to_string(), (oid.to_string(), beat));
+        }
+        Ok(out)
+    }
+
+    fn observed_beat(&self, host: &str) -> Result<Option<(String, String)>> {
+        let path = self.beat_observation(host);
+        match std::fs::read(&path) {
+            Ok(b) => {
+                let v: serde_json::Value = serde_json::from_slice(&b)?;
+                Ok(v["marker"]
+                    .as_str()
+                    .map(str::to_string)
+                    .zip(v["at"].as_str().map(str::to_string)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn observe_beat(&self, host: &str, marker: &str, at: &str) -> Result<()> {
+        let path = self.beat_observation(host);
+        std::fs::create_dir_all(path.parent().expect("a parent"))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(
+            &tmp,
+            serde_json::json!({"marker": marker, "at": at}).to_string(),
+        )?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    fn publish_candidate(&self, branch: &str, id: &str, rev: &Rev) -> Result<()> {
+        state_ref(branch)?;
+        let spec = format!("+{rev}:refs/sluice/combinations/{branch}/{id}");
+        let out = self.pushed.remote_git(&[
+            "push",
+            "--porcelain",
+            "--no-verify",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "opening the combination {id} on {} failed: {}",
+                self.remote(),
+                refusal(&out)
+            );
+        }
+        Ok(())
+    }
+
+    fn unpublish_candidate(&self, branch: &str, id: &str) -> Result<()> {
+        self.delete_if_present(&format!("refs/sluice/combinations/{branch}/{id}"))
+    }
+
+    fn fetch_candidates(&self, branch: &str) -> Result<()> {
+        state_ref(branch)?;
+        let spec = format!(
+            "+refs/sluice/combinations/{branch}/*:refs/sluice-fetched/{}/combinations/{branch}/*",
+            self.remote()
+        );
+        let out = self.pushed.remote_git(&[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--prune",
+            self.pushed.target(),
+            &spec,
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "fetching {branch}'s combinations from {} failed: {}",
                 self.remote(),
                 String::from_utf8_lossy(&out.stderr).trim()
             );
