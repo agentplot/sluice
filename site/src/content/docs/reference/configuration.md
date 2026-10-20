@@ -31,7 +31,7 @@ parallel = 4
 batch = false
 flaky = "fail"
 timeout = "20m"
-trust = ["open", "sandbox", "container", "cache"]
+trust = ["open", "sandbox", "container"]
 
 [branches.main]
 required = ["#suite", "#live"]
@@ -135,6 +135,77 @@ longer, unique among the repository's previews.
 |---|---|
 | `subject` | The first line of a landing commit: `{id}` the submission, `{from}` the agent's branch, `{agent}`, `{to}` the branch landed on. The default is the conventional `chore(land): #{id} {from}`. |
 
+## `[systems]`: what a test runs on
+
+The systems a branch can require a test to pass on, each a name for an
+operating system and a processor architecture as the toolchain names
+them (`linux` or `macos`; `x86_64` or `aarch64`). A result records the
+system it ran on, and a pass on one system never stands for another.
+
+```toml
+[systems]
+linux-x64   = { os = "linux", arch = "x86_64" }
+linux-arm64 = { os = "linux", arch = "aarch64" }
+macos-arm64 = { os = "macos", arch = "aarch64" }
+```
+
+Every other key that names a system, a branch's `systems` and
+`systems_for`, a signer's `systems` and a pool's `runners`, uses these
+names, and sluice refuses a name the table lacks.
+
+## `[signers."<name>"]`: who may sign results
+
+A policy with signers keeps the state of every branch with a `remote`
+on that remote, so every host that submits to it reads and writes the
+same queue ([Executors and systems](/sluice/guides/executors-and-systems/)).
+A result counts there only when a signer the branch trusts signed it.
+A policy with no `[signers]` keeps every branch's state on the host,
+as before.
+
+```toml
+[signers.box]
+ssh = "exec@build-1 ssh-ed25519 AAAA..."
+confined = true
+systems = ["linux-x64"]
+
+[signers.forge]
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+confined = true
+
+[signers.sessions]
+ssh = ".config/sluice.sessions"
+```
+
+| key | meaning |
+|---|---|
+| `ssh` | An SSH public key in `allowed_signers` form, or the path in the repository of a file of them, one per host. A host signs with the private half its own [`[signing]`](#signing) names. |
+| `github` | A GitHub Actions workflow and the branch it runs from. Its jobs sign with the job's own identity and hold no key, and only a job of that workflow on that branch signs as this signer. |
+| `confined` | Whether results it signs may count as confined: no agent could reach the checkout or what the test wrote. Say it only of a host that runs no agents, or a pool that gives each job a fresh machine; sluice never works it out. The default is `false`. |
+| `systems` | The systems its results may say they ran on. The default is every system. |
+
+A signer has exactly one of `ssh` and `github`.
+
+## `[pools."<name>"]`: where runs go when no host has room
+
+A pool starts a machine for each run it is given. sluice starts a run
+on a pool only when no host that may take it has room, and tries the
+pools in the order the policy lists them.
+
+```toml
+[pools.forge]
+github = { workflow = ".github/workflows/sluice.yml" }
+signer = "forge"
+runners = { linux-x64 = "ubuntu-24.04", linux-arm64 = "ubuntu-24.04-arm", macos-arm64 = "macos-15" }
+```
+
+| key | meaning |
+|---|---|
+| `github` | The GitHub Actions workflow sluice starts a job of for each run; `sluice init actions` writes it. |
+| `signer` | The signer its jobs sign as, of the same kind: a `github` signer for a GitHub pool. |
+| `runners` | The runner for each system the pool runs, each a system the signer may claim. |
+
+The guide [GitHub Actions](/sluice/guides/github-actions/) sets one up.
+
 ## `[branches."<pattern>"]`: rules per target branch
 
 One table per pattern of branch names. Every branch that matches one is
@@ -200,14 +271,55 @@ that hits it is recorded as timed out.
 
 ### `trust`
 
-Which results satisfy this branch: `"confined"` (no agent could reach
-the run), an executor (`"open"`, `"sandbox"`, `"container"`), and
-`"cache"` for a result moon replayed instead of ran. Without `"cache"`,
-every required test runs every time, since the cache holds whatever any
-shell ran. A branch without `trust` accepts every run sluice starts
-(`"open"`, `"sandbox"`, `"container"`) and no replay
+Which results satisfy this branch.
+
+On a branch whose state is on its remote, in a policy with `[signers]`,
+`trust` lists signer names: a result counts only when one of them signed
+it. Without `trust`, such a branch trusts no signer, and its policy's
+author names them.
+
+On a branch whose state is on this host, `trust` lists `"confined"` (no
+agent could reach the run) and executors (`"open"`, `"sandbox"`,
+`"container"`), and the results sluice starts here count unsigned. A
+branch without `trust` accepts every run sluice starts
 ([ADR 0015](/sluice/decisions/0015/)); one whose executor can never
 satisfy it starts nothing and says why.
+
+A result moon replays from its cache counts only when a run the branch
+trusts recorded a pass for the same inputs on the same system. When
+none has, the test runs again without the cache. `"cache"`, which once
+let any replay count, is ignored, and `sluice status` warns of it.
+
+### `confined`
+
+On a branch whose state is on its remote, `confined = true` counts only
+results whose signer has `confined = true`. On a branch whose state is
+on this host, list `"confined"` in `trust` instead; sluice refuses
+`confined` there.
+
+### `systems`
+
+The systems every required test must pass on, by the names of
+[`[systems]`](#systems-what-a-test-runs-on). Each system is one more run
+per combination. Without `systems`, a test takes one pass from any
+system.
+
+### `[branches."<pattern>".systems_for]`
+
+The systems one test must pass on, in place of `systems`:
+
+```toml
+[branches.main]
+systems = ["linux-x64"]
+
+[branches.main.systems_for]
+"cli:build" = ["linux-x64", "linux-arm64", "macos-arm64"]
+```
+
+A combination of `main` then passes only when `cli:build` passed on all
+three and every other required test passed on `linux-x64`.
+[Parallel and batch](/sluice/guides/parallel-and-batch/#systems-multiply-runs)
+counts the runs this costs.
 
 ### `remote`
 
@@ -217,7 +329,9 @@ landing is a push that the remote takes only if its branch has not moved
 since the combination was formed. The local branch is then moved to
 match. A push the remote refuses because someone else pushed is
 reported, and the next round tests again on the new revision. Only the
-branch is pushed: the state stays on the host. A branch without
+branch is pushed, and the state stays on the host, unless the policy
+has [`[signers]`](#signersname-who-may-sign-results): then the state is
+on the remote too, under `refs/sluice/`. A branch without
 `remote` is a local branch, and a `remote` the repository has no remote
 of that name for lands nothing and says so. A branch must be on its
 remote before anything is submitted to it: `sluice branch create
@@ -271,6 +385,14 @@ reserved = 1   # default: 0; runs of the bound agents' own runs never use
 [forge]
 app_id = 123456                  # the GitHub App sluice pushes as
 key = "~/.config/sluice/app.pem" # its private key on this host
+
+[signing]
+signer = "box"                   # the policy's name for this host's key
+key = "~/.config/sluice/signing" # an SSH private key on this host
+
+[peers]
+lease = "5m"   # how long a quiet host keeps a branch
+alive = "2m"   # how often this host shows it is alive
 ```
 
 ### `[runs]`
@@ -316,6 +438,35 @@ own. The guide [Give sluice its own GitHub
 identity](/sluice/guides/github-app/) sets it up, and
 [`sluice forge check`](/sluice/reference/commands/#sluice-forge-check)
 says whether it is set up right.
+
+### `[runs] systems`
+
+The systems this host runs, by the policy's
+[`[systems]`](#systems-what-a-test-runs-on) names. Without it, the host
+runs the one system it is. `sluice run` refuses a system whose operating
+system and architecture the host isn't.
+
+### `[signing]`
+
+The signer this host signs its results as, `signer`, one of the
+policy's [`[signers]`](#signersname-who-may-sign-results), and the path
+of its SSH private key, `key`, whose public half the policy lists.
+sluice refuses a key file anyone but its owner may read, as it does
+`[forge] key`. A host with no `[signing]` records no result on a branch
+whose state is on its remote, and says so on every run. Make the key
+with `ssh-keygen -t ed25519 -f ~/.config/sluice/signing -N ""`.
+
+### `[peers]`
+
+How long a branch whose state is on its remote stays with the host
+that last wrote it, and how often this host shows it is alive. The same
+for every branch the host serves, and never a branch's: a policy that
+sets either is refused.
+
+| key | meaning |
+|---|---|
+| `lease` | How long this host waits, having seen a branch's state stand unchanged, before it takes the branch from a host that has gone quiet. It counts by its own clock, never by the time another host wrote. The default is `"5m"`. |
+| `alive` | How often this host rewrites its sign of life. A claim on a run lapses once its host's sign of life has stood unchanged this long, and another host runs it. It must be shorter than `lease`. The default is `"2m"`. |
 
 ## Environment
 
