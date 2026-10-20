@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The scene the plugins' screenshots are taken of: a real sluice queue on a
 # demo repository, with one submission blamed, one landed, a combination of
-# two under test with its tasks part done, and one queued behind it.
+# two under test with its tasks part done, and one queued behind it; and an
+# agent's own check (sluice exec) part done in its worktree.
 #
 #   screenshots-scene.sh [--fast] <new dir>   build it and print "ready" once
 #                                             the scene holds; the driver
@@ -23,20 +24,21 @@ die() {
 }
 
 teardown() {
-  local dir=$1
-  if [ -f "$dir/driver.pid" ]; then
-    pkill -P "$(cat "$dir/driver.pid")" 2>/dev/null || true
-    kill "$(cat "$dir/driver.pid")" 2>/dev/null || true
-    rm -f "$dir/driver.pid"
-  fi
-  # The candidates' runs, each its own process group.
-  for g in "$dir"/shop/.git/sluice/.runs/*/pgid; do
+  local dir=$1 p
+  for p in driver check; do
+    [ -f "$dir/$p.pid" ] || continue
+    pkill -P "$(cat "$dir/$p.pid")" 2>/dev/null || true
+    kill "$(cat "$dir/$p.pid")" 2>/dev/null || true
+    rm -f "$dir/$p.pid"
+  done
+  # The candidates' runs and the agent's, each its own process group.
+  for g in "$dir"/shop/.git/sluice/.runs/*/pgid "$dir"/shop/.git/sluice/.runs/*/*/pgid; do
     [ -f "$g" ] && kill -TERM -- "-$(cat "$g")" 2>/dev/null || true
   done
   # Each run's supervisor writes the run's result once its group has
   # ended: wait for it, up to 30 seconds, before removing where it writes.
   local lock pid n
-  for lock in "$dir"/shop/.git/sluice/.runs/*/lock; do
+  for lock in "$dir"/shop/.git/sluice/.runs/*/lock "$dir"/shop/.git/sluice/.runs/*/*/lock; do
     [ -f "$lock" ] || continue
     pid=$(tr -dc 0-9 <"$lock")
     [ -n "$pid" ] || continue
@@ -93,6 +95,9 @@ export GIT_AUTHOR_NAME=dev GIT_AUTHOR_EMAIL=dev@example.com GIT_COMMITTER_NAME=d
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
 unset GIT_ASKPASS SSH_ASKPASS
 export XDG_STATE_HOME=$ROOT/state XDG_CONFIG_HOME=$ROOT/config
+# The host's bound, the same on every machine the scene is built on.
+mkdir -p "$XDG_CONFIG_HOME/sluice"
+printf '[runs]\nmax = 4\n' >"$XDG_CONFIG_HOME/sluice/config.toml"
 
 # --- the repository: three moon projects, five tasks tagged check ---------------------------------------------------
 # Each task sleeps the seconds in delays/<task> and fails when fail/<task> exists.
@@ -215,16 +220,35 @@ E=$(submit search-index "ui: search index" sh -c 'echo "search" >>ui/README.md')
 done) </dev/null >>"$ROOT/driver.log" 2>&1 &
 echo $! >"$ROOT/driver.pid"
 
-# Ready: #C and #D under test with three tasks passed and one running, #E queued, the blame and the landing recent.
+# An agent's own check in its worktree, under the same bound: a change that affects every task, one of them slow, so
+# the others pass while it runs whichever moon starts first.
+inventory_sync() {
+  echo "inventory" >>api/README.md
+  if [ $FAST = 1 ]; then delays 1 1 1 1 120; else delays 1 1 1 1 900; fi
+}
+F=$WT/inventory-sync
+git worktree add -q -b unit/inventory-sync "$F" main
+(cd "$F" && inventory_sync)
+git -C "$F" add -A
+git -C "$F" commit -qm "api: inventory sync"
+(cd "$F" && SLUICE_AGENT=inventory-sync sluice exec main) </dev/null >>"$ROOT/check.log" 2>&1 &
+echo $! >"$ROOT/check.pid"
+
+# Ready: #C and #D under test with three tasks passed and one running, #E queued, the blame and the landing recent,
+# and the agent's check with three tasks passed and one running.
 ready() {
   sluice overview --json | jq -e --argjson c "$C" --argjson d "$D" --argjson e "$E" --argjson a "$A" --argjson b "$B" '
-    .branches[] | select(.branch == "main") |
+    ([.sessions[] | select(.branch == "main") | .run.tasks // empty] | first // []) as $k |
+    ([$k[] | select(.state == "passed")] | length) >= 3 and
+    ([$k[] | select(.state == "running")] | length) >= 1 and
+    .room.sessions == 1 and
+    (.branches[] | select(.branch == "main") |
     ([.candidates[] | select(.state == "testing" and .submissions == [$c, $d]) | .tasks] | first // []) as $t |
     ([$t[] | select(.state == "passed")] | length) >= 3 and
     ([$t[] | select(.state == "running")] | length) >= 1 and
     ([.submissions[] | select(.id == $e and .state == "queued")] | length) == 1 and
     ([.recent[] | select(.event == "blamed") | .id] | index($a) != null) and
-    ([.recent[] | select(.event == "landed") | .ids[]] | index($b) != null)' >/dev/null
+    ([.recent[] | select(.event == "landed") | .ids[]] | index($b) != null))' >/dev/null
 }
 i=0
 until ready; do
