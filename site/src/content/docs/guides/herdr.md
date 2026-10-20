@@ -109,7 +109,7 @@ worktree held more than its head, so nothing was recorded. The host line
 counts the runs against the bound: the queue's combinations and the
 agents' checks, those of other repositories on the host included.
 
-When the host has no run free while a submission waits, and agents' checks
+When the host has no run free while a submission is queued, and agents' checks
 hold some of those runs, the tab bar's line ends with
 `· 1 slot to an agent's checks`. That is why a queue tests fewer
 combinations at once than its window allows.

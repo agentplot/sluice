@@ -941,6 +941,10 @@ out=$(segment_with '.branches[0].window = 2 | .room = {bound: 3, queue: 1, sessi
 [ "$out" = "$band" ] || fail "with a run free it printed: $out"
 out=$(segment_with '.room = {bound: 2, queue: 1, sessions: 1, reserve: 0}')
 [ "$out" = "$band" ] || fail "with the window full it printed: $out"
+# #14's combination passed: it waits on no run.
+out=$(segment_with '.branches[0].window = 2 | .room = {bound: 2, queue: 1, sessions: 1, reserve: 0}
+  | .branches[0].submissions |= map(if .id == 14 then .state = "passed" else . end)')
+[ "$out" = "$band" ] || fail "with nothing queued it printed: $out"
 pass
 
 fresh "status: branches keep the overview's order"

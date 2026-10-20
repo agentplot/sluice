@@ -86,11 +86,12 @@ def shown($now): busy or ((.recent | last | .at | since($now)) // 900) < 900;
 
 # Whether agents' checks hold back this branch's queue, by the document's
 # $room: the host has no free run, a session run holds one, and the branch
-# has a submission waiting while fewer of its combinations are under test
-# than its window. Nothing without a room: an older sluice gives none.
+# has a submission queued while fewer of its combinations are under test
+# than its window. One whose combination passed waits on no run. Nothing
+# without a room: an older sluice gives none.
 def held_back($room): $room != null and ($room.sessions // 0) > 0
   and (($room.queue // 0) + $room.sessions) >= ($room.bound // 0)
-  and (waiting | length) > 0 and (testing | length) < (.window // 0);
+  and any(.submissions[]; .state == "queued") and (testing | length) < (.window // 0);
 
 def held_words($room): if $room.sessions == 1 then "1 slot to an agent's checks"
   else "\($room.sessions) slots to agents' checks" end;

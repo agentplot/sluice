@@ -76,7 +76,7 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   board's band says it: `sluice main · 3 submissions · testing
   main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa`. When
   agents' checks hold the queue back, the host has no run free while a
-  submission waits, and the line ends `· 1 slot to an agent's checks`.
+  submission is queued, and the line ends `· 1 slot to an agent's checks`.
 
 Every token is set again at least every 15 seconds and expires after two
 minutes, so nothing stale stays if the plugin stops.
