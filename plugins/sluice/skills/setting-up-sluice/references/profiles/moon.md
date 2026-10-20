@@ -12,6 +12,8 @@ when the branch trusts the cache.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]   # optional: the shell the tasks run in
 release = "scripts/stack-down"            # optional: removes what tasks hand off
+ready = ["docker", "info"]                # optional: the host can run the tasks
+not_run = [77]                            # optional: exits meaning "could not run here"
 
 [branches."bolt/*"]
 required = ["#check-fast"]                # moon targets: a tag (#tag) or project:task

@@ -20,10 +20,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
-use sluice_seams::{Outcome, Source, TaskProgress, TaskResult, TaskState};
+use sluice_seams::{NotRun, Outcome, Source, TaskProgress, TaskResult, TaskState};
 
-use super::checks::{Context, Plan};
-use crate::runs::Ended;
+use super::checks::{not_run_reason, Context, Plan};
 
 /// The run report, relative to the place.
 const REPORT: &str = ".moon/cache/runReport.json";
@@ -146,22 +145,26 @@ impl Moon {
 
     /// Each required target's result from moon's run report: a task that
     /// ran, `Ran` with its outcome; one answered from the cache,
-    /// `Replayed`; anything else, no result (15, 16, 38; rule core.9).
+    /// `Replayed`; one that failed with an exit `not_run` names, not run
+    /// (could-not-run-1 114); anything else, no result (15, 16, 38; rule
+    /// core.9).
     pub fn read(
         &self,
         place: &Path,
         targets: &[String],
-        _ended: &Ended,
+        not_run: &[i32],
         host: &str,
-    ) -> Result<Vec<TaskResult>> {
+    ) -> Result<(Vec<TaskResult>, Vec<NotRun>)> {
         let report = match std::fs::read(place.join(REPORT)) {
             Ok(b) => b,
             // Ended before moon wrote it, or nothing was run.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), Vec::new()))
+            }
             Err(e) => return Err(e.into()),
         };
         let report: Value = serde_json::from_slice(&report).context("reading moon's run report")?;
-        Ok(read_report(&report, targets, host))
+        Ok(read_report(&report, targets, not_run, host))
     }
 
     /// ADR 0028: where each of `targets` has got in a run still going,
@@ -333,10 +336,17 @@ fn changed_files(place: &Path, base: &str, head: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The results of `targets` in a run report. Only `RunTask(…)` actions
-/// are checks: a `wait` dependency's `RunPersistentTask(…)` is a helper.
-fn read_report(report: &Value, targets: &[String], host: &str) -> Vec<TaskResult> {
+/// The results of `targets` in a run report, and those that failed with
+/// an exit `not_run` names. Only `RunTask(…)` actions are checks: a
+/// `wait` dependency's `RunPersistentTask(…)` is a helper.
+fn read_report(
+    report: &Value,
+    targets: &[String],
+    not_run: &[i32],
+    host: &str,
+) -> (Vec<TaskResult>, Vec<NotRun>) {
     let mut out = Vec::new();
+    let mut unjudged = Vec::new();
     for action in report["actions"].as_array().into_iter().flatten() {
         let Some(label) = action["label"].as_str() else {
             continue;
@@ -364,9 +374,21 @@ fn read_report(report: &Value, targets: &[String], host: &str) -> Vec<TaskResult
         };
         let hydrated =
             op("output-hydration").is_some_and(|o| o["status"].as_str() == Some("cached"));
+        let exit = op("task-execution")
+            .and_then(|o| o["meta"]["exitCode"].as_i64())
+            .and_then(|c| i32::try_from(c).ok());
         let (outcome, replayed) = match action["status"].as_str() {
             Some("passed") => (Outcome::Pass, hydrated),
-            Some("failed") => (Outcome::Fail, false),
+            Some("failed") => match exit.filter(|c| not_run.contains(c)) {
+                Some(code) => {
+                    unjudged.push(NotRun {
+                        task: target.to_string(),
+                        reason: not_run_reason(code),
+                    });
+                    continue;
+                }
+                None => (Outcome::Fail, false),
+            },
             Some("cached" | "cached-from-remote") => (Outcome::Pass, true),
             _ => continue,
         };
@@ -385,7 +407,8 @@ fn read_report(report: &Value, targets: &[String], host: &str) -> Vec<TaskResult
     }
     // In target order, whatever order moon ran them in.
     out.sort_by(|a, b| a.task.cmp(&b.task));
-    out
+    unjudged.sort_by(|a, b| a.task.cmp(&b.task));
+    (out, unjudged)
 }
 
 /// A task's run record as moon writes it when the task ends.
@@ -529,7 +552,8 @@ mod tests {
         let targets: Vec<String> = ["a:test", "b:test", "c:test", "d:test", "e:serve"]
             .map(String::from)
             .to_vec();
-        let got = read_report(&report, &targets, "h");
+        let (got, unjudged) = read_report(&report, &targets, &[], "h");
+        assert!(unjudged.is_empty());
         let short: Vec<(&str, &str, Outcome, bool)> = got
             .iter()
             .map(|t| {
@@ -548,6 +572,16 @@ mod tests {
                 ("b:test", "h2", Outcome::Pass, true),
                 ("c:test", "h3", Outcome::Fail, false),
             ]
+        );
+        // Could-not-run-1 114: an exit `not_run` names is no fail.
+        let (got, unjudged) = read_report(&report, &targets, &[1], "h");
+        assert!(!got.iter().any(|t| t.task == "c:test"));
+        assert_eq!(unjudged.len(), 1);
+        assert_eq!(unjudged[0].task, "c:test");
+        assert!(
+            unjudged[0].reason.contains("exited 1"),
+            "{}",
+            unjudged[0].reason
         );
     }
 

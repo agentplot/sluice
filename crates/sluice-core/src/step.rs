@@ -39,6 +39,10 @@ use crate::records::{
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
 
+/// Could-not-run-1 115: the deployment's bound on a candidate's runs in a
+/// row that leave a check not run and fail none on its own result.
+pub const NOT_RUN_BOUND: u32 = 3;
+
 /// A round: how its step went, the session places it released because
 /// their worktrees no longer exist (session-runs-1 clause 97), and the
 /// previews it released because nobody can use them (previews-1 clause
@@ -536,6 +540,7 @@ impl Sluice<'_> {
                         now,
                         Event::Lost {
                             combination: c.revision.clone(),
+                            not_run: Vec::new(),
                         },
                     );
                 }
@@ -597,6 +602,40 @@ impl Sluice<'_> {
                     // check; a report holding none of them is no pass.
                     if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {
                         v.passed = false;
+                    }
+                    // Could-not-run-1 114, 115: checks the run did not
+                    // judge have no outcome. With nothing failed on its own
+                    // result, the candidate runs again and nobody is blamed,
+                    // up to the bound; past it, or beside a check that
+                    // failed, each is named with why.
+                    if !report.not_run.is_empty() {
+                        let x = line.candidate_mut(&c.id).expect("polled candidate");
+                        if v.failed.is_empty() && !v.timed_out {
+                            x.not_run_runs += 1;
+                            if x.not_run_runs < NOT_RUN_BOUND {
+                                x.state = CandidateState::Formed;
+                                x.run = None;
+                                if let Some(p) = x.place.take() {
+                                    line.doc.release.push(p);
+                                }
+                                line.log(
+                                    now,
+                                    Event::Lost {
+                                        combination: c.revision.clone(),
+                                        not_run: report.not_run.clone(),
+                                    },
+                                );
+                                continue;
+                            }
+                        }
+                        v.passed = false;
+                        v.failed.extend(report.not_run.iter().map(|n| FailedTask {
+                            task: n.task.clone(),
+                            hash: String::new(),
+                            log: None,
+                            flaky: None,
+                            not_run: Some(n.reason.clone()),
+                        }));
                     }
                     // 20: what the failed tasks printed, kept while the
                     // place still holds it.
@@ -758,6 +797,7 @@ impl Sluice<'_> {
                         every_check: false,
                         ran: 0,
                         replayed: 0,
+                        not_run_runs: 0,
                     });
                     prev = rev.clone();
                     ids.push(cid);

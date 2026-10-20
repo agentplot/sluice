@@ -77,7 +77,8 @@ it**; sluice has already checked the entries ahead passed on their own.
 1. Open the log path printed after `log of <task>:` (also
    `failed[].log` in `sluice status <id> --json`).
 2. Reproduce in your worktree with `sluice exec <branch>`, the same tests
-   under the same limits.
+   under the same limits. If `sluice exec` itself goes wrong, find out why
+   and tell the user; don't route around it.
 3. Fix, commit, submit again.
 
 A **conflict** names the paths and the submission it conflicts with. Merge
@@ -108,7 +109,9 @@ Pick the form by what you want from the run:
    It covers uncommitted edits, uses moon's cache, records nothing, and is
    the fast loop. Going through `sluice exec` rather than straight to moon
    shares the host's bound with the queue's runs and gives your worktree
-   ports no other worktree holds.
+   ports no other worktree holds. Run suites this way, so the sessions on
+   one host take turns rather than all running at once; a quick, narrow
+   call, such as a type check or one unit test, can run directly.
 2. **Before submitting**, to get the gate's own verdict early: commit, then
 
    ```sh

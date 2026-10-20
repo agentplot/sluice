@@ -213,6 +213,10 @@ fn a_flaky_failure_says_so() {
             format!("  log of this run: {this_log}"),
             format!("  log of the run that failed: {failed_log}"),
             format!(
+                "  if the host caused that fail, the operator can set it aside: \
+                 sluice set-aside tests:t-batch-cards --at {at} --reason \"…\""
+            ),
+            format!(
                 "  {BRANCH} reads a test that passed and failed on the same inputs as failed \
                  (flaky = \"fail\")"
             ),
@@ -222,6 +226,58 @@ fn a_flaky_failure_says_so() {
         ],
         "{out}"
     );
+}
+
+/// Could-not-run-1 116: the operator sets aside the fail a host caused;
+/// the same head then lands, and asking again for it is refused.
+#[test]
+fn a_fail_set_aside_lets_the_same_head_land() {
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    let submit = ["submit", BRANCH, "--worktree", "unit/batch-review"];
+    assert_eq!(sluice(&f, &submit).0, FAILED);
+    assert_eq!(sluice(&f, &submit).0, FAILED, "the key reads flaky");
+    let (_, json) = sluice(&f, &["status", "2", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let at = v["failed"][0]["flaky"]["other"]["at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let aside = [
+        "set-aside",
+        "tests:t-batch-cards",
+        "--at",
+        &at,
+        "--reason",
+        "the engine was down",
+    ];
+    let (code, out) = sluice(&f, &aside);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("set aside tests:t-batch-cards "), "{out}");
+    assert!(
+        out.contains(&format!("recorded at {at} on {BRANCH} ")),
+        "{out}"
+    );
+    assert!(
+        out.ends_with(
+            ": the engine was down\nno gate reads it from now; its line stays in the results\n"
+        ),
+        "{out}"
+    );
+    let (code, out) = sluice(&f, &aside);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("already set aside"), "{out}");
+
+    let (code, out) = sluice(&f, &submit);
+    assert_eq!(code, LANDED, "{out}");
 }
 
 #[test]

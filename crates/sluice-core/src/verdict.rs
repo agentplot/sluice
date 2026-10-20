@@ -93,6 +93,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
                 hash: t.hash.clone(),
                 log: None,
                 flaky,
+                not_run: None,
             });
         }
     }
@@ -103,6 +104,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             hash: String::new(),
             log: None,
             flaky: None,
+            not_run: None,
         });
     }
     Verdict {
@@ -156,6 +158,7 @@ mod tests {
                 source,
             }],
             missing: Vec::new(),
+            not_run: Vec::new(),
             timed_out: false,
             executor,
         }

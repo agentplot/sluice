@@ -258,6 +258,29 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Set aside a recorded result its host caused, not its test: no gate
+    /// reads it again, and its line stays. The operator's to do, never a
+    /// session's.
+    #[command(
+        name = "set-aside",
+        after_help = "Example:\n  $ sluice set-aside cli:tools --at 2026-10-17T13:05:32Z \\\n      --reason \"OrbStack was down\""
+    )]
+    SetAside {
+        /// The test, as its result names it.
+        task: String,
+        /// When the result was recorded, as `sluice status` gives it.
+        #[arg(long)]
+        at: String,
+        /// The start of the result's key, when two were recorded at once.
+        #[arg(long)]
+        hash: Option<String>,
+        /// Why the result says nothing of the test.
+        #[arg(long)]
+        reason: String,
+        /// One JSON document on stdout; the rest on stderr.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run the checks this worktree's head affects against a branch, or a
     /// command after `--`, under the host's bound, the worktree's ports
     /// and the branch's limits.
@@ -592,6 +615,7 @@ impl Cli {
                 | Command::Step { json, .. }
                 | Command::Amend { json, .. }
                 | Command::Withdraw { json, .. }
+                | Command::SetAside { json, .. }
                 | Command::Release { json, .. }
                 | Command::Protect { json, .. }
                 | Command::Forge {
@@ -920,6 +944,52 @@ pub fn run(
                 Ok(2)
             }
         },
+        Command::SetAside {
+            task,
+            at,
+            hash,
+            reason,
+            json,
+        } => {
+            let by = format!(
+                "{}@{}",
+                std::env::var("USER").unwrap_or_else(|_| "someone".into()),
+                profiles::checks::hostname()
+            );
+            match s.set_aside(&task, &at, hash.as_deref(), &reason, &by) {
+                Ok(aside) => {
+                    if json {
+                        writeln!(out, "{}", serde_json::to_string(&aside)?)?;
+                    } else {
+                        writeln!(
+                            out,
+                            "set aside {} {} recorded at {} on {} {}: {}",
+                            aside.task,
+                            &aside.hash[..aside.hash.len().min(12)],
+                            aside.run_at,
+                            aside.branch,
+                            aside.combination.short(),
+                            aside.reason
+                        )?;
+                        writeln!(
+                            out,
+                            "no gate reads it from now; its line stays in the results"
+                        )?;
+                    }
+                    Ok(0)
+                }
+                Err(e) => {
+                    told::tell(
+                        out,
+                        json,
+                        Kind::Refused,
+                        &format!("refused: {e:#}"),
+                        &["sluice status --all".to_string()],
+                    )?;
+                    Ok(2)
+                }
+            }
+        }
         Command::Exec {
             branch,
             command,
@@ -1366,6 +1436,13 @@ fn report(
             if !not_run.is_empty() {
                 writeln!(out, "not run: {}", not_run.join(", "))?;
             }
+            // Could-not-run-1 115: a test that could not run, and why.
+            let could_not: Vec<&FailedTask> =
+                sub.failed.iter().filter(|f| f.not_run.is_some()).collect();
+            for f in &could_not {
+                let why = f.not_run.as_deref().unwrap_or_default();
+                writeln!(out, "  {} could not run: {why}", f.task)?;
+            }
             writeln!(
                 out,
                 "  on {} ({})",
@@ -1421,6 +1498,16 @@ fn report(
                 if let Some(at) = &k.other.log {
                     writeln!(out, "  log of the run that {}: {at}", word(k.other.outcome))?;
                 }
+                // Could-not-run-1 116: a fail the host caused is the
+                // operator's to set aside.
+                if k.other.outcome == Outcome::Fail {
+                    writeln!(
+                        out,
+                        "  if the host caused that fail, the operator can set it aside: \
+                         sluice set-aside {} --at {} --reason \"…\"",
+                        f.task, k.other.at
+                    )?;
+                }
             }
             if !flaky.is_empty() {
                 writeln!(
@@ -1429,7 +1516,18 @@ fn report(
                      (flaky = \"fail\")"
                 )?;
             }
-            if timed_out || !not_run.is_empty() || ran.len() > flaky.len() {
+            if !could_not.is_empty() {
+                writeln!(
+                    out,
+                    "the host could not run {}: once it can, submit again{same_commits}",
+                    could_not
+                        .iter()
+                        .map(|f| f.task.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
+            }
+            if timed_out || not_run.len() > could_not.len() || ran.len() > flaky.len() {
                 writeln!(
                     out,
                     "fix it in your worktree and submit again{same_commits}"
@@ -1690,9 +1788,10 @@ fn detail(branch: &str, s: &Submission) -> String {
             let tasks: Vec<String> = s
                 .failed
                 .iter()
-                .map(|f| match f.flaky {
-                    Some(_) => format!("{} (flaky)", f.task),
-                    None => f.task.clone(),
+                .map(|f| match (&f.flaky, &f.not_run) {
+                    (Some(_), _) => format!("{} (flaky)", f.task),
+                    (None, Some(_)) => format!("{} (could not run)", f.task),
+                    (None, None) => f.task.clone(),
                 })
                 .collect();
             let what = if tasks.is_empty() {
@@ -1888,6 +1987,7 @@ fn last_result_text(r: &sluice_seams::LastResult) -> String {
         RunOutcome::TimedOut => "timed out",
         RunOutcome::Lost => "lost",
         RunOutcome::Stopped => "stopped",
+        RunOutcome::NotRun => "could not run",
     };
     let head = r.head.short();
     match (r.kind, r.recorded) {

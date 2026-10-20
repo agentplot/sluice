@@ -138,6 +138,8 @@ pub enum RunOutcome {
     Lost,
     /// Its caller ended it.
     Stopped,
+    /// Nothing failed and a check could not run (could-not-run-1 114).
+    NotRun,
 }
 
 /// A worktree of the repository with a branch checked out, as the place
@@ -439,6 +441,17 @@ pub struct TaskResult {
     pub source: Source,
 }
 
+/// A check a run did not judge: its program could not be started, it
+/// exited as the policy's `not_run` names, or the host failed `ready`
+/// after it (could-not-run-1 114). It has no outcome (60): no result
+/// under its key, and it is run again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotRun {
+    pub task: String,
+    /// Why, for the person told of it (20).
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunReport {
     pub tasks: Vec<TaskResult>,
@@ -447,6 +460,9 @@ pub struct RunReport {
     /// 15: required checks the run was to run that it left without a
     /// result: skipped, or never reached. None of them passes.
     pub missing: Vec<String>,
+    /// Checks the run did not judge (could-not-run-1 114): in neither
+    /// `tasks` nor `missing`.
+    pub not_run: Vec<NotRun>,
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
@@ -788,6 +804,13 @@ pub trait State {
 
     /// 69: append to the repository's results log.
     fn record_results(&self, lines: &[u8]) -> Result<()>;
+
+    /// Could-not-run-1 116: the results set aside, one JSON document per
+    /// line, beside the results log and never in it.
+    fn set_asides(&self) -> Result<Vec<u8>>;
+
+    /// Could-not-run-1 116: append one set-aside, under the records' lock.
+    fn set_aside(&self, line: &[u8]) -> Result<()>;
 
     /// 20: keep a failed candidate's task outputs, readable with no sluice
     /// running (26); the answer says where each is. Only the last

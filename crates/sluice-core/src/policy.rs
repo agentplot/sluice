@@ -405,6 +405,8 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
                 xs.into_iter()
                     .map(|x| match x {
                         toml::Value::String(s) => Ok(s),
+                        // A number is its digits, as on its own.
+                        toml::Value::Integer(n) => Ok(n.to_string()),
                         other => bail!("{section} {k} must list strings, not {other}"),
                     })
                     .collect::<Result<_>>()?,
@@ -755,7 +757,15 @@ batch = true
         assert!(Policy::parse("[executor]\ncpus = 2\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"lots\"\n").is_err());
         assert!(Policy::parse("[executor]\nmemory = \"8\"\n").is_err());
-        assert!(Policy::parse("[tests]\nshell = [1]\n").is_err());
+        assert!(Policy::parse("[tests]\nshell = [1.5]\n").is_err());
+        // A number in a list is its digits, as on its own: `not_run`'s
+        // exits (could-not-run-1 114).
+        assert_eq!(
+            Policy::parse("[tests]\nnot_run = [77, 99]\n")
+                .unwrap()
+                .tests["not_run"],
+            Setting::List(vec!["77".into(), "99".into()])
+        );
         assert!(Policy::parse("[tests]\njobs = true\n").is_err());
         assert_eq!(
             Policy::parse("[checkout]\nports_from = 20000\n")
