@@ -69,6 +69,7 @@ Then ask the user which branches sluice should gate (`main`; a family like
 | sluice's identity on GitHub (host `[forge]`) | a GitHub App | [github-app](references/profiles/github-app.md) |
 | how work reaches the queue | straight from a worktree, or pull requests | [pull-requests](references/profiles/pull-requests.md) |
 | running copies of landed revisions (`[preview]`) | a command per repository | [previews](references/profiles/previews.md) |
+| more than one host, or more than one system (`[signers]`, `[systems]`, `[pools]`) | peers on the git remote; standing hosts first, then GitHub Actions | [peers](references/profiles/peers.md) |
 
 The rules per branch (`required`, `parallel`, `batch`, `flaky`, `timeout`,
 `trust`) and `[landing] subject` are in the
@@ -123,6 +124,7 @@ draws all of this.
 Complete starting points:
 [moon-minimal](references/examples/moon-minimal.sluice.toml),
 [moon-worktrunk-github](references/examples/moon-worktrunk-github.sluice.toml),
+[moon-peers-github](references/examples/moon-peers-github.sluice.toml),
 [command-only](references/examples/command-only.sluice.toml).
 Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
 

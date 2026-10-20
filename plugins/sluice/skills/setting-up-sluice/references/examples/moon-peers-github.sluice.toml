@@ -1,0 +1,56 @@
+# .config/sluice.toml: many hosts as peers, with no server. The queue for
+# every branch with a remote lives on origin under refs/sluice/; a box
+# the operator keeps running takes runs first, GitHub Actions the rest.
+# main must pass cli:build on three systems.
+
+[tests]
+runner = "moon"
+
+[checkout]
+ports = ["api", "web"]
+
+[systems]
+linux-x64 = { os = "linux", arch = "x86_64" }
+linux-arm64 = { os = "linux", arch = "aarch64" }
+macos-arm64 = { os = "macos", arch = "aarch64" }
+
+[signers.box]
+ssh = "exec@build-1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly"
+confined = true                                                          # container checkouts; no session reaches its engine
+systems = ["linux-x64"]
+
+[signers.forge]
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+confined = true                                                                 # a fresh machine per job
+systems = ["linux-x64", "linux-arm64", "macos-arm64"]
+
+[signers.sessions]
+ssh = ".config/sluice.sessions" # one line per session host's key
+confined = false
+
+# Where the lead starts runs no standing host can take, in order.
+[pools.forge]
+github = { workflow = ".github/workflows/sluice.yml" }
+signer = "forge"
+runners = { linux-x64 = "ubuntu-24.04", linux-arm64 = "ubuntu-24.04-arm", macos-arm64 = "macos-15" }
+
+[branches."bolt/*"]
+remote = "origin"
+required = ["#check-fast"]
+trust = ["sessions", "box", "forge"] # no systems named: any one system
+
+[branches.main]
+remote = "origin"
+required = ["#check-fast", "#integration", "cli:build"]
+trust = ["box", "forge"]
+confined = true
+systems = ["linux-x64"]
+batch = true
+timeout = "45m"
+
+[branches.main.systems_for]
+"cli:build" = ["linux-x64", "linux-arm64", "macos-arm64"]
+
+[branches.main.pull_requests]
+reviews = 1
+checks = ["codeql"] # other systems' checks; sluice's own are its results

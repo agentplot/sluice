@@ -23,7 +23,8 @@ required = ["#check-fast", "#check-tools"]
   `refused` and the next round tests again on the new tip. Nothing in the
   queue is lost.
 - Only the branch is pushed; the queue, results and logs stay in
-  `$(git rev-parse --git-common-dir)/sluice/` on the host.
+  `$(git rev-parse --git-common-dir)/sluice/` on the host. A policy with
+  `[signers]` keeps them on the remote instead: see [peers](peers.md).
 
 ## Turning it on
 

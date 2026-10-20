@@ -33,6 +33,61 @@ pub struct Policy {
     /// `[preview]`: how a preview of this revision is brought up
     /// (previews-1 clauses 98, 99); `None` when the table is absent.
     pub preview: Option<Preview>,
+    /// `[systems]`: what a run may execute on, by name (85, 86).
+    pub systems: BTreeMap<String, System>,
+    /// `[signers]`: who may sign runs, and the most each may claim (78,
+    /// 79). A policy with signers keeps every branch with a `remote` on
+    /// its remote (C.6).
+    pub signers: BTreeMap<String, Signer>,
+    /// `[pools]`, in the order written: where the lead starts the runs no
+    /// standing executor can take (88, 107).
+    pub pools: Vec<Pool>,
+    /// What the policy says that sluice reads differently than it is
+    /// written, for `sluice status` to show.
+    pub warnings: Vec<String>,
+}
+
+/// `[systems.<name>]`: a processor architecture and operating system, as
+/// the toolchain names them (85).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct System {
+    pub os: String,
+    pub arch: String,
+}
+
+/// `[signers.<name>]` (78, 79): one identity, which the records seam's
+/// profile reads and the core does not, and the claims it may make.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signer {
+    /// The identity's kind, the one key of the table that is not a claim,
+    /// and its value.
+    pub identity: (String, Setting),
+    /// Whether its runs may be read as confined (29, 79).
+    pub confined: bool,
+    /// The systems its runs may claim; `None` for every system.
+    pub systems: Option<Vec<String>>,
+}
+
+impl Signer {
+    /// 79: whether a run it signed may claim `system`.
+    pub fn may_claim(&self, system: &str) -> bool {
+        self.systems
+            .as_ref()
+            .is_none_or(|s| s.iter().any(|x| x == system))
+    }
+}
+
+/// `[pools.<name>]` (88, 107): a job service the check seam's launched
+/// profile drives, the signer its jobs sign as, and its runner for each
+/// system.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pool {
+    pub name: String,
+    /// The pool's kind, the one key of the table that is not `signer` or
+    /// `runners`, and its value, for the profile.
+    pub kind: (String, Setting),
+    pub signer: String,
+    pub runners: BTreeMap<String, String>,
 }
 
 /// `[preview]`: what brings a preview of the revision up, and the
@@ -70,9 +125,21 @@ pub struct Rules {
     pub flaky: Flaky,
     /// How long one candidate's checks may run (66).
     pub timeout: Option<Duration>,
-    /// Which results satisfy the gate (27 to 29): `confined`, executor
-    /// kinds, and `cache` for replays.
+    /// Which results satisfy the gate (27 to 29): on a branch whose
+    /// records are on its remote, signer names (78); otherwise
+    /// `confined` and executor kinds.
     pub trust: Vec<String>,
+    /// Whether the branch's records are on its remote: it names a
+    /// `remote`, and the policy names signers (C.6).
+    pub signed: bool,
+    /// Whether only confined runs count, on a branch whose records are
+    /// on its remote (29, 79).
+    pub confined: bool,
+    /// The systems every required check must pass on; empty for any one
+    /// system (86).
+    pub systems: Vec<String>,
+    /// The systems one check must pass on, in place of `systems` (86).
+    pub systems_for: BTreeMap<String, Vec<String>>,
     /// The git remote the branch lives on (C.4, C.7): read by fetch and
     /// landed by a leased push. `None` for a local branch.
     pub remote: Option<String>,
@@ -108,9 +175,17 @@ impl Rules {
     }
 
     /// 29: whether a run of the executor `kind` can ever satisfy the gate:
-    /// only a container is confined today.
+    /// only a container is confined today. On a branch whose records are
+    /// on its remote, what satisfies the gate is a signer's (78), so no
+    /// executor kind rules a run out.
     pub fn satisfiable_by(&self, kind: &str) -> bool {
-        self.trusts(kind) || (kind == "container" && self.trusts("confined"))
+        self.signed || self.trusts(kind) || (kind == "container" && self.trusts("confined"))
+    }
+
+    /// 86: the systems a pass of `check` must come from; empty for any
+    /// one system.
+    pub fn systems_of(&self, check: &str) -> &[String] {
+        self.systems_for.get(check).unwrap_or(&self.systems)
     }
 }
 
@@ -126,6 +201,10 @@ impl Default for Rules {
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
+            signed: false,
+            confined: false,
+            systems: Vec::new(),
+            systems_for: BTreeMap::new(),
             remote: None,
             pull_requests: None,
         }
@@ -146,6 +225,19 @@ struct FileForm {
     #[serde(default)]
     landing: LandingForm,
     preview: Option<PreviewForm>,
+    #[serde(default)]
+    systems: BTreeMap<String, SystemForm>,
+    #[serde(default)]
+    signers: BTreeMap<String, BTreeMap<String, toml::Value>>,
+    #[serde(default)]
+    pools: BTreeMap<String, toml::Spanned<BTreeMap<String, toml::Value>>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SystemForm {
+    os: String,
+    arch: String,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +276,12 @@ struct RulesForm {
     trust: Option<Vec<String>>,
     remote: Option<String>,
     pull_requests: Option<PullRequestsForm>,
+    confined: Option<bool>,
+    systems: Option<Vec<String>>,
+    systems_for: Option<BTreeMap<String, Vec<String>>>,
+    // The host's, never a branch's (74): read only to refuse them by name.
+    lease: Option<toml::Value>,
+    alive: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -208,9 +306,116 @@ impl Policy {
             network: form.executor.network,
             docker: form.executor.docker.unwrap_or(false),
         };
+        let systems: BTreeMap<String, System> = form
+            .systems
+            .into_iter()
+            .map(|(n, s)| {
+                (
+                    n,
+                    System {
+                        os: s.os,
+                        arch: s.arch,
+                    },
+                )
+            })
+            .collect();
+        let known = |what: &str, names: &[String]| -> Result<()> {
+            match names.iter().find(|n| !systems.contains_key(*n)) {
+                Some(n) => bail!(
+                    "{what} names the system {n:?}, which [systems] does not name{}",
+                    listed(systems.keys())
+                ),
+                None => Ok(()),
+            }
+        };
+        let mut signers = BTreeMap::new();
+        for (name, mut table) in form.signers {
+            let at = format!("[signers.{name}]");
+            let confined = match table.remove("confined") {
+                None => false,
+                Some(toml::Value::Boolean(b)) => b,
+                Some(v) => bail!("{at} confined must be true or false, not {v}"),
+            };
+            let systems = match table.remove("systems") {
+                None => None,
+                Some(v) => Some(strings(v, &format!("{at} systems"))?),
+            };
+            if let Some(s) = &systems {
+                known(&at, s)?;
+            }
+            let identity = one(table, &at, "identity")?;
+            signers.insert(
+                name,
+                Signer {
+                    identity,
+                    confined,
+                    systems,
+                },
+            );
+        }
+        let mut pools: Vec<(usize, Pool)> = Vec::new();
+        for (name, spanned) in form.pools {
+            let at = format!("[pools.{name}]");
+            let start = spanned.span().start;
+            let mut table = spanned.into_inner();
+            let signer = match table.remove("signer") {
+                Some(toml::Value::String(s)) => s,
+                Some(v) => bail!("{at} signer must name a signer, not {v}"),
+                None => bail!("{at} names no signer; its jobs sign as one of [signers]"),
+            };
+            let runners = match table.remove("runners") {
+                Some(toml::Value::Table(t)) if !t.is_empty() => t
+                    .into_iter()
+                    .map(|(s, v)| match v {
+                        toml::Value::String(l) => Ok((s, l)),
+                        v => bail!("{at} runners.{s} must be a string, not {v}"),
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()?,
+                _ => bail!(
+                    "{at} names no runners: a table of each system it runs and the runner for it"
+                ),
+            };
+            let kind = one(table, &at, "kind")?;
+            let Some(s) = signers.get(&signer) else {
+                bail!("{at} signs as {signer:?}, which [signers] does not name");
+            };
+            if s.identity.0 != kind.0 {
+                bail!(
+                    "{at} is a {} pool and its signer {signer} signs by {}; a pool's jobs sign as a signer of its own kind",
+                    kind.0,
+                    s.identity.0
+                );
+            }
+            let names: Vec<String> = runners.keys().cloned().collect();
+            known(&format!("{at} runners"), &names)?;
+            if let Some(n) = names.iter().find(|n| !s.may_claim(n)) {
+                bail!("{at} has a runner for {n}, which its signer {signer} may not claim (79)");
+            }
+            pools.push((
+                start,
+                Pool {
+                    name,
+                    kind,
+                    signer,
+                    runners,
+                },
+            ));
+        }
+        pools.sort_by_key(|(start, _)| *start);
+        let pools: Vec<Pool> = pools.into_iter().map(|(_, p)| p).collect();
         let mut branches = Vec::new();
         for (pattern, r) in form.branches {
             let d = Rules::default();
+            let at = format!("[branches.\"{pattern}\"]");
+            for (key, v) in [("lease", &r.lease), ("alive", &r.alive)] {
+                if v.is_some() {
+                    bail!(
+                        "{at} sets {key}, which is the host's, never a branch's (74): \
+                         set it under [peers] in the host's config"
+                    );
+                }
+            }
+            let signed = r.remote.is_some() && !signers.is_empty();
             let parallel = match r.parallel {
                 None => d.parallel,
                 Some(n) if n >= 1 => n as usize,
@@ -231,12 +436,40 @@ impl Policy {
                         .with_context(|| format!("[branches.\"{pattern}\"] timeout"))?,
                 ),
             };
-            let trust = r.trust.unwrap_or(d.trust);
-            if let Some(t) = trust.iter().find(|t| !TRUSTS.contains(&t.as_str())) {
-                bail!(
-                    "[branches.\"{pattern}\"] trust lists {t:?}; it may list {}",
-                    TRUSTS.join(", ")
-                );
+            let trust = match r.trust {
+                Some(t) => t,
+                None if signed => Vec::new(),
+                None => d.trust,
+            };
+            if signed {
+                if let Some(t) = trust.iter().find(|t| !signers.contains_key(*t)) {
+                    let what = if TRUSTS.contains(&t.as_str()) {
+                        "an executor kind"
+                    } else {
+                        "no signer"
+                    };
+                    bail!(
+                        "{at} trust lists {t:?}, {what}; on a branch whose state is on its \
+                         remote, trust lists signers{}",
+                        listed(signers.keys())
+                    );
+                }
+            } else if let Some(t) = trust.iter().find(|t| !TRUSTS.contains(&t.as_str())) {
+                bail!("{at} trust lists {t:?}; it may list {}", TRUSTS.join(", "));
+            }
+            let confined = match r.confined {
+                Some(true) if !signed => bail!(
+                    "{at} sets confined, which asks a branch whose state is on its remote for \
+                     confined runs; this branch keeps its state on this host, so list \
+                     \"confined\" in trust"
+                ),
+                c => c.unwrap_or(false),
+            };
+            let systems_all = r.systems.unwrap_or_default();
+            known(&format!("{at} systems"), &systems_all)?;
+            let systems_for = r.systems_for.unwrap_or_default();
+            for (check, s) in &systems_for {
+                known(&format!("{at} systems_for.{check:?}"), s)?;
             }
             let pull_requests = match r.pull_requests {
                 None => None,
@@ -264,6 +497,10 @@ impl Policy {
                     flaky,
                     timeout,
                     trust,
+                    signed,
+                    confined,
+                    systems: systems_all,
+                    systems_for,
                     remote: r.remote,
                     pull_requests,
                 },
@@ -295,6 +532,10 @@ impl Policy {
             branches,
             landing_subject,
             preview,
+            systems,
+            signers,
+            pools,
+            warnings: Vec::new(),
         })
     }
 
@@ -416,6 +657,52 @@ fn settings(table: BTreeMap<String, toml::Value>, section: &str) -> Result<Setti
         out.insert(k, setting);
     }
     Ok(out)
+}
+
+/// A list of strings.
+fn strings(v: toml::Value, at: &str) -> Result<Vec<String>> {
+    match v {
+        toml::Value::Array(xs) => xs
+            .into_iter()
+            .map(|x| match x {
+                toml::Value::String(s) => Ok(s),
+                other => bail!("{at} must list strings, not {other}"),
+            })
+            .collect(),
+        other => bail!("{at} must be a list of strings, not {other}"),
+    }
+}
+
+/// The one key left in a signer's or a pool's table, for its profile: a
+/// string, a list of strings or a table of them.
+fn one(table: BTreeMap<String, toml::Value>, at: &str, what: &str) -> Result<(String, Setting)> {
+    let mut keys = table.into_iter();
+    let Some((k, v)) = keys.next() else {
+        bail!("{at} names no {what}");
+    };
+    if let Some((other, _)) = keys.next() {
+        bail!("{at} names more than one {what}: {k} and {other}; it names one");
+    }
+    let setting = match v {
+        toml::Value::String(s) => Setting::Text(s),
+        toml::Value::Table(t) => Setting::Tables(vec![settings(
+            t.into_iter().collect(),
+            &format!("{at} {k}"),
+        )?]),
+        v @ toml::Value::Array(_) => Setting::List(strings(v, &format!("{at} {k}"))?),
+        other => bail!("{at} {k} must be a string, a list of strings or a table, not {other}"),
+    };
+    Ok((k, setting))
+}
+
+/// `; [systems] names a, b`, or nothing when there are none.
+fn listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
+    let names: Vec<&str> = names.map(String::as_str).collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", names.join(", "))
+    }
 }
 
 /// `"512M"`, `"8G"`: bytes, in powers of 1024.
@@ -559,6 +846,12 @@ batch = true
                 ),
                 "main",
             ),
+            (
+                include_str!(
+                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-peers-github.sluice.toml"
+                ),
+                "main",
+            ),
         ];
         for (text, branch) in examples {
             let p = Policy::parse(text).unwrap_or_else(|e| panic!("an example in {DIR}: {e:#}"));
@@ -569,6 +862,10 @@ batch = true
         let main = full.rules_for("main").unwrap().unwrap();
         assert_eq!(main.remote.as_deref(), Some("origin"));
         assert!(main.pull_requests.is_some());
+        let peers = Policy::parse(examples[3].0).unwrap();
+        let main = peers.rules_for("main").unwrap().unwrap();
+        assert!(main.signed && main.confined);
+        assert_eq!(main.systems_of("cli:build").len(), 3);
     }
 
     /// sluice's own policy reads, and gates as section 9 says: bolt
@@ -826,5 +1123,201 @@ batch = true
         .unwrap();
         assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().parallel, 1);
         assert_eq!(p.rules_for("bolt/y").unwrap().unwrap().parallel, 3);
+    }
+
+    /// The statement's C.7 example: one repository's whole policy.
+    const PEERS: &str = r##"
+[tests]
+runner = "moon"
+
+[checkout]
+ports = ["api", "web"]
+
+[systems]
+linux-x64   = { os = "linux", arch = "x86_64" }
+linux-arm64 = { os = "linux", arch = "aarch64" }
+macos-arm64 = { os = "macos", arch = "aarch64" }
+
+[signers.box]
+ssh = "exec@build-1 ssh-ed25519 AAAAC3Nza..."
+confined = true
+systems = ["linux-x64"]
+
+[signers.forge]
+github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+confined = true
+systems = ["linux-x64", "linux-arm64", "macos-arm64"]
+
+[signers.sessions]
+ssh = ".config/sluice.sessions"
+confined = false
+
+[pools.forge]
+github = { workflow = ".github/workflows/sluice.yml" }
+signer = "forge"
+runners = { linux-x64 = "ubuntu-24.04", linux-arm64 = "ubuntu-24.04-arm", macos-arm64 = "macos-15" }
+
+[branches."bolt/*"]
+remote = "origin"
+required = ["#check-fast"]
+trust = ["sessions", "box", "forge"]
+
+[branches.main]
+remote = "origin"
+required = ["#check-fast", "#integration", "cli:build"]
+trust = ["box", "forge"]
+confined = true
+systems = ["linux-x64"]
+batch = true
+timeout = "45m"
+
+[branches.main.systems_for]
+"cli:build" = ["linux-x64", "linux-arm64", "macos-arm64"]
+
+[branches.main.pull_requests]
+reviews = 1
+checks = ["codeql"]
+"##;
+
+    #[test]
+    fn reads_the_peers_example_whole() {
+        let p = Policy::parse(PEERS).unwrap();
+        assert_eq!(p.systems.len(), 3);
+        assert_eq!(
+            p.systems["macos-arm64"],
+            System {
+                os: "macos".into(),
+                arch: "aarch64".into()
+            }
+        );
+        let forge = &p.signers["forge"];
+        assert_eq!(forge.identity.0, "github");
+        assert!(forge.confined && forge.may_claim("macos-arm64"));
+        assert!(!p.signers["box"].may_claim("macos-arm64"));
+        let sessions = &p.signers["sessions"];
+        assert_eq!(
+            sessions.identity,
+            (
+                "ssh".into(),
+                Setting::Text(".config/sluice.sessions".into())
+            )
+        );
+        assert!(!sessions.confined && sessions.may_claim("linux-arm64"));
+        assert_eq!(p.pools.len(), 1);
+        assert_eq!(p.pools[0].signer, "forge");
+        assert_eq!(p.pools[0].runners["macos-arm64"], "macos-15");
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert!(main.signed && main.confined);
+        assert_eq!(main.trust, ["box", "forge"]);
+        assert_eq!(main.systems_of("#check-fast"), ["linux-x64"]);
+        assert_eq!(main.systems_of("cli:build").len(), 3);
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert!(bolt.signed && !bolt.confined);
+        assert!(bolt.systems_of("#check-fast").is_empty());
+        assert!(main.satisfiable_by("open"));
+    }
+
+    fn refused(policy: &str) -> String {
+        format!("{:#}", Policy::parse(policy).unwrap_err())
+    }
+
+    #[test]
+    fn pools_keep_the_order_written() {
+        let p = Policy::parse(&format!(
+            "{PEERS}\n[pools.alpha]\ngithub = {{ workflow = \"a.yml\" }}\nsigner = \"forge\"\nrunners = {{ linux-x64 = \"x\" }}\n"
+        ))
+        .unwrap();
+        let names: Vec<&str> = p.pools.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["forge", "alpha"]);
+    }
+
+    #[test]
+    fn a_signer_has_exactly_one_identity() {
+        let two = refused("[signers.box]\nssh = \"k\"\ngithub = { workflow = \"w\" }\n");
+        assert!(
+            two.contains("[signers.box]") && two.contains("more than one"),
+            "{two}"
+        );
+        let none = refused("[signers.box]\nconfined = true\n");
+        assert!(none.contains("[signers.box] names no identity"), "{none}");
+    }
+
+    #[test]
+    fn an_unknown_system_is_refused_by_name() {
+        let e = refused(&PEERS.replace(
+            "systems = [\"linux-x64\"]\nbatch",
+            "systems = [\"linux-riscv\"]\nbatch",
+        ));
+        assert!(
+            e.contains("linux-riscv") && e.contains("[branches.\"main\"] systems"),
+            "{e}"
+        );
+        let e = refused(&PEERS.replace(
+            "\"cli:build\" = [\"linux-x64\",",
+            "\"cli:build\" = [\"win\",",
+        ));
+        assert!(e.contains("\"win\""), "{e}");
+        let e = refused(&PEERS.replace(
+            "systems = [\"linux-x64\"]\n\n[signers.forge]",
+            "systems = [\"x\"]\n\n[signers.forge]",
+        ));
+        assert!(e.contains("[signers.box]") && e.contains("\"x\""), "{e}");
+    }
+
+    #[test]
+    fn a_pool_runner_its_signer_may_not_claim_is_refused() {
+        let e = refused(&PEERS.replace(
+            "systems = [\"linux-x64\", \"linux-arm64\", \"macos-arm64\"]\n\n[signers.sessions]",
+            "systems = [\"linux-x64\", \"linux-arm64\"]\n\n[signers.sessions]",
+        ));
+        assert!(
+            e.contains("[pools.forge]") && e.contains("macos-arm64"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_pool_signs_as_a_signer_of_its_kind() {
+        let e = refused(&PEERS.replace("signer = \"forge\"", "signer = \"box\""));
+        assert!(e.contains("[pools.forge]") && e.contains("own kind"), "{e}");
+        let e = refused(&PEERS.replace("signer = \"forge\"", "signer = \"nobody\""));
+        assert!(e.contains("nobody"), "{e}");
+    }
+
+    #[test]
+    fn a_remote_branch_with_signers_trusts_signers_by_name() {
+        let e = refused(&PEERS.replace("trust = [\"box\", \"forge\"]", "trust = [\"sandbox\"]"));
+        assert!(
+            e.contains("\"sandbox\"") && e.contains("trust lists signers"),
+            "{e}"
+        );
+        let e = refused(&PEERS.replace("trust = [\"box\", \"forge\"]", "trust = [\"ci\"]"));
+        assert!(e.contains("\"ci\", no signer"), "{e}");
+        let p = Policy::parse(&PEERS.replace("trust = [\"box\", \"forge\"]\n", "")).unwrap();
+        assert!(p.rules_for("main").unwrap().unwrap().trust.is_empty());
+    }
+
+    #[test]
+    fn without_signers_a_remote_branch_keeps_its_kinds() {
+        let p = Policy::parse(
+            "[branches.main]\nremote = \"origin\"\ntrust = [\"confined\", \"sandbox\"]\nsystems = []\n",
+        )
+        .unwrap();
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert!(!main.signed);
+        assert_eq!(main.trust, ["confined", "sandbox"]);
+        let e = refused("[branches.main]\nconfined = true\n");
+        assert!(e.contains("list \"confined\" in trust"), "{e}");
+    }
+
+    #[test]
+    fn the_lease_is_never_a_branchs() {
+        for key in ["lease", "alive"] {
+            let e = refused(&format!("[branches.main]\n{key} = \"1m\"\n"));
+            assert!(
+                e.contains(&format!("sets {key}")) && e.contains("[peers]"),
+                "{e}"
+            );
+        }
     }
 }
