@@ -5,7 +5,8 @@
 The popup SHALL show, after the branches, a CHECKING section with one row
 per entry of `sessions[]` with a `run`, or with a `last_result` that
 ended in the last 15 minutes, worded as the board's pane words it, and
-under it `host: R of B runs · Q queue · S agent(s)` while any run counts.
+under it `host: R of B runs · Q queue · S agent(s)` while any run counts,
+leaving out a part that is zero.
 A check SHALL never be listed as a submission or worded as testing.
 
 #### Scenario: A check under way

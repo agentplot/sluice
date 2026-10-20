@@ -104,8 +104,9 @@ takes a run of the bound as a session run does (previews-1).
 
 The queue is held back by checks when the host has no free run (`queue
 + sessions >= bound`), at least one session run holds one, and some
-branch has a submission waiting while fewer of its candidates are under
-test than its window. Only then do the counts line, the band, the status
+branch has a submission queued, in no candidate, while fewer of its
+candidates are under test than its window; a submission whose candidate
+passed waits on no run. Only then do the counts line, the band, the status
 line and the tab bar add `· 1 slot to an agent's checks`, or `· N slots
 to agents' checks`. The CLI and both plugins implement this one rule,
 each tested on the same cases.

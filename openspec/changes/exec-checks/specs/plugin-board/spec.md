@@ -4,7 +4,7 @@
 
 The band and the status line SHALL add `· 1 slot to an agent's checks`,
 or `· N slots to agents' checks`, when the overview's `room` has no free
-run, `room.sessions` is above zero, and a branch has a submission waiting
+run, `room.sessions` is above zero, and a branch has a submission queued
 while fewer of its combinations are under test than its window: the band
 on that branch's line, the status line once. They SHALL say nothing of
 agents' checks otherwise, and SHALL never show a check as a submission.
@@ -58,7 +58,8 @@ or `F of N failed`, counting its `last_result.tasks`.
 ### Requirement: The pane shows the host's runs
 
 Under CHECKING the pane SHALL show `host: R of B runs · Q queue · S
-agent(s)` from the overview's `room` while any run counts.
+agent(s)` from the overview's `room` while any run counts, leaving out a
+part that is zero.
 
 #### Scenario: The host line
 

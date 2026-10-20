@@ -22,7 +22,7 @@ agentplot/blueprints. Work inside `devenv shell`; run suites through
 - [ ] 3.3 Add `Sluice::room` and compute `session_capacity` on it; verify the conformance tests of the bound and the reserve unchanged, and a room test.
 - [ ] 3.4 Give `LastResult` `tasks` and `reused`, set by `finish_session`; verify cli.rs cases for reused, not kept and not trusted.
 - [ ] 3.5 Give `sessions[]` entries their `run` and the document its `room`; verify `overview_shows_an_agents_check_and_the_hosts_room`, a command's run, and a watch printing when a task ends.
-- [ ] 3.6 Add `a_check_shows_each_task_as_it_ends` to `tests/exec.rs` under the tools feature, one moon task waiting on a flag file; verify `sluice exec main -- moon run cli:tools`.
+- [ ] 3.6 Add `a_session_run_shows_each_task_as_it_ends` to `tests/profiles/moon.rs`, the run-progress flag-file test run in a session's place; verify it under the tools feature.
 
 ## 4. The CLI's text and reference
 

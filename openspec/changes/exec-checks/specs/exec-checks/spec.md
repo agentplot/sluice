@@ -80,13 +80,13 @@ The counts line of `sluice`, `sluice status <branch>` and `sluice
 overview` SHALL add `· 1 slot to an agent's checks`, or `· N slots to
 agents' checks`, to a branch when the host has no free run (`queue +
 sessions >= bound`), at least one session run holds one, and that branch
-has a submission waiting while fewer of its candidates are under test
+has a submission queued while fewer of its candidates are under test
 than its window; and SHALL add nothing otherwise.
 
 #### Scenario: Held back
 
 - **WHEN** the bound is 3, `main` tests 2 combinations of a window of 3
-  with a third submission waiting, and one agent's checks are running
+  with a third submission queued, and one agent's checks are running
 - **THEN** `main`'s line reads `testing 2 at once (up to 3) · 1 slot to
   an agent's checks`
 
