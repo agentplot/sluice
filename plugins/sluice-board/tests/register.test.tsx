@@ -292,7 +292,8 @@ test("agents' checks: the clause in the band, CHECKING and the host line in the 
   const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT|CHECKING)$/ });
   expect(heads.map((h) => h.text)).toEqual(["TESTING", "QUEUED", "RECENT", "CHECKING"]);
   const running = await pane.find({ type: "Text", text: /fix-cards → main 3\/8 ▓▓▓░░░░░░░ 1m10s/ });
-  expect(running?.props.color).toBe("yellow");
+  // Plain, never the yellow of a combination under test.
+  expect(running?.props.color).toBeUndefined();
   expect(await pane.find({ type: "Text", text: /e2e-stack → main make e2e 2m00s/ })).toBeDefined();
   expect(
     await pane.find({ type: "Text", text: /done-ok → main 14 passed · reused when submitted/ }),

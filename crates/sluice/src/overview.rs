@@ -179,7 +179,8 @@ fn write_overview(
     let held = sessions.iter().filter(|w| w.get("ports").is_some()).count();
     let previews = doc["previews"].as_array().map_or(0, Vec::len);
     if held + previews > 0 {
-        writeln!(out, "{held} worktrees held · {previews} previews")?;
+        let worktrees = if held == 1 { "worktree" } else { "worktrees" };
+        writeln!(out, "{held} {worktrees} held · {previews} previews")?;
     }
     for w in sessions {
         if let Some(b) = w["holds_queued_branch"].as_str() {

@@ -43,8 +43,9 @@ const TASK_COLOR: Record<OverviewTask["state"], string | undefined> = {
   running: "yellow",
   waiting: undefined,
 };
+// A check under way is plain, never the yellow of a combination under test.
 const CHECK_COLOR: Record<CheckRow["state"], string | undefined> = {
-  running: "yellow",
+  running: undefined,
   passed: "green",
   failed: "red",
   ended: undefined,
@@ -439,7 +440,7 @@ export const register: Register = (on, options) => {
         )}
         <Box marginTop={1}>
           <Text dimColor>
-            {held} worktrees held · {d.previews.length} previews
+            {plural(held, "worktree")} held · {d.previews.length} previews
           </Text>
         </Box>
       </Box>

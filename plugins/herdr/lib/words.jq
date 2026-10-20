@@ -204,7 +204,7 @@ def rows($now; $color): . as $d
   + (if $host then [("  " + $host | paint($color; "2") | row("heading"))] else [] end)
   # A worktree held is one sluice gave ports; one that only has a branch
   # sluice lands on checked out holds nothing.
-  + [("" | row("blank")), ("\([$d.sessions[] | select(.ports)] | length) worktrees held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
+  + [("" | row("blank")), ("\(plural([$d.sessions[] | select(.ports)] | length; "worktree")) held · \($d.previews | length) previews" | paint($color; "2") | row("heading"))];
 
 # --- Fitting rows to a height -----------------------------------------
 
