@@ -78,8 +78,8 @@ confined = true
 
 `confined = true` on a signer is a claim you make for it: no agent can
 reach the checkouts its runs use, or what they wrote. Say it only of a
-host that runs no agents, where each run gets a fresh container, or of
-a pool that gives each job a fresh machine. sluice never works it out.
+host that runs no agents, where each run gets a fresh container.
+sluice never works it out.
 A branch with `confined = true` counts only results from signers you
 said that of.
 
@@ -135,7 +135,7 @@ systems = ["linux-x64"]
 
 A pass on one system never stands for another. Each combination becomes
 one run per system, each run holding only the checks that need it, and
-a host takes only runs of its own system. A run no host or pool can take
+a host takes only runs of its own system. A run no host can take
 fails the combination when the branch's `timeout` passes, naming the
 check and the system it never ran on. Name a system only for the checks
 that need it: [Parallel and
@@ -144,10 +144,10 @@ what each costs.
 
 ## When no box has room
 
-A pool starts a machine for each run it is given. sluice starts a run on
-a pool only when no host that may take it has room, so a box comes
-first and the pool takes a burst, or a system no box runs. [GitHub
-Actions](/sluice/guides/github-actions/) is the pool sluice ships with.
+A run waits until a host of its system that the branch trusts has room,
+and claims go earliest combination first. GitHub Actions as a pool of
+machines that takes a burst, or a system no box runs, is [designed, not
+built](/sluice/roadmap/).
 
 ## Watching it
 

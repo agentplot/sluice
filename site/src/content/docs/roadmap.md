@@ -21,10 +21,13 @@ host, gated on every test tier in a sandbox.
 | Telemetry over OTLP, opt-in | ✓ | ✓ |
 | Many hosts sharing one queue on the git remote, with signed results: [executors and systems](/sluice/guides/executors-and-systems/) | ✓ | ✓ |
 | A check required on several systems | ✓ | ✓ |
-| GitHub Actions as a pool of machines: [GitHub Actions](/sluice/guides/github-actions/) | ✓ | ✓ |
 
 ## Designed, not built
 
+- **GitHub Actions as a pool of machines**: a job per run no host has
+  room for, rounds run in a job so a submission lands with every host
+  off, results signed by the workflow itself, and a check per system on
+  each pull request.
 - **Sandboxed checks on Linux**, with bubblewrap and Landlock, and memory
   and core limits by cgroup
   ([ADR 0012](/sluice/decisions/0012/)).

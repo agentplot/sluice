@@ -462,7 +462,7 @@ only one run at a time for a branch.
   work to do, the next round there takes the branch, and the former host
   writes nothing more for it. Each host measures the lease by its own
   clock, never by comparing clocks. A submission written to the remote
-  goes on with its submitter's host switched off: any other host, or a
-  [pool's job](/sluice/guides/github-actions/), lands it.
+  goes on with its submitter's host switched off: any other host lands
+  it.
   [Executors and systems](/sluice/guides/executors-and-systems/) sets
   one up.

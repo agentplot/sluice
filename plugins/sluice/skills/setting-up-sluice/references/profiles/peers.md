@@ -1,4 +1,4 @@
-# Many hosts: signers, systems and pools
+# Many hosts: signers and systems
 
 **Choose it when** sessions on more than one host submit to the same branch,
 when an agent should be able to submit and switch its host off, or when a
@@ -25,29 +25,24 @@ ssh = "exec@build-1 ssh-ed25519 AAAA..."
 confined = true                  # its checkouts are containers no session reaches
 systems = ["linux-x64"]
 
-[signers.forge]                  # GitHub Actions jobs, signed keylessly
-github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
+[signers.mac]                    # a Mac the operator keeps running
+ssh = "exec@mac-1 ssh-ed25519 AAAA..."
 confined = true
-systems = ["linux-x64", "macos-arm64"]
+systems = ["macos-arm64"]
 
 [signers.sessions]               # the hosts agents work on
 ssh = ".config/sluice.sessions"  # one allowed-signers line per host
 confined = false
 
-[pools.forge]                    # tried in the order written
-github = { workflow = ".github/workflows/sluice.yml" }
-signer = "forge"
-runners = { linux-x64 = "ubuntu-24.04", macos-arm64 = "macos-15" }
-
 [branches."bolt/*"]
 remote = "origin"
 required = ["#check-fast"]
-trust = ["sessions", "box", "forge"]   # no systems: a pass from any one
+trust = ["sessions", "box", "mac"]   # no systems: a pass from any one
 
 [branches.main]
 remote = "origin"
 required = ["#check-fast", "cli:build"]
-trust = ["box", "forge"]
+trust = ["box", "mac"]
 confined = true
 systems = ["linux-x64"]
 
@@ -59,15 +54,15 @@ systems = ["linux-x64"]
   trusts signed it. A branch with a remote and no `trust` trusts no signer.
 - `confined = true` counts only results whose signer has `confined = true`.
   Say it of a signer only when no session can reach its checkouts: a box
-  that runs no sessions, or a pool's fresh machines.
+  that runs no sessions.
 - `systems` is what every required check must pass on; `systems_for` names
   other systems for one check. A check with neither takes one pass from any
   system. Each system is one more run per combination.
 - A replay from the task runner's cache counts only when a trusted signer
   recorded a pass for that key on that system. `cache` in `trust` is
   ignored, with a warning.
-- A standing host claims runs before any pool is started; a pool gets a run
-  only when no host that may take it has room.
+- A run waits for a host of its system whose signer the branch trusts, up to
+  the branch's `timeout`. GitHub Actions as a pool is designed, not built.
 
 ## The host's own settings
 
@@ -89,11 +84,3 @@ alive = "2m"   # how often this host shows it is alive; a claim lapses after it
 `sluice run` on a host with `[signing]` claims the runs its signer counts
 for. A host with no `[signing]` records nothing on a branch kept on the
 remote, and says so.
-
-## GitHub Actions
-
-`sluice init actions` writes the workflows, adds `[signers.forge]` and
-`[pools.forge]`, and prints what to set on GitHub: the app's permissions and
-the `sluice` environment that holds its key. `sluice forge check main` says
-whether the workflow, the environment and the signer agree. The guide is
-<https://agentplot.github.io/sluice/guides/github-actions/>.

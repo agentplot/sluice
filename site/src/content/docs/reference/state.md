@@ -133,8 +133,7 @@ and system is one subject, named `<test>@<system>`, its digest the
 test's key. The predicate holds each outcome, the branch, the
 combination, and what the signer claims of the run: its executor,
 whether it was confined, and its system. A host signs with the SSH key
-its [`[signing]`](/sluice/reference/configuration/#signing) names, a
-GitHub Actions job with the job's own identity. sluice counts a result
+its [`[signing]`](/sluice/reference/configuration/#signing) names. sluice counts a result
 only once the signature checks against a signer the branch's policy
 names.
 

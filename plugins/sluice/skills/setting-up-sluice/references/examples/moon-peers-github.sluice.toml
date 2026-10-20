@@ -1,7 +1,8 @@
 # .config/sluice.toml: many hosts as peers, with no server. The queue for
-# every branch with a remote lives on origin under refs/sluice/; a box
-# the operator keeps running takes runs first, GitHub Actions the rest.
-# main must pass cli:build on three systems.
+# every branch with a remote lives on origin under refs/sluice/; boxes
+# the operator keeps running take main's runs, one per system, and the
+# session hosts take the bolts'. main must pass cli:build on three
+# systems.
 
 [tests]
 runner = "moon"
@@ -15,34 +16,22 @@ linux-arm64 = { os = "linux", arch = "aarch64" }
 macos-arm64 = { os = "macos", arch = "aarch64" }
 
 [signers.box]
-ssh = "exec@build-1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly"
-confined = true                                                          # container checkouts; no session reaches its engine
-systems = ["linux-x64"]
-
-[signers.forge]
-github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
-confined = true                                                                 # a fresh machine per job
-systems = ["linux-x64", "linux-arm64", "macos-arm64"]
+ssh = ".config/sluice.boxes" # one line per box's key: build-1 (linux-x64), build-2 (linux-arm64), mac-1 (macos-arm64)
+confined = true              # container checkouts; no session reaches its engine
 
 [signers.sessions]
 ssh = ".config/sluice.sessions" # one line per session host's key
 confined = false
 
-# Where the lead starts runs no standing host can take, in order.
-[pools.forge]
-github = { workflow = ".github/workflows/sluice.yml" }
-signer = "forge"
-runners = { linux-x64 = "ubuntu-24.04", linux-arm64 = "ubuntu-24.04-arm", macos-arm64 = "macos-15" }
-
 [branches."bolt/*"]
 remote = "origin"
 required = ["#check-fast"]
-trust = ["sessions", "box", "forge"] # no systems named: any one system
+trust = ["sessions", "box"] # no systems named: any one system
 
 [branches.main]
 remote = "origin"
 required = ["#check-fast", "#integration", "cli:build"]
-trust = ["box", "forge"]
+trust = ["box"]
 confined = true
 systems = ["linux-x64"]
 batch = true

@@ -148,8 +148,7 @@ in `systems_for`, and leave the rest to one.
 `parallel` counts combinations, never runs, and a combination passes
 only once every run of it has. A host runs only the system it is, up to
 its own [`[runs] max`](/sluice/reference/configuration/#runs). Runs for
-another system wait for a host of that system, or for a
-[pool](/sluice/guides/github-actions/), and a run nobody takes fails
+another system wait for a host of that system, and a run nobody takes fails
 the combination when `timeout` passes. `batch = true` keeps the count
 down: one combination at a time is one run per system.
 

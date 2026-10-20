@@ -68,8 +68,8 @@ user.
 When the policy has `[signers]`, a branch with a `remote` keeps its queue on
 the remote, shared by every host that submits to it. There, a `--no-wait`
 submission goes on without you: push it and you may stop, close the laptop
-or end the session. Another host, a box kept running, or a GitHub Actions
-job lands it, and `sluice status <id>` reads the outcome from the remote
+or end the session. Another host or a box kept running
+lands it, and `sluice status <id>` reads the outcome from the remote
 whenever you look.
 
 - `sluice step <branch>` printing `led` means another host keeps the branch:

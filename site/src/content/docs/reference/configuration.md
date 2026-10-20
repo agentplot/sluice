@@ -150,7 +150,7 @@ macos-arm64 = { os = "macos", arch = "aarch64" }
 ```
 
 Every other key that names a system, a branch's `systems` and
-`systems_for`, a signer's `systems` and a pool's `runners`, uses these
+`systems_for` and a signer's `systems`, uses these
 names, and sluice refuses a name the table lacks.
 
 ## `[signers."<name>"]`: who may sign results
@@ -168,10 +168,6 @@ ssh = "exec@build-1 ssh-ed25519 AAAA..."
 confined = true
 systems = ["linux-x64"]
 
-[signers.forge]
-github = { workflow = ".github/workflows/sluice.yml", ref = "refs/heads/main" }
-confined = true
-
 [signers.sessions]
 ssh = ".config/sluice.sessions"
 ```
@@ -179,32 +175,10 @@ ssh = ".config/sluice.sessions"
 | key | meaning |
 |---|---|
 | `ssh` | An SSH public key in `allowed_signers` form, or the path in the repository of a file of them, one per host. A host signs with the private half its own [`[signing]`](#signing) names. |
-| `github` | A GitHub Actions workflow and the branch it runs from. Its jobs sign with the job's own identity and hold no key, and only a job of that workflow on that branch signs as this signer. |
-| `confined` | Whether results it signs may count as confined: no agent could reach the checkout or what the test wrote. Say it only of a host that runs no agents, or a pool that gives each job a fresh machine; sluice never works it out. The default is `false`. |
+| `confined` | Whether results it signs may count as confined: no agent could reach the checkout or what the test wrote. Say it only of a host that runs no agents; sluice never works it out. The default is `false`. |
 | `systems` | The systems its results may say they ran on. The default is every system. |
 
-A signer has exactly one of `ssh` and `github`.
-
-## `[pools."<name>"]`: where runs go when no host has room
-
-A pool starts a machine for each run it is given. sluice starts a run
-on a pool only when no host that may take it has room, and tries the
-pools in the order the policy lists them.
-
-```toml
-[pools.forge]
-github = { workflow = ".github/workflows/sluice.yml" }
-signer = "forge"
-runners = { linux-x64 = "ubuntu-24.04", linux-arm64 = "ubuntu-24.04-arm", macos-arm64 = "macos-15" }
-```
-
-| key | meaning |
-|---|---|
-| `github` | The GitHub Actions workflow sluice starts a job of for each run; `sluice init actions` writes it. |
-| `signer` | The signer its jobs sign as, of the same kind: a `github` signer for a GitHub pool. |
-| `runners` | The runner for each system the pool runs, each a system the signer may claim. |
-
-The guide [GitHub Actions](/sluice/guides/github-actions/) sets one up.
+A signer has exactly one `ssh`.
 
 ## `[branches."<pattern>"]`: rules per target branch
 
