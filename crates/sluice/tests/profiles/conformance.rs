@@ -255,7 +255,7 @@ struct Real {
     driver: Sessions,
     state: Records,
     /// The shared remote, for a rig whose records are on it.
-    _origin: Option<Scratch>,
+    origin: Option<Scratch>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -399,7 +399,7 @@ impl Real {
             },
             state,
             _blocks: blocks,
-            _origin: origin,
+            origin,
         }
     }
 
@@ -701,4 +701,64 @@ peers_scenarios! {
     peers_s9 => s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped: batch();
     peers_recorded => every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass: bolt();
     peers_state_read => state_and_status_read_the_records_with_no_step_running: bolt();
+}
+
+/// The refs of the rig's shared remote.
+fn origin_refs(r: &Real) -> Vec<String> {
+    let bare = r.origin.as_ref().expect("a rig with records on its remote");
+    String::from_utf8(
+        support::git_command()
+            .arg("--git-dir")
+            .arg(bare.path())
+            .args(["for-each-ref", "--format=%(refname)"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .lines()
+    .map(str::to_string)
+    .collect()
+}
+
+/// The remote-branch spec's "State on the remote stays under
+/// refs/sluice": sluice changes nothing on the remote but the branch and
+/// what is under `refs/sluice/`.
+#[test]
+fn peers_push_only_the_branch_and_refs_sluice() {
+    let r = Real::peers("peers-refs", &bolt());
+    let before: Vec<String> = origin_refs(&r)
+        .into_iter()
+        .filter(|n| !n.starts_with("refs/sluice/"))
+        .collect();
+    shared::s1_two_heads_pass_and_land_in_order(&r);
+    let after = origin_refs(&r);
+    assert!(after
+        .iter()
+        .any(|n| n == &format!("refs/sluice/state/{BRANCH}")));
+    assert!(after.iter().any(|n| n == "refs/sluice/runs/box"));
+    for n in &after {
+        assert!(
+            n.starts_with("refs/sluice/") || before.contains(n),
+            "sluice pushed {n}"
+        );
+    }
+}
+
+/// 80: with the remote out of reach, the state reads as last fetched,
+/// and the status says so.
+#[test]
+fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
+    let r = Real::peers("peers-stale", &bolt());
+    shared::s1_two_heads_pass_and_land_in_order(&r);
+    let s = r.sluice();
+    let landed = s.status(BRANCH).unwrap().submissions.len();
+    assert_eq!(s.status(BRANCH).unwrap().stale, None);
+    let bare = r.origin.as_ref().unwrap().path();
+    let away = bare.with_extension("away");
+    std::fs::rename(bare, &away).unwrap();
+    let status = r.sluice().status(BRANCH).unwrap();
+    std::fs::rename(&away, bare).unwrap();
+    assert_eq!(status.stale.as_deref(), Some("origin"));
+    assert_eq!(status.submissions.len(), landed);
 }

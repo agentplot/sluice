@@ -143,6 +143,12 @@ impl State for Records {
         }
     }
 
+    fn stale(&self, branch: &str) -> Option<String> {
+        let remote = self.routes.borrow().get(branch).cloned().flatten()?;
+        let r = self.remotes.borrow().get(&remote).cloned()?;
+        r.stale(branch)
+    }
+
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
         match self.route(branch)? {
             None => self.local.read_finished(branch, name),

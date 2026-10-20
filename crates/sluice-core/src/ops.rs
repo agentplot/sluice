@@ -124,6 +124,9 @@ pub struct Status {
     /// What the policy at `at` says that sluice reads differently than
     /// it is written.
     pub warnings: Vec<String>,
+    /// 80: the remote the branch's state could not be read from just now,
+    /// so what is shown is what was last fetched from it.
+    pub stale: Option<String>,
 }
 
 impl Status {
@@ -587,6 +590,7 @@ impl Sluice<'_> {
             finished: line.finished.len(),
             submissions: line.subs.into_values().collect(),
             warnings,
+            stale: self.seams.state.stale(branch),
         })
     }
 }

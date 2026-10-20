@@ -790,6 +790,13 @@ pub trait State {
     /// nothing under [`FINISHED`] (finished-records-1 clause 61).
     fn read(&self, branch: &str) -> Result<Snapshot>;
 
+    /// 80: where the branch's last read could not reach the records it
+    /// keeps elsewhere and read what was last fetched, the place it could
+    /// not reach; `None` when the read was current.
+    fn stale(&self, _branch: &str) -> Option<String> {
+        None
+    }
+
     /// Finished-records-1 clause 105: one file of the branch's finished
     /// records, by its name under [`FINISHED`], as last written.
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>>;

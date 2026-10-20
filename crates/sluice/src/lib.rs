@@ -1759,6 +1759,12 @@ fn write_status(
     for w in &status.warnings {
         writeln!(out, "warning: {w}")?;
     }
+    if let Some(remote) = &status.stale {
+        writeln!(
+            out,
+            "{remote} could not be reached: this is the state last fetched from it"
+        )?;
+    }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs
         .iter()
@@ -1794,6 +1800,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "parallel": status.parallel,
         "submissions": submissions,
         "warnings": status.warnings,
+        "stale": status.stale,
     })
 }
 

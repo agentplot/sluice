@@ -76,6 +76,8 @@ pub struct RemoteRefs {
     signers: BTreeMap<String, SignerKey>,
     signing: Option<Signing>,
     read: RefCell<BTreeMap<String, Read>>,
+    /// The branches whose last read could not reach the remote (80).
+    stale: RefCell<BTreeSet<String>>,
     /// Statements already verified, by their blob, so a round verifies
     /// only what it has not seen.
     verified: RefCell<BTreeMap<String, Option<Vec<ResultLine>>>>,
@@ -95,6 +97,7 @@ impl RemoteRefs {
             signers,
             signing,
             read: RefCell::default(),
+            stale: RefCell::default(),
             verified: RefCell::default(),
         }
     }
@@ -339,7 +342,26 @@ impl RemoteRefs {
     /// Read `branch`'s state from the remote, keeping it for a write.
     fn read_remote(&self, branch: &str) -> Result<Read> {
         let name = state_ref(branch)?;
-        let read = match self.fetch(&name)? {
+        // 80: a remote that cannot be reached leaves the state as it was
+        // last fetched, readable, and the read says so.
+        let fetched = match self.fetch(&name) {
+            Ok(f) => {
+                self.stale.borrow_mut().remove(branch);
+                f
+            }
+            Err(e) => {
+                let last = self.pushed.read_ref(&self.fetched(&name))?;
+                let Some(last) = last else { return Err(e) };
+                tracing::warn!(
+                    sluice.branch = branch,
+                    "reading {name} from {} failed, so the state last fetched is read: {e:#}",
+                    self.remote()
+                );
+                self.stale.borrow_mut().insert(branch.into());
+                Some(last.0)
+            }
+        };
+        let read = match fetched {
             None => Read::default(),
             Some(commit) => {
                 let files = self.tree(&commit)?;
@@ -536,6 +558,13 @@ impl State for RemoteRefs {
 
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
         self.own.wait_lock(branch)
+    }
+
+    fn stale(&self, branch: &str) -> Option<String> {
+        self.stale
+            .borrow()
+            .contains(branch)
+            .then(|| self.remote().to_string())
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {
