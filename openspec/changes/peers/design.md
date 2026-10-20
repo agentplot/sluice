@@ -286,7 +286,7 @@ Once the operator rules: core.11 loses its server-profile exception; a
 rule under "Verdicts and attribution" says a result counts only through
 a signer the policy names, never a record's executor field alone (78); a
 rule under "Places" says an instance claims nothing while it has
-checkouts to release (81). ADRs: 0031 the remote refs records and the
+checkouts to release (81). ADRs: 0037 the remote refs records and the
 lease; 0032 signed results (DSSE, in-toto, SSH and keyless); 0033 a
 landing reads its verdict from signed results; 0034 the pool is a
 launched executor of the check seam, with GitHub its only profile

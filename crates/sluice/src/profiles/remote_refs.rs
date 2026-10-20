@@ -1,4 +1,4 @@
-//! The records seam's `remote refs` profile (C.6; ADR 0031): a branch's
+//! The records seam's `remote refs` profile (C.6; ADR 0037): a branch's
 //! state on the remote its policy names, for every host that submits to
 //! it (80, 82).
 //!

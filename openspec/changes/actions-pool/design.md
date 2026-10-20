@@ -10,7 +10,7 @@ What `peers` leaves in place:
 
 - Records on the remote under `refs/sluice/`, the lead and the lease,
   claims and signs of life, SSH signers verified from the policy
-  (ADRs 0031, 0032, 0033).
+  (ADRs 0037, 0032, 0033).
 - The check seam's launched side (`launch`, `job_alive`, `wake`) and
   its GitHub profile, `github/actions.rs`: a run is a
   `workflow_dispatch` of the pool's workflow titled `sluice <claim>`,

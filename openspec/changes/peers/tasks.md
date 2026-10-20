@@ -16,7 +16,7 @@ makes runs with no credential helper and no prompt.
 ## 1. Decisions and rules
 
 - [x] 1.1 Confirm the statement holds 72 to 82, 85 to 88, 107 to 113 and the amended 27, 28, 29, 69 as this change reads them, and C.6 holds design D1 and D9; verify `openspec validate peers --strict`.
-- [x] 1.2 Write ADRs 0031 (remote refs records, the lead and the lease), 0032 (signed results: DSSE, in-toto, SSH and keyless), 0033 (a landing reads its verdict from signed results) and 0034 (the pool is the check seam's launched executor, GitHub its only profile, core.3); amend 0004, 0008 and 0015 as design D12 says; verify the site's decisions pages build and `site:prose` reports nothing.
+- [x] 1.2 Write ADRs 0037 (remote refs records, the lead and the lease), 0032 (signed results: DSSE, in-toto, SSH and keyless), 0033 (a landing reads its verdict from signed results) and 0034 (the pool is the check seam's launched executor, GitHub its only profile, core.3); amend 0004, 0008 and 0015 as design D12 says; verify the site's decisions pages build and `site:prose` reports nothing.
 - [x] 1.3 In `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`: drop core.11's server-profile exception; add the rule that a result counts only through a signer the policy names, never a record's executor field (78); add the rule that an instance claims nothing while it has checkouts to release (81); verify `site:prose` reports nothing.
 
 ## 2. The key a signer computes (design D9)

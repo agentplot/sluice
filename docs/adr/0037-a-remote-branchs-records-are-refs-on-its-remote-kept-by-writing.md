@@ -1,5 +1,5 @@
 ---
-number: 31
+number: 37
 title: A remote branch's records are refs on its remote, kept by writing them
 status: accepted
 date: 2026-10-19

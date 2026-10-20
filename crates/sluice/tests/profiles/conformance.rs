@@ -692,7 +692,7 @@ scenarios! {
 }
 
 /// Each scenario of `shared` with the branch's records on its remote and
-/// every result signed by this host (C.6; 78, 109; ADR 0031).
+/// every result signed by this host (C.6; 78, 109; ADR 0037).
 macro_rules! peers_scenarios {
     ($($test:ident => $name:ident: $policy:expr;)*) => {$(
         #[test]

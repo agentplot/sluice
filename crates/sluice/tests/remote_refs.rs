@@ -1,6 +1,6 @@
 //! The records seam's `remote refs` profile against a bare repository as
 //! the shared remote, from two hosts' clones of it (C.6; 62, 63, 80, 109;
-//! ADR 0031). The check-tools tier: run with `--features tools`.
+//! ADR 0037). The check-tools tier: run with `--features tools`.
 
 #![cfg(feature = "tools")]
 

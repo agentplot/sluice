@@ -1,4 +1,4 @@
-//! The records seam as an instance binds it (C.6; ADR 0031): a branch
+//! The records seam as an instance binds it (C.6; ADR 0037): a branch
 //! whose policy names a `remote` and signers to `remote refs` on that
 //! remote, every other to `local files`. What names no branch, the
 //! results and the next id, goes to the remote once a branch has been
