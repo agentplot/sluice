@@ -55,9 +55,21 @@ the policy declares the cache, the same condition as between
 combinations. A worktree holding anything more runs the same tests,
 records nothing, and says `not recorded: worktree is not clean`.
 
+A test that could not run is listed as `could not run: <test>: <why>`
+and has no result, so nothing is recorded under its key. A test could
+not run when its program could not be started, when it exits with a code
+`[tests] not_run` names, or when the host failed `[tests] ready` after a
+run in which it did not pass. A host that fails `ready` before the run
+is refused it, and the command's output says why.
+
 `sluice exec <branch> -- <command>` runs any command the same way, with
 `SLUICE_CHECKOUT`, `SLUICE_TMP` and the ports in its environment, and
-exits with the command's exit code. It records nothing.
+exits with the command's exit code. It records nothing, and is held to
+neither `ready` nor `not_run`.
+
+Run suites through `sluice exec` so the agents on one host take turns
+under its bound rather than all running at once. A quick, narrow call,
+such as a type check or one unit test, can run directly.
 
 What a run starts and hands to another process, a container above all,
 stays up between runs, so the next run finds it. `sluice release` ends
@@ -388,6 +400,27 @@ failed  ruleset "main" on main lets more than the app through: RepositoryRole 5
 [Protecting main on GitHub](/sluice/guides/github-app/) sets
 it up.
 
+## `sluice set-aside`
+
+A test's fail that the host caused, not the test, still sits under the
+test's key, and a later pass makes the key read as flaky. On a branch
+whose `flaky` is `"fail"`, the same inputs then never pass. The operator
+who finds the cause on the host sets the fail aside:
+
+```console
+$ sluice set-aside cli:tools --at 2026-10-17T13:05:32Z --reason "OrbStack was down"
+set aside cli:tools 7272335f33f8 recorded at 2026-10-17T13:05:32Z on main 79b832d: OrbStack was down
+no gate reads it from now; its line stays in the results
+```
+
+`--at` is when the result was recorded, as a flaky failure names it.
+`--hash` gives the start of its key when two results of the test were
+recorded at once. The result's line stays in `results.jsonl`. The
+set-aside, with who made it and why, is kept in `set-aside.jsonl` beside
+it, and no branch reads the result again. An agent never sets aside a
+result; the Claude Code plugin refuses it. Under `--json`, the
+set-aside's record is printed.
+
 ## Exit codes
 
 | exit | meaning |
@@ -423,6 +456,7 @@ else they say goes to stderr:
 | `sluice step` | `{"branch","outcome","released","previews_released"}`: `outcome` is `stepped`, `busy` or `contended`; the two lists name the worktrees and previews the round released because they were gone or their command failed |
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
+| `sluice set-aside` | `{"schema","at","task","hash","run_at","branch","combination","reason","by"}`, the record kept |
 | `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release |
 | `sluice protect` | `{"protection":"installed","changed","held"}`: `changed` is `false` when the hook was in place already, and `held` lists each worktree that has checked out a protected branch; with `--remove`, `{"protection":"removed","changed"}` |
 | `sluice forge check` | `{"branch","ok","checks"}`, each check with its `ok` and `message` |
@@ -436,7 +470,7 @@ failed; `2` when the revision or the branch is refused; `130` when
 stopped while it waits.
 
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
-not run or timed out, `2` on a refusal, and `130` when stopped with
+not run, could not run or timed out, `2` on a refusal, and `130` when stopped with
 Ctrl-C, which ends the run. With a command, it exits with the command's
 code.
 
