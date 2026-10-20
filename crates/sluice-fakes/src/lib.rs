@@ -112,6 +112,10 @@ struct Inner {
     /// Submissions left behind when a branch's records moved to its
     /// remote, by branch (design D10).
     left: BTreeMap<String, Vec<Vec<u8>>>,
+    /// What each host last saw of each branch, by host and branch (73).
+    seen: BTreeMap<(String, String), (u64, String)>,
+    /// The signer the host's results are recorded as signed by (78).
+    signer: Option<String>,
     /// Session runs on the host, by worktree, and whether each still runs.
     sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
@@ -484,6 +488,18 @@ impl World {
 
     pub fn host_limit(&self, limit: usize) {
         self.0.borrow_mut().host_limit = Some(limit);
+    }
+
+    /// From now, the host's results are recorded signed by `signer`, as
+    /// on a branch whose records are on its remote (78).
+    pub fn signs_as(&self, signer: &str) {
+        self.0.borrow_mut().signer = Some(signer.into());
+    }
+
+    /// From now, this world's host is `host`: what it observes is its own
+    /// (73).
+    pub fn be_host(&self, host: &str) {
+        self.0.borrow_mut().host = host.into();
     }
 
     /// `doc`, a submission's document of this host's own records, left
@@ -1482,6 +1498,21 @@ fn finished_name(path: &str) -> Option<&str> {
 }
 
 impl State for FakeState {
+    fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .seen
+            .get(&(inner.host.clone(), branch.to_string()))
+            .cloned())
+    }
+
+    fn observe(&self, branch: &str, version: u64, at: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let key = (inner.host.clone(), branch.to_string());
+        inner.seen.insert(key, (version, at.to_string()));
+        Ok(())
+    }
+
     fn left_behind(&self, branch: &str) -> Result<Vec<Vec<u8>>> {
         Ok(self
             .0
@@ -1619,7 +1650,19 @@ impl State for FakeState {
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
-        self.0 .0.borrow_mut().results.extend(lines);
+        let mut inner = self.0 .0.borrow_mut();
+        let Some(signer) = inner.signer.clone() else {
+            inner.results.extend(lines);
+            return Ok(());
+        };
+        // As the remote refs profile reads a run back: signed by the host's
+        // signer, a replay kept unsigned (core.9).
+        for mut l in sluice_core::records::parse_lines::<sluice_core::records::ResultLine>(lines)? {
+            if l.kind == sluice_core::records::ResultKind::Ran {
+                l.signer = Some(signer.clone());
+            }
+            inner.results.extend(sluice_core::records::to_line(&l));
+        }
         Ok(())
     }
 

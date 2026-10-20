@@ -529,6 +529,10 @@ pub struct BranchDoc {
     pub passed: Vec<String>,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
+    /// 72: the instance that keeps the branch, on a branch whose records
+    /// are on its remote; `None` until one takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<String>,
 }
 
 impl BranchDoc {
@@ -547,6 +551,7 @@ impl BranchDoc {
             release: Vec::new(),
             passed: Vec::new(),
             outbox: Vec::new(),
+            lead: None,
         }
     }
 }
@@ -609,6 +614,13 @@ pub enum Event {
         outcome: Outcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_run_at: Option<String>,
+    },
+    /// 72, 73: an instance took the branch, from the lead it names or
+    /// from none.
+    Took {
+        by: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
     },
     /// A run whose executor stopped before reporting: no outcome (60).
     Lost {

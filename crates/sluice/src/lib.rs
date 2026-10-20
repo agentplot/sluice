@@ -618,7 +618,7 @@ pub fn run(
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let s = Sluice::new(seams, clock);
+    let s = Sluice::new(seams, clock).as_peer(host.peer());
     let Some(command) = cli.command else {
         return home::run(&s, &cli.worktree, cli.json, out);
     };
@@ -668,6 +668,7 @@ pub fn run(
                 let outcome = match round.step {
                     Step::Stepped => "stepped",
                     Step::Busy => "busy",
+                    Step::Led => "led",
                     Step::Contended => "contended",
                 };
                 writeln!(
@@ -685,6 +686,7 @@ pub fn run(
             let word = match round.step {
                 Step::Stepped => "stepped",
                 Step::Busy => "busy: another round holds the lock",
+                Step::Led => "led: another host keeps the branch, and its lease has not passed",
                 Step::Contended => "contended: the records moved; nothing done",
             };
             writeln!(out, "{branch}: {word}")?;

@@ -797,6 +797,19 @@ pub trait State {
         None
     }
 
+    /// 73: the version of the branch's records this host last saw, and
+    /// when it first saw it, by its own clock; kept on this host alone,
+    /// so it decides nothing but when to try taking the branch.
+    fn observed(&self, _branch: &str) -> Result<Option<(u64, String)>> {
+        Ok(None)
+    }
+
+    /// Note that this host first saw `version` of the branch's records at
+    /// `at`.
+    fn observe(&self, _branch: &str, _version: u64, _at: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// The submissions this host had queued on the branch in its own
     /// records, when the branch's records moved to the remote and another
     /// host's queue was there first (design D10): each a submission's

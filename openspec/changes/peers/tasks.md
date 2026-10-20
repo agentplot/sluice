@@ -53,7 +53,7 @@ makes runs with no credential helper and no prompt.
 
 ## 7. The lead and the lease
 
-- [ ] 7.1 Write `lead.json` and refuse a step whose state names another lead; keep the version a host saw and when, in its own state directory; take the branch after the lease by the host's own clock; verify conformance tests over the fakes with a fake clock for every peer-lead scenario, S17 included.
+- [x] 7.1 Name the branch's lead in its state; a step on a branch whose records are on its remote proceeds only for the lead, taking the branch when no one holds it, or when this host has itself seen the version stand for the lease and there is work (`Step::Led` otherwise, `Took` logged); keep the version a host saw and when in its own state directory; give the CLI's `Sluice` the host's name and `[peers] lease`; verify `sluice-conformance/tests/peers.rs` over the fakes for each peer-lead scenario, S17 included.
 - [ ] 7.2 Make a waiting `sluice submit` and `wt submit` run rounds as a lead on a peer branch, and a `--no-wait` submit write its entry, push its head to `refs/sluice/heads/<oid>` and wake; remove the head once its submission leaves the queue (82); verify a `check-tools` test where the submitting host stops and a second host lands the submission.
 - [ ] 7.3 Document the lead and the lease under `[peers]` in the configuration reference and in `reference/commands.md`'s `sluice submit` and `sluice run`; verify `site:prose` reports nothing.
 

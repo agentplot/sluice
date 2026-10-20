@@ -55,6 +55,9 @@ pub struct Round {
 pub enum Step {
     /// Another step holds the branch's lock (rule core.14).
     Busy,
+    /// Another instance keeps the branch, and its lease has not passed
+    /// (72, 73).
+    Led,
     /// The records were written between this step's read and its write;
     /// nothing was done (62).
     Contended,
@@ -91,6 +94,10 @@ impl Sluice<'_> {
             round.record("sluice.step", "busy");
             return Ok(Step::Busy);
         };
+        if !self.keeps(branch)? {
+            round.record("sluice.step", "led");
+            return Ok(Step::Led);
+        }
         info_span!("sluice.recover").in_scope(|| self.recover(branch))?;
         if !info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
             round.record("sluice.step", "contended");
@@ -99,6 +106,47 @@ impl Sluice<'_> {
         info_span!("sluice.perform").in_scope(|| self.perform(branch))?;
         round.record("sluice.step", "stepped");
         Ok(Step::Stepped)
+    }
+
+    /// 72, 73: whether this instance keeps `branch`, taking it when no one
+    /// does, or when the instance that does has written nothing for the
+    /// lease by this host's own observation and there is work to do.
+    /// Taking is a write (62), after which the former lead's next write is
+    /// refused. A branch in this host's own files has no lead.
+    fn keeps(&self, branch: &str) -> Result<bool> {
+        let line = self.read_line(branch)?;
+        let Some(tip) = self.seams.branch.read(branch)? else {
+            return Ok(true);
+        };
+        if !self.rules_at(branch, &tip)?.is_some_and(|r| r.signed) {
+            return Ok(true);
+        }
+        let me = self.peer.name.clone();
+        let from = match &line.doc.lead {
+            Some(l) if *l == me => return Ok(true),
+            None => None,
+            Some(other) => {
+                let now = self.now();
+                let seen = self.seams.state.observed(branch)?;
+                let since = match seen {
+                    Some((v, at)) if v == line.version => at,
+                    _ => {
+                        self.seams.state.observe(branch, line.version, &now)?;
+                        return Ok(false);
+                    }
+                };
+                let waited = seconds_between(&since, &now).unwrap_or(0.0);
+                if waited < self.peer.lease.as_secs_f64() || !has_work(&line) {
+                    return Ok(false);
+                }
+                Some(other.clone())
+            }
+        };
+        let mut taken = line;
+        taken.doc.lead = Some(me.clone());
+        let now = self.now();
+        taken.log(&now, Event::Took { by: me, from });
+        Ok(matches!(self.write(&taken)?, Written::Written(_)))
     }
 
     // -----------------------------------------------------------------------
@@ -1557,6 +1605,16 @@ impl Sluice<'_> {
             .find(|l| matches!(&l.event, Event::Testing { combination, .. } if combination == revision))
             .and_then(|l| seconds_between(&l.at, now)))
     }
+}
+
+/// Whether a branch has anything a lead would do: a submission in the
+/// queue, a run under test, a landing, an outcome or a place to release.
+fn has_work(line: &Line) -> bool {
+    line.subs.values().any(|s| !s.state.is_out())
+        || line.doc.candidates.iter().any(|c| c.state.under_test())
+        || line.doc.landing.is_some()
+        || !line.doc.outbox.is_empty()
+        || !line.doc.release.is_empty()
 }
 
 /// Seconds from one record time to another.

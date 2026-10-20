@@ -277,6 +277,13 @@ impl crate::exec::Host for Bound {
         self.tests.instance().reserved
     }
 
+    fn peer(&self) -> sluice_core::Peer {
+        sluice_core::Peer {
+            name: checks::hostname(),
+            lease: self.tests.instance().peers.lease,
+        }
+    }
+
     fn worktree(&self, dir: &str) -> Result<String> {
         let path = std::fs::canonicalize(dir)?;
         path.to_str()

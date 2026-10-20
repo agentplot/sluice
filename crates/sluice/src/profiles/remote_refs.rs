@@ -437,6 +437,20 @@ impl RemoteRefs {
     }
 }
 
+impl RemoteRefs {
+    /// Where this host keeps what it last saw of `branch` (73).
+    fn observation(&self, branch: &str) -> Result<PathBuf> {
+        state_ref(branch)?;
+        Ok(self
+            .pushed
+            .git_dir()
+            .join("sluice-remote")
+            .join(self.remote())
+            .join("observed")
+            .join(format!("{branch}.json")))
+    }
+}
+
 /// `refs/sluice/state/<branch>`, for a branch git may name.
 fn state_ref(branch: &str) -> Result<String> {
     if branch.is_empty()
@@ -558,6 +572,32 @@ impl State for RemoteRefs {
 
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
         self.own.wait_lock(branch)
+    }
+
+    fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
+        let path = self.observation(branch)?;
+        match std::fs::read(&path) {
+            Ok(b) => {
+                let v: serde_json::Value = serde_json::from_slice(&b)?;
+                Ok(v["version"]
+                    .as_u64()
+                    .zip(v["at"].as_str().map(str::to_string)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn observe(&self, branch: &str, version: u64, at: &str) -> Result<()> {
+        let path = self.observation(branch)?;
+        std::fs::create_dir_all(path.parent().expect("a parent"))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(
+            &tmp,
+            serde_json::json!({"version": version, "at": at}).to_string(),
+        )?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
     }
 
     fn stale(&self, branch: &str) -> Option<String> {

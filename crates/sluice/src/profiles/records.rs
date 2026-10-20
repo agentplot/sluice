@@ -244,6 +244,20 @@ impl State for Records {
         }
     }
 
+    fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
+        match self.route(branch)? {
+            None => Ok(None),
+            Some(r) => r.observed(branch),
+        }
+    }
+
+    fn observe(&self, branch: &str, version: u64, at: &str) -> Result<()> {
+        match self.route(branch)? {
+            None => Ok(()),
+            Some(r) => r.observe(branch, version, at),
+        }
+    }
+
     fn left_behind(&self, branch: &str) -> Result<Vec<Vec<u8>>> {
         Ok(self.moved(branch)?.map(|m| m.left).unwrap_or_default())
     }

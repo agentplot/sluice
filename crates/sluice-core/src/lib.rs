@@ -75,6 +75,25 @@ pub struct Sluice<'a> {
     seams: Seams<'a>,
     clock: &'a dyn Clock,
     serves: Serves,
+    peer: Peer,
+}
+
+/// 72 to 74: who this instance is among the hosts that keep a branch
+/// whose records are on its remote, and the lease it waits out before it
+/// takes one another instance keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Peer {
+    pub name: String,
+    pub lease: std::time::Duration,
+}
+
+impl Default for Peer {
+    fn default() -> Self {
+        Peer {
+            name: "this-host".into(),
+            lease: std::time::Duration::from_secs(300),
+        }
+    }
 }
 
 /// How many times a write refused because the records moved is tried
@@ -87,7 +106,14 @@ impl<'a> Sluice<'a> {
             seams,
             clock,
             serves: Serves::Stepped,
+            peer: Peer::default(),
         }
+    }
+
+    /// The same sluice, as `peer` among the hosts of a branch whose
+    /// records are on its remote (72 to 74).
+    pub fn as_peer(self, peer: Peer) -> Self {
+        Sluice { peer, ..self }
     }
 
     /// The same sluice, serving `serves` (71).
