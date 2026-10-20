@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use sluice_core::overview::OrderFrom;
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
 use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport};
@@ -41,6 +42,10 @@ pub trait Host {
     fn name(&self) -> String;
     /// The repository, as the path of its common git directory.
     fn repository(&self) -> Result<String>;
+    /// The repository's default branch, its HEAD, with its revision here:
+    /// whose policy orders the overview (ADR 0036). `None` when HEAD names
+    /// no branch.
+    fn default_branch(&self) -> Result<Option<OrderFrom>>;
 }
 
 pub struct Exec<'a> {

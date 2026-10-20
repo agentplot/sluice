@@ -87,6 +87,8 @@ struct Inner {
     // the repository
     commits: BTreeMap<Rev, Commit>,
     refs: BTreeMap<String, Rev>,
+    /// The repository's HEAD: the first branch made, as `git init` names it.
+    head: Option<String>,
     moves: Vec<MoveRecord>,
     crash: Option<Crash>,
     // the check
@@ -285,7 +287,21 @@ impl World {
             .collect();
         let rev = Self::put_commit(&mut inner, tree, vec![], &format!("init {branch}"));
         inner.refs.insert(branch.into(), rev.clone());
+        inner.head.get_or_insert_with(|| branch.into());
         rev
+    }
+
+    /// The repository's default branch, its HEAD, and its revision.
+    pub fn head(&self) -> Option<(String, Option<Rev>)> {
+        let inner = self.0.borrow();
+        let name = inner.head.clone()?;
+        let rev = inner.refs.get(&name).cloned();
+        Some((name, rev))
+    }
+
+    /// Name `branch` the repository's HEAD.
+    pub fn set_head(&self, branch: &str) {
+        self.0.borrow_mut().head = Some(branch.into());
     }
 
     /// A session's work: a commit on `on` changing `changes` (`None`

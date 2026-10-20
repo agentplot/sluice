@@ -643,7 +643,7 @@ pub fn run(
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock);
     let Some(command) = cli.command else {
-        return home::run(&s, &cli.worktree, cli.json, out);
+        return home::run(&s, host, &cli.worktree, cli.json, out);
     };
     match command {
         Command::Submit {
@@ -796,7 +796,8 @@ pub fn run(
             Err(_) => {
                 let status = s.status(&target)?;
                 if status.is_unknown() {
-                    let known: Vec<String> = s.overview()?.into_iter().map(|b| b.branch).collect();
+                    let known: Vec<String> =
+                        s.overview(None)?.into_iter().map(|b| b.branch).collect();
                     let text = match known.as_slice() {
                         [] => format!("no branch {target}, and no branch has records here"),
                         _ => format!(

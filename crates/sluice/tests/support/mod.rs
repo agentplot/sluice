@@ -251,4 +251,11 @@ impl sluice::exec::Host for FakeHost {
     fn repository(&self) -> anyhow::Result<String> {
         Ok("/fake/repo.git".into())
     }
+
+    fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
+        Ok(self
+            .world
+            .head()
+            .map(|(branch, local)| sluice_core::overview::OrderFrom { branch, local }))
+    }
 }

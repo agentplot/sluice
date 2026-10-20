@@ -894,6 +894,49 @@ fn overview_shows_a_combinations_tasks() {
     );
 }
 
+/// ADR 0036: the branches in the order the default branch's policy writes
+/// their tables, read at its own revision when it has no records; every
+/// other branch is still gated by its own policy (rule core.15).
+#[test]
+fn overview_orders_branches_as_the_policy_names_them() {
+    let f = Fakes::new();
+    // The repository's HEAD names release before bolt/*; the bolt branches'
+    // own policies name them the other way round.
+    f.world.init(
+        "main",
+        &[(
+            ".config/sluice.toml",
+            "[branches.release]\nrequired = []\n[branches.\"bolt/*\"]\nrequired = []\n",
+        )],
+    );
+    let theirs = "[branches.\"bolt/*\"]\nrequired = []\n[branches.release]\nrequired = []\n";
+    for b in ["bolt/b", "release", "bolt/a"] {
+        f.world.init(b, &[(".config/sluice.toml", theirs)]);
+        let head = f.world.work(&f.world.tip(b), &[("work", Some(b))]);
+        let worktree = format!("w/{b}");
+        f.world.session(&worktree, "agent", &head);
+        let (code, _) = sluice(&f, &["submit", b, "--worktree", &worktree, "--no-wait"]);
+        assert_eq!(code, 0, "submitting to {b}");
+    }
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let order: Vec<&str> = v["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["branch"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["release", "bolt/a", "bolt/b"]);
+    let (_, text) = sluice(&f, &["overview"]);
+    let heads: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with(' '))
+        .map(|l| l.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(heads, ["release", "bolt/a", "bolt/b"]);
+}
+
 #[test]
 fn overview_of_a_repository_with_no_records_says_so() {
     let f = setup();

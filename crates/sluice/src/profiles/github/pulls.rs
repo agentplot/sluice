@@ -895,18 +895,9 @@ impl crate::PullRequests for Pulls {
         };
         let common = git(&["rev-parse", "--git-common-dir"])?;
         let common = self.dir.join(common);
-        let out = Command::new("git")
-            .arg("--git-dir")
-            .arg(&common)
-            .args(["symbolic-ref", "--short", "-q", "HEAD"])
-            .env_remove("GIT_DIR")
-            .stdin(Stdio::null())
-            .output()
-            .context("running git")?;
-        let default = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if default.is_empty() {
+        let Some(default) = crate::profiles::default_branch(&common)? else {
             return Ok(Vec::new());
-        }
+        };
         let Some(rev) = seams.branch.read(&default)? else {
             return Ok(Vec::new());
         };

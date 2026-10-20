@@ -21,7 +21,7 @@ pub fn document(
     host: &dyn Host,
     clock: &dyn Clock,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
-    let branches = s.overview()?;
+    let branches = s.overview(host.default_branch()?.as_ref())?;
     let sessions = sessions_json(&s.session_places()?, &s.held()?);
     let previews: Vec<serde_json::Value> = s.previews()?.iter().map(preview_json).collect();
     let doc = serde_json::json!({

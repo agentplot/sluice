@@ -141,8 +141,10 @@ struct FileForm {
     checkout: BTreeMap<String, toml::Value>,
     #[serde(default)]
     executor: ExecutorForm,
+    /// Each key with where it is written, so the tables keep the order
+    /// the file gives them.
     #[serde(default)]
-    branches: BTreeMap<String, RulesForm>,
+    branches: BTreeMap<toml::Spanned<String>, RulesForm>,
     #[serde(default)]
     landing: LandingForm,
     preview: Option<PreviewForm>,
@@ -208,8 +210,11 @@ impl Policy {
             network: form.executor.network,
             docker: form.executor.docker.unwrap_or(false),
         };
+        let mut written: Vec<_> = form.branches.into_iter().collect();
+        written.sort_by_key(|(p, _)| p.span().start);
         let mut branches = Vec::new();
-        for (pattern, r) in form.branches {
+        for (pattern, r) in written {
+            let pattern = pattern.into_inner();
             let d = Rules::default();
             let parallel = match r.parallel {
                 None => d.parallel,
@@ -302,30 +307,37 @@ impl Policy {
     /// pattern with the most literal characters. `None` when no table
     /// names the branch, which is then not sluice's to land on.
     pub fn rules_for(&self, branch: &str) -> Result<Option<&Rules>> {
-        if let Some((_, r)) = self.branches.iter().find(|(p, _)| p == branch) {
-            return Ok(Some(r));
+        Ok(self.table_for(branch)?.map(|i| &self.branches[i].1))
+    }
+
+    /// Which of the `[branches]` tables, in the order written, gives
+    /// `branch` its gate, as `rules_for` chooses it.
+    pub fn table_for(&self, branch: &str) -> Result<Option<usize>> {
+        if let Some(i) = self.branches.iter().position(|(p, _)| p == branch) {
+            return Ok(Some(i));
         }
-        let mut best: Option<(usize, &String, &Rules)> = None;
+        let mut best: Option<(usize, usize)> = None;
         let mut tied = false;
-        for (p, r) in &self.branches {
+        for (i, (p, _)) in self.branches.iter().enumerate() {
             if !p.contains('*') || !glob(p, branch) {
                 continue;
             }
             let weight = p.chars().filter(|c| *c != '*').count();
             match best {
-                Some((w, _, _)) if w > weight => {}
-                Some((w, _, _)) if w == weight => tied = true,
+                Some((w, _)) if w > weight => {}
+                Some((w, _)) if w == weight => tied = true,
                 _ => {
-                    best = Some((weight, p, r));
+                    best = Some((weight, i));
                     tied = false;
                 }
             }
         }
         if tied {
-            let (_, p, _) = best.expect("a tie has a best");
+            let (_, i) = best.expect("a tie has a best");
+            let p = &self.branches[i].0;
             bail!("{branch} matches more than one [branches] pattern as closely as {p:?}");
         }
-        Ok(best.map(|(_, _, r)| r))
+        Ok(best.map(|(_, i)| i))
     }
 }
 
@@ -606,6 +618,20 @@ batch = true
         assert_eq!(p.landing_subject, "land: #{id} from {agent}");
         assert!(Policy::parse("[landing]\nsubject = \"#{nope}\"\n").is_err());
         assert!(Policy::parse("[landing]\nsubject = \"#{id\"\n").is_err());
+    }
+
+    /// ADR 0036: the tables in the order the file writes them, which the
+    /// overview lists branches by.
+    #[test]
+    fn keeps_the_branches_tables_in_the_order_written() {
+        let p = Policy::parse(
+            "[branches.zeta]\nrequired = []\n\
+             [branches.\"bolt/*\"]\nrequired = []\n\
+             [branches.alpha]\nrequired = []\n",
+        )
+        .unwrap();
+        let order: Vec<&str> = p.branches.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(order, ["zeta", "bolt/*", "alpha"]);
     }
 
     /// 27 to 29: a gate names the results it trusts.

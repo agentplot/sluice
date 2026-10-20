@@ -21,7 +21,7 @@ fn task(target: &str, state: TaskState) -> TaskProgress {
 
 fn branch(h: &Harness) -> BranchView {
     h.sluice()
-        .overview()
+        .overview(None)
         .unwrap()
         .into_iter()
         .find(|b| b.branch == BRANCH)

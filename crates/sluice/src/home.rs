@@ -13,6 +13,8 @@ use sluice_core::records::{State, Submission};
 use sluice_core::Sluice;
 use sluice_seams::{SessionPlace, Submitter};
 
+use crate::exec::Host;
+
 /// The commands that follow from where the worktree stands.
 fn next(from: Option<&Submitter>, sub: Option<&Submission>) -> Vec<String> {
     let Some(from) = from else {
@@ -53,8 +55,14 @@ fn submission_json(s: &Submission) -> serde_json::Value {
     })
 }
 
-pub fn run(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let branches = s.overview()?;
+pub fn run(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    worktree: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let branches = s.overview(host.default_branch()?.as_ref())?;
     let counts = counts(&branches);
     // Outside a worktree the driver knows, there is no session to show.
     let from = s.seams().driver.session(worktree).ok().map(|x| x.from);

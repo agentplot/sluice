@@ -215,12 +215,17 @@ impl Sluice<'_> {
     }
 
     /// 26, 61: every branch with records, as last written, each read at
-    /// the revision its records last saw.
-    pub fn overview(&self) -> Result<Vec<BranchView>> {
+    /// the revision its records last saw, in the order `from`'s policy
+    /// names them (ADR 0036).
+    pub fn overview(&self, from: Option<&OrderFrom>) -> Result<Vec<BranchView>> {
         let mut out = Vec::new();
+        let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
             let snapshot = self.seams.state.read(&branch)?;
             let base = Line::load(&branch, snapshot.clone())?.doc.base;
+            if from.is_some_and(|f| f.branch == branch) {
+                order_at = base.clone().or(order_at);
+            }
             let policy = match &base {
                 Some(rev) => self.policy_at(rev)?,
                 None => None,
@@ -237,8 +242,31 @@ impl Sluice<'_> {
                 rules,
             })?);
         }
+        // The order decides nothing, so a policy it cannot read leaves the
+        // branches in name order rather than failing the overview.
+        let policy = order_at.and_then(|rev| self.policy_at(&rev).ok().flatten());
+        order(&mut out, policy.as_ref());
         Ok(out)
     }
+}
+
+/// The branch whose policy orders the overview, the repository's default
+/// (ADR 0036): its name, and its revision for when it has no records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderFrom {
+    pub branch: String,
+    pub local: Option<Rev>,
+}
+
+/// ADR 0036: `branches` in the order `policy` writes the tables their
+/// gates come from, the branches one pattern gives a gate together in name
+/// order, and those no table names last in name order. No round, gate or
+/// landing reads it (rule core.15).
+pub fn order(branches: &mut [BranchView], policy: Option<&Policy>) {
+    branches.sort_by_cached_key(|b| {
+        let table = policy.and_then(|p| p.table_for(&b.branch).ok().flatten());
+        (table.unwrap_or(usize::MAX), b.branch.clone())
+    });
 }
 
 pub const HOME_SCHEMA: &str = "sluice/home@1";
@@ -462,6 +490,33 @@ mod tests {
             branch: "",
         };
         assert!(!detached.made(&from("pull/9", None, Some(""))));
+    }
+
+    /// ADR 0036: the policy's tables in the order written, a pattern's
+    /// branches together in name order, unnamed branches last.
+    #[test]
+    fn orders_branches_by_the_policy() {
+        let policy = Policy::parse(
+            "[branches.main]\nrequired = []\n\
+             [branches.\"bolt/*\"]\nrequired = []\n\
+             [branches.release]\nrequired = []\n",
+        )
+        .unwrap();
+        let names = |v: &[BranchView]| v.iter().map(|b| b.branch.clone()).collect::<Vec<_>>();
+        let mut v: Vec<BranchView> = ["scratch", "release", "bolt/b", "main", "bolt/a", "aside"]
+            .iter()
+            .map(|b| view(b, Vec::new()))
+            .collect();
+        order(&mut v, Some(&policy));
+        assert_eq!(
+            names(&v),
+            ["main", "bolt/a", "bolt/b", "release", "aside", "scratch"]
+        );
+        order(&mut v, None);
+        assert_eq!(
+            names(&v),
+            ["aside", "bolt/a", "bolt/b", "main", "release", "scratch"]
+        );
     }
 
     #[test]
