@@ -20,6 +20,34 @@ use super::remote_refs::{RemoteRefs, SignerKey, Signing};
 use crate::instance;
 use crate::signing::ssh;
 
+/// What this host noted when a branch's own records moved to its remote:
+/// the submissions it left behind, each its document.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Moved {
+    #[serde(with = "docs")]
+    left: Vec<Vec<u8>>,
+}
+
+/// The documents as JSON text.
+mod docs {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(docs: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
+        let text: Vec<String> = docs
+            .iter()
+            .map(|d| String::from_utf8_lossy(d).into_owned())
+            .collect();
+        text.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
+        Ok(Vec::<String>::deserialize(d)?
+            .into_iter()
+            .map(String::into_bytes)
+            .collect())
+    }
+}
+
 pub struct Records {
     local: LocalFiles,
     /// The locks of the branches routed to a remote: one host's steps,
@@ -115,6 +143,76 @@ impl Records {
         Ok(r)
     }
 
+    /// Where this host notes that `branch`'s own records moved to its
+    /// remote, and what of them it left behind.
+    fn moved_path(&self, branch: &str) -> PathBuf {
+        self.common
+            .join("sluice-remote")
+            .join("moved")
+            .join(format!("{branch}.json"))
+    }
+
+    fn moved(&self, branch: &str) -> Result<Option<Moved>> {
+        match std::fs::read(self.moved_path(branch)) {
+            Ok(b) => Ok(Some(serde_json::from_slice(&b)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn put_moved(&self, branch: &str, m: &Moved) -> Result<()> {
+        let path = self.moved_path(branch);
+        std::fs::create_dir_all(path.parent().expect("a parent"))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(m)?)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// Design D10, under the branch's lock: the first time this host routes
+    /// `branch` to its remote, its own records of the branch go there as
+    /// the starting state when the remote has none; when another host's
+    /// already are, its queued submissions are left behind, for the round
+    /// to submit again.
+    fn migrate(&self, branch: &str, r: &RemoteRefs) -> Result<()> {
+        if self.moved(branch)?.is_some() {
+            return Ok(());
+        }
+        let own = self.local.read(branch)?;
+        if own.version == 0 {
+            return self.put_moved(branch, &Moved::default());
+        }
+        let theirs = r.read(branch)?;
+        if theirs.version == 0 {
+            let mut changes = Changes {
+                put: own.files.clone(),
+                ..Changes::default()
+            };
+            for (name, bytes) in self.local.read_all_finished(branch)? {
+                changes
+                    .put
+                    .insert(format!("{}/{name}", sluice_seams::FINISHED), bytes);
+            }
+            if r.write(branch, 0, changes)? != Written::Refused {
+                return self.put_moved(branch, &Moved::default());
+            }
+        }
+        let left = own
+            .files
+            .iter()
+            .filter(|(p, _)| p.starts_with("submissions/"))
+            .filter_map(|(_, b)| {
+                let v: serde_json::Value = serde_json::from_slice(b).ok()?;
+                let out = matches!(
+                    v["state"].as_str(),
+                    Some("landed" | "withdrawn" | "failed" | "conflict")
+                );
+                (!out).then(|| b.clone())
+            })
+            .collect();
+        self.put_moved(branch, &Moved { left })
+    }
+
     /// The remote whose ids every host numbers from, once one is routed.
     fn shared(&self) -> Option<Rc<RemoteRefs>> {
         self.remotes.borrow().values().next().cloned()
@@ -125,15 +223,42 @@ impl State for Records {
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
         match self.route(branch)? {
             None => self.local.lock(branch),
-            Some(_) => self.locks.lock(branch),
+            Some(r) => {
+                let g = self.locks.lock(branch)?;
+                if g.is_some() {
+                    self.migrate(branch, &r)?;
+                }
+                Ok(g)
+            }
         }
     }
 
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>> {
         match self.route(branch)? {
             None => self.local.wait_lock(branch),
-            Some(_) => self.locks.wait_lock(branch),
+            Some(r) => {
+                let g = self.locks.wait_lock(branch)?;
+                self.migrate(branch, &r)?;
+                Ok(g)
+            }
         }
+    }
+
+    fn left_behind(&self, branch: &str) -> Result<Vec<Vec<u8>>> {
+        Ok(self.moved(branch)?.map(|m| m.left).unwrap_or_default())
+    }
+
+    fn forget_left_behind(&self, branch: &str, ids: &[u64]) -> Result<()> {
+        let Some(mut m) = self.moved(branch)? else {
+            return Ok(());
+        };
+        m.left.retain(|doc| {
+            let id = serde_json::from_slice::<serde_json::Value>(doc)
+                .ok()
+                .and_then(|v| v["id"].as_u64());
+            !id.is_some_and(|id| ids.contains(&id))
+        });
+        self.put_moved(branch, &m)
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {

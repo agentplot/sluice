@@ -227,6 +227,7 @@ impl Sluice<'_> {
                     withdrawn: None,
                     told: None,
                     landed_as: None,
+                    was: None,
                 },
             );
             l.log(
@@ -444,6 +445,25 @@ impl Sluice<'_> {
             return Ok(Some(s));
         }
         self.finished_sub(&branch, id)
+    }
+
+    /// Design D10: the submission that `old`, a submission of this host's
+    /// own records, became when the branch's records moved to its remote.
+    pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {
+        for b in self.seams.state.branches()? {
+            let line = self.read_line(&b)?;
+            if let Some(s) = line.subs.values().find(|s| s.was == Some(old)) {
+                return Ok(Some(s.clone()));
+            }
+            for id in line.finished.keys() {
+                if let Some(s) = self.finished_sub(&b, *id)? {
+                    if s.was == Some(old) {
+                        return Ok(Some(s));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Submission `id` of `branch` when it is among the finished records

@@ -478,6 +478,7 @@ impl Sluice<'_> {
         }
         line.doc.window = line.doc.window.clamp(1, rules.parallel);
 
+        let adopted = self.adopt_left_behind(&mut line, &now)?;
         self.poll(&mut line, &rules, home.as_deref(), &now)?;
         let chain = loop {
             let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
@@ -492,6 +493,9 @@ impl Sluice<'_> {
         self.keep_tasks(&line)?;
         let queued = line.subs.values().filter(|s| !s.state.is_out()).count() as u64;
         let written = matches!(self.write(&line)?, Written::Written(_));
+        if written && !adopted.is_empty() {
+            self.seams.state.forget_left_behind(branch, &adopted)?;
+        }
         if written {
             info!(gauge.sluice.queue.depth = queued, sluice.branch = branch);
             info!(
@@ -500,6 +504,45 @@ impl Sluice<'_> {
             );
         }
         Ok(written)
+    }
+
+    /// Design D10: what this host had queued on the branch in its own
+    /// records, left behind when another host's queue reached the remote
+    /// first, submitted again under new ids, each naming its old one.
+    /// Returns the old ids, for the records seam to forget once written.
+    fn adopt_left_behind(&self, line: &mut Line, now: &str) -> Result<Vec<u64>> {
+        let left = self.seams.state.left_behind(&line.branch)?;
+        let mut adopted = Vec::new();
+        for bytes in left {
+            let old: crate::records::Submission = serde_json::from_slice(&bytes)?;
+            adopted.push(old.id);
+            if line.subs.values().any(|s| s.was == Some(old.id)) {
+                continue;
+            }
+            let id = self.seams.state.allocate_id()?;
+            let head = old.head.clone();
+            line.subs.insert(
+                id,
+                crate::records::Submission {
+                    id,
+                    submitted: now.to_string(),
+                    after: Vec::new(),
+                    attempt: 1,
+                    state: State::Queued,
+                    tested: None,
+                    result: None,
+                    failed: Vec::new(),
+                    conflict: None,
+                    withdrawn: None,
+                    told: None,
+                    landed_as: None,
+                    was: Some(old.id),
+                    ..old
+                },
+            );
+            line.log(now, Event::Submitted { id, head });
+        }
+        Ok(adopted)
     }
 
     /// ADR 0028: keep the tasks of each run still under test, as its

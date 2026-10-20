@@ -109,6 +109,9 @@ struct Inner {
     /// Tasks whose reported keys the candidate's tree does not bear out
     /// (design D9).
     forged: BTreeSet<String>,
+    /// Submissions left behind when a branch's records moved to its
+    /// remote, by branch (design D10).
+    left: BTreeMap<String, Vec<Vec<u8>>>,
     /// Session runs on the host, by worktree, and whether each still runs.
     sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
@@ -481,6 +484,22 @@ impl World {
 
     pub fn host_limit(&self, limit: usize) {
         self.0.borrow_mut().host_limit = Some(limit);
+    }
+
+    /// `doc`, a submission's document of this host's own records, left
+    /// behind on `branch` when its records moved to the remote.
+    pub fn leave_behind(&self, branch: &str, doc: &str) {
+        self.0
+            .borrow_mut()
+            .left
+            .entry(branch.into())
+            .or_default()
+            .push(doc.as_bytes().to_vec());
+    }
+
+    /// What is still left behind on `branch`.
+    pub fn left_behind(&self, branch: &str) -> usize {
+        self.0.borrow().left.get(branch).map_or(0, Vec::len)
     }
 
     /// From now, `task`'s reported key is one the candidate's tree does
@@ -1463,6 +1482,29 @@ fn finished_name(path: &str) -> Option<&str> {
 }
 
 impl State for FakeState {
+    fn left_behind(&self, branch: &str) -> Result<Vec<Vec<u8>>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .left
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn forget_left_behind(&self, branch: &str, ids: &[u64]) -> Result<()> {
+        if let Some(left) = self.0 .0.borrow_mut().left.get_mut(branch) {
+            left.retain(|doc| {
+                let id = serde_json::from_slice::<serde_json::Value>(doc)
+                    .ok()
+                    .and_then(|v| v["id"].as_u64());
+                !id.is_some_and(|id| ids.contains(&id))
+            });
+        }
+        Ok(())
+    }
+
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
         let mut inner = self.0 .0.borrow_mut();
         let line = inner.lines.entry(branch.into()).or_default();

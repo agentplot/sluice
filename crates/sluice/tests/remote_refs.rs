@@ -294,3 +294,66 @@ fn logs_are_kept_on_the_remote_for_the_last_candidates() {
     assert!(!refs.contains("refs/sluice/logs/main/c1\n"));
     assert!(refs.contains(&format!("refs/sluice/logs/main/c{}\n", KEPT_LOGS + 2)));
 }
+
+/// Design D10: the first host to take a branch whose records moved to its
+/// remote pushes its own queue there as the starting state; another host
+/// whose queue was not first leaves its queued submissions behind, for its
+/// round to submit again.
+#[test]
+fn the_first_hosts_queue_moves_and_the_others_is_left_behind() {
+    use sluice::profiles::branches::Branches;
+    use sluice::profiles::local_files::LocalFiles;
+    use sluice::profiles::records::Records;
+
+    let k = key();
+    let a = Repo::new("rr-move");
+    a.write(
+        ".config/sluice.toml",
+        &format!(
+            "[signers.box]\nssh = \"box {}\"\n\n[branches.main]\nremote = \"origin\"\ntrust = [\"box\"]\n",
+            k.public_key().to_openssh().unwrap()
+        ),
+    );
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let bare = a.bare_origin();
+    let b = Repo::clone_of(bare.path(), "rr-move-b");
+    // Each host's own queue, as its sluice wrote it before the move.
+    let own = |r: &Repo, id: u64| {
+        let s = LocalFiles::new(&r.dir().join(".git"));
+        let _g = s.lock("main").unwrap().unwrap();
+        let doc = format!(
+            "{{\"schema\":\"sluice/submission@1\",\"id\":{id},\"branch\":\"main\",\"state\":\"queued\"}}\n"
+        );
+        s.write("main", 0, put(&[(&format!("submissions/{id}.json"), &doc)]))
+            .unwrap();
+    };
+    own(&a, 5);
+    own(&b, 9);
+
+    let records = |r: &Repo| {
+        Records::new(
+            &r.dir().join(".git"),
+            Branches::open(r.dir()).unwrap(),
+            None,
+        )
+    };
+    let ra = records(&a);
+    drop(ra.lock("main").unwrap().unwrap());
+    let moved = ra.read("main").unwrap();
+    assert!(moved.files.contains_key("submissions/5.json"));
+    assert!(ra.left_behind("main").unwrap().is_empty());
+
+    let rb = records(&b);
+    drop(rb.lock("main").unwrap().unwrap());
+    assert!(!rb
+        .read("main")
+        .unwrap()
+        .files
+        .contains_key("submissions/9.json"));
+    let left = rb.left_behind("main").unwrap();
+    assert_eq!(left.len(), 1);
+    assert!(String::from_utf8_lossy(&left[0]).contains("\"id\":9"));
+    rb.forget_left_behind("main", &[9]).unwrap();
+    assert!(rb.left_behind("main").unwrap().is_empty());
+}

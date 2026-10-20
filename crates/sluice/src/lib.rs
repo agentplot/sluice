@@ -747,7 +747,10 @@ pub fn run(
             all,
             json,
         } => match target.parse::<u64>() {
-            Ok(id) => match s.state(id)? {
+            Ok(id) => match s
+                .state(id)?
+                .map_or_else(|| s.moved_to(id), |x| Ok(Some(x)))?
+            {
                 None => {
                     let next = ["sluice overview".to_string()];
                     told::tell(
@@ -764,6 +767,13 @@ pub fn run(
                     Ok(0)
                 }
                 Some(sub) => {
+                    if sub.id != id {
+                        writeln!(
+                            out,
+                            "submission {id} is #{} now: {}'s queue moved to its remote",
+                            sub.id, sub.branch
+                        )?;
+                    }
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     write_status(&s.status(&branch)?, pusher.as_ref(), &[sub], out)?;

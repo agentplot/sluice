@@ -206,6 +206,10 @@ pub struct Submission {
     pub told: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
+    /// Its id in this host's own records, before the branch's records
+    /// moved to the remote and it was submitted again there (design D10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
