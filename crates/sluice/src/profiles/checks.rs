@@ -690,7 +690,14 @@ impl Tests for Checks {
                     argv: Some(cx.argv(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
                     holds_processors: false,
-                    stamps: Vec::new(),
+                    // A command in a checkout that lists proto's tools may
+                    // run them, moon among them, and proto stamps each
+                    // toolchain it runs as used, as a moon run's does.
+                    stamps: if request.place.path.join(".prototools").exists() {
+                        vec![".last-used"]
+                    } else {
+                        Vec::new()
+                    },
                 }
             }
             other => bail!("[tests] runner = {other:?} names no runner: \"moon\" or \"command\""),
