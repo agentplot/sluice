@@ -315,6 +315,9 @@ impl Real {
                 reserved: 0,
                 processors: 4,
                 forge: None,
+                signing: None,
+                peers: Default::default(),
+                systems: None,
             },
         )
         .expect("the profiles bind");

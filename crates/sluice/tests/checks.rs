@@ -25,6 +25,9 @@ fn checks(repo: &Repo) -> Checks {
             reserved: 0,
             processors: 8,
             forge: None,
+            signing: None,
+            peers: Default::default(),
+            systems: None,
         },
     )
 }

@@ -333,6 +333,9 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             reserved: 0,
             processors: 2,
             forge: None,
+            signing: None,
+            peers: Default::default(),
+            systems: None,
         },
     );
     let checkout = Settings::from([
