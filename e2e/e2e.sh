@@ -56,7 +56,7 @@ parallel = 4
 batch = false
 flaky = "fail"
 timeout = "20m"
-trust = ["open", "sandbox", "container", "cache"]
+trust = ["open", "sandbox", "container"]
 EOF
 }
 

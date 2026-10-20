@@ -267,6 +267,10 @@ pub struct Candidate {
     pub ran: usize,
     #[serde(default)]
     pub replayed: usize,
+    /// 108: started again with no replay, after a replay no trusted pass
+    /// proved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_replay: bool,
 }
 
 impl Candidate {
@@ -478,6 +482,12 @@ pub enum Event {
     /// A run whose executor stopped before reporting: no outcome (60).
     Lost {
         combination: Rev,
+    },
+    /// 108: replays no trusted pass proved, so the checks run again with
+    /// no replay.
+    Unproven {
+        combination: Rev,
+        tasks: Vec<String>,
     },
     Result {
         combination: Rev,

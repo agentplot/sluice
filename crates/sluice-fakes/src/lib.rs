@@ -557,13 +557,15 @@ impl World {
             .collect();
         let mut report = RunReport {
             tasks: Vec::new(),
+            // What the run was held to: the request's container engine, as
+            // an executor that holds it reports it (83, 84).
             executor: Enforced {
                 kind: "open".into(),
                 confined: false,
                 processors: None,
                 memory: None,
                 network: None,
-                docker: false,
+                docker: request.limits.docker,
             },
             missing: Vec::new(),
             timed_out: false,

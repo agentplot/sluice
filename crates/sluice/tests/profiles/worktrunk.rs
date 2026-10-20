@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use support::Repo;
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-[branches.\"bolt/*\"]\ntimeout = \"1m\"\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
+[branches.\"bolt/*\"]\ntimeout = \"1m\"\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
 
 /// The check: fails while a file named `broken` exists, after `SLOW`
 /// seconds.

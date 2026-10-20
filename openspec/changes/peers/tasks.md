@@ -25,8 +25,8 @@ makes runs with no credential helper and no prompt.
 
 ## 3. The policy and the host's config
 
-- [ ] 3.1 Parse `[systems]`, `[signers.<name>]` (one identity, kept as opaque settings; `confined`; `systems`) and `[pools.<name>]` (opaque to the core but for `signer` and the systems of its `runners`) in `crates/sluice-core/src/policy.rs`. Refuse each case the run-signing, check-systems and actions-pool specs refuse; verify unit tests per refusal and for the C.7 example parsing whole.
-- [ ] 3.2 Give `Rules` `systems`, `systems_for` and `confined`; on a branch whose state is on the remote (a `remote`, and `[signers]` in the policy), read `trust` as signer names and refuse kinds and unknown names; read `cache` as absent with a warning; refuse `lease` or `alive` in a branch's table; verify unit tests, and that sluice's own `.config/sluice.toml` still parses with one warning.
+- [x] 3.1 Parse `[systems]`, `[signers.<name>]` (one identity, kept as opaque settings; `confined`; `systems`) and `[pools.<name>]` (opaque to the core but for `signer` and the systems of its `runners`) in `crates/sluice-core/src/policy.rs`. Refuse each case the run-signing, check-systems and actions-pool specs refuse; verify unit tests per refusal and for the C.7 example parsing whole.
+- [x] 3.2 Give `Rules` `systems`, `systems_for` and `confined`; on a branch whose state is on the remote (a `remote`, and `[signers]` in the policy), read `trust` as signer names and refuse kinds and unknown names; read `cache` as absent with a warning `sluice status` shows; count a replay only through a trusted ran pass recorded for its key, and run a combination again with no replay when a replay is unproven (108); refuse `lease` or `alive` in a branch's table; drop `cache` from sluice's own policy and `e2e/e2e.sh`; verify `sluice-core` unit tests, `a_replay_no_trusted_pass_proves_runs_again_with_no_replay` in `sluice-conformance/tests/verdicts.rs`, and `status_warns_of_cache_in_trust` in `tests/cli.rs`.
 - [ ] 3.3 Read `[signing] signer` and `key` (refused unless `0600`), `[peers] lease` and `alive` (defaults 5m, 2m) and `[runs] systems` from the host's config in `crates/sluice/src/instance.rs`; refuse a system the host is not; verify unit tests.
 - [ ] 3.4 Document `[systems]`, `[signers]`, `[pools]`, `systems`, `systems_for`, `confined` and signer `trust`, and the host's `[signing]`, `[peers]` and `[runs] systems`, in `site/src/content/docs/reference/configuration.md`, with the C.7 example; verify `site:prose` reports nothing.
 
@@ -67,7 +67,7 @@ makes runs with no credential helper and no prompt.
 ## 9. Landing from signed results
 
 - [ ] 9.1 Read a combination's checks again from the trusted signers' runs before a landing intent, and land only on a pass, as design D8 says; verify a conformance test where the state holds a passing verdict with no signed results behind it and nothing lands, and S18.
-- [ ] 9.2 Count a replay only through a signed pass for its key and system, or, on a one-host branch, the host's own recorded pass; verify `verdict.rs` unit tests for S42 and each replay scenario of the run-signing spec.
+- [ ] 9.2 On a branch whose state is on the remote, prove a replay only through a pass a signer the gate trusts signed for its key and system; verify `verdict.rs` unit tests and a conformance test for S42 over signed results.
 - [ ] 9.3 Update the using-sluice skill (`plugins/sluice/skills/using-sluice/SKILL.md`): submitting to a peer branch and closing the laptop, reading a result's system and signer, a host with no signing key; verify `moon run plugin-sluice:validate`.
 
 ## 10. The GitHub Actions pool

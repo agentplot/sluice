@@ -421,7 +421,7 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
 #[test]
 fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {
     let strict = policy(false, "fail", 4).replace(
-        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
+        "trust = [\"open\", \"sandbox\", \"container\"]",
         "trust = [\"confined\"]",
     );
     let h = Harness::new(&strict);
@@ -439,19 +439,19 @@ fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {
     assert_eq!(h.w().tip(BRANCH), tip);
 }
 
-/// satisfies: 28, 16, 38
+/// satisfies: 108, 16, 38; S42
 #[test]
-fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
+fn a_replay_no_trusted_pass_proves_runs_again_with_no_replay() {
     let h = Harness::bolt();
     let other = "bolt/y";
-    let no_cache = policy(false, "fail", 4).replace(
-        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
-        "trust = [\"open\"]",
-    );
+    // Runs on bolt/y are held to a container engine, so the passes the
+    // first branch's runs recorded, held to none, prove none of its keys
+    // (19, 83).
+    let docker = format!("{}\n[executor]\ndocker = true\n", policy(false, "fail", 4));
     h.w().init(
         other,
         &[
-            (".config/sluice.toml", &no_cache),
+            (".config/sluice.toml", &docker),
             ("a/lib", "a1"),
             ("b/lib", "b1"),
             ("c/lib", "c1"),
@@ -463,8 +463,8 @@ fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
     assert_eq!(h.sub(one).state, State::Landed);
     let ran = h.w().observed().len();
 
-    // The same work on a branch whose gate does not trust the cache: every
-    // key holds a pass, and each check runs again all the same.
+    // The same work on bolt/y: the runner replays every key from its
+    // cache, no trusted pass proves them, and the checks run again.
     let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
     h.w().session("unit/y", "agent-y", &head);
     let s = h.sluice();
@@ -478,15 +478,32 @@ fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
         .unwrap()
         .unwrap()
         .id;
-    for _ in 0..6 {
+    for _ in 0..8 {
         s.step(other).unwrap();
     }
     assert_eq!(h.sub(two).state, State::Landed);
-    assert!(h.w().requests().iter().any(|r| !r.replay));
+    let requests = h.w().requests();
+    assert!(requests.iter().any(|r| r.replay));
+    assert!(requests.iter().any(|r| !r.replay));
     assert_eq!(h.w().observed().len(), ran + 3);
-    let r = results(&h);
-    assert!(r
+    let snap = s.seams().state.read(other).unwrap();
+    let events: Vec<Event> = sluice_core::line::Line::read_log(&snap)
+        .unwrap()
+        .into_iter()
+        .map(|l| l.event)
+        .collect();
+    assert!(events
         .iter()
-        .filter(|l| l.branch == other)
-        .all(|l| l.kind == ResultKind::Ran));
+        .any(|e| matches!(e, Event::Unproven { tasks, .. } if tasks.len() == 3)));
+    // The first attempt's replays are recorded as replays (core.9), and
+    // the runs as runs.
+    let r = results(&h);
+    let mine: Vec<&ResultLine> = r.iter().filter(|l| l.branch == other).collect();
+    assert_eq!(
+        mine.iter()
+            .filter(|l| l.kind == ResultKind::Replayed)
+            .count(),
+        3
+    );
+    assert_eq!(mine.iter().filter(|l| l.kind == ResultKind::Ran).count(), 3);
 }

@@ -160,8 +160,8 @@ pub struct PullRequests {
     pub checks: Vec<String>,
 }
 
-/// What `trust` may list.
-const TRUSTS: [&str; 5] = ["confined", "open", "sandbox", "container", "cache"];
+/// What `trust` may list on a branch whose records are this host's.
+const TRUSTS: [&str; 4] = ["confined", "open", "sandbox", "container"];
 
 impl Rules {
     /// 28: whether a ran result's executor satisfies the gate.
@@ -404,6 +404,7 @@ impl Policy {
         pools.sort_by_key(|(start, _)| *start);
         let pools: Vec<Pool> = pools.into_iter().map(|(_, p)| p).collect();
         let mut branches = Vec::new();
+        let mut warnings = Vec::new();
         for (pattern, r) in form.branches {
             let d = Rules::default();
             let at = format!("[branches.\"{pattern}\"]");
@@ -436,11 +437,21 @@ impl Policy {
                         .with_context(|| format!("[branches.\"{pattern}\"] timeout"))?,
                 ),
             };
-            let trust = match r.trust {
+            let mut trust = match r.trust {
                 Some(t) => t,
                 None if signed => Vec::new(),
                 None => d.trust,
             };
+            // 108: the cache supplies outputs and decides nothing; refusing
+            // the word would refuse the policy a branch already holds
+            // (core.15), so it is read as absent.
+            if trust.iter().any(|t| t == "cache") {
+                trust.retain(|t| t != "cache");
+                warnings.push(format!(
+                    "{at} trust lists \"cache\", which no longer counts: a replay counts \
+                     only through a pass recorded for its key (108)"
+                ));
+            }
             if signed {
                 if let Some(t) = trust.iter().find(|t| !signers.contains_key(*t)) {
                     let what = if TRUSTS.contains(&t.as_str()) {
@@ -535,7 +546,7 @@ impl Policy {
             systems,
             signers,
             pools,
-            warnings: Vec::new(),
+            warnings,
         })
     }
 
@@ -881,7 +892,7 @@ batch = true
         assert!(matches!(&p.checkout["cache"], Setting::Tables(t) if t.len() == 1));
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
         assert_eq!(bolt.required, ["#check-fast"]);
-        assert!(bolt.satisfiable_by("sandbox") && bolt.trusts("cache"));
+        assert!(bolt.satisfiable_by("sandbox") && !bolt.trusts("cache"));
         let main = p.rules_for("main").unwrap().unwrap();
         assert_eq!(main.required, ["#check-fast", "#check-tools", "#check-e2e"]);
         assert!(main.batch && main.satisfiable_by("sandbox") && !main.trusts("cache"));
@@ -919,8 +930,11 @@ batch = true
         assert!(main.satisfiable_by("sandbox"));
         assert!(!main.satisfiable_by("open"));
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
-        assert!(bolt.trusts("cache") && bolt.trusts_run("open", false));
+        // 108: `cache` is read as absent, with a warning.
+        assert!(!bolt.trusts("cache") && bolt.trusts_run("open", false));
         assert!(!bolt.satisfiable_by("sandbox"));
+        assert_eq!(p.warnings.len(), 1);
+        assert!(p.warnings[0].contains("\"cache\"") && p.warnings[0].contains("bolt/*"));
         // ADR 0015: a table without `trust` takes every run sluice starts,
         // and no replay.
         let default = Policy::parse("[branches.main]\n").unwrap();

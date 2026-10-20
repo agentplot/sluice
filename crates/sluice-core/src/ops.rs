@@ -121,6 +121,9 @@ pub struct Status {
     /// How many have moved to its finished records, which
     /// [`Sluice::history`] reads.
     pub finished: usize,
+    /// What the policy at `at` says that sluice reads differently than
+    /// it is written.
+    pub warnings: Vec<String>,
 }
 
 impl Status {
@@ -561,10 +564,15 @@ impl Sluice<'_> {
             Some(base) => Some(base.clone()),
             None => self.seams.branch.read(branch)?,
         };
-        let parallel = match &at {
-            Some(rev) => self.rules_at(branch, rev)?.map(|r| r.parallel),
+        let policy = match &at {
+            Some(rev) => self.policy_at(rev)?,
             None => None,
         };
+        let parallel = match &policy {
+            Some(p) => p.rules_for(branch)?.map(|r| r.parallel),
+            None => None,
+        };
+        let warnings = policy.map(|p| p.warnings).unwrap_or_default();
         Ok(Status {
             branch: branch.into(),
             at,
@@ -578,6 +586,7 @@ impl Sluice<'_> {
             parallel,
             finished: line.finished.len(),
             submissions: line.subs.into_values().collect(),
+            warnings,
         })
     }
 }

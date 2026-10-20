@@ -12,6 +12,9 @@ pub struct Verdict {
     pub failed: Vec<FailedTask>,
     pub ran: usize,
     pub replayed: usize,
+    /// 108: the tasks the run replayed with no trusted pass recorded for
+    /// their key, which count for nothing.
+    pub unproven: Vec<String>,
 }
 
 /// The gate read over one finished run. `results` is the repository's
@@ -27,34 +30,41 @@ pub struct Verdict {
 /// a required check without a result (15).
 ///
 /// Only results the gate trusts are read (28): a ran result by its
-/// recorded executor, a replay only when the gate trusts the cache. A
-/// check left with no trusted result reads as missing.
+/// recorded executor. A replay is an observation of no one (core.9): it
+/// counts only when a trusted ran pass is recorded for its key (108),
+/// and otherwise is unproven, for the round to run again with no
+/// replay. A check left with no trusted result reads as missing.
 pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
     let flaky = rules.flaky;
-    let counts = |kind: &ResultKind, executor: Option<&Enforced>| match kind {
-        ResultKind::Ran => executor.is_some_and(|e| rules.trusts_run(&e.kind, e.confined)),
-        ResultKind::Replayed => rules.trusts("cache"),
-    };
+    let trusted = |e: &Enforced| rules.trusts_run(&e.kind, e.confined);
     let mut failed = Vec::new();
+    let mut unproven = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
     for t in &report.tasks {
-        match t.source {
-            Source::Ran { .. } => ran += 1,
-            Source::Replayed { .. } => replayed += 1,
-        }
-        let this = match t.source {
-            Source::Ran { .. } => counts(&ResultKind::Ran, Some(&report.executor)),
-            Source::Replayed { .. } => counts(&ResultKind::Replayed, None),
-        };
         let recorded: Vec<&ResultLine> = results
             .iter()
-            .filter(|r| r.task == t.task && r.hash == t.hash)
-            .filter(|r| counts(&r.kind, r.executor.as_ref()))
-            .filter(|r| match (&r.kind, &r.executor) {
-                (ResultKind::Ran, Some(e)) => same_limits(e, &report.executor),
-                _ => true,
+            .filter(|r| r.task == t.task && r.hash == t.hash && r.kind == ResultKind::Ran)
+            .filter(|r| {
+                r.executor
+                    .as_ref()
+                    .is_some_and(|e| trusted(e) && same_limits(e, &report.executor))
             })
             .collect();
+        let this = match t.source {
+            Source::Ran { .. } => {
+                ran += 1;
+                trusted(&report.executor)
+            }
+            Source::Replayed { .. } => {
+                replayed += 1;
+                if !recorded.iter().any(|r| r.outcome == Outcome::Pass) {
+                    unproven.push(t.task.clone());
+                    continue;
+                }
+                // The pass it replays is already among the recorded.
+                false
+            }
+        };
         let key = recorded
             .iter()
             .map(|r| r.outcome)
@@ -106,11 +116,12 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
         });
     }
     Verdict {
-        passed: failed.is_empty() && !report.timed_out,
+        passed: failed.is_empty() && unproven.is_empty() && !report.timed_out,
         timed_out: report.timed_out,
         failed,
         ran,
         replayed,
+        unproven,
     }
 }
 
@@ -178,7 +189,8 @@ mod tests {
     }
 
     /// 28: a result from an executor the gate does not trust never
-    /// satisfies it; a replay counts only when the gate trusts the cache.
+    /// satisfies it; a replay counts only through a trusted pass recorded
+    /// for its key (108), and is otherwise unproven.
     #[test]
     fn only_trusted_results_are_read() {
         let ran = |kind| report(Source::Ran { host: "h".into() }, enforced(kind, false));
@@ -190,8 +202,23 @@ mod tests {
             Source::Replayed { from_run_at: None },
             enforced("open", false),
         );
-        assert!(read(&replay, &[], &rules(&["open", "cache"])).passed);
-        assert!(!read(&replay, &[], &rules(&["open"])).passed);
+        let none = read(&replay, &[], &rules(&["open"]));
+        assert!(!none.passed && none.failed.is_empty());
+        assert_eq!(none.unproven, ["a:test"]);
+        let pass = |kind| recorded(ResultKind::Ran, Some(enforced(kind, false)), Outcome::Pass);
+        let proven = read(&replay, &[pass("open")], &rules(&["open"]));
+        assert!(proven.passed && proven.unproven.is_empty());
+        // A pass by an executor the gate does not trust proves nothing,
+        // and neither does an earlier replay (core.9).
+        assert_eq!(
+            read(&replay, &[pass("open")], &rules(&["sandbox"])).unproven,
+            ["a:test"]
+        );
+        let replayed = recorded(ResultKind::Replayed, None, Outcome::Pass);
+        assert_eq!(
+            read(&replay, &[replayed], &rules(&["open"])).unproven,
+            ["a:test"]
+        );
 
         // An untrusted fail at the key is not read either; nor is a
         // trusted one from runs held to other limits (19).

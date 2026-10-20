@@ -33,7 +33,7 @@ pub fn policy(batch: bool, flaky: &str, parallel: usize) -> String {
         "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
          [branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = {parallel}\n\
          batch = {batch}\nflaky = \"{flaky}\"\ntimeout = \"20m\"\n\
-         trust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n"
+         trust = [\"open\", \"sandbox\", \"container\"]\n"
     )
 }
 

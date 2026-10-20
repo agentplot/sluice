@@ -11,7 +11,7 @@ use sluice_seams::Outcome;
 
 const BRANCH: &str = "bolt/concurrent-units";
 
-const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
+const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
 
 struct Rounds(Cell<usize>);
 
@@ -666,6 +666,36 @@ fn status_of_an_unknown_branch_says_so() {
     let (code, out) = sluice(&f, &["status", BRANCH]);
     assert_eq!(code, 0);
     assert!(!out.contains("no longer in the queue"), "{out}");
+}
+
+/// 108: `cache` in `trust` is read as absent, and `sluice status` says so.
+#[test]
+fn status_warns_of_cache_in_trust() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &POLICY.replace("\"container\"]", "\"container\", \"cache\"]"),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(
+            "warning: [branches.\"bolt/*\"] trust lists \"cache\", which no longer counts"
+        ),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["warnings"].as_array().unwrap().len(), 1);
+    let (_, out) = sluice(&setup(), &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["warnings"], serde_json::json!([]));
 }
 
 /// A landed #1, a blamed #2 and #3 under test, as `status_lists_the_queue`

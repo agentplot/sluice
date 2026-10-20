@@ -1755,6 +1755,9 @@ fn write_status(
              sluice has no identity of its own there"
         )?,
     }
+    for w in &status.warnings {
+        writeln!(out, "warning: {w}")?;
+    }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs
         .iter()
@@ -1789,6 +1792,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "window": status.window,
         "parallel": status.parallel,
         "submissions": submissions,
+        "warnings": status.warnings,
     })
 }
 

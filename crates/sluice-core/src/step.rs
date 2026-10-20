@@ -400,7 +400,9 @@ impl Sluice<'_> {
                 limit: rules.timeout,
                 limits: policy.limits.clone(),
                 tests: policy.tests.clone(),
-                replay: rules.trusts("cache"),
+                // 108: the cache supplies outputs; a replay counts only
+                // through a trusted pass recorded for its key.
+                replay: !c.no_replay,
             })?;
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
@@ -593,6 +595,25 @@ impl Sluice<'_> {
                         results.extend(fresh);
                     }
                     let mut v = verdict::read(&report, &results, rules);
+                    // 108: a replay no trusted pass proved counts for
+                    // nothing, and the checks run again with no replay.
+                    if !v.unproven.is_empty() && !c.no_replay {
+                        let x = line.candidate_mut(&c.id).expect("polled candidate");
+                        x.state = CandidateState::Formed;
+                        x.run = None;
+                        x.no_replay = true;
+                        if let Some(p) = x.place.take() {
+                            line.doc.release.push(p);
+                        }
+                        line.log(
+                            now,
+                            Event::Unproven {
+                                combination: c.revision.clone(),
+                                tasks: v.unproven.clone(),
+                            },
+                        );
+                        continue;
+                    }
                     // 70, 55: a revision with no verdict runs every required
                     // check; a report holding none of them is no pass.
                     if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {
@@ -758,6 +779,7 @@ impl Sluice<'_> {
                         every_check: false,
                         ran: 0,
                         replayed: 0,
+                        no_replay: false,
                     });
                     prev = rev.clone();
                     ids.push(cid);

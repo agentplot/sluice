@@ -21,7 +21,7 @@ use tracing_subscriber::Layer;
 
 const BRANCH: &str = "bolt/telemetry";
 
-const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
+const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
 
 struct Rounds(Cell<usize>);
 
