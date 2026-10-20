@@ -335,3 +335,130 @@ fn the_sandbox_holds_writes_and_the_network() {
     );
     drop(listener);
 }
+
+/// `tests` with `key` set to `value`.
+fn with(mut tests: Settings, key: &str, value: Setting) -> Settings {
+    tests.insert(key.into(), value);
+    tests
+}
+
+/// The checks a run recorded as failed.
+fn fails(r: &RunReport) -> Vec<String> {
+    r.tasks
+        .iter()
+        .filter(|t| t.outcome == Outcome::Fail)
+        .map(|t| t.task.clone())
+        .collect()
+}
+
+/// Run in a child of this test binary whose `PATH` holds git and no
+/// `bash`, so a run with a toolchain cannot start.
+#[test]
+fn cannot_start_probe() {
+    let Ok(out) = std::env::var("SLUICE_TEST_START_OUT") else {
+        return;
+    };
+    let repo = Repo::new("checks-cannot-start");
+    let c = checks(&repo);
+    let tests = with(
+        command("true"),
+        "toolchain",
+        Setting::List(vec!["/usr/bin/true".into()]),
+    );
+    let r = finish(&c, &request(&repo, "p1", tests));
+    std::fs::write(&out, fails(&r).join("\n")).unwrap();
+}
+
+/// could-not-run-1 114: a check whose program could not be started did
+/// not judge it, so no fail is recorded under its key.
+#[test]
+fn a_check_that_cannot_start_records_no_fail() {
+    let out = support::Scratch::new("checks-start-out");
+    let file = out.path().join("fails");
+    let bin = out.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let git = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|d| d.join("git"))
+        .find(|g| g.is_file())
+        .expect("git on the path");
+    std::os::unix::fs::symlink(git, bin.join("git")).unwrap();
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "cannot_start_probe", "--nocapture"])
+    .env("SLUICE_TEST_START_OUT", &file)
+    .env("PATH", &bin)
+    .status()
+    .unwrap();
+    assert!(status.success());
+    let fails = std::fs::read_to_string(&file).unwrap();
+    assert!(fails.is_empty(), "recorded as failed: {fails}");
+}
+
+/// could-not-run-1 114: an exit the policy's `not_run` names says the
+/// check could not run here: no fail under its key. Any other exit is the
+/// check's own.
+#[test]
+fn an_exit_the_policy_names_records_no_fail() {
+    let repo = Repo::new("checks-not-run");
+    let c = checks(&repo);
+    let not_run = Setting::List(vec!["77".into()]);
+    let r = finish(
+        &c,
+        &request(
+            &repo,
+            "p1",
+            with(command("exit 77"), "not_run", not_run.clone()),
+        ),
+    );
+    assert!(fails(&r).is_empty(), "recorded as failed: {:?}", r.tasks);
+    let r = finish(
+        &c,
+        &request(&repo, "p2", with(command("exit 1"), "not_run", not_run)),
+    );
+    assert_eq!(fails(&r), ["exit 1"]);
+}
+
+/// 84, could-not-run-1: a host that fails the readiness the repository
+/// declares is refused the run before anything of it runs, naming the
+/// command.
+#[test]
+fn a_host_that_is_not_ready_runs_nothing() {
+    let repo = Repo::new("checks-not-ready");
+    let c = checks(&repo);
+    let tests = with(
+        command("touch ran"),
+        "ready",
+        Setting::Text("test -e ready".into()),
+    );
+    let err = c.start(&request(&repo, "p1", tests)).unwrap_err();
+    assert!(format!("{err:#}").contains("test -e ready"), "{err:#}");
+    assert!(!repo.dir().join("ran").exists());
+}
+
+/// could-not-run-1 114: a host that stops being ready during a run
+/// leaves its fails unjudged and records none; its passes stand.
+#[test]
+fn a_host_that_stops_being_ready_records_no_fail() {
+    let repo = Repo::new("checks-ready-lost");
+    let c = checks(&repo);
+    let ready = Setting::Text("test -e ready".into());
+    std::fs::write(repo.dir().join("ready"), "").unwrap();
+    let r = finish(
+        &c,
+        &request(
+            &repo,
+            "p1",
+            with(command("rm ready; exit 1"), "ready", ready.clone()),
+        ),
+    );
+    assert!(fails(&r).is_empty(), "recorded as failed: {:?}", r.tasks);
+    std::fs::write(repo.dir().join("ready"), "").unwrap();
+    let r = finish(
+        &c,
+        &request(&repo, "p2", with(command("rm ready"), "ready", ready)),
+    );
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+}

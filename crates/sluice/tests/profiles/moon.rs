@@ -324,6 +324,28 @@ fn a_failure_and_its_dependent() {
     assert!(!logs[1].text.is_empty());
 }
 
+/// could-not-run-1 114: a task that exits as the policy's `not_run`
+/// says could not run here, so no fail is recorded under its key; its
+/// dependent, never run, is missing as before.
+#[test]
+fn a_task_that_could_not_run_records_no_fail() {
+    let repo = workspace("moon-not-run");
+    let c = checks(&repo);
+    change(&repo, &[("alpha/test.sh", "exit 77\n")]);
+    let mut req = request(&repo, "p1", &["#check-fast"], None);
+    req.tests
+        .insert("not_run".into(), Setting::List(vec!["77".into()]));
+    let r = finish(&c, &req);
+    assert!(
+        !r.tasks
+            .iter()
+            .any(|t| t.task == "alpha:test" && t.outcome == Outcome::Fail),
+        "recorded as failed: {:?}",
+        r.tasks
+    );
+    assert_eq!(r.missing, ["beta:test"]);
+}
+
 /// 70: with no verified revision every required task runs; two tags run
 /// the union of their tasks, and a tag with no tasks adds none.
 #[test]
