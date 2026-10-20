@@ -195,6 +195,8 @@ impl Ask<'_> {
                                     .now()
                                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                                 run_dir: self.host.run_dir(&run).unwrap_or_default(),
+                                command: None,
+                                tasks: Vec::new(),
                             },
                         )?;
                         break;

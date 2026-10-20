@@ -250,6 +250,27 @@ impl Sluice<'_> {
     }
 }
 
+/// The host's runs against its bound (71; session-runs-1 clauses 89, 91;
+/// ADR 0035): the bound, the repository's candidates under test, the
+/// host's session runs, and the part of the bound session runs never take.
+/// It decides nothing; `session_capacity` reads the same numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Room {
+    pub bound: usize,
+    pub queue: usize,
+    pub sessions: usize,
+    pub reserve: usize,
+}
+
+impl Room {
+    /// How many more session runs may start now.
+    pub fn for_sessions(&self) -> usize {
+        self.bound
+            .saturating_sub(self.reserve)
+            .saturating_sub(self.queue + self.sessions)
+    }
+}
+
 /// The branch whose policy orders the overview, the repository's default
 /// (ADR 0036): its name, and its revision for when it has no records.
 #[derive(Clone, Debug, PartialEq, Eq)]

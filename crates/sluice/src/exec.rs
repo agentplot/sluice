@@ -12,7 +12,7 @@ use anyhow::Result;
 use sluice_core::overview::OrderFrom;
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Sluice};
-use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport};
+use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress};
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
@@ -31,6 +31,8 @@ pub trait Host {
     fn begin_session(&self, held: &dyn Any, run: &SessionRun) -> Result<()>;
     /// The worktree's session run has ended.
     fn end_session(&self, worktree: &str) -> Result<()>;
+    /// Keep `tasks` on the worktree's running session run (ADR 0035).
+    fn session_tasks(&self, worktree: &str, tasks: &[TaskProgress]) -> Result<()>;
     /// Where a run's output and result are kept, when on this host.
     fn run_dir(&self, run: &RunHandle) -> Option<PathBuf>;
     /// End a run's process group now.
@@ -231,6 +233,8 @@ impl Exec<'_> {
                                 .now()
                                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                             run_dir: self.host.run_dir(&run).unwrap_or_default(),
+                            command: command.clone(),
+                            tasks: Vec::new(),
                         },
                     )?;
                     break (place, run);
@@ -274,11 +278,20 @@ impl Exec<'_> {
             }
             Ok(())
         };
+        let mut kept: Vec<TaskProgress> = Vec::new();
         let progress = loop {
             let p = seams.tests.progress(&run)?;
             show(out)?;
             if !matches!(p, Progress::Running) {
                 break p;
+            }
+            // ADR 0035: where its tasks have got, kept on its record for a
+            // person to read. They decide nothing, so one that cannot be read
+            // or kept is passed over.
+            if let Ok(tasks) = seams.tests.tasks(&run) {
+                if tasks != kept && self.host.session_tasks(&worktree, &tasks).is_ok() {
+                    kept = tasks;
+                }
             }
             if !self.pause.pause() {
                 self.host.end_run(&run)?;

@@ -48,8 +48,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle, RunReport,
-    RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    log_tail, Enforced, HostRun, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle,
+    RunReport, RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -849,6 +849,21 @@ impl Tests for Checks {
 
     fn sessions(&self) -> Result<usize> {
         Ok(self.host_sessions()?.running()?.len())
+    }
+
+    fn session_runs(&self) -> Result<Vec<HostRun>> {
+        Ok(self
+            .host_sessions()?
+            .running()?
+            .into_iter()
+            .map(|r| HostRun {
+                worktree: r.worktree,
+                branch: r.branch,
+                started: r.started,
+                command: r.command,
+                tasks: r.tasks,
+            })
+            .collect())
     }
 
     fn logs(&self, run: &RunHandle, tasks: &[String]) -> Result<Vec<TaskLog>> {

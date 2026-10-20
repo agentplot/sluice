@@ -311,6 +311,10 @@ impl crate::exec::Host for Bound {
         self.tests.host_sessions()?.end(worktree)
     }
 
+    fn session_tasks(&self, worktree: &str, tasks: &[sluice_seams::TaskProgress]) -> Result<()> {
+        self.tests.host_sessions()?.keep_tasks(worktree, tasks)
+    }
+
     fn run_dir(&self, run: &sluice_seams::RunHandle) -> Option<PathBuf> {
         Some(self.tests.runs().dir(&run.0))
     }

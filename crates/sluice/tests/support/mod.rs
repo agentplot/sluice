@@ -222,12 +222,27 @@ impl sluice::exec::Host for FakeHost {
         _: &dyn std::any::Any,
         run: &sluice::sessions::SessionRun,
     ) -> anyhow::Result<()> {
-        self.world.session_run(&run.worktree, true);
+        self.world.begin_host_run(sluice_seams::HostRun {
+            worktree: run.worktree.clone(),
+            branch: run.branch.clone(),
+            started: run.started.clone(),
+            command: run.command.clone(),
+            tasks: run.tasks.clone(),
+        });
         Ok(())
     }
 
     fn end_session(&self, worktree: &str) -> anyhow::Result<()> {
         self.world.kill_session(worktree);
+        Ok(())
+    }
+
+    fn session_tasks(
+        &self,
+        worktree: &str,
+        tasks: &[sluice_seams::TaskProgress],
+    ) -> anyhow::Result<()> {
+        self.world.session_tasks(worktree, tasks);
         Ok(())
     }
 

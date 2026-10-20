@@ -22,7 +22,22 @@ pub fn document(
     clock: &dyn Clock,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     let branches = s.overview(host.default_branch()?.as_ref())?;
-    let sessions = sessions_json(&s.session_places()?, &s.held()?);
+    let mut sessions = sessions_json(&s.session_places()?, &s.held()?);
+    // ADR 0035: each worktree's session run going, from the host's state;
+    // a run in another repository counts only in `room`.
+    let runs = s.seams().tests.session_runs()?;
+    for w in &mut sessions {
+        if let Some(r) = runs.iter().find(|r| w["worktree"] == r.worktree.as_str()) {
+            let mut run = serde_json::json!({ "started": r.started });
+            if let Some(c) = &r.command {
+                run["command"] = c.as_str().into();
+            }
+            if !r.tasks.is_empty() {
+                run["tasks"] = serde_json::json!(r.tasks);
+            }
+            w["run"] = run;
+        }
+    }
     let previews: Vec<serde_json::Value> = s.previews()?.iter().map(preview_json).collect();
     let doc = serde_json::json!({
         "schema": OVERVIEW_SCHEMA,
@@ -32,6 +47,7 @@ pub fn document(
         "branches": branches,
         "sessions": sessions,
         "previews": previews,
+        "room": s.room(host.reserved())?,
     });
     Ok((branches, doc))
 }

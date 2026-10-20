@@ -2,7 +2,7 @@
 
 mod support;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use clap::Parser;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
@@ -784,6 +784,9 @@ fn overview_shows_every_branch_at_a_glance() {
     assert!(v["at"].is_string());
     assert_eq!(v["sessions"], serde_json::json!([]));
     assert_eq!(v["previews"], serde_json::json!([]));
+    // ADR 0035: the one combination under test counts against the bound.
+    assert_eq!(v["room"]["queue"], 1);
+    assert_eq!(v["room"]["sessions"], 0);
     let branches = v["branches"].as_array().unwrap();
     assert_eq!(branches.len(), 1);
     let b = &branches[0];
@@ -1396,6 +1399,230 @@ fn exec_never_takes_the_reserve() {
     // Without the reserve, the room is taken.
     let (code, _) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
     assert_eq!(code, LANDED);
+}
+
+/// The overview's document, as a fake host with `reserved` reads it.
+fn overview_doc(f: &Fakes, reserved: usize) -> serde_json::Value {
+    let cli = Cli::try_parse_from(["sluice", "overview", "--json"]).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved,
+    };
+    let pause = Rounds(Cell::new(0));
+    run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
+    serde_json::from_slice(&out).unwrap()
+}
+
+/// ADR 0035: while an agent's check runs, its worktree's entry carries the
+/// tasks its `sluice exec` keeps, and `room` counts it against the bound;
+/// keeping them moves no branch's version. Once it ends the run is gone,
+/// and its result lists its tasks and says it is reused.
+#[test]
+fn overview_shows_an_agents_check_and_the_hosts_room() {
+    use sluice_seams::{TaskProgress, TaskState};
+    let f = setup();
+    f.world.host_limit(3);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let head = sluice_seams::Driver::session(&f.driver, "unit/a")
+        .unwrap()
+        .head;
+    f.world.hold_runs(true);
+    let task = |state| TaskProgress {
+        target: "plugin:test".into(),
+        state,
+        started: None,
+        ended: None,
+        exit: None,
+    };
+    let seen = RefCell::new(None);
+    let version = f.world.version(BRANCH);
+    let pause = Then(Cell::new(0), |n| {
+        match n {
+            1 => f.world.says_tasks(&head, &[task(TaskState::Running)]),
+            2 => {
+                *seen.borrow_mut() = Some(overview_doc(&f, 1));
+                f.world.complete(&head);
+            }
+            _ => {}
+        }
+        true
+    });
+    let (code, out) = exec_with(&f, 0, &pause, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+
+    let during = seen.into_inner().expect("read while the check ran");
+    let w = &during["sessions"][0];
+    assert_eq!(w["worktree"], "unit/a");
+    assert!(w["run"]["started"].is_string());
+    assert!(w["run"].get("command").is_none());
+    assert_eq!(w["run"]["tasks"][0]["target"], "plugin:test");
+    assert_eq!(w["run"]["tasks"][0]["state"], "running");
+    assert_eq!(
+        during["room"],
+        serde_json::json!({"bound": 3, "queue": 0, "sessions": 1, "reserve": 1})
+    );
+    assert_eq!(
+        f.world.version(BRANCH),
+        version,
+        "no branch's version moved"
+    );
+
+    let after = overview_doc(&f, 0);
+    let w = &after["sessions"][0];
+    assert!(w.get("run").is_none());
+    assert_eq!(after["room"]["sessions"], 0);
+    let last = &w["last_result"];
+    assert_eq!(last["recorded"], true);
+    assert_eq!(last["reused"], true);
+    assert_eq!(last["tasks"][0]["target"], "plugin:test");
+    assert_eq!(last["tasks"][0]["state"], "passed");
+}
+
+/// ADR 0035: a run of a command names its command and lists no tasks; a
+/// session run in another repository on the host counts only in `room`.
+#[test]
+fn overview_names_a_commands_check_and_counts_another_repositorys() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    f.world.session_run("/elsewhere/agent", true);
+    f.world.hold_runs(true);
+    let seen = RefCell::new(None);
+    let pause = Then(Cell::new(0), |n| {
+        if n == 1 {
+            *seen.borrow_mut() = Some(overview_doc(&f, 0));
+            f.world.complete_all();
+        }
+        true
+    });
+    exec_with(
+        &f,
+        0,
+        &pause,
+        &[BRANCH, "--worktree", "unit/a", "--", "make", "e2e"],
+    );
+    let during = seen.into_inner().unwrap();
+    let sessions = during["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["run"]["command"], "make e2e");
+    assert!(sessions[0]["run"].get("tasks").is_none());
+    assert_eq!(during["room"]["sessions"], 2);
+    // A command's result says nothing of what it is worth.
+    let after = overview_doc(&f, 0);
+    let last = &after["sessions"][0]["last_result"];
+    assert_eq!(last["kind"], "command");
+    assert!(last.get("reused").is_none() && last.get("tasks").is_none());
+}
+
+/// ADR 0035, 93: a check's passes are reused only when recorded under an
+/// executor the gate trusts; one with uncommitted changes is not kept.
+#[test]
+fn a_finished_check_says_whether_it_is_reused() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    f.world.dirty("unit/a", &["scratch"]);
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let last = &overview_doc(&f, 0)["sessions"][0]["last_result"];
+    assert_eq!(last["outcome"], "pass");
+    assert_eq!(last["recorded"], false);
+    assert_eq!(last["reused"], false);
+    assert_eq!(last["tasks"].as_array().unwrap().len(), 1);
+
+    // A gate that trusts only confined runs takes none of the session's.
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\ntrust = [\"confined\"]\n",
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let last = &overview_doc(&f, 0)["sessions"][0]["last_result"];
+    assert_eq!(last["recorded"], true);
+    assert_eq!(last["reused"], false);
+}
+
+/// ADR 0035: the watch prints again when a check starts and when one of
+/// its tasks moves, and not when nothing of it does.
+#[test]
+fn overview_watch_prints_when_a_checks_task_moves() {
+    use sluice_seams::{HostRun, TaskProgress, TaskState};
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    let running = [TaskProgress {
+        target: "plugin:test".into(),
+        state: TaskState::Running,
+        started: None,
+        ended: None,
+        exit: None,
+    }];
+    let between = |n: usize| match n {
+        1 => f.world.begin_host_run(HostRun {
+            worktree: "unit/a".into(),
+            branch: BRANCH.into(),
+            started: "2026-10-20T09:00:00Z".into(),
+            command: None,
+            tasks: Vec::new(),
+        }),
+        2 | 3 => f.world.session_tasks("unit/a", &running),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    let docs: Vec<serde_json::Value> = out
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(docs.len(), 3, "{out}");
+    assert!(docs[0]["sessions"][0].get("run").is_none());
+    assert!(docs[1]["sessions"][0]["run"].get("tasks").is_none());
+    assert_eq!(
+        docs[2]["sessions"][0]["run"]["tasks"][0]["state"],
+        "running"
+    );
 }
 
 /// 66, 92: a run past the branch's time limit is reported as timed out,

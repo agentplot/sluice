@@ -174,7 +174,20 @@ fn the_tasks_a_range_affects() {
 /// result (37, 38).
 #[test]
 fn a_run_shows_each_task_as_it_ends() {
-    let repo = workspace("moon-progress");
+    shows_each_task_as_it_ends("moon-progress", |_| "p1".into());
+}
+
+/// ADR 0035: a session's run, which takes a new run name in its place each
+/// time (session-runs-1 clause 94), reads its tasks as a combination's do.
+#[test]
+fn a_session_run_shows_each_task_as_it_ends() {
+    shows_each_task_as_it_ends("moon-session-progress", |repo| {
+        format!("session/{}", repo.dir().display())
+    });
+}
+
+fn shows_each_task_as_it_ends(name: &str, place: impl Fn(&Repo) -> String) {
+    let repo = workspace(name);
     let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
     change(
         &repo,
@@ -195,7 +208,7 @@ fn a_run_shows_each_task_as_it_ends() {
         ],
     );
     let c = checks(&repo);
-    let req = request(&repo, "p1", &["alpha:test", "slow:test"], None);
+    let req = request(&repo, &place(&repo), &["alpha:test", "slow:test"], None);
     let run = c.start(&req).unwrap();
     let until = Instant::now() + Duration::from_secs(120);
     let seen = loop {

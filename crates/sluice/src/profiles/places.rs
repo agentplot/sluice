@@ -1422,6 +1422,8 @@ mod tests {
             kind: RunKind::Checks,
             outcome: RunOutcome::Pass,
             recorded: true,
+            tasks: Vec::new(),
+            reused: None,
         }
     }
 

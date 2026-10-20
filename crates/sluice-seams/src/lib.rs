@@ -115,6 +115,16 @@ pub struct LastResult {
     /// Its results are under their keys (92): only a run of the checks in
     /// a place holding exactly its head that did not hit its time limit.
     pub recorded: bool,
+    /// Each task of a run of the checks that reported, as it ended:
+    /// passed, failed or replayed (ADR 0035).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
+    /// Whether its passes are what the branch's gate takes when its head is
+    /// submitted: recorded, every check passed, and its executor trusted by
+    /// the gate read from the branch's revision (93, 56). Set for a run of
+    /// the checks that reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused: Option<bool>,
 }
 
 /// What a session run ran (89).
@@ -535,6 +545,11 @@ pub trait Tests {
     /// bound and the records never hold it.
     fn sessions(&self) -> Result<usize>;
 
+    /// ADR 0035: the session runs running on this host, as `sessions`
+    /// counts them, each with what its `sluice exec` kept of it: for a
+    /// person to read, never a run or a result (rule core.18).
+    fn session_runs(&self) -> Result<Vec<HostRun>>;
+
     /// 20: what each of `tasks` printed in a finished run, while its place
     /// still exists: the run's own output for a task with none of its
     /// own. Only the end of a long output is kept.
@@ -544,6 +559,25 @@ pub trait Tests {
     /// person to read; empty when the runner says nothing until the run
     /// ends. Never a result (37, 38).
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
+}
+
+/// A session run going on the host (session-runs-1 clause 89), as the
+/// host's state keeps it beside its count (ADR 0035). It decides nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostRun {
+    /// The session's place, as its canonical path.
+    pub worktree: String,
+    /// The branch whose policy the run is held to.
+    pub branch: String,
+    /// When it started, RFC 3339.
+    pub started: String,
+    /// The command of a run of a command; `None` for a run of the checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Where each task has got, as its runner says; empty when it says
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
 }
 
 /// What one task printed in a run, or where it is kept.
