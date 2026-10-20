@@ -16,8 +16,11 @@ export type OverviewSubmission = {
   id: number;
   state: string;
   from: { agent: string; worktree: string; path?: string };
-  failed?: { task: string; log?: string }[];
+  failed?: OverviewFailed[];
 };
+
+/** A failed test: the system it failed on, where the policy names one. */
+export type OverviewFailed = { task: string; log?: string; system?: string };
 
 /** One task of a run under test, as its runner says while it goes. */
 export type OverviewTask = {
@@ -39,7 +42,7 @@ export type OverviewCandidate = {
   executor: string | null;
   ran: number;
   replayed: number;
-  failed: { task: string; log?: string }[];
+  failed: OverviewFailed[];
   /** Present while the runner says how far its tasks have got. */
   tasks?: OverviewTask[];
 };

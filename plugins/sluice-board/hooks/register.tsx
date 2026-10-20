@@ -12,6 +12,7 @@ import {
   bandLines,
   combination,
   duration,
+  failedName,
   githubBase,
   isMine,
   learn,
@@ -391,11 +392,11 @@ export const register: Register = (on, options) => {
               .slice(-1)
               .flatMap((c) => c.failed.filter((f) => f.log))
               .map((f) => {
-                const k = `log-${b.branch}-${f.task}`;
+                const k = `log-${b.branch}-${f.task}${f.system ? `-${f.system}` : ""}`;
                 return (
                   <Box key={`${k}-row`} flexDirection="column">
                     <Button key={k} plain onPress={() => toggle($, k, async () => [f])}>
-                      {"    "}log of {f.task}: <Text dimColor>{f.log}</Text>
+                      {"    "}log of {failedName(f)}: <Text dimColor>{f.log}</Text>
                     </Button>
                     {open_.includes(k) && view(k, shownOf[k] ?? [])}
                   </Box>

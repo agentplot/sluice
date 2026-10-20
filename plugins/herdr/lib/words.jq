@@ -132,7 +132,7 @@ def rows($now; $color): . as $d
                 | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c) | row("event") + {age: $age})
             , ([$b.candidates[] | select(any(.failed[]; .log))] | last // empty
                 | .failed[] | select(.log)
-                | ("      log of \(.task): \(.log)" | row("failure"))
+                | ("      log of \(.task)\(if .system then " (\(.system))" else "" end): \(.log)" | row("failure"))
                   + {url: "sluice-herdr:log?path=\(.log | @uri)&task=\(.task | @uri)"})
           else empty end )
     ]

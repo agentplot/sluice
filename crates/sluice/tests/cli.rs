@@ -137,6 +137,53 @@ fn submit_fails_and_names_the_combination() {
     assert_eq!(lines[6], "fix it in your worktree and submit again");
 }
 
+/// 85, 86: a failure on a system the gate names says which system.
+#[test]
+fn a_failure_names_its_system() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!(
+                    "[systems]\nlinux-x64 = {{ os = \"linux\", arch = \"x86_64\" }}\n\n{}\
+                     systems = [\"linux-x64\"]\n",
+                    POLICY.replace(
+                        "required = [\"#gate\"]",
+                        "required = [\"tests:t-batch-cards\"]"
+                    )
+                ),
+            ),
+            ("tests/t_cards.py", "cards"),
+        ],
+    );
+    f.world.task("tests:t-batch-cards", "tests/");
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED);
+    assert!(
+        out.contains("failed: tests:t-batch-cards (linux-x64)\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  log of tests:t-batch-cards (linux-x64): "),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert!(out.contains("tests:t-batch-cards (linux-x64) on "), "{out}");
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["submissions"][0]["failed"][0]["system"], "linux-x64");
+}
+
 /// 19, 20: a test read as failed only because its inputs failed before
 /// says it is flaky: that it passed in this run, when and on which
 /// combination the same inputs failed, how the branch reads that, and

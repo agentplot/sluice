@@ -7,9 +7,15 @@ import type {
   Overview,
   OverviewBranch,
   OverviewCandidate,
+  OverviewFailed,
   OverviewTask,
   Recent,
 } from "../types";
+
+/** A failed test by name, and the system it failed on where there is one. */
+export function failedName(f: OverviewFailed): string {
+  return f.system ? `${f.task} (${f.system})` : f.task;
+}
 
 /** `2m10s`, `45s`, `1h03m`. */
 export function duration(seconds: number): string {
@@ -236,7 +242,7 @@ export function statusLine(doc: Overview | null, mine: Mine): string | undefined
 }
 
 /** The prompt that tells an idle session its submission's outcome. */
-export function wakeText(o: Outcome, failed: { task: string; log?: string }[]): string {
+export function wakeText(o: Outcome, failed: OverviewFailed[]): string {
   if (o.word === "landed") {
     return `[sluice] Your submission #${o.id} landed on ${o.branch} as ${(o.to ?? "").slice(0, 7)}.`;
   }
@@ -246,8 +252,8 @@ export function wakeText(o: Outcome, failed: { task: string; log?: string }[]): 
       `Merge ${o.branch} into your worktree, resolve, commit, and submit again (check first with \`sluice submit --check ${o.branch}\`).`,
     ].join("\n");
   }
-  const tasks = failed.map((f) => f.task).join(", ") || "its tests";
-  const logs = failed.filter((f) => f.log).map((f) => `Log of ${f.task}: ${f.log}`);
+  const tasks = failed.map(failedName).join(", ") || "its tests";
+  const logs = failed.filter((f) => f.log).map((f) => `Log of ${failedName(f)}: ${f.log}`);
   return [
     `[sluice] Your submission #${o.id} to ${o.branch} failed: ${tasks}${o.combination ? ` on ${o.combination.slice(0, 7)}` : ""}.`,
     ...logs,

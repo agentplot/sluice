@@ -154,4 +154,13 @@ describe("outcomes", () => {
     expect(text).toContain("Log of cli:test: /r/sluice.git/sluice/.logs/main/c7/cli:test.log");
     expect(text).toContain("sluice exec main");
   });
+
+  test("a failure names the system it failed on", () => {
+    const text = wakeText(
+      { key: "k", branch: "main", id: 13, word: "failed", combination: "9a03c1e5d2" },
+      [{ task: "cli:build", log: "/l/cli:build.log", system: "linux-arm64" }, { task: "cli:test" }],
+    );
+    expect(text).toContain("failed: cli:build (linux-arm64), cli:test on 9a03c1e");
+    expect(text).toContain("Log of cli:build (linux-arm64): /l/cli:build.log");
+  });
 });

@@ -1354,13 +1354,7 @@ fn report(
             if timed_out {
                 writeln!(out, "timed out")?;
             } else if !ran.is_empty() {
-                let named: Vec<String> = ran
-                    .iter()
-                    .map(|f| match f.flaky {
-                        Some(_) => format!("{} (flaky)", f.task),
-                        None => f.task.clone(),
-                    })
-                    .collect();
+                let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
             }
             if !not_run.is_empty() {
@@ -1395,7 +1389,7 @@ fn report(
             for f in &sub.failed {
                 let Some(k) = &f.flaky else {
                     if let Some(at) = &f.log {
-                        writeln!(out, "  log of {}: {at}", f.task)?;
+                        writeln!(out, "  log of {}: {at}", failed_name(f))?;
                     }
                     continue;
                 };
@@ -1683,18 +1677,24 @@ fn exit_for(sub: &Submission) -> i32 {
     }
 }
 
+/// A failed task as a person reads it: its system where the policy names
+/// one (85), and `(flaky)` when its key holds both outcomes (19).
+fn failed_name(f: &sluice_core::records::FailedTask) -> String {
+    let mut name = f.task.clone();
+    if let Some(s) = &f.system {
+        name.push_str(&format!(" ({s})"));
+    }
+    if f.flaky.is_some() {
+        name.push_str(" (flaky)");
+    }
+    name
+}
+
 fn detail(branch: &str, s: &Submission) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.
-            let tasks: Vec<String> = s
-                .failed
-                .iter()
-                .map(|f| match f.flaky {
-                    Some(_) => format!("{} (flaky)", f.task),
-                    None => f.task.clone(),
-                })
-                .collect();
+            let tasks: Vec<String> = s.failed.iter().map(failed_name).collect();
             let what = if tasks.is_empty() {
                 s.result.clone().unwrap_or_default()
             } else {
