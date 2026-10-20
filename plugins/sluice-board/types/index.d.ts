@@ -67,6 +67,18 @@ export type Overview = {
   branches: OverviewBranch[];
   sessions: { worktree: string; branch: string; removed: boolean }[];
   previews: { name: string; state: string }[];
+  /** The hosts serving a remote, by their last sign of life. */
+  hosts?: OverviewHost[];
+};
+
+export type OverviewHost = {
+  host: string;
+  signer?: string;
+  system?: string;
+  held: number;
+  room: number;
+  lapsed: boolean;
+  at?: string;
 };
 
 /** How the board knows this session's submissions. */

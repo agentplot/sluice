@@ -241,6 +241,58 @@ impl Sluice<'_> {
     }
 }
 
+/// 77, 107: a host serving a remote, by its last sign of life.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostView {
+    pub host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub held: u64,
+    /// The runs it has room for by its last sign of life; none once it
+    /// has lapsed.
+    pub room: u64,
+    /// Its sign of life has stood still for the bound, by this host's
+    /// observation (77).
+    pub lapsed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+impl Sluice<'_> {
+    /// Every host serving a remote, by its last sign of life. A reader:
+    /// what this host has observed of each beat is read, never written.
+    pub fn hosts(&self) -> Result<Vec<HostView>> {
+        let now = self.now();
+        let mut out = Vec::new();
+        for (host, (marker, beat)) in self.seams.state.beats()? {
+            let v: serde_json::Value = serde_json::from_slice(&beat).unwrap_or_default();
+            let lapsed = match self.seams.state.observed_beat(&host)? {
+                Some((m, since)) if m == marker => crate::step::seconds_since(&since, &now)
+                    .is_some_and(|s| s >= self.peer.alive.as_secs_f64()),
+                _ => false,
+            };
+            let held = v["held"].as_u64().unwrap_or(0);
+            let bound = v["bound"].as_u64().unwrap_or(0);
+            out.push(HostView {
+                signer: v["signer"].as_str().map(str::to_string),
+                system: v["system"].as_str().map(str::to_string),
+                held,
+                room: if lapsed {
+                    0
+                } else {
+                    bound.saturating_sub(held)
+                },
+                lapsed,
+                at: v["at"].as_str().map(str::to_string),
+                host,
+            });
+        }
+        Ok(out)
+    }
+}
+
 pub const HOME_SCHEMA: &str = "sluice/home@1";
 
 /// One branch as the home view counts it: the overview's own counts.

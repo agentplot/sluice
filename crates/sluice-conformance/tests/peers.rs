@@ -358,3 +358,27 @@ fn a_host_naming_a_system_it_is_not_is_refused() {
         .check_host_systems()
         .unwrap();
 }
+
+/// satisfies: 77, 107; the standing-executor spec's "A host gone quiet"
+#[test]
+fn the_overview_shows_hosts_their_room_and_a_lapse() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(3);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let lead = as_signer(&h, "lead", None);
+    let hosts = lead.hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].host, "b");
+    assert_eq!(hosts[0].signer.as_deref(), Some("box"));
+    assert_eq!(
+        (hosts[0].held, hosts[0].room, hosts[0].lapsed),
+        (0, 3, false)
+    );
+    // The lead watches b's beat stand still past the bound.
+    lead.step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(3));
+    let hosts = as_signer(&h, "lead", None).hosts().unwrap();
+    assert!(hosts[0].lapsed);
+    assert_eq!(hosts[0].room, 0);
+}

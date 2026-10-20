@@ -8,9 +8,17 @@ import type {
   OverviewBranch,
   OverviewCandidate,
   OverviewFailed,
+  OverviewHost,
   OverviewTask,
   Recent,
 } from "../types";
+
+/** The hosts serving a remote: how many, their room, and any lapsed. */
+export function hostsLine(hosts: readonly OverviewHost[]): string {
+  const room = hosts.reduce((n, h) => n + h.room, 0);
+  const lapsed = hosts.filter((h) => h.lapsed).length;
+  return `${plural(hosts.length, "host")}, room for ${room}${lapsed > 0 ? `, ${lapsed} lapsed` : ""}`;
+}
 
 /** A failed test by name, and the system it failed on where there is one. */
 export function failedName(f: OverviewFailed): string {

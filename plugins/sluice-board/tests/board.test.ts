@@ -5,6 +5,7 @@ import {
   bar,
   duration,
   githubBase,
+  hostsLine,
   isMine,
   learn,
   outcomes,
@@ -162,5 +163,19 @@ describe("outcomes", () => {
     );
     expect(text).toContain("failed: cli:build (linux-arm64), cli:test on 9a03c1e");
     expect(text).toContain("Log of cli:build (linux-arm64): /l/cli:build.log");
+  });
+});
+
+describe("hosts", () => {
+  test("the hosts line counts hosts, their room and the lapsed", () => {
+    expect(
+      hostsLine([
+        { host: "box", signer: "box", held: 1, room: 3, lapsed: false },
+        { host: "gone", held: 1, room: 0, lapsed: true },
+      ]),
+    ).toBe("2 hosts, room for 3, 1 lapsed");
+    expect(hostsLine([{ host: "box", held: 0, room: 4, lapsed: false }])).toBe(
+      "1 host, room for 4",
+    );
   });
 });

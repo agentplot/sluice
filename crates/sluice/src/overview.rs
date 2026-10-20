@@ -24,6 +24,7 @@ pub fn document(
     let branches = s.overview()?;
     let sessions = sessions_json(&s.session_places()?, &s.held()?);
     let previews: Vec<serde_json::Value> = s.previews()?.iter().map(preview_json).collect();
+    let hosts = s.hosts()?;
     let doc = serde_json::json!({
         "schema": OVERVIEW_SCHEMA,
         "host": host.name(),
@@ -32,6 +33,7 @@ pub fn document(
         "branches": branches,
         "sessions": sessions,
         "previews": previews,
+        "hosts": hosts,
     });
     Ok((branches, doc))
 }
@@ -117,6 +119,22 @@ fn write_overview(
         for r in b.recent.iter().rev().take(3) {
             writeln!(out, "  {}", recent_line(r))?;
         }
+    }
+    // 77, 107: the hosts serving a remote, by their last sign of life.
+    for h in doc["hosts"].as_array().map_or(&[][..], Vec::as_slice) {
+        let mut line = format!(
+            "host {}  {}  {}  {} held",
+            h["host"].as_str().unwrap_or(""),
+            h["signer"].as_str().unwrap_or("signs nothing"),
+            h["system"].as_str().unwrap_or("any system"),
+            h["held"].as_u64().unwrap_or(0),
+        );
+        if h["lapsed"].as_bool() == Some(true) {
+            line.push_str(" · lapsed: no sign of life for the bound");
+        } else {
+            line.push_str(&format!(" · room for {}", h["room"].as_u64().unwrap_or(0)));
+        }
+        writeln!(out, "{line}")?;
     }
     let sessions = doc["sessions"].as_array().map_or(&[][..], Vec::as_slice);
     let held = sessions.iter().filter(|w| w.get("ports").is_some()).count();

@@ -1959,6 +1959,11 @@ fn has_work(line: &Line) -> bool {
         || !line.doc.release.is_empty()
 }
 
+/// Seconds from one record time to another, for a reader.
+pub(crate) fn seconds_since(from: &str, to: &str) -> Option<f64> {
+    seconds_between(from, to)
+}
+
 /// Seconds from one record time to another.
 fn seconds_between(from: &str, to: &str) -> Option<f64> {
     let from = chrono::DateTime::parse_from_rfc3339(from).ok()?;

@@ -14,6 +14,7 @@ import {
   duration,
   failedName,
   githubBase,
+  hostsLine,
   isMine,
   learn,
   limit,
@@ -407,6 +408,7 @@ export const register: Register = (on, options) => {
         <Box marginTop={1}>
           <Text dimColor>
             {d.sessions.length} worktrees held · {d.previews.length} previews
+            {(d.hosts ?? []).length > 0 ? ` · ${hostsLine(d.hosts ?? [])}` : ""}
           </Text>
         </Box>
       </Box>
