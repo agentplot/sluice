@@ -180,6 +180,35 @@ ssh = ".config/sluice.sessions"
 
 A signer has exactly one `ssh`.
 
+### `ssh`: one key, or a file of them
+
+`ssh` takes one of two forms:
+
+- **A line**, for a signer with one host: `ssh = "build-1 ssh-ed25519
+  AAAA..."`.
+- **A path** in the repository, for a signer with many hosts:
+  `ssh = ".config/sluice.sessions"`. sluice reads the file from the
+  branch's current revision, as it reads the policy, so adding a host
+  is a landing that adds its line, and a submission can't trust its own
+  key. A path the revision doesn't hold stops the branch with an error
+  naming it.
+
+Either way, each line is in `ssh-keygen`'s allowed-signers form:
+
+```text
+# .config/sluice.sessions: one line per session host
+laptop-chuck ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... chuck's laptop
+mini-2       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+```
+
+The first word is a label: sluice shows it and never checks it. Then
+the key type and key, and an optional comment. Blank lines and `#`
+lines are skipped. Options between the label and the key, such as
+`namespaces=` or `valid-after=`, are skipped too, and restrict nothing:
+remove a key's line to stop trusting it. Any key on the list signs as
+the signer. A host prints its own line with
+`echo "$(hostname -s) $(cat ~/.config/sluice/signing.pub)"`.
+
 ## `[branches."<pattern>"]`: rules per target branch
 
 One table per pattern of branch names. Every branch that matches one is
