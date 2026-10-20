@@ -43,10 +43,11 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
   Verify with cli.rs cases over the fakes and `tests/exec.rs`.
 
-## 4. Plugin, policy and inputs
+## 4. Plugin, policy and the scene
 
 - [x] 4.1 `plugins/sluice/scripts/guard.sh` refuses `sluice set-aside`. Verify a case in `plugins/sluice/tests/hooks.sh` (`plugin-sluice:hooks`).
-- [x] 4.2 `.config/sluice.toml` gets `ready = ["docker", "info"]` under `[tests]`. `cli:e2e` and `root:screenshots-scene` get explicit inputs. Verify `moon query tasks` shows the inputs, and `sluice exec main` passes.
+- [x] 4.2 `.config/sluice.toml` gets `ready = ["docker", "info"]` under `[tests]`. Verify `sluice exec main -- docker info` passes under the sandbox.
+- [x] 4.3 `plugins/screenshots-scene.sh`'s teardown waits for each run's supervisor, whose pid the run's lock holds, before removing the scene. Verify `sluice exec main -- bash plugins/screenshots-scene.sh --check` three times.
 
 ## 5. Decisions, rules and docs
 

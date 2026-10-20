@@ -31,8 +31,6 @@ tasks:
   # since the screenshots are taken only on a Mac.
   screenshots-scene:
     command: 'bash plugins/screenshots-scene.sh --check'
-    # The scene and the sluice it builds from this tree.
-    inputs: ['/plugins/screenshots-scene.sh', '/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-e2e]
     options: {runFromWorkspaceRoot: true, cache: false, runInCI: false}
   # The screenshots themselves (plugins/screenshots-capture.sh), run by hand

@@ -43,8 +43,9 @@ agentplot/blueprints (clauses 114 to 116, amended 84).
   `results.jsonl`. The result's line stays, and no gate reads it from
   then on. The Claude Code plugin's guard refuses it from an agent's
   session.
-- sluice's own policy declares `ready = ["docker", "info"]`. `cli:e2e`
-  and `root:screenshots-scene` get explicit inputs.
+- sluice's own policy declares `ready = ["docker", "info"]`. The
+  screenshots scene's teardown waits for each run's supervisor before
+  removing the scene.
 - `CLAUDE.md` gains "Running checks". The `using-sluice` skill says to
   run suites through `sluice exec` so parallel sessions share the host,
   and that a small call may run directly.
@@ -53,6 +54,11 @@ agentplot/blueprints (clauses 114 to 116, amended 84).
 
 Out of scope:
 
+- Explicit inputs for `cli:e2e` and `root:screenshots-scene`, which
+  declare none. A change to a `moon.yml` runs every required test, and
+  two of plugin-herdr's keys hold a fail an overloaded host caused. That
+  change waits until this one is installed, so the operator can set
+  those fails aside first.
 - Recognising a host fault that neither `ready` nor `not_run` declares.
   That is what set-aside is for.
 - Signing a set-aside on a signer's ref. That waits on the records
