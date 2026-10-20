@@ -2488,6 +2488,7 @@ name = "sluice-conformance"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "serde_json",
  "sluice-core",
  "sluice-fakes",

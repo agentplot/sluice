@@ -104,6 +104,8 @@ struct Inner {
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
+    /// The system the host's executor is, as `(os, arch)` (87).
+    platform: (String, String),
     /// Session runs on the host, by worktree, and whether each still runs.
     sessions: BTreeMap<String, bool>,
     observed: Vec<(String, String, Outcome)>,
@@ -237,6 +239,7 @@ impl World {
         World(Rc::new(RefCell::new(Inner {
             next_id: 1,
             host: "fake-host".into(),
+            platform: ("linux".into(), "x86_64".into()),
             now: Utc.with_ymd_and_hms(2026, 10, 11, 9, 0, 0).unwrap(),
             ..Default::default()
         })))
@@ -475,6 +478,12 @@ impl World {
 
     pub fn host_limit(&self, limit: usize) {
         self.0.borrow_mut().host_limit = Some(limit);
+    }
+
+    /// The system the host's executor is, as `(os, arch)`: `linux` on
+    /// `x86_64` unless set.
+    pub fn platform(&self, os: &str, arch: &str) {
+        self.0.borrow_mut().platform = (os.into(), arch.into());
     }
 
     /// Every run request, in order of starting.
@@ -1054,6 +1063,14 @@ impl Tests for FakeTests {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
+    }
+
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        let inner = self.0 .0.borrow();
+        Ok(sluice_seams::Platform {
+            os: inner.platform.0.clone(),
+            arch: inner.platform.1.clone(),
+        })
     }
 
     fn sessions(&self) -> Result<usize> {

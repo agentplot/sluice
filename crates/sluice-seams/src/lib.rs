@@ -401,9 +401,23 @@ pub struct RunRequest {
     pub limits: Limits,
     /// The policy's `[tests]` table: which runner, and its settings.
     pub tests: Settings,
-    /// Whether a result may be answered from the task runner's cache: only
-    /// when the branch's gate trusts the cache (28; ADR 0004).
+    /// Whether a result may be answered from the task runner's cache. A
+    /// replay supplies outputs and decides nothing: it counts only through
+    /// a trusted pass recorded for its key (108), and a run whose replays
+    /// none proved runs again without it.
     pub replay: bool,
+    /// The system the run is for, by the policy's name (85, 87); `None`
+    /// when the gate names none, or the policy no systems.
+    pub system: Option<String>,
+}
+
+/// The operating system and processor architecture an executor runs on,
+/// as the toolchain names them (85): `linux`, `macos`; `x86_64`,
+/// `aarch64`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Platform {
+    pub os: String,
+    pub arch: String,
 }
 
 /// A run in progress, as the check seam names it. The core keeps it in
@@ -512,6 +526,10 @@ pub trait Tests {
     /// the windows of the branches it serves. The core counts the runs
     /// under test from the records.
     fn bound(&self) -> Result<usize>;
+
+    /// 87: the system this instance's executor runs on, so a run is taken
+    /// only where its system is.
+    fn platform(&self) -> Result<Platform>;
 
     /// Session-runs-1 clause 89: how many session runs are running on this
     /// host, each counting against the bound. A session run is the

@@ -13,6 +13,9 @@ sluice-fakes = { path = "../sluice-fakes" }
 anyhow.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+chrono.workspace = true
+
 [lib]
 doctest = false
 

@@ -34,9 +34,20 @@ pub struct Verdict {
 /// counts only when a trusted ran pass is recorded for its key (108),
 /// and otherwise is unproven, for the round to run again with no
 /// replay. A check left with no trusted result reads as missing.
-pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
+///
+/// Only results on the run's `system` are read, a pass on one system
+/// never standing for another (85, 69); a line that names no system is
+/// read as on `unnamed`, the host's own.
+pub fn read(
+    report: &RunReport,
+    results: &[ResultLine],
+    rules: &Rules,
+    system: Option<&str>,
+    unnamed: Option<&str>,
+) -> Verdict {
     let flaky = rules.flaky;
     let trusted = |e: &Enforced| rules.trusts_run(&e.kind, e.confined);
+    let on_system = |r: &ResultLine| r.system.as_deref().or(unnamed) == system;
     let mut failed = Vec::new();
     let mut unproven = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
@@ -44,6 +55,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
         let recorded: Vec<&ResultLine> = results
             .iter()
             .filter(|r| r.task == t.task && r.hash == t.hash && r.kind == ResultKind::Ran)
+            .filter(|r| on_system(r))
             .filter(|r| {
                 r.executor
                     .as_ref()
@@ -103,6 +115,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
                 hash: t.hash.clone(),
                 log: None,
                 flaky,
+                system: system.map(str::to_string),
             });
         }
     }
@@ -113,6 +126,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             hash: String::new(),
             log: None,
             flaky: None,
+            system: system.map(str::to_string),
         });
     }
     Verdict {
@@ -138,6 +152,11 @@ fn same_limits(a: &Enforced, b: &Enforced) -> bool {
 mod tests {
     use super::*;
     use crate::records::RESULT_SCHEMA;
+
+    /// A run read on no named system.
+    fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
+        super::read(report, results, rules, None, None)
+    }
     use sluice_seams::TaskResult;
 
     fn rules(trust: &[&str]) -> Rules {
@@ -185,6 +204,7 @@ mod tests {
             branch: "main".into(),
             combination: sluice_seams::Rev::new("c"),
             worktree: None,
+            system: None,
         }
     }
 
@@ -314,5 +334,68 @@ mod tests {
         };
         let v = read(&failing, &[], &rules);
         assert_eq!(v.failed[0].flaky, None);
+    }
+
+    /// 85, 86, 69: a pass on one system never stands for another, and a
+    /// line that names no system is the host's own.
+    #[test]
+    fn a_pass_on_one_system_proves_nothing_on_another() {
+        let replay = report(
+            Source::Replayed { from_run_at: None },
+            enforced("open", false),
+        );
+        let on = |system: Option<&str>| ResultLine {
+            system: system.map(str::to_string),
+            ..recorded(
+                ResultKind::Ran,
+                Some(enforced("open", false)),
+                Outcome::Pass,
+            )
+        };
+        let r = rules(&["open"]);
+        let v = super::read(
+            &replay,
+            &[on(Some("linux-x64"))],
+            &r,
+            Some("macos-arm64"),
+            None,
+        );
+        assert_eq!(v.unproven, ["a:test"]);
+        let v = super::read(
+            &replay,
+            &[on(Some("linux-x64"))],
+            &r,
+            Some("linux-x64"),
+            None,
+        );
+        assert!(v.passed);
+        // An old line is the host's own system.
+        let v = super::read(
+            &replay,
+            &[on(None)],
+            &r,
+            Some("linux-x64"),
+            Some("linux-x64"),
+        );
+        assert!(v.passed);
+        let v = super::read(
+            &replay,
+            &[on(None)],
+            &r,
+            Some("macos-arm64"),
+            Some("linux-x64"),
+        );
+        assert!(!v.passed);
+        // A failure names its system.
+        let fail = report(Source::Ran { host: "h".into() }, enforced("open", false));
+        let fail = RunReport {
+            tasks: vec![TaskResult {
+                outcome: Outcome::Fail,
+                ..fail.tasks[0].clone()
+            }],
+            ..fail
+        };
+        let v = super::read(&fail, &[], &r, Some("linux-arm64"), None);
+        assert_eq!(v.failed[0].system.as_deref(), Some("linux-arm64"));
     }
 }

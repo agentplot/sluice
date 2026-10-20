@@ -460,6 +460,7 @@ pub fn release_request(
         limits: limits.clone(),
         tests: tests.clone(),
         replay: false,
+        system: None,
     };
     let mut env = environment(&request, jobs);
     if kind == Kind::Sandbox {
@@ -682,6 +683,14 @@ impl Tests for Checks {
 
     fn bound(&self) -> Result<usize> {
         Ok(self.instance.bound)
+    }
+
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        let (os, arch) = crate::instance::this_system();
+        Ok(sluice_seams::Platform {
+            os: os.into(),
+            arch: arch.into(),
+        })
     }
 
     fn sessions(&self) -> Result<usize> {

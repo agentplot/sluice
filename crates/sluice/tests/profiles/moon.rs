@@ -102,6 +102,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
         limits: Limits::default(),
         tests: moon(),
         replay: true,
+        system: None,
     }
 }
 

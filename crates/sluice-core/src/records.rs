@@ -135,6 +135,10 @@ pub struct FailedTask {
     /// `flaky` reads as failed; `None` for a task that failed on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flaky: Option<FlakyKey>,
+    /// The system it failed on, or was missing on (85, 87); `None` when
+    /// the policy names no systems.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
 
 /// A task read as failed for its key holding a pass and a fail (19): what
@@ -244,19 +248,73 @@ impl CandidateState {
     }
 }
 
+/// One run of a candidate: the required checks that need one system, or
+/// any one system (86).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemRun {
+    /// The system its checks must pass on, by the policy's name; `None`
+    /// for any one system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// The checks it runs.
+    pub checks: Vec<String>,
+    pub state: RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunHandle>,
+    /// 108: started again with no replay, after a replay no trusted pass
+    /// proved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_replay: bool,
+}
+
+/// A run's state, from open to its own verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunState {
+    /// Waiting for an executor of its system (87).
+    Open,
+    /// Its place is decided here and its run not yet confirmed started.
+    Starting,
+    Testing,
+    Passed,
+    Failed,
+    TimedOut,
+}
+
+impl RunState {
+    pub fn done(self) -> bool {
+        matches!(
+            self,
+            RunState::Passed | RunState::Failed | RunState::TimedOut
+        )
+    }
+
+    /// Holding a place on this host.
+    pub fn held(self) -> bool {
+        matches!(self, RunState::Starting | RunState::Testing)
+    }
+}
+
 /// A candidate: the branch's revision `on` extended, in order, by
 /// `submissions` (10). Identified by exactly those two.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "CandidateForm")]
 pub struct Candidate {
     pub id: String,
     pub on: Rev,
     pub submissions: Vec<u64>,
     pub revision: Rev,
     pub state: CandidateState,
+    /// Its runs, one per system its checks need (86), opened when it is
+    /// chosen for testing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<SystemRun>,
+    /// When it was chosen for testing: its time limit counts from here
+    /// for a run no executor took (66, 87).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub place: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<RunHandle>,
+    pub opened: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<FailedTask>,
     /// Started on a revision covered by no verdict: every required check
@@ -267,13 +325,82 @@ pub struct Candidate {
     pub ran: usize,
     #[serde(default)]
     pub replayed: usize,
-    /// 108: started again with no replay, after a replay no trusted pass
-    /// proved.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub no_replay: bool,
+}
+
+/// A candidate as records written before runs per system hold it: one
+/// place and one run, read as its one run for any system.
+#[derive(Deserialize)]
+struct CandidateForm {
+    id: String,
+    on: Rev,
+    submissions: Vec<u64>,
+    revision: Rev,
+    state: CandidateState,
+    #[serde(default)]
+    runs: Vec<SystemRun>,
+    #[serde(default)]
+    opened: Option<String>,
+    #[serde(default)]
+    place: Option<String>,
+    #[serde(default)]
+    run: Option<RunHandle>,
+    #[serde(default)]
+    failed: Vec<FailedTask>,
+    #[serde(default)]
+    every_check: bool,
+    #[serde(default)]
+    ran: usize,
+    #[serde(default)]
+    replayed: usize,
+}
+
+impl From<CandidateForm> for Candidate {
+    fn from(f: CandidateForm) -> Candidate {
+        let mut runs = f.runs;
+        if runs.is_empty() && (f.place.is_some() || f.run.is_some()) {
+            runs.push(SystemRun {
+                system: None,
+                checks: Vec::new(),
+                state: match f.state {
+                    CandidateState::Starting => RunState::Starting,
+                    CandidateState::Testing => RunState::Testing,
+                    CandidateState::Passed => RunState::Passed,
+                    CandidateState::Failed => RunState::Failed,
+                    CandidateState::TimedOut => RunState::TimedOut,
+                    CandidateState::Formed => RunState::Open,
+                },
+                place: f.place,
+                run: f.run,
+                no_replay: false,
+            });
+        }
+        Candidate {
+            id: f.id,
+            on: f.on,
+            submissions: f.submissions,
+            revision: f.revision,
+            state: f.state,
+            runs,
+            opened: f.opened,
+            failed: f.failed,
+            every_check: f.every_check,
+            ran: f.ran,
+            replayed: f.replayed,
+        }
+    }
 }
 
 impl Candidate {
+    /// The places its runs hold on this host.
+    pub fn places(&self) -> impl Iterator<Item = &String> {
+        self.runs.iter().filter_map(|r| r.place.as_ref())
+    }
+
+    /// Its runs holding a place on this host.
+    pub fn held(&self) -> usize {
+        self.runs.iter().filter(|r| r.state.held()).count()
+    }
+
     pub fn newest(&self) -> u64 {
         *self
             .submissions
@@ -569,6 +696,11 @@ pub struct ResultLine {
     /// run in; `None` for a candidate's run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// 85: the system it ran on, by the policy's name; `None` when the
+    /// policy named no system for its host, as every line written before
+    /// systems is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
 
 impl ResultLine {
@@ -582,6 +714,7 @@ impl ResultLine {
         branch: &str,
         combination: &Rev,
         worktree: Option<&str>,
+        system: Option<&str>,
     ) -> ResultLine {
         let (kind, host, executor) = match &task.source {
             sluice_seams::Source::Ran { host } => {
@@ -601,6 +734,7 @@ impl ResultLine {
             branch: branch.into(),
             combination: combination.clone(),
             worktree: worktree.map(str::to_string),
+            system: system.map(str::to_string),
         }
     }
 
@@ -613,6 +747,7 @@ impl ResultLine {
             && self.host == other.host
             && self.branch == other.branch
             && self.combination == other.combination
+            && self.system == other.system
     }
 }
 

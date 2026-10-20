@@ -369,6 +369,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
                 },
                 tests: tests.clone(),
                 replay: false,
+                system: None,
             })
             .unwrap();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(200);

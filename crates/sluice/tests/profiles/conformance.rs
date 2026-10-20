@@ -153,6 +153,10 @@ impl Tests for RecordedChecks {
         self.inner.bound()
     }
 
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        self.inner.platform()
+    }
+
     fn sessions(&self) -> Result<usize> {
         self.inner.sessions()
     }

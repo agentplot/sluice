@@ -32,8 +32,8 @@ makes runs with no credential helper and no prompt.
 
 ## 4. Systems on one host
 
-- [ ] 4.1 Add `system` to `ResultLine` and to the check seam's per-task report; read a line with none as the host's system; match a result by task, hash and system in `verdict::read`; verify `sluice-core` unit tests: one key on two systems, a check with no systems named, an old line.
-- [ ] 4.2 Open one run per system a combination needs, the any-system checks in the first, in `step.rs`; read the verdict over every required check on every system; a run no executor can take stays open until the branch's `timeout`; verify conformance tests in `crates/sluice-conformance/tests/verdicts.rs` for each check-systems scenario over the fakes.
+- [x] 4.1 Add `system` to `ResultLine` and to the check seam's per-task report; read a line with none as the host's system; match a result by task, hash and system in `verdict::read`; verify `sluice-core` unit tests: one key on two systems, a check with no systems named, an old line.
+- [x] 4.2 Open one run per system a combination needs, the any-system checks in the first, in `step.rs`; read the verdict over every required check on every system; a run no executor can take stays open until the branch's `timeout`; verify conformance tests in `crates/sluice-conformance/tests/verdicts.rs` for each check-systems scenario over the fakes.
 - [ ] 4.3 Show each result's system in `sluice status`, `sluice overview` (text and JSON) and a blamed submission's report; add `system` to the overview document's types in `plugins/sluice-board/types/index.d.ts` and to herdr's `lib/words.jq` where it names a failed check; verify `cli.rs` cases, `moon run plugin-board:` and `moon run plugin-herdr:` tasks.
 - [ ] 4.4 Add "Systems multiply runs" to `site/src/content/docs/guides/parallel-and-batch.md`: one run per system per combination, how `systems_for` keeps the multiplication to the checks that need it, and how the window and the host's bound count them; verify `site:prose` reports nothing.
 

@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunRequest, Source,
-    TaskLog, Written,
+    Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle, RunRequest,
+    Source, TaskLog, Written,
 };
 use tracing::{info, info_span};
 
@@ -34,7 +34,8 @@ use crate::order::{self, Entry};
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     Candidate, CandidateState, ConflictRecord, Event, FailedTask, LandingCommitRecord,
-    LandingIntent, OutboxItem, Recorded, ResultLine, State, Tested, ToldRecord,
+    LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State, SystemRun, Tested,
+    ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
@@ -106,24 +107,30 @@ impl Sluice<'_> {
 
     fn recover(&self, branch: &str) -> Result<()> {
         // A place decided by a step that stopped before confirming its run
-        // started: release it by its name and form the candidate again.
+        // started: release it by its name and open the run again.
         let line = self.read_line(branch)?;
         let stale: Vec<(String, String)> = line
             .doc
             .candidates
             .iter()
-            .filter(|c| c.state == CandidateState::Starting)
-            .filter_map(|c| c.place.clone().map(|p| (c.id.clone(), p)))
+            .flat_map(|c| {
+                c.runs
+                    .iter()
+                    .filter(|r| r.state == RunState::Starting)
+                    .filter_map(|r| r.place.clone().map(|p| (c.id.clone(), p)))
+            })
             .collect();
         for (cand, place) in stale {
             self.seams.checkout.release(&place, false)?;
             let now = self.now();
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
-                    if c.state == CandidateState::Starting && c.place.as_deref() == Some(&place) {
-                        c.state = CandidateState::Formed;
-                        c.place = None;
-                        c.run = None;
+                    for r in &mut c.runs {
+                        if r.state == RunState::Starting && r.place.as_deref() == Some(&place) {
+                            r.state = RunState::Open;
+                            r.place = None;
+                            r.run = None;
+                        }
                     }
                 }
                 l.log(
@@ -250,7 +257,7 @@ impl Sluice<'_> {
                             c.on = intent.to.clone();
                             if c.submissions.is_empty() {
                                 if c.state.under_test() {
-                                    release.extend(c.place.clone());
+                                    release.extend(c.places().cloned());
                                 }
                                 return false;
                             }
@@ -349,15 +356,22 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 33, 37: make each decided candidate's place and start its checks.
+    /// 33, 37: make each decided run's place and start its checks.
     fn perform_starts(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
-        let starting: Vec<Candidate> = line
+        let starting: Vec<(Candidate, usize)> = line
             .doc
             .candidates
             .iter()
-            .filter(|c| c.state == CandidateState::Starting)
-            .cloned()
+            .filter(|c| c.state.under_test())
+            .flat_map(|c| {
+                c.runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.state == RunState::Starting)
+                    .map(|(i, _)| (c.clone(), i))
+                    .collect::<Vec<_>>()
+            })
             .collect();
         if starting.is_empty() {
             return Ok(());
@@ -377,16 +391,18 @@ impl Sluice<'_> {
                 rules.trust
             );
         }
-        for c in starting {
+        for (c, i) in starting {
+            let r = &c.runs[i];
             let _span = info_span!(
                 "sluice.start",
                 sluice.branch = branch,
                 sluice.candidate = %c.revision,
                 sluice.submissions = ?c.submissions,
                 sluice.executor = kind,
+                sluice.system = r.system.as_deref().unwrap_or(""),
             )
             .entered();
-            let name = c.place.clone().expect("a starting candidate has a place");
+            let name = r.place.clone().expect("a starting run has a place");
             let place = self
                 .seams
                 .checkout
@@ -395,20 +411,27 @@ impl Sluice<'_> {
             let run = self.seams.tests.start(&RunRequest {
                 place,
                 revision: c.revision.clone(),
-                required: rules.required.clone(),
+                required: if r.checks.is_empty() {
+                    rules.required.clone()
+                } else {
+                    r.checks.clone()
+                },
                 since,
                 limit: rules.timeout,
                 limits: policy.limits.clone(),
                 tests: policy.tests.clone(),
                 // 108: the cache supplies outputs; a replay counts only
                 // through a trusted pass recorded for its key.
-                replay: !c.no_replay,
+                replay: !r.no_replay,
+                system: r.system.clone(),
             })?;
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
-                    if x.state == CandidateState::Starting && x.place == c.place {
-                        x.state = CandidateState::Testing;
-                        x.run = Some(run.clone());
+                    if let Some(xr) = x.runs.get_mut(i) {
+                        if xr.state == RunState::Starting && xr.place.as_deref() == Some(&name) {
+                            xr.state = RunState::Testing;
+                            xr.run = Some(run.clone());
+                        }
                     }
                 }
                 Ok(())
@@ -448,13 +471,14 @@ impl Sluice<'_> {
             line.doc.verified = false;
         }
         let rules = self.gate(branch, &tip)?;
+        let home = self.home_system(&tip)?;
         // A new branch starts at its widest window (13).
         if line.doc.window == 0 {
             line.doc.window = rules.parallel;
         }
         line.doc.window = line.doc.window.clamp(1, rules.parallel);
 
-        self.poll(&mut line, &rules, &now)?;
+        self.poll(&mut line, &rules, home.as_deref(), &now)?;
         let chain = loop {
             let (chain, removed) = self.arrange(&mut line, &rules, &now)?;
             if !removed {
@@ -462,7 +486,7 @@ impl Sluice<'_> {
             }
         };
         if !self.choose_landing(&mut line, &rules, &chain, &now)? {
-            self.choose_starts(&mut line, &rules, &chain, &now)?;
+            self.choose_starts(&mut line, &rules, home.as_deref(), &chain, &now)?;
         }
         derive_states(&mut line, &chain);
         self.keep_tasks(&line)?;
@@ -488,11 +512,21 @@ impl Sluice<'_> {
         let kept = state.progress(&line.branch)?;
         let mut testing = BTreeSet::new();
         for c in &line.doc.candidates {
-            let (CandidateState::Testing, Some(run)) = (c.state, c.run.as_ref()) else {
+            let runs: Vec<&RunHandle> = c
+                .runs
+                .iter()
+                .filter(|r| r.state == RunState::Testing)
+                .filter_map(|r| r.run.as_ref())
+                .collect();
+            if !c.state.under_test() || runs.is_empty() {
                 continue;
-            };
+            }
             testing.insert(c.id.clone());
-            match self.seams.tests.tasks(run) {
+            let tasks = runs.iter().try_fold(Vec::new(), |mut all, run| {
+                all.extend(self.seams.tests.tasks(run)?);
+                anyhow::Ok(all)
+            });
+            match tasks {
                 Ok(tasks) if kept.get(&c.id).map(Vec::as_slice).unwrap_or_default() == tasks => {}
                 // A run started again on the candidate says nothing yet: the
                 // tasks of the run before go.
@@ -513,222 +547,317 @@ impl Sluice<'_> {
 
     /// Read every run that finished: record each check, pass and fail
     /// alike, before the verdict is read from the records (16, 69; rules
-    /// core.7, core.9).
-    fn poll(&self, line: &mut Line, rules: &Rules, now: &str) -> Result<()> {
+    /// core.7, core.9). A candidate has its verdict once every run of it
+    /// has one, over every check on every system its gate names (86).
+    fn poll(&self, line: &mut Line, rules: &Rules, home: Option<&str>, now: &str) -> Result<()> {
         let testing: Vec<Candidate> = line
             .doc
             .candidates
             .iter()
-            .filter(|c| c.state == CandidateState::Testing)
+            .filter(|c| c.state.under_test())
             .cloned()
             .collect();
         for c in testing {
-            let run = c.run.clone().expect("a testing candidate has a run");
-            match self.seams.tests.progress(&run)? {
-                Progress::Running => {}
-                Progress::Lost => {
-                    // 60: no outcome; the checks run again.
-                    let x = line.candidate_mut(&c.id).expect("polled candidate");
-                    x.state = CandidateState::Formed;
-                    x.run = None;
-                    if let Some(p) = x.place.take() {
-                        line.doc.release.push(p);
-                    }
-                    line.log(
-                        now,
-                        Event::Lost {
-                            combination: c.revision.clone(),
-                        },
-                    );
+            for (i, r) in c.runs.iter().enumerate() {
+                if r.state != RunState::Testing {
+                    continue;
                 }
-                Progress::Finished(report) => {
-                    let span = info_span!(
-                        "sluice.verdict",
-                        sluice.branch = %line.branch,
-                        sluice.candidate = %c.revision,
-                        sluice.submissions = ?c.submissions,
-                        sluice.executor = %report.executor.kind,
-                        sluice.confined = report.executor.confined,
-                        sluice.outcome = "",
-                        sluice.ran = 0u64,
-                        sluice.replayed = 0u64,
-                    );
-                    let _span = span.enter();
-                    let mut results = self.results()?;
-                    let mut fresh = Vec::new();
-                    for t in &report.tasks {
-                        let event = match &t.source {
-                            Source::Ran { host } => Event::Ran {
-                                combination: c.revision.clone(),
-                                task: t.task.clone(),
-                                hash: t.hash.clone(),
-                                outcome: t.outcome,
-                                host: host.clone(),
-                            },
-                            Source::Replayed { from_run_at } => Event::Replayed {
-                                combination: c.revision.clone(),
-                                task: t.task.clone(),
-                                hash: t.hash.clone(),
-                                outcome: t.outcome,
-                                from_run_at: from_run_at.clone(),
-                            },
-                        };
-                        let r = ResultLine::of(
-                            now,
-                            t,
-                            &report.executor,
-                            &line.branch,
-                            &c.revision,
-                            None,
-                        );
-                        if !results.iter().any(|x| x.same_as(&r)) {
-                            fresh.push(r);
-                        }
-                        line.log(now, event);
-                    }
-                    if !fresh.is_empty() {
-                        let mut bytes = Vec::new();
-                        for r in &fresh {
-                            bytes.extend(crate::records::to_line(r));
-                        }
-                        self.seams.state.record_results(&bytes)?;
-                        results.extend(fresh);
-                    }
-                    let mut v = verdict::read(&report, &results, rules);
-                    // 108: a replay no trusted pass proved counts for
-                    // nothing, and the checks run again with no replay.
-                    if !v.unproven.is_empty() && !c.no_replay {
+                let run = r.run.clone().expect("a testing run has a handle");
+                match self.seams.tests.progress(&run)? {
+                    Progress::Running => {}
+                    Progress::Lost => {
+                        // 60: no outcome; the checks run again.
                         let x = line.candidate_mut(&c.id).expect("polled candidate");
-                        x.state = CandidateState::Formed;
-                        x.run = None;
-                        x.no_replay = true;
-                        if let Some(p) = x.place.take() {
+                        let xr = &mut x.runs[i];
+                        xr.state = RunState::Open;
+                        xr.run = None;
+                        if let Some(p) = xr.place.take() {
                             line.doc.release.push(p);
                         }
                         line.log(
                             now,
-                            Event::Unproven {
+                            Event::Lost {
                                 combination: c.revision.clone(),
-                                tasks: v.unproven.clone(),
                             },
                         );
-                        continue;
                     }
-                    // 70, 55: a revision with no verdict runs every required
-                    // check; a report holding none of them is no pass.
-                    if c.every_check && !rules.required.is_empty() && report.tasks.is_empty() {
-                        v.passed = false;
-                    }
-                    // 20: what the failed tasks printed, kept while the
-                    // place still holds it.
-                    if !v.passed && !v.failed.is_empty() {
-                        let tasks: Vec<String> = v.failed.iter().map(|f| f.task.clone()).collect();
-                        let logs = self.seams.tests.logs(&run, &tasks)?;
-                        let kept = self.seams.state.keep_logs(&line.branch, &c.id, &logs)?;
-                        for f in &mut v.failed {
-                            f.log = kept
-                                .iter()
-                                .find(|k| k.task == f.task)
-                                .map(|k| k.text.clone());
-                        }
-                        // ADR 0022: the output, for telemetry to send as
-                        // its level says; the kept copy is the record.
-                        for l in &logs {
-                            let kept = kept.iter().find(|k| k.task == l.task);
-                            let replayed = report.tasks.iter().any(|t| {
-                                t.task == l.task && matches!(t.source, Source::Replayed { .. })
-                            });
-                            tracing::event!(
-                                target: OUTPUT,
-                                tracing::Level::INFO,
-                                sluice.branch = %line.branch,
-                                sluice.candidate = %c.revision,
-                                sluice.submissions = ?c.submissions,
-                                sluice.task = %l.task,
-                                sluice.kept = kept.map(|k| k.text.as_str()).unwrap_or(""),
-                                sluice.bytes = l.text.len() as u64,
-                                sluice.replayed = replayed,
-                                "{}",
-                                l.text
-                            );
-                        }
-                    }
-                    // 19, 20: where the run a flaky task contradicts is
-                    // kept, when the records name it; a pointer, so one
-                    // that cannot be read holds up no verdict.
-                    for f in &mut v.failed {
-                        if let Some(k) = &mut f.flaky {
-                            k.other.log = match self.kept_log(line, &f.task, &k.other) {
-                                Ok(log) => log,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        sluice.branch = %line.branch,
-                                        sluice.candidate = %c.revision,
-                                        "reading where a flaky task's other run is kept failed: {e:#}"
-                                    );
-                                    None
-                                }
-                            };
-                        }
-                    }
-                    let branch = line.branch.clone();
-                    let branch = branch.as_str();
-                    let x = line.candidate_mut(&c.id).expect("polled candidate");
-                    x.state = if v.passed {
-                        CandidateState::Passed
-                    } else if v.timed_out {
-                        CandidateState::TimedOut
-                    } else {
-                        CandidateState::Failed
-                    };
-                    x.failed = v.failed.clone();
-                    x.ran = v.ran;
-                    x.replayed = v.replayed;
-                    let word = x.result_word().to_string();
-                    span.record("sluice.outcome", word.as_str());
-                    span.record("sluice.ran", v.ran as u64);
-                    span.record("sluice.replayed", v.replayed as u64);
-                    info!(
-                        monotonic_counter.sluice.verdicts = 1u64,
-                        sluice.branch = branch,
-                        sluice.outcome = word.as_str(),
-                    );
-                    info!(
-                        monotonic_counter.sluice.tasks.ran = v.ran as u64,
-                        sluice.branch = branch
-                    );
-                    info!(
-                        monotonic_counter.sluice.tasks.replayed = v.replayed as u64,
-                        sluice.branch = branch,
-                    );
-                    if tracing::enabled!(tracing::Level::INFO) {
-                        if let Some(secs) = self.tested_for(branch, &c.revision, now)? {
-                            info!(
-                                histogram.sluice.candidate.tested_for = secs,
-                                sluice.branch = branch,
-                                sluice.outcome = word.as_str(),
-                            );
-                        }
-                    }
-                    if let Some(p) = x.place.clone() {
-                        if v.passed {
-                            line.doc.passed.push(p.clone());
-                        }
-                        line.doc.release.push(p);
-                    }
-                    line.log(
-                        now,
-                        Event::Result {
-                            combination: c.revision.clone(),
-                            result: word,
-                            failed: v.failed.iter().map(|f| f.task.clone()).collect(),
-                        },
-                    );
-                    if v.passed && Some(&c.on) == line.doc.base.as_ref() {
-                        line.doc.window = (line.doc.window + 1).min(rules.parallel);
+                    Progress::Finished(report) => {
+                        self.finish_run(line, &c, i, &run, report, rules, home, now)?;
                     }
                 }
             }
+            // 66, 87: a run no executor here takes, for a system this host
+            // is not, is read as not passed once the time limit has gone.
+            let x = line.candidate(&c.id).expect("polled candidate").clone();
+            if let (Some(limit), Some(opened)) = (rules.timeout, x.opened.as_deref()) {
+                let over = seconds_between(opened, now).is_some_and(|s| s >= limit.as_secs_f64());
+                if over {
+                    let x = line.candidate_mut(&c.id).expect("polled candidate");
+                    for r in x.runs.iter_mut() {
+                        if r.state == RunState::Open && !ours(r, home) {
+                            r.state = RunState::TimedOut;
+                            let checks = if r.checks.is_empty() {
+                                rules.required.clone()
+                            } else {
+                                r.checks.clone()
+                            };
+                            x.failed.extend(checks.into_iter().map(|task| FailedTask {
+                                task,
+                                hash: String::new(),
+                                log: None,
+                                flaky: None,
+                                system: r.system.clone(),
+                            }));
+                        }
+                    }
+                }
+            }
+            self.judge(line, &c.id, rules, now)?;
+        }
+        Ok(())
+    }
+
+    /// One run's report: its results recorded, then its own verdict read.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_run(
+        &self,
+        line: &mut Line,
+        c: &Candidate,
+        i: usize,
+        run: &RunHandle,
+        report: sluice_seams::RunReport,
+        rules: &Rules,
+        home: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
+        let r = &c.runs[i];
+        let system = r.system.as_deref().or(home);
+        let span = info_span!(
+            "sluice.verdict",
+            sluice.branch = %line.branch,
+            sluice.candidate = %c.revision,
+            sluice.submissions = ?c.submissions,
+            sluice.executor = %report.executor.kind,
+            sluice.confined = report.executor.confined,
+            sluice.system = system.unwrap_or(""),
+            sluice.outcome = "",
+            sluice.ran = 0u64,
+            sluice.replayed = 0u64,
+        );
+        let _span = span.enter();
+        let mut results = self.results()?;
+        let mut fresh = Vec::new();
+        for t in &report.tasks {
+            let event = match &t.source {
+                Source::Ran { host } => Event::Ran {
+                    combination: c.revision.clone(),
+                    task: t.task.clone(),
+                    hash: t.hash.clone(),
+                    outcome: t.outcome,
+                    host: host.clone(),
+                },
+                Source::Replayed { from_run_at } => Event::Replayed {
+                    combination: c.revision.clone(),
+                    task: t.task.clone(),
+                    hash: t.hash.clone(),
+                    outcome: t.outcome,
+                    from_run_at: from_run_at.clone(),
+                },
+            };
+            let l = ResultLine::of(
+                now,
+                t,
+                &report.executor,
+                &line.branch,
+                &c.revision,
+                None,
+                system,
+            );
+            if !results.iter().any(|x| x.same_as(&l)) {
+                fresh.push(l);
+            }
+            line.log(now, event);
+        }
+        if !fresh.is_empty() {
+            let mut bytes = Vec::new();
+            for l in &fresh {
+                bytes.extend(crate::records::to_line(l));
+            }
+            self.seams.state.record_results(&bytes)?;
+            results.extend(fresh);
+        }
+        let mut v = verdict::read(&report, &results, rules, system, home);
+        // 108: a replay no trusted pass proved counts for nothing, and the
+        // checks run again with no replay.
+        if !v.unproven.is_empty() && !r.no_replay {
+            let x = line.candidate_mut(&c.id).expect("polled candidate");
+            let xr = &mut x.runs[i];
+            xr.state = RunState::Open;
+            xr.run = None;
+            xr.no_replay = true;
+            if let Some(p) = xr.place.take() {
+                line.doc.release.push(p);
+            }
+            line.log(
+                now,
+                Event::Unproven {
+                    combination: c.revision.clone(),
+                    tasks: v.unproven.clone(),
+                },
+            );
+            return Ok(());
+        }
+        let checks = if r.checks.is_empty() {
+            &rules.required
+        } else {
+            &r.checks
+        };
+        // 70, 55: a revision with no verdict runs every required check; a
+        // report holding none of them is no pass.
+        if c.every_check && !checks.is_empty() && report.tasks.is_empty() {
+            v.passed = false;
+        }
+        // 20: what the failed tasks printed, kept while the place still
+        // holds it.
+        if !v.passed && !v.failed.is_empty() {
+            let tasks: Vec<String> = v.failed.iter().map(|f| f.task.clone()).collect();
+            let logs = self.seams.tests.logs(run, &tasks)?;
+            let key = match system {
+                Some(s) if c.runs.len() > 1 => format!("{}-{s}", c.id),
+                _ => c.id.clone(),
+            };
+            let kept = self.seams.state.keep_logs(&line.branch, &key, &logs)?;
+            for f in &mut v.failed {
+                f.log = kept
+                    .iter()
+                    .find(|k| k.task == f.task)
+                    .map(|k| k.text.clone());
+            }
+            // ADR 0022: the output, for telemetry to send as its level
+            // says; the kept copy is the record.
+            for l in &logs {
+                let kept = kept.iter().find(|k| k.task == l.task);
+                let replayed = report
+                    .tasks
+                    .iter()
+                    .any(|t| t.task == l.task && matches!(t.source, Source::Replayed { .. }));
+                tracing::event!(
+                    target: OUTPUT,
+                    tracing::Level::INFO,
+                    sluice.branch = %line.branch,
+                    sluice.candidate = %c.revision,
+                    sluice.submissions = ?c.submissions,
+                    sluice.task = %l.task,
+                    sluice.kept = kept.map(|k| k.text.as_str()).unwrap_or(""),
+                    sluice.bytes = l.text.len() as u64,
+                    sluice.replayed = replayed,
+                    "{}",
+                    l.text
+                );
+            }
+        }
+        // 19, 20: where the run a flaky task contradicts is kept, when the
+        // records name it; a pointer, so one that cannot be read holds up
+        // no verdict.
+        for f in &mut v.failed {
+            if let Some(k) = &mut f.flaky {
+                k.other.log = match self.kept_log(line, &f.task, &k.other) {
+                    Ok(log) => log,
+                    Err(e) => {
+                        tracing::warn!(
+                            sluice.branch = %line.branch,
+                            sluice.candidate = %c.revision,
+                            "reading where a flaky task's other run is kept failed: {e:#}"
+                        );
+                        None
+                    }
+                };
+            }
+        }
+        let word = if v.passed {
+            "passed"
+        } else if v.timed_out {
+            "timed out"
+        } else {
+            "failed"
+        };
+        span.record("sluice.outcome", word);
+        span.record("sluice.ran", v.ran as u64);
+        span.record("sluice.replayed", v.replayed as u64);
+        let branch = line.branch.clone();
+        info!(
+            monotonic_counter.sluice.tasks.ran = v.ran as u64,
+            sluice.branch = branch.as_str()
+        );
+        info!(
+            monotonic_counter.sluice.tasks.replayed = v.replayed as u64,
+            sluice.branch = branch.as_str(),
+        );
+        let x = line.candidate_mut(&c.id).expect("polled candidate");
+        let xr = &mut x.runs[i];
+        xr.state = if v.passed {
+            RunState::Passed
+        } else if v.timed_out {
+            RunState::TimedOut
+        } else {
+            RunState::Failed
+        };
+        let place = xr.place.clone();
+        x.failed.extend(v.failed);
+        x.ran += v.ran;
+        x.replayed += v.replayed;
+        if let Some(p) = place {
+            if v.passed {
+                line.doc.passed.push(p.clone());
+            }
+            line.doc.release.push(p);
+        }
+        Ok(())
+    }
+
+    /// A candidate's verdict, once every run of it has its own: passed
+    /// only when every run passed (86, 15).
+    fn judge(&self, line: &mut Line, id: &str, rules: &Rules, now: &str) -> Result<()> {
+        let c = line.candidate(id).expect("judged candidate").clone();
+        if c.runs.is_empty() || !c.runs.iter().all(|r| r.state.done()) {
+            return Ok(());
+        }
+        let state = if c.runs.iter().any(|r| r.state == RunState::Failed) {
+            CandidateState::Failed
+        } else if c.runs.iter().any(|r| r.state == RunState::TimedOut) {
+            CandidateState::TimedOut
+        } else {
+            CandidateState::Passed
+        };
+        let x = line.candidate_mut(id).expect("judged candidate");
+        x.state = state;
+        let word = x.result_word().to_string();
+        let branch = line.branch.clone();
+        let branch = branch.as_str();
+        info!(
+            monotonic_counter.sluice.verdicts = 1u64,
+            sluice.branch = branch,
+            sluice.outcome = word.as_str(),
+        );
+        if tracing::enabled!(tracing::Level::INFO) {
+            if let Some(secs) = self.tested_for(branch, &c.revision, now)? {
+                info!(
+                    histogram.sluice.candidate.tested_for = secs,
+                    sluice.branch = branch,
+                    sluice.outcome = word.as_str(),
+                );
+            }
+        }
+        line.log(
+            now,
+            Event::Result {
+                combination: c.revision.clone(),
+                result: word,
+                failed: c.failed.iter().map(|f| f.task.clone()).collect(),
+            },
+        );
+        if state == CandidateState::Passed && Some(&c.on) == line.doc.base.as_ref() {
+            line.doc.window = (line.doc.window + 1).min(rules.parallel);
         }
         Ok(())
     }
@@ -773,13 +902,12 @@ impl Sluice<'_> {
                         submissions: prefix.clone(),
                         revision: rev.clone(),
                         state: CandidateState::Formed,
-                        place: None,
-                        run: None,
+                        runs: Vec::new(),
+                        opened: None,
                         failed: Vec::new(),
                         every_check: false,
                         ran: 0,
                         replayed: 0,
-                        no_replay: false,
                     });
                     prev = rev.clone();
                     ids.push(cid);
@@ -801,7 +929,7 @@ impl Sluice<'_> {
         line.doc.candidates.retain(|c| {
             let keep = held.contains(&c.id);
             if !keep && c.state.under_test() {
-                release.extend(c.place.clone());
+                release.extend(c.places().cloned());
             }
             keep
         });
@@ -1052,7 +1180,7 @@ impl Sluice<'_> {
     }
 
     /// 71: how many more runs this instance starts now: its bound less the
-    /// candidates under test in the records of the branches it serves,
+    /// runs holding a place in the records of the branches it serves,
     /// `line` as this step has it, and less the host's session runs
     /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
@@ -1062,8 +1190,8 @@ impl Sluice<'_> {
                 .doc
                 .candidates
                 .iter()
-                .filter(|c| c.state.under_test())
-                .count();
+                .map(Candidate::held)
+                .sum::<usize>();
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
@@ -1072,8 +1200,8 @@ impl Sluice<'_> {
                         .doc
                         .candidates
                         .iter()
-                        .filter(|c| c.state.under_test())
-                        .count();
+                        .map(Candidate::held)
+                        .sum::<usize>();
                 }
             }
         }
@@ -1093,8 +1221,8 @@ impl Sluice<'_> {
                 .doc
                 .candidates
                 .iter()
-                .filter(|c| c.state.under_test())
-                .count();
+                .map(Candidate::held)
+                .sum::<usize>();
         }
         Ok(self
             .seams
@@ -1104,26 +1232,60 @@ impl Sluice<'_> {
             .saturating_sub(under))
     }
 
-    /// 13, 14, 71: start candidates up to the window, and up to what the
-    /// instance takes.
+    /// 13, 14, 71: start candidates up to the window, and their runs this
+    /// host takes up to what the instance takes; first the runs of
+    /// candidates under test opened again (60, 108).
     fn choose_starts(
         &self,
         line: &mut Line,
         rules: &Rules,
+        home: Option<&str>,
         chain: &[String],
         now: &str,
     ) -> Result<()> {
+        let mut room = self.capacity(line)?;
+        let reopened: Vec<(String, usize)> = chain
+            .iter()
+            .filter_map(|id| line.candidate(id))
+            .filter(|c| c.state.under_test())
+            .flat_map(|c| {
+                c.runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.state == RunState::Open && ours(r, home))
+                    .map(|(i, _)| (c.id.clone(), i))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (id, i) in reopened {
+            if room == 0 {
+                break;
+            }
+            room -= 1;
+            let place = self.next_place(line);
+            let c = line.candidate_mut(&id).expect("a chain's candidate");
+            c.runs[i].state = RunState::Starting;
+            c.runs[i].place = Some(place.clone());
+            let c = c.clone();
+            line.log(
+                now,
+                Event::Testing {
+                    combination: c.revision.clone(),
+                    submissions: c.submissions.clone(),
+                    place,
+                },
+            );
+        }
         let running = line
             .doc
             .candidates
             .iter()
             .filter(|c| c.state.under_test())
             .count();
-        let room = line.doc.window.saturating_sub(running);
-        if room == 0 || chain.is_empty() {
+        let window = line.doc.window.saturating_sub(running);
+        if window == 0 || chain.is_empty() {
             return Ok(());
         }
-        let room = room.min(self.capacity(line)?);
         let mut start: Vec<String> = Vec::new();
         {
             let cands: Vec<&Candidate> = chain
@@ -1155,15 +1317,30 @@ impl Sluice<'_> {
                     Vec::new()
                 }
             };
-            start.extend(pick.into_iter().take(room));
+            start.extend(pick.into_iter().take(window));
         }
         let every_known = line.doc.verified;
         for id in start {
-            let place = format!("sluice/try/{}/{}", line.branch, line.doc.next_place);
-            line.doc.next_place += 1;
+            let mut runs = open_runs(rules, home);
+            let mine = runs.iter().position(|r| ours(r, home));
+            // A candidate this host would run starts only with room for it.
+            if mine.is_some() && room == 0 {
+                break;
+            }
+            let place = match mine {
+                Some(i) => {
+                    room -= 1;
+                    let place = self.next_place(line);
+                    runs[i].state = RunState::Starting;
+                    runs[i].place = Some(place.clone());
+                    place
+                }
+                None => String::new(),
+            };
             let c = line.candidate_mut(&id).expect("a chain's candidate");
-            c.state = CandidateState::Starting;
-            c.place = Some(place.clone());
+            c.state = CandidateState::Testing;
+            c.runs = runs;
+            c.opened = Some(now.to_string());
             c.every_check = !every_known;
             let c = c.clone();
             line.sub_mut(c.newest()).tested = Some(Tested {
@@ -1182,6 +1359,82 @@ impl Sluice<'_> {
         }
         Ok(())
     }
+
+    /// The name of the next place on the branch.
+    fn next_place(&self, line: &mut Line) -> String {
+        let place = format!("sluice/try/{}/{}", line.branch, line.doc.next_place);
+        line.doc.next_place += 1;
+        place
+    }
+
+    /// The policy's name for the system this host's executor is, at the
+    /// branch's revision `rev`; `None` when the policy names none (85).
+    pub(crate) fn home_system(&self, rev: &Rev) -> Result<Option<String>> {
+        let Some(policy) = self.policy_at(rev)? else {
+            return Ok(None);
+        };
+        if policy.systems.is_empty() {
+            return Ok(None);
+        }
+        let p = self.seams.tests.platform()?;
+        Ok(policy
+            .systems
+            .iter()
+            .find(|(_, s)| s.os == p.os && s.arch == p.arch)
+            .map(|(n, _)| n.clone()))
+    }
+}
+
+/// Whether this host's executor takes `run`: one for any system, or for
+/// the system it is (87).
+fn ours(run: &SystemRun, home: Option<&str>) -> bool {
+    match run.system.as_deref() {
+        None => true,
+        Some(s) => Some(s) == home,
+    }
+}
+
+/// 86: a candidate's runs, one per system its gate names for some
+/// required check, each holding the checks that need it; the checks that
+/// need no system ride in this host's run where it has one, else the
+/// first, or make a run of their own for any system when no check names
+/// one.
+fn open_runs(rules: &Rules, home: Option<&str>) -> Vec<SystemRun> {
+    let mut by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut any = Vec::new();
+    for check in &rules.required {
+        let systems = rules.systems_of(check);
+        if systems.is_empty() {
+            any.push(check.clone());
+        }
+        for s in systems {
+            by.entry(s.clone()).or_default().push(check.clone());
+        }
+    }
+    let run = |system: Option<String>, checks: Vec<String>| SystemRun {
+        system,
+        checks,
+        state: RunState::Open,
+        place: None,
+        run: None,
+        no_replay: false,
+    };
+    if by.is_empty() {
+        return vec![run(None, any)];
+    }
+    if !any.is_empty() {
+        let at = home
+            .filter(|h| by.contains_key(*h))
+            .map(str::to_string)
+            .unwrap_or_else(|| by.keys().next().expect("a system").clone());
+        let checks = by.get_mut(&at).expect("a system");
+        for c in any {
+            if !checks.contains(&c) {
+                checks.push(c);
+            }
+        }
+    }
+    by.into_iter().map(|(s, c)| run(Some(s), c)).collect()
 }
 
 impl Sluice<'_> {
