@@ -16,6 +16,7 @@ pub mod profiles;
 pub mod protect;
 pub mod runs;
 pub mod sessions;
+pub mod signing;
 pub mod telemetry;
 pub mod told;
 
