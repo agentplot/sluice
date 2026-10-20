@@ -162,6 +162,11 @@ For a branch on GitHub, do these in this order, or a step is refused:
 4. Put the app in the bypass list, then remove every other entry.
 5. `sluice forge check <branch>`.
 
+For more than one host or system, follow [peers](references/profiles/peers.md)'s
+"Set it up, in order": a signing key per host, `[signing]` in each host's
+config, then one landing that adds `[signers]` and rewrites `trust`, then
+`sluice run` kept running on each standing executor.
+
 A bolt pattern with `remote = "origin"` needs no push by hand: `sluice branch
 create bolt/<b> --from main` makes each bolt there as the app, and its
 ruleset restricts creations and deletions as well as updates.

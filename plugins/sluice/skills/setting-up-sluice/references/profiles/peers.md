@@ -79,8 +79,75 @@ systems = ["linux-x64"]            # default: the one system the host is
 [peers]
 lease = "5m"   # how long a quiet lead keeps a branch before another takes it
 alive = "2m"   # how often this host shows it is alive; a claim lapses after it
+name = "build-1" # default: the host name; set it when two hosts share one
 ```
 
 `sluice run` on a host with `[signing]` claims the runs its signer counts
 for. A host with no `[signing]` records nothing on a branch kept on the
 remote, and says so.
+
+## Set it up, in order
+
+Each step needs the one before it. Do the host steps on every host that
+will submit or run checks.
+
+1. **On each host, make its signing key.** sluice signs with no
+   passphrase to type and refuses a key whose mode is not `0600`:
+
+   ```sh
+   ssh-keygen -t ed25519 -N "" -C "sluice $(hostname -s)" -f ~/.config/sluice/signing
+   chmod 600 ~/.config/sluice/signing
+   ```
+
+2. **On each host, name its signer and key** in `~/.config/sluice/config.toml`
+   (`[signing]`, above). The signer is the name the policy will give it:
+   one per kind of host, such as `box` for hosts that run no agents and
+   `sessions` for the hosts agents work on. Set `[peers] name` when two
+   hosts share a host name. On a host that runs only some of the policy's
+   systems, set `[runs] systems`; sluice refuses a system the host is not.
+
+3. **Collect each public half as an allowed-signers line**, the principal
+   first (any label; sluice shows it, never checks it):
+
+   ```sh
+   echo "$(hostname -s) $(cat ~/.config/sluice/signing.pub)"
+   ```
+
+   One host per signer goes inline (`ssh = "<line>"`). Several hosts of one
+   signer, usually the session hosts, go one line each in a file in the
+   repository, named by `ssh = ".config/sluice.sessions"`. Adding a host
+   later is a landing that adds its line.
+
+4. **Land the policy in one change**: `[systems]` if checks need more than
+   one, `[signers]`, and every branch with a remote rewritten from
+   executor kinds to signer names in `trust`, with `confined = true` where
+   it said `trust = ["confined"]`. Drop `cache` from `trust`. Land it
+   through sluice as any change; the gate that tests it is the branch's
+   current one. The first round after it lands moves each such branch's
+   queue to the remote, and work queued on other hosts is submitted again
+   under new ids (`sluice status <old id>` names the new one).
+
+5. **Start the standing executors.** On each host that should take runs
+   without a session waiting, keep `sluice run` running from a clone of the
+   repository: under the host's own service manager (launchd, systemd, a
+   terminal multiplexer). sluice starts no service itself. It takes the
+   runs of its systems that its signer counts for, earliest first, up to
+   `[runs] max`.
+
+6. **Check it.** `sluice overview` lists each host serving the remote, with
+   its signer, system, runs held and room. `sluice status <branch>` warns
+   of anything in the policy it ignored. A session host with no
+   `[signing]` says on every run that it records nothing. Then submit a
+   harmless change with `--no-wait`, close the session, and see
+   `sluice status <id>` read `landed` from another host.
+
+What can go wrong:
+
+- **Nothing runs a check on one system.** No trusted signer may claim it,
+  or no host of it is up; the run waits until the branch's `timeout` and
+  then fails naming the check and system.
+- **A host's results never count.** Its signer is not in the branch's
+  `trust`, or its key's line is not in the policy on the branch's current
+  revision, or the branch has `confined = true` and its signer does not.
+- **Two hosts both think they lead.** They share a host name: set
+  `[peers] name` on one.
