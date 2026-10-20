@@ -42,5 +42,5 @@ agentplot/blueprints. Work inside `devenv shell`; run suites through
 
 ## 7. Screenshots and land
 
-- [ ] 7.1 Give the screenshot scene one agent's check and retake the frames; verify the frames show CHECKING.
+- [x] 7.1 Give the screenshot scene one agent's check and retake the frames; verify the frames show CHECKING.
 - [ ] 7.2 Run `sluice exec main`, land with `sluice submit main`; verify the landing, and by hand that `sluice overview --json --watch` shows a check's tasks fill and `room` while `sluice exec main` runs in another worktree.
