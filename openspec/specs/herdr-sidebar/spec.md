@@ -9,11 +9,12 @@ where its worktree's work stands, and one on each workspace for its queue.
 ### Requirement: The pane token says where the worktree's work stands
 
 The plugin SHALL set the token `sluice` on each pane whose worktree has a
-submission or commits ahead of its branch, choosing the first that holds:
-a live submission, an unanswered blame or conflict, commits ahead, a
-landing in the last 30 minutes; and SHALL clear it on every other pane. A
-submission under test SHALL show its combination's task count and bar when
-the document lists its tasks, and never the tasks themselves.
+submission, a check under way, or commits ahead of its branch, choosing
+the first that holds: a live submission, an unanswered blame or conflict,
+a check under way, commits ahead, a landing in the last 30 minutes; and
+SHALL clear it on every other pane. A submission under test SHALL show its
+combination's task count and bar when the document lists its tasks, and
+never the tasks themselves.
 
 #### Scenario: Testing
 
@@ -40,8 +41,27 @@ the document lists its tasks, and never the tasks themselves.
 
 #### Scenario: Nothing to say
 
-- **WHEN** the pane's worktree has no submission and no commit ahead
+- **WHEN** the pane's worktree has no submission, no check under way and
+  no commit ahead
 - **THEN** the pane has no `sluice` token, and so no extra sidebar row
+
+### Requirement: The pane token says a check is under way
+
+A check under way in the pane's worktree SHALL read `checking` with its
+count of ended tasks, or its time when it lists none, and never as a
+submission.
+
+#### Scenario: Checking
+
+- **WHEN** the pane's worktree has no live submission and is running its
+  checks, 3 of 8 tasks ended
+- **THEN** the pane's token is `checking 3/8`
+
+#### Scenario: Checking a command
+
+- **WHEN** the pane's worktree is running `sluice exec main -- make e2e`,
+  started 2 minutes ago
+- **THEN** the pane's token is `checking 2m`
 
 ### Requirement: The ahead token forecasts the merge
 
