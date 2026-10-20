@@ -181,7 +181,7 @@ out_board=$W/plugins/sluice-board/screenshots
 out_herdr=$W/plugins/herdr/screenshots
 mkdir -p "$out_board" "$out_herdr"
 
-# --- the board: this session's worktree is order-emails, under test with checkout-flow -----------------------------------
+# --- the board: this session's worktree is order-emails, queued behind checkout-flow ---------------------------------------
 board() {
   local theme=$1 win
   win=$(open_window board "$theme" 150 42 \
@@ -255,12 +255,12 @@ popup() {
   # herdr knows a pane's Claude Code by its hooks, in the demo's own Claude Code configuration.
   herdr integration install claude >/dev/null
   herdr workspace rename "$(herdr workspace list | jq -r '.result.workspaces[0].workspace_id')" shop >/dev/null
-  # Four panes, two by two, one per worktree.
+  # Four panes, two by two, one per worktree: the agent running its check among them.
   root=$(herdr pane list | jq -r '.result.panes[0].pane_id')
   a=$(split "$root" right checkout-flow)
   herdr pane close "$root" >/dev/null
   b=$(split "$a" right order-emails)
-  split "$a" down search-index >/dev/null
+  split "$a" down inventory-sync >/dev/null
   split "$b" down coupon-codes >/dev/null
   sleep "$SETTLE"
   herdr plugin action invoke agentplot.sluice.status >/dev/null
