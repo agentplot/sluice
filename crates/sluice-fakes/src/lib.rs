@@ -17,7 +17,7 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, LandingCommit,
-    LastResult, Moved, Network, Notification, Outcome, Place, PreviewPlace, Progress,
+    LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace, Progress,
     ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session, SessionPlace,
     Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
     Written,
@@ -95,6 +95,10 @@ struct Inner {
     flaky: BTreeMap<String, VecDeque<Outcome>>,
     hang: BTreeSet<String>,
     skip: BTreeSet<String>,
+    /// Checks a run leaves not run, with why (could-not-run-1 114).
+    cannot_run: BTreeMap<String, String>,
+    /// A run whose policy sets `[tests] ready` is refused (84).
+    not_ready: bool,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -148,6 +152,7 @@ struct Inner {
     /// Each branch's candidates' tasks, kept beside its records.
     progress: BTreeMap<String, BTreeMap<String, Vec<TaskProgress>>>,
     results: Vec<u8>,
+    set_asides: Vec<u8>,
     next_id: u64,
     crash_writes: usize,
     interfere: usize,
@@ -419,6 +424,22 @@ impl World {
         self.0.borrow_mut().skip.insert(task.into());
     }
 
+    /// Runs leave `task` not run, for `reason` (could-not-run-1 114);
+    /// `None` lets it run again.
+    pub fn cannot_run(&self, task: &str, reason: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match reason {
+            Some(r) => inner.cannot_run.insert(task.into(), r.into()),
+            None => inner.cannot_run.remove(task),
+        };
+    }
+
+    /// The host fails a policy's `[tests] ready` from now: a run whose
+    /// request sets it is refused before anything of it runs (84).
+    pub fn not_ready(&self, not_ready: bool) {
+        self.0.borrow_mut().not_ready = not_ready;
+    }
+
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
@@ -536,6 +557,7 @@ impl World {
                     docker: false,
                 },
                 missing: Vec::new(),
+                not_run: Vec::new(),
                 timed_out: false,
             };
         }
@@ -566,6 +588,7 @@ impl World {
                 docker: false,
             },
             missing: Vec::new(),
+            not_run: Vec::new(),
             timed_out: false,
         };
         for t in wanted {
@@ -581,6 +604,13 @@ impl World {
             }
             if inner.skip.contains(&t.name) {
                 report.missing.push(t.name.clone());
+                continue;
+            }
+            if let Some(reason) = inner.cannot_run.get(&t.name) {
+                report.not_run.push(NotRun {
+                    task: t.name.clone(),
+                    reason: reason.clone(),
+                });
                 continue;
             }
             if inner.hang.contains(&t.name) && request.limit.is_some() {
@@ -1009,6 +1039,9 @@ impl Tests for FakeTests {
             Some(Network::Denied | Network::Localhost)
         ) {
             bail!("the open executor cannot keep a run off the network");
+        }
+        if inner.not_ready && request.tests.contains_key("ready") {
+            bail!("the host is not ready: [tests] ready failed");
         }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
@@ -1540,6 +1573,15 @@ impl State for FakeState {
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
         self.0 .0.borrow_mut().results.extend(lines);
+        Ok(())
+    }
+
+    fn set_asides(&self) -> Result<Vec<u8>> {
+        Ok(self.0 .0.borrow().set_asides.clone())
+    }
+
+    fn set_aside(&self, line: &[u8]) -> Result<()> {
+        self.0 .0.borrow_mut().set_asides.extend(line);
         Ok(())
     }
 

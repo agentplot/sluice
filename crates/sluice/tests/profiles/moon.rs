@@ -343,6 +343,9 @@ fn a_task_that_could_not_run_records_no_fail() {
         "recorded as failed: {:?}",
         r.tasks
     );
+    assert_eq!(r.not_run.len(), 1, "{:?}", r.not_run);
+    assert_eq!(r.not_run[0].task, "alpha:test");
+    assert!(r.not_run[0].reason.contains("exited 77"));
     assert_eq!(r.missing, ["beta:test"]);
 }
 

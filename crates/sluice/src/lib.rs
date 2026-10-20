@@ -1888,6 +1888,7 @@ fn last_result_text(r: &sluice_seams::LastResult) -> String {
         RunOutcome::TimedOut => "timed out",
         RunOutcome::Lost => "lost",
         RunOutcome::Stopped => "stopped",
+        RunOutcome::NotRun => "could not run",
     };
     let head = r.head.short();
     match (r.kind, r.recorded) {

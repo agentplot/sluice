@@ -366,7 +366,16 @@ fn cannot_start_probe() {
         Setting::List(vec!["/usr/bin/true".into()]),
     );
     let r = finish(&c, &request(&repo, "p1", tests));
-    std::fs::write(&out, fails(&r).join("\n")).unwrap();
+    let not_run: Vec<String> = r
+        .not_run
+        .iter()
+        .map(|n| format!("{}: {}", n.task, n.reason))
+        .collect();
+    std::fs::write(
+        &out,
+        format!("{}\n--\n{}", fails(&r).join(","), not_run.join("\n")),
+    )
+    .unwrap();
 }
 
 /// could-not-run-1 114: a check whose program could not be started did
@@ -393,8 +402,14 @@ fn a_check_that_cannot_start_records_no_fail() {
     .status()
     .unwrap();
     assert!(status.success());
-    let fails = std::fs::read_to_string(&file).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    let (fails, not_run) = text.split_once("\n--\n").unwrap();
     assert!(fails.is_empty(), "recorded as failed: {fails}");
+    assert!(not_run.starts_with("true: "), "{not_run}");
+    assert!(
+        not_run.contains("bash"),
+        "names what could not start: {not_run}"
+    );
 }
 
 /// could-not-run-1 114: an exit the policy's `not_run` names says the
@@ -414,11 +429,16 @@ fn an_exit_the_policy_names_records_no_fail() {
         ),
     );
     assert!(fails(&r).is_empty(), "recorded as failed: {:?}", r.tasks);
+    assert_eq!(r.not_run.len(), 1);
+    assert_eq!(r.not_run[0].task, "exit 77");
+    assert!(r.not_run[0].reason.contains("exited 77"), "{:?}", r.not_run);
+    assert!(r.missing.is_empty());
     let r = finish(
         &c,
         &request(&repo, "p2", with(command("exit 1"), "not_run", not_run)),
     );
     assert_eq!(fails(&r), ["exit 1"]);
+    assert!(r.not_run.is_empty());
 }
 
 /// 84, could-not-run-1: a host that fails the readiness the repository
@@ -455,6 +475,12 @@ fn a_host_that_stops_being_ready_records_no_fail() {
         ),
     );
     assert!(fails(&r).is_empty(), "recorded as failed: {:?}", r.tasks);
+    assert_eq!(r.not_run.len(), 1, "{:?}", r.not_run);
+    assert!(
+        r.not_run[0].reason.contains("test -e ready"),
+        "{:?}",
+        r.not_run
+    );
     std::fs::write(repo.dir().join("ready"), "").unwrap();
     let r = finish(
         &c,
