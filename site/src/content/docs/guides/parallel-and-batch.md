@@ -120,6 +120,39 @@ that share one break as soon as two runs overlap. The sign is unrelated
 submissions failing the same check, and each of those failures halves
 how many the branch tests at once.
 
+## Systems multiply runs
+
+A branch that names [systems](/sluice/reference/configuration/#systems-what-a-test-runs-on)
+tests each combination once per system: a pass on Linux says nothing
+of macOS. Each combination is one run per system its required tests
+need, and each run holds only the tests that need that system.
+
+```toml
+[branches.main]
+required = ["#check-fast", "#integration", "cli:build"]
+systems = ["linux-x64"]
+parallel = 4
+
+[branches.main.systems_for]
+"cli:build" = ["linux-x64", "linux-arm64", "macos-arm64"]
+```
+
+Here each combination is three runs: one on `linux-x64` with all three
+tests, and one each on `linux-arm64` and `macos-arm64` with `cli:build`
+alone. With `parallel = 4` and four submissions queued, that is twelve
+runs, of which eight are single builds. Had the branch said
+`systems = ["linux-x64", "linux-arm64", "macos-arm64"]` instead, all
+twelve would run every test. Name a system for the tests that need it,
+in `systems_for`, and leave the rest to one.
+
+`parallel` counts combinations, never runs, and a combination passes
+only once every run of it has. A host runs only the system it is, up to
+its own [`[runs] max`](/sluice/reference/configuration/#runs). Runs for
+another system wait for a host of that system, or for a
+[pool](/sluice/guides/github-actions/), and a run nobody takes fails
+the combination when `timeout` passes. `batch = true` keeps the count
+down: one combination at a time is one run per system.
+
 ## Choosing
 
 Start from how long the gate takes and how often submissions arrive.
