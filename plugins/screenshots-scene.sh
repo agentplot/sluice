@@ -33,6 +33,19 @@ teardown() {
   for g in "$dir"/shop/.git/sluice/.runs/*/pgid; do
     [ -f "$g" ] && kill -TERM -- "-$(cat "$g")" 2>/dev/null || true
   done
+  # Each run's supervisor writes the run's result once its group has
+  # ended: wait for it, up to 30 seconds, before removing where it writes.
+  local lock pid n
+  for lock in "$dir"/shop/.git/sluice/.runs/*/lock; do
+    [ -f "$lock" ] || continue
+    pid=$(tr -dc 0-9 <"$lock")
+    [ -n "$pid" ] || continue
+    n=0
+    while kill -0 "$pid" 2>/dev/null && [ $n -lt 300 ]; do
+      sleep 0.1
+      n=$((n + 1))
+    done
+  done
   rm -rf "$dir"
 }
 
