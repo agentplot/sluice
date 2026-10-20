@@ -180,7 +180,7 @@ describe("agents' checks", () => {
       "host: 4 of 6 runs · 3 queue · 1 agent",
     );
     expect(hostLine({ bound: 6, queue: 0, sessions: 2, reserve: 1 })).toBe(
-      "host: 2 of 6 runs · 0 queue · 2 agents",
+      "host: 2 of 6 runs · 2 agents",
     );
     expect(hostLine({ bound: 6, queue: 0, sessions: 0, reserve: 0 })).toBeNull();
   });

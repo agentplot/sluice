@@ -165,15 +165,16 @@ fn write_overview(
         )?;
     }
     if let Some(r) = room.filter(|r| r.queue + r.sessions > 0) {
-        let agents = if r.sessions == 1 { "agent" } else { "agents" };
-        writeln!(
-            out,
-            "host: {} of {} runs · {} queue · {} {agents}",
-            r.queue + r.sessions,
-            r.bound,
-            r.queue,
-            r.sessions
-        )?;
+        let mut line = format!("host: {} of {} runs", r.queue + r.sessions, r.bound);
+        if r.queue > 0 {
+            line.push_str(&format!(" · {} queue", r.queue));
+        }
+        match r.sessions {
+            0 => {}
+            1 => line.push_str(" · 1 agent"),
+            n => line.push_str(&format!(" · {n} agents")),
+        }
+        writeln!(out, "{line}")?;
     }
     let held = sessions.iter().filter(|w| w.get("ports").is_some()).count();
     let previews = doc["previews"].as_array().map_or(0, Vec::len);

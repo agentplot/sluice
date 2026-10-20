@@ -266,7 +266,10 @@ export function checkRows(doc: Overview, now: number): CheckRow[] {
 /** `host: 4 of 6 runs · 3 queue · 1 agent`, or null while nothing counts against the bound. */
 export function hostLine(room: Room | undefined): string | null {
   if (!room || room.queue + room.sessions === 0) return null;
-  return `host: ${room.queue + room.sessions} of ${room.bound} runs · ${room.queue} queue · ${plural(room.sessions, "agent")}`;
+  const parts = [`host: ${room.queue + room.sessions} of ${room.bound} runs`];
+  if (room.queue > 0) parts.push(`${room.queue} queue`);
+  if (room.sessions > 0) parts.push(plural(room.sessions, "agent"));
+  return parts.join(" · ");
 }
 
 /** Whether times on the board move: a combination under test, or a check going or just ended. */
