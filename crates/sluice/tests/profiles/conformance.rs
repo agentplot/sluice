@@ -443,6 +443,10 @@ impl Rig for Real {
             },
             &SystemClock,
         )
+        .as_peer(sluice_core::Peer {
+            signer: self.origin.as_ref().map(|_| "box".to_string()),
+            ..sluice_core::Peer::default()
+        })
     }
 
     /// One round, taken again while the branch's lock is busy, as `sluice
