@@ -242,6 +242,23 @@ launches only after D4 finds no live host with room for the run (107).
   workflow on `main`, so a pull request that edits either file signs as
   nothing the policy names (113).
 
+The jobs call `sluice job`, which the workflows are written around:
+
+- `sluice job round --branch <b>` leads the branch under one name for
+  every round job of the pool, `pool/<pool>/round`, so a scheduled job
+  goes on from the last one with no lease to wait out; the workflow's
+  `concurrency` keeps one per branch at a time. It runs rounds until the
+  branch has nothing to do, or 50 minutes have gone.
+- `sluice job run --claim <c> --branch <b>` makes the claimed run's
+  checkout from the combination's ref, runs its checks, and writes the
+  run's report and moon's manifests for its keys to a directory the job
+  uploads. It records nothing and holds no key.
+- `sluice job sign --claim <c> --branch <b> --from <dir>` keeps only the
+  keys the combination's tree bears out (D9) and writes the run's
+  statement; `actions/attest` signs it; `sluice job record` adds the
+  bundle to `refs/sluice/runs/<signer>` and reports the run's outcome
+  under its claim, as a standing host reports its own.
+
 The checks never share a job with the identity token or the key
 (actions-pool spec). Splitting run from sign costs one job start per
 run. *Alternative:* one job per run with `id-token: write`. Any check
