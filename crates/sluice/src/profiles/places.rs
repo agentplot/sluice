@@ -372,7 +372,7 @@ fn free_block(dir: &Path, n: u32, record: &Path) -> Result<()> {
 }
 
 /// A cache `[[checkout.cache]]` declares, keyed for one candidate:
-/// `<common>/sluice/caches/<bucket>/<key>/` holds its `paths`.
+/// `<common>/sluice/.caches/<bucket>/<key>/` holds its `paths`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Cache {
     paths: Vec<String>,
@@ -758,7 +758,17 @@ impl Places {
     }
 
     fn bucket(&self, cache: &Cache) -> PathBuf {
-        self.root().join("caches").join(&cache.bucket)
+        let dir = self.root().join(".caches");
+        // Under a dotted name, which no branch's records can take, so a
+        // reader listing the branches never walks the caches. Caches saved
+        // under `caches` before are moved there once; a branch named
+        // `caches`, whose records hold a version, is left alone.
+        let old = self.root().join("caches");
+        if !dir.exists() && old.is_dir() && !old.join("version").exists() {
+            // Another process may move it first.
+            let _ = std::fs::rename(&old, &dir);
+        }
+        dir.join(&cache.bucket)
     }
 
     /// The saved keys of a cache, the last saved first.

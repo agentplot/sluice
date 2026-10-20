@@ -319,7 +319,7 @@ fn a_place_holds_the_caches_its_policy_declares() {
     assert_eq!(built(&place), "two\n");
     build(&place, "three\n");
     p.release(NAME, true).unwrap();
-    let caches = repo.dir().join(".git/sluice/caches");
+    let caches = repo.dir().join(".git/sluice/.caches");
     let bucket = std::fs::read_dir(&caches)
         .unwrap()
         .next()
@@ -332,6 +332,32 @@ fn a_place_holds_the_caches_its_policy_declares() {
         .collect();
     kept.sort();
     assert_eq!(kept, ["three\n", "two\n"]);
+}
+
+/// Caches live under a dotted name no branch's records can take, so a
+/// reader listing the branches never walks them; those saved under
+/// `caches` before are moved there and still restored.
+#[test]
+fn caches_saved_under_the_old_name_are_moved_and_kept() {
+    let (repo, _) = scratch("places-cache-moved");
+    let p = places(&repo);
+    let cached = cached();
+    let one = locked(&repo, "one\n");
+    let place = p.materialize(NAME, &one, &cached).unwrap();
+    std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
+    std::fs::write(place.path.join("target/debug/a"), "one\n").unwrap();
+    p.release(NAME, true).unwrap();
+
+    let root = repo.dir().join(".git/sluice");
+    std::fs::rename(root.join(".caches"), root.join("caches")).unwrap();
+    let place = p.materialize(NAME, &one, &cached).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(place.path.join("target/debug/a")).unwrap(),
+        "one\n"
+    );
+    assert!(root.join(".caches").is_dir());
+    assert!(!root.join("caches").exists());
+    p.release(NAME, false).unwrap();
 }
 
 fn ported(names: &[&str], from: &str) -> Settings {

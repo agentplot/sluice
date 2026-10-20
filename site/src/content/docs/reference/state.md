@@ -27,7 +27,7 @@ readable with plain tools whether or not sluice is running.
     lock               held by a round of this branch
   .logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-  caches/<bucket>/<key>/
+  .caches/<bucket>/<key>/
                        the [[checkout.cache]] entries, the last two keys of each
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, caches,
