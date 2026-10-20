@@ -18,8 +18,19 @@ sluice's queue inside a Claude Code session.
   submissions with this session's marked and each pull request linked to
   GitHub, and recent landings, blames and conflicts with the blamed tests'
   logs (press one to copy its path). A branch with nothing queued is left
-  out once a quarter hour has passed since its last event.
-- **Status line**: `sluice: 3 submissions · yours #13 testing`.
+  out once a quarter hour has passed since its last event. Branches come
+  in the order the policy names them.
+- **Agents' checks**: each `sluice exec` takes one of the host's runs, the
+  ones combinations are tested in. When checks hold a queue back, the
+  band's line for that branch ends `· 1 slot to an agent's checks`. The
+  pane lists every check under CHECKING, apart from the queue:
+  `fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, and for a quarter
+  hour after, what it is worth: `14 passed · reused when submitted` when
+  the gate takes its passes for that commit, `not kept: uncommitted
+  changes` when the checkout held more. Under them,
+  `host: 4 of 6 runs · 3 queue · 1 agent`.
+- **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
+  same `· 1 slot to an agent's checks` when checks hold the queue back.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.

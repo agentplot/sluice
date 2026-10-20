@@ -1,4 +1,4 @@
-import type { Overview } from "../types";
+import type { Overview, OverviewTask } from "../types";
 
 /** 2026-10-16T19:45:10Z: 130 s after the combination under test started. */
 export const NOW = Date.parse("2026-10-16T19:45:10Z");
@@ -94,6 +94,90 @@ export function withTasks(): Overview {
     { target: "core:test", state: "waiting" },
     { target: "sluice:e2e", state: "running" },
     { target: "site:prose", state: "replayed", ended: "2026-10-16T19:44:54Z" },
+  ];
+  return doc;
+}
+
+/** `n` finished tasks of a check, the first `failed` of them failed. */
+function finished(n: number, failed = 0): OverviewTask[] {
+  return Array.from({ length: n }, (_, i) => ({
+    target: `t:${i}`,
+    state: i < failed ? ("failed" as const) : ("passed" as const),
+  }));
+}
+
+/**
+ * The fixture with agents' checks: main tests one combination of a window
+ * of 3 with #14 waiting, and the host's last run of 2 goes to an agent's
+ * checks, so the queue is held back. Two checks go, three ended this
+ * quarter hour, one ended long ago, and one worktree is only warned of.
+ */
+export function withChecks(): Overview {
+  const doc = overview();
+  doc.branches[0]!.window = 3;
+  doc.room = { bound: 2, queue: 1, sessions: 1, reserve: 0 };
+  const ports = { web: "4001" };
+  const tasks: OverviewTask[] = [
+    ...finished(3),
+    { target: "t:3", state: "running" },
+    ...Array.from({ length: 4 }, (_, i) => ({ target: `t:${4 + i}`, state: "waiting" as const })),
+  ];
+  const result = (at: string, outcome: "pass" | "fail", more: object) => ({
+    at,
+    head: "e20a6f9b48",
+    kind: "checks" as const,
+    outcome,
+    recorded: true,
+    ...more,
+  });
+  doc.sessions = [
+    {
+      worktree: "/work/sluice/fix-cards",
+      branch: "main",
+      ports,
+      run: { started: "2026-10-16T19:44:00Z", tasks },
+    },
+    {
+      worktree: "/work/sluice/e2e-stack",
+      branch: "main",
+      ports,
+      run: { started: "2026-10-16T19:43:10Z", command: "make e2e" },
+    },
+    {
+      worktree: "/work/sluice/done-ok",
+      branch: "main",
+      ports,
+      last_result: result("2026-10-16T19:43:10Z", "pass", {
+        tasks: finished(14),
+        reused: true,
+      }),
+    },
+    {
+      worktree: "/work/sluice/dirty",
+      branch: "main",
+      ports,
+      last_result: result("2026-10-16T19:44:10Z", "pass", {
+        recorded: false,
+        tasks: finished(14),
+        reused: false,
+      }),
+    },
+    {
+      worktree: "/work/sluice/broke",
+      branch: "main",
+      ports,
+      last_result: result("2026-10-16T19:44:30Z", "fail", {
+        tasks: finished(14, 2),
+        reused: false,
+      }),
+    },
+    {
+      worktree: "/work/sluice/long-ago",
+      branch: "main",
+      ports,
+      last_result: result("2026-10-16T19:20:00Z", "pass", { tasks: finished(5), reused: true }),
+    },
+    { worktree: "/work/sluice", branch: "main", holds_queued_branch: "main" },
   ];
   return doc;
 }

@@ -115,6 +115,21 @@ long each ended task took. Each round updates it, every few seconds
 while a submission waits, and it counts tasks, not the tests inside one.
 It shows only for combinations tested on this host.
 
+Your agents' own runs of `sluice exec` are checks, not submissions, and
+the board shows them as load on the host, never in a branch's queue. A
+check takes one of the host's runs, the same runs combinations are tested
+in, so a busy host can test fewer combinations than a branch allows. When
+it does, the band ends that branch's line with `· 1 slot to an agent's
+checks`, and the status line says it once. The pane lists each check
+under CHECKING, one row per checkout and the branch it checks against:
+`fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, or the command it
+runs. A check that ended stays a quarter hour. `14 passed · reused when
+submitted` means the gate takes those passes when that commit is
+submitted, so its combination doesn't run them again; `not kept:
+uncommitted changes` means the checkout held more than its commit and
+nothing was kept. Under the rows, `host: 4 of 6 runs · 3 queue · 1 agent`
+says where the host's runs go.
+
 When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests
 were blamed and where their logs are, so the agent can fix its work without

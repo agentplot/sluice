@@ -2,7 +2,7 @@ import type { On } from "claude-code";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Overview } from "../types";
-import { NOW, overview, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withTasks } from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
@@ -252,6 +252,91 @@ test("a combination's tasks: the count and bar in the band, the list in the pane
   expect(await pane.find({ type: "Text", text: /✓ sluice:test\s+1m48s/ })).toBeDefined();
   expect(await pane.find({ type: "Text", text: /… sluice:e2e\s+running/ })).toBeDefined();
   expect(await pane.find({ type: "Text", text: /· core:test\s+waiting/ })).toBeDefined();
+  await pane.unmount();
+});
+
+test("agents' checks: the clause in the band, CHECKING and the host line in the pane", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = {
+    prompts: [] as string[],
+    toasts: [] as string[],
+    status: [] as (string | undefined)[],
+  };
+  host(on, [withChecks()], seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(seen.status).toContain(
+    "sluice: 3 submissions · yours #13 testing · 1 slot to an agent's checks",
+  );
+
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: /#14 waiting · .* · 1 slot to an agent's checks$/ }),
+  ).toBeDefined();
+  expect(await band.find({ type: "Text", text: /fix-cards/ })).toBeUndefined();
+  await band.unmount();
+
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT|CHECKING)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["TESTING", "QUEUED", "RECENT", "CHECKING"]);
+  const running = await pane.find({ type: "Text", text: /fix-cards → main 3\/8 ▓▓▓░░░░░░░ 1m10s/ });
+  expect(running?.props.color).toBe("yellow");
+  expect(await pane.find({ type: "Text", text: /e2e-stack → main make e2e 2m00s/ })).toBeDefined();
+  expect(
+    await pane.find({ type: "Text", text: /done-ok → main 14 passed · reused when submitted/ }),
+  ).toBeDefined();
+  expect(
+    await pane.find({
+      type: "Text",
+      text: /dirty → main 14 passed · not kept: uncommitted changes/,
+    }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Text", text: /broke → main 2 of 14 failed/ })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: /long-ago/ })).toBeUndefined();
+  expect(
+    await pane.find({ type: "Text", text: "host: 2 of 2 runs · 1 queue · 1 agent" }),
+  ).toBeDefined();
+  // A check is never a submission: QUEUED lists #14 alone.
+  expect(await pane.findAll({ type: "Text", text: /^\s+#\d+ queued/ })).toHaveLength(1);
+  // The worktree only warned of holds no ports, and is not counted held.
+  expect(await pane.find({ type: "Text", text: "6 worktrees held · 0 previews" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("the pane keeps the overview's order of branches, and counts the idle ones", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d = overview();
+  const main = d.branches[0]!;
+  const idle = { ...main, branch: "bolt/a", depth: 0, submissions: [], candidates: [], recent: [] };
+  d.branches = [{ ...main, branch: "release" }, idle, main];
+  host(on, [d], { prompts: [], toasts: [], status: [] });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^\S+ at / });
+  expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["release", "main"]);
+  expect(
+    await pane.find({ type: "Text", text: "1 other branch with nothing queued" }),
+  ).toBeDefined();
   await pane.unmount();
 });
 

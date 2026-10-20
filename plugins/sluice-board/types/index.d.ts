@@ -56,14 +56,62 @@ export type OverviewBranch = {
   recent: Recent[];
 };
 
+/** How a worktree's last `sluice exec` ended (ADR 0027). */
+export type LastResult = {
+  at: string;
+  head: string;
+  kind: "checks" | "command";
+  outcome: "pass" | "fail" | "timed_out" | "lost" | "stopped" | "not_run";
+  /** Its results are under their keys. */
+  recorded: boolean;
+  /** The finished run's tasks, from its report. */
+  tasks?: OverviewTask[];
+  /** The gate takes its passes when its head is submitted. */
+  reused?: boolean;
+};
+
+/** An agent's `sluice exec` going in its worktree (ADR 0035). */
+export type SessionRun = {
+  started: string;
+  /** The command, for `sluice exec <branch> -- <command>`. */
+  command?: string;
+  tasks?: OverviewTask[];
+};
+
+/** A worktree sluice holds, or one that has a branch sluice lands on checked out. */
+export type OverviewSession = {
+  worktree: string;
+  branch: string;
+  /** Present for a worktree whose runs hold ports, absent for one only warned of. */
+  ports?: Record<string, string>;
+  last_run?: string | null;
+  removed?: boolean;
+  last_result?: LastResult;
+  holds_queued_branch?: string;
+  run?: SessionRun;
+};
+
+/** The host's bound and what counts against it (session-runs-1 clauses 89, 91). */
+export type Room = {
+  bound: number;
+  /** Combinations under test on the repository's branches. */
+  queue: number;
+  /** Agents' checks on the host, every repository's. */
+  sessions: number;
+  /** The part of the bound agents' checks never take. */
+  reserve: number;
+};
+
 export type Overview = {
   schema: string;
   host: string;
   repository: string;
   at: string;
   branches: OverviewBranch[];
-  sessions: { worktree: string; branch: string; removed: boolean }[];
+  sessions: OverviewSession[];
   previews: { name: string; state: string }[];
+  /** Absent from a sluice older than agents' checks in the overview. */
+  room?: Room;
 };
 
 /** How the board knows this session's submissions. */
