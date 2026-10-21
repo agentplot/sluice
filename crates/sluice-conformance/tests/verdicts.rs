@@ -422,7 +422,7 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
 #[test]
 fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {
     let strict = policy(false, "fail", 4).replace(
-        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
+        "trust = [\"open\", \"sandbox\", \"container\"]",
         "trust = [\"confined\"]",
     );
     let h = Harness::new(&strict);
@@ -440,19 +440,19 @@ fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {
     assert_eq!(h.w().tip(BRANCH), tip);
 }
 
-/// satisfies: 28, 16, 38
+/// satisfies: 108, 16, 38; S42
 #[test]
-fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
+fn a_replay_no_trusted_pass_proves_runs_again_with_no_replay() {
     let h = Harness::bolt();
     let other = "bolt/y";
-    let no_cache = policy(false, "fail", 4).replace(
-        "trust = [\"open\", \"sandbox\", \"container\", \"cache\"]",
-        "trust = [\"open\"]",
-    );
+    // Runs on bolt/y are held to a container engine, so the passes the
+    // first branch's runs recorded, held to none, prove none of its keys
+    // (19, 83).
+    let docker = format!("{}\n[executor]\ndocker = true\n", policy(false, "fail", 4));
     h.w().init(
         other,
         &[
-            (".config/sluice.toml", &no_cache),
+            (".config/sluice.toml", &docker),
             ("a/lib", "a1"),
             ("b/lib", "b1"),
             ("c/lib", "c1"),
@@ -464,8 +464,8 @@ fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
     assert_eq!(h.sub(one).state, State::Landed);
     let ran = h.w().observed().len();
 
-    // The same work on a branch whose gate does not trust the cache: every
-    // key holds a pass, and each check runs again all the same.
+    // The same work on bolt/y: the runner replays every key from its
+    // cache, no trusted pass proves them, and the checks run again.
     let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
     h.w().session("unit/y", "agent-y", &head);
     let s = h.sluice();
@@ -479,15 +479,139 @@ fn a_gate_that_does_not_trust_the_cache_is_given_no_replay() {
         .unwrap()
         .unwrap()
         .id;
-    for _ in 0..6 {
+    for _ in 0..8 {
         s.step(other).unwrap();
     }
     assert_eq!(h.sub(two).state, State::Landed);
-    assert!(h.w().requests().iter().any(|r| !r.replay));
+    let requests = h.w().requests();
+    assert!(requests.iter().any(|r| r.replay));
+    assert!(requests.iter().any(|r| !r.replay));
     assert_eq!(h.w().observed().len(), ran + 3);
-    let r = results(&h);
-    assert!(r
+    let snap = s.seams().state.read(other).unwrap();
+    let events: Vec<Event> = sluice_core::line::Line::read_log(&snap)
+        .unwrap()
+        .into_iter()
+        .map(|l| l.event)
+        .collect();
+    assert!(events
         .iter()
-        .filter(|l| l.branch == other)
-        .all(|l| l.kind == ResultKind::Ran));
+        .any(|e| matches!(e, Event::Unproven { tasks, .. } if tasks.len() == 3)));
+    // The first attempt's replays are recorded as replays (core.9), and
+    // the runs as runs.
+    let r = results(&h);
+    let mine: Vec<&ResultLine> = r.iter().filter(|l| l.branch == other).collect();
+    assert_eq!(
+        mine.iter()
+            .filter(|l| l.kind == ResultKind::Replayed)
+            .count(),
+        3
+    );
+    assert_eq!(mine.iter().filter(|l| l.kind == ResultKind::Ran).count(), 3);
+}
+
+/// A policy naming two systems, its bolts' rules ending in `extra`.
+fn systems_policy(extra: &str) -> String {
+    format!(
+        "[tests]\nrunner = \"fake\"\n\n[checkout]\n\n\
+         [systems]\nlinux-x64 = {{ os = \"linux\", arch = \"x86_64\" }}\n\
+         macos-arm64 = {{ os = \"macos\", arch = \"aarch64\" }}\n\n\
+         [branches.\"bolt/*\"]\nrequired = [\"a:test\", \"b:test\"]\nparallel = 4\n\
+         timeout = \"20m\"\n{extra}"
+    )
+}
+
+fn runs_of(h: &Harness) -> Vec<sluice_core::records::SystemRun> {
+    let s = h.sluice();
+    let snap = s.seams().state.read(BRANCH).unwrap();
+    let line = sluice_core::line::Line::load(BRANCH, snap).unwrap();
+    line.doc.candidates[0].runs.clone()
+}
+
+/// satisfies: 86; the check-systems spec's "Runs of one combination"
+#[test]
+fn a_combination_opens_one_run_per_system() {
+    let h = Harness::new(&systems_policy(
+        "systems = [\"linux-x64\"]\n\n[branches.\"bolt/*\".systems_for]\n\
+         \"b:test\" = [\"linux-x64\", \"macos-arm64\"]\n",
+    ));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.settle();
+    let runs = runs_of(&h);
+    let shape: Vec<(Option<&str>, Vec<&str>)> = runs
+        .iter()
+        .map(|r| {
+            (
+                r.system.as_deref(),
+                r.checks.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (Some("linux-x64"), vec!["a:test", "b:test"]),
+            (Some("macos-arm64"), vec!["b:test"])
+        ]
+    );
+    // This host is linux-x64: it runs that run alone, and the other stays
+    // open for an executor of its system (87).
+    assert_eq!(runs[0].state, sluice_core::records::RunState::Passed);
+    assert_eq!(runs[1].state, sluice_core::records::RunState::Open);
+    let req = &h.w().requests()[0];
+    assert_eq!(req.system.as_deref(), Some("linux-x64"));
+    assert_eq!(req.required, ["a:test", "b:test"]);
+}
+
+/// satisfies: 85, 86, 87, 66; S41's half with no executor; the
+/// check-systems spec's "Nobody runs the system"
+#[test]
+fn a_run_no_executor_takes_reads_as_not_passed_at_the_time_limit() {
+    let h = Harness::new(&systems_policy(
+        "systems = [\"linux-x64\", \"macos-arm64\"]\n",
+    ));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    // A pass on linux-x64 stands for nothing on macos-arm64.
+    assert_eq!(h.sub(one).state, State::Testing);
+    let s = h.sluice();
+    h.w().advance(chrono::Duration::minutes(21));
+    for _ in 0..4 {
+        s.step(BRANCH).unwrap();
+    }
+    let sub = h.sub(one);
+    assert_eq!(sub.state, State::Failed);
+    assert_eq!(sub.result.as_deref(), Some("timed out"));
+    let missing: Vec<(&str, Option<&str>)> = sub
+        .failed
+        .iter()
+        .map(|f| (f.task.as_str(), f.system.as_deref()))
+        .collect();
+    assert_eq!(
+        missing,
+        [
+            ("a:test", Some("macos-arm64")),
+            ("b:test", Some("macos-arm64"))
+        ]
+    );
+    // Each result names the system it ran on.
+    assert!(results(&h)
+        .iter()
+        .all(|l| l.system.as_deref() == Some("linux-x64")));
+}
+
+/// satisfies: 86; the check-systems spec's "No systems named"
+#[test]
+fn a_check_with_no_system_named_takes_a_pass_from_the_host_it_ran_on() {
+    let h = Harness::new(&systems_policy(""));
+    h.w().platform("macos", "aarch64");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.w().requests()[0].system, None);
+    assert!(results(&h)
+        .iter()
+        .all(|l| l.system.as_deref() == Some("macos-arm64")));
 }

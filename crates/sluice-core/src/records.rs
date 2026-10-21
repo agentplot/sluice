@@ -138,6 +138,10 @@ pub struct FailedTask {
     /// `flaky` reads as failed; `None` for a task that failed on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flaky: Option<FlakyKey>,
+    /// The system it failed on, or was missing on (85, 87); `None` when
+    /// the policy names no systems.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     /// Could-not-run-1 115: the check could not run in as many runs in a
     /// row as the bound, and why it last could not; `None` for a check
     /// with a result.
@@ -210,6 +214,10 @@ pub struct Submission {
     pub told: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
+    /// Its id in this host's own records, before the branch's records
+    /// moved to the remote and it was submitted again there (design D10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -252,19 +260,77 @@ impl CandidateState {
     }
 }
 
+/// One run of a candidate: the required checks that need one system, or
+/// any one system (86).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemRun {
+    /// The system its checks must pass on, by the policy's name; `None`
+    /// for any one system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// The checks it runs.
+    pub checks: Vec<String>,
+    pub state: RunState,
+    /// 75: the instance whose claim holds it, on a branch whose records
+    /// are on its remote; `None` on a branch kept in one host's files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunHandle>,
+    /// 108: started again with no replay, after a replay no trusted pass
+    /// proved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_replay: bool,
+}
+
+/// A run's state, from open to its own verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunState {
+    /// Waiting for an executor of its system (87).
+    Open,
+    /// Its place is decided here and its run not yet confirmed started.
+    Starting,
+    Testing,
+    Passed,
+    Failed,
+    TimedOut,
+}
+
+impl RunState {
+    pub fn done(self) -> bool {
+        matches!(
+            self,
+            RunState::Passed | RunState::Failed | RunState::TimedOut
+        )
+    }
+
+    /// Holding a place on this host.
+    pub fn held(self) -> bool {
+        matches!(self, RunState::Starting | RunState::Testing)
+    }
+}
+
 /// A candidate: the branch's revision `on` extended, in order, by
 /// `submissions` (10). Identified by exactly those two.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "CandidateForm")]
 pub struct Candidate {
     pub id: String,
     pub on: Rev,
     pub submissions: Vec<u64>,
     pub revision: Rev,
     pub state: CandidateState,
+    /// Its runs, one per system its checks need (86), opened when it is
+    /// chosen for testing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<SystemRun>,
+    /// When it was chosen for testing: its time limit counts from here
+    /// for a run no executor took (66, 87).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub place: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<RunHandle>,
+    pub opened: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<FailedTask>,
     /// Started on a revision covered by no verdict: every required check
@@ -285,7 +351,84 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// A candidate as records written before runs per system hold it: one
+/// place and one run, read as its one run for any system.
+#[derive(Deserialize)]
+struct CandidateForm {
+    id: String,
+    on: Rev,
+    submissions: Vec<u64>,
+    revision: Rev,
+    state: CandidateState,
+    #[serde(default)]
+    runs: Vec<SystemRun>,
+    #[serde(default)]
+    opened: Option<String>,
+    #[serde(default)]
+    place: Option<String>,
+    #[serde(default)]
+    run: Option<RunHandle>,
+    #[serde(default)]
+    failed: Vec<FailedTask>,
+    #[serde(default)]
+    every_check: bool,
+    #[serde(default)]
+    ran: usize,
+    #[serde(default)]
+    replayed: usize,
+    #[serde(default)]
+    not_run_runs: u32,
+}
+
+impl From<CandidateForm> for Candidate {
+    fn from(f: CandidateForm) -> Candidate {
+        let mut runs = f.runs;
+        if runs.is_empty() && (f.place.is_some() || f.run.is_some()) {
+            runs.push(SystemRun {
+                system: None,
+                checks: Vec::new(),
+                state: match f.state {
+                    CandidateState::Starting => RunState::Starting,
+                    CandidateState::Testing => RunState::Testing,
+                    CandidateState::Passed => RunState::Passed,
+                    CandidateState::Failed => RunState::Failed,
+                    CandidateState::TimedOut => RunState::TimedOut,
+                    CandidateState::Formed => RunState::Open,
+                },
+                place: f.place,
+                run: f.run,
+                no_replay: false,
+                host: None,
+            });
+        }
+        Candidate {
+            id: f.id,
+            on: f.on,
+            submissions: f.submissions,
+            revision: f.revision,
+            state: f.state,
+            runs,
+            opened: f.opened,
+            failed: f.failed,
+            every_check: f.every_check,
+            ran: f.ran,
+            replayed: f.replayed,
+            not_run_runs: f.not_run_runs,
+        }
+    }
+}
+
 impl Candidate {
+    /// The places its runs hold on this host.
+    pub fn places(&self) -> impl Iterator<Item = &String> {
+        self.runs.iter().filter_map(|r| r.place.as_ref())
+    }
+
+    /// Its runs holding a place on this host.
+    pub fn held(&self) -> usize {
+        self.runs.iter().filter(|r| r.state.held()).count()
+    }
+
     pub fn newest(&self) -> u64 {
         *self
             .submissions
@@ -410,6 +553,10 @@ pub struct BranchDoc {
     pub passed: Vec<String>,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
+    /// 72: the instance that keeps the branch, on a branch whose records
+    /// are on its remote; `None` until one takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<String>,
 }
 
 impl BranchDoc {
@@ -428,6 +575,7 @@ impl BranchDoc {
             release: Vec::new(),
             passed: Vec::new(),
             outbox: Vec::new(),
+            lead: None,
         }
     }
 }
@@ -491,6 +639,31 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_run_at: Option<String>,
     },
+    /// 72, 73: an instance took the branch, from the lead it names or
+    /// from none.
+    Took {
+        by: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+    },
+    /// Design D8: a candidate the records said passed, with no signed
+    /// results to bear it out; it is tested again and lands nothing.
+    Unsigned {
+        combination: Rev,
+    },
+    /// 75: an instance claimed one of a candidate's runs.
+    Claimed {
+        combination: Rev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        host: String,
+    },
+    /// 77: a claim whose host showed no sign of life for the bound: its
+    /// run has no outcome and is open again.
+    Lapsed {
+        combination: Rev,
+        host: String,
+    },
     /// A run whose executor stopped before reporting, or that left checks
     /// not run and failed none on its own result: no outcome (60,
     /// could-not-run-1 114). The candidate runs again.
@@ -498,6 +671,12 @@ pub enum Event {
         combination: Rev,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         not_run: Vec<NotRun>,
+    },
+    /// 108: replays no trusted pass proved, so the checks run again with
+    /// no replay.
+    Unproven {
+        combination: Rev,
+        tasks: Vec<String>,
     },
     Result {
         combination: Rev,
@@ -599,6 +778,16 @@ pub struct ResultLine {
     /// run in; `None` for a candidate's run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// 85: the system it ran on, by the policy's name; `None` when the
+    /// policy named no system for its host, as every line written before
+    /// systems is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// 78: the signer whose signature over it verified, as the records
+    /// seam read it from the remote; `None` for one host's own results,
+    /// which count unsigned on a branch kept in its own files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
 }
 
 impl ResultLine {
@@ -612,6 +801,7 @@ impl ResultLine {
         branch: &str,
         combination: &Rev,
         worktree: Option<&str>,
+        system: Option<&str>,
     ) -> ResultLine {
         let (kind, host, executor) = match &task.source {
             sluice_seams::Source::Ran { host } => {
@@ -631,6 +821,8 @@ impl ResultLine {
             branch: branch.into(),
             combination: combination.clone(),
             worktree: worktree.map(str::to_string),
+            system: system.map(str::to_string),
+            signer: None,
         }
     }
 
@@ -652,6 +844,7 @@ impl ResultLine {
             && self.host == other.host
             && self.branch == other.branch
             && self.combination == other.combination
+            && self.system == other.system
     }
 }
 

@@ -32,3 +32,4 @@ Option 1 cannot see a fail or a flake and cannot tell executors apart. Option 3 
 
 - Rules core.7 and core.9.
 - A policy line per branch of the repository says how a flaky key reads; the bolt branch reads it passed, the shared branch reads it missing until a confined run settles it.
+- Trust by the cache's write credential is superseded by ADR 0032: a run counts through a signer the policy names, and a replay through a signed pass for its key and system.

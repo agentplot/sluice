@@ -585,3 +585,111 @@ fn live_pull_request_calls() {
     app.edit(&r, pull.number, "edited by sluice's live test")
         .unwrap();
 }
+
+/// 88, 107, 111: GitHub Actions as a pool, against the fake API: a run is
+/// one dispatch of the pool's workflow on the signer's branch, with the
+/// runner of its system and its claim; a job is alive while a queued or
+/// running run of the workflow bears its claim in its title; a wake is a
+/// dispatch to advance the branch.
+#[test]
+fn the_pools_calls() {
+    use sluice::profiles::checks::Launcher;
+    use sluice::profiles::github::actions::Actions;
+    use sluice_seams::{Launch, Rev, Setting};
+    use std::collections::BTreeMap;
+
+    let clock = Clock::new();
+    let tokens = Forge::new(&clock);
+    let fake = Fake::start(move |r: &Request| {
+        let path = r.path.as_str();
+        if path == "/repos/o/r/installation" || path.ends_with("/access_tokens") {
+            return if path.ends_with("/access_tokens") {
+                json(
+                    201,
+                    json!({ "token": "token-1", "expires_at": (tokens.clock.now() + TimeDelta::hours(1)).to_rfc3339() }),
+                )
+            } else {
+                json(
+                    200,
+                    json!({ "id": INSTALLATION, "app_id": APP, "permissions": tokens.permissions }),
+                )
+            };
+        }
+        if path == "/repos/o/r/actions/workflows/sluice.yml/dispatches" && r.method == "POST" {
+            return (204, vec![], String::new());
+        }
+        if path.starts_with("/repos/o/r/actions/workflows/sluice.yml/runs?status=in_progress") {
+            return json(
+                200,
+                json!({ "workflow_runs": [{ "display_title": "sluice pool/forge/7" }] }),
+            );
+        }
+        if path.starts_with("/repos/o/r/actions/workflows/sluice.yml/runs") {
+            return json(200, json!({ "workflow_runs": [] }));
+        }
+        json(404, json!({ "message": "Not Found" }))
+    });
+    let dir = support::Scratch::new("pool-repo");
+    for args in [
+        &["init", "-q", "."][..],
+        &["remote", "add", "origin", "https://github.com/o/r.git"][..],
+    ] {
+        let out = support::git_command()
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }
+    let table = |pairs: &[(&str, &str)]| -> (String, Setting) {
+        let t: BTreeMap<String, Setting> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), Setting::Text(v.to_string())))
+            .collect();
+        ("github".into(), Setting::Tables(vec![t]))
+    };
+    let kind = table(&[("workflow", ".github/workflows/sluice.yml")]);
+    let pool = Actions::new(std::rc::Rc::new(app(&fake, &clock)), dir.path());
+    pool.launch(&Launch {
+        pool: "forge".into(),
+        kind: kind.clone(),
+        signer: table(&[
+            ("workflow", ".github/workflows/sluice.yml"),
+            ("ref", "refs/heads/main"),
+        ]),
+        runner: "macos-15".into(),
+        remote: Some("origin".into()),
+        branch: "main".into(),
+        candidate: "c3".into(),
+        combination: Rev::new("c0ffee"),
+        system: Some("macos-arm64".into()),
+        claim: "pool/forge/7".into(),
+    })
+    .unwrap();
+    let sent = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.path.ends_with("/dispatches"))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&sent.body).unwrap();
+    assert_eq!(body["ref"], "main");
+    assert_eq!(body["inputs"]["mode"], "run");
+    assert_eq!(body["inputs"]["runner"], "macos-15");
+    assert_eq!(body["inputs"]["claim"], "pool/forge/7");
+    assert_eq!(body["inputs"]["combination"], "c0ffee");
+    assert!(pool
+        .job_alive(&kind, "pool/forge/7", Some("origin"))
+        .unwrap());
+    assert!(!pool
+        .job_alive(&kind, "pool/forge/8", Some("origin"))
+        .unwrap());
+    pool.wake(&kind, "main", Some("origin")).unwrap();
+    let wake = fake
+        .requests()
+        .into_iter()
+        .rfind(|r| r.path.ends_with("/dispatches"))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&wake.body).unwrap();
+    assert_eq!(body["inputs"]["mode"], "round");
+    assert_eq!(body["inputs"]["branch"], "main");
+}

@@ -63,6 +63,27 @@ submissions keep failing the same check, read its log for a cause in the
 tests or the host, such as two runs writing the same directory, and tell the
 user.
 
+### A branch whose queue is on the remote
+
+When the policy has `[signers]`, a branch with a `remote` keeps its queue on
+the remote, shared by every host that submits to it. There, a `--no-wait`
+submission goes on without you: push it and you may stop, close the laptop
+or end the session. Another host or a box kept running
+lands it, and `sluice status <id>` reads the outcome from the remote
+whenever you look.
+
+- `sluice step <branch>` printing `led` means another host keeps the branch:
+  nothing is wrong, and stepping again does not help.
+- A failure names its system when the branch requires more than one:
+  `failed: cli:build (macos-arm64)`. Reproduce it on a host of that system,
+  or read its log; `sluice exec` here runs this host's system only.
+- A result counts only when a host the branch trusts signed it. If your
+  host has no `[signing]` key, or the branch does not trust your host's
+  signer (as `main` often does not trust agents' hosts), your runs do not
+  decide it; the branch's own executors run the checks.
+- `sluice status <branch>` saying the remote could not be reached shows the
+  queue as last fetched; it moves on when the remote is back.
+
 On a branch with `[branches."<pattern>".pull_requests]`, `submit` pushes your
 branch and opens or updates its pull request instead; the pull request joins
 the queue once its reviews and checks hold. See

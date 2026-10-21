@@ -12,6 +12,9 @@ pub struct Verdict {
     pub failed: Vec<FailedTask>,
     pub ran: usize,
     pub replayed: usize,
+    /// 108: the tasks the run replayed with no trusted pass recorded for
+    /// their key, which count for nothing.
+    pub unproven: Vec<String>,
 }
 
 /// The gate read over one finished run. `results` is the repository's
@@ -27,34 +30,60 @@ pub struct Verdict {
 /// a required check without a result (15).
 ///
 /// Only results the gate trusts are read (28): a ran result by its
-/// recorded executor, a replay only when the gate trusts the cache. A
-/// check left with no trusted result reads as missing.
-pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
+/// recorded executor. A replay is an observation of no one (core.9): it
+/// counts only when a trusted ran pass is recorded for its key (108),
+/// and otherwise is unproven, for the round to run again with no
+/// replay. A check left with no trusted result reads as missing.
+///
+/// Only results on the run's `system` are read, a pass on one system
+/// never standing for another (85, 69); a line that names no system is
+/// read as on `unnamed`, the host's own.
+pub fn read(
+    report: &RunReport,
+    results: &[ResultLine],
+    rules: &Rules,
+    system: Option<&str>,
+    unnamed: Option<&str>,
+) -> Verdict {
     let flaky = rules.flaky;
-    let counts = |kind: &ResultKind, executor: Option<&Enforced>| match kind {
-        ResultKind::Ran => executor.is_some_and(|e| rules.trusts_run(&e.kind, e.confined)),
-        ResultKind::Replayed => rules.trusts("cache"),
+    let trusted = |e: &Enforced| rules.trusts_run(&e.kind, e.confined);
+    let on_system = |r: &ResultLine| r.system.as_deref().or(unnamed) == system;
+    // 78, 79: on a branch whose records are on its remote, a result counts
+    // through its signer and the claims that signer may make, and this
+    // run's own report counts once it is recorded signed.
+    let counts = |r: &ResultLine| match (rules.signed, &r.executor) {
+        (true, Some(e)) => r
+            .signer
+            .as_deref()
+            .is_some_and(|s| rules.trusts_signed(s, e.confined, r.system.as_deref().or(unnamed))),
+        (false, Some(e)) => trusted(e) && same_limits(e, &report.executor),
+        (_, None) => false,
     };
     let mut failed = Vec::new();
+    let mut unproven = Vec::new();
     let (mut ran, mut replayed) = (0, 0);
     for t in &report.tasks {
-        match t.source {
-            Source::Ran { .. } => ran += 1,
-            Source::Replayed { .. } => replayed += 1,
-        }
-        let this = match t.source {
-            Source::Ran { .. } => counts(&ResultKind::Ran, Some(&report.executor)),
-            Source::Replayed { .. } => counts(&ResultKind::Replayed, None),
-        };
         let recorded: Vec<&ResultLine> = results
             .iter()
-            .filter(|r| r.task == t.task && r.hash == t.hash)
-            .filter(|r| counts(&r.kind, r.executor.as_ref()))
-            .filter(|r| match (&r.kind, &r.executor) {
-                (ResultKind::Ran, Some(e)) => same_limits(e, &report.executor),
-                _ => true,
-            })
+            .filter(|r| r.task == t.task && r.hash == t.hash && r.kind == ResultKind::Ran)
+            .filter(|r| on_system(r))
+            .filter(|r| counts(r))
             .collect();
+        let this = match t.source {
+            Source::Ran { .. } => {
+                ran += 1;
+                !rules.signed && trusted(&report.executor)
+            }
+            Source::Replayed { .. } => {
+                replayed += 1;
+                if !recorded.iter().any(|r| r.outcome == Outcome::Pass) {
+                    unproven.push(t.task.clone());
+                    continue;
+                }
+                // The pass it replays is already among the recorded.
+                false
+            }
+        };
         let key = recorded
             .iter()
             .map(|r| r.outcome)
@@ -93,6 +122,7 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
                 hash: t.hash.clone(),
                 log: None,
                 flaky,
+                system: system.map(str::to_string),
                 not_run: None,
             });
         }
@@ -104,15 +134,17 @@ pub fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdic
             hash: String::new(),
             log: None,
             flaky: None,
+            system: system.map(str::to_string),
             not_run: None,
         });
     }
     Verdict {
-        passed: failed.is_empty() && !report.timed_out,
+        passed: failed.is_empty() && unproven.is_empty() && !report.timed_out,
         timed_out: report.timed_out,
         failed,
         ran,
         replayed,
+        unproven,
     }
 }
 
@@ -129,6 +161,11 @@ fn same_limits(a: &Enforced, b: &Enforced) -> bool {
 mod tests {
     use super::*;
     use crate::records::RESULT_SCHEMA;
+
+    /// A run read on no named system.
+    fn read(report: &RunReport, results: &[ResultLine], rules: &Rules) -> Verdict {
+        super::read(report, results, rules, None, None)
+    }
     use sluice_seams::TaskResult;
 
     fn rules(trust: &[&str]) -> Rules {
@@ -177,11 +214,14 @@ mod tests {
             branch: "main".into(),
             combination: sluice_seams::Rev::new("c"),
             worktree: None,
+            system: None,
+            signer: None,
         }
     }
 
     /// 28: a result from an executor the gate does not trust never
-    /// satisfies it; a replay counts only when the gate trusts the cache.
+    /// satisfies it; a replay counts only through a trusted pass recorded
+    /// for its key (108), and is otherwise unproven.
     #[test]
     fn only_trusted_results_are_read() {
         let ran = |kind| report(Source::Ran { host: "h".into() }, enforced(kind, false));
@@ -193,8 +233,23 @@ mod tests {
             Source::Replayed { from_run_at: None },
             enforced("open", false),
         );
-        assert!(read(&replay, &[], &rules(&["open", "cache"])).passed);
-        assert!(!read(&replay, &[], &rules(&["open"])).passed);
+        let none = read(&replay, &[], &rules(&["open"]));
+        assert!(!none.passed && none.failed.is_empty());
+        assert_eq!(none.unproven, ["a:test"]);
+        let pass = |kind| recorded(ResultKind::Ran, Some(enforced(kind, false)), Outcome::Pass);
+        let proven = read(&replay, &[pass("open")], &rules(&["open"]));
+        assert!(proven.passed && proven.unproven.is_empty());
+        // A pass by an executor the gate does not trust proves nothing,
+        // and neither does an earlier replay (core.9).
+        assert_eq!(
+            read(&replay, &[pass("open")], &rules(&["sandbox"])).unproven,
+            ["a:test"]
+        );
+        let replayed = recorded(ResultKind::Replayed, None, Outcome::Pass);
+        assert_eq!(
+            read(&replay, &[replayed], &rules(&["open"])).unproven,
+            ["a:test"]
+        );
 
         // An untrusted fail at the key is not read either; nor is a
         // trusted one from runs held to other limits (19).
@@ -290,5 +345,68 @@ mod tests {
         };
         let v = read(&failing, &[], &rules);
         assert_eq!(v.failed[0].flaky, None);
+    }
+
+    /// 85, 86, 69: a pass on one system never stands for another, and a
+    /// line that names no system is the host's own.
+    #[test]
+    fn a_pass_on_one_system_proves_nothing_on_another() {
+        let replay = report(
+            Source::Replayed { from_run_at: None },
+            enforced("open", false),
+        );
+        let on = |system: Option<&str>| ResultLine {
+            system: system.map(str::to_string),
+            ..recorded(
+                ResultKind::Ran,
+                Some(enforced("open", false)),
+                Outcome::Pass,
+            )
+        };
+        let r = rules(&["open"]);
+        let v = super::read(
+            &replay,
+            &[on(Some("linux-x64"))],
+            &r,
+            Some("macos-arm64"),
+            None,
+        );
+        assert_eq!(v.unproven, ["a:test"]);
+        let v = super::read(
+            &replay,
+            &[on(Some("linux-x64"))],
+            &r,
+            Some("linux-x64"),
+            None,
+        );
+        assert!(v.passed);
+        // An old line is the host's own system.
+        let v = super::read(
+            &replay,
+            &[on(None)],
+            &r,
+            Some("linux-x64"),
+            Some("linux-x64"),
+        );
+        assert!(v.passed);
+        let v = super::read(
+            &replay,
+            &[on(None)],
+            &r,
+            Some("macos-arm64"),
+            Some("linux-x64"),
+        );
+        assert!(!v.passed);
+        // A failure names its system.
+        let fail = report(Source::Ran { host: "h".into() }, enforced("open", false));
+        let fail = RunReport {
+            tasks: vec![TaskResult {
+                outcome: Outcome::Fail,
+                ..fail.tasks[0].clone()
+            }],
+            ..fail
+        };
+        let v = super::read(&fail, &[], &r, Some("linux-arm64"), None);
+        assert_eq!(v.failed[0].system.as_deref(), Some("linux-arm64"));
     }
 }

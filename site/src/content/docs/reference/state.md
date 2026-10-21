@@ -88,6 +88,60 @@ starts removes it, and nothing counts it before then. Its `sluice exec`
 rewrites it as each task ends, for `sluice overview` to show; nothing
 that decides a result reads it.
 
+## A branch whose state is on its remote
+
+A branch with a `remote`, in a policy with
+[`[signers]`](/sluice/reference/configuration/#signersname-who-may-sign-results),
+keeps its state on that remote as refs. Every host that submits to the
+branch reads the same queue, and none of them has to be running for the
+rest to go on:
+
+```
+refs/sluice/state/<branch>       one commit: the branch's files above, branch.json,
+                                 submissions/, .finished/, log.jsonl and version,
+                                 replaced on every write
+refs/sluice/runs/<signer>        each signer's signed results, only ever added to:
+                                 <combination>/<system>/<n>.json, one run's results
+                                 in a signed envelope
+refs/sluice/ids                  the next submission's id, for every host
+refs/sluice/heads/<commit>       a submitted head, until the submission leaves the queue
+refs/sluice/combinations/<branch>/<id>
+                                 a combination open to any host with room
+refs/sluice/logs/<branch>/<id>   what a failed combination's tests printed, for
+                                 the last 20
+refs/sluice/hosts/<host>         a host's sign of life and the room it has, rewritten
+                                 by that host alone
+refs/sluice/set-aside            the results `sluice set-aside` set aside, one file
+                                 each, only ever added to
+```
+
+A write to a branch's state is a push that the remote takes only if the
+ref is still the commit the round read, so the version rule below holds
+across hosts. A signer's results are added on top of whatever its ref
+holds, so two hosts that sign as one signer never lose each other's.
+What only this host keeps, its locks, its runs' tasks and copies of the
+logs it kept, is in `.git/sluice-remote/<remote>/`. A result moon
+replayed is kept there too: a replay is nobody's observation, so nobody
+signs it.
+
+Read any of it with git, on any host:
+
+```sh
+git fetch origin '+refs/sluice/*:refs/sluice-fetched/origin/*'
+git show refs/sluice-fetched/origin/state/main:branch.json
+git ls-tree -r refs/sluice-fetched/origin/runs/box
+```
+
+A signed result is an [in-toto](https://in-toto.io) statement in a
+[DSSE](https://github.com/secure-systems-lab/dsse) envelope. Each test
+and system is one subject, named `<test>@<system>`, its digest the
+test's key. The predicate holds each outcome, the branch, the
+combination, and what the signer claims of the run: its executor,
+whether it was confined, and its system. A host signs with the SSH key
+its [`[signing]`](/sluice/reference/configuration/#signing) names. sluice counts a result
+only once the signature checks against a signer the branch's policy
+names.
+
 ## A submission
 
 ```json
@@ -172,9 +226,10 @@ Full example files are in the repository under
 
 `version` is bumped on every write, and a round writes only if the
 version is still the one it read. Two rounds never both write; the one
-that loses reads again. The same rule, as a push with an expected old
-value, is how [peers](/sluice/many-hosts/peers/) would share one branch's
-state through a git remote.
+that loses reads again. On a branch whose state is on its remote, the
+same rule is a push with an expected old value, and it holds between
+hosts as it does between rounds on one
+([above](#a-branch-whose-state-is-on-its-remote)).
 
 ## What a landing looks like in history
 

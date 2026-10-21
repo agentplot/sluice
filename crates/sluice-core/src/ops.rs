@@ -121,6 +121,12 @@ pub struct Status {
     /// How many have moved to its finished records, which
     /// [`Sluice::history`] reads.
     pub finished: usize,
+    /// What the policy at `at` says that sluice reads differently than
+    /// it is written.
+    pub warnings: Vec<String>,
+    /// 80: the remote the branch's state could not be read from just now,
+    /// so what is shown is what was last fetched from it.
+    pub stale: Option<String>,
 }
 
 impl Status {
@@ -163,6 +169,8 @@ impl Sluice<'_> {
         if !unknown.is_empty() {
             return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
         }
+        // 82: the head is fetchable by every host before it is submitted.
+        self.seams.state.publish_head(&req.branch, &session.head)?;
         let id = self.seams.state.allocate_id()?;
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&req.branch)?;
@@ -221,6 +229,7 @@ impl Sluice<'_> {
                     withdrawn: None,
                     told: None,
                     landed_as: None,
+                    was: None,
                 },
             );
             l.log(
@@ -236,6 +245,28 @@ impl Sluice<'_> {
                 withdrew,
             })
         })?;
+        // 111: work on a branch whose records are on its remote may be
+        // taken by no instance now running: the first pool is asked to
+        // advance the branch. A wake that is lost delays it and loses
+        // nothing (59).
+        if let Some(policy) = self.policy_at(&tip)? {
+            let rules = policy.rules_for(&req.branch)?.cloned();
+            if let (Some(rules), Some(pool)) = (rules, policy.pools.first()) {
+                if rules.signed {
+                    if let Err(e) =
+                        self.seams
+                            .tests
+                            .wake(&pool.kind, &req.branch, rules.remote.as_deref())
+                    {
+                        tracing::warn!(
+                            sluice.branch = %req.branch,
+                            "waking the pool {} failed: {e:#}",
+                            pool.name
+                        );
+                    }
+                }
+            }
+        }
         Ok(Ok(accepted))
     }
 
@@ -440,6 +471,25 @@ impl Sluice<'_> {
         self.finished_sub(&branch, id)
     }
 
+    /// Design D10: the submission that `old`, a submission of this host's
+    /// own records, became when the branch's records moved to its remote.
+    pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {
+        for b in self.seams.state.branches()? {
+            let line = self.read_line(&b)?;
+            if let Some(s) = line.subs.values().find(|s| s.was == Some(old)) {
+                return Ok(Some(s.clone()));
+            }
+            for id in line.finished.keys() {
+                if let Some(s) = self.finished_sub(&b, *id)? {
+                    if s.was == Some(old) {
+                        return Ok(Some(s));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Submission `id` of `branch` when it is among the finished records
     /// alone, which nothing changes again.
     fn only_finished(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
@@ -561,10 +611,15 @@ impl Sluice<'_> {
             Some(base) => Some(base.clone()),
             None => self.seams.branch.read(branch)?,
         };
-        let parallel = match &at {
-            Some(rev) => self.rules_at(branch, rev)?.map(|r| r.parallel),
+        let policy = match &at {
+            Some(rev) => self.policy_at(rev)?,
             None => None,
         };
+        let parallel = match &policy {
+            Some(p) => p.rules_for(branch)?.map(|r| r.parallel),
+            None => None,
+        };
+        let warnings = policy.map(|p| p.warnings).unwrap_or_default();
         Ok(Status {
             branch: branch.into(),
             at,
@@ -578,6 +633,8 @@ impl Sluice<'_> {
             parallel,
             finished: line.finished.len(),
             submissions: line.subs.into_values().collect(),
+            warnings,
+            stale: self.seams.state.stale(branch),
         })
     }
 }

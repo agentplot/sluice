@@ -11,7 +11,7 @@ use sluice_seams::Outcome;
 
 const BRANCH: &str = "bolt/concurrent-units";
 
-const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\", \"cache\"]\n";
+const POLICY: &str = "[branches.\"bolt/*\"]\nrequired = [\"#gate\"]\nparallel = 4\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
 
 struct Rounds(Cell<usize>);
 
@@ -135,6 +135,53 @@ fn submit_fails_and_names_the_combination() {
         .unwrap()
         .contains("tests:t-batch-cards failed"));
     assert_eq!(lines[6], "fix it in your worktree and submit again");
+}
+
+/// 85, 86: a failure on a system the gate names says which system.
+#[test]
+fn a_failure_names_its_system() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!(
+                    "[systems]\nlinux-x64 = {{ os = \"linux\", arch = \"x86_64\" }}\n\n{}\
+                     systems = [\"linux-x64\"]\n",
+                    POLICY.replace(
+                        "required = [\"#gate\"]",
+                        "required = [\"tests:t-batch-cards\"]"
+                    )
+                ),
+            ),
+            ("tests/t_cards.py", "cards"),
+        ],
+    );
+    f.world.task("tests:t-batch-cards", "tests/");
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED);
+    assert!(
+        out.contains("failed: tests:t-batch-cards (linux-x64)\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  log of tests:t-batch-cards (linux-x64): "),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert!(out.contains("tests:t-batch-cards (linux-x64) on "), "{out}");
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["submissions"][0]["failed"][0]["system"], "linux-x64");
 }
 
 /// 19, 20: a test read as failed only because its inputs failed before
@@ -722,6 +769,36 @@ fn status_of_an_unknown_branch_says_so() {
     let (code, out) = sluice(&f, &["status", BRANCH]);
     assert_eq!(code, 0);
     assert!(!out.contains("no longer in the queue"), "{out}");
+}
+
+/// 108: `cache` in `trust` is read as absent, and `sluice status` says so.
+#[test]
+fn status_warns_of_cache_in_trust() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &POLICY.replace("\"container\"]", "\"container\", \"cache\"]"),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(
+            "warning: [branches.\"bolt/*\"] trust lists \"cache\", which no longer counts"
+        ),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["warnings"].as_array().unwrap().len(), 1);
+    let (_, out) = sluice(&setup(), &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["warnings"], serde_json::json!([]));
 }
 
 /// A landed #1, a blamed #2 and #3 under test, as `status_lists_the_queue`

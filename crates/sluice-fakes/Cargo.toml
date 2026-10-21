@@ -6,6 +6,7 @@ license.workspace = true
 description = "In-memory profiles of all five seams, scriptable per test."
 
 [dependencies]
+serde_json.workspace = true
 sluice-seams = { path = "../sluice-seams" }
 anyhow.workspace = true
 chrono.workspace = true

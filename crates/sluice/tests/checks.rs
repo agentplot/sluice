@@ -25,6 +25,9 @@ fn checks(repo: &Repo) -> Checks {
             reserved: 0,
             processors: 8,
             forge: None,
+            signing: None,
+            peers: Default::default(),
+            systems: None,
         },
     )
 }
@@ -53,6 +56,7 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
         limits: Limits::default(),
         tests,
         replay: true,
+        system: None,
     }
 }
 

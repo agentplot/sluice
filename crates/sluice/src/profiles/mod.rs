@@ -14,6 +14,8 @@ pub mod local_refs;
 pub mod moon;
 pub mod places;
 pub mod pushed_refs;
+pub mod records;
+pub mod remote_refs;
 pub mod worktrunk;
 
 use std::io::Write;
@@ -33,7 +35,7 @@ pub struct Bound {
     pub tests: checks::Checks,
     pub branch: branches::Branches,
     pub driver: Drivers,
-    pub state: local_files::LocalFiles,
+    pub state: records::Records,
     /// The pull request driver, which also takes pull requests in.
     pub pulls: Rc<github::pulls::Pulls>,
 }
@@ -77,6 +79,7 @@ impl Bound {
             Some(f) => Some(Rc::new(github::App::open(f)?)),
             None => None,
         };
+        let app_for_pool = app.clone();
         let identity = app
             .clone()
             .map(|a| (a as Rc<dyn Identity>, program.clone()));
@@ -87,9 +90,15 @@ impl Bound {
             branch.git_dir(),
             &common,
             forge,
-            identity,
+            identity.clone(),
         ));
-        let state = local_files::LocalFiles::new(&common);
+        // C.6: a branch's records are on its remote when its policy names
+        // signers, and this host's own files otherwise.
+        let state = records::Records::new(
+            &common,
+            branches::Branches::open_as(dir, identity.clone())?,
+            instance.signing.clone(),
+        );
         let jobs = instance.jobs();
         Ok(Bound {
             // A session's place's release command is the check seam's to
@@ -101,7 +110,17 @@ impl Bound {
             .with_release(Box::new(move |place, tests, limits, dir| {
                 checks::release_request(place, tests, limits, jobs, dir)
             })),
-            tests: checks::Checks::new(&common, program, instance),
+            tests: {
+                let checks = checks::Checks::new(&common, program, instance);
+                // 88: with sluice's app, GitHub Actions is the pool this
+                // host can start runs on; the binding hands it over (core.2).
+                match &app_for_pool {
+                    Some(app) => {
+                        checks.with_pool(Box::new(github::actions::Actions::new(app.clone(), dir)))
+                    }
+                    None => checks,
+                }
+            },
             branch,
             driver: Drivers {
                 worktrunk: worktrunk::Worktrunk,
@@ -283,6 +302,17 @@ fn operator_token() -> Option<String> {
 impl crate::exec::Host for Bound {
     fn reserved(&self) -> usize {
         self.tests.instance().reserved
+    }
+
+    fn peer(&self) -> sluice_core::Peer {
+        let i = self.tests.instance();
+        sluice_core::Peer {
+            name: i.peers.name.clone().unwrap_or_else(checks::hostname),
+            lease: i.peers.lease,
+            alive: i.peers.alive,
+            signer: i.signing.as_ref().map(|s| s.signer.clone()),
+            systems: i.systems.clone(),
+        }
     }
 
     fn worktree(&self, dir: &str) -> Result<String> {

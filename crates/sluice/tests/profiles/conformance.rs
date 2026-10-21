@@ -23,8 +23,8 @@ use anyhow::Result;
 use sluice::instance::Instance;
 use sluice::profiles::branches::Branches;
 use sluice::profiles::checks::Checks;
-use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::places::Places;
+use sluice::profiles::records::Records;
 use sluice::profiles::Bound;
 use sluice::profiles::Drivers;
 use sluice_conformance::{policy, shared, Rig, BRANCH};
@@ -65,6 +65,10 @@ impl Checkout for RecordedPlaces {
         let place = self.inner.materialize(name, rev, checkout)?;
         self.log.borrow_mut().made.push(name.into());
         Ok(place)
+    }
+
+    fn made(&self) -> Result<Vec<String>> {
+        self.inner.made()
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
@@ -153,8 +157,16 @@ impl Tests for RecordedChecks {
         self.inner.bound()
     }
 
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        self.inner.platform()
+    }
+
     fn sessions(&self) -> Result<usize> {
         self.inner.sessions()
+    }
+
+    fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
+        self.inner.proven(run, report)
     }
 
     fn session_runs(&self) -> Result<Vec<sluice_seams::HostRun>> {
@@ -244,12 +256,17 @@ struct Real {
     /// The host's blocks of ports, kept with the rig: a sandboxed run
     /// writes nothing of the user's own state.
     _blocks: Scratch,
+    /// The host's session runs, the rig's own, so another agent's runs on
+    /// this host never shrink the bound it tests under (71).
+    _host: Scratch,
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
     branch: RecordedRefs,
     driver: Sessions,
-    state: LocalFiles,
+    state: Records,
+    /// The shared remote, for a rig whose records are on it.
+    origin: Option<Scratch>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -283,7 +300,30 @@ fn real_policy(policy: &str) -> String {
 impl Real {
     /// `bolt/x` holding the three projects under `policy`, its runner moon.
     fn new(name: &str, policy: &str) -> Real {
+        Real::open(name, policy, false)
+    }
+
+    /// As [`Real::new`], `bolt/x` on a bare `origin` and its records there,
+    /// under a policy naming this host's signer `box` and trusting it
+    /// alone; this host signs with its own key (C.6; 78).
+    fn peers(name: &str, policy: &str) -> Real {
+        Real::open(name, policy, true)
+    }
+
+    fn open(name: &str, policy: &str, peers: bool) -> Real {
         let repo = Repo::new(name);
+        let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .unwrap();
+        let policy = if peers {
+            let line = format!("box {}", key.public_key().to_openssh().unwrap());
+            policy.replace(
+                "trust = [\"open\", \"sandbox\", \"container\"]\n",
+                "trust = [\"box\"]\nremote = \"origin\"\n",
+            ) + &format!("\n[signers.box]\nssh = \"{line}\"\nconfined = true\n")
+        } else {
+            policy.to_string()
+        };
+        let policy = policy.as_str();
         let rules = repo.dir().join(".git/rig-rules");
         std::fs::write(&rules, "").unwrap();
         repo.write(".config/sluice.toml", &real_policy(policy));
@@ -310,6 +350,18 @@ impl Real {
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "three projects"]);
         repo.git(&["branch", BRANCH]);
+        let origin = peers.then(|| repo.bare_origin());
+        let signing = peers.then(|| {
+            let path = repo.dir().join(".git/rig-signing");
+            key.write_openssh_file(&path, ssh_key::LineEnding::LF)
+                .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            sluice::instance::Signing {
+                signer: "box".into(),
+                key: path,
+            }
+        });
 
         let bound = Bound::open_with(
             repo.dir(),
@@ -319,6 +371,9 @@ impl Real {
                 reserved: 0,
                 processors: 4,
                 forge: None,
+                signing,
+                peers: Default::default(),
+                systems: None,
             },
         )
         .expect("the profiles bind");
@@ -331,6 +386,7 @@ impl Real {
             ..
         } = bound;
         let blocks = Scratch::new(&format!("{name}-blocks"));
+        let host = Scratch::new(&format!("{name}-host-sessions"));
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
@@ -340,7 +396,7 @@ impl Real {
                 log: RefCell::default(),
             },
             tests: RecordedChecks {
-                inner: tests,
+                inner: tests.with_sessions(host.path().to_path_buf()),
                 requests: RefCell::default(),
                 started: RefCell::default(),
             },
@@ -355,6 +411,8 @@ impl Real {
             },
             state,
             _blocks: blocks,
+            _host: host,
+            origin,
         }
     }
 
@@ -394,6 +452,10 @@ impl Rig for Real {
             },
             &SystemClock,
         )
+        .as_peer(sluice_core::Peer {
+            signer: self.origin.as_ref().map(|_| "box".to_string()),
+            ..sluice_core::Peer::default()
+        })
     }
 
     /// One round, taken again while the branch's lock is busy, as `sluice
@@ -636,4 +698,84 @@ scenarios! {
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: cached();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
+}
+
+/// Each scenario of `shared` with the branch's records on its remote and
+/// every result signed by this host (C.6; 78, 109; ADR 0037).
+macro_rules! peers_scenarios {
+    ($($test:ident => $name:ident: $policy:expr;)*) => {$(
+        #[test]
+        fn $test() {
+            shared::$name(&Real::peers(stringify!($test), &$policy));
+        }
+    )*};
+}
+
+peers_scenarios! {
+    peers_s1 => s1_two_heads_pass_and_land_in_order: bolt();
+    peers_s3 => s3_the_second_fails_and_only_its_session_hears: bolt();
+    peers_s4 => s4_the_first_fails_and_the_second_is_formed_again_without_it: bolt();
+    peers_s9 => s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped: batch();
+    peers_recorded => every_run_is_recorded_before_its_verdict_a_fail_exactly_as_a_pass: bolt();
+    peers_state_read => state_and_status_read_the_records_with_no_step_running: bolt();
+}
+
+/// The refs of the rig's shared remote.
+fn origin_refs(r: &Real) -> Vec<String> {
+    let bare = r.origin.as_ref().expect("a rig with records on its remote");
+    String::from_utf8(
+        support::git_command()
+            .arg("--git-dir")
+            .arg(bare.path())
+            .args(["for-each-ref", "--format=%(refname)"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .lines()
+    .map(str::to_string)
+    .collect()
+}
+
+/// The remote-branch spec's "State on the remote stays under
+/// refs/sluice": sluice changes nothing on the remote but the branch and
+/// what is under `refs/sluice/`.
+#[test]
+fn peers_push_only_the_branch_and_refs_sluice() {
+    let r = Real::peers("peers-refs", &bolt());
+    let before: Vec<String> = origin_refs(&r)
+        .into_iter()
+        .filter(|n| !n.starts_with("refs/sluice/"))
+        .collect();
+    shared::s1_two_heads_pass_and_land_in_order(&r);
+    let after = origin_refs(&r);
+    assert!(after
+        .iter()
+        .any(|n| n == &format!("refs/sluice/state/{BRANCH}")));
+    assert!(after.iter().any(|n| n == "refs/sluice/runs/box"));
+    for n in &after {
+        assert!(
+            n.starts_with("refs/sluice/") || before.contains(n),
+            "sluice pushed {n}"
+        );
+    }
+}
+
+/// 80: with the remote out of reach, the state reads as last fetched,
+/// and the status says so.
+#[test]
+fn peers_read_the_last_fetched_state_when_the_remote_is_unreachable() {
+    let r = Real::peers("peers-stale", &bolt());
+    shared::s1_two_heads_pass_and_land_in_order(&r);
+    let s = r.sluice();
+    let landed = s.status(BRANCH).unwrap().submissions.len();
+    assert_eq!(s.status(BRANCH).unwrap().stale, None);
+    let bare = r.origin.as_ref().unwrap().path();
+    let away = bare.with_extension("away");
+    std::fs::rename(bare, &away).unwrap();
+    let status = r.sluice().status(BRANCH).unwrap();
+    std::fs::rename(&away, bare).unwrap();
+    assert_eq!(status.stale.as_deref(), Some("origin"));
+    assert_eq!(status.submissions.len(), landed);
 }

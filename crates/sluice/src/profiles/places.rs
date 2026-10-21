@@ -1048,6 +1048,48 @@ impl Checkout for Places {
         })
     }
 
+    /// Every candidate's place recorded under `.places/`, its name read
+    /// back from its record's file name.
+    fn made(&self) -> Result<Vec<String>> {
+        let dir = self.root().join(".places");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for e in entries {
+            let path = e?.path();
+            let Some(stem) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            // A name cut short says nothing of the name it was.
+            if stem.contains("%~") {
+                continue;
+            }
+            let made: Made = match std::fs::read(&path) {
+                Ok(b) => serde_json::from_slice(&b)
+                    .with_context(|| format!("reading {}", path.display()))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if made.kind != Kind::Made {
+                continue;
+            }
+            let name = stem
+                .replace("%2F", "/")
+                .replace("%2E", ".")
+                .replace("%25", "%");
+            out.push(name);
+        }
+        out.sort();
+        Ok(out)
+    }
+
     fn release(&self, name: &str, passed: bool) -> Result<()> {
         if crate::runs::is_session(name) {
             self.release_session(name, None)?;

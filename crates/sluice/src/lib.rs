@@ -16,6 +16,7 @@ pub mod profiles;
 pub mod protect;
 pub mod runs;
 pub mod sessions;
+pub mod signing;
 pub mod telemetry;
 pub mod told;
 
@@ -641,7 +642,7 @@ pub fn run(
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let s = Sluice::new(seams, clock);
+    let s = Sluice::new(seams, clock).as_peer(host.peer());
     let Some(command) = cli.command else {
         return home::run(&s, host, &cli.worktree, cli.json, out);
     };
@@ -691,6 +692,7 @@ pub fn run(
                 let outcome = match round.step {
                     Step::Stepped => "stepped",
                     Step::Busy => "busy",
+                    Step::Led => "led",
                     Step::Contended => "contended",
                 };
                 writeln!(
@@ -708,6 +710,7 @@ pub fn run(
             let word = match round.step {
                 Step::Stepped => "stepped",
                 Step::Busy => "busy: another round holds the lock",
+                Step::Led => "led: another host keeps the branch, and its lease has not passed",
                 Step::Contended => "contended: the records moved; nothing done",
             };
             writeln!(out, "{branch}: {word}")?;
@@ -715,6 +718,7 @@ pub fn run(
         }
         Command::Run { rounds } => {
             let s = s.serving(Serves::Every);
+            s.check_host_systems()?;
             let mut n = 0;
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
@@ -770,7 +774,10 @@ pub fn run(
             all,
             json,
         } => match target.parse::<u64>() {
-            Ok(id) => match s.state(id)? {
+            Ok(id) => match s
+                .state(id)?
+                .map_or_else(|| s.moved_to(id), |x| Ok(Some(x)))?
+            {
                 None => {
                     let next = ["sluice overview".to_string()];
                     told::tell(
@@ -787,6 +794,13 @@ pub fn run(
                     Ok(0)
                 }
                 Some(sub) => {
+                    if sub.id != id {
+                        writeln!(
+                            out,
+                            "submission {id} is #{} now: {}'s queue moved to its remote",
+                            sub.id, sub.branch
+                        )?;
+                    }
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
@@ -1433,13 +1447,7 @@ fn report(
             if timed_out {
                 writeln!(out, "timed out")?;
             } else if !ran.is_empty() {
-                let named: Vec<String> = ran
-                    .iter()
-                    .map(|f| match f.flaky {
-                        Some(_) => format!("{} (flaky)", f.task),
-                        None => f.task.clone(),
-                    })
-                    .collect();
+                let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
             }
             if !not_run.is_empty() {
@@ -1481,7 +1489,7 @@ fn report(
             for f in &sub.failed {
                 let Some(k) = &f.flaky else {
                     if let Some(at) = &f.log {
-                        writeln!(out, "  log of {}: {at}", f.task)?;
+                        writeln!(out, "  log of {}: {at}", failed_name(f))?;
                     }
                     continue;
                 };
@@ -1796,19 +1804,26 @@ fn exit_for(sub: &Submission) -> i32 {
     }
 }
 
+/// A failed task as a person reads it: its system where the policy names
+/// one (85), and `(flaky)` when its key holds both outcomes (19).
+fn failed_name(f: &sluice_core::records::FailedTask) -> String {
+    let mut name = f.task.clone();
+    if let Some(s) = &f.system {
+        name.push_str(&format!(" ({s})"));
+    }
+    if f.flaky.is_some() {
+        name.push_str(" (flaky)");
+    } else if f.not_run.is_some() {
+        name.push_str(" (could not run)");
+    }
+    name
+}
+
 fn detail(branch: &str, s: &Submission) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.
-            let tasks: Vec<String> = s
-                .failed
-                .iter()
-                .map(|f| match (&f.flaky, &f.not_run) {
-                    (Some(_), _) => format!("{} (flaky)", f.task),
-                    (None, Some(_)) => format!("{} (could not run)", f.task),
-                    (None, None) => f.task.clone(),
-                })
-                .collect();
+            let tasks: Vec<String> = s.failed.iter().map(failed_name).collect();
             let what = if tasks.is_empty() {
                 s.result.clone().unwrap_or_default()
             } else {
@@ -1876,6 +1891,15 @@ fn write_status(
              sluice has no identity of its own there"
         )?,
     }
+    for w in &status.warnings {
+        writeln!(out, "warning: {w}")?;
+    }
+    if let Some(remote) = &status.stale {
+        writeln!(
+            out,
+            "{remote} could not be reached: this is the state last fetched from it"
+        )?;
+    }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs
         .iter()
@@ -1910,6 +1934,8 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "window": status.window,
         "parallel": status.parallel,
         "submissions": submissions,
+        "warnings": status.warnings,
+        "stale": status.stale,
     })
 }
 

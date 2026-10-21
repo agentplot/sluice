@@ -310,6 +310,22 @@ fn parse_version(text: &str) -> Option<(u64, u64)> {
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
 }
 
+/// A file of `revision`'s tree, read by git in the place; `None` when the
+/// tree has no such file.
+pub fn file_at(place: &Path, revision: &str, path: &str) -> Option<Vec<u8>> {
+    let out = Command::new("git")
+        .current_dir(place)
+        .args(["cat-file", "blob", &format!("{revision}:{path}")])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
 /// The files that differ between two revisions, by git, in the place.
 fn changed_files(place: &Path, base: &str, head: &str) -> Result<Vec<String>> {
     let out = Command::new("git")
@@ -542,9 +558,187 @@ fn timestamp(ms: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Design D9 (C.6): whether `key` is moon's key for `task` on the
+/// combination's tree, checked without running anything. moon keeps each
+/// task's hash manifest in its blob store under its key, the key the
+/// sha256 of the manifest; the manifest names the task, every input with
+/// the sha256 of its content, and each dependency's key, or `ignored`
+/// for one with no outputs. `blob` reads the store, `tree` a path of the
+/// combination's tree. A signer signs only keys this passes.
+pub fn check_key(
+    key: &str,
+    task: &str,
+    blob: &dyn Fn(&str) -> Option<Vec<u8>>,
+    tree: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<()> {
+    fn go(
+        key: &str,
+        task: &str,
+        blob: &dyn Fn(&str) -> Option<Vec<u8>>,
+        tree: &dyn Fn(&str) -> Option<Vec<u8>>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 64 {
+            bail!("{task}: dependencies deeper than any graph");
+        }
+        if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+            bail!("{task}: {key:?} is no key");
+        }
+        let bytes = blob(key).ok_or_else(|| anyhow!("{task}: no manifest for {key}"))?;
+        if sha256_hex(&bytes) != key {
+            bail!("{task}: the manifest under {key} does not hash to it");
+        }
+        let manifest: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("{task}: the manifest under {key}"))?;
+        let m = &manifest[0];
+        if m["target"].as_str() != Some(task) {
+            bail!("{task}: the manifest under {key} is {}'s", m["target"]);
+        }
+        let inputs = m["inputs"]
+            .as_object()
+            .ok_or_else(|| anyhow!("{task}: the manifest names no inputs"))?;
+        for (path, sum) in inputs {
+            let held = tree(path).ok_or_else(|| anyhow!("{task}: {path} is not in the tree"))?;
+            if Some(sha256_hex(&held).as_str()) != sum.as_str() {
+                bail!("{task}: {path} is not what the tree holds");
+            }
+        }
+        if let Some(deps) = m["deps"].as_object() {
+            for (dep, k) in deps {
+                match k.as_str() {
+                    Some("ignored") => {}
+                    Some(k) => go(k, dep, blob, tree, depth + 1)?,
+                    None => bail!("{task}: dependency {dep} has no key"),
+                }
+            }
+        }
+        Ok(())
+    }
+    go(key, task, blob, tree, 0)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// moon's blob store in a place: `<2>/<62>` of a key.
+pub fn blob_in(place: &Path, key: &str) -> Option<Vec<u8>> {
+    if key.len() < 3 || !key.is_ascii() {
+        return None;
+    }
+    std::fs::read(
+        place
+            .join(".moon/cache/blobs")
+            .join(&key[..2])
+            .join(&key[2..]),
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod keys {
+        use super::super::*;
+        use std::collections::BTreeMap;
+
+        /// A blob store and a tree, built as moon builds them.
+        struct Store(BTreeMap<String, Vec<u8>>);
+
+        impl Store {
+            fn manifest(
+                &mut self,
+                task: &str,
+                inputs: &[(&str, &str)],
+                deps: &[(&str, &str)],
+            ) -> String {
+                let inputs: BTreeMap<&str, String> = inputs
+                    .iter()
+                    .map(|(p, c)| (*p, sha256_hex(c.as_bytes())))
+                    .collect();
+                let deps: BTreeMap<&str, &str> = deps.iter().copied().collect();
+                let bytes = serde_json::to_vec(&serde_json::json!([{
+                    "command": "true", "args": [], "deps": deps, "env": {},
+                    "inputs": inputs, "inputEnv": {}, "outputs": [], "projectDeps": [],
+                    "target": task, "toolchains": ["system"], "version": "3"
+                }]))
+                .unwrap();
+                let key = sha256_hex(&bytes);
+                self.0.insert(key.clone(), bytes);
+                key
+            }
+        }
+
+        fn tree(files: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<Vec<u8>> {
+            let files: BTreeMap<&str, &str> = files.iter().copied().collect();
+            move |p: &str| files.get(p).map(|c| c.as_bytes().to_vec())
+        }
+
+        #[test]
+        fn a_key_the_tree_bears_out_passes() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let b = s.manifest(
+                "b:test",
+                &[("b/y", "2")],
+                &[("a:test", &a), ("c:lint", "ignored")],
+            );
+            let blob = |k: &str| s.0.get(k).cloned();
+            let t = tree(&[("a/x", "1"), ("b/y", "2")]);
+            check_key(&b, "b:test", &blob, &t).unwrap();
+        }
+
+        #[test]
+        fn a_key_of_another_combination_is_refused() {
+            let mut s = Store(BTreeMap::new());
+            let other = s.manifest("a:test", &[("a/x", "other")], &[]);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&other, "a:test", &blob, &tree(&[("a/x", "1")])).unwrap_err();
+            assert!(
+                e.to_string().contains("a/x is not what the tree holds"),
+                "{e}"
+            );
+        }
+
+        #[test]
+        fn an_altered_manifest_is_refused() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let mut forged = s.0[&a].clone();
+            forged.extend(b" ");
+            s.0.insert(a.clone(), forged);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&a, "a:test", &blob, &tree(&[("a/x", "1")])).unwrap_err();
+            assert!(e.to_string().contains("does not hash"), "{e}");
+        }
+
+        #[test]
+        fn a_key_named_for_another_task_is_refused() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "1")], &[]);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e = check_key(&a, "b:test", &blob, &tree(&[("a/x", "1")])).unwrap_err();
+            assert!(e.to_string().contains("a:test"), "{e}");
+            let none = check_key(&"0".repeat(64), "a:test", &blob, &tree(&[])).unwrap_err();
+            assert!(none.to_string().contains("no manifest"), "{none}");
+        }
+
+        #[test]
+        fn a_dependency_the_tree_does_not_bear_out_is_refused() {
+            let mut s = Store(BTreeMap::new());
+            let a = s.manifest("a:test", &[("a/x", "stale")], &[]);
+            let b = s.manifest("b:test", &[("b/y", "2")], &[("a:test", &a)]);
+            let blob = |k: &str| s.0.get(k).cloned();
+            let e =
+                check_key(&b, "b:test", &blob, &tree(&[("a/x", "1"), ("b/y", "2")])).unwrap_err();
+            assert!(e.to_string().starts_with("a:test:"), "{e}");
+        }
+    }
 
     /// Shapes captured from moon's run reports (section 3).
     #[test]

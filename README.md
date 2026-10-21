@@ -202,6 +202,15 @@ cannot read.
 A complete setup, with moon, a sandbox, a build cache and two tiers of
 branches, is walked through in [docs/examples](docs/examples/README.md).
 
+**4. On many hosts**, when agents on several machines submit to one
+branch, or a check must pass on Linux and macOS: name signers in the
+policy, and the branch's queue moves to its git remote, shared by every
+host, with no server. Each host signs the results it runs; a box you keep
+running with `sluice run` takes the checks first, and an agent can submit
+and switch its machine off. [Executors and
+systems](https://agentplot.github.io/sluice/guides/executors-and-systems/)
+sets it up.
+
 ## Commands
 
 | Command | |

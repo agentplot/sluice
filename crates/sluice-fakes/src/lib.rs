@@ -110,6 +110,30 @@ struct Inner {
     hold: bool,
     crash_start: bool,
     host_limit: Option<usize>,
+    /// The system the host's executor is, as `(os, arch)` (87).
+    platform: (String, String),
+    /// Tasks whose reported keys the candidate's tree does not bear out
+    /// (design D9).
+    forged: BTreeSet<String>,
+    /// Submissions left behind when a branch's records moved to its
+    /// remote, by branch (design D10).
+    left: BTreeMap<String, Vec<Vec<u8>>>,
+    /// What each host last saw of each branch, by host and branch (73).
+    seen: BTreeMap<(String, String), (u64, String)>,
+    /// The host that made each candidate's place (81).
+    place_host: BTreeMap<String, String>,
+    /// Each host's last sign of life: a count of its beats, and the beat.
+    beats: BTreeMap<String, (u64, Vec<u8>)>,
+    /// Each host's view of every other host's beats (77).
+    seen_beats: BTreeMap<(String, String), (String, String)>,
+    /// Every run started on a pool, in order (88).
+    launches: Vec<sluice_seams::Launch>,
+    /// The pool jobs that ended, by claim (77, 88).
+    jobs_ended: BTreeSet<String>,
+    /// Every branch a pool was woken for, in order (111).
+    wakes: Vec<String>,
+    /// The signer the host's results are recorded as signed by (78).
+    signer: Option<String>,
     /// Session runs on the host, by worktree: whether each still runs, and
     /// what its `sluice exec` kept of it (ADR 0035).
     sessions: BTreeMap<String, (bool, HostRun)>,
@@ -245,6 +269,7 @@ impl World {
         World(Rc::new(RefCell::new(Inner {
             next_id: 1,
             host: "fake-host".into(),
+            platform: ("linux".into(), "x86_64".into()),
             now: Utc.with_ymd_and_hms(2026, 10, 11, 9, 0, 0).unwrap(),
             ..Default::default()
         })))
@@ -515,6 +540,61 @@ impl World {
         self.0.borrow_mut().host_limit = Some(limit);
     }
 
+    /// From now, the host's results are recorded signed by `signer`, as
+    /// on a branch whose records are on its remote (78).
+    pub fn signs_as(&self, signer: &str) {
+        self.0.borrow_mut().signer = Some(signer.into());
+    }
+
+    /// From now, this world's host is `host`: what it observes is its own
+    /// (73).
+    pub fn be_host(&self, host: &str) {
+        self.0.borrow_mut().host = host.into();
+    }
+
+    /// `doc`, a submission's document of this host's own records, left
+    /// behind on `branch` when its records moved to the remote.
+    pub fn leave_behind(&self, branch: &str, doc: &str) {
+        self.0
+            .borrow_mut()
+            .left
+            .entry(branch.into())
+            .or_default()
+            .push(doc.as_bytes().to_vec());
+    }
+
+    /// What is still left behind on `branch`.
+    pub fn left_behind(&self, branch: &str) -> usize {
+        self.0.borrow().left.get(branch).map_or(0, Vec::len)
+    }
+
+    /// Every run started on a pool.
+    pub fn launches(&self) -> Vec<sluice_seams::Launch> {
+        self.0.borrow().launches.clone()
+    }
+
+    /// The pool's job under `claim` has ended: lost, cancelled, or done.
+    pub fn end_job(&self, claim: &str) {
+        self.0.borrow_mut().jobs_ended.insert(claim.into());
+    }
+
+    /// Every branch a pool was woken for.
+    pub fn wakes(&self) -> Vec<String> {
+        self.0.borrow().wakes.clone()
+    }
+
+    /// From now, `task`'s reported key is one the candidate's tree does
+    /// not bear out, as a check that lies about its key reports it.
+    pub fn forges(&self, task: &str) {
+        self.0.borrow_mut().forged.insert(task.into());
+    }
+
+    /// The system the host's executor is, as `(os, arch)`: `linux` on
+    /// `x86_64` unless set.
+    pub fn platform(&self, os: &str, arch: &str) {
+        self.0.borrow_mut().platform = (os.into(), arch.into());
+    }
+
     /// Every run request, in order of starting.
     pub fn requests(&self) -> Vec<RunRequest> {
         self.0
@@ -596,13 +676,15 @@ impl World {
             .collect();
         let mut report = RunReport {
             tasks: Vec::new(),
+            // What the run was held to: the request's container engine, as
+            // an executor that holds it reports it (83, 84).
             executor: Enforced {
                 kind: "open".into(),
                 confined: false,
                 processors: None,
                 memory: None,
                 network: None,
-                docker: false,
+                docker: request.limits.docker,
             },
             missing: Vec::new(),
             not_run: Vec::new(),
@@ -1126,6 +1208,38 @@ impl Tests for FakeTests {
         Ok(self.0 .0.borrow().host_limit.unwrap_or(usize::MAX))
     }
 
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()> {
+        self.0 .0.borrow_mut().launches.push(launch.clone());
+        Ok(())
+    }
+
+    fn job_alive(
+        &self,
+        _kind: &(String, sluice_seams::Setting),
+        claim: &str,
+        _remote: Option<&str>,
+    ) -> Result<bool> {
+        Ok(!self.0 .0.borrow().jobs_ended.contains(claim))
+    }
+
+    fn wake(
+        &self,
+        _kind: &(String, sluice_seams::Setting),
+        branch: &str,
+        _remote: Option<&str>,
+    ) -> Result<()> {
+        self.0 .0.borrow_mut().wakes.push(branch.into());
+        Ok(())
+    }
+
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        let inner = self.0 .0.borrow();
+        Ok(sluice_seams::Platform {
+            os: inner.platform.0.clone(),
+            arch: inner.platform.1.clone(),
+        })
+    }
+
     fn sessions(&self) -> Result<usize> {
         Ok(self
             .0
@@ -1146,6 +1260,16 @@ impl Tests for FakeTests {
             .values()
             .filter(|(r, _)| *r)
             .map(|(_, run)| run.clone())
+            .collect())
+    }
+
+    fn proven(&self, _run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+        let inner = self.0 .0.borrow();
+        Ok(report
+            .tasks
+            .iter()
+            .filter(|t| !inner.forged.contains(&t.task))
+            .map(|t| t.task.clone())
             .collect())
     }
 
@@ -1238,6 +1362,8 @@ impl Checkout for FakeCheckout {
         }
         inner.places.insert(name.into(), rev.clone());
         inner.made.push(name.into());
+        let host = inner.host.clone();
+        inner.place_host.insert(name.into(), host);
         Ok(Place {
             name: name.into(),
             path: format!("/fake/places/{name}").into(),
@@ -1360,6 +1486,16 @@ impl Checkout for FakeCheckout {
         }
         inner.saved.push(name.into());
         Ok(())
+    }
+
+    fn made(&self) -> Result<Vec<String>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .places
+            .keys()
+            .filter(|p| inner.place_host.get(*p) == Some(&inner.host))
+            .cloned()
+            .collect())
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
@@ -1516,6 +1652,77 @@ fn finished_name(path: &str) -> Option<&str> {
 }
 
 impl State for FakeState {
+    fn beat(&self, host: &str, beat: &[u8]) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let n = inner.beats.get(host).map_or(0, |(n, _)| n + 1);
+        inner.beats.insert(host.into(), (n, beat.to_vec()));
+        Ok(())
+    }
+
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .beats
+            .iter()
+            .map(|(h, (n, b))| (h.clone(), (n.to_string(), b.clone())))
+            .collect())
+    }
+
+    fn observed_beat(&self, host: &str) -> Result<Option<(String, String)>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .seen_beats
+            .get(&(inner.host.clone(), host.to_string()))
+            .cloned())
+    }
+
+    fn observe_beat(&self, host: &str, marker: &str, at: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let key = (inner.host.clone(), host.to_string());
+        inner.seen_beats.insert(key, (marker.into(), at.into()));
+        Ok(())
+    }
+
+    fn observed(&self, branch: &str) -> Result<Option<(u64, String)>> {
+        let inner = self.0 .0.borrow();
+        Ok(inner
+            .seen
+            .get(&(inner.host.clone(), branch.to_string()))
+            .cloned())
+    }
+
+    fn observe(&self, branch: &str, version: u64, at: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let key = (inner.host.clone(), branch.to_string());
+        inner.seen.insert(key, (version, at.to_string()));
+        Ok(())
+    }
+
+    fn left_behind(&self, branch: &str) -> Result<Vec<Vec<u8>>> {
+        Ok(self
+            .0
+             .0
+            .borrow()
+            .left
+            .get(branch)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn forget_left_behind(&self, branch: &str, ids: &[u64]) -> Result<()> {
+        if let Some(left) = self.0 .0.borrow_mut().left.get_mut(branch) {
+            left.retain(|doc| {
+                let id = serde_json::from_slice::<serde_json::Value>(doc)
+                    .ok()
+                    .and_then(|v| v["id"].as_u64());
+                !id.is_some_and(|id| ids.contains(&id))
+            });
+        }
+        Ok(())
+    }
+
     fn lock<'a>(&'a self, branch: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
         let mut inner = self.0 .0.borrow_mut();
         let line = inner.lines.entry(branch.into()).or_default();
@@ -1630,7 +1837,17 @@ impl State for FakeState {
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
-        self.0 .0.borrow_mut().results.extend(lines);
+        let mut inner = self.0 .0.borrow_mut();
+        let Some(signer) = inner.signer.clone() else {
+            inner.results.extend(lines);
+            return Ok(());
+        };
+        // As the remote refs profile reads a run back: signed by the host's
+        // signer, a replay as a replay (core.9).
+        for mut l in sluice_core::records::parse_lines::<sluice_core::records::ResultLine>(lines)? {
+            l.signer = Some(signer.clone());
+            inner.results.extend(sluice_core::records::to_line(&l));
+        }
         Ok(())
     }
 

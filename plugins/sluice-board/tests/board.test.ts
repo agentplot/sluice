@@ -9,6 +9,7 @@ import {
   githubBase,
   heldBack,
   hostLine,
+  hostsLine,
   isMine,
   learn,
   moving,
@@ -362,5 +363,28 @@ describe("outcomes", () => {
     expect(text).toContain("#13 to main failed: cli:test on 9a03c1e");
     expect(text).toContain("Log of cli:test: /r/sluice.git/sluice/.logs/main/c7/cli:test.log");
     expect(text).toContain("sluice exec main");
+  });
+
+  test("a failure names the system it failed on", () => {
+    const text = wakeText(
+      { key: "k", branch: "main", id: 13, word: "failed", combination: "9a03c1e5d2" },
+      [{ task: "cli:build", log: "/l/cli:build.log", system: "linux-arm64" }, { task: "cli:test" }],
+    );
+    expect(text).toContain("failed: cli:build (linux-arm64), cli:test on 9a03c1e");
+    expect(text).toContain("Log of cli:build (linux-arm64): /l/cli:build.log");
+  });
+});
+
+describe("hosts", () => {
+  test("the hosts line counts hosts, their room and the lapsed", () => {
+    expect(
+      hostsLine([
+        { host: "box", signer: "box", held: 1, room: 3, lapsed: false },
+        { host: "gone", held: 1, room: 0, lapsed: true },
+      ]),
+    ).toBe("2 hosts, room for 3, 1 lapsed");
+    expect(hostsLine([{ host: "box", held: 0, room: 4, lapsed: false }])).toBe(
+      "1 host, room for 4",
+    );
   });
 });
