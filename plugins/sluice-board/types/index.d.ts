@@ -151,6 +151,8 @@ declare module "claude-code" {
       opened: string[];
       /** What each opened failure showed when it was opened. */
       details: Record<string, OpenedTest[]>;
+      /** The branch `SLUICE_BRANCH` named for the session, or null. */
+      named: string | null;
     };
   }
 }

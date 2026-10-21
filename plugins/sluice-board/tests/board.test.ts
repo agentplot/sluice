@@ -12,6 +12,8 @@ import {
   isMine,
   learn,
   moving,
+  namedFirst,
+  namedLine,
   outcomes,
   progress,
   pullOf,
@@ -23,7 +25,7 @@ import {
   wakeText,
 } from "../hooks/board";
 import type { Mine, Overview } from "../types";
-import { NOW, overview, withChecks, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
 
 const ME: Mine = { root: "/work/sluice/plugin-board", ids: [], pulls: [] };
 
@@ -208,6 +210,69 @@ describe("the branches' order", () => {
       "sluice bolt/a",
       "sluice main",
     ]);
+  });
+
+  test("a branch named for the session comes first, the rest as the overview has them", () => {
+    const d = overview();
+    const main = d.branches[0]!;
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
+    expect(bandLines(d, NOW, "bolt/a").map((l) => l.split(" · ")[0])).toEqual([
+      "sluice bolt/a",
+      "sluice release",
+      "sluice main",
+    ]);
+    expect(namedFirst(d.branches, "main").map((b) => b.branch)).toEqual([
+      "main",
+      "release",
+      "bolt/a",
+    ]);
+    expect(namedFirst(d.branches, "hotfix").map((b) => b.branch)).toEqual([
+      "release",
+      "bolt/a",
+      "main",
+    ]);
+    expect(namedFirst(d.branches, null).map((b) => b.branch)).toEqual([
+      "release",
+      "bolt/a",
+      "main",
+    ]);
+  });
+});
+
+describe("a branch named for the session", () => {
+  test("its queue, its oldest combination under test, and the checks held to it", () => {
+    expect(namedLine(withRelease(), "release", NOW)).toBe(
+      "release · 3 queued · #12 testing 3/8 · 2 checking",
+    );
+  });
+
+  test("its oldest combination's minutes when it lists no tasks, and how many more", () => {
+    const d = withRelease();
+    const b = d.branches[1]!;
+    const c = { ...b.candidates[0]!, started: "2026-10-16T19:41:10Z" };
+    delete c.tasks;
+    b.candidates = [{ ...c, id: "c10", submissions: [14], started: "2026-10-16T19:43:00Z" }, c];
+    b.submissions = b.submissions
+      .filter((s) => s.id === 12 || s.id === 14)
+      .map((s) => ({ ...s, state: "testing" }));
+    d.sessions = [];
+    expect(namedLine(d, "release", NOW)).toBe("release · #12 testing 4m +1 more");
+  });
+
+  test("nothing queued, or no records", () => {
+    expect(namedLine(withRelease(), "main", NOW)).toBe("main · nothing queued");
+    expect(namedLine(withRelease(), "hotfix", NOW)).toBe("hotfix · no records");
+  });
+
+  test("on the status line, after the session's own submissions", () => {
+    expect(statusLine(withRelease(), ME, "release", NOW)).toBe(
+      "sluice: release · 3 queued · #12 testing 3/8 · 2 checking",
+    );
+    expect(statusLine(withRelease(), ME, "hotfix", NOW)).toBe("sluice: hotfix · no records");
+    expect(statusLine(overview(), learn(overview(), ME), "release", NOW)).toBe(
+      "sluice: 3 submissions · yours #13 testing",
+    );
+    expect(statusLine(withRelease(), ME, null, NOW)).toBe("sluice: 4 submissions");
   });
 });
 
