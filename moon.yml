@@ -13,9 +13,16 @@ tasks:
     options: {runFromWorkspaceRoot: true}
   lint:
     command: 'cargo clippy --workspace --all-targets -- -D warnings'
-    inputs: ['/crates/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock', '/.prototools']
+    inputs: ['/crates/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock', '/.prototools', '/rust-toolchain.toml']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # rustc, cargo, clippy and rustfmt are the build .prototools pins, on
+  # whichever host runs the gate (core.24). It reads the tools it checks
+  # from outside the tree, so it never replays.
+  toolchain:
+    command: 'sh check-toolchain.sh'
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true, cache: false}
   # The Claude Code marketplace, which spans the plugins: it validates, and
   # every plugin it lists has a manifest. Each plugin's own checks are its
   # project's (plugins/*/moon.yml).

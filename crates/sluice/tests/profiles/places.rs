@@ -376,9 +376,11 @@ fn port(place: &Place, name: &str) -> u16 {
 
 /// The first of twenty ports this test process uses, so two runs of these
 /// tests on one host, as two candidates under test at once are, ask for
-/// different ports.
+/// different ports. All are below 32768, where Linux starts the ports it
+/// gives a host's own connections for a moment, which would make a block
+/// look busy; macOS starts at 49152.
 fn base() -> u16 {
-    30000 + (std::process::id() % 900) as u16 * 20
+    25000 + (std::process::id() % 380) as u16 * 20
 }
 
 /// 31: two places alive at once hold two blocks of ports: the same
