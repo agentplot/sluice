@@ -8,7 +8,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use super::app::{App, Repo};
-use super::forge::{Check, Forge, Posted, Posting, Pull, Review, Standing, Status, SLUICE_CHECK};
+use super::forge::{
+    Check, Comment, Forge, Posted, Posting, Pull, Review, Standing, Status, SLUICE_CHECK,
+};
 
 /// The most a page of a list holds.
 const PAGE: usize = 100;
@@ -83,7 +85,7 @@ fn status_standing(state: &str) -> Standing {
     }
 }
 
-fn posting_json(posting: &Posting) -> Value {
+fn posting_json(name: &str, posting: &Posting) -> Value {
     let (status, conclusion) = match posting.status {
         Status::Queued => ("queued", None),
         Status::InProgress => ("in_progress", None),
@@ -97,10 +99,13 @@ fn posting_json(posting: &Posting) -> Value {
         &posting.summary
     };
     let mut v = json!({
-        "name": SLUICE_CHECK,
+        "name": name,
         "status": status,
         "output": { "title": posting.title, "summary": summary },
     });
+    if let Some(text) = &posting.text {
+        v["output"]["text"] = json!(text);
+    }
     if let Some(c) = conclusion {
         v["conclusion"] = json!(c);
     }
@@ -118,7 +123,9 @@ fn posted(v: &Value) -> Option<Posted> {
     let summary = text(&v["output"]["summary"]);
     Some(Posted {
         id: v["id"].as_u64()?,
+        name: text(&v["name"]),
         posting: Posting {
+            text: v["output"]["text"].as_str().map(String::from),
             status,
             // Posted with the title for an empty summary: read back as
             // empty, so it reads the same as what is posted.
@@ -170,7 +177,7 @@ impl Forge for App {
         )?;
         let mut out: Vec<Check> = runs
             .iter()
-            .filter(|r| !(r["name"] == SLUICE_CHECK && r["app"]["id"].as_u64() == Some(self.id())))
+            .filter(|r| r["app"]["id"].as_u64() != Some(self.id()))
             .map(|r| Check {
                 name: text(&r["name"]),
                 standing: run_standing(r),
@@ -201,24 +208,33 @@ impl Forge for App {
             .collect())
     }
 
-    fn posted(&self, repo: &Repo, rev: &str) -> Result<Option<Posted>> {
+    fn posted_all(&self, repo: &Repo, rev: &str) -> Result<Vec<Posted>> {
         let path = Self::repo_path(
             repo,
-            &format!(
-                "/commits/{rev}/check-runs?check_name={SLUICE_CHECK}&app_id={}",
-                self.id()
-            ),
+            &format!("/commits/{rev}/check-runs?app_id={}", self.id()),
         );
         let runs = self.all(repo, &path, |v| v["check_runs"].as_array())?;
         Ok(runs
             .iter()
-            .filter(|r| r["name"] == SLUICE_CHECK && r["app"]["id"].as_u64() == Some(self.id()))
-            .find_map(posted))
+            .filter(|r| r["app"]["id"].as_u64() == Some(self.id()))
+            .filter(|r| {
+                let n = r["name"].as_str().unwrap_or_default();
+                n == SLUICE_CHECK || n.starts_with(&format!("{SLUICE_CHECK} / "))
+            })
+            .filter_map(posted)
+            .collect())
     }
 
-    fn post(&self, repo: &Repo, rev: &str, existing: Option<u64>, posting: &Posting) -> Result<()> {
+    fn post_named(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        name: &str,
+        existing: Option<u64>,
+        posting: &Posting,
+    ) -> Result<()> {
         let token = self.token(repo)?;
-        let mut body = posting_json(posting);
+        let mut body = posting_json(name, posting);
         match existing {
             Some(id) => {
                 self.patch_api(
@@ -239,13 +255,27 @@ impl Forge for App {
         Ok(())
     }
 
-    fn comments(&self, repo: &Repo, number: u64) -> Result<Vec<String>> {
+    fn comment_list(&self, repo: &Repo, number: u64) -> Result<Vec<Comment>> {
         let path = Self::repo_path(repo, &format!("/issues/{number}/comments"));
         Ok(self
             .all(repo, &path, Value::as_array)?
             .iter()
-            .map(|c| text(&c["body"]))
+            .map(|c| Comment {
+                id: c["id"].as_u64().unwrap_or_default(),
+                body: text(&c["body"]),
+                url: text(&c["html_url"]),
+            })
             .collect())
+    }
+
+    fn edit_comment(&self, repo: &Repo, id: u64, body: &str) -> Result<()> {
+        let token = self.token(repo)?;
+        self.patch_api(
+            &Self::repo_path(repo, &format!("/issues/comments/{id}")),
+            &token,
+            &json!({ "body": body }).to_string(),
+        )?;
+        Ok(())
     }
 
     fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
@@ -305,8 +335,9 @@ mod tests {
                 status,
                 title: "t".into(),
                 summary: summary.into(),
+                text: (status == Status::Failure).then_some("| a | b |".into()),
             };
-            let mut v = posting_json(&p);
+            let mut v = posting_json(SLUICE_CHECK, &p);
             v["id"] = json!(3);
             assert_eq!(posted(&v).unwrap().posting, p);
         }

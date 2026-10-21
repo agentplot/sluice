@@ -590,6 +590,7 @@ fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
     }
     Shown {
         posting: Posting {
+            text: None,
             status: Status::Queued,
             title,
             summary: summary.join("\n\n"),
@@ -606,6 +607,7 @@ fn queued(branch: &str, ahead: &[String]) -> Shown {
     };
     Shown {
         posting: Posting {
+            text: None,
             status: Status::Queued,
             summary: format!("In {branch}'s queue; it lands once its combination passes."),
             title,
@@ -626,6 +628,7 @@ fn queue_shown(
             let title = format!("testing {}", combination(branch, &t.submissions, names));
             Shown {
                 posting: Posting {
+                    text: None,
                     status: Status::InProgress,
                     summary: format!(
                         "sluice is testing `{}`, {branch} with what is ahead of it.",
@@ -769,6 +772,7 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
     };
     Shown {
         posting: Posting {
+            text: None,
             status,
             title,
             summary,

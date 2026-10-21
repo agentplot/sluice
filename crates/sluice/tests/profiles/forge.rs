@@ -485,6 +485,7 @@ fn the_apps_pull_request_calls() {
         status: Status::Queued,
         title: "waiting".into(),
         summary: "needs qa/approved".into(),
+        text: None,
     };
     app.post(&r, "aaa", None, &waiting).unwrap();
     let first = app.posted(&r, "aaa").unwrap().unwrap();
@@ -493,6 +494,7 @@ fn the_apps_pull_request_calls() {
         status: Status::Success,
         title: "landed".into(),
         summary: String::new(),
+        text: Some("## sluice: landed\n| | Check |".into()),
     };
     app.post(&r, "aaa", Some(first.id), &landed).unwrap();
     assert_eq!(app.posted(&r, "aaa").unwrap().unwrap().posting, landed);
@@ -505,6 +507,33 @@ fn the_apps_pull_request_calls() {
 
     app.comment(&r, a, "blamed").unwrap();
     assert_eq!(app.comments(&r, a).unwrap(), ["blamed"]);
+    // ADR 0039: the check's text reads back, a check per check is sluice's
+    // and no other system's, and a comment is edited in place.
+    app.post_named(&r, "aaa", "sluice / a:test (linux-x64)", None, &waiting)
+        .unwrap();
+    let names: Vec<String> = app
+        .posted_all(&r, "aaa")
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(
+        names.contains(&"sluice / a:test (linux-x64)".to_string()),
+        "{names:?}"
+    );
+    assert!(app
+        .checks(&r, "aaa")
+        .unwrap()
+        .iter()
+        .all(|c| !c.name.starts_with("sluice")));
+    let c = app.comment_list(&r, a).unwrap().remove(0);
+    assert!(
+        c.url.contains(&format!("issuecomment-{}", c.id)),
+        "{}",
+        c.url
+    );
+    app.edit_comment(&r, c.id, "edited").unwrap();
+    assert_eq!(app.comments(&r, a).unwrap(), ["edited"]);
     let opened = app.open(&r, "main", "unit/e", "E", "body").unwrap();
     assert!(opened.open && !opened.draft && opened.title == "E");
     app.edit(&r, opened.number, "new body").unwrap();
@@ -565,6 +594,7 @@ fn live_pull_request_calls() {
         status: Status::Queued,
         title: "waiting".into(),
         summary: "sluice's live test".into(),
+        text: None,
     };
     app.post(&r, &pull.head, existing, &waiting).unwrap();
     let posted = app.posted(&r, &pull.head).unwrap().unwrap();
@@ -573,6 +603,7 @@ fn live_pull_request_calls() {
         status: Status::Success,
         title: "landed".into(),
         summary: String::new(),
+        text: Some("## sluice: landed\n| | Check |".into()),
     };
     app.post(&r, &pull.head, Some(posted.id), &landed).unwrap();
     assert_eq!(app.posted(&r, &pull.head).unwrap().unwrap().posting, landed);

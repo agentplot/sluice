@@ -174,13 +174,13 @@ impl OnGitHub {
 
     /// What sluice's check on `head` reads.
     fn posted(&self, head: &str) -> Option<(Status, String, String)> {
-        self.gh.forge.held().unwrap().posted.get(head).map(|p| {
-            (
-                p.posting.status,
-                p.posting.title.clone(),
-                p.posting.summary.clone(),
-            )
-        })
+        let held = self.gh.forge.held().unwrap();
+        let p = held.posted.get(head)?.iter().find(|p| p.name == "sluice")?;
+        Some((
+            p.posting.status,
+            p.posting.title.clone(),
+            p.posting.summary.clone(),
+        ))
     }
 
     fn posts(&self) -> usize {
@@ -194,8 +194,10 @@ impl OnGitHub {
             .unwrap()
             .comments
             .get(&n)
-            .cloned()
-            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|c| c.body.clone())
+            .collect()
     }
 
     /// Step until `done` holds, at most a minute.

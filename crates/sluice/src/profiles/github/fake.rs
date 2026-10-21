@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::app::Repo;
-use super::forge::{Check, Forge, Posted, Posting, Pull, Review, Standing};
+use super::forge::{Check, Comment, Forge, Posted, Posting, Pull, Review, Standing};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Held {
@@ -23,11 +23,15 @@ pub struct Held {
     /// Other systems' checks, by revision.
     pub checks: BTreeMap<String, Vec<Check>>,
     /// sluice's check runs, by revision.
-    pub posted: BTreeMap<String, Posted>,
-    /// Every post of sluice's check run, in order: the revision and what.
-    pub posts: Vec<(String, Posting)>,
+    pub posted: BTreeMap<String, Vec<Posted>>,
+    /// Every post of sluice's check runs, in order: the revision, the
+    /// check's name and what.
+    pub posts: Vec<(String, String, Posting)>,
     pub readied: BTreeMap<u64, Vec<DateTime<Utc>>>,
-    pub comments: BTreeMap<u64, Vec<String>>,
+    pub comments: BTreeMap<u64, Vec<Comment>>,
+    /// Every edit of a comment, in order: its id and new body.
+    #[serde(default)]
+    pub edits: Vec<(u64, String)>,
 }
 
 pub struct FileForge {
@@ -205,11 +209,18 @@ impl Forge for FileForge {
         Ok(self.held()?.readied.remove(&number).unwrap_or_default())
     }
 
-    fn posted(&self, _: &Repo, rev: &str) -> Result<Option<Posted>> {
-        Ok(self.held()?.posted.remove(rev))
+    fn posted_all(&self, _: &Repo, rev: &str) -> Result<Vec<Posted>> {
+        Ok(self.held()?.posted.remove(rev).unwrap_or_default())
     }
 
-    fn post(&self, _: &Repo, rev: &str, existing: Option<u64>, posting: &Posting) -> Result<()> {
+    fn post_named(
+        &self,
+        _: &Repo,
+        rev: &str,
+        name: &str,
+        existing: Option<u64>,
+        posting: &Posting,
+    ) -> Result<()> {
         self.change(|h| {
             let id = match existing {
                 Some(id) => id,
@@ -219,25 +230,45 @@ impl Forge for FileForge {
                     id
                 }
             };
-            h.posted.insert(
-                rev.into(),
-                Posted {
-                    id,
-                    posting: posting.clone(),
-                },
-            );
-            h.posts.push((rev.into(), posting.clone()));
+            let on = h.posted.entry(rev.into()).or_default();
+            on.retain(|p| p.id != id);
+            on.push(Posted {
+                id,
+                name: name.into(),
+                posting: posting.clone(),
+            });
+            h.posts.push((rev.into(), name.into(), posting.clone()));
             Ok(())
         })
     }
 
-    fn comments(&self, _: &Repo, number: u64) -> Result<Vec<String>> {
+    fn comment_list(&self, _: &Repo, number: u64) -> Result<Vec<Comment>> {
         Ok(self.held()?.comments.remove(&number).unwrap_or_default())
     }
 
-    fn comment(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
+    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
         self.change(|h| {
-            h.comments.entry(number).or_default().push(body.into());
+            let id = h.next;
+            h.next += 1;
+            h.comments.entry(number).or_default().push(Comment {
+                id,
+                body: body.into(),
+                url: format!("https://github.com/{repo}/pull/{number}#issuecomment-{id}"),
+            });
+            Ok(())
+        })
+    }
+
+    fn edit_comment(&self, _: &Repo, id: u64, body: &str) -> Result<()> {
+        self.change(|h| {
+            let c = h
+                .comments
+                .values_mut()
+                .flatten()
+                .find(|c| c.id == id)
+                .ok_or_else(|| anyhow!("no comment {id}"))?;
+            c.body = body.into();
+            h.edits.push((id, body.into()));
             Ok(())
         })
     }
@@ -365,6 +396,7 @@ mod tests {
             status: Status::Queued,
             title: "waiting".into(),
             summary: "needs 1 review".into(),
+            text: None,
         };
         f.post(&repo, "aaa", None, &waiting).unwrap();
         let first = f.posted(&repo, "aaa").unwrap().unwrap();
@@ -373,6 +405,7 @@ mod tests {
             status: Status::Success,
             title: "landed".into(),
             summary: String::new(),
+            text: Some("the report".into()),
         };
         f.post(&repo, "aaa", Some(first.id), &landed).unwrap();
         let second = f.posted(&repo, "aaa").unwrap().unwrap();
@@ -380,6 +413,16 @@ mod tests {
         assert_eq!(f.held().unwrap().posts.len(), 2);
         f.comment(&repo, n, "blamed").unwrap();
         assert_eq!(f.comments(&repo, n).unwrap(), ["blamed"]);
+        // ADR 0039: a check per check, beside `sluice`, and a comment
+        // edited in place.
+        f.post_named(&repo, "aaa", "sluice / a:test", None, &waiting)
+            .unwrap();
+        let all = f.posted_all(&repo, "aaa").unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(f.posted(&repo, "aaa").unwrap().unwrap().id, first.id);
+        let c = f.comment_list(&repo, n).unwrap().remove(0);
+        f.edit_comment(&repo, c.id, "edited").unwrap();
+        assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
         let opened = f.open(&repo, "main", "unit/b", "B", "body").unwrap();
         f.edit(&repo, opened.number, "new body").unwrap();
         assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");

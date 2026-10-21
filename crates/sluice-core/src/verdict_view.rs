@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
-use sluice_seams::{Enforced, Outcome, Rev, RunDetail};
+use sluice_seams::{Enforced, Outcome, Rev, RunDetail, TaskProgress};
 
 use crate::line::Line;
 use crate::records::{
@@ -37,6 +37,10 @@ pub struct VerdictView {
     /// run, missing, timed out and set aside first, then by name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<Row>,
+    /// ADR 0028: while its combination is under test, its tasks as last
+    /// kept on the host that runs it; no result (16, 38).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
 }
 
 /// Where the submission stands.
@@ -152,7 +156,23 @@ impl Sluice<'_> {
             .collect();
         let results: Vec<ResultLine> = parse_lines(&self.seams.state.results()?)?;
         let asides: Vec<SetAside> = parse_lines(&self.seams.state.set_asides()?)?;
-        Ok(Some(verdict_view(&sub, &ahead, &results, &asides, &log)))
+        let mut view = verdict_view(&sub, &ahead, &results, &asides, &log);
+        if view.standing == Standing::Testing {
+            let candidate = line
+                .doc
+                .candidates
+                .iter()
+                .find(|c| Some(&c.revision) == view.combination.as_ref());
+            if let Some(c) = candidate {
+                view.tasks = self
+                    .seams
+                    .state
+                    .progress(branch)?
+                    .remove(&c.id)
+                    .unwrap_or_default();
+            }
+        }
+        Ok(Some(view))
     }
 }
 
@@ -174,6 +194,7 @@ pub fn verdict_view(
         submissions: Vec::new(),
         runs: Vec::new(),
         rows: Vec::new(),
+        tasks: Vec::new(),
     };
     let shows_rows = matches!(
         view.standing,
