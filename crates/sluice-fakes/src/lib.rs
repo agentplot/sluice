@@ -633,7 +633,11 @@ impl World {
         if request.place.name.starts_with("preview/") {
             // A preview's command: one exit, never a check (103).
             return RunReport {
+                detail: None,
+                kept_out: Vec::new(),
                 tasks: vec![TaskResult {
+                    took_ms: None,
+                    attempts: None,
                     task: "preview".into(),
                     hash: request.revision.to_string(),
                     outcome: if inner.preview_fails {
@@ -675,6 +679,8 @@ impl World {
             .cloned()
             .collect();
         let mut report = RunReport {
+            detail: None,
+            kept_out: Vec::new(),
             tasks: Vec::new(),
             // What the run was held to: the request's container engine, as
             // an executor that holds it reports it (83, 84).
@@ -722,6 +728,8 @@ impl World {
             if scripted.is_none() && request.replay {
                 if let Some(at) = inner.cache.get(&key) {
                     report.tasks.push(TaskResult {
+                        took_ms: None,
+                        attempts: None,
                         task: t.name.clone(),
                         hash,
                         outcome: Outcome::Pass,
@@ -750,6 +758,8 @@ impl World {
             }
             inner.observed.push((t.name.clone(), hash.clone(), outcome));
             report.tasks.push(TaskResult {
+                took_ms: None,
+                attempts: None,
                 task: t.name.clone(),
                 hash,
                 outcome,

@@ -70,8 +70,8 @@ seam only (core.11):
 - `State::results()`, for the lines of the branch whose combination is
   the submission's `Tested.combination`;
 - `State::set_asides()`;
-- the branch's log, for the `Testing`, `Result`, `Blamed` and `Landed`
-  lines of that combination, and the run's detail.
+- the branch's log, for the `Testing`, `Result`, `Blamed`, `Landed`
+  and `Detail` lines of that combination.
 
 Rows are built from the result lines, one per (task, system). A row is
 filled in from `FailedTask` for flaky, could-not-run, missing and log
@@ -116,13 +116,13 @@ The decision is made in the core, so no driver can show a failure clause
 
 | Where | New fields |
 |---|---|
-| `TaskResult` (`sluice-seams`) | `took: Option<Duration>`, `attempts: Option<u32>` |
-| `RunReport` (`sluice-seams`) | `detail: Option<RunDetail { took, saved, changed: Vec<String> }>` |
+| `TaskResult` (`sluice-seams`) | `took_ms: Option<u64>`, `attempts: Option<u32>` |
+| `RunReport` (`sluice-seams`) | `detail: Option<RunDetail { took_ms, estimate_ms, changed }>` and `kept_out: Vec<String>` |
 | `ResultLine` | `took_ms: Option<u64>`, `attempts: Option<u32>`, each `#[serde(default, skip_serializing_if = ...)]` |
-| `Event::Result` | `detail: Option<RunDetail>` |
+| a new log line, `Detail { combination, system, detail, kept_out }` | one per run that has any, since a combination has one run per system |
 
-- `step.rs` `poll` writes all of these where it already writes the
-  result lines and the `Result` line, before the verdict (core.7).
+- `step.rs` `finish_run` writes all of these where it already writes
+  the result lines, before the run's verdict is read (core.7).
 - Old lines read without them, so `RESULT_SCHEMA` stays `result@1`.
 - `verdict::read` takes no new input. A test runs it on the same
   results with and without detail and asserts the same verdict (16, 19,

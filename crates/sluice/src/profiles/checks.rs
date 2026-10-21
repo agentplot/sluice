@@ -864,6 +864,8 @@ impl Tests for Checks {
             }
         }
         Ok(Progress::Finished(RunReport {
+            detail: None,
+            kept_out: Vec::new(),
             tasks,
             executor: meta.executor,
             missing,
@@ -1018,6 +1020,8 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
         .targets
         .iter()
         .map(|t| TaskResult {
+            took_ms: None,
+            attempts: None,
             task: t.clone(),
             hash: meta.revision.clone(),
             outcome: if ended.passed() {

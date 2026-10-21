@@ -488,6 +488,40 @@ pub struct TaskResult {
     pub hash: String,
     pub outcome: Outcome,
     pub source: Source,
+    /// Pull-requests-1 proposed 119: how long the runner says the task
+    /// took, in milliseconds; a replay's is what restoring it took.
+    /// Shown, never read as an outcome, a replay or a flake.
+    pub took_ms: Option<u64>,
+    /// Pull-requests-1 proposed 119: how many times the runner tried it.
+    pub attempts: Option<u32>,
+}
+
+/// Pull-requests-1 proposed 119: what a runner says of a whole run beyond
+/// its results. Recorded with the run's result and shown; nothing reads a
+/// verdict from it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDetail {
+    /// How long the run took, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took_ms: Option<u64>,
+    /// How long the runner estimates it would have taken with nothing
+    /// replayed, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate_ms: Option<u64>,
+    /// The files the runner took as changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
+}
+
+impl RunDetail {
+    /// The time the runner estimates the run saved, never below zero.
+    pub fn saved_ms(&self) -> Option<u64> {
+        Some(self.estimate_ms?.saturating_sub(self.took_ms?))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self == &RunDetail::default()
+    }
 }
 
 /// A check a run did not judge: its program could not be started, it
@@ -515,6 +549,11 @@ pub struct RunReport {
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
+    /// Pull-requests-1 proposed 119: what the runner says of the run.
+    pub detail: Option<RunDetail>,
+    /// Required checks the runner keeps out of its CI mode, so never runs
+    /// (moon's `runInCI: false`); each is also in `missing`.
+    pub kept_out: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

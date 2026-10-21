@@ -58,6 +58,13 @@ pub struct RunResult {
     /// (108; rule core.9).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
+    /// Pull-requests-1 proposed 119: how long the task runner says it
+    /// took, in milliseconds, and how often it tried it. Shown with the
+    /// result; no verifier or verdict reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
 }
 
 /// 79: what the signer claims of the run; each counts only when the
@@ -129,12 +136,16 @@ mod tests {
                     key: "6de6b709".into(),
                     outcome: Outcome::Pass,
                     replayed: false,
+                    took_ms: Some(2_000),
+                    attempts: Some(2),
                 },
                 RunResult {
                     check: "cli:test".into(),
                     key: "4863a9af".into(),
                     outcome: Outcome::Fail,
                     replayed: false,
+                    took_ms: None,
+                    attempts: None,
                 },
             ],
             claims: Claims {
@@ -160,6 +171,25 @@ mod tests {
         assert_eq!(json["predicate"]["claims"]["system"], "linux-x64");
         let back = Statement::from_envelope(&s.envelope().unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn a_runners_detail_travels_signed_and_is_optional() {
+        let s = Statement::of(run());
+        let back = Statement::from_envelope(&s.envelope().unwrap()).unwrap();
+        assert_eq!(back.predicate.results[0].took_ms, Some(2_000));
+        assert_eq!(back.predicate.results[0].attempts, Some(2));
+        let json = serde_json::to_value(&s).unwrap();
+        assert!(json["predicate"]["results"][1].get("took_ms").is_none());
+        // A statement signed before the detail existed reads without it.
+        let mut old = json.clone();
+        old["predicate"]["results"][0]
+            .as_object_mut()
+            .unwrap()
+            .retain(|k, _| k != "took_ms" && k != "attempts");
+        let e = Envelope::new(IN_TOTO, &serde_json::to_vec(&old).unwrap());
+        let read = Statement::from_envelope(&e).unwrap();
+        assert_eq!(read.predicate.results[0].took_ms, None);
     }
 
     #[test]

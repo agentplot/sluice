@@ -408,6 +408,8 @@ fn read_report(
             _ => continue,
         };
         out.push(TaskResult {
+            took_ms: None,
+            attempts: None,
             task: target.to_string(),
             hash,
             outcome,

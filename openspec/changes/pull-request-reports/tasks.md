@@ -13,10 +13,10 @@ suites through `sluice exec main -- <command>`.
 
 ## 2. A runner's detail, recorded
 
-- [ ] 2.1 Add `TaskResult.took`/`attempts`, `RunReport.detail` (`RunDetail`) and `RunReport.kept_out` to `sluice-seams`; fill them as `None` or empty in the fakes; verify `cargo check --workspace`.
-- [ ] 2.2 Record `took_ms`/`attempts` on `ResultLine` and `detail` on `Event::Result` in `step.rs` `poll`; verify a core unit test that a run's lines carry them and that old lines still parse.
-- [ ] 2.3 Add a test that `verdict::read` gives the same verdict for results with and without detail, two attempts included; verify it passes.
-- [ ] 2.4 Carry `took_ms`/`attempts` in the signed statement's per-result fields; verify a signing round-trip test with and without them.
+- [x] 2.1 Add `TaskResult.took`/`attempts`, `RunReport.detail` (`RunDetail`) and `RunReport.kept_out` to `sluice-seams`; fill them as `None` or empty in the fakes; verify `cargo check --workspace`.
+- [x] 2.2 Record `took_ms`/`attempts` on `ResultLine` and a `Detail` log line per run in `step.rs` `finish_run`; verify a core unit test that a run's lines carry them and that old lines still parse.
+- [x] 2.3 Add a test that `verdict::read` gives the same verdict for results with and without detail, two attempts included; verify it passes.
+- [x] 2.4 Carry `took_ms`/`attempts` in the signed statement's per-result fields; verify a signing round-trip test with and without them.
 
 ## 3. moon
 

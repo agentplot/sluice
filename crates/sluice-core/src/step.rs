@@ -844,6 +844,20 @@ impl Sluice<'_> {
             }
             line.log(now, event);
         }
+        // Pull-requests-1 proposed 119: what the runner said of the run,
+        // kept for the report; no verdict reads it.
+        let detail = report.detail.clone().unwrap_or_default();
+        if !detail.is_empty() || !report.kept_out.is_empty() {
+            line.log(
+                now,
+                Event::Detail {
+                    combination: c.revision.clone(),
+                    system: system.map(str::to_string),
+                    detail,
+                    kept_out: report.kept_out.clone(),
+                },
+            );
+        }
         if !fresh.is_empty() {
             let mut bytes = Vec::new();
             for l in &fresh {

@@ -341,12 +341,16 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
     let plan = s.session_plan(BRANCH).unwrap().unwrap();
     let head = h.w().tip(BRANCH);
     let task = |name: &str, source: Source| TaskResult {
+        took_ms: None,
+        attempts: None,
         task: name.into(),
         hash: format!("{name}-hash"),
         outcome: Outcome::Pass,
         source,
     };
     let report = RunReport {
+        detail: None,
+        kept_out: Vec::new(),
         tasks: vec![
             task(
                 "a:test",
