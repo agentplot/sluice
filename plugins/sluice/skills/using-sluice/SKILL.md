@@ -34,25 +34,37 @@ wt submit main                  # the same under worktrunk; removes the worktree
 ```
 
 Exit codes: `0` landed, `1` failed (this submission was blamed), `2` a
-conflict or a refusal, `130` stopped with Ctrl-C (the submission stays
+conflict or a refusal, `4` withdrawn, `5` still waiting (`sluice wait
+--timeout` ran out), `130` stopped with Ctrl-C (the submission stays
 queued).
 
 A waiting submit also runs sluice's rounds, so it is what moves the queue on
-a single machine. Prefer it. When you must not block, submit with
-`--no-wait` and check later:
+a single machine. Prefer it when your tool call can outlast the verdict,
+which can take most of an hour. When it can't, submit with `--no-wait` and
+wait in steps with `sluice wait`, which runs the rounds the same way:
 
 ```sh
-sluice submit main --no-wait --json     # {"id":12,"branch":"main","ahead":[...]}
-sluice status 12 --json                 # the submission's record
-sluice submit main --status             # this worktree's last submission, or its pull request
+sluice submit main --no-wait --json        # {"id":12,"branch":"main","ahead":[...]}
+sluice wait 12 --timeout 9m --json         # again for as long as it exits 5
+sluice wait main --timeout 9m --json       # this worktree's last submission to main
 ```
 
-Nothing moves while nobody waits and no `sluice run` is going. If a
-`--no-wait` submission sits at `queued` with nothing testing, move it with
-`sluice step main` (one round) in a loop, or `sluice run --rounds N`. Do not
-submit again to move it: a second submit from the same worktree replaces the
-first. On a pull-request branch, a waiting `sluice submit main` follows the
-pull request already open, so there it is the way to wait.
+Set the timeout a minute under your tool call's limit. Each `sluice wait
+--json` prints the submission's record however it ends: read its `state`
+and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`, `passed` or
+`landing`; run `sluice wait` again. Never search `sluice status <branch>`'s
+listing for `landed` or `failed`: a decided submission leaves that listing,
+and a loop waiting for it there never ends. `sluice status 12 --json` reads
+the record once without waiting, and `sluice submit main --status` this
+worktree's last submission or its pull request.
+
+Nothing moves while nobody waits and no `sluice run` is going, so a
+`--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
+wait` moves it, as do `sluice step main` (one round) and `sluice run
+--rounds N`. Do not submit again to move it: a second submit from the same
+worktree replaces the first. On a pull-request branch, `sluice wait main`
+follows the pull request already open; while it is open, its `--json`
+document is `{"pull_request","branch","state"}`.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one

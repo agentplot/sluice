@@ -18,9 +18,16 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 
 ```
 submission 12 to bolt/x · 1 queued ahead (#11)
+testing bolt/x + #11 + #12 · 3s of 15m
+testing bolt/x + #11 + #12 · 30/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
 testing bolt/x + #11 + #12 · 4 tasks to run, 29 replayed
 passed · landed as b7d2e94
 ```
+
+While it waits it prints a line each time its combination's tasks move:
+how many have ended of how many, up to three running with how long each
+has run, and the combination's time against its limit. `sluice status
+<branch>` and `sluice status <id>` show the same line.
 
 `N tasks to run, M replayed`: with moon, only affected tasks run, and a task
 whose inputs did not change may replay its earlier result, when the branch
@@ -33,6 +40,9 @@ tests if there is room, read finished tests, blame a failure, land what
 passed. Any process may run one; a lock lets one run at a time.
 
 - A waiting `sluice submit` / `wt submit` runs rounds while it waits.
+- `sluice wait <id>` does the same for a submission made with
+  `--no-wait`; `--timeout 9m` returns after that long, exit `5`, with the
+  submission's record under `--json`, for a caller whose calls are capped.
 - `sluice step <branch>`: one round, then exit.
 - `sluice run`: rounds for every branch until stopped. Needed for pull
   requests opened by hand, which nobody waits on.

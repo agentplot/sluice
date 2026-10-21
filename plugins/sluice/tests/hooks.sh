@@ -131,8 +131,8 @@ allows "$plain" 'git merge topic'
 # The session note.
 out=$(jq -n --arg d "$wt" '{cwd: $d}' | "$note")
 # shellcheck disable=SC2016 # backticks are the text
-if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`bolt/\*`, `main` only move through it.*`sluice submit main`'; then
-  echo "ok    the session note names the protected branches"
+if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`bolt/\*`, `main` only move through it.*`sluice submit main`.*`sluice wait <id> --timeout 9m --json`'; then
+  echo "ok    the session note names the protected branches, and how to wait in steps"
 else
   echo "FAIL  session note: ${out:-nothing}"
   failures=$((failures + 1))

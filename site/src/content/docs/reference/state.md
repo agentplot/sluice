@@ -49,6 +49,7 @@ readable with plain tools whether or not sluice is running.
     lock               held by the run's supervisor for as long as the run is going
     pgid               the run's process group, so the whole of it can be ended
     out.log            what the run printed
+    out.times          when out.log grew: its length and the time, at most once a second
     result.json        how the run ended, once it has
     release.log        what the release command printed
     released           written once the release command has run
@@ -164,6 +165,13 @@ names.
   "told": "2026-10-11T09:21:55Z"
 }
 ```
+
+`state` is one of `queued`, `waiting` (behind the submissions in
+`after`), `testing`, `passed`, `landing`, `landed`, `failed`,
+`conflict` and `withdrawn`. These nine are stable: under
+`sluice/submission@1` none of them is renamed or removed, and none is
+added, so a script that reads `state`, such as an agent looping on
+`sluice wait --json`, can match all of them.
 
 `after` lists submissions this one must land after. `attempt` counts how
 many times this worktree has submitted to this branch. `from.worktree`

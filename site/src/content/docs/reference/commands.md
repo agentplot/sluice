@@ -9,7 +9,8 @@ sidebar:
 |---|---|
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. |
-| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it; `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
+| `sluice wait <id>` | Wait for a submission's outcome, running sluice's rounds meanwhile, as a waiting submit does; `sluice wait <branch>` for this worktree's last submission to it. `--timeout 9m` returns after that long with the submission as it stands, and exits `5`; `--json` prints its record. |
+| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch. `--json` for scripts. |
@@ -195,7 +196,7 @@ and writes nothing, and it reads with no sluice running.
 ```console
 $ sluice overview
 bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
-  testing bolt/concurrent-units + #13 + #14 3/5 since 2026-10-16T09:16:44Z
+  testing bolt/concurrent-units + #13 + #14 · 3/5 tasks · running tests:t-cards 2m10s · 6m02s of 15m
   2026-10-16T09:15:02Z  landed #12 as c41e8f2
   2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
 checking /home/me/wt/unit-a → bolt/concurrent-units 3/8 since 2026-10-16T09:17:02Z
@@ -223,10 +224,17 @@ A combination's `tasks` say how far its tests have got and decide
 nothing: its result is still read from the finished run. Each round
 updates them, about every 3 seconds while a submission waits, from
 what moon writes as each task ends, and they go once the combination
-is no longer under test. The text line's `3/5` counts the tasks that
-have ended. They are kept on the host that runs the combination, so
-another host shows none. The `command` runner has one test, the run
-itself, and gives none.
+is no longer under test. They are kept on the host that runs the
+combination, so another host shows none. The `command` runner has one
+test, the run itself, and gives none.
+
+`sluice status` and a waiting submit say a combination's progress as
+the text form does. It counts the tasks that have ended and names up to
+three running ones, longest first, with how long each has run. Then it
+gives the combination's time against its limit. A running task's time
+starts when moon printed that it had started, which the run notes as
+its output arrives. Where no tasks are kept, the text gives the
+combination's time alone.
 
 A check's `run` comes from the host's own state, written by its `sluice
 exec` as each task ends, and goes when the run ends; its `last_result`
@@ -345,9 +353,16 @@ worktrunk](/sluice/guides/worktrunk/) has the move from `wt merge`.
 ```console
 $ wt submit bolt/concurrent-units
 submission 12 to bolt/concurrent-units · nothing queued ahead
+testing bolt/concurrent-units + #12 · 4s of 15m
+testing bolt/concurrent-units + #12 · 31/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
+testing bolt/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
 testing bolt/concurrent-units + #12 · 2 tasks to run, 31 replayed
 passed · landed as b7d2e94
 ```
+
+While it waits, it says its combination's progress again each time the
+count of ended tasks or the running tasks change, as `sluice overview`
+shows them.
 
 Submitting again from the same worktree withdraws that worktree's earlier
 submission.
@@ -478,6 +493,52 @@ it, and no branch reads the result again. An agent never sets aside a
 result; the Claude Code plugin refuses it. Under `--json`, the
 set-aside's record is printed.
 
+## `sluice wait`
+
+`sluice wait <id>` waits for a submission's outcome as a waiting submit
+does. Between reads of the submission's state it runs sluice's rounds,
+so the queue moves while it waits, and it ends with the same outcome
+and exit. A submission already decided is reported at once, and nothing
+runs. `sluice wait <branch>` waits for this worktree's last submission
+to that branch, the one `sluice submit <branch> --status` reports.
+
+With `--timeout`, as `90s`, `9m` or `1h30m`, it returns once that long
+has passed and exits `5`, with the submission as it stands. The
+submission stays in the queue. An agent whose tool calls end before a
+result comes submits without waiting, then waits in steps, for as long
+as `sluice wait` exits `5`:
+
+```console
+$ sluice submit main --no-wait --json
+{"id":12,"branch":"main","ahead":[]}
+$ sluice wait 12 --timeout 9m --json
+```
+
+Under `--json`, it prints one document however it ends, out of time
+and stopped with Ctrl-C included: the submission's record, as `sluice
+status <id> --json` prints it. Read the outcome from its `state` and
+the exit. A landed or withdrawn submission leaves `sluice status
+<branch>`'s listing, so searching that listing for an outcome never
+finds one.
+
+Without `--json`, it prints the submission's state as it changes and,
+while its combination is under test, how far it has got:
+
+```console
+$ sluice wait 12
+#12 queued
+testing main + #12 · 3s of 45m
+testing main + #12 · 7/12 tasks · running sluice:e2e 25m03s, site:prose 40s · 26m10s of 45m
+testing main + #12 · 12 tasks to run, 0 replayed
+passed · landed as b7d2e94
+```
+
+To a branch with pull requests, `sluice wait <branch>` follows the
+worktree's pull request as a waiting `sluice submit` does. While the
+pull request is open, its document under `--json` is the one `sluice
+submit --status --json` prints, `{"pull_request","branch","state"}`;
+once its submission is decided, the submission's record.
+
 ## Exit codes
 
 | exit | meaning |
@@ -485,6 +546,8 @@ set-aside's record is printed.
 | `0` | landed |
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
+| `4` | withdrawn while it was waited on |
+| `5` | `sluice wait --timeout` ran out; the submission stays queued |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
 Every command, not only submit, exits `3` when sluice itself fails (a
@@ -538,9 +601,10 @@ tests if there is room, read finished tests, blame a failure, land what
 passed, write the queue back. Any process may run one, and a lock lets
 only one run at a time for a branch.
 
-- **On one machine**, a waiting `sluice submit` or `wt submit` runs the
-  rounds itself between reads of its own submission's state, so nothing
-  else needs to be running ([ADR 0011](/sluice/decisions/0011/)).
+- **On one machine**, a waiting `sluice submit`, `wt submit` or
+  `sluice wait` runs the rounds itself between reads of its own
+  submission's state, so nothing else needs to be running
+  ([ADR 0011](/sluice/decisions/0011/)).
   `sluice run` and `sluice step` do the same for a host when no agent is
   waiting. For a branch with pull requests, each round first reads its
   open pull requests on GitHub, and `sluice run` serves that branch
