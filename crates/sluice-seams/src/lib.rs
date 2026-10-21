@@ -848,6 +848,145 @@ impl Told {
     }
 }
 
+// ---------------------------------------------------------------------------
+// A submission's report (49; pull-requests-1 proposed 118, 119; ADR 0039)
+// ---------------------------------------------------------------------------
+
+/// What a submission's report says.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictView {
+    pub branch: String,
+    pub id: u64,
+    pub standing: Standing,
+    /// The combination its rows are of, and the branch revision it
+    /// extends; `None` when it shows none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combination: Option<Rev>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<Rev>,
+    /// The submissions tested in it, in chain order (10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submissions: Vec<u64>,
+    /// What the task runner said of each run, by system (proposed 119).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<RunShown>,
+    /// One per required check on each system: failed, flaky, could not
+    /// run, missing, timed out and set aside first, then by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<Row>,
+    /// ADR 0028: while its combination is under test, its tasks as last
+    /// kept on the host that runs it; no result (16, 38).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskProgress>,
+    /// While its combination is under test, the checks of its runs not
+    /// yet finished, each on its system: what a check per check shows in
+    /// progress.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<(String, Option<String>)>,
+}
+
+/// Where the submission stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum Standing {
+    /// In the queue, behind `ahead` (live submissions before it).
+    Queued {
+        ahead: Vec<u64>,
+    },
+    /// Waiting on an `after` submission (7).
+    Waiting,
+    /// In a combination under test.
+    Testing,
+    /// Its combination passed; the combinations ahead have yet to (18).
+    Passed,
+    Landing,
+    Landed {
+        landed_as: Rev,
+    },
+    /// Blamed for the failure its rows show (17, 20).
+    Blamed {
+        timed_out: bool,
+    },
+    Conflict {
+        paths: Vec<String>,
+        with: Vec<Contested>,
+    },
+    /// Tested with a submission blamed for the failure: its combination is
+    /// formed again, and nothing of the failed one is shown (20; proposed
+    /// 118).
+    FormedAgain,
+    Withdrawn,
+}
+
+/// What a run's runner said of it, on one system.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunShown {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub detail: RunDetail,
+}
+
+/// One required check on one system.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Row {
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// Its key's hash; `None` for a check left with no result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub result: RowResult,
+    /// Answered from an earlier pass, not run (38).
+    pub replayed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// 78: the signer whose signature counted it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    /// 84: what its executor enforced; none for a replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<Enforced>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
+    /// 19: the result a flaky reading contradicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flaky: Option<Contradicted>,
+    /// Could-not-run-1 115: why it could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_run: Option<String>,
+    /// Could-not-run-1 116: why its result was set aside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_aside: Option<String>,
+    /// 20: where what it printed is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RowResult {
+    Failed,
+    Flaky,
+    NotRun,
+    Missing,
+    TimedOut,
+    SetAside,
+    Passed,
+}
+
+/// 19: the recorded result a flaky reading contradicts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contradicted {
+    pub outcome: Outcome,
+    pub at: String,
+    pub combination: Rev,
+    /// The session's worktree, for a session run (session-runs-1 92).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+}
+
 /// 50, 51: an outcome for one entry's session. `id` names the entry and
 /// the outcome, so a repeat after a crash is known as one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -857,6 +996,9 @@ pub struct Notification {
     pub branch: String,
     pub to: Submitter,
     pub told: Told,
+    /// 49: the entry's report as its records hold it when told, for a
+    /// driver that shows one (ADR 0039); `None` when it could not be read.
+    pub report: Option<VerdictView>,
 }
 
 pub trait Driver {

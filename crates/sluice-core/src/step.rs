@@ -391,12 +391,16 @@ impl Sluice<'_> {
         let line = self.read_line(branch)?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
+            // ADR 0039: the report as it stands, for a driver that shows
+            // one; a read that fails tells the outcome without it.
+            let report = self.verdict_of(branch, item.submission).ok().flatten();
             self.seams.driver.notify(&Notification {
                 id: item.id.clone(),
                 submission: item.submission,
                 branch: branch.into(),
                 to: sub.from.clone(),
                 told: item.told.to_told(),
+                report,
             })?;
             let now = self.now();
             self.update(branch, |l| {

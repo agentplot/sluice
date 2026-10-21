@@ -49,10 +49,14 @@ pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Ve
     match app.installation(repo) {
         Ok(i) => {
             // Contents to land at all; workflows because GitHub refuses an
-            // app's push of any change under `.github/workflows`.
+            // app's push of any change under `.github/workflows`; checks
+            // and pull requests to show a pull request its state and its
+            // report (ADRs 0021, 0039).
             for (key, what, grant) in [
                 ("contents", "contents", "Contents"),
                 ("workflows", "workflows", "Workflows"),
+                ("checks", "checks", "Checks"),
+                ("pull_requests", "pull requests", "Pull requests"),
             ] {
                 found.push(match i.permissions.get(key).map(String::as_str) {
                     Some("write") => ok(format!("the app may write {repo}'s {what}")),

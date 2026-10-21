@@ -5,133 +5,25 @@
 //! it decides nothing (27, 30; pull-requests-1 proposed 118).
 
 use anyhow::Result;
-use serde::Serialize;
-use sluice_seams::{Enforced, Outcome, Rev, RunDetail, TaskProgress};
+use sluice_seams::{Outcome, Rev};
 
 use crate::line::Line;
 use crate::records::{
     parse_lines, ConflictRecord, Event, FailedTask, LogLine, Recorded, ResultKind, ResultLine,
     SetAside, State, Submission,
 };
+
+fn contradicted(r: &Recorded) -> Contradicted {
+    Contradicted {
+        outcome: r.outcome,
+        at: r.at.clone(),
+        combination: r.combination.clone(),
+        worktree: r.worktree.clone(),
+    }
+}
 use crate::Sluice;
 
-/// What a submission's report says.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct VerdictView {
-    pub branch: String,
-    pub id: u64,
-    pub standing: Standing,
-    /// The combination its rows are of, and the branch revision it
-    /// extends; `None` when it shows none.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub combination: Option<Rev>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub on: Option<Rev>,
-    /// The submissions tested in it, in chain order (10).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub submissions: Vec<u64>,
-    /// What the task runner said of each run, by system (proposed 119).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub runs: Vec<RunShown>,
-    /// One per required check on each system: failed, flaky, could not
-    /// run, missing, timed out and set aside first, then by name.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rows: Vec<Row>,
-    /// ADR 0028: while its combination is under test, its tasks as last
-    /// kept on the host that runs it; no result (16, 38).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<TaskProgress>,
-}
-
-/// Where the submission stands.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
-pub enum Standing {
-    /// In the queue, behind `ahead` (live submissions before it).
-    Queued {
-        ahead: Vec<u64>,
-    },
-    /// Waiting on an `after` submission (7).
-    Waiting,
-    /// In a combination under test.
-    Testing,
-    /// Its combination passed; the combinations ahead have yet to (18).
-    Passed,
-    Landing,
-    Landed {
-        landed_as: Rev,
-    },
-    /// Blamed for the failure its rows show (17, 20).
-    Blamed {
-        timed_out: bool,
-    },
-    Conflict {
-        conflict: ConflictRecord,
-    },
-    /// Tested with a submission blamed for the failure: its combination is
-    /// formed again, and nothing of the failed one is shown (20; proposed
-    /// 118).
-    FormedAgain,
-    Withdrawn,
-}
-
-/// What a run's runner said of it, on one system.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct RunShown {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
-    pub detail: RunDetail,
-}
-
-/// One required check on one system.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Row {
-    pub task: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
-    /// Its key's hash; `None` for a check left with no result.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
-    pub result: RowResult,
-    /// Answered from an earlier pass, not run (38).
-    pub replayed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    /// 78: the signer whose signature counted it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer: Option<String>,
-    /// 84: what its executor enforced; none for a replay.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executor: Option<Enforced>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub took_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempts: Option<u32>,
-    /// 19: the result a flaky reading contradicts.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flaky: Option<Recorded>,
-    /// Could-not-run-1 115: why it could not run.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_run: Option<String>,
-    /// Could-not-run-1 116: why its result was set aside.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub set_aside: Option<String>,
-    /// 20: where what it printed is kept.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub log: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RowResult {
-    Failed,
-    Flaky,
-    NotRun,
-    Missing,
-    TimedOut,
-    SetAside,
-    Passed,
-}
+pub use sluice_seams::{Contradicted, Row, RowResult, RunShown, Standing, VerdictView};
 
 impl Sluice<'_> {
     /// 49, 26: submission `id`'s report on `branch`, live or finished,
@@ -170,6 +62,31 @@ impl Sluice<'_> {
                     .progress(branch)?
                     .remove(&c.id)
                     .unwrap_or_default();
+                let open: Vec<_> = c.runs.iter().filter(|r| !r.state.done()).collect();
+                for r in &open {
+                    // A tag names no check until the runner expands it; the
+                    // one run under way names its tasks as it goes.
+                    let named: Vec<String> = if r.checks.iter().any(|c| c.starts_with('#')) {
+                        if open.len() == 1 {
+                            view.tasks.iter().map(|t| t.target.clone()).collect()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        r.checks.clone()
+                    };
+                    for task in named {
+                        if !view
+                            .rows
+                            .iter()
+                            .any(|x| x.task == task && x.system == r.system)
+                        {
+                            view.pending.push((task, r.system.clone()));
+                        }
+                    }
+                }
+                view.pending.sort();
+                view.pending.dedup();
             }
         }
         Ok(Some(view))
@@ -195,6 +112,7 @@ pub fn verdict_view(
         runs: Vec::new(),
         rows: Vec::new(),
         tasks: Vec::new(),
+        pending: Vec::new(),
     };
     let shows_rows = matches!(
         view.standing,
@@ -227,12 +145,16 @@ fn standing(sub: &Submission, ahead: &[u64], log: &[LogLine]) -> Standing {
         State::Failed => Standing::Blamed {
             timed_out: sub.result.as_deref() == Some("timed out"),
         },
-        State::Conflict => Standing::Conflict {
-            conflict: sub.conflict.clone().unwrap_or(ConflictRecord {
+        State::Conflict => {
+            let c = sub.conflict.clone().unwrap_or(ConflictRecord {
                 paths: Vec::new(),
                 with: Vec::new(),
-            }),
-        },
+            });
+            Standing::Conflict {
+                paths: c.paths,
+                with: c.with,
+            }
+        }
         State::Withdrawn => Standing::Withdrawn,
         State::Queued if blamed_with(sub, log) => Standing::FormedAgain,
         State::Queued => Standing::Queued {
@@ -328,7 +250,7 @@ fn rows(
                 attempts: r.attempts,
                 flaky: failed
                     .and_then(|f| f.flaky.as_ref())
-                    .map(|k| k.other.clone()),
+                    .map(|k| contradicted(&k.other)),
                 not_run: None,
                 set_aside: aside.map(|a| a.reason.clone()),
                 log: failed.and_then(|f| f.log.clone()),
@@ -364,7 +286,7 @@ fn rows(
             executor: None,
             took_ms: None,
             attempts: None,
-            flaky: f.flaky.as_ref().map(|k| k.other.clone()),
+            flaky: f.flaky.as_ref().map(|k| contradicted(&k.other)),
             not_run: f.not_run.clone(),
             set_aside: None,
             log: f.log.clone(),

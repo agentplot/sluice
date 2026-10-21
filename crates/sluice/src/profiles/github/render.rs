@@ -481,8 +481,7 @@ pub fn pending_check(status: Status, word: &str) -> Posting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sluice_core::records::Recorded;
-    use sluice_core::verdict_view::RunShown;
+    use sluice_core::verdict_view::{Contradicted, RunShown};
     use sluice_seams::{Rev, RunDetail};
 
     fn row(task: &str, result: RowResult) -> Row {
@@ -529,6 +528,7 @@ mod tests {
             }],
             rows,
             tasks: Vec::new(),
+            pending: Vec::new(),
         }
     }
 
@@ -562,13 +562,11 @@ mod tests {
         replayed.executor = None;
         replayed.took_ms = None;
         let mut flaky = row("app:e2e", RowResult::Flaky);
-        flaky.flaky = Some(Recorded {
+        flaky.flaky = Some(Contradicted {
             outcome: sluice_seams::Outcome::Pass,
             at: "2026-10-19T10:00:00Z".into(),
-            branch: "main".into(),
             combination: Rev::new("c0"),
             worktree: None,
-            log: None,
         });
         let mut could_not = row("site:check", RowResult::NotRun);
         could_not.not_run = Some("the host failed [tests] ready `docker info`, 3 runs".into());
