@@ -32,11 +32,55 @@ pub fn flaky(task: &str, k: &FlakyKey) -> String {
 }
 
 /// Could-not-run-1 116: the operator's way to set aside a fail the host
-/// caused.
+/// caused, or a time limit did before sluice told those apart
+/// (time-limit-1 66).
 pub fn set_aside_hint(task: &str, at: &str) -> String {
     format!(
-        "if the host caused that fail, the operator can set it aside: \
+        "if the host or a time limit caused that fail, the operator can set it aside: \
          sluice set-aside {task} --at {at} --reason \"…\""
+    )
+}
+
+/// 19, could-not-run-1 116: how a head whose key reads flaky lands. Never
+/// a change to what the test reads only to have it tested again.
+pub fn flaky_way_on(tasks: &[&str], other_failed: bool) -> String {
+    let which = if other_failed {
+        "the other result"
+    } else {
+        "this run's fail"
+    };
+    format!(
+        "the same head lands once the operator sets {which} aside, or once a real fix \
+         changes what {} {}",
+        tasks.join(", "),
+        if tasks.len() == 1 { "reads" } else { "read" }
+    )
+}
+
+/// Time-limit-1 66: the tests a run's time limit ended, which have no
+/// result.
+pub fn cut_off(tasks: &[&str]) -> String {
+    format!(
+        "timed out: {} {} running when the time limit ended the run",
+        tasks.join(", "),
+        if tasks.len() == 1 { "was" } else { "were" }
+    )
+}
+
+/// Time-limit-1 66: the way on after a run its time limit ended. Nothing
+/// was recorded for a test it cut off, so the same head is tested afresh.
+pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
+    let (recorded, which) = match tasks {
+        [] => (String::new(), "a test".to_string()),
+        [one] => (format!("nothing was recorded for {one}: "), one.to_string()),
+        _ => (
+            format!("nothing was recorded for {}: ", tasks.join(", ")),
+            "one".to_string(),
+        ),
+    };
+    format!(
+        "{recorded}if the host was slow, submit the same head again{same_commits}; \
+         if {which} never ends, fix it in your worktree and submit again"
     )
 }
 
