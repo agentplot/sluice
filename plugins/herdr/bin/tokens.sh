@@ -42,7 +42,7 @@ want=$(jqw -n -c --argjson panes "$panes" --argjson docs "$docs" --argjson extra
   { panes: [ $panes[] | select(.top) | . as $p
       | ($docs | map(select(.repository == $p.repo))) as $d
       | {id: .pane_id, v: (if ($d | length) == 0 then ""
-          else $d | pane_token($p.top; $extra[$p.repo].paths // {}; $extra[$p.repo].failed // {}; $checks[$p.top]; $now) end)} ],
+          else $d | pane_token($p.top; $extra[$p.repo].paths // {}; $extra[$p.repo].failed // {}; $checks[$p.top]; $now; $p.named) end)} ],
     spaces: [ $panes | group_by(.workspace_id)[] | .[0].workspace_id as $w
       | (map(.repo) | unique) as $repos
       | {id: $w, v: ($docs | map(select(.repository as $r | $repos | index($r))) | queue_token)} ] }')

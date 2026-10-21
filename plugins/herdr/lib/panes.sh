@@ -1,9 +1,10 @@
 # shellcheck shell=sh disable=SC2154,SC2016 # jq programs; common.sh sets lib, state and config.
 # herdr's panes as the plugin needs them: each with the top of the worktree
-# it is in, that worktree's repository, and whether it is the pane in front
-# of the user (it, its tab and its workspace all focused). Sourced.
+# it is in, that worktree's repository, whether it is the pane in front of
+# the user (it, its tab and its workspace all focused), and the branch its
+# `sluice_branch` token names, which any source may set. Sourced.
 
-# Prints [{pane_id, tab_id, workspace_id, agent, top, repo, front}].
+# Prints [{pane_id, tab_id, workspace_id, agent, top, repo, front, named}].
 panes_json() {
   raw=$(hd pane list 2>/dev/null) || raw='{}'
   tabs=$(hd tab list 2>/dev/null) || tabs='{}'
@@ -24,7 +25,9 @@ panes_json() {
     | ([$w.result.workspaces // [] | .[] | select(.focused) | .workspace_id]) as $fw
     | [ $p.result.panes // [] | .[] | (.foreground_cwd // .cwd) as $d | .tab_id as $tab | .workspace_id as $ws
         | {pane_id, tab_id, workspace_id, agent, top: $where[$d].top, repo: $where[$d].repo,
-           front: (.focused == true and ($ft | index($tab)) != null and ($fw | index($ws)) != null)} ]'
+           front: (.focused == true and ($ft | index($tab)) != null and ($fw | index($ws)) != null),
+           named: (.tokens.sluice_branch // null | if type == "string" then gsub("[[:cntrl:]]"; "") else null end
+             | if . == "" then null else . end)} ]'
 }
 
 # Bring a pane forward: an agent's pane by `agent focus`, which brings its

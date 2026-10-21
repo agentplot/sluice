@@ -10,10 +10,10 @@ suites through `sluice exec main -- <command>`.
 
 ## 2. herdr
 
-- [ ] 2.1 Carry each pane's `sluice_branch` token in `panes_json`, and give `pane_token` the named branch, in the order of D2 and the words of D3; verify the `plugin-herdr` tasks `test-sh` and `test-dash` pass with the tests `sidebar: a named branch`, `sidebar: a submission comes before a named branch`, `sidebar: a named branch with nothing queued`, `sidebar: a named branch with no records` and `sidebar: a named branch counts its checks`, which fail before the change.
-- [ ] 2.2 Forecast a worktree only when one of its panes has no named branch; verify the test `sidebar: no forecast for a named pane` in the same tasks.
-- [ ] 2.3 Put the focused pane's named branch first in the popup and the dashboard, shown when idle and with no records; verify the tests `status: the focused pane's named branch comes first` and `status: a named branch with no records` in the same tasks.
-- [ ] 2.4 Say how an orchestrator names a pane's branch in the plugin's README and `guides/herdr.md`; verify `site:prose` reports nothing.
+- [x] 2.1 Carry each pane's `sluice_branch` token in `panes_json`, and give `pane_token` the named branch, in the order of D2 and the words of D3; verify the `plugin-herdr` tasks `test-sh` and `test-dash` pass with the tests `sidebar: a named branch`, `sidebar: a named branch with nothing queued`, `sidebar: a named branch with no records`, `sidebar: a named branch counts its checks` and `sidebar: a named branch with more than one under test`, and with `sidebar: a submission comes before a named branch` and `sidebar: a blame comes before a named branch`, which fail before the change.
+- [x] 2.2 Forecast a worktree only when one of its panes has no named branch; verify the test `sidebar: no forecast for a named pane` in the same tasks.
+- [x] 2.3 Put the focused pane's named branch first in the popup and the dashboard, shown when idle and with no records; verify the tests `status: the focused pane's named branch comes first` and `status: a named branch with no records` in the same tasks.
+- [x] 2.4 Say how an orchestrator names a pane's branch in the plugin's README and `guides/herdr.md`; verify `site:prose` reports nothing.
 
 ## 3. Board
 

@@ -173,6 +173,13 @@ panes() {
   jq -n -c --arg f "$1" '{result: {workspaces: [{workspace_id: "w1", focused: ($f == "p1")}, {workspace_id: "w2", focused: ($f == "p2")}]}}' >"$FAKE/spaces.json"
 }
 
+# The token sluice_branch=$2 on pane $1, as an orchestrator sets it,
+# beside another source's token in the one map herdr keeps.
+named() {
+  jq -c --arg p "$1" --arg b "$2" '.result.panes |= map(if .pane_id == $p then .tokens = {sluice_branch: $b, other_tool: "x"} else . end)' \
+    "$FAKE/panes.json" >"$FAKE/panes.next" && mv "$FAKE/panes.next" "$FAKE/panes.json"
+}
+
 # A document for repo: main with nothing queued, changed by the jq in $1.
 doc() {
   jq -n -c --arg repo "$common" --arg main "$main" --arg work "$work" --arg other "$other" "
@@ -201,6 +208,18 @@ testing95=$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '
 blamed87='.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:44:00Z", event: "blamed", id: 87, combination: "b03f4a00e8"}]'
 landed94='.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:33:10Z", event: "landed", ids: [94], to: "46cc4290c0"}]'
 conflict53='.branches[0].recent += [{schema: "sluice/log@1", at: "2026-10-16T19:44:30Z", event: "conflict", id: 53, paths: ["a.rs"], with: []}]'
+# release, whose submissions come from other worktrees: #12 under test, 3
+# of 8 tasks ended; #13 to #15 queued; two agents' checks held to it.
+release_busy='.branches += [{branch: "release", at: $main, version: 1, window: 1, parallel: 1, depth: 4,
+    candidates: [{id: "c9", submissions: [12], revision: "x", state: "testing", started: "2026-10-16T19:42:00Z",
+      limit: 900, targets: ["#check-fast"], executor: "sandbox", ran: 0, replayed: 0, failed: [],
+      tasks: ([range(3) | {target: "t\(.):test", state: "passed"}] + [range(5) | {target: "u\(.):test", state: "waiting"}])}],
+    submissions: [12, 13, 14, 15 | {id: ., state: (if . == 12 then "testing" else "queued" end),
+      from: {agent: "unit", worktree: "u", path: "/elsewhere/u\(.)"}}],
+    recent: []}]
+  | .sessions += [{worktree: "/elsewhere/u1", branch: "release", run: {started: "2026-10-16T19:44:00Z"}},
+      {worktree: "/elsewhere/u2", branch: "release", run: {started: "2026-10-16T19:44:00Z"}}]'
+release_idle='.branches += [{branch: "release", at: $main, version: 1, window: 1, depth: 0, candidates: [], submissions: [], recent: []}]'
 status_of() {
   # $1 id, $2 path, $3 state, $4 failed tasks as JSON
   jq -n -c --argjson id "$1" --arg p "$2" --arg s "$3" --argjson f "${4:-[]}" \
@@ -963,6 +982,29 @@ printf '%s' "$third" | grep -q '^… 2 lines above · ↑ scrolls$' || fail "it 
 [ "$(printf '%s\n' "$third" | wc -l)" -le 12 ] || fail "a scrolled frame is taller than 12 lines: $third"
 pass
 
+focused_p1=$(jq -c --arg w "$work" '.focused_pane_cwd = $w | .focused_pane_id = "p1"' "$here/docs/context.json")
+
+fresh "status: the focused pane's named branch comes first"
+feed "$(printf '%s\n' "$board" | jq -c '.branches = [(.branches[0] | .branch = "release"),
+  {branch: "bolt/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
+named p1 bolt/a
+out=$(HERDR_PLUGIN_CONTEXT_JSON=$focused_p1 sh "$plugin/bin/status.sh" --once)
+[ "$(printf '%s\n' "$out" | sed -n -E 's/^(release|main|bolt\/a) at .*/\1/p' | tr '\n' ' ')" = 'bolt/a release main ' ] ||
+  fail "the named branch is not first: $out"
+printf '%s' "$out" | grep -q 'with nothing queued$' && fail "the named branch is counted with nothing queued: $out"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+case $out in "sluice release · "*"  |  sluice main · "*) ;; *) fail "the segment moved: $out" ;; esac
+pass
+
+fresh 'status: a named branch with no records'
+feed "$testing95"
+named p1 hotfix
+out=$(HERDR_PLUGIN_CONTEXT_JSON=$focused_p1 sh "$plugin/bin/status.sh" --once)
+first=$(printf '%s\n' "$out" | grep -E -m1 '^(hotfix|main)( at | · )')
+[ "$first" = 'hotfix · no records' ] || fail "the first branch line is '$first': $out"
+pass
+
 fresh 'status: setup shows, never edits'
 before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
 # A state directory outside the home directory is named whole.
@@ -1272,6 +1314,80 @@ tokens
 grep -q 'submit' "$FAKE/sluice-calls" && fail "a forecast ran"
 has '--token sluice=3 ahead'
 hasnt '3 ahead ·'
+pass
+
+fresh 'sidebar: a named branch'
+named p1 release
+feed "$(doc "$release_busy")"
+tokens
+has '--token sluice=release · 3 queued · #12 testing 3/8 · 2 checking'
+pass
+
+fresh 'sidebar: a submission comes before a named branch'
+named p1 release
+feed "$(printf '%s' "$testing95" | jq -c --arg main "$main" "$release_busy")"
+tokens
+has '--token sluice=#95 testing 3m/15m'
+hasnt 'sluice=release'
+pass
+
+fresh 'sidebar: a blame comes before a named branch'
+status_of 87 "$work" withdrawn '["tests:t-cards"]'
+named p1 release
+feed "$(doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 87 '$work' testing)]")" "$(doc "$blamed87 | $release_busy")"
+tokens
+has '--token sluice=#87 BLAMED · tests:t-cards'
+hasnt 'sluice=release'
+pass
+
+fresh 'sidebar: a named branch with nothing queued'
+named p1 release
+feed "$(doc "$release_idle")"
+tokens
+has '--token sluice=release · nothing queued'
+pass
+
+fresh 'sidebar: a named branch with no records'
+named p1 release
+feed "$(doc)"
+tokens
+has '--token sluice=release · no records'
+pass
+
+fresh 'sidebar: a named branch counts its checks'
+named p1 release
+feed "$(doc "$release_idle | .sessions = [$checking,
+  {worktree: \"/elsewhere/u1\", branch: \"release\", run: {started: \"2026-10-16T19:44:00Z\"}},
+  {worktree: \"/elsewhere/u2\", branch: \"release\"}]")"
+tokens
+has '--token sluice=release · 1 checking'
+hasnt 'checking 1/3'
+pass
+
+fresh 'sidebar: a named branch with more than one under test'
+named p1 release
+feed "$(doc "$release_busy | .sessions = []
+  | .branches[1].candidates[0] |= (del(.tasks) | .started = \"2026-10-16T19:41:10Z\")
+  | .branches[1].candidates += [.branches[1].candidates[0] | .id = \"c10\" | .submissions = [14]]
+  | .branches[1].submissions |= map(select(.id == 12 or .id == 14) | .state = \"testing\")")"
+tokens
+has '--token sluice=release · #12 testing 4m +1 more'
+pass
+
+fresh 'sidebar: no forecast for a named pane'
+named p1 release
+feed "$(doc "$release_idle | .sessions = [{worktree: \$work, branch: \"main\"}]")"
+forecast
+grep -q 'submit' "$FAKE/sluice-calls" && fail "a forecast ran for a named pane: $(cat "$FAKE/sluice-calls")"
+# Another pane in the same worktree, with no branch named, has one.
+jq -c --arg work "$work" '.result.panes += [{pane_id: "p4", tab_id: "t1", workspace_id: "w1", cwd: $work, foreground_cwd: $work, focused: false}]' \
+  "$FAKE/panes.json" >"$FAKE/panes.next" && mv "$FAKE/panes.next" "$FAKE/panes.json"
+forecast
+tokens
+[ "$(grep -c 'work: submit main --check --json' "$FAKE/sluice-calls")" = 1 ] || fail "no forecast for the pane with no branch named: $(cat "$FAKE/sluice-calls")"
+has 'pane report-metadata p4 --source agentplot.sluice'
+has '--token sluice=3 ahead · clean'
+has '--token sluice=release · nothing queued'
 pass
 
 fresh 'sidebar: queued'
