@@ -53,7 +53,7 @@ suites through `sluice exec main -- <command>`.
 
 ## 8. Integration
 
-- [ ] 8.1 Run `sluice exec main` from this worktree, checking `docker info` and `sysctl vm.loadavg` first; verify every check passes.
+- [x] 8.1 Run `sluice exec main` from this worktree, checking `docker info` and `sysctl vm.loadavg` first; verify every check passes.
 - [ ] 8.2 After landing, open a pull request on sluice's own `main` and read its report comment and checks while testing and once landed; run `sluice forge check main`; record what was seen in the pull request's description. This is a by-hand check, because the gate cannot reach GitHub.
 
 ## Workflow follow-up
