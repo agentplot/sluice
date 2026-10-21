@@ -39,7 +39,7 @@ suites through `sluice exec main -- <command>`.
 ## 6. The pull request
 
 - [x] 6.1 Add `Posting.text`, comment ids and `Forge::edit_comment` to `forge.rs`, `rest.rs` and `fake.rs`; verify the fake API in `tests/profiles/forge/github.rs` sees `output.text` and a PATCH of a comment.
-- [ ] 6.2 Write `github/render.rs`: the head line, the combination line, the totals, the rows in order, 20 then collapsed, the executor, changed files and output sections, one section per system, the size cut; verify snapshot unit tests for blamed, landed, testing, formed again, could not run, flaky, many checks and an oversized report.
+- [x] 6.2 Write `github/render.rs`: the head line, the combination line, the totals, the rows in order, 20 then collapsed, the executor, changed files and output sections, one section per system, the size cut; verify snapshot unit tests for blamed, landed, testing, formed again, could not run, flaky, many checks and an oversized report.
 - [ ] 6.3 Post the report comment in place and the `sluice` check's text from `verdict_of`, live rows from the overview while testing, posting only on change; link the blamed comment to the report; verify `tests/profiles/pull_requests.rs` cases for edited-not-repeated, queued-only, no repeated posts, landed and blamed.
 - [ ] 6.4 Post `sluice / <check> (<system>)`, or `sluice / <check>`, per required check per system, read back before posting; verify `tests/profiles/pull_requests.rs` cases for a build on three systems, a result read by key and no systems.
 - [ ] 6.5 Behind a blamed pull request, its checks go back to queued and its report shows no rows; verify the two-pull-request case for S50: #12's comment and checks name neither #10 nor `app:test`.

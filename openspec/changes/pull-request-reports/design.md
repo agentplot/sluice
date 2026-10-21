@@ -200,6 +200,10 @@ and removed by design (ADR 0028).
 - **While testing**, the rows come from the overview's
   `CandidateView.tasks` for the submission's combination: each task
   `waiting`, `running`, `passed`, `failed` or `replayed`, with its times.
+  - A task that has ended reads "Ended", with its time and no outcome,
+    until the combination's results are read. A live "failed" could be
+    another submission's failure, which clause 20 keeps from this pull
+    request until a culprit is named.
   - A post happens only when a task's state changes, so a long run
     costs one edit per task that ends.
   - Rounds run every few seconds, so time alone never triggers a post.
