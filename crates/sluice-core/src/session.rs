@@ -155,6 +155,7 @@ impl Sluice<'_> {
             limits: plan.policy.limits.clone(),
             tests,
             replay: false,
+            system: None,
         }
     }
 
@@ -347,6 +348,8 @@ impl Sluice<'_> {
                 &plan.branch,
                 head,
                 Some(worktree),
+                // The host's own system: a line naming none is read as it.
+                None,
             );
             if !have.iter().any(|x| x.same_as(&r)) {
                 bytes.extend(crate::records::to_line(&r));

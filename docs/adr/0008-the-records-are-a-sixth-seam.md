@@ -36,3 +36,4 @@ Both deployments are designed and neither is built yet. The first cut stays on o
 - ADR 0007's local JSON is the local files profile; the record form is the same in every profile (53).
 - Rule core.11 reads "from every host that submits to its branch".
 - A candidate's checks run in a container place on whichever host executes them (C.1, 60); the task runner's cache is an optimization neither deployment depends on.
+- The central server is superseded by ADR 0037: sluice on many hosts is peers alone, and the records seam's profiles are local files and remote refs.

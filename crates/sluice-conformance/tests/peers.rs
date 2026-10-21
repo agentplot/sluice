@@ -1,0 +1,666 @@
+//! A branch whose records are on its remote, kept by one instance at a
+//! time and taken by another after the lease (72 to 74; S17).
+
+use std::time::Duration;
+
+use sluice_conformance::{policy, Crash, Harness, Rig, BRANCH};
+use sluice_core::records::{Event, State};
+use sluice_core::{Peer, Sluice, Step};
+
+/// The bolt policy with its records on `origin`, trusting the signer
+/// `box` this host signs as.
+fn peers() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+/// Instance `name` of the rig, on its own host, with a lease of five
+/// minutes.
+fn on<'a>(h: &'a Harness, name: &str) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("box".into()),
+        systems: None,
+    })
+}
+
+fn took(h: &Harness) -> Vec<(String, Option<String>)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Took { by, from } => Some((by, from)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 72; the peer-lead spec's "A host keeps a branch only by
+/// writing its state"
+#[test]
+fn the_first_instance_takes_the_branch_and_another_is_led() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    assert_eq!(on(&h, "a").step(BRANCH).unwrap(), Step::Stepped);
+    assert_eq!(took(&h), [("a".to_string(), None)]);
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+    for _ in 0..4 {
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 72, 73, 58; the peer-lead spec's "A lead that went quiet"
+/// and "The former lead stops after a takeover"
+#[test]
+fn a_quiet_lead_is_taken_after_the_lease_by_the_takers_own_observation() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    on(&h, "a").step(BRANCH).unwrap();
+    // a goes quiet with work to do; b sees the same version stand.
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+    h.w().advance(chrono::Duration::minutes(4));
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+    h.w().advance(chrono::Duration::minutes(2));
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Stepped);
+    assert_eq!(
+        took(&h).last().cloned(),
+        Some(("b".to_string(), Some("a".to_string())))
+    );
+    // The former lead writes nothing more for the branch.
+    assert_eq!(on(&h, "a").step(BRANCH).unwrap(), Step::Led);
+    for _ in 0..4 {
+        on(&h, "b").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.w().moves().len(), 1);
+}
+
+/// satisfies: 73; a version written meanwhile starts the lease again
+#[test]
+fn a_lead_that_writes_keeps_the_branch() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    on(&h, "a").step(BRANCH).unwrap();
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+    h.w().advance(chrono::Duration::minutes(4));
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/b");
+    on(&h, "a").step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(2));
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+}
+
+/// A branch with nothing to do is not taken, however long its lead is
+/// quiet.
+#[test]
+fn a_quiet_branch_with_nothing_to_do_is_not_taken() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..4 {
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    on(&h, "b").step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(30));
+    assert_eq!(on(&h, "b").step(BRANCH).unwrap(), Step::Led);
+    assert_eq!(took(&h).len(), 1);
+}
+
+/// satisfies: 72, 73, 24, 59; S17
+#[test]
+fn s17_a_landing_left_by_a_quiet_lead_lands_once_by_the_next() {
+    let h = peers();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    on(&h, "a").step(BRANCH).unwrap();
+    h.w().crash(Crash::BeforeMove);
+    assert!(on(&h, "a").step(BRANCH).is_err());
+    assert_eq!(h.sub(one).state, State::Landing);
+    on(&h, "b").step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(6));
+    on(&h, "b").step(BRANCH).unwrap();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(on(&h, "a").step(BRANCH).unwrap(), Step::Led);
+    assert_eq!(h.w().moves().len(), 1);
+    assert_eq!(h.w().told_to("agent-a").len(), 1);
+}
+
+/// Instance `name`, signing as `signer` or as no one.
+fn as_signer<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: signer.map(str::to_string),
+        systems: None,
+    })
+}
+
+/// The runs of the branch's first candidate: `(host, state)`.
+fn runs(h: &Harness) -> Vec<(Option<String>, sluice_core::records::RunState)> {
+    let s = h.sluice();
+    let line =
+        sluice_core::line::Line::load(BRANCH, s.seams().state.read(BRANCH).unwrap()).unwrap();
+    line.doc
+        .candidates
+        .iter()
+        .flat_map(|c| c.runs.iter().map(|r| (r.host.clone(), r.state)))
+        .collect()
+}
+
+fn claims(h: &Harness) -> Vec<String> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Claimed { host, .. } => Some(host),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A lead that signs as no one the gate trusts, so other hosts take the
+/// runs; a submission it has opened a run for.
+fn opened(h: &Harness) -> u64 {
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    as_signer(h, "lead", None).step(BRANCH).unwrap();
+    assert_eq!(runs(h), [(None, sluice_core::records::RunState::Open)]);
+    one
+}
+
+/// satisfies: 75; the run-claims spec's "Two hosts reach for one run"
+#[test]
+fn a_run_is_taken_by_one_claim() {
+    let h = peers();
+    opened(&h);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b"]);
+    assert_eq!(h.w().requests().len(), 1);
+}
+
+/// satisfies: 71, 75; the run-claims spec's "A full host claims nothing"
+#[test]
+fn a_full_host_claims_nothing() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(0);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert!(claims(&h).is_empty());
+}
+
+/// satisfies: 79, 107: a host whose signer the gate does not trust takes
+/// no run of it
+#[test]
+fn a_host_the_gate_does_not_trust_claims_nothing() {
+    let h = peers();
+    opened(&h);
+    as_signer(&h, "b", Some("sessions")).step(BRANCH).unwrap();
+    as_signer(&h, "c", None).step(BRANCH).unwrap();
+    assert!(claims(&h).is_empty());
+}
+
+/// satisfies: 76; the run-claims spec's "The first combination first"
+#[test]
+fn runs_are_claimed_earliest_first() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/b");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().host_limit(1);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let started = h.w().requests();
+    assert_eq!(started.len(), 1);
+    let s = h.sluice();
+    let line =
+        sluice_core::line::Line::load(BRANCH, s.seams().state.read(BRANCH).unwrap()).unwrap();
+    let first = line
+        .doc
+        .candidates
+        .iter()
+        .find(|c| c.submissions.len() == 1)
+        .unwrap();
+    assert_eq!(started[0].revision, first.revision);
+}
+
+/// satisfies: 77, 60; the run-claims spec's "A host stops mid-run" and
+/// "A late report"; S20
+#[test]
+fn s20_a_lapsed_claim_runs_again_elsewhere_and_its_late_report_is_not_written() {
+    let h = peers();
+    let one = opened(&h);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(runs(&h)[0].0.as_deref(), Some("b"));
+    // b stops; the lead watches its sign of life stand still.
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(3));
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Lapsed { host, .. } if host == "b")));
+    assert_eq!(runs(&h)[0], (None, sluice_core::records::RunState::Open));
+    // c claims it again and passes it.
+    h.w().hold_runs(false);
+    as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    // b returns: its run finished meanwhile; nothing of it is written, and
+    // its place goes before it claims again (81).
+    h.w().complete_all();
+    let places_before = h.w().live_places().len();
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert!(h.w().live_places().len() < places_before);
+    for _ in 0..4 {
+        as_signer(&h, "lead", None).step(BRANCH).unwrap();
+        as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 74, 77; the run-claims spec's "A long run keeps its claim"
+#[test]
+fn a_long_run_keeps_its_claim_while_its_host_shows_it_is_alive() {
+    let h = peers();
+    opened(&h);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    for _ in 0..10 {
+        h.w().advance(chrono::Duration::minutes(1));
+        as_signer(&h, "lead", None).step(BRANCH).unwrap();
+        as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    }
+    assert!(!h.events().iter().any(|e| matches!(e, Event::Lapsed { .. })));
+    assert_eq!(runs(&h)[0].0.as_deref(), Some("b"));
+}
+
+/// The peers policy with two systems, `main`'s required checks needing
+/// both.
+fn two_systems() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\nsystems = [\"linux-x64\", \"macos-arm64\"]\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\n[systems]\n\
+         linux-x64 = { os = \"linux\", arch = \"x86_64\" }\n\
+         macos-arm64 = { os = \"macos\", arch = \"aarch64\" }\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+fn with_systems<'a>(h: &'a Harness, name: &str, systems: &[&str]) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("box".into()),
+        systems: Some(systems.iter().map(|s| s.to_string()).collect()),
+    })
+}
+
+/// satisfies: 87; the standing-executor spec's "A box for one system"
+#[test]
+fn a_host_claims_only_runs_of_its_systems() {
+    let h = two_systems();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    with_systems(&h, "box", &["linux-x64"])
+        .step(BRANCH)
+        .unwrap();
+    let held: Vec<(Option<String>, Option<String>)> = {
+        let s = h.sluice();
+        let line =
+            sluice_core::line::Line::load(BRANCH, s.seams().state.read(BRANCH).unwrap()).unwrap();
+        line.doc.candidates[0]
+            .runs
+            .iter()
+            .map(|r| (r.system.clone(), r.host.clone()))
+            .collect()
+    };
+    assert_eq!(
+        held,
+        [
+            (Some("linux-x64".into()), Some("box".into())),
+            (Some("macos-arm64".into()), None)
+        ]
+    );
+}
+
+/// satisfies: 87; the standing-executor spec's "A system the host is not"
+#[test]
+fn a_host_naming_a_system_it_is_not_is_refused() {
+    let h = two_systems();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    let err = with_systems(&h, "box", &["macos-arm64"])
+        .check_host_systems()
+        .unwrap_err();
+    assert!(err.to_string().contains("macos-arm64"), "{err}");
+    with_systems(&h, "box", &["linux-x64"])
+        .check_host_systems()
+        .unwrap();
+}
+
+/// satisfies: 77, 107; the standing-executor spec's "A host gone quiet"
+#[test]
+fn the_overview_shows_hosts_their_room_and_a_lapse() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(3);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let lead = as_signer(&h, "lead", None);
+    let hosts = lead.hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].host, "b");
+    assert_eq!(hosts[0].signer.as_deref(), Some("box"));
+    assert_eq!(
+        (hosts[0].held, hosts[0].room, hosts[0].lapsed),
+        (0, 3, false)
+    );
+    // The lead watches b's beat stand still past the bound.
+    lead.step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(3));
+    let hosts = as_signer(&h, "lead", None).hosts().unwrap();
+    assert!(hosts[0].lapsed);
+    assert_eq!(hosts[0].room, 0);
+}
+
+/// Design D8, rule core.22: a passing verdict written into the state with
+/// no signed results behind it lands nothing; the combination is tested
+/// again.
+#[test]
+fn a_verdict_the_state_alone_holds_lands_nothing() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let lead = on(&h, "a");
+    lead.step(BRANCH).unwrap();
+    // A host that can write the state forges a pass.
+    let state = lead.seams().state;
+    let snap = state.read(BRANCH).unwrap();
+    let mut line = sluice_core::line::Line::load(BRANCH, snap).unwrap();
+    for c in &mut line.doc.candidates {
+        c.state = sluice_core::records::CandidateState::Passed;
+        for r in &mut c.runs {
+            r.state = sluice_core::records::RunState::Passed;
+            r.place = None;
+            r.run = None;
+        }
+    }
+    let at = line.version;
+    {
+        let _g = state.lock(BRANCH).unwrap().unwrap();
+        assert!(matches!(
+            state.write(BRANCH, at, line.changes()).unwrap(),
+            sluice_seams::Written::Written(_)
+        ));
+    }
+    on(&h, "a").step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Unsigned { .. })));
+    assert_ne!(h.sub(one).state, State::Landed);
+    assert!(h.w().moves().is_empty());
+}
+
+/// satisfies: 108, 78; S42: a key whose only pass was signed by a signer
+/// the gate does not trust replays for nothing, and the check runs.
+#[test]
+fn s42_a_replay_no_trusted_signer_proved_runs_again() {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\n",
+    ) + "\n[branches.\"bolt/y\"]\nrequired = [\"#gate\"]\nremote = \"origin\"\ntrust = [\"sessions\"]\n\
+         \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n\
+         \n[signers.sessions]\nssh = \"s ssh-ed25519 BBBB\"\n";
+    let h = Harness::new(&p);
+    let other = "bolt/y";
+    h.w().init(
+        other,
+        &[
+            (".config/sluice.toml", &p),
+            ("a/lib", "a1"),
+            ("b/lib", "b1"),
+            ("c/lib", "c1"),
+        ],
+    );
+    // The work passes on bolt/y, signed by the sessions' signer.
+    h.w().signs_as("sessions");
+    let head = h.w().work(&h.w().tip(other), &[("a/lib", Some("a2"))]);
+    h.w().session("unit/y", "agent-y", &head);
+    let sessions = Sluice::new(h.sluice().seams(), &h.f.clock).as_peer(Peer {
+        name: "s".into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some("sessions".into()),
+        systems: None,
+    });
+    let y = sessions
+        .submit(&sluice_core::SubmitRequest {
+            worktree: "unit/y".into(),
+            branch: other.into(),
+            after: vec![],
+            priority: 0,
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+    for _ in 0..6 {
+        sessions.step(other).unwrap();
+    }
+    assert_eq!(sessions.state(y).unwrap().unwrap().state, State::Landed);
+    let ran = h.w().observed().len();
+
+    // The same work on bolt/x, whose gate trusts only box: the runner
+    // replays every key, no box pass proves them, and they run again.
+    h.w().signs_as("box");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..8 {
+        on(&h, "a").step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Unproven { .. })));
+    assert!(h.w().requests().iter().any(|r| !r.replay));
+    assert!(h.w().observed().len() > ran);
+}
+
+/// Two systems, a box that signs for `linux-x64` and a forge pool with a
+/// runner for each, both trusted.
+fn with_pool() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\", \"forge\"]\nremote = \"origin\"\nsystems = [\"linux-x64\", \"macos-arm64\"]\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\nsystems = [\"linux-x64\"]\n\
+         \n[signers.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\", ref = \"refs/heads/main\" }\n\
+         \n[pools.forge]\ngithub = { workflow = \".github/workflows/sluice.yml\" }\nsigner = \"forge\"\n\
+         runners = { linux-x64 = \"ubuntu-24.04\", macos-arm64 = \"macos-15\" }\n\
+         \n[systems]\nlinux-x64 = { os = \"linux\", arch = \"x86_64\" }\n\
+         macos-arm64 = { os = \"macos\", arch = \"aarch64\" }\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+fn signer<'a>(h: &'a Harness, name: &str, signer: &str) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.w().signs_as(signer);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: Some(signer.into()),
+        systems: None,
+    })
+}
+
+/// satisfies: 107, 88; S41; the run-claims spec's "The box has room" and
+/// "The box is full"
+#[test]
+fn s41_a_box_with_room_comes_before_the_pool() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    assert_eq!(h.w().wakes(), [BRANCH]);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    let launched: Vec<(Option<String>, String)> = h
+        .w()
+        .launches()
+        .iter()
+        .map(|l| (l.system.clone(), l.runner.clone()))
+        .collect();
+    // The box takes linux-x64; only macos-arm64, which no box runs, goes
+    // to the pool.
+    assert_eq!(launched, [(Some("macos-arm64".into()), "macos-15".into())]);
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    assert!(claims(&h).contains(&"box".to_string()));
+
+    // A full box: the pool takes linux-x64 too.
+    let h = with_pool();
+    h.w().hold_runs(true);
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().host_limit(0);
+    signer(&h, "box", "box").step(BRANCH).unwrap();
+    h.w().host_limit(4);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    as_signer(&h, "lead", None).step(BRANCH).unwrap();
+    assert_eq!(h.w().launches().len(), 2);
+}
+
+/// satisfies: 88, 111, 77; S19: every host of the submitter is off; the
+/// pool's jobs run each system and the work lands; a job its pool lost
+/// lapses and the run is started again.
+#[test]
+fn s19_a_pools_jobs_land_the_work_with_no_box() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let lead = || as_signer(&h, "lead", None);
+    lead().step(BRANCH).unwrap();
+    let first: Vec<String> = h.w().launches().iter().map(|l| l.claim.clone()).collect();
+    assert_eq!(first.len(), 2);
+    // The macOS job is lost before it reports.
+    h.w().end_job(&first[1]);
+    lead().step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Lapsed { host, .. } if *host == first[1])));
+    assert_eq!(h.w().launches().len(), 3);
+    // Each job the pool is given runs under its claim and reports; a
+    // macOS job that replays keys only Linux proved runs them again (108).
+    h.w().hold_runs(false);
+    for _ in 0..6 {
+        let jobs: Vec<String> = h
+            .w()
+            .launches()
+            .iter()
+            .map(|l| l.claim.clone())
+            .filter(|c| *c != first[1])
+            .collect();
+        for c in &jobs {
+            let job = signer(&h, c, "forge");
+            for _ in 0..2 {
+                job.step(BRANCH).unwrap();
+            }
+        }
+        lead().step(BRANCH).unwrap();
+        if h.sub(one).state == State::Landed {
+            break;
+        }
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 78, 79, 28, 29; S18: results signed by a signer the shared
+/// branch does not name settle nothing there; a confinement claim counts
+/// only from a signer that may make it.
+#[test]
+fn s18_a_signer_the_gate_does_not_trust_settles_nothing() {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\nconfined = true\n",
+    ) + "\n[branches.\"bolt/y\"]\nrequired = [\"#gate\"]\nremote = \"origin\"\ntrust = [\"sessions\"]\n\
+         \n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\nconfined = true\n\
+         \n[signers.sessions]\nssh = \"s ssh-ed25519 BBBB\"\nconfined = false\n";
+    let h = Harness::new(&p);
+    h.w().init(
+        "bolt/y",
+        &[
+            (".config/sluice.toml", &p),
+            ("a/lib", "a1"),
+            ("b/lib", "b1"),
+            ("c/lib", "c1"),
+        ],
+    );
+    // On bolt/x, whose gate trusts only box and only confined results, a
+    // host signing as sessions settles nothing: the combination never
+    // passes, and the branch is left as it was.
+    h.w().signs_as("sessions");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let sessions = || {
+        h.w().be_host("s");
+        h.sluice().as_peer(Peer {
+            name: "s".into(),
+            lease: Duration::from_secs(300),
+            alive: Duration::from_secs(120),
+            signer: Some("sessions".into()),
+            systems: None,
+        })
+    };
+    for _ in 0..4 {
+        sessions().step(BRANCH).unwrap();
+    }
+    assert_ne!(h.sub(one).state, State::Landed);
+    assert!(h.w().moves().is_empty());
+    assert!(claims(&h).is_empty());
+
+    // On bolt/y, which trusts sessions and asks for no confinement, the
+    // same host's results land the work, read as they are: unconfined.
+    let head = h.w().work(&h.w().tip("bolt/y"), &[("a/lib", Some("a2"))]);
+    h.w().session("unit/y", "agent-y", &head);
+    let s = sessions();
+    let y = s
+        .submit(&sluice_core::SubmitRequest {
+            worktree: "unit/y".into(),
+            branch: "bolt/y".into(),
+            after: vec![],
+            priority: 0,
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+    for _ in 0..6 {
+        sessions().step("bolt/y").unwrap();
+    }
+    assert_eq!(sessions().state(y).unwrap().unwrap().state, State::Landed);
+}

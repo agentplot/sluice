@@ -13,7 +13,7 @@ tasks:
   # Playwright), and the conformance scenarios that need no fault on them:
   # the check-tools tier.
   tools:
-    command: 'cargo test -p sluice --features tools --test instance --test local_refs --test pushed_refs --test forge --test pull_requests --test remote_branch --test moon --test places --test worktrunk --test protect --test conformance --test stack --test exec --test previews_tools -- --skip sandbox'
+    command: 'cargo test -p sluice --features tools --test instance --test local_refs --test pushed_refs --test remote_refs --test peers --test forge --test pull_requests --test remote_branch --test moon --test places --test worktrunk --test protect --test conformance --test stack --test exec --test previews_tools -- --skip sandbox'
     inputs: ['/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/crates/sluice-fakes/**/*', '/crates/sluice-conformance/src/**/*', '/crates/sluice-conformance/Cargo.toml', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-tools]
     options: {runFromWorkspaceRoot: true}

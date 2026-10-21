@@ -251,6 +251,9 @@ fn the_check_seam_counts_the_hosts_session_runs() {
             reserved: 0,
             processors: 2,
             forge: None,
+            signing: None,
+            peers: Default::default(),
+            systems: None,
         },
     )
     .with_sessions(dir.path().join("sessions"));

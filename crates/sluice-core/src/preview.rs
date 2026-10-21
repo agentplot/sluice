@@ -180,6 +180,7 @@ impl Sluice<'_> {
             limits: plan.limits.clone(),
             tests,
             replay: false,
+            system: None,
         }
     }
 

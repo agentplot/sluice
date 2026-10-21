@@ -213,7 +213,7 @@ impl App {
         self.send("GET", path, bearer, None)
     }
 
-    pub(super) fn post_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
+    pub fn post_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
         self.send("POST", path, bearer, Some(body))
     }
 

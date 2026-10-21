@@ -29,3 +29,4 @@ Option 2. A run sluice starts is in a place sluice made from the candidate, so i
 
 - The quick start's policy, with no `trust`, lands what passes.
 - Supersedes ADR 0007's defaults for `trust`; its other defaults stand.
+- Amended by ADR 0032: this default holds for a branch in the host's own files, whose runs count unsigned. A branch whose records are on its remote and names no `trust` trusts no signer.

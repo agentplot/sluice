@@ -49,8 +49,8 @@ struct Setup {
     seen: Scratch,
     sessions: Scratch,
     config: Scratch,
-    /// The host's state, the rig's own: its bound counts none of the
-    /// agents' checks running on the host beside the tests.
+    /// The host's state, the setup's own, so another agent's runs on this
+    /// host never take the bound its rounds start under (71).
     state: Scratch,
 }
 

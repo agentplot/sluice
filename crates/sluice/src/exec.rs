@@ -23,6 +23,11 @@ use crate::{Pause, Pushers, CONFLICT, FAILED, LANDED, STOPPED};
 pub trait Host {
     /// The part of the bound session runs never use (91).
     fn reserved(&self) -> usize;
+    /// 72 to 74: this host among the hosts of a branch whose records are
+    /// on its remote: its name and the lease it waits out.
+    fn peer(&self) -> sluice_core::Peer {
+        sluice_core::Peer::default()
+    }
     /// `dir` as the worktree's canonical path, the key of its session runs.
     fn worktree(&self, dir: &str) -> Result<String>;
     /// The host's lock over its session runs, held until dropped.

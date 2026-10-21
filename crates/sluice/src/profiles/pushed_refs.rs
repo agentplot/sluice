@@ -81,6 +81,11 @@ impl PushedRefs {
         })
     }
 
+    /// The repository's git directory.
+    pub fn git_dir(&self) -> &Path {
+        self.local.git_dir()
+    }
+
     /// The remote's name.
     pub fn remote(&self) -> &str {
         &self.remote
@@ -93,7 +98,7 @@ impl PushedRefs {
     }
 
     /// Where git reaches the remote: its name, or the identity's URL.
-    fn target(&self) -> &str {
+    pub(crate) fn target(&self) -> &str {
         self.speaker.as_ref().map_or(&self.remote, |s| &s.url)
     }
 
@@ -101,7 +106,7 @@ impl PushedRefs {
     /// are cleared for this call alone and sluice's is named in their
     /// place, given the credentials in this call's environment; nothing is
     /// written to a git config, so no other git finds them.
-    fn remote_git(&self, args: &[&str]) -> Result<Output> {
+    pub(crate) fn remote_git(&self, args: &[&str]) -> Result<Output> {
         let Some(s) = &self.speaker else {
             return git(self.local.git_dir(), args);
         };
@@ -202,7 +207,7 @@ impl PushedRefs {
 /// Why a `git push --porcelain` failed: the remote's reason for each ref
 /// it refused, which porcelain prints on stdout, then what git printed on
 /// stderr, which alone says only that some refs failed.
-fn refusal(out: &Output) -> String {
+pub(crate) fn refusal(out: &Output) -> String {
     let report = String::from_utf8_lossy(&out.stdout);
     let err = String::from_utf8_lossy(&out.stderr);
     report
@@ -220,13 +225,13 @@ fn refusal(out: &Output) -> String {
 /// credentials, and nothing read from stdin. sluice runs unattended, so a
 /// credential git cannot find is an error, never a prompt: no terminal
 /// prompt, no askpass program, and a credential manager told not to ask.
-fn git(git_dir: &Path, args: &[&str]) -> Result<Output> {
+pub(crate) fn git(git_dir: &Path, args: &[&str]) -> Result<Output> {
     command(git_dir, args)
         .output()
         .with_context(|| format!("running git {}", args.join(" ")))
 }
 
-fn command(git_dir: &Path, args: &[&str]) -> Command {
+pub(crate) fn command(git_dir: &Path, args: &[&str]) -> Command {
     let mut c = Command::new("git");
     c.arg("--git-dir")
         .arg(git_dir)

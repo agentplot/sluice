@@ -224,6 +224,10 @@ pub trait Checkout {
     /// read: only such a place's declared caches are saved (35).
     fn release(&self, name: &str, passed: bool) -> Result<()>;
 
+    /// 81: every candidate's place this host made and has not released,
+    /// by name: what a returning host releases before it claims again.
+    fn made(&self) -> Result<Vec<String>>;
+
     /// Session-runs-1 clause 90: a session's own place, `worktree`, taken
     /// as found for a session run held to `branch`'s policy: its ports,
     /// held from its first run until its release and the same on every
@@ -413,9 +417,44 @@ pub struct RunRequest {
     pub limits: Limits,
     /// The policy's `[tests]` table: which runner, and its settings.
     pub tests: Settings,
-    /// Whether a result may be answered from the task runner's cache: only
-    /// when the branch's gate trusts the cache (28; ADR 0004).
+    /// Whether a result may be answered from the task runner's cache. A
+    /// replay supplies outputs and decides nothing: it counts only through
+    /// a trusted pass recorded for its key (108), and a run whose replays
+    /// none proved runs again without it.
     pub replay: bool,
+    /// The system the run is for, by the policy's name (85, 87); `None`
+    /// when the gate names none, or the policy no systems.
+    pub system: Option<String>,
+}
+
+/// 88, 107: a run started on a pool: one job, on the runner its system
+/// names, whose start is its claim. The pool's kind and settings are the
+/// policy's `[pools.<name>]` table, which the core does not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    pub pool: String,
+    pub kind: (String, Setting),
+    /// The identity of the signer its jobs sign as: where a forge's job
+    /// runs from.
+    pub signer: (String, Setting),
+    pub runner: String,
+    /// The git remote the branch lives on, which the pool's jobs fetch from.
+    pub remote: Option<String>,
+    pub branch: String,
+    pub candidate: String,
+    pub combination: Rev,
+    pub system: Option<String>,
+    /// The claim the job runs under: the host its results are reported as.
+    pub claim: String,
+}
+
+/// The operating system and processor architecture an executor runs on,
+/// as the toolchain names them (85): `linux`, `macos`; `x86_64`,
+/// `aarch64`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Platform {
+    pub os: String,
+    pub arch: String,
 }
 
 /// A run in progress, as the check seam names it. The core keeps it in
@@ -539,11 +578,45 @@ pub trait Tests {
     /// under test from the records.
     fn bound(&self) -> Result<usize>;
 
+    /// 87: the system this instance's executor runs on, so a run is taken
+    /// only where its system is.
+    fn platform(&self) -> Result<Platform>;
+
+    /// 88, 107: start one job on a pool for a run no standing host can
+    /// take; its start is its claim (ADR 0034).
+    fn launch(&self, launch: &Launch) -> Result<()> {
+        anyhow::bail!("no pool is bound for {}", launch.pool)
+    }
+
+    /// 77, 88: whether the job under `claim` that pool `kind` was given
+    /// still runs or waits to; one its pool finished, cancelled or lost
+    /// without a report is a lapsed claim.
+    fn job_alive(
+        &self,
+        _kind: &(String, Setting),
+        _claim: &str,
+        _remote: Option<&str>,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// 111: ask a pool to advance `branch`, when work is written that no
+    /// live instance will take. A wake that is lost loses nothing (59).
+    fn wake(&self, _kind: &(String, Setting), _branch: &str, _remote: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
     /// Session-runs-1 clause 89: how many session runs are running on this
     /// host, each counting against the bound. A session run is the
     /// host's, never a branch's, so the check seam counts it beside the
     /// bound and the records never hold it.
     fn sessions(&self) -> Result<usize>;
+
+    /// Design D9 (C.6): the tasks of a finished run whose keys the
+    /// candidate's tree bears out, read while its place still exists,
+    /// running nothing. A signer signs only these, so no check signs a
+    /// pass under a key it does not hold.
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
 
     /// ADR 0035: the session runs running on this host, as `sessions`
     /// counts them, each with what its `sluice exec` kept of it: for a
@@ -815,6 +888,97 @@ pub trait State {
     /// 61: the branch's live records, and the version they were read at:
     /// nothing under [`FINISHED`] (finished-records-1 clause 61).
     fn read(&self, branch: &str) -> Result<Snapshot>;
+
+    /// 80: where the branch's last read could not reach the records it
+    /// keeps elsewhere and read what was last fetched, the place it could
+    /// not reach; `None` when the read was current.
+    fn stale(&self, _branch: &str) -> Option<String> {
+        None
+    }
+
+    /// 77, 107: rewrite this host's sign of life, `beat` its document:
+    /// its signer, its systems and the room it has. Only this host writes
+    /// its own.
+    fn beat(&self, _host: &str, _beat: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    /// 77: every host's last sign of life, by host: something that changes
+    /// with every beat, and the beat's document.
+    fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        Ok(BTreeMap::new())
+    }
+
+    /// 77: the beat of `host` this host last saw, and when it first saw
+    /// it, by its own clock.
+    fn observed_beat(&self, _host: &str) -> Result<Option<(String, String)>> {
+        Ok(None)
+    }
+
+    /// Note that this host first saw `host`'s beat `marker` at `at`.
+    fn observe_beat(&self, _host: &str, _marker: &str, _at: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 73: the version of the branch's records this host last saw, and
+    /// when it first saw it, by its own clock; kept on this host alone,
+    /// so it decides nothing but when to try taking the branch.
+    fn observed(&self, _branch: &str) -> Result<Option<(u64, String)>> {
+        Ok(None)
+    }
+
+    /// Note that this host first saw `version` of the branch's records at
+    /// `at`.
+    fn observe(&self, _branch: &str, _version: u64, _at: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: make a submitted head fetchable by every host that may run its
+    /// checks or keep its branch, before its submission is written.
+    fn publish_head(&self, _branch: &str, _head: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: a head whose submission has left the queue.
+    fn unpublish_head(&self, _branch: &str, _head: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: fetch every head submitted to the branch from another host, so
+    /// combinations of them can be formed here.
+    fn fetch_heads(&self, _branch: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: make a candidate open to claims fetchable by every host that
+    /// may claim it, before it is opened.
+    fn publish_candidate(&self, _branch: &str, _id: &str, _rev: &Rev) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: a candidate no longer open to claims.
+    fn unpublish_candidate(&self, _branch: &str, _id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 82: fetch the branch's candidates open to claims, to run them here.
+    fn fetch_candidates(&self, _branch: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// The submissions this host had queued on the branch in its own
+    /// records, when the branch's records moved to the remote and another
+    /// host's queue was there first (design D10): each a submission's
+    /// document, to be submitted again under a new id.
+    fn left_behind(&self, _branch: &str) -> Result<Vec<Vec<u8>>> {
+        Ok(Vec::new())
+    }
+
+    /// The submissions of [`State::left_behind`] by their old ids, once
+    /// submitted again.
+    fn forget_left_behind(&self, _branch: &str, _ids: &[u64]) -> Result<()> {
+        Ok(())
+    }
 
     /// Finished-records-1 clause 105: one file of the branch's finished
     /// records, by its name under [`FINISHED`], as last written.

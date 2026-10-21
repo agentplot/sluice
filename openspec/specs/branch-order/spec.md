@@ -32,6 +32,13 @@ together, in name order; branches no table names last, in name order.
 - **WHEN** the overview lists `main` before `bolt/a`
 - **THEN** the board, the herdr popup and the tab bar show `main` first
 
+#### Scenario: A named branch first
+
+- **WHEN** the overview lists `main` before `bolt/a`, and a herdr pane's
+  `sluice_branch` token or a session's `SLUICE_BRANCH` names `bolt/a`
+- **THEN** that pane's popup, and that session's board, show `bolt/a`
+  first, then `main`; the tab bar still shows `main` first
+
 ### Requirement: The order is read from the default branch
 
 The default branch SHALL be the repository's HEAD, and its policy SHALL

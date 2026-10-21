@@ -77,10 +77,6 @@ export default defineConfig({
           collapsed: true,
           items: [{ autogenerate: { directory: "decisions" } }],
         },
-        {
-          label: "Many hosts (designed, not built)",
-          items: [{ autogenerate: { directory: "many-hosts" } }],
-        },
         { label: "Roadmap", link: "/roadmap/" },
       ],
     }),

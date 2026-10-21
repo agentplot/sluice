@@ -136,11 +136,25 @@ struct Ready {
     shown: String,
 }
 
+/// A pool the binding hands this profile, to start runs on (88; ADR 0034).
+pub trait Launcher {
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()>;
+    fn job_alive(
+        &self,
+        kind: &(String, Setting),
+        claim: &str,
+        remote: Option<&str>,
+    ) -> Result<bool>;
+    fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()>;
+}
+
 /// The check seam's profile, for the repository whose common dir is
 /// `common`.
 pub struct Checks {
     runs: Runs,
     instance: Instance,
+    /// The pool this host can start runs on, where the binding gave one.
+    pool: Option<Box<dyn Launcher>>,
     /// The host's session runs, when not the host's own directory.
     sessions: Option<Sessions>,
 }
@@ -152,7 +166,14 @@ impl Checks {
             runs: Runs::new(common, program),
             instance,
             sessions: None,
+            pool: None,
         }
+    }
+
+    /// The same profile, starting runs on `pool` (88).
+    pub fn with_pool(mut self, pool: Box<dyn Launcher>) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// The same profile, keeping the host's session runs under `dir`.
@@ -529,6 +550,7 @@ pub fn release_request(
         limits: limits.clone(),
         tests: tests.clone(),
         replay: false,
+        system: None,
     };
     let mut env = environment(&request, jobs);
     if kind == Kind::Sandbox {
@@ -854,8 +876,73 @@ impl Tests for Checks {
         Ok(self.instance.bound)
     }
 
+    fn launch(&self, launch: &sluice_seams::Launch) -> Result<()> {
+        match &self.pool {
+            Some(p) => p.launch(launch),
+            None => anyhow::bail!(
+                "this host has no pool of kind {} for {}: name the app it reaches GitHub as under [forge]",
+                launch.kind.0,
+                launch.pool
+            ),
+        }
+    }
+
+    fn job_alive(
+        &self,
+        kind: &(String, Setting),
+        claim: &str,
+        remote: Option<&str>,
+    ) -> Result<bool> {
+        match &self.pool {
+            Some(p) => p.job_alive(kind, claim, remote),
+            // A host that cannot ask the pool reads its jobs as running:
+            // a claim lapses only by what is known of it (77).
+            None => Ok(true),
+        }
+    }
+
+    fn wake(&self, kind: &(String, Setting), branch: &str, remote: Option<&str>) -> Result<()> {
+        match &self.pool {
+            Some(p) => p.wake(kind, branch, remote),
+            None => Ok(()),
+        }
+    }
+
+    fn platform(&self) -> Result<sluice_seams::Platform> {
+        let (os, arch) = crate::instance::this_system();
+        Ok(sluice_seams::Platform {
+            os: os.into(),
+            arch: arch.into(),
+        })
+    }
+
     fn sessions(&self) -> Result<usize> {
         Ok(self.host_sessions()?.running()?.len())
+    }
+
+    /// A command runner's one key is sluice's own; a moon task's is
+    /// checked against the candidate's tree by its manifest (design D9).
+    fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>> {
+        let meta: Meta = serde_json::from_value(self.runs.request(&run.0)?.meta)
+            .with_context(|| format!("reading run {}", run.0))?;
+        if meta.runner != "moon" {
+            return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
+        }
+        let place = meta.place.clone();
+        let blob = |k: &str| super::moon::blob_in(&place, k);
+        let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
+        let mut out = Vec::new();
+        for t in &report.tasks {
+            match super::moon::check_key(&t.hash, &t.task, &blob, &tree) {
+                Ok(()) => out.push(t.task.clone()),
+                Err(e) => tracing::warn!(
+                    sluice.task = %t.task,
+                    sluice.hash = %t.hash,
+                    "a key the combination's tree does not bear out is not signed: {e:#}"
+                ),
+            }
+        }
+        Ok(out)
     }
 
     fn session_runs(&self) -> Result<Vec<HostRun>> {

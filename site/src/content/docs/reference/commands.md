@@ -9,10 +9,10 @@ sidebar:
 |---|---|
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. |
-| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it; `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
+| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it; `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
-| `sluice run` | Work every branch's queue until stopped. |
-| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. `--json` for scripts. |
+| `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch. `--json` for scripts. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
 | `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
@@ -545,8 +545,15 @@ only one run at a time for a branch.
   waiting. For a branch with pull requests, each round first reads its
   open pull requests on GitHub, and `sluice run` serves that branch
   before it has any submission.
-- **On a fleet**, passed `--remote`, a submit only submits and waits, and
-  a `sluice run` runs every round: one on a shared host that every
-  submission goes to ([ADR 0012](/sluice/decisions/0012/)), or one on
-  each host under the [many-hosts design](/sluice/many-hosts/overview/).
-  There is no third mode.
+- **On many hosts**, one host at a time keeps a branch whose state is on
+  its remote: whichever host's round wrote its state last. A waiting
+  submit, `sluice run` or `sluice step` on another host reads `led` and
+  leaves the branch alone. Once the state has stood unchanged for that
+  host's [`[peers] lease`](/sluice/reference/configuration/#peers) with
+  work to do, the next round there takes the branch, and the former host
+  writes nothing more for it. Each host measures the lease by its own
+  clock, never by comparing clocks. A submission written to the remote
+  goes on with its submitter's host switched off: any other host lands
+  it.
+  [Executors and systems](/sluice/guides/executors-and-systems/) sets
+  one up.

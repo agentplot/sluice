@@ -13,12 +13,25 @@
 //! [forge]
 //! app_id = 123456
 //! key = "~/.config/sluice/app.pem"
+//!
+//! [signing]
+//! signer = "box"
+//! key = "~/.config/sluice/signing"
+//!
+//! [peers]
+//! lease = "5m"
+//! alive = "2m"
 //! ```
 //!
 //! `reserved` keeps that many runs of the bound for submissions, which
 //! session runs never take, so submissions' runs start first (session-runs-1 clause 91).
+//! `[runs] systems` names the systems this host runs, of those the
+//! policy names (85, 87); `[signing]` the signer it signs its runs as
+//! and its SSH key (78); `[peers]` the lease and the bound on a host's
+//! sign of life, the host's and never a branch's (74).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -35,6 +48,51 @@ pub struct Instance {
     pub processors: usize,
     /// The app sluice pushes as, where the host names one.
     pub forge: Option<Forge>,
+    /// The signer this host signs its runs as, where it names one (78).
+    pub signing: Option<Signing>,
+    /// The lease and the sign-of-life bound (74).
+    pub peers: Peers,
+    /// The systems this host runs, by the policy's names; `None` for the
+    /// one system it is (87).
+    pub systems: Option<Vec<String>>,
+}
+
+/// The host's `[signing]` table: the policy's name for this host's key,
+/// and the path of its SSH private key (78).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signing {
+    pub signer: String,
+    pub key: PathBuf,
+}
+
+/// The host's `[peers]` table (72 to 74, 77).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Peers {
+    /// How long a branch's records stand unwritten before another
+    /// instance may take it (72, 73).
+    pub lease: Duration,
+    /// How often this host shows it is alive; a claim lapses after it
+    /// passes with no sign (77).
+    pub alive: Duration,
+    /// What this host is called among the hosts of a remote; its host
+    /// name when unset.
+    pub name: Option<String>,
+}
+
+impl Default for Peers {
+    fn default() -> Self {
+        Peers {
+            lease: Duration::from_secs(300),
+            alive: Duration::from_secs(120),
+            name: None,
+        }
+    }
+}
+
+/// The operating system and architecture this host is, as the toolchain
+/// names them (85): `macos`, `linux`; `aarch64`, `x86_64`.
+pub fn this_system() -> (&'static str, &'static str) {
+    (std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// The host's `[forge]` table: the app sluice is on the forge, and the
@@ -51,6 +109,24 @@ struct ConfigForm {
     #[serde(default)]
     runs: RunsForm,
     forge: Option<ForgeForm>,
+    signing: Option<SigningForm>,
+    #[serde(default)]
+    peers: PeersForm,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SigningForm {
+    signer: String,
+    key: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PeersForm {
+    lease: Option<String>,
+    alive: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +141,7 @@ struct ForgeForm {
 struct RunsForm {
     max: Option<i64>,
     reserved: Option<i64>,
+    systems: Option<Vec<String>>,
 }
 
 impl Instance {
@@ -104,11 +181,56 @@ impl Instance {
             .forge
             .map(|f| forge(f, home().as_deref()))
             .transpose()?;
+        let signing = match form.signing {
+            None => None,
+            Some(s) => Some(Signing {
+                key: private_key("[signing] key", &s.key, home().as_deref())?,
+                signer: s.signer,
+            }),
+        };
+        let d = Peers::default();
+        let duration = |v: Option<String>, name: &str, default: Duration| -> Result<Duration> {
+            match v {
+                None => Ok(default),
+                Some(t) => {
+                    let d = sluice_core::policy::parse_duration(&t)
+                        .with_context(|| format!("[peers] {name}"))?;
+                    if d.is_zero() {
+                        bail!("[peers] {name} must be longer than nothing");
+                    }
+                    Ok(d)
+                }
+            }
+        };
+        if let Some(n) = &form.peers.name {
+            if n.is_empty() || n.contains(['/', ' ']) {
+                bail!("[peers] name {n:?} must be one word with no /");
+            }
+        }
+        let peers = Peers {
+            lease: duration(form.peers.lease, "lease", d.lease)?,
+            alive: duration(form.peers.alive, "alive", d.alive)?,
+            name: form.peers.name,
+        };
+        if peers.alive >= peers.lease {
+            bail!(
+                "[peers] alive must be shorter than lease, so a lead that is alive keeps its branch"
+            );
+        }
+        let systems = match form.runs.systems {
+            Some(s) if s.is_empty() => {
+                bail!("[runs] systems names no system; leave it out for the one this host is")
+            }
+            s => s,
+        };
         Ok(Instance {
             bound,
             reserved,
             processors,
             forge,
+            signing,
+            peers,
+            systems,
         })
     }
 
@@ -122,25 +244,31 @@ impl Instance {
 /// The `[forge]` table, its key's path with `~` expanded. A key anyone
 /// but its owner may read is refused.
 fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
-    let key = match (form.key.strip_prefix("~/"), home) {
+    Ok(Forge {
+        app_id: form.app_id,
+        key: private_key("[forge] key", &form.key, home)?,
+    })
+}
+
+/// A private key's path, `~` expanded; refused when anyone but its owner
+/// may read it.
+fn private_key(what: &str, path: &str, home: Option<&Path>) -> Result<PathBuf> {
+    let key = match (path.strip_prefix("~/"), home) {
         (Some(rest), Some(home)) => home.join(rest),
-        (Some(_), None) => bail!("[forge] key {}: no home directory to expand ~ in", form.key),
-        (None, _) => PathBuf::from(&form.key),
+        (Some(_), None) => bail!("{what} {path}: no home directory to expand ~ in"),
+        (None, _) => PathBuf::from(path),
     };
-    let meta = std::fs::metadata(&key).with_context(|| format!("[forge] key {}", key.display()))?;
+    let meta = std::fs::metadata(&key).with_context(|| format!("{what} {}", key.display()))?;
     let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o777;
     if mode & 0o077 != 0 {
         bail!(
-            "[forge] key {} has mode {mode:04o}, which lets others read it: \
+            "{what} {} has mode {mode:04o}, which lets others read it: \
              give it mode 0600 (chmod 600 {})",
             key.display(),
             key.display()
         );
     }
-    Ok(Forge {
-        app_id: form.app_id,
-        key,
-    })
+    Ok(key)
 }
 
 fn home() -> Option<PathBuf> {
@@ -250,6 +378,59 @@ mod tests {
         .unwrap();
         assert_eq!(home.key, key);
         assert!(with("[forge]\napp_id = 1\n", 4).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `[signing]`, `[peers]` and `[runs] systems` (74, 78, 87).
+    #[test]
+    fn signing_peers_and_systems() {
+        let dir = std::env::temp_dir().join(format!("sluice-signing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("signing");
+        std::fs::write(&key, "key").unwrap();
+        let set = |mode: u32| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let table = format!(
+            "[signing]\nsigner = \"box\"\nkey = {:?}\n",
+            key.display().to_string()
+        );
+        set(0o600);
+        let i = with(&table, 4).unwrap();
+        assert_eq!(
+            i.signing,
+            Some(Signing {
+                signer: "box".into(),
+                key: key.clone()
+            })
+        );
+        set(0o644);
+        let err = format!("{:#}", with(&table, 4).unwrap_err());
+        assert!(
+            err.contains("[signing] key") && err.contains("0600"),
+            "{err}"
+        );
+
+        let none = Instance::from_file(None, 4).unwrap();
+        assert_eq!(none.signing, None);
+        assert_eq!(none.peers, Peers::default());
+        assert_eq!(none.peers.lease, Duration::from_secs(300));
+        assert_eq!(none.peers.alive, Duration::from_secs(120));
+        assert_eq!(none.systems, None);
+        let p = with("[peers]\nlease = \"10m\"\nalive = \"30s\"\n", 4).unwrap();
+        assert_eq!(
+            (p.peers.lease, p.peers.alive),
+            (Duration::from_secs(600), Duration::from_secs(30))
+        );
+        assert!(with("[peers]\nlease = \"1m\"\nalive = \"2m\"\n", 4).is_err());
+        assert!(with("[peers]\nlease = \"soon\"\n", 4).is_err());
+        let s = with("[runs]\nsystems = [\"linux-x64\"]\n", 4).unwrap();
+        assert_eq!(s.systems, Some(vec!["linux-x64".to_string()]));
+        assert!(with("[runs]\nsystems = []\n", 4).is_err());
+        let (os, arch) = this_system();
+        assert!(["macos", "linux"].contains(&os), "{os}");
+        assert!(["aarch64", "x86_64"].contains(&arch), "{arch}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
