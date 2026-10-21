@@ -138,12 +138,17 @@ and removed by design (ADR 0028).
 
 ### D4. moon in CI mode, the targets unchanged
 
-- `moon.rs` adds `--ci` to `moon exec`.
-- The first task checks by hand, on moon 2.6, that `moon exec --ci <t>`
-  skips a `<t>` marked `runInCI: false`, as `moon ci <t>` does. If it
-  does not, the profile runs `moon ci <targets>` instead. sluice already
-  narrows the targets, and `--force` keeps its meaning of no replay.
-- **The warning.** `moon query tasks --json` gives each task's options.
+- `moon.rs` adds `--ci` to `moon exec`. Checked by hand on moon 2.6.1:
+  - `moon exec app:test app:serve --ci`, where `app:serve` has
+    `runInCI: false`, runs only `app:test`. `app:serve` is absent from
+    `runReport.json`, so sluice reads it as missing. It is the same with
+    `--force`.
+  - Without `--ci`, both run.
+  - `--ci` does not set `CI` in the tasks' environment: the task printed
+    `CI=unset` both ways.
+  - `moon ci` refuses `--on-failure`, which sluice needs to judge every
+    check. So the profile keeps `exec`.
+- **The warning.** `moon query tasks` (JSON by default) gives each task's `options.runInCI`.
   The runner's `plan` already calls it, so it reads `runInCI` there. The
   required targets marked `false` go back to the core as a new
   `RunReport.kept_out: Vec<String>`. The core logs them once per
@@ -242,13 +247,9 @@ from the installation.
 
 ## Risks / Trade-offs
 
-- **[Risk]** `moon exec --ci` may not filter by `runInCI` for explicit
-  targets. → Task 1.1 checks it first. D4's fallback is `moon ci
-  <targets>`.
-- **[Risk]** `--ci` changes moon's output (log groups) and may set
-  `CI=true` for tasks. A test that behaves differently under `CI` would
-  start failing in sluice. → Say so in the moon guide section. It is
-  what the team's own CI already does.
+- **[Risk]** `--ci` changes moon's own output, for example log groups on
+  a CI provider. → sluice reads the report, not the output, and the
+  kept output is still the task's own.
 - **[Risk]** GitHub's secondary rate limits on edits. → One edit per
   ended task per pull request. Live posts pause when a round's posts
   exceed 30, and the final report is always posted.
