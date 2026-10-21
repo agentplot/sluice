@@ -158,12 +158,13 @@ shows no row:
 | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards` |
 | is the pane's, and the pane has a branch named (below) | `release · 3 queued · #12 testing 3/8 · 2 checking` |
 | is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
-| is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95` |
+| is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95 in builds.md +1` |
 | landed in the last 30 minutes | `#94 landed 12m` |
 
 The ahead row asks `sluice submit <branch> --check --json` whether the
-worktree would merge with no conflict behind everything queued, again only
-when its head or the branch moves. Each workspace's row shows how many submissions
+worktree would merge with no conflict behind everything queued, and names
+the first file in conflict. It asks again only when the worktree's head,
+the branch's revision or the submissions queued on it move. Each workspace's row shows how many submissions
 its repositories hold. Every row expires two minutes after the plugin last
 set it, so nothing stale stays if the plugin stops.
 

@@ -102,6 +102,27 @@ impl Sluice<'_> {
         }))
     }
 
+    /// 64: what the session's head would meet were it submitted now, on the
+    /// branch's revision the plan read. A session's run is told it before
+    /// it runs; it refuses nothing and is never recorded or read as a
+    /// verdict. `None` for a place on no branch, which cannot submit (3).
+    pub fn session_forecast(
+        &self,
+        plan: &SessionPlan,
+        session: &Session,
+    ) -> Result<Option<crate::Forecasted>> {
+        if session.detached {
+            return Ok(None);
+        }
+        Ok(Some(self.forecast_onto(
+            &session.head,
+            &session.from.worktree,
+            &plan.branch,
+            plan.base.clone(),
+            &[],
+        )?))
+    }
+
     /// 89, 83: a session run of the checks `head` affects against the
     /// branch, or of `command`, in `place`, under the branch's executor,
     /// limits and time limit; never answered from the cache, since what a

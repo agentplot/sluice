@@ -8,7 +8,7 @@ sidebar:
 | Command | |
 |---|---|
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
-| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict; `--after 2,5` lands it after those; `--json` for scripts. |
+| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. |
 | `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it; `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
@@ -24,6 +24,32 @@ sidebar:
 | `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
 | `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. `--json` for scripts. |
+
+## Forecasting a conflict
+
+`sluice submit <branch> --check` forms the combination the worktree's
+head would land in were it submitted now, behind every submission
+queued on the branch, and says whether it would conflict. It queues
+nothing and changes nothing. A bolt's branch, which no worktree holds,
+is forecast with `--head`; the submissions made from that branch are
+left out, as submitting it again would withdraw them:
+
+```console
+$ sluice submit main --check --head bolt/runner
+would conflict: docs/architecture/builds.md with #217 (wldn-design, design/runner-credential)
+```
+
+It exits `0` with no conflict, `2` with one or on a refusal. `--json`
+prints `conflict`, null or `{paths, with}`, and what the forecast was
+formed from: `head`, the revision forecast; `onto`, the branch's
+revision; and `ahead`, the submissions formed ahead of it, in order. A
+tool forecasts again only when one of them has moved. A forecast takes
+the combinations the queue has already formed on the branch's revision,
+so it costs one merge behind them.
+
+```json
+{"conflict":{"paths":["docs/architecture/builds.md"],"with":[{"id":217,"from":{"agent":"wldn-design","worktree":"design/runner-credential"}}]},"head":"4f0c2a1…","onto":"9b7e3d0…","ahead":[217]}
+```
 
 ## `sluice exec`
 
@@ -54,6 +80,13 @@ the result on a branch that trusts open runs, and replays the test when
 the policy declares the cache, the same condition as between
 combinations. A worktree holding anything more runs the same tests,
 records nothing, and says `not recorded: worktree is not clean`.
+
+Before it runs, exec forecasts the head against the branch, as `sluice
+submit --check` does, and says when it would conflict: `would conflict:
+<files> with <what>`. The run goes on either way, its exit is the
+run's, and nothing of the forecast is recorded. `--json` carries it as
+`forecast`, in `--check --json`'s shape, or null for a detached
+worktree.
 
 A test that could not run is listed as `could not run: <test>: <why>`
 and has no result, so nothing is recorded under its key. A test could

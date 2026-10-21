@@ -2,6 +2,7 @@
 
 use sluice_conformance::{policy, shared, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
+use sluice_core::Forecast;
 use sluice_seams::Outcome;
 
 /// satisfies: S1, 1, 10, 11, 22, 23, 33, 34, 37, 42, 43, 44, 45, 47, 50
@@ -180,6 +181,38 @@ fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by() {
 #[test]
 fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing() {
     shared::s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(&Harness::bolt());
+}
+
+/// satisfies: 64, 65, 47a, 67
+#[test]
+fn a_branch_is_forecast_with_no_place_of_it() {
+    shared::a_branch_is_forecast_with_no_place_of_it(&Harness::bolt());
+}
+
+/// satisfies: 64, 10
+/// A forecast takes the candidates a round formed on the branch's
+/// revision, and forms only the head on them.
+#[test]
+fn a_forecast_takes_the_candidates_a_round_formed() {
+    let h = Harness::bolt();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("from a"))]);
+    let one = h.submit("unit/a");
+    h.work("unit/b", "agent-b", &[("b/lib", Some("from b"))]);
+    let two = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.tested(), vec![vec![one], vec![one, two]]);
+    h.work("unit/c", "agent-c", &[("c/lib", Some("from c"))]);
+
+    let before = h.w().forms();
+    let f = h
+        .sluice()
+        .forecast(&h.place("unit/c"), BRANCH, &[])
+        .unwrap()
+        .unwrap();
+    assert_eq!(f.forecast, Forecast::Clear);
+    assert_eq!(f.ahead, vec![one, two]);
+    assert_eq!(h.w().forms() - before, 1);
 }
 
 /// satisfies: S26, 69, 92, 93, 16, 38

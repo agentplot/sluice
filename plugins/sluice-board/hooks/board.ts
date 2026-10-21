@@ -2,7 +2,9 @@
 // pure functions over the document, so the tests need no sluice running.
 
 import type {
+  Forecast,
   LastResult,
+  Latest,
   Mine,
   Outcome,
   Overview,
@@ -467,6 +469,95 @@ export function wakeText(o: Outcome, failed: OverviewFailed[]): string {
     ...logs,
     `Read the log, reproduce with \`sluice exec ${o.branch}\`, fix, commit, and submit again.`,
   ].join("\n");
+}
+
+/**
+ * The session's latest submission the document shows: still in a queue, or
+ * named by a recent landing, blame or conflict. Null when it shows none.
+ */
+export function latest(doc: Overview, mine: Mine): Latest | null {
+  let found: Latest | null = null;
+  const see = (l: Latest) => {
+    if (!found || l.id > found.id) found = l;
+  };
+  for (const b of doc.branches) {
+    for (const s of b.submissions)
+      if (isMine(s, mine)) see({ id: s.id, branch: b.branch, conflict: false, active: true });
+    for (const r of b.recent) {
+      const named = r.id !== undefined ? [r.id] : (r.ids ?? []);
+      for (const id of named)
+        if (mine.ids.includes(id) && !b.submissions.some((s) => s.id === id))
+          see({ id, branch: b.branch, conflict: r.event === "conflict", active: false });
+    }
+  }
+  return found;
+}
+
+/**
+ * The branch the session's work would land on: its latest submission's,
+ * else the one its checkout's runs are held to, else the only branch.
+ */
+export function forecastBranch(doc: Overview, mine: Mine): OverviewBranch | null {
+  const name =
+    latest(doc, mine)?.branch ??
+    doc.sessions.find((s) => mine.root !== null && s.worktree === mine.root)?.branch ??
+    (doc.branches.length === 1 ? doc.branches[0]!.branch : undefined);
+  return doc.branches.find((b) => b.branch === name) ?? null;
+}
+
+/**
+ * Whether to forecast the session's work on `b`: not while a submission of
+ * its own waits there or is under test, which the round judges itself.
+ */
+export function forecasts(b: OverviewBranch, mine: Mine): boolean {
+  return b.at !== null && !b.submissions.some((s) => isMine(s, mine));
+}
+
+/** What a forecast rests on: the head, the branch's revision, the others waiting. */
+export function forecastKey(head: string, b: OverviewBranch, mine: Mine): string {
+  const others = b.submissions
+    .filter((s) => !isMine(s, mine))
+    .map((s) => s.id)
+    .sort((x, y) => x - y);
+  return `${head} ${b.at ?? ""} ${others.join(",")}`;
+}
+
+/** A conflict by its files and what they are contested with, or null for none. */
+export function signature(branch: string, f: Forecast): string | null {
+  if (!f.conflict) return null;
+  const paths = [...f.conflict.paths].sort().join(",");
+  const with_ = f.conflict.with.map((c) => c.id).sort((x, y) => x - y);
+  return `${branch}|${paths}|${with_.join(",")}`;
+}
+
+/** What a conflict is contested with: the submissions, or what the branch landed. */
+function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
+  return f.with.length === 0
+    ? `what ${branch} has landed`
+    : f.with.map((c) => `#${c.id} (${c.from.worktree})`).join(", ");
+}
+
+/** The toast for a conflict a forecast found. */
+export function forecastToast(branch: string, f: NonNullable<Forecast["conflict"]>): string {
+  const more = f.paths.length > 1 ? ` +${f.paths.length - 1}` : "";
+  return `sluice: your work would conflict with ${branch} in ${f.paths[0] ?? "a file"}${more}`;
+}
+
+/** The prompt that tells a session its work has come to conflict. */
+export function conflictText(branch: string, f: NonNullable<Forecast["conflict"]>): string {
+  return [
+    `[sluice] Your work would conflict with ${contested(branch, f)}, in ${f.paths.join(", ")}.`,
+    `Merge ${branch} into your worktree now and resolve it while it is small (check with \`sluice submit --check ${branch}\`).`,
+  ].join(" ");
+}
+
+/** The prompt that tells a session the conflict it was told of has cleared. */
+export function clearText(branch: string, last: Latest | null): string {
+  const again =
+    last?.conflict && !last.active && last.branch === branch
+      ? ` #${last.id} can be submitted again: \`sluice submit ${branch}\`.`
+      : "";
+  return `[sluice] Your work no longer conflicts with ${branch} or anything queued.${again}`;
 }
 
 /** `https://github.com/<owner>/<repo>` from a remote's URL, or null off GitHub. */

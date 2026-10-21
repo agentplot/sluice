@@ -28,6 +28,7 @@ queue; the policy's `[branches."<pattern>"]` tables are the whole list.
 
 ```sh
 sluice submit --check main      # would it conflict? writes nothing
+sluice submit --check main --head bolt/x   # the same for a branch no worktree holds
 sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
 ```
@@ -104,7 +105,9 @@ it**; sluice has already checked the entries ahead passed on their own.
 
 A **conflict** names the paths and the submission it conflicts with. Merge
 or rebase the target branch into your worktree, resolve, commit, submit
-again. Details and every state: [references/verdicts.md](references/verdicts.md).
+again. Don't wait for the submission to find it: `sluice exec` says
+`would conflict: …` before it runs, and when told your work would conflict
+(by the board, or a forecast), merge the branch in then, while it is small. Details and every state: [references/verdicts.md](references/verdicts.md).
 
 ## Seeing the queue
 

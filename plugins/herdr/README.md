@@ -63,14 +63,17 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards`, `#53 CONFLICT · a.rs` |
   | is the pane's, and the pane has a branch named ([below](#naming-a-panes-branch)) | `release · 3 queued · #12 testing 3/8 · 2 checking` |
   | is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
-  | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95` |
+  | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95 in builds.md +1` |
   | landed in the last 30 minutes | `#94 landed 12m` |
   | none of these | no line |
 
-  The ahead line forecasts with `sluice submit <branch> --check --json`,
-  run again only when the worktree's head or the branch moves. On a branch
-  with a `remote`, a forecast fetches the branch; set `ahead_check = false`
-  (below) to show the count alone.
+  The ahead line forecasts with `sluice submit <branch> --check --json`.
+  A conflict names what it is with, a submission or the branch itself, and
+  the first file in conflict, with how many more. The forecast runs again
+  only when the worktree's head, the branch's revision or the submissions
+  waiting on it change, not each time a combination starts or ends. On a
+  branch with a `remote`, a forecast fetches the branch; set
+  `ahead_check = false` (below) to show the count alone.
 - **The queue on each workspace's row**, the `$sluice_q` token
   (`4 submissions`, every branch counted).
 - **The tab bar**: the focused repository's queue on one line, as the

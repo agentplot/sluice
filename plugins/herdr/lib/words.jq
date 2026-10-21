@@ -321,6 +321,9 @@ def pane_token($w; $paths; $failed; $check; $now; $named):
     elif $check != null and ($check.count // 0) > 0 then
       "\($check.count) ahead" + (if $check.result == "clean" then " · clean"
         elif $check.result == "conflicts" then " · conflicts " + (if ($check.with | length) > 0 then ($check.with | map("#\(.)") | join(" ")) else $check.branch end)
+          # The first file in conflict, by its name alone, and how many more.
+          + (($check.paths // []) | if length > 0 then " in " + (.[0] | split("/") | last)
+              + (if length > 1 then " +\(length - 1)" else "" end) else "" end)
         else "" end)
     elif $landed and (($landed.at | since($now)) // 99999) < 1800 then
       "#\($landed.id) landed \($landed.at | since($now) | minutes)"
