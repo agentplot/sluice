@@ -61,6 +61,7 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   |---|---|
   | has a submission queued or under test | `#95 testing 3m/15m` |
   | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards`, `#53 CONFLICT · a.rs` |
+  | is the pane's, and the pane has a branch named ([below](#naming-a-panes-branch)) | `release · 3 queued · #12 testing 3/8 · 2 checking` |
   | is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
   | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95 in builds.md +1` |
   | landed in the last 30 minutes | `#94 landed 12m` |
@@ -133,6 +134,36 @@ survives a reinstall. herdr runs the command through `/bin/sh -lc`, which
 fills in each host's `$HOME`, so one `config.toml` serves a Mac and a
 Linux box alike wherever herdr keeps its state below the home directory,
 as it does by default. `setup` prints the command for the host it runs on.
+
+## Naming a pane's branch
+
+A pane's line follows the worktree it is in. When several agents share one
+checkout, each working for a different branch whose submissions come from
+other worktrees, the checkout can't say which branch is whose. Whatever
+starts the agents can name it, with the pane token `sluice_branch`:
+
+```sh
+herdr pane report-metadata "$HERDR_PANE_ID" --source my-orchestrator \
+  --token sluice_branch=release
+```
+
+The pane's line then shows that branch: `release · 3 queued · #12 testing
+3/8 · 2 checking`, its submissions in no combination under test, its
+oldest combination under test, and the agents' checks held to it;
+`release · nothing queued`, or `release · no records` when sluice has no
+records of it. The popup opened over the pane shows that branch first. A
+submission, blame or conflict of the worktree's own still comes first, and
+the pane gets no ahead forecast, so name a branch only where the worktree
+doesn't say it.
+
+Any source may set the token; let one own it on each pane. Reported
+without `--ttl-ms`, herdr keeps it until it is replaced, cleared
+(`--clear-token sluice_branch`) or the pane closes, but not across a
+restart of herdr's server: report it again when the agent is restarted or
+resumed. The plugin reads it at each tick, within 15 seconds. herdr gives
+every pane `HERDR_PANE_ID`; from elsewhere, use the id `herdr pane list`
+shows. A Claude Code session's board reads the same from `SLUICE_BRANCH`
+in the session's environment.
 
 ## Sources
 

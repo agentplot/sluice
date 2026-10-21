@@ -27,6 +27,12 @@ repo=
 [ -n "$dir" ] && repo=$(repo_of "$dir")
 name=
 [ -n "$repo" ] && name=$(name_of "$repo")
+# The branch named for that pane by its `sluice_branch` token, which its
+# repository's view shows first.
+pane=$(printf '%s' "$ctx" | jq -r '.focused_pane_id // empty' 2>/dev/null)
+named=
+[ -n "$pane" ] && named=$(hd pane list 2>/dev/null | jq -r --arg p "$pane" '[.result.panes // [] | .[]
+  | select(.pane_id == $p) | .tokens.sluice_branch | strings | gsub("[[:cntrl:]]"; "")] | first // empty' 2>/dev/null)
 
 [ -t 1 ] && tty=true || tty=false
 # Rows are OSC 8 links on a terminal (SLUICE_HERDR_LINKS=1 asks for them
@@ -67,10 +73,12 @@ frame() {
     | sort_by(.repository, .host)')
   if [ "$(printf '%s' "$shown" | jq length)" -gt 0 ]; then
     drawn=$(printf '%s' "$shown" | jqw -c --argjson now "$t" --argjson color "$tty" --argjson numbers "$numbers" \
-      --arg note "$note" --argjson height "$height" --argjson top "$top" '
+      --arg note "$note" --argjson height "$height" --argjson top "$top" --arg r "$repo" --arg n "$name" --arg named "$named" '
       include "words";
       (if $note == "" then [] else [{text: $note, kind: "heading"}, {text: "", kind: "blank"}] end)
-      + [.[] | rows($now; $color)[]] | fit($height; $top; $color) | if $numbers then numbered else . end')
+      + [.[] | (if $named != "" and (.repository == $r or (.repository | repo_name) == $n) then $named else null end) as $first
+          | rows($now; $color; $first)[]]
+      | fit($height; $top; $color) | if $numbers then numbered else . end')
     printf '%s' "$drawn" | jq -r '.[] | select(.n) | .url' >"$links_file"
     printf '%s' "$drawn" | jq -r '[.[] | select(.kind == "above") | .top] | first // 0' >"$top_file"
     printf '%s' "$drawn" | jqw -r --argjson links "$links" 'include "words"; .[] | line($links)'

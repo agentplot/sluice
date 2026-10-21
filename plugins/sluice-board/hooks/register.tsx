@@ -36,6 +36,7 @@ import {
   learn,
   limit,
   moving,
+  namedFirst,
   outcomes,
   plural,
   progress,
@@ -79,6 +80,8 @@ const repo = atom({ plugin: "sluice-board", key: "repo" } as const, null);
 // Failures opened in place: their keys, and what each showed when opened.
 const opened = atom({ plugin: "sluice-board", key: "opened" } as const, []);
 const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
+// The branch the session works for, when what started it named one.
+const named = atom({ plugin: "sluice-board", key: "named" } as const, null);
 const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const, NOT_YET);
 
 type Detail = OpenedTest;
@@ -134,7 +137,7 @@ async function take($: $, next: Overview, cwd: string, how: How) {
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
   await update($, mine, () => known);
-  $.ui.status(statusLine(next, known));
+  $.ui.status(statusLine(next, known, await read($, named), await $.clock.now()));
   if (how.forecast) void forecast($, how.wake, first);
   if (first) {
     // What happened before the session started is not news.
@@ -288,6 +291,10 @@ export const register: Register = (on, options) => {
       .catch(() => null);
     const root = top && top.exitCode === 0 ? top.stdout.trim() : null;
     await update($, mine, (m) => ({ ...m, root }));
+    // An orchestrator that starts several agents in one checkout names each
+    // one's branch, which the checkout can't say.
+    const hint = await $.env.get("SLUICE_BRANCH").catch(() => undefined);
+    await update($, named, () => (hint ? hint : null));
     const origin = await $.process
       .run(["git", "remote", "get-url", "origin"], { cwd })
       .catch(() => null);
@@ -337,7 +344,7 @@ export const register: Register = (on, options) => {
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     const d = await read($, doc);
     await read($, now);
-    const lines = bandLines(d, await $.clock.now());
+    const lines = bandLines(d, await $.clock.now(), await read($, named));
     if (lines.length === 0 || (await read($, isHidden)) || e.props.hasSurvey) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
     return (
@@ -369,8 +376,11 @@ export const register: Register = (on, options) => {
     await read($, now);
     if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
     const at = await $.clock.now();
-    const visible = d.branches.filter((b) => shown(b, at));
+    // The session's named branch first, shown when idle too.
+    const first = await read($, named);
+    const visible = namedFirst(d.branches, first).filter((b) => b.branch === first || shown(b, at));
     const quiet = d.branches.length - visible.length;
+    const unknown = first !== null && !d.branches.some((b) => b.branch === first);
     const checks = checkRows(d, at);
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
@@ -409,6 +419,11 @@ export const register: Register = (on, options) => {
         <Text dimColor>
           {d.repository} on {d.host}
         </Text>
+        {unknown && (
+          <Box marginTop={1}>
+            <Text bold>{first} · no records</Text>
+          </Box>
+        )}
         {visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
         {visible.map((b) => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>

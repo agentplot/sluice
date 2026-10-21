@@ -14,16 +14,23 @@ check=$(read_sources | jq -r .ahead_check)
 t=$(now)
 panes=$(panes_json)
 docs=$(all_docs)
-tops=$(printf '%s' "$panes" | jq -r '[.[] | select(.top) | [.top, .repo] | @tsv] | unique[]')
+# Each worktree once, and whether every pane in it has a branch named:
+# their tokens never say ahead.
+tops=$(printf '%s' "$panes" | jq -r '[.[] | select(.top)] | group_by(.top)[]
+  | [.[0].top, .[0].repo, (all(.named != null) | tostring)] | @tsv')
 
 old_ifs=$IFS
 IFS='
 '
 for line in $tops; do
-  IFS='	' read -r top repo <<EOF
+  IFS='	' read -r top repo named <<EOF
 $line
 EOF
   out=$state/checks/$(sum "$top")
+  [ "$named" = false ] || {
+    rm -f "$out"
+    continue
+  }
   d=$(printf '%s' "$docs" | jq -c --arg r "$repo" 'map(select(.repository == $r))')
   [ "$(printf '%s' "$d" | jq length)" -gt 0 ] || {
     rm -f "$out"
@@ -35,7 +42,7 @@ EOF
   done
   # Nothing to forecast while the worktree's token is about a submission.
   busy=$(jqw -n -r --argjson d "$d" --argjson p "$paths" --arg w "$top" --argjson now "$t" 'include "words";
-    $d | pane_token($w; $p; {}; null; $now) | test("^#") and (test("^#[0-9]+ landed ") | not)')
+    $d | pane_token($w; $p; {}; null; $now; null) | test("^#") and (test("^#[0-9]+ landed ") | not)')
   if [ "$busy" = true ]; then
     rm -f "$out"
     continue

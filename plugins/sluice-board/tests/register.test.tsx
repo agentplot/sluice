@@ -2,7 +2,7 @@ import type { On } from "claude-code";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Overview } from "../types";
-import { NOW, overview, withChecks, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
@@ -44,12 +44,17 @@ function blamedWithLog(log: string): Overview {
   return d;
 }
 
-/** A host where sluice answers from `docs`, streamed by --watch in turn. */
+/**
+ * A host where sluice answers from `docs`, streamed by --watch in turn, and
+ * the session was started with the variables `env`.
+ */
 function host(
   on: On,
   docs: Overview[],
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
+  env: Record<string, string> = {},
 ) {
+  mock.env(on, env);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
@@ -338,6 +343,88 @@ test("the pane keeps the overview's order of branches, and counts the idle ones"
   expect(
     await pane.find({ type: "Text", text: "1 other branch with nothing queued" }),
   ).toBeDefined();
+  await pane.unmount();
+});
+
+test("a branch named by SLUICE_BRANCH on the status line, and first in the band and the pane", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = {
+    prompts: [] as string[],
+    toasts: [] as string[],
+    status: [] as (string | undefined)[],
+  };
+  const d = withRelease();
+  d.branches[0]!.depth = 1;
+  d.branches[0]!.submissions = [
+    { id: 20, state: "queued", from: { agent: "claude", worktree: "w", path: "/work/sluice/w" } },
+  ];
+  host(on, [d], seen, { SLUICE_BRANCH: "release" });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(seen.status).toContain("sluice: release · 3 queued · #12 testing 3/8 · 2 checking");
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  const lines = await band.findAll({ type: "Text", text: /^sluice / });
+  expect(lines.map((l) => l.text.split(" · ")[0])).toEqual(["sluice release", "sluice main"]);
+  await band.unmount();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^\S+ at / });
+  expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["release", "main"]);
+  await pane.unmount();
+});
+
+test("the pane shows a named branch first even when idle", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d = overview();
+  const main = d.branches[0]!;
+  const idle = { ...main, branch: "bolt/a", depth: 0, submissions: [], candidates: [], recent: [] };
+  d.branches = [{ ...main, branch: "release" }, idle, main];
+  host(on, [d], { prompts: [], toasts: [], status: [] }, { SLUICE_BRANCH: "bolt/a" });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^\S+ at / });
+  expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["bolt/a", "release", "main"]);
+  expect(await pane.find({ type: "Text", text: /with nothing queued/ })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("the pane names a branch it has no records of", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [overview()], { prompts: [], toasts: [], status: [] }, { SLUICE_BRANCH: "hotfix" });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^\S+ (at|·) / });
+  expect(heads.map((h) => h.text)).toEqual([
+    "hotfix · no records",
+    expect.stringMatching(/^main at /),
+  ]);
   await pane.unmount();
 });
 

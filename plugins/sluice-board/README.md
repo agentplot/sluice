@@ -30,7 +30,9 @@ sluice's queue inside a Claude Code session.
   changes` when the checkout held more. Under them,
   `host: 4 of 6 runs · 3 queue · 1 agent`.
 - **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
-  same `· 1 slot to an agent's checks` when checks hold the queue back.
+  same `· 1 slot to an agent's checks` when checks hold the queue back; or
+  the state of the branch named for the session
+  ([below](#naming-a-sessions-branch)).
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.
@@ -51,6 +53,28 @@ later), in a repository with sluice's records, and is silent elsewhere. A
 submission is this session's when its `from.path` is the session's worktree,
 or the session's own `sluice submit` / `wt submit` printed its number or its
 pull request.
+
+## Naming a session's branch
+
+The status line follows the session's worktree. When several agents share
+one checkout, each working for a different branch whose submissions come
+from other worktrees, the checkout can't say which branch is whose.
+Whatever starts the session names it in the session's environment:
+
+```sh
+SLUICE_BRANCH=release claude
+```
+
+With no submission of its own, the session's status line then shows that
+branch: `sluice: release · 3 queued · #12 testing 3/8 · 2 checking`, its
+submissions in no combination under test, its oldest combination under
+test, and the agents' checks held to it; `release · nothing queued`, or
+`release · no records` when sluice has no records of it. The band and the
+pane show that branch first, and the pane shows it even with nothing
+queued. The variable is read when the session starts. A preview's command
+gets `SLUICE_BRANCH` too, the branch the preview was made from, so a
+session started there follows that branch. In herdr, the pane token
+`sluice_branch` does the same for the herdr plugin.
 
 This is a mod: Claude Code's function-hooks API, early access. It is kept
 apart from the `sluice` plugin's skills so a Claude Code release that changes

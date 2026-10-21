@@ -183,12 +183,68 @@ export function branchLine(b: OverviewBranch, now: number, room?: Room): string 
   return parts.join(" · ");
 }
 
-/** The band: one line per branch with a queue, in the overview's order; empty when none has. */
-export function bandLines(doc: Overview | null, now: number): string[] {
+/** The branch named for this session first, then the rest in the overview's order. */
+export function namedFirst<B extends { branch: string }>(
+  branches: readonly B[],
+  named: string | null,
+): B[] {
+  if (!named) return [...branches];
+  return [
+    ...branches.filter((b) => b.branch === named),
+    ...branches.filter((b) => b.branch !== named),
+  ];
+}
+
+/**
+ * The band: one line per branch with a queue, in the overview's order but
+ * for the branch named for this session, first; empty when none has.
+ */
+export function bandLines(
+  doc: Overview | null,
+  now: number,
+  named: string | null = null,
+): string[] {
   if (!doc) return [];
-  return doc.branches
+  return namedFirst(doc.branches, named)
     .map((b) => branchLine(b, now, doc.room))
     .filter((l): l is string => l !== null);
+}
+
+/**
+ * The state of a branch named for a session whose worktree can't say it, in
+ * the herdr plugin's words for a pane's: `release · 3 queued · #12 testing
+ * 3/8 · 2 checking`, its oldest combination under test and the agents'
+ * checks held to it; `release · nothing queued`, or `release · no records`
+ * when the overview does not list it.
+ */
+export function namedLine(doc: Overview, branch: string, now: number): string {
+  const b = doc.branches.find((x) => x.branch === branch);
+  if (!b) return `${branch} · no records`;
+  const parts = [branch];
+  const queued = waiting(b).length;
+  if (queued > 0) parts.push(`${queued} queued`);
+  const under = testing(b);
+  const key = (c: OverviewCandidate) => c.started ?? "~";
+  const oldest = under.reduce<OverviewCandidate | undefined>(
+    (min, c) => (min === undefined || key(c) < key(min) ? c : min),
+    undefined,
+  );
+  if (oldest) {
+    const tasks = oldest.tasks ?? [];
+    const took = since(oldest.started, now);
+    const count =
+      tasks.length > 0
+        ? ` ${tasks.filter(ended).length}/${tasks.length}`
+        : took === undefined
+          ? ""
+          : ` ${Math.floor(took / 60)}m`;
+    const more = under.length > 1 ? ` +${under.length - 1} more` : "";
+    parts.push(`${ids(oldest.submissions)} testing${count}${more}`);
+  }
+  const checking = doc.sessions.filter((s) => s.branch === branch && s.run).length;
+  if (checking > 0) parts.push(`${checking} checking`);
+  if (parts.length === 1) parts.push("nothing queued");
+  return parts.join(" · ");
 }
 
 /** How long a finished check stays in the pane: as long as a recent event does. */
@@ -358,17 +414,26 @@ export function submitted(stdout: string): { ids: number[]; pulls: string[] } {
   return { ids, pulls };
 }
 
-/** The status line: what is queued, and where this session's work stands. */
-export function statusLine(doc: Overview | null, mine: Mine): string | undefined {
+/**
+ * The status line: what is queued, and where this session's work stands;
+ * with no submission of its own, the state of the branch named for it.
+ */
+export function statusLine(
+  doc: Overview | null,
+  mine: Mine,
+  named: string | null = null,
+  now = 0,
+): string | undefined {
   if (!doc) return undefined;
   const queued = doc.branches.reduce((n, b) => n + b.depth, 0);
   const own = doc.branches.flatMap((b) => b.submissions).filter((s) => isMine(s, mine));
-  if (queued === 0 && own.length === 0) return undefined;
-  const yours = own.map((s) => ` · yours #${s.id} ${s.state}`).join("");
   const held =
     doc.room && doc.branches.some((b) => heldBack(b, doc.room))
       ? ` · ${checksWords(doc.room)}`
       : "";
+  if (named && own.length === 0) return `sluice: ${namedLine(doc, named, now)}${held}`;
+  if (queued === 0 && own.length === 0) return undefined;
+  const yours = own.map((s) => ` · yours #${s.id} ${s.state}`).join("");
   return `sluice: ${plural(queued, "submission")}${yours}${held}`;
 }
 

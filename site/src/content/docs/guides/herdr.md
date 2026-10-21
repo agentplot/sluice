@@ -156,6 +156,7 @@ shows no row:
 |---|---|
 | has a submission queued or under test | `#95 testing 3m/15m`, `#95 testing 1/2 ▓▓▓▓▓░░░░░ 3m/15m` |
 | had its latest submission blamed, or in conflict | `#87 BLAMED · tests:t-cards` |
+| is the pane's, and the pane has a branch named (below) | `release · 3 queued · #12 testing 3/8 · 2 checking` |
 | is running its checks with `sluice exec` | `checking 3/8`, or `checking 2m` for a command |
 | is ahead of its branch | `3 ahead · clean`, `3 ahead · conflicts #95 in builds.md +1` |
 | landed in the last 30 minutes | `#94 landed 12m` |
@@ -166,6 +167,34 @@ the first file in conflict. It asks again only when the worktree's head,
 the branch's revision or the submissions queued on it move. Each workspace's row shows how many submissions
 its repositories hold. Every row expires two minutes after the plugin last
 set it, so nothing stale stays if the plugin stops.
+
+## Naming a pane's branch
+
+A row follows the worktree its pane is in. When several agents share one
+checkout, each working for a different branch whose submissions come from
+other worktrees, the checkout can't say which branch is whose. Whatever
+starts the agents names it, with the pane token `sluice_branch`:
+
+```sh
+herdr pane report-metadata "$HERDR_PANE_ID" --source my-orchestrator \
+  --token sluice_branch=release
+```
+
+The row then shows that branch: `release · 3 queued · #12 testing 3/8 · 2
+checking`, its submissions in no combination under test, its oldest
+combination under test, and the agents' checks held to it; `release ·
+nothing queued`, or `release · no records` when sluice has no records of
+it. The popup opened over the pane shows that branch first. A submission,
+blame or conflict of the worktree's own still comes first, and the pane
+gets no ahead forecast, so name a branch only where the worktree doesn't
+say it.
+
+Reported without `--ttl-ms`, the token stays until it is replaced,
+cleared with `--clear-token sluice_branch`, or the pane closes, but not
+across a restart of herdr's server: report it again when the agent is
+restarted or resumed. The plugin reads it within 15 seconds. A Claude Code
+session reads the same from `SLUICE_BRANCH`, as
+[the Claude Code guide](/sluice/guides/claude-code/#naming-a-sessions-branch) says.
 
 ## Other sources
 

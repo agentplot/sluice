@@ -157,15 +157,24 @@ def host_line: .room as $r
       + (if ($r.queue // 0) > 0 then ["\($r.queue) queue"] else [] end)
       + (if ($r.sessions // 0) > 0 then [plural($r.sessions; "agent")] else [] end)) | join(" · ") end;
 
+# The branch named for a pane ($named, or null) first, then the rest in
+# their order.
+def named_first($named): map(select(.branch == $named)) + map(select(.branch != $named));
+
 # One document's rows, as the board's /sluice pane draws them, under the
 # headings TESTING, QUEUED and RECENT: {text, kind, url?}. A row with a url
 # is a link: a submission to its worktree's pane, a failed test to its log.
-def rows($now; $color): . as $d
+# The branch named for the focused pane ($named, or null) comes first, shown
+# when idle, and as one line when no record names it.
+def rows($now; $color; $named): . as $d
   | ($d | check_rows($now; $color)) as $checks | ($d | host_line) as $host
   | def row($kind): {text: ., kind: $kind};
+  def visible: shown($now) or .branch == $named;
   [("\($d.repository) on \($d.host)" | paint($color; "2") | row("heading"))]
-  + (if ([$d.branches[] | select(shown($now))] | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
-  + [ $d.branches[] | select(shown($now)) | . as $b | testing as $under
+  + (if $named != null and ([$d.branches[] | select(.branch == $named)] | length) == 0
+      then [("" | row("blank")), ("\($named) · no records" | paint($color; "1") | row("heading"))] else [] end)
+  + (if ([$d.branches[] | select(visible)] | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
+  + [ $d.branches | named_first($named)[] | select(visible) | . as $b | testing as $under
       | ("" | row("blank"))
       , ("\($b.branch) at \(($b.at // "nothing") | .[0:7]) · \(plural($b.depth; "submission")) · \(plural($under | length; "combination")) under test\(if $b.parallel then " (up to \($b.parallel) at once)" else "" end)" | paint($color; "1") | row("heading"))
       , ( ($under + ($b.candidates | map(select(.state == "formed")))) as $shown
@@ -197,7 +206,7 @@ def rows($now; $color): . as $d
                   + {url: "sluice-herdr:log?path=\(.log | @uri)&task=\(.task | @uri)"})
           else empty end )
     ]
-  + ([$d.branches[] | select(shown($now) | not)] | length | if . > 0 and . < ($d.branches | length)
+  + ([$d.branches[] | select(visible | not)] | length | if . > 0 and . < ($d.branches | length)
       then [("" | row("blank")), ((if . == 1 then "1 other branch" else "\(.) other branches" end) + " with nothing queued" | paint($color; "2") | row("heading"))] else [] end)
   + (if ($checks | length) > 0 or $host then [("" | row("blank"))] else [] end)
   + (if ($checks | length) > 0 then [("CHECKING" | paint($color; "1") | row("heading"))] + $checks else [] end)
@@ -253,10 +262,36 @@ def line($links):
 
 def minutes: "\(. / 60 | floor)m";
 
+# The state of the branch $branch, named for a pane whose worktree can't
+# say it, from its repository's documents: `release · 3 queued · #12
+# testing 3/8 · 2 checking`, its oldest combination under test and the
+# agents' checks held to it; `release · nothing queued`, or `release · no
+# records` when no document lists it. The board's status line says the same.
+def named_line($branch; $now):
+  . as $docs
+  | ([$docs[].branches[] | select(.branch == $branch)] | first) as $b
+  | if $b == null then "\($branch) · no records"
+    else ($b | testing) as $under
+      | ($b | waiting | length) as $queued
+      | ([$docs[].sessions[] | select(.branch == $branch and .run)] | length) as $checking
+      | [$branch]
+        + (if $queued > 0 then ["\($queued) queued"] else [] end)
+        + (if ($under | length) > 0 then
+            [($under | min_by(.started // "~")) as $c
+              | "\($c.submissions | map("#\(.)") | join("+")) testing"
+                + (if ($c.tasks // []) | length > 0 then " \([$c.tasks[] | select(ended)] | length)/\($c.tasks | length)"
+                  else ($c.started | since($now)) as $took | if $took == null then "" else " \($took | minutes)" end end)
+                + (if ($under | length) > 1 then " +\(($under | length) - 1) more" else "" end)]
+          else [] end)
+        + (if $checking > 0 then ["\($checking) checking"] else [] end)
+      | if length == 1 then . + ["nothing queued"] else . end
+      | join(" · ") end;
+
 # The `sluice` token for the worktree $w, from its repository's documents,
 # the submissions learned for it ($paths: id -> {path, branch}), the
-# blamed tests ($failed: id -> [task]) and its last forecast ($check).
-def pane_token($w; $paths; $failed; $check; $now):
+# blamed tests ($failed: id -> [task]), its last forecast ($check) and the
+# branch named for its pane ($named, or null).
+def pane_token($w; $paths; $failed; $check; $now; $named):
   . as $docs
   | ($paths | to_entries | map(select(.value.path == $w) | .key | tonumber)) as $mine
   | [ $docs[].branches[] | . as $b | .submissions[] | select(.from.path == $w)
@@ -278,6 +313,8 @@ def pane_token($w; $paths; $failed; $check; $now):
       if $out.event == "blamed" then "#\($out.id) BLAMED" + (($failed[$out.id | tostring] // []) | map(select(test("^\\S{1,24}$")))
           | if length > 0 then " · " + join(", ") else "" end)
       else "#\($out.id) CONFLICT" + (($out.paths // []) | if length > 0 then " · " + .[0] else "" end) end
+    # A worktree several agents share says nothing of each one's branch.
+    elif $named != null then $docs | named_line($named; $now)
     elif $run then "checking " + ($run | if (.tasks // []) | length > 0
         then "\([.tasks[] | select(ended)] | length)/\(.tasks | length)"
         else (.started | since($now)) // 0 | minutes end)
