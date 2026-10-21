@@ -13,6 +13,7 @@ pub mod instance;
 pub mod overview;
 pub mod preview;
 pub mod profiles;
+pub mod progress;
 pub mod protect;
 pub mod runs;
 pub mod scrub;
@@ -682,7 +683,7 @@ pub fn run(
                 );
             }
             if status {
-                return submitted(&s, &worktree, &branch, json, out);
+                return submitted(&s, clock, &worktree, &branch, json, out);
             }
             submit(
                 &s,
@@ -820,9 +821,11 @@ pub fn run(
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
+                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now())?;
                     write_status(
                         &s.status(&branch)?,
                         pusher.as_ref(),
+                        &testing,
                         &[sub],
                         Some(&room),
                         out,
@@ -866,7 +869,8 @@ pub fn run(
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
-                    write_status(&status, pusher.as_ref(), &shown, Some(&room), out)?;
+                    let testing = progress::lines(&s, &target, None, clock.now())?;
+                    write_status(&status, pusher.as_ref(), &testing, &shown, Some(&room), out)?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
@@ -1657,6 +1661,7 @@ fn owner(s: &Sluice<'_>, id: u64) -> Result<String> {
 
 fn submitted(
     s: &Sluice<'_>,
+    clock: &dyn Clock,
     worktree: &str,
     branch: &str,
     json: bool,
@@ -1685,7 +1690,8 @@ fn submitted(
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
     } else {
-        write_status(&status, None, &[sub], None, out)?;
+        let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
+        write_status(&status, None, &testing, &[sub], None, out)?;
     }
     Ok(0)
 }
@@ -1758,9 +1764,11 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
+                    let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
                     write_status(
                         &s.status(branch)?,
                         None,
+                        &testing,
                         std::slice::from_ref(&sub),
                         None,
                         out,
@@ -1897,9 +1905,13 @@ fn detail(branch: &str, s: &Submission) -> String {
     }
 }
 
+/// A branch's status as text: its counts, where it is pushed, its
+/// warnings, `testing`, a line per combination under test that is to be
+/// shown (ADR 0042), and a row per submission in `subs`.
 fn write_status(
     status: &Status,
     pusher: Option<&Pusher>,
+    testing: &[String],
     subs: &[Submission],
     room: Option<&sluice_core::overview::Room>,
     out: &mut dyn Write,
@@ -1944,6 +1956,9 @@ fn write_status(
             out,
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
+    }
+    for t in testing {
+        writeln!(out, "  {t}")?;
     }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs

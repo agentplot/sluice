@@ -679,23 +679,31 @@ fn status_lists_the_queue() {
         "{BRANCH} at {} · 1 in the queue · testing 1 at once (up to 4)",
         &tip.0[..7]
     );
+    // ADR 0042: the combination under test, with how long it has run.
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], header);
+    assert!(
+        lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")),
+        "{out}"
+    );
     assert_eq!(
-        out,
-        format!(
-            "{header}\n  #3  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3\n\
-             2 no longer in the queue: sluice status {BRANCH} --all\n"
-        )
+        lines[2..],
+        [
+            format!("  #3  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
+            format!("2 no longer in the queue: sluice status {BRANCH} --all"),
+        ]
     );
 
     let (code, out) = sluice(&f, &["status", BRANCH, "--all"]);
     assert_eq!(code, 0);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], header);
-    assert_eq!(lines[1], "  #1  landed    crw-1-unit-1  unit/touches");
-    assert!(lines[2]
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
+    assert_eq!(lines[2], "  #1  landed    crw-1-unit-1  unit/touches");
+    assert!(lines[3]
         .starts_with("  #2  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "));
     assert_eq!(
-        lines[3],
+        lines[4],
         format!("  #3  testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3")
     );
 
@@ -962,7 +970,7 @@ fn overview_shows_every_branch_at_a_glance() {
             &tip.0[..7]
         )
     );
-    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 since ")));
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
 }
 
 /// ADR 0028: a combination under test carries its run's tasks, as a
@@ -1019,10 +1027,73 @@ fn overview_shows_a_combinations_tasks() {
     );
     let (_, text) = sluice(&f, &["overview"]);
     assert!(
-        text.lines()
-            .any(|l| l.starts_with(&format!("  testing {BRANCH} + #3 1/3 since "))),
+        text.lines().any(|l| l.starts_with(&format!(
+            "  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards · "
+        ))),
         "{text}"
     );
+}
+
+/// ADR 0042: `status` says how far a combination under test has got, a
+/// line under the branch's counts, the rows as they were.
+#[test]
+fn status_shows_a_combinations_progress() {
+    use sluice_core::Clock;
+    use sluice_seams::{Rev, TaskProgress, TaskState};
+    let f = setup();
+    three_submissions(&f);
+    let (_, before) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        before
+            .lines()
+            .any(|l| l == format!("  testing {BRANCH} + #3").as_str()
+                || l.starts_with(&format!("  testing {BRANCH} + #3 · "))),
+        "{before}"
+    );
+    let (_, json) = sluice(&f, &["status", "3", "--json"]);
+    let rev = Rev::new(
+        serde_json::from_str::<serde_json::Value>(&json).unwrap()["tested"]["combination"]
+            .as_str()
+            .unwrap(),
+    );
+    let started = (f.clock.now() - chrono::Duration::minutes(4))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let task = |target: &str, state: TaskState, started: Option<&str>| TaskProgress {
+        target: target.into(),
+        state,
+        started: started.map(String::from),
+        ended: None,
+        exit: (state == TaskState::Passed).then_some(0),
+    };
+    f.world.says_tasks(
+        &rev,
+        &[
+            task("tests:t-cards", TaskState::Passed, None),
+            task("tests:t-batch-cards", TaskState::Running, Some(&started)),
+            task("plugin:test", TaskState::Waiting, None),
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+
+    let head = format!("  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards 4m");
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(lines[at].contains(" · "), "{text}");
+    assert!(
+        lines[at + 1..]
+            .iter()
+            .any(|l| l.starts_with("  #3  testing ") && l.ends_with(&format!("{BRANCH} + #3"))),
+        "{text}"
+    );
+    let (_, text) = sluice(&f, &["status", "3"]);
+    assert!(text.lines().any(|l| l.starts_with(&head)), "{text}");
+    // A submission in no combination under test has no line.
+    let (_, text) = sluice(&f, &["status", "1"]);
+    assert!(!text.contains("  testing "), "{text}");
 }
 
 /// ADR 0036: the branches in the order the default branch's policy writes

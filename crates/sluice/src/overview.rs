@@ -13,7 +13,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::{combination, hashes, sessions_json, Pause, STOPPED};
+use crate::{hashes, progress, sessions_json, Pause, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -102,6 +102,10 @@ fn write_overview(
         writeln!(out, "no branch has records here")?;
     }
     let room: Option<Room> = serde_json::from_value(doc["room"].clone()).ok();
+    let now = doc["at"]
+        .as_str()
+        .and_then(|at| at.parse().ok())
+        .unwrap_or_default();
     for b in branches {
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
@@ -118,21 +122,8 @@ fn write_overview(
             if !matches!(c.state, CandidateState::Starting | CandidateState::Testing) {
                 continue;
             }
-            let since = c
-                .started
-                .as_deref()
-                .map_or(String::new(), |t| format!(" since {t}"));
-            // ADR 0028: how many of its tasks have ended, where its runner
-            // says.
-            let ended = c.tasks.as_ref().map_or(String::new(), |t| {
-                let done = t.iter().filter(|t| t.state.ended()).count();
-                format!(" {done}/{}", t.len())
-            });
-            writeln!(
-                out,
-                "  testing {}{ended}{since}",
-                combination(&b.branch, &c.submissions)
-            )?;
+            // ADR 0042: how far it has got, as of when the overview was read.
+            writeln!(out, "  {}", progress::testing_line(&b.branch, c, now))?;
         }
         for r in b.recent.iter().rev().take(3) {
             writeln!(out, "  {}", recent_line(r))?;
