@@ -49,6 +49,9 @@ struct Setup {
     seen: Scratch,
     sessions: Scratch,
     config: Scratch,
+    /// The host's state, the setup's own, so another agent's runs on this
+    /// host never take the bound its rounds start under (71).
+    state: Scratch,
 }
 
 impl Setup {
@@ -78,6 +81,7 @@ impl Setup {
             seen,
             sessions: Scratch::new(&format!("{name}-sessions")),
             config: Scratch::new(&format!("{name}-config")),
+            state: Scratch::new(&format!("{name}-state")),
         }
     }
 
@@ -86,6 +90,7 @@ impl Setup {
         support::isolated(&mut c)
             .current_dir(dir)
             .env("XDG_CONFIG_HOME", self.config.path())
+            .env("XDG_STATE_HOME", self.state.path())
             .env_remove("SLUICE_AGENT")
             .env_remove("SLUICE_OTEL")
             .env_remove("GIT_DIR")
