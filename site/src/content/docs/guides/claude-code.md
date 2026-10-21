@@ -60,7 +60,9 @@ In a repository with a `.config/sluice.toml`, Claude:
 - commits everything first, and checks for a conflict with `--check`;
 - on a failure, reads the blamed tests and their logs, reproduces them with
   `sluice exec`, fixes and submits again;
-- on a conflict, merges the branch in and submits again;
+- on a conflict, merges the branch in and submits again, and, told by
+  the board that its work would come to conflict, merges the branch in
+  while the conflict is small;
 - runs its tests while it works with `sluice exec`, and cleans up with
   `sluice release`;
 - brings up a landed revision with `sluice preview` when you ask to try it.
@@ -134,6 +136,18 @@ When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests
 were blamed and where their logs are, so the agent can fix its work without
 being asked. The `wake` option in `/config` turns that turn off.
+
+Before it submits, the board forecasts the session's worktree whenever its
+commit, its branch or the submissions queued there move, as `sluice submit
+--check` does. The work can come to conflict with what the branch has
+landed since the worktree was cut, or with a submission ahead. The session
+then gets a turn naming the files and telling it to merge the branch in
+now, while the conflict is small. A conflict it was told of can also go
+away without its commit moving, when a submission ahead fails or is
+withdrawn. The session is told that too, and that a submission removed for
+the conflict can go again. The `forecast` option in `/config` turns this
+off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
+that forecasts for its agents itself.
 
 It reads everything from `sluice overview --json --watch`, so it needs
 sluice 0.12 or later, and stays silent in a repository with no queue. It is a

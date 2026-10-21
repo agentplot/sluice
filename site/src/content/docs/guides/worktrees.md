@@ -57,8 +57,12 @@ cargo install --path crates/sluice --locked
 
 Work on a branch of your own in a worktree of your own, and submit it.
 Keep it current yourself, when it suits you: at the start of a task,
-when a forecast says your submission conflicts, or after a landing you
-want to build on.
+when a forecast says your work would conflict, or after a landing you
+want to build on. `sluice submit main --check` forecasts it, and `sluice
+exec` forecasts it before every run. The Claude Code board and the herdr
+plugin forecast it each time the branch or the queue moves. A conflict
+is then known while it is a few lines, not an hour of work on a base the
+branch has left.
 
 ```sh
 git fetch origin
