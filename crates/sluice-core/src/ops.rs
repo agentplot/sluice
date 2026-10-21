@@ -244,6 +244,7 @@ impl Sluice<'_> {
                     told: None,
                     landed_as: None,
                     was: None,
+                    held: None,
                 },
             );
             l.log(

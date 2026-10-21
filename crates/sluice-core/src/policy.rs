@@ -125,6 +125,9 @@ pub struct Rules {
     pub flaky: Flaky,
     /// How long one candidate's checks may run (66).
     pub timeout: Option<Duration>,
+    /// How long a passed candidate may wait to land while a deeper one
+    /// holding it is under test (117). `None` holds nothing.
+    pub hold: Option<Duration>,
     /// Which results satisfy the gate (27 to 29): on a branch whose
     /// records are on its remote, signer names (78); otherwise
     /// `confined` and executor kinds.
@@ -220,6 +223,7 @@ impl Default for Rules {
             batch: false,
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
+            hold: None,
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
             signed: false,
             confined: false,
@@ -296,6 +300,7 @@ struct RulesForm {
     batch: Option<bool>,
     flaky: Option<String>,
     timeout: Option<String>,
+    hold: Option<String>,
     trust: Option<Vec<String>>,
     remote: Option<String>,
     pull_requests: Option<PullRequestsForm>,
@@ -463,6 +468,11 @@ impl Policy {
                         .with_context(|| format!("[branches.\"{pattern}\"] timeout"))?,
                 ),
             };
+            let hold = match r.hold.as_deref() {
+                None => d.hold,
+                Some(t) => Some(parse_duration(t).with_context(|| format!("{at} hold"))?)
+                    .filter(|h| !h.is_zero()),
+            };
             let mut trust = match r.trust {
                 Some(t) => t,
                 None if signed => Vec::new(),
@@ -544,6 +554,7 @@ impl Policy {
                     batch: r.batch.unwrap_or(d.batch),
                     flaky,
                     timeout,
+                    hold,
                     trust,
                     signed,
                     confined,
@@ -855,6 +866,7 @@ timeout = "20m"
 required = ["#gate", "#live"]
 parallel = 2
 batch = true
+hold = "5m"
 "##;
 
     #[test]
@@ -875,6 +887,8 @@ batch = true
         assert_eq!(main.parallel, 2);
         assert_eq!(main.flaky, Flaky::Fail);
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
+        assert_eq!(main.hold, Some(Duration::from_secs(300)));
+        assert_eq!(bolt.hold, None);
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
