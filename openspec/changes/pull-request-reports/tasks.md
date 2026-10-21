@@ -8,7 +8,7 @@ suites through `sluice exec main -- <command>`.
 ## 1. Decisions and the statement
 
 - [x] 1.1 Check by hand, on moon 2.6 in a scratch workspace, whether `moon exec --ci <t>` skips a `<t>` marked `runInCI: false` as `moon ci <t>` does; write the answer into design D4 and pick `exec --ci` or `ci` (`exec --ci`: `ci` refuses `--on-failure`); verify by the two commands' output, recorded in design.md.
-- [ ] 1.2 Draft clauses 118 and 119, scenarios S50 and S51, and the C.2 and C.5 edits into `design/sluice/proposals/pull-requests-1.md` on a blueprints branch `pull-request-reports`; verify by showing it with `plannotator annotate`.
+- [x] 1.2 Draft clauses 118 and 119, scenarios S50 and S51, and the C.2 and C.5 edits into `design/sluice/proposals/pull-requests-1.md` on a blueprints branch `pull-request-reports`; verify by showing it with `plannotator annotate`.
 - [x] 1.3 Write ADR 0039, "A request shows its verdict from the records, the same for every task runner", and its `adrs.toml` entry; verify `openspec validate pull-request-reports --strict` and the ADR check task pass.
 
 ## 2. A runner's detail, recorded
