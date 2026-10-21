@@ -39,6 +39,12 @@ conflict SHALL be told once, a reload of the mod included.
   and resolve it while it is small (check with sluice submit --check
   main).`
 
+#### Scenario: Already in conflict when the session starts
+
+- **WHEN** the first forecast after the session starts finds a conflict
+- **THEN** a toast says so and no turn starts, as for an outcome from
+  before the session started
+
 #### Scenario: A queued submission
 
 - **WHEN** the forecast says the work conflicts in `docs/builds.md` with
