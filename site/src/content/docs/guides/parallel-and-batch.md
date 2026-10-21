@@ -198,8 +198,14 @@ parallel = 3
 required = ["#check-fast", "#integration"]
 parallel = 4
 batch = true
+hold = "5m"
 timeout = "45m"
 ```
+
+`hold` keeps a submission that passed from landing alone while a longer
+combination holding it is under test, so submissions arriving a few
+seconds apart land in one move of `main` and start one deployment
+([`hold`](/sluice/reference/configuration/#hold)).
 
 ## A queue that tests one at a time
 

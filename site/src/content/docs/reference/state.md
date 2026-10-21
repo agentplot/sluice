@@ -171,6 +171,12 @@ is the branch the work was submitted from; `from.path` is the worktree
 itself, for a reader to match a submission to the session that made it.
 A submission written by an older sluice has no `path`.
 
+A passed submission waiting under its branch's [`hold`](/sluice/reference/configuration/#hold)
+has `"held": { "by": [12, 13, 14], "until": "2026-10-11T09:26:40Z" }`:
+the longer combination it waits for, by its submissions, and when the
+hold runs out. Nothing reads it to decide; the round decides from the
+branch's record, where each combination that passed has `passed_at`.
+
 A submission that has landed or been withdrawn moves, unchanged, from
 `submissions/` to `.finished/` in the same write that tells its outcome,
 once no combination or landing still names it. A round, `sluice

@@ -37,6 +37,7 @@ trust = ["open", "sandbox", "container"]
 required = ["#suite", "#live"]
 parallel = 2
 batch = true
+hold = "5m"
 trust = ["confined", "sandbox"]
 ```
 
@@ -257,11 +258,29 @@ Whether to test every combination or only the longest.
 | `false` | every combination: `+A`, `+A+B`, `+A+B+C`, up to `parallel` at once | fast tests, and a host with room for several runs; each submission lands about one run after it was submitted, and a failure names its submission at once |
 | `true` | only the longest, `+A+B+C`, one run at a time; if it passes, all three land together; if it fails, the shorter ones are tested to find which submission broke it | slow tests, where running fewer combinations matters more than landing or blaming quickly |
 
-With `true`, the branch tests nothing else while a batch is under test.
-Submissions that arrive meanwhile wait, and the next batch is whatever
-queued up: no timer collects one. A branch can't test several batches
+With `true`, the branch tests nothing else while a batch is under test,
+unless it has a [`hold`](#hold). Submissions that arrive meanwhile wait,
+and the next batch is whatever queued up: no timer collects one. A branch can't test several batches
 at once; several branches can, sharing the host's
 [`[runs] max`](#runs).
+
+### `hold`
+
+How long a combination that passed may wait to land while a longer one
+holding it is still under test, for example `"5m"`. Unset or `"0s"`,
+nothing waits: what passed lands at once.
+
+Say A is under test when B and C arrive ten seconds later. Without a
+hold, A lands alone when it passes and B and C land in a second move of
+the branch. With `hold = "5m"`, A waits for `+A+B+C`; when that passes,
+all three land in one move. If it fails, A lands at once with whatever
+else passed ahead of the failure. A never waits longer than the hold
+from its own pass. Set it on a branch whose every move starts a build or
+a deployment, such as `main`, to how far apart submissions may arrive
+and still land together. With `batch = true`, a branch with a hold also
+tests the longest combination beside one already under test, so B and
+C are not left waiting behind A. `sluice status` names what a held
+submission waits for and when its hold runs out.
 
 ### `flaky`
 

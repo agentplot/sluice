@@ -71,8 +71,8 @@ Then ask the user which branches sluice should gate (`main`; a family like
 | running copies of landed revisions (`[preview]`) | a command per repository | [previews](references/profiles/previews.md) |
 | more than one host, or more than one system (`[signers]`, `[systems]`) | peers on the git remote, standing hosts signing with SSH keys | [peers](references/profiles/peers.md) |
 
-The rules per branch (`required`, `parallel`, `batch`, `flaky`, `timeout`,
-`trust`) and `[landing] subject` are in the
+The rules per branch (`required`, `parallel`, `batch`, `hold`, `flaky`,
+`timeout`, `trust`) and `[landing] subject` are in the
 [configuration reference](https://agentplot.github.io/sluice/reference/configuration/#branchespattern-rules-per-target-branch).
 Leave `flaky = "fail"`.
 
@@ -107,6 +107,9 @@ Then choose, and tell the user why:
 - One branch can't do both. Bolts and `main` can differ: `batch = false` on
   `bolt/*` with a short gate, `batch = true` on `main` with the full one.
 - Set `timeout` to about twice the gate's usual time; the default is an hour.
+- Set `hold` on a branch whose every move starts a build or a deployment,
+  such as `main`, to how far apart submissions may arrive and still land in
+  one move, e.g. `"5m"`. Leave it off bolt branches.
 - Set the host's `[runs] max` (step 5) to how many runs the host holds at
   once. It caps every branch together, and agents' `sluice exec` runs too.
 - Every run gets its own checkout and its own ports. Check the tests write
