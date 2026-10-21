@@ -59,12 +59,34 @@ fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
         "1    failed",
         "2    a conflict",
         "3    sluice itself failed",
+        "4    withdrawn",
         "64   a command line",
         "130  stopped",
     ] {
         assert!(text.contains(exit), "{exit:?} in {text}");
     }
     assert!(!text.contains("--otel"), "{text}");
+}
+
+/// ADR 0041: `wait`'s help lists its exits, still waiting among them,
+/// and a timeout it cannot read is a usage error.
+#[test]
+fn wait_help_lists_the_exits_and_a_bad_timeout_exits_usage() {
+    let text = help(&["wait", "--help"]);
+    for exit in [
+        "0    landed",
+        "1    failed",
+        "2    a conflict",
+        "4    withdrawn",
+        "5    still waiting",
+        "130  stopped",
+        "--timeout 9m --json",
+    ] {
+        assert!(text.contains(exit), "{exit:?} in {text}");
+    }
+    let out = sluice(&["wait", "3", "--timeout", "soon"]);
+    assert_eq!(out.status.code(), Some(sluice::USAGE));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--timeout"));
 }
 
 #[test]

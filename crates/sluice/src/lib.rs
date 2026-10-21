@@ -13,6 +13,7 @@ pub mod instance;
 pub mod overview;
 pub mod preview;
 pub mod profiles;
+pub mod progress;
 pub mod protect;
 pub mod runs;
 pub mod scrub;
@@ -37,10 +38,15 @@ use sluice_core::{
 use sluice_seams::{Outcome, SessionPlace};
 use told::Kind;
 
-/// Exits of a waiting submit (walkthrough section 5).
+/// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
+/// ADR 0041).
 pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
+/// The submission was withdrawn while it was waited on.
+pub const WITHDRAWN: i32 = 4;
+/// `sluice wait --timeout` ran out with the submission undecided.
+pub const WAITING: i32 = 5;
 /// A command line sluice cannot read: an unknown command, flag or value.
 /// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
 /// conflict.
@@ -88,8 +94,32 @@ Exit codes:
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
   3    sluice itself failed; the cause is on stderr
+  4    withdrawn while it waited
   64   a command line sluice cannot read
   130  stopped with Ctrl-C; the submission stays queued";
+
+/// `sluice wait --help`'s examples and exits (ADR 0041).
+const WAIT_AFTER_HELP: &str = "\
+Examples:
+  $ sluice wait 12
+  $ sluice wait 12 --timeout 9m --json   an agent's loop: again while it exits 5
+  $ sluice wait main                     this worktree's last submission to main
+
+Exit codes:
+  0    landed
+  1    failed: it was blamed, or its pull request closed; or no such submission
+  2    a conflict
+  3    sluice itself failed; the cause is on stderr
+  4    withdrawn
+  5    still waiting: --timeout ran out, and the submission stays queued
+  64   a command line sluice cannot read
+  130  stopped with Ctrl-C; the submission stays queued";
+
+/// `--timeout`'s value, read as the policy reads a duration; one it cannot
+/// read is a command line sluice cannot read (64).
+fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
+    sluice_core::policy::parse_duration(text).map_err(|e| format!("{e:#}"))
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -188,6 +218,24 @@ pub enum Command {
         #[arg(long, default_value = ".")]
         worktree: String,
         /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait for a submission's outcome, running sluice's rounds meanwhile,
+    /// as a waiting submit does.
+    #[command(after_help = WAIT_AFTER_HELP)]
+    Wait {
+        /// A submission's number, or a branch: this worktree's last
+        /// submission to it.
+        target: String,
+        /// Return after this long, as `90s`, `9m` or `1h30m`, with the
+        /// submission as it stands.
+        #[arg(long, value_parser = timeout)]
+        timeout: Option<std::time::Duration>,
+        /// The worktree whose last submission a branch names.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout: the submission's record.
         #[arg(long)]
         json: bool,
     },
@@ -614,6 +662,7 @@ impl Cli {
             None => self.json,
             Some(
                 Command::Submit { json, .. }
+                | Command::Wait { json, .. }
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
@@ -677,16 +726,20 @@ pub fn run(
                 );
             }
             if takes_pulls(&s, &branch)? {
-                return submit_pull(
-                    &s, pulls, clock, &worktree, &branch, no_wait, status, json, pause, out,
-                );
+                let mode = if status {
+                    PullMode::Status
+                } else {
+                    PullMode::Open { no_wait }
+                };
+                return submit_pull(&s, pulls, clock, &worktree, &branch, mode, json, pause, out);
             }
             if status {
-                return submitted(&s, &worktree, &branch, json, out);
+                return submitted(&s, clock, &worktree, &branch, json, out);
             }
             submit(
                 &s,
                 pushers,
+                clock,
                 SubmitRequest {
                     worktree,
                     branch,
@@ -698,6 +751,54 @@ pub fn run(
                 pause,
                 out,
             )
+        }
+        Command::Wait {
+            target,
+            timeout,
+            worktree,
+            json,
+        } => {
+            let deadline = timeout.map(|t| {
+                clock.now() + chrono::Duration::from_std(t).unwrap_or(chrono::Duration::MAX)
+            });
+            let sub = match target.parse::<u64>() {
+                Ok(id) => match s
+                    .state(id)?
+                    .map_or_else(|| s.moved_to(id), |x| Ok(Some(x)))?
+                {
+                    Some(sub) => sub,
+                    None => {
+                        let next = ["sluice overview".to_string()];
+                        let text = format!("no submission {id}");
+                        told::tell(out, json, Kind::NotFound, &text, &next)?;
+                        return Ok(FAILED);
+                    }
+                },
+                Err(_) if takes_pulls(&s, &target)? => {
+                    let mode = PullMode::Wait { deadline };
+                    return submit_pull(
+                        &s, pulls, clock, &worktree, &target, mode, json, pause, out,
+                    );
+                }
+                Err(_) => match last_submitted(&s, &worktree, &target)? {
+                    Ok(sub) => sub,
+                    Err(from) => {
+                        let text = format!("nothing submitted from {from} to {target}");
+                        let next = [format!("sluice submit {target}")];
+                        told::tell(out, json, Kind::NotFound, &text, &next)?;
+                        return Ok(FAILED);
+                    }
+                },
+            };
+            let intake = takes_pulls(&s, &sub.branch)?.then_some(pulls);
+            let waiting = Waiting {
+                clock,
+                pulls: intake,
+                deadline,
+                json,
+                pause,
+            };
+            await_submission(&s, &waiting, sub, None, out)
         }
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch);
@@ -820,9 +921,11 @@ pub fn run(
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
+                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now())?;
                     write_status(
                         &s.status(&branch)?,
                         pusher.as_ref(),
+                        &testing,
                         &[sub],
                         Some(&room),
                         out,
@@ -866,7 +969,8 @@ pub fn run(
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
-                    write_status(&status, pusher.as_ref(), &shown, Some(&room), out)?;
+                    let testing = progress::lines(&s, &target, None, clock.now())?;
+                    write_status(&status, pusher.as_ref(), &testing, &shown, Some(&room), out)?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
@@ -1294,9 +1398,11 @@ pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn submit(
     s: &Sluice<'_>,
     pushers: &dyn Pushers,
+    clock: &dyn Clock,
     req: SubmitRequest,
     no_wait: bool,
     json: bool,
@@ -1332,41 +1438,137 @@ fn submit(
         return Ok(0);
     }
     // Keep the queue moving while waiting (walkthrough section 6).
-    let still_queued = |out: &mut dyn Write| -> Result<i32> {
-        writeln!(out, "still queued: sluice status {id}")?;
-        Ok(STOPPED)
+    let sub = s.state(id)?.expect("a submission just made");
+    let waiting = Waiting {
+        clock,
+        pulls: None,
+        deadline: None,
+        json,
+        pause,
     };
-    let sub = loop {
-        match s.round(&req.branch) {
-            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+    await_submission(s, &waiting, sub, Some(State::Queued), out)
+}
+
+/// How a command waits on a submission.
+struct Waiting<'a> {
+    clock: &'a dyn Clock,
+    /// On a branch that takes pull requests: taken in before each round,
+    /// as a waiting pull-request submit does.
+    pulls: Option<&'a dyn PullRequests>,
+    /// When `sluice wait --timeout` runs out.
+    deadline: Option<chrono::DateTime<chrono::Utc>>,
+    json: bool,
+    pause: &'a dyn Pause,
+}
+
+/// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
+/// say it: the loop under a waiting submit and `sluice wait`. `told` is
+/// the state its caller has said already. Under `--json`, one document
+/// however it ends: the submission's record.
+fn await_submission(
+    s: &Sluice<'_>,
+    waiting: &Waiting<'_>,
+    sub: Submission,
+    told: Option<State>,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
+        Waited::Decided(sub) => {
+            let branch = sub.branch.clone();
+            return report(
+                s,
+                &sub,
+                &branch,
+                &BTreeMap::new(),
+                Reached::Now,
+                waiting.json,
+                out,
+            );
+        }
+        Waited::Undecided(sub, code) => (sub, code),
+    };
+    if waiting.json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+    } else {
+        writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+    }
+    Ok(code)
+}
+
+/// How a wait ended.
+enum Waited {
+    /// Landed, failed, conflict or withdrawn.
+    Decided(Submission),
+    /// As it stands when the wait's time ran out ([`WAITING`]) or it was
+    /// stopped ([`STOPPED`]).
+    Undecided(Submission, i32),
+}
+
+/// Read `sub` again until it is decided, running a round between reads
+/// as a waiting driver does (1; rule core.4; ADR 0011), until the
+/// deadline or Ctrl-C. It reads before its first round, so a submission
+/// already decided runs nothing. Without `--json`, it says the
+/// submission's state, or its combination's progress, each time either
+/// moves (ADR 0042).
+fn wait_on(
+    s: &Sluice<'_>,
+    waiting: &Waiting<'_>,
+    mut sub: Submission,
+    told: Option<State>,
+    out: &mut dyn Write,
+) -> Result<Waited> {
+    let (id, branch) = (sub.id, sub.branch.clone());
+    type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
+    let mut said: Option<Moved> = told.map(|t| (t, None));
+    let mut first = true;
+    loop {
+        if sub.state.is_out() {
+            return Ok(Waited::Decided(sub));
+        }
+        if !waiting.json {
+            // How far it has got decides nothing: a read that fails says
+            // nothing this time.
+            let view = s.branch_view_of(&branch).ok();
+            let own = view.as_ref().and_then(|v| progress::own(v, id));
+            let now: Moved = (sub.state, own.map(progress::moved));
+            if said.as_ref() != Some(&now) {
+                match own {
+                    Some(c) => {
+                        let line = progress::testing_line(&branch, c, waiting.clock.now());
+                        writeln!(out, "{line}")?;
+                    }
+                    None => match detail(&branch, &sub) {
+                        d if d.is_empty() => writeln!(out, "#{id} {}", sub.state.word())?,
+                        d => writeln!(out, "#{id} {} · {d}", sub.state.word())?,
+                    },
+                }
+                said = Some(now);
+            }
+        }
+        if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
+            return Ok(Waited::Undecided(sub, WAITING));
+        }
+        if !first && !waiting.pause.pause() {
+            return Ok(Waited::Undecided(sub, STOPPED));
+        }
+        first = false;
+        if let Some(pulls) = waiting.pulls {
+            intake(pulls, s.seams(), waiting.clock, &branch);
+        }
+        match s.round(&branch) {
+            Ok(round) => exec::tell_abandoned(out, waiting.json, &round.released)?,
             Err(e) => {
                 // Ctrl-C reaches the tools a round runs in the foreground.
                 if INTERRUPTED.load(Ordering::SeqCst) {
-                    return still_queued(out);
+                    return Ok(Waited::Undecided(sub, STOPPED));
                 }
                 return Err(e);
             }
         }
-        let sub = s.state(id)?.expect("a submission just made");
-        if matches!(
-            sub.state,
-            State::Landed | State::Failed | State::Conflict | State::Withdrawn
-        ) {
-            break sub;
-        }
-        if !pause.pause() {
-            return still_queued(out);
-        }
-    };
-    report(
-        s,
-        &sub,
-        &req.branch,
-        &BTreeMap::new(),
-        Reached::Now,
-        json,
-        out,
-    )
+        sub = s
+            .state(id)?
+            .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))?;
+    }
 }
 
 /// Whose outcome a waiting submit ends with.
@@ -1655,45 +1857,75 @@ fn owner(s: &Sluice<'_>, id: u64) -> Result<String> {
     })
 }
 
-fn submitted(
+/// This worktree's last submission to `branch`, as `submit --status` and
+/// `sluice wait <branch>` find it: from the live records first, the
+/// branch's history only when they hold nothing from it. `Err` with the
+/// worktree's branch when it submitted nothing there.
+fn last_submitted(
     s: &Sluice<'_>,
     worktree: &str,
     branch: &str,
-    json: bool,
-    out: &mut dyn Write,
-) -> Result<i32> {
+) -> Result<std::result::Result<Submission, String>> {
     let from = s.seams().driver.session(worktree)?.from;
-    let status = s.status(branch)?;
     let latest = |subs: &[Submission]| {
         subs.iter()
             .rev()
             .find(|x| x.from.worktree == from.worktree)
             .cloned()
     };
-    // The live records first; the branch's history only when they hold
-    // nothing from this worktree.
-    let found = match latest(&status.submissions) {
+    let found = match latest(&s.status(branch)?.submissions) {
         Some(sub) => Some(sub),
         None => latest(&s.history(branch)?),
     };
-    let Some(sub) = found else {
-        let text = format!("nothing submitted from {} to {branch}", from.worktree);
-        let next = [format!("sluice submit {branch}")];
-        told::tell(out, json, Kind::NotFound, &text, &next)?;
-        return Ok(1);
+    Ok(found.ok_or(from.worktree))
+}
+
+fn submitted(
+    s: &Sluice<'_>,
+    clock: &dyn Clock,
+    worktree: &str,
+    branch: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let sub = match last_submitted(s, worktree, branch)? {
+        Ok(sub) => sub,
+        Err(from) => {
+            let text = format!("nothing submitted from {from} to {branch}");
+            let next = [format!("sluice submit {branch}")];
+            told::tell(out, json, Kind::NotFound, &text, &next)?;
+            return Ok(1);
+        }
     };
+    let status = s.status(branch)?;
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
     } else {
-        write_status(&status, None, &[sub], None, out)?;
+        let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
+        write_status(&status, None, &testing, &[sub], None, out)?;
     }
     Ok(0)
+}
+
+/// What `submit_pull` does with a worktree's pull request.
+#[derive(Clone, Copy)]
+enum PullMode {
+    /// Open or update it, then follow it to its outcome unless `no_wait`.
+    Open { no_wait: bool },
+    /// Only say where it stands.
+    Status,
+    /// Follow it to its outcome, or until `deadline`: `sluice wait
+    /// <branch>` (ADR 0041).
+    Wait {
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    },
 }
 
 /// `sluice submit` to a branch with pull requests (C.5 pull request):
 /// push the worktree's branch and open or update its pull request, which
 /// waits for its conditions; then follow it, reporting each state it
-/// reaches, to its outcome. With `status`, only say where it stands.
+/// reaches, to its outcome. [`PullMode::Status`] only says where it
+/// stands; [`PullMode::Wait`] follows the one open.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -1701,14 +1933,16 @@ fn submit_pull(
     clock: &dyn Clock,
     worktree: &str,
     branch: &str,
-    no_wait: bool,
-    status: bool,
+    mode: PullMode,
     json: bool,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
-    let number = if status {
+    let status = matches!(mode, PullMode::Status);
+    let no_wait = matches!(mode, PullMode::Open { no_wait: true });
+    let opens = matches!(mode, PullMode::Open { .. });
+    let number = if !opens {
         match pulls.find(seams, clock, branch, worktree)? {
             Some(n) => n,
             None => {
@@ -1735,7 +1969,7 @@ fn submit_pull(
     // A pull request already sent back on the head just pushed: intake
     // submits it again only once it is marked a draft and then ready for
     // review, so a decision on that submission is no run of this submit's.
-    let sent_back = if status {
+    let sent_back = if !opens {
         None
     } else {
         let head = seams.driver.session(worktree)?.head;
@@ -1758,9 +1992,11 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
+                    let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
                     write_status(
                         &s.status(branch)?,
                         None,
+                        &testing,
                         std::slice::from_ref(&sub),
                         None,
                         out,
@@ -1775,7 +2011,17 @@ fn submit_pull(
                 return report(s, &sub, branch, &names, reached, json, out);
             }
             Followed::Closed => {
-                writeln!(out, "#{number} was closed without landing")?;
+                if json {
+                    writeln!(
+                        out,
+                        "{}",
+                        serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": "closed",
+                        })
+                    )?;
+                } else {
+                    writeln!(out, "#{number} was closed without landing")?;
+                }
                 return Ok(FAILED);
             }
             Followed::Open { title, lines } => {
@@ -1802,25 +2048,39 @@ fn submit_pull(
         if no_wait || status {
             return Ok(0);
         }
+        // Undecided: as it stands, the document `--status` prints, or
+        // where to read it again.
+        let still = |out: &mut dyn Write, code: i32| -> Result<i32> {
+            if json {
+                let state = last.as_ref().map_or("waiting", |l| l.0.as_str());
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::json!({
+                        "pull_request": number, "branch": branch, "state": state,
+                    })
+                )?;
+            } else {
+                writeln!(out, "still open: #{number}; sluice wait {branch}")?;
+            }
+            Ok(code)
+        };
+        if let PullMode::Wait { deadline: Some(d) } = mode {
+            if clock.now() >= d {
+                return still(out, WAITING);
+            }
+        }
         match s.round(branch) {
             Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
-                    writeln!(
-                        out,
-                        "still open: #{number}; sluice submit {branch} --status"
-                    )?;
-                    return Ok(STOPPED);
+                    return still(out, STOPPED);
                 }
                 return Err(e);
             }
         }
         if !pause.pause() {
-            writeln!(
-                out,
-                "still open: #{number}; sluice submit {branch} --status"
-            )?;
-            return Ok(STOPPED);
+            return still(out, STOPPED);
         }
     }
 }
@@ -1834,6 +2094,7 @@ fn exit_for(sub: &Submission) -> i32 {
     match sub.state {
         State::Landed => LANDED,
         State::Conflict => CONFLICT,
+        State::Withdrawn => WITHDRAWN,
         _ => FAILED,
     }
 }
@@ -1897,9 +2158,13 @@ fn detail(branch: &str, s: &Submission) -> String {
     }
 }
 
+/// A branch's status as text: its counts, where it is pushed, its
+/// warnings, `testing`, a line per combination under test that is to be
+/// shown (ADR 0042), and a row per submission in `subs`.
 fn write_status(
     status: &Status,
     pusher: Option<&Pusher>,
+    testing: &[String],
     subs: &[Submission],
     room: Option<&sluice_core::overview::Room>,
     out: &mut dyn Write,
@@ -1944,6 +2209,9 @@ fn write_status(
             out,
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
+    }
+    for t in testing {
+        writeln!(out, "  {t}")?;
     }
     let aw = subs.iter().map(|s| s.from.agent.len()).max().unwrap_or(0);
     let ww = subs

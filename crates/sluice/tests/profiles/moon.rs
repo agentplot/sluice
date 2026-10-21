@@ -220,14 +220,17 @@ fn shows_each_task_as_it_ends(name: &str, place: impl Fn(&Repo) -> String) {
         let task = |t: &str| tasks.iter().find(|x| x.target == t);
         // moon writes a task's run record a moment before its end
         // checkpoint, which gives its start.
+        // A running task's start is when its start line was printed,
+        // noted by the supervisor within a second (ADR 0042).
         if task("alpha:test").is_some_and(|t| t.state == TaskState::Passed && t.started.is_some())
-            && task("slow:test").map(|t| t.state) == Some(TaskState::Running)
+            && task("slow:test")
+                .is_some_and(|t| t.state == TaskState::Running && t.started.is_some())
         {
             break tasks;
         }
         assert!(
             Instant::now() < until,
-            "alpha:test never passed with slow:test running: {tasks:?}"
+            "alpha:test never passed with slow:test running since a time: {tasks:?}"
         );
         std::thread::sleep(Duration::from_millis(100));
     };

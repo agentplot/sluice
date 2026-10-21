@@ -15,6 +15,10 @@
 | `withdrawn` | taken out, by its agent, a planner, the operator, or a resubmission |
 
 `failed` and `conflict` are out of the queue until you submit again.
+These nine are all the states there are: `sluice wait --json` and
+`sluice status <id> --json` give one of them as `state`, and none is
+renamed, removed or added under `sluice/submission@1`. Decided means
+`landed`, `failed`, `conflict` or `withdrawn`.
 
 ## Reading a failure
 

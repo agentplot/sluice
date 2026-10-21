@@ -818,6 +818,44 @@ fn no_wait_then_status() {
 
 /// A pull request sent back keeps the agent's worktree: the waiting
 /// submit exits 1 with the failure.
+/// ADR 0041: `sluice wait <branch>` follows this worktree's pull request,
+/// out of time with the document `--status` prints; `sluice wait <n>`
+/// takes the pull requests in before each round, and lands it.
+#[test]
+fn wait_follows_a_pull_request() {
+    let g = OnGitHub::new("pr-wait-cmd", "reviews = 1");
+    let w = g.session("waits", &[("v.txt", "v\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let wait = |args: &[&str]| {
+        g.command(env!("CARGO_BIN_EXE_sluice"), &w)
+            .arg("wait")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = wait(&["main", "--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let pull = g.gh.forge.by_ref("unit/waits").unwrap().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["pull_request"], pull.number);
+    assert_eq!(doc["state"], "waiting: needs 1 review");
+
+    g.gh.forge
+        .review(pull.number, "reviewer", "APPROVED", &pull.head)
+        .unwrap();
+    g.step();
+    let status: serde_json::Value =
+        serde_json::from_slice(&g.sluice(&["status", "main", "--json"]).stdout).unwrap();
+    let id = status["submissions"][0]["id"]
+        .as_u64()
+        .expect(&status.to_string());
+    let out = wait(&[&id.to_string(), "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["state"], "landed");
+}
+
 #[test]
 fn sent_back_keeps_the_worktree() {
     let g = OnGitHub::new("pr-sent-back", "");

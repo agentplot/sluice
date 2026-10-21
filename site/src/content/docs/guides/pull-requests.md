@@ -107,7 +107,9 @@ updates the same pull request.
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
 people review, so an agent that shouldn't wait submits with
-`--no-wait`, and `wt submit --status` reads it later.
+`--no-wait`, and `wt submit --status` reads it later. `sluice wait main`
+follows the pull request as a waiting submit does, and with `--timeout`
+returns after that long, exiting `5` while it is still open.
 
 ## A person opens one by hand
 

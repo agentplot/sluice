@@ -188,13 +188,19 @@ driver, and the one here. A tool's own merge stage, or worktrunk's
 ```console
 $ sluice submit bolt/concurrent-units
 submission 12 to bolt/concurrent-units · nothing queued ahead
+testing bolt/concurrent-units + #12 · 3s of 15m
+testing bolt/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
 testing bolt/concurrent-units + #12 · 2 tasks to run, 31 replayed
 passed · landed as b7d2e94
 ```
 
 `sluice submit` waits for the outcome and exits with it: 0 landed, 1
-failed, 2 conflict. `--no-wait` returns at once, and `sluice status 12`
-reads it later. The agent's worktree and branch stay as they were:
+failed, 2 conflict, 4 withdrawn. While it waits, it says how far its
+combination has got. `--no-wait` returns at once, and `sluice wait 12`
+waits for it later, running the rounds as a waiting submit does; an
+agent whose tool calls are capped runs `sluice wait 12 --timeout 9m
+--json` again for as long as it exits 5. `sluice status 12` reads it
+without waiting. The agent's worktree and branch stay as they were:
 removing them after a landing is a driver's business, and the plain
 driver leaves it to the agent.
 
