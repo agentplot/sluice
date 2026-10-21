@@ -78,7 +78,9 @@ filled in from `FailedTask` for flaky, could-not-run, missing and log
 path, and from the set-asides for a set-aside. A required check with no
 line and no `FailedTask` is missing.
 
-`VerdictView` is defined in `sluice-seams`, beside `Notification` (53).
+`VerdictView` is defined in the core, beside it, as the overview's
+`BranchView` is: a view the core reads, which every driver can render
+(53).
 Its fields:
 
 - `branch`;

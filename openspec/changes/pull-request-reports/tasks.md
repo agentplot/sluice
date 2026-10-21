@@ -27,8 +27,8 @@ suites through `sluice exec main -- <command>`.
 
 ## 4. The report in the core
 
-- [ ] 4.1 Add `VerdictView` and its row and standing types to `sluice-seams`; verify `cargo check --workspace`.
-- [ ] 4.2 Write a pure `verdict_view` in `sluice-core/src/verdict_view.rs` and `Sluice::verdict_of` in `ops.rs`, as design D1 and D2 say; verify unit tests for each verdict-report scenario: ran and replayed, two systems, could not run, flaky, set aside, waiting ahead, landed together, behind a blamed submission, read after the run's files are gone, a landed submission found among the finished.
+- [x] 4.1 Add `VerdictView` and its row and standing types beside `verdict_view` in the core, as the overview's views are; verify `cargo check --workspace`.
+- [x] 4.2 Write a pure `verdict_view` in `sluice-core/src/verdict_view.rs` and `Sluice::verdict_of` in `ops.rs`, as design D1 and D2 say; verify unit tests for each verdict-report scenario: ran and replayed, two systems, could not run, flaky, set aside, waiting ahead, landed together, behind a blamed submission, read after the run's files are gone, a landed submission found among the finished (unit tests in `verdict_view.rs`, flows in `sluice-conformance/tests/reports.rs`).
 
 ## 5. Shared text and scrubbing
 
