@@ -50,6 +50,7 @@ part exists.
 ### The gate
 
 - **[core.21]** Every file the tree tracks is owned by a formatter the gate runs, or is excluded by name with its reason; every language with a linter is linted; every directory under `plugins/`, and `site/`, is a moon project of its own, listed in `.moon/workspace.yml` with its language declared, whose check-fast tasks validate, type-check and test it, one task per check.
+- **[core.24]** Every tool a gate task runs is the version the tree pins, on every host that runs the gate, so CI and `sluice exec` hold a tree to the same rules.
 
 ## Details
 
@@ -76,3 +77,4 @@ part exists.
 - **core.12** Rules out: a comment or commit that reinterprets a clause; a behavior the statement forbids kept behind a flag. Source: ADR 0001.
 - **core.13** Rules out: a pricing table, a tier name, a customer name, a hosted-plan reference in any file. Source: ADR 0001.
 - **core.21** Rules out: a file type treefmt neither formats nor excludes; an exclude with no comment saying why; a plugin directory or the site with no project of its own in `.moon/workspace.yml`, or one with no language declared; a part's check run as a task of another project, the root's included; one task bundling several checks; a plugin directory whose manifest, types or tests no task of its project runs; a task in a change whose only verification is a command run by hand, unless the task says why the gate cannot run it. Not ruled out: a check that spans the parts, the marketplace's, as a task of the root; the formatters and linters treefmt runs over the whole tree in `root:format`; the site's build, which is the Pages workflow's; the site's prose check, `site:prose`, as its one check, since the site has no tests and its type check waits until a place holds the site's dependencies; `*.md` outside the site, which no gate reads. Source: ADRs 0029, 0030.
+- **core.24** Rules out: a tool a task finds outside its pin, in rustup's default toolchain or a runner's own install; a pinned toolchain without a component a task runs; two files pinning one tool with no check that fails when they differ. Not ruled out: the hosts' platforms differing, macOS's gate and CI's Linux, which pins can't make one; a test that leans on one platform's behaviour, ports a host hands out among it, fails on the other. Source: ADR 0040.
