@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Contested, Enforced, NotRun, Outcome, Rev, RunHandle, Submitter, TaskLog, Told,
+    Contested, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog, Told,
 };
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
@@ -695,6 +695,18 @@ pub enum Event {
         combination: Rev,
         tasks: Vec<String>,
     },
+    /// Pull-requests-1 proposed 119: what a run's runner said of it beyond
+    /// its results, and the required checks it keeps out of its CI mode.
+    /// Shown; nothing reads a verdict from it.
+    Detail {
+        combination: Rev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        #[serde(default, skip_serializing_if = "RunDetail::is_empty")]
+        detail: RunDetail,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        kept_out: Vec<String>,
+    },
     Result {
         combination: Rev,
         result: String,
@@ -805,6 +817,13 @@ pub struct ResultLine {
     /// which count unsigned on a branch kept in its own files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer: Option<String>,
+    /// Pull-requests-1 proposed 119: how long the runner says it took,
+    /// in milliseconds. Shown, never read for a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub took_ms: Option<u64>,
+    /// Pull-requests-1 proposed 119: how many times the runner tried it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
 }
 
 impl ResultLine {
@@ -840,6 +859,8 @@ impl ResultLine {
             worktree: worktree.map(str::to_string),
             system: system.map(str::to_string),
             signer: None,
+            took_ms: task.took_ms,
+            attempts: task.attempts,
         }
     }
 

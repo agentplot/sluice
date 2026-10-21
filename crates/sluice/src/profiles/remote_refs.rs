@@ -554,6 +554,8 @@ fn verify(signer: &str, key: &SignerKey, bytes: &[u8]) -> Result<Vec<ResultLine>
             // A run on no named system claims none (85).
             system: Some(run.claims.system.clone()).filter(|s| !s.is_empty()),
             signer: Some(signer.into()),
+            took_ms: r.took_ms,
+            attempts: r.attempts,
         })
         .collect())
 }
@@ -585,6 +587,8 @@ fn statements(lines: &[ResultLine]) -> Vec<Statement> {
                         key: l.hash.clone(),
                         outcome: l.outcome,
                         replayed: l.kind == ResultKind::Replayed,
+                        took_ms: l.took_ms,
+                        attempts: l.attempts,
                     })
                     .collect(),
                 claims: Claims {

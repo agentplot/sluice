@@ -111,6 +111,16 @@ is marked a draft and then ready for review. A submit with no new commits
 says it ran nothing: `#63's head bd85bd4 was tested and blamed at …:
 nothing was queued or run again`, then the failure it was sent back for.
 
+On GitHub, the pull request carries the same verdict as a report: one
+comment in its conversation, the `sluice` check's details, and a check per
+required test on each system (`sluice / app:test (linux-x64)`). Each test's
+row says whether it ran or was replayed, where, how long it took and how
+many tries; a failed test's output is posted only when the branch's policy
+sets `log_lines`. A pull request tested together with a blamed one shows
+none of that failure: its report says its combination is formed again.
+The report decides nothing; read the failure from `sluice submit` or
+`sluice status --json` as above.
+
 ## Reading a conflict
 
 ```

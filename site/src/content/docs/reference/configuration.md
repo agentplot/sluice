@@ -55,6 +55,37 @@ trust = ["confined", "sandbox"]
 
 Which tasks must pass is not here: it is set per branch.
 
+### moon, as your CI runs it
+
+With `runner = "moon"`, sluice runs moon in its CI mode, as `moon ci`
+does, with three differences:
+
+- **The targets.** sluice runs the branch's `required` tasks that the
+  combination affects, with everything that depends on them, where
+  `moon ci` runs every affected task.
+- **Base and head.** sluice sets `MOON_BASE` and `MOON_HEAD` to the
+  branch's tested revision and the combination, so moon never has to
+  guess them from a CI provider.
+- **No sharding.** sluice splits work by system and host, never with
+  `--job`.
+
+Things moon's CI mode does that sluice keeps:
+
+- **`runInCI: false`.** A task marked `runInCI: false` is not run, as in
+  moon's own CI. A required task marked so never runs, so it reads
+  missing and the branch can't pass while it is required.
+  `sluice status` warns of such a task.
+- **The cache, by the branch's rules.** moon's cache counts only as the
+  branch's `trust` allows, and a replay is never counted as a run.
+
+From moon's run report, sluice keeps each task's time and tries and the
+run's time and estimated savings with the results. The pull request's
+report shows them, and no result is read from them. sluice doesn't post
+moon's own report: it describes one moon run, while sluice's describes
+the combination that lands, every pull request in it, and each test on
+each system. A repository can still run moon and its reporting in its
+own CI workflow beside sluice.
+
 A combination whose tests could not run is tested again and blames
 nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
@@ -386,12 +417,14 @@ remote = "origin"
 [branches.main.pull_requests]
 reviews = 1                  # approving reviews on the current head
 checks = ["qa/approved"]     # checks other systems post, by name
+log_lines = 40               # post the end of a failed test's output
 ```
 
 | key | meaning |
 |---|---|
 | `reviews` | How many approving reviews the pull request needs on its latest commit; a review given on an earlier commit doesn't count. The default is 0. |
 | `checks` | Checks other systems post on the pull request's latest commit, by the name GitHub shows, each of which must have passed. The default is none. |
+| `log_lines` | How many of the last lines of a failed test's output the pull request's report posts, scrubbed of what looks like a secret. At least 1. Without it, the report says where the output is kept on the host instead. |
 
 The conditions are read from the branch itself, so a pull request that
 changes `.config/sluice.toml` can't loosen its own. They decide when

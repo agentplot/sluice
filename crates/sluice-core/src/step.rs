@@ -391,12 +391,16 @@ impl Sluice<'_> {
         let line = self.read_line(branch)?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
+            // ADR 0039: the report as it stands, for a driver that shows
+            // one; a read that fails tells the outcome without it.
+            let report = self.verdict_of(branch, item.submission).ok().flatten();
             self.seams.driver.notify(&Notification {
                 id: item.id.clone(),
                 submission: item.submission,
                 branch: branch.into(),
                 to: sub.from.clone(),
                 told: item.told.to_told(),
+                report,
             })?;
             let now = self.now();
             self.update(branch, |l| {
@@ -843,6 +847,20 @@ impl Sluice<'_> {
                 fresh.push(l);
             }
             line.log(now, event);
+        }
+        // Pull-requests-1 proposed 119: what the runner said of the run,
+        // kept for the report; no verdict reads it.
+        let detail = report.detail.clone().unwrap_or_default();
+        if !detail.is_empty() || !report.kept_out.is_empty() {
+            line.log(
+                now,
+                Event::Detail {
+                    combination: c.revision.clone(),
+                    system: system.map(str::to_string),
+                    detail,
+                    kept_out: report.kept_out.clone(),
+                },
+            );
         }
         if !fresh.is_empty() {
             let mut bytes = Vec::new();

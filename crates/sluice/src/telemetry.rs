@@ -33,7 +33,6 @@ use opentelemetry_sdk::logs::{self, LogProcessor, SdkLogRecord, SdkLoggerProvide
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
-use regex::Regex;
 use sluice_core::OUTPUT;
 use sluice_seams::LOG_LIMIT;
 use tracing_opentelemetry::{MetricsLayer, OpenTelemetrySpanExt};
@@ -166,61 +165,20 @@ pub fn error(line: &str) {
 struct Scrub {
     level: Logs,
     limit: usize,
-    /// The values of sluice's variables whose names say they are secret.
-    secrets: Vec<String>,
-    shapes: Regex,
-}
-
-/// What reads as a secret whatever variable it came from.
-const SHAPES: &str = concat!(
-    r"gh[pousr]_[A-Za-z0-9]{20,}",
-    r"|github_pat_[A-Za-z0-9_]{20,}",
-    r"|A[KS]IA[0-9A-Z]{16}",
-    r"|xox[abprs]-[A-Za-z0-9-]{10,}",
-    r"|sk-ant-[A-Za-z0-9_-]{10,}",
-    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+",
-    r"|(?i:bearer)\s+[A-Za-z0-9._~+/=-]{8,}",
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----(?s:.)*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
-);
-
-/// A variable whose value is never sent.
-fn secret_name(name: &str) -> bool {
-    let n = name.to_ascii_uppercase();
-    [
-        "TOKEN",
-        "SECRET",
-        "KEY",
-        "PASS",
-        "AUTH",
-        "CREDENTIAL",
-        "HEADERS",
-    ]
-    .iter()
-    .any(|w| n.contains(w))
+    secrets: crate::scrub::Scrub,
 }
 
 impl Scrub {
     fn new(level: Logs, limit: usize, env: impl Iterator<Item = (String, String)>) -> Scrub {
-        let mut secrets: Vec<String> = env
-            .filter(|(k, v)| secret_name(k) && v.len() >= 8)
-            .map(|(_, v)| v)
-            .collect();
-        // The longest first, so none is left half replaced.
-        secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
         Scrub {
             level,
             limit: limit.min(LOG_LIMIT),
-            secrets,
-            shapes: Regex::new(SHAPES).expect("the secret shapes"),
+            secrets: crate::scrub::Scrub::new(env),
         }
     }
 
     fn scrub(&self, text: &str) -> String {
-        let mut text = text.to_string();
-        for s in &self.secrets {
-            text = text.replace(s.as_str(), "[redacted]");
-        }
-        self.shapes.replace_all(&text, "[redacted]").into_owned()
+        self.secrets.scrub(text)
     }
 
     /// The body a record of `target` with `body` is sent with.
@@ -271,14 +229,7 @@ impl LogProcessor for Scrub {
     }
 }
 
-/// The last `limit` bytes of `text`, from a character's start.
-fn end(text: &str, limit: usize) -> &str {
-    let start = text.len().saturating_sub(limit);
-    let start = (start..=text.len())
-        .find(|i| text.is_char_boundary(*i))
-        .unwrap_or(text.len());
-    &text[start..]
-}
+use crate::scrub::end;
 
 /// Whether this process exports.
 pub fn on() -> bool {

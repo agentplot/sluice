@@ -683,7 +683,9 @@ impl Sluice<'_> {
     /// not fetched for a read. Only a branch whose records have seen no
     /// revision yet is read from the branch itself.
     pub fn status(&self, branch: &str) -> Result<Status> {
-        let line = self.read_line(branch)?;
+        let snapshot = self.seams.state.read(branch)?;
+        let kept_out = kept_out(&Line::read_log(&snapshot)?);
+        let line = Line::load(branch, snapshot)?;
         let at = match &line.doc.base {
             Some(base) => Some(base.clone()),
             None => self.seams.branch.read(branch)?,
@@ -696,7 +698,8 @@ impl Sluice<'_> {
             Some(p) => p.rules_for(branch)?.map(|r| r.parallel),
             None => None,
         };
-        let warnings = policy.map(|p| p.warnings).unwrap_or_default();
+        let mut warnings = policy.map(|p| p.warnings).unwrap_or_default();
+        warnings.extend(kept_out.iter().map(|t| kept_out_warning(branch, t)));
         Ok(Status {
             branch: branch.into(),
             at,
@@ -714,6 +717,33 @@ impl Sluice<'_> {
             stale: self.seams.state.stale(branch),
         })
     }
+}
+
+/// ADR 0039: the required checks the latest run of each system said its
+/// task runner keeps out of CI, so never runs.
+pub fn kept_out(log: &[crate::records::LogLine]) -> Vec<String> {
+    let mut seen: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();
+    for l in log {
+        if let Event::Detail {
+            system, kept_out, ..
+        } = &l.event
+        {
+            seen.insert(system.clone(), kept_out.clone());
+        }
+    }
+    let mut all: Vec<String> = seen.into_values().flatten().collect();
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// What `sluice status` and a waiting `submit` say of a check `kept_out`
+/// names.
+pub fn kept_out_warning(branch: &str, task: &str) -> String {
+    format!(
+        "{branch} requires {task}, which its task runner keeps out of CI, so it is never run: \
+         {branch} cannot pass while it is required"
+    )
 }
 
 /// In a candidate under test or judged on the branch's revision (6).

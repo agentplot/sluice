@@ -472,6 +472,33 @@ fn every_required_task_of_every_tag() {
     assert_eq!(names(&r), ["gamma:test"]);
 }
 
+/// ADR 0039: moon runs in its CI mode, so a required task the repository
+/// keeps out of CI is not run: it reads missing, and the run names it kept
+/// out. Each task's time and the run's own come back with the results.
+#[test]
+fn a_task_kept_out_of_ci_is_not_run() {
+    let repo = workspace("moon-ci");
+    repo.write(
+        "gamma/moon.yml",
+        "tasks:\n  test:\n    command: 'true'\n    inputs: ['value.txt']\n    tags: [check-tools]\n  \
+         serve:\n    command: 'touch served'\n    tags: [check-tools]\n    options:\n      runInCI: false\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "serve"]);
+    let c = checks(&repo);
+    let r = finish(&c, &request(&repo, "p1", &["#check-tools"], None));
+    assert_eq!(names(&r), ["gamma:test"]);
+    assert_eq!(r.missing, ["gamma:serve"]);
+    assert_eq!(r.kept_out, ["gamma:serve"]);
+    assert!(
+        !repo.dir().join("gamma/served").exists(),
+        "kept out, never run"
+    );
+    assert!(r.tasks[0].took_ms.is_some());
+    assert_eq!(r.tasks[0].attempts, Some(1));
+    assert!(r.detail.as_ref().is_some_and(|d| d.took_ms.is_some()));
+}
+
 /// Run in a child of this test binary, with moon's options set in
 /// sluice's own environment.
 #[test]

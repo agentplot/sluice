@@ -106,6 +106,9 @@ pub struct Plan {
     /// Names of files the runner's tools stamp wherever they are installed
     /// (proto's `.last-used`), which a sandbox lets the run write.
     pub stamps: Vec<&'static str>,
+    /// Targets the runner keeps out of its CI mode, so never runs (moon's
+    /// `runInCI: false`); each reads missing.
+    pub kept_out: Vec<String>,
 }
 
 /// What a run's request carries for reading its result.
@@ -128,6 +131,9 @@ struct Meta {
     /// `[tests] not_run`: exits by which a check says it could not run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     not_run: Vec<i32>,
+    /// `Plan::kept_out`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kept_out: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -712,6 +718,7 @@ impl Tests for Checks {
                     argv: Some(cx.argv(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
                     holds_processors: false,
+                    kept_out: Vec::new(),
                     // A command in a checkout that lists proto's tools may
                     // run them, moon among them, and proto stamps each
                     // toolchain it runs as used, as a moon run's does.
@@ -785,6 +792,7 @@ impl Tests for Checks {
             started_ms: Some(chrono::Utc::now().timestamp_millis()),
             ready,
             not_run,
+            kept_out: plan.kept_out,
         };
         self.runs.start(
             name,
@@ -812,6 +820,7 @@ impl Tests for Checks {
         let meta: Meta = serde_json::from_value(request.meta.clone())
             .with_context(|| format!("reading run {}", run.0))?;
         // Could-not-run-1 114: a runner that never started judged nothing.
+        let mut detail = None;
         let (mut tasks, mut not_run) = match &ended.error {
             Some(e) => (
                 Vec::new(),
@@ -824,7 +833,12 @@ impl Tests for Checks {
                     .collect(),
             ),
             None => match meta.runner.as_str() {
-                "moon" => Moon.read(&meta.place, &meta.targets, &meta.not_run, &meta.host)?,
+                "moon" => {
+                    let (tasks, not_run, d) =
+                        Moon.read(&meta.place, &meta.targets, &meta.not_run, &meta.host)?;
+                    detail = d;
+                    (tasks, not_run)
+                }
                 _ => command_result(&meta, &ended),
             },
         };
@@ -864,6 +878,8 @@ impl Tests for Checks {
             }
         }
         Ok(Progress::Finished(RunReport {
+            detail,
+            kept_out: meta.kept_out,
             tasks,
             executor: meta.executor,
             missing,
@@ -1018,6 +1034,8 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
         .targets
         .iter()
         .map(|t| TaskResult {
+            took_ms: took_ms(&ended.started, &ended.ended),
+            attempts: None,
             task: t.clone(),
             hash: meta.revision.clone(),
             outcome: if ended.passed() {
@@ -1036,4 +1054,12 @@ fn command_result(meta: &Meta, ended: &Ended) -> (Vec<TaskResult>, Vec<NotRun>) 
 /// Why a check that exited `code` could not run.
 pub fn not_run_reason(code: i32) -> String {
     format!("exited {code}, which [tests] not_run names: it could not run here")
+}
+
+/// Pull-requests-1 proposed 119: milliseconds between two RFC 3339 times,
+/// the command runner's time for its one command.
+fn took_ms(started: &str, ended: &str) -> Option<u64> {
+    let a = chrono::DateTime::parse_from_rfc3339(started).ok()?;
+    let b = chrono::DateTime::parse_from_rfc3339(ended).ok()?;
+    u64::try_from((b - a).num_milliseconds()).ok()
 }

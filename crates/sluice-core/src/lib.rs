@@ -18,6 +18,7 @@ pub mod session;
 pub mod step;
 pub mod text;
 pub mod verdict;
+pub mod verdict_view;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, SecondsFormat, Utc};

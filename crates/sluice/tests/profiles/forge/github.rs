@@ -141,10 +141,11 @@ fn posting(body: &Value) -> Posting {
             summary
         },
         title,
+        text: body["output"]["text"].as_str().map(String::from),
     }
 }
 
-fn run_json(id: u64, p: &Posting) -> Value {
+fn run_json(id: u64, name: &str, p: &Posting) -> Value {
     let (status, conclusion) = match p.status {
         Status::Queued => ("queued", Value::Null),
         Status::InProgress => ("in_progress", Value::Null),
@@ -157,8 +158,8 @@ fn run_json(id: u64, p: &Posting) -> Value {
         &p.summary
     };
     json!({
-        "id": id, "name": "sluice", "status": status, "conclusion": conclusion,
-        "output": { "title": p.title, "summary": summary }, "app": { "id": APP },
+        "id": id, "name": name, "status": status, "conclusion": conclusion,
+        "output": { "title": p.title, "summary": summary, "text": p.text }, "app": { "id": APP },
     })
 }
 
@@ -249,8 +250,8 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
         }
         ("GET", ["commits", sha, "check-runs"]) => {
             let mut runs: Vec<Value> = Vec::new();
-            if let Some(p) = forge.posted(&repo, sha).unwrap() {
-                runs.push(run_json(p.id, &p.posting));
+            for p in forge.posted_all(&repo, sha).unwrap() {
+                runs.push(run_json(p.id, &p.name, &p.posting));
             }
             if param("check_name").is_none() {
                 for c in forge.checks(&repo, sha).unwrap() {
@@ -273,9 +274,10 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
         }
         ("POST", ["check-runs"]) => {
             forge
-                .post(
+                .post_named(
                     &repo,
                     body["head_sha"].as_str().unwrap(),
+                    body["name"].as_str().unwrap(),
                     None,
                     &posting(&body),
                 )
@@ -285,10 +287,17 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
         ("PATCH", ["check-runs", id]) => {
             let id: u64 = id.parse().unwrap();
             let held = forge.held().unwrap();
-            let Some((sha, _)) = held.posted.iter().find(|(_, p)| p.id == id) else {
+            let Some((sha, name)) = held
+                .posted
+                .iter()
+                .find_map(|(sha, ps)| ps.iter().find(|p| p.id == id).map(|p| (sha, &p.name)))
+            else {
                 return not_found();
             };
-            forge.post(&repo, sha, Some(id), &posting(&body)).unwrap();
+            let name = body["name"].as_str().unwrap_or(name);
+            forge
+                .post_named(&repo, sha, name, Some(id), &posting(&body))
+                .unwrap();
             json(200, json!({}))
         }
         ("GET", ["issues", n, "timeline"]) => {
@@ -303,10 +312,14 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
             )
         }
         ("GET", ["issues", n, "comments"]) => {
-            let cs = forge.comments(&repo, n.parse().unwrap()).unwrap();
+            let cs = forge.comment_list(&repo, n.parse().unwrap()).unwrap();
             json(
                 200,
-                Value::Array(cs.iter().map(|b| json!({ "body": b })).collect()),
+                Value::Array(
+                    cs.iter()
+                        .map(|c| json!({ "id": c.id, "body": c.body, "html_url": c.url }))
+                        .collect(),
+                ),
             )
         }
         ("POST", ["issues", n, "comments"]) => {
@@ -318,6 +331,16 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
                 )
                 .unwrap();
             json(201, json!({}))
+        }
+        ("PATCH", ["issues", "comments", id]) => {
+            forge
+                .edit_comment(
+                    &repo,
+                    id.parse().unwrap(),
+                    body["body"].as_str().unwrap_or_default(),
+                )
+                .unwrap();
+            json(200, json!({}))
         }
         _ => not_found(),
     }

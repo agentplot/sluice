@@ -164,6 +164,8 @@ fn ran(task: &str, outcome: Outcome) -> ResultLine {
         worktree: None,
         system: Some("linux-x64".into()),
         signer: None,
+        took_ms: None,
+        attempts: None,
     }
 }
 

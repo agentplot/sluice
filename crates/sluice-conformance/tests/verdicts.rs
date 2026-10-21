@@ -341,12 +341,16 @@ fn a_session_run_records_what_it_ran_and_never_a_replay() {
     let plan = s.session_plan(BRANCH).unwrap().unwrap();
     let head = h.w().tip(BRANCH);
     let task = |name: &str, source: Source| TaskResult {
+        took_ms: None,
+        attempts: None,
         task: name.into(),
         hash: format!("{name}-hash"),
         outcome: Outcome::Pass,
         source,
     };
     let report = RunReport {
+        detail: None,
+        kept_out: Vec::new(),
         tasks: vec![
             task(
                 "a:test",
@@ -416,6 +420,27 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
         Told::Failed { failed, .. } => assert_eq!(failed, &vec!["b:test".to_string()]),
         other => panic!("told {other:?}"),
     }
+}
+
+/// satisfies: 15, 27 (ADR 0039)
+#[test]
+fn a_required_check_kept_out_of_ci_is_missing_and_named() {
+    let h = Harness::bolt();
+    h.w().keeps_out("b:test");
+    h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert!(results(&h).iter().all(|r| r.task != "b:test"));
+    let status = h.sluice().status(BRANCH).unwrap();
+    assert!(
+        status
+            .warnings
+            .iter()
+            .any(|w| w.contains("b:test") && w.contains("keeps out of CI")),
+        "{:?}",
+        status.warnings
+    );
 }
 
 /// satisfies: 27, 29

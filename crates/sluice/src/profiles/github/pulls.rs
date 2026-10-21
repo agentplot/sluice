@@ -31,10 +31,12 @@ use sluice_seams::{
 };
 
 use super::app::Repo;
-use super::forge::{approvals, Forge, Posting, Pull, Standing, Status};
+use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHECK};
+use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
 use crate::{Followed, Opened};
+use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
 pub fn place(number: u64) -> String {
@@ -111,6 +113,8 @@ pub struct Pulls {
     entries: RefCell<BTreeMap<u64, Entry>>,
     /// What each pull request's state reads, as last posted, by number.
     shown: RefCell<BTreeMap<u64, Shown>>,
+    /// Each branch's `pull_requests.log_lines`, as intake last read it.
+    log_lines: RefCell<BTreeMap<String, Option<usize>>>,
 }
 
 /// A pull request's state: what sluice posts, and what a submit that
@@ -147,6 +151,7 @@ impl Pulls {
             known: RefCell::default(),
             entries: RefCell::default(),
             shown: RefCell::default(),
+            log_lines: RefCell::default(),
         }
     }
 
@@ -280,10 +285,22 @@ impl Pulls {
         body: &str,
     ) -> Result<()> {
         let m = told_marker(id);
-        if forge.comments(repo, number)?.iter().any(|c| c.contains(&m)) {
+        let comments = forge.comment_list(repo, number)?;
+        if comments.iter().any(|c| c.body.contains(&m)) {
             return Ok(());
         }
-        forge.comment(repo, number, &format!("{m}\n{body}"))
+        // ADR 0039: a pull request sent back is pointed at its report.
+        let report = comments
+            .iter()
+            .find(|c| c.body.starts_with("<!-- sluice-report: "))
+            .map(|c| c.url.clone())
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}/checks"));
+        forge.comment(
+            repo,
+            number,
+            &format!("{m}\n{body}\n\nEvery check of the combination: [sluice's report]({report})."),
+        )
     }
 
     /// One intake pass over `branch`, reading the branch once.
@@ -354,9 +371,115 @@ impl Pulls {
                 &log,
                 &names,
             )?;
-            self.show(forge, &t.repo, p.number, &p.head, shown)?;
+            let report = match latest.get(&place(p.number)) {
+                Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
+                _ => None,
+            };
+            self.log_lines
+                .borrow_mut()
+                .insert(branch.to_string(), t.conditions.log_lines);
+            self.show_report(
+                forge,
+                &t.repo,
+                p.number,
+                &p.head,
+                t.conditions.log_lines,
+                &names,
+                shown,
+                report.as_ref(),
+            )?;
         }
         Ok(true)
+    }
+
+    /// ADR 0039: post what pull request `p` shows of its submission: its
+    /// `sluice` check, with the report as its text once a result touches
+    /// it; the report as one comment in its conversation, edited in place;
+    /// and a check per required check per system.
+    #[allow(clippy::too_many_arguments)]
+    fn show_report(
+        &self,
+        forge: &dyn Forge,
+        repo: &Repo,
+        number: u64,
+        head: &str,
+        log_lines: Option<usize>,
+        names: &BTreeMap<u64, String>,
+        mut shown: Shown,
+        report: Option<&VerdictView>,
+    ) -> Result<()> {
+        let Some(view) = report.filter(|v| render::has_report(v)) else {
+            return self.show(forge, repo, number, head, shown);
+        };
+        let scrub = crate::scrub::Scrub::new(std::env::vars());
+        let read_log = |at: &str| std::fs::read_to_string(at).ok();
+        let cx = render::Context {
+            names,
+            repo_url: format!("https://github.com/{repo}"),
+            log_lines,
+            read_log: &read_log,
+            scrub: &scrub,
+        };
+        let text = render::report(view, &cx);
+        shown.posting.text = Some(text.clone());
+        self.show(forge, repo, number, head, shown)?;
+
+        // The comment: found by its marker, created at the first result,
+        // edited after, never posted twice.
+        let marker = render::marker(&view.branch);
+        let mine = forge
+            .comment_list(repo, number)?
+            .into_iter()
+            .find(|c| c.body.starts_with(&marker));
+        match mine {
+            Some(c) if c.body != text => forge.edit_comment(repo, c.id, &text)?,
+            Some(_) => {}
+            None if view.standing != Stands::FormedAgain => forge.comment(repo, number, &text)?,
+            None => {}
+        }
+
+        // A check per required check per system (many-hosts-3's C.5
+        // addition), read back so nothing that reads the same is posted.
+        let posted = forge.posted_all(repo, head)?;
+        let post = |name: &str, posting: Posting| -> Result<()> {
+            let existing = posted.iter().find(|x| x.name == name);
+            if existing.map(|x| &x.posting) != Some(&posting) {
+                forge.post_named(repo, head, name, existing.map(|x| x.id), &posting)?;
+            }
+            Ok(())
+        };
+        let mut named = Vec::new();
+        for row in &view.rows {
+            let (name, posting) = render::row_check(row, &cx);
+            named.push(name.clone());
+            post(&name, posting)?;
+        }
+        for (task, system) in &view.pending {
+            let name = super::forge::check_name(task, system.as_deref());
+            if !named.contains(&name) {
+                named.push(name.clone());
+                post(&name, render::pending_check(Status::InProgress, "testing"))?;
+            }
+        }
+        // 20: one this pull request's combination left shows no outcome
+        // of it; a check no longer among the rows waits again.
+        let waits = if view.standing == Stands::FormedAgain {
+            "formed again"
+        } else {
+            "testing"
+        };
+        let status = if view.standing == Stands::FormedAgain {
+            Status::Queued
+        } else {
+            Status::InProgress
+        };
+        for x in posted
+            .iter()
+            .filter(|x| x.name != SLUICE_CHECK && !named.contains(&x.name))
+        {
+            post(&x.name, render::pending_check(status, waits))?;
+        }
+        Ok(())
     }
 
     /// Where pull request `p` stands this round, submitting it if it is
@@ -594,6 +717,7 @@ fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
     }
     Shown {
         posting: Posting {
+            text: None,
             status: Status::Queued,
             title,
             summary: summary.join("\n\n"),
@@ -610,6 +734,7 @@ fn queued(branch: &str, ahead: &[String]) -> Shown {
     };
     Shown {
         posting: Posting {
+            text: None,
             status: Status::Queued,
             summary: format!("In {branch}'s queue; it lands once its combination passes."),
             title,
@@ -630,6 +755,7 @@ fn queue_shown(
             let title = format!("testing {}", combination(branch, &t.submissions, names));
             Shown {
                 posting: Posting {
+                    text: None,
                     status: Status::InProgress,
                     summary: format!(
                         "sluice is testing `{}`, {branch} with what is ahead of it.",
@@ -773,6 +899,7 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
     };
     Shown {
         posting: Posting {
+            text: None,
             status,
             title,
             summary,
@@ -1110,7 +1237,19 @@ impl Pulls {
             .collect();
         let outcome = Outcome::told(&n.told);
         let shown = outcome_shown(&n.branch, &outcome, &names);
-        self.show(forge, &e.repo, e.number, &e.head, shown)?;
+        // ADR 0039: a pull request that landed is closed, so no intake
+        // reads it again: its report is posted with the outcome.
+        let log_lines = self.log_lines.borrow().get(&n.branch).copied().flatten();
+        self.show_report(
+            forge,
+            &e.repo,
+            e.number,
+            &e.head,
+            log_lines,
+            &names,
+            shown,
+            n.report.as_ref(),
+        )?;
         if let Some(body) = comment(&n.branch, &outcome, &names) {
             self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
         }
@@ -1129,6 +1268,106 @@ fn lock_name(branch: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profiles::github::fake::FileForge;
+    use sluice_core::verdict_view::{Row, RowResult};
+
+    fn row(system: &str, replayed: bool) -> Row {
+        Row {
+            task: "cli:build".into(),
+            system: Some(system.into()),
+            key: Some("k".into()),
+            result: RowResult::Passed,
+            replayed,
+            host: (!replayed).then(|| "box-1".into()),
+            signer: Some(if replayed { "earlier" } else { "box" }.into()),
+            executor: None,
+            took_ms: Some(1_000),
+            attempts: None,
+            flaky: None,
+            not_run: None,
+            set_aside: None,
+            log: None,
+        }
+    }
+
+    /// pull-request-status, a build on three systems and a result read by
+    /// key (many-hosts-3's C.5 addition; ADR 0039).
+    #[test]
+    fn a_check_per_required_check_per_system() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-checks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let forge = Rc::new(FileForge::new(&dir.join("github.json"), &repo));
+        let pulls = Pulls::new(&dir, &dir, Some(forge.clone()), None);
+        let view = VerdictView {
+            branch: "main".into(),
+            id: 12,
+            standing: Stands::Testing,
+            combination: Some(Rev::new("c1")),
+            on: Some(Rev::new("m0")),
+            submissions: vec![12],
+            runs: Vec::new(),
+            rows: vec![row("linux-x64", false), row("linux-arm64", true)],
+            tasks: Vec::new(),
+            pending: vec![("cli:build".into(), Some("macos-arm64".into()))],
+        };
+        let names = BTreeMap::from([(12, "#12".to_string())]);
+        let shown = queued("main", &[]);
+        let post = |v: &VerdictView| {
+            pulls
+                .show_report(
+                    &*forge,
+                    &repo,
+                    12,
+                    "head",
+                    None,
+                    &names,
+                    shown.clone(),
+                    Some(v),
+                )
+                .unwrap()
+        };
+        post(&view);
+        let held = forge.held().unwrap();
+        let by = |name: &str| {
+            held.posted["head"]
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| (p.posting.status, p.posting.title.clone()))
+                .unwrap()
+        };
+        assert_eq!(
+            by("sluice / cli:build (linux-x64)"),
+            (Status::Success, "passed · on box-1 · signed by box".into())
+        );
+        assert_eq!(
+            by("sluice / cli:build (linux-arm64)"),
+            (
+                Status::Success,
+                "replayed · from a pass the gate trusts · signed by earlier".into()
+            )
+        );
+        assert_eq!(by("sluice / cli:build (macos-arm64)").0, Status::InProgress);
+        // Posted again unchanged: nothing.
+        let posts = held.posts.len();
+        post(&view);
+        assert_eq!(forge.held().unwrap().posts.len(), posts);
+        // Formed again: every check waits, none shows an outcome (20).
+        let formed = VerdictView {
+            standing: Stands::FormedAgain,
+            rows: Vec::new(),
+            pending: Vec::new(),
+            ..view
+        };
+        post(&formed);
+        let held = forge.held().unwrap();
+        assert!(held.posted["head"]
+            .iter()
+            .filter(|p| p.name != SLUICE_CHECK)
+            .all(|p| p.posting.status == Status::Queued));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// A branch's lock keeps its name when short; a long one is shortened
     /// under the 255 bytes a file name may hold, and two long branches

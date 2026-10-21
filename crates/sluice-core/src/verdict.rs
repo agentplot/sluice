@@ -188,7 +188,11 @@ mod tests {
 
     fn report(source: Source, executor: Enforced) -> RunReport {
         RunReport {
+            detail: None,
+            kept_out: Vec::new(),
             tasks: vec![TaskResult {
+                took_ms: None,
+                attempts: None,
                 task: "a:test".into(),
                 hash: "h".into(),
                 outcome: Outcome::Pass,
@@ -216,7 +220,67 @@ mod tests {
             worktree: None,
             system: None,
             signer: None,
+            took_ms: None,
+            attempts: None,
         }
+    }
+
+    /// Pull-requests-1 proposed 119: a runner's time and attempts decide
+    /// nothing; a pass tried twice is a pass, not a flake (19).
+    #[test]
+    fn a_runners_detail_decides_nothing() {
+        let plain = report(Source::Ran { host: "h".into() }, enforced("sandbox", false));
+        let mut detailed = plain.clone();
+        detailed.tasks[0].took_ms = Some(123_000);
+        detailed.tasks[0].attempts = Some(2);
+        detailed.detail = Some(sluice_seams::RunDetail {
+            took_ms: Some(250_000),
+            estimate_ms: Some(580_000),
+            changed: vec!["app/a.rs".into()],
+        });
+        let r = rules(&["sandbox"]);
+        let mut with = recorded(
+            ResultKind::Ran,
+            Some(enforced("sandbox", false)),
+            Outcome::Pass,
+        );
+        with.took_ms = Some(123_000);
+        with.attempts = Some(2);
+        let without = recorded(
+            ResultKind::Ran,
+            Some(enforced("sandbox", false)),
+            Outcome::Pass,
+        );
+        let a = read(&plain, &[without], &r);
+        let b = read(&detailed, &[with], &r);
+        assert_eq!(a, b);
+        assert!(b.passed);
+        assert!(b.failed.iter().all(|f| f.flaky.is_none()));
+    }
+
+    /// A result line carries its runner's detail, and a line written
+    /// before it reads without.
+    #[test]
+    fn result_lines_carry_detail_and_old_ones_read() {
+        let mut t =
+            report(Source::Ran { host: "h".into() }, enforced("open", false)).tasks[0].clone();
+        t.took_ms = Some(2_003);
+        t.attempts = Some(2);
+        let l = ResultLine::of(
+            "t",
+            &t,
+            &enforced("open", false),
+            "main",
+            &sluice_seams::Rev::new("c"),
+            None,
+            None,
+        );
+        assert_eq!((l.took_ms, l.attempts), (Some(2_003), Some(2)));
+        let json = serde_json::to_string(&l).unwrap();
+        assert!(json.contains("\"took_ms\":2003"));
+        let old = r#"{"schema":"sluice/result@1","at":"t","kind":"ran","task":"a:test","hash":"h","outcome":"pass","branch":"main","combination":"c"}"#;
+        let back: ResultLine = serde_json::from_str(old).unwrap();
+        assert_eq!((back.took_ms, back.attempts), (None, None));
     }
 
     /// 28: a result from an executor the gate does not trust never

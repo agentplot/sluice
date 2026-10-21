@@ -58,7 +58,10 @@ struct Forge {
 impl Forge {
     fn new(clock: &Clock) -> Forge {
         Forge {
-            permissions: json!({ "contents": "write", "workflows": "write", "metadata": "read" }),
+            permissions: json!({
+                "contents": "write", "workflows": "write", "checks": "write",
+                "pull_requests": "write", "metadata": "read"
+            }),
             rulesets: vec![(
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
@@ -174,15 +177,15 @@ fn failures(found: &[Finding]) -> Vec<&str> {
         .collect()
 }
 
-/// All set: the app is installed to write contents and workflows and is the only
-/// bypass of the branch's ruleset.
+/// All set: the app is installed to write contents, workflows, checks and
+/// pull requests and is the only bypass of the branch's ruleset.
 #[test]
 fn forge_check_all_set() {
     let clock = Clock::new();
     let fake = Forge::new(&clock).start();
     let found = check(&app(&fake, &clock), &repo(), "main", Some("operator"));
     assert!(failures(&found).is_empty(), "{found:?}");
-    assert_eq!(found.len(), 4, "{found:?}");
+    assert_eq!(found.len(), 6, "{found:?}");
 }
 
 /// A ruleset that lets the operator's role through beside the app fails,
@@ -225,7 +228,9 @@ fn forge_check_names_each_failure() {
     assert!(got[0].contains("does not let app 4242 through"), "{got:?}");
 
     let mut f = Forge::new(&clock);
-    f.permissions = json!({ "contents": "read", "workflows": "write" });
+    f.permissions = json!({
+        "contents": "read", "workflows": "write", "checks": "write", "pull_requests": "write"
+    });
     let got = one(f, Some("operator"));
     assert_eq!(got.len(), 1, "{got:?}");
     assert!(
@@ -234,13 +239,25 @@ fn forge_check_names_each_failure() {
     );
 
     let mut f = Forge::new(&clock);
-    f.permissions = json!({ "contents": "write" });
+    f.permissions = json!({ "contents": "write", "checks": "write", "pull_requests": "write" });
     let got = one(f, Some("operator"));
     assert_eq!(got.len(), 1, "{got:?}");
     assert!(
         got[0].contains(
             "may not write o/r's workflows (workflows: none): give it Workflows read and write"
         ),
+        "{got:?}"
+    );
+
+    // ADR 0039: no permission to post checks.
+    let mut f = Forge::new(&clock);
+    f.permissions = json!({
+        "contents": "write", "workflows": "write", "checks": "read", "pull_requests": "write"
+    });
+    let got = one(f, Some("operator"));
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(
+        got[0].contains("may not write o/r's checks (checks: read): give it Checks read and write"),
         "{got:?}"
     );
 
@@ -485,6 +502,7 @@ fn the_apps_pull_request_calls() {
         status: Status::Queued,
         title: "waiting".into(),
         summary: "needs qa/approved".into(),
+        text: None,
     };
     app.post(&r, "aaa", None, &waiting).unwrap();
     let first = app.posted(&r, "aaa").unwrap().unwrap();
@@ -493,6 +511,7 @@ fn the_apps_pull_request_calls() {
         status: Status::Success,
         title: "landed".into(),
         summary: String::new(),
+        text: Some("## sluice: landed\n| | Check |".into()),
     };
     app.post(&r, "aaa", Some(first.id), &landed).unwrap();
     assert_eq!(app.posted(&r, "aaa").unwrap().unwrap().posting, landed);
@@ -505,6 +524,33 @@ fn the_apps_pull_request_calls() {
 
     app.comment(&r, a, "blamed").unwrap();
     assert_eq!(app.comments(&r, a).unwrap(), ["blamed"]);
+    // ADR 0039: the check's text reads back, a check per check is sluice's
+    // and no other system's, and a comment is edited in place.
+    app.post_named(&r, "aaa", "sluice / a:test (linux-x64)", None, &waiting)
+        .unwrap();
+    let names: Vec<String> = app
+        .posted_all(&r, "aaa")
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(
+        names.contains(&"sluice / a:test (linux-x64)".to_string()),
+        "{names:?}"
+    );
+    assert!(app
+        .checks(&r, "aaa")
+        .unwrap()
+        .iter()
+        .all(|c| !c.name.starts_with("sluice")));
+    let c = app.comment_list(&r, a).unwrap().remove(0);
+    assert!(
+        c.url.contains(&format!("issuecomment-{}", c.id)),
+        "{}",
+        c.url
+    );
+    app.edit_comment(&r, c.id, "edited").unwrap();
+    assert_eq!(app.comments(&r, a).unwrap(), ["edited"]);
     let opened = app.open(&r, "main", "unit/e", "E", "body").unwrap();
     assert!(opened.open && !opened.draft && opened.title == "E");
     app.edit(&r, opened.number, "new body").unwrap();
@@ -565,6 +611,7 @@ fn live_pull_request_calls() {
         status: Status::Queued,
         title: "waiting".into(),
         summary: "sluice's live test".into(),
+        text: None,
     };
     app.post(&r, &pull.head, existing, &waiting).unwrap();
     let posted = app.posted(&r, &pull.head).unwrap().unwrap();
@@ -573,6 +620,7 @@ fn live_pull_request_calls() {
         status: Status::Success,
         title: "landed".into(),
         summary: String::new(),
+        text: Some("## sluice: landed\n| | Check |".into()),
     };
     app.post(&r, &pull.head, Some(posted.id), &landed).unwrap();
     assert_eq!(app.posted(&r, &pull.head).unwrap().unwrap().posting, landed);

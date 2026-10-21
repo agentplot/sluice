@@ -15,6 +15,7 @@ required = ["#check-fast", "#check-tools"]   # what sluice tests
 [branches.main.pull_requests]
 reviews = 1                  # approving reviews on the latest commit
 checks = ["qa/approved"]     # checks other systems post, by the name GitHub shows
+log_lines = 40               # optional: post the end of a failed test's output
 ```
 
 - `reviews` and `checks` decide when sluice takes a pull request, never what
@@ -22,6 +23,10 @@ checks = ["qa/approved"]     # checks other systems post, by the name GitHub sho
 - They are read from the branch itself, so a pull request cannot loosen its
   own.
 - The table needs `remote`; sluice refuses it without one.
+- `log_lines` posts that many last lines of a failed test's output in the
+  pull request's report, scrubbed of what looks like a secret. Leave it out
+  unless the tests' output is safe for every reader of the repository: the
+  report then says where the output is kept on the host.
 
 ## How it behaves
 
@@ -33,6 +38,13 @@ checks = ["qa/approved"]     # checks other systems post, by the name GitHub sho
 - sluice posts one check named `sluice` with the state (`waiting: …`,
   `queued behind …`, `testing …`, `failed: …`, `conflict: …`, `landed as …`)
   and comments when it sends one back.
+- Once a combination has a result, sluice posts its report: one comment in
+  the conversation, edited as it changes, the same text as the `sluice`
+  check's details, and a check per required test per system
+  (`sluice / app:test (linux-x64)`). Don't require these checks in a
+  ruleset.
+- The app needs Checks and Pull requests read and write; `sluice forge
+  check` says so.
 - Pull requests from forks are never taken.
 
 ## Keep `sluice run` going

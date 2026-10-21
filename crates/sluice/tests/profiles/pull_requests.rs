@@ -23,9 +23,12 @@ use support::{Repo, Scratch};
 
 const KEY: &[u8] = include_bytes!("forge/test-key.pem");
 
-/// The check: fails while a file named `broken` exists, and takes five
-/// seconds while one named `slow` does.
-const CHECK: &str = "if test -e slow; then sleep 5; fi\ntest ! -e broken\n";
+/// The check: fails while a file named `broken` exists, printing a
+/// token-shaped line and a last line, and takes five seconds while one
+/// named `slow` does.
+const CHECK: &str = "if test -e slow; then sleep 5; fi\n\
+                     if test -e broken; then echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123; \
+                     echo it broke; fi\ntest ! -e broken\n";
 
 /// `main` on GitHub, taking pull requests with `conditions`, the lines of
 /// its `pull_requests` table.
@@ -174,13 +177,34 @@ impl OnGitHub {
 
     /// What sluice's check on `head` reads.
     fn posted(&self, head: &str) -> Option<(Status, String, String)> {
-        self.gh.forge.held().unwrap().posted.get(head).map(|p| {
-            (
-                p.posting.status,
-                p.posting.title.clone(),
-                p.posting.summary.clone(),
-            )
-        })
+        let held = self.gh.forge.held().unwrap();
+        let p = held.posted.get(head)?.iter().find(|p| p.name == "sluice")?;
+        Some((
+            p.posting.status,
+            p.posting.title.clone(),
+            p.posting.summary.clone(),
+        ))
+    }
+
+    /// The report comment on pull request `n`.
+    fn report(&self, n: u64) -> Option<String> {
+        self.comments(n)
+            .into_iter()
+            .find(|c| c.starts_with("<!-- sluice-report: main -->"))
+    }
+
+    /// sluice's check named `name` on `head`: its status and title.
+    fn check(&self, head: &str, name: &str) -> Option<(Status, String)> {
+        let held = self.gh.forge.held().unwrap();
+        let p = held.posted.get(head)?.iter().find(|p| p.name == name)?;
+        Some((p.posting.status, p.posting.title.clone()))
+    }
+
+    /// The text of sluice's check named `name` on `head`.
+    fn text(&self, head: &str, name: &str) -> Option<String> {
+        let held = self.gh.forge.held().unwrap();
+        let p = held.posted.get(head)?.iter().find(|p| p.name == name)?;
+        p.posting.text.clone()
     }
 
     fn posts(&self) -> usize {
@@ -194,8 +218,10 @@ impl OnGitHub {
             .unwrap()
             .comments
             .get(&n)
-            .cloned()
-            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|c| c.body.clone())
+            .collect()
     }
 
     /// Step until `done` holds, at most a minute.
@@ -468,16 +494,107 @@ fn blamed_and_left_alone() {
         (Status::Failure, "failed: sh check.sh")
     );
     // pull-request-status, blamed: one comment naming the failed check,
-    // its log, and how to submit again.
+    // its log, and how to submit again, pointing at the report; and the
+    // report, one comment of its own (ADR 0039).
     let comments = g.comments(n);
-    assert_eq!(comments.len(), 1, "{comments:?}");
-    let c = &comments[0];
+    assert_eq!(comments.len(), 2, "{comments:?}");
+    let c = comments.iter().find(|c| c.contains("told=")).unwrap();
     assert!(c.contains("`sh check.sh` failed"), "{c}");
     assert!(c.contains("The logs, on the host"), "{c}");
     assert!(
         c.contains("Push a fix") && c.contains("draft and then ready"),
         "{c}"
     );
+    assert!(c.contains("[sluice's report]("), "{c}");
+    let r = g.report(n).unwrap();
+    assert!(
+        r.contains("## sluice: failed on main, #1 is to blame"),
+        "{r}"
+    );
+    assert!(r.contains("| 🟥 | `sh check.sh` |"), "{r}");
+    // The `sluice` check carries the same report, and the check has its
+    // own check.
+    assert_eq!(g.text(&head, "sluice").as_deref(), Some(r.as_str()));
+    let own = g.check(&head, "sluice / sh check.sh").unwrap();
+    assert_eq!(own.0, Status::Failure);
+    // Output is posted only when the policy asks for it.
+    assert!(!r.contains("it broke"), "{r}");
+}
+
+/// pull-request-status, edited not repeated (ADR 0039): one report
+/// comment, edited from testing to landed.
+#[test]
+fn one_report_comment_edited_until_landed() {
+    let g = OnGitHub::new("pr-report-edited", "");
+    let (n, head) = g.by_hand("unit/fine", &[("slow", Some("x\n"))], false);
+    g.step_until("landed", |g| {
+        g.of(n).first().is_some_and(|s| s["state"] == "landed")
+    });
+    for _ in 0..2 {
+        g.step();
+    }
+    let reports: Vec<String> = g
+        .comments(n)
+        .into_iter()
+        .filter(|c| c.starts_with("<!-- sluice-report: main -->"))
+        .collect();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(
+        reports[0].contains("## sluice: landed on main as "),
+        "{}",
+        reports[0]
+    );
+    assert!(
+        reports[0].contains("| 🟩 | `sh check.sh` |"),
+        "{}",
+        reports[0]
+    );
+    let own = g.check(&head, "sluice / sh check.sh").unwrap();
+    assert_eq!(own.0, Status::Success);
+    // Nothing reads differently, so a further round posts nothing.
+    let before = g.posts();
+    let edits = g.gh.forge.held().unwrap().edits.len();
+    g.step();
+    assert_eq!(g.posts(), before);
+    assert_eq!(g.gh.forge.held().unwrap().edits.len(), edits);
+}
+
+/// S50 (proposed 118, 20): behind a blamed pull request, nothing of the
+/// failed combination is shown.
+#[test]
+fn behind_a_blamed_pull_request_no_failure_is_shown() {
+    let g = OnGitHub::new("pr-report-behind", "");
+    let (one, _) = g.by_hand("unit/broken", &[("broken", Some("x\n"))], false);
+    let (two, head) = g.by_hand("unit/fine", &[("fine", Some("x\n"))], false);
+    g.step_until("blamed", |g| {
+        g.of(one).first().is_some_and(|s| s["state"] == "failed")
+    });
+    let shown = g.report(two).unwrap_or_default();
+    assert!(!shown.contains("#1") && !shown.contains("🟥"), "{shown}");
+    if let Some((status, _, _)) = g.posted(&head) {
+        assert_ne!(status, Status::Failure);
+    }
+    if let Some(own) = g.check(&head, "sluice / sh check.sh") {
+        assert_ne!(own.0, Status::Failure, "{own:?}");
+    }
+    g.step_until("landed", |g| {
+        g.of(two).iter().any(|s| s["state"] == "landed")
+    });
+}
+
+/// pull-request-status, output as asked (ADR 0039): the last lines of a
+/// failed check's output, scrubbed.
+#[test]
+fn output_posted_as_asked_and_scrubbed() {
+    let g = OnGitHub::new("pr-report-output", "log_lines = 2");
+    let (n, _) = g.by_hand("unit/broken", &[("broken", Some("x\n"))], false);
+    g.step_until("blamed", |g| {
+        g.of(n).first().is_some_and(|s| s["state"] == "failed")
+    });
+    g.step();
+    let r = g.report(n).unwrap();
+    assert!(r.contains("it broke"), "{r}");
+    assert!(r.contains("[redacted]") && !r.contains("ghp_"), "{r}");
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +642,16 @@ fn landed_and_merged_by_landing() {
     g.step();
     let pull = g.gh.forge.held().unwrap().pulls[0].clone();
     assert!(!pull.open, "GitHub shows it merged");
-    assert!(g.comments(n).is_empty());
+    // No sent-back comment; only the report (ADR 0039).
+    let comments = g.comments(n);
+    assert!(
+        comments.iter().all(|c| !c.contains("told=")),
+        "{comments:?}"
+    );
+    assert!(g
+        .report(n)
+        .unwrap()
+        .contains("## sluice: landed on main as "));
 }
 
 /// Two rounds with nothing changed between them post nothing the second
