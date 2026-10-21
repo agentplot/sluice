@@ -96,6 +96,13 @@ fn a_command_passes_or_fails_by_its_exit() {
 
     let fail = finish(&c, &request(&repo, "p2", command("exit 3")));
     assert_eq!(fail.tasks[0].outcome, Outcome::Fail);
+
+    // Proposed 119: the command's own time, and no attempts or estimate.
+    let slow = finish(&c, &request(&repo, "p3", command("sleep 0.3")));
+    let took = slow.tasks[0].took_ms.expect("a command's time");
+    assert!((250..10_000).contains(&took), "{took}");
+    assert_eq!(slow.tasks[0].attempts, None);
+    assert_eq!(slow.detail, None);
 }
 
 /// 66: a run over its time limit is ended and reported timed out, with no

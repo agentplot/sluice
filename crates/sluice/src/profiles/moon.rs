@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
-use sluice_seams::{NotRun, Outcome, Source, TaskProgress, TaskResult, TaskState};
+use sluice_seams::{NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState};
 
 use super::checks::{not_run_reason, Context, Plan};
 
@@ -37,6 +37,13 @@ const FLOOR: (u64, u64) = (2, 6);
 
 pub struct Moon;
 
+/// A task as `moon query tasks` lists it.
+struct Task {
+    tags: Vec<String>,
+    /// Whether moon runs it in its CI mode (`runInCI`).
+    in_ci: bool,
+}
+
 impl Moon {
     pub fn plan(&self, cx: &Context) -> Result<Plan> {
         let request = cx.request;
@@ -51,7 +58,7 @@ impl Moon {
                 Some(tag) => wanted.extend(
                     tasks
                         .iter()
-                        .filter(|(_, tags)| tags.iter().any(|t| t == tag))
+                        .filter(|(_, task)| task.tags.iter().any(|t| t == tag))
                         .map(|(t, _)| t.clone()),
                 ),
                 None => {
@@ -82,6 +89,13 @@ impl Moon {
             }
         }
         let targets: Vec<String> = wanted.into_iter().collect();
+        // ADR 0039: moon runs in its CI mode, which runs no task the
+        // repository keeps out of CI; each such target reads missing.
+        let kept_out: Vec<String> = targets
+            .iter()
+            .filter(|t| tasks.get(*t).is_some_and(|task| !task.in_ci))
+            .cloned()
+            .collect();
         // A report left in the place is not this run's.
         match std::fs::remove_file(place.join(REPORT)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
@@ -93,6 +107,7 @@ impl Moon {
                 targets,
                 holds_processors: true,
                 stamps: Vec::new(),
+                kept_out,
             });
         }
         // The workspace's toolchains, installed here, outside the executor,
@@ -108,7 +123,7 @@ impl Moon {
         }
         argv.push("exec");
         argv.extend(targets.iter().map(String::as_str));
-        argv.extend(["--on-failure", "continue", "--concurrency", &jobs]);
+        argv.extend(["--ci", "--on-failure", "continue", "--concurrency", &jobs]);
         // A gate that does not trust the cache gets no replay (28).
         if !request.replay {
             argv.push("--force");
@@ -119,6 +134,7 @@ impl Moon {
             holds_processors: true,
             // proto stamps each toolchain it runs as used.
             stamps: vec![".last-used"],
+            kept_out,
         })
     }
 
@@ -146,24 +162,25 @@ impl Moon {
     /// ran, `Ran` with its outcome; one answered from the cache,
     /// `Replayed`; one that failed with an exit `not_run` names, not run
     /// (could-not-run-1 114); anything else, no result (15, 16, 38; rule
-    /// core.9).
+    /// core.9). With them, what moon says of the run (proposed 119).
     pub fn read(
         &self,
         place: &Path,
         targets: &[String],
         not_run: &[i32],
         host: &str,
-    ) -> Result<(Vec<TaskResult>, Vec<NotRun>)> {
+    ) -> Result<(Vec<TaskResult>, Vec<NotRun>, Option<RunDetail>)> {
         let report = match std::fs::read(place.join(REPORT)) {
             Ok(b) => b,
             // Ended before moon wrote it, or nothing was run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((Vec::new(), Vec::new()))
+                return Ok((Vec::new(), Vec::new(), None))
             }
             Err(e) => return Err(e.into()),
         };
         let report: Value = serde_json::from_slice(&report).context("reading moon's run report")?;
-        Ok(read_report(&report, targets, not_run, host))
+        let (tasks, unjudged) = read_report(&report, targets, not_run, host);
+        Ok((tasks, unjudged, run_detail(&report)))
     }
 
     /// ADR 0028: where each of `targets` has got in a run still going,
@@ -273,7 +290,7 @@ impl Moon {
     /// Every task moon knows in the place, with its tags; with
     /// `MOON_BASE` and `MOON_HEAD`, those the range affects, dependents
     /// included.
-    fn tasks(&self, cx: &Context, range: &[(&str, &str)]) -> Result<BTreeMap<String, Vec<String>>> {
+    fn tasks(&self, cx: &Context, range: &[(&str, &str)]) -> Result<BTreeMap<String, Task>> {
         let mut args = vec!["query", "tasks"];
         if !range.is_empty() {
             args.extend(["--affected", "--downstream", "deep"]);
@@ -296,7 +313,12 @@ impl Moon {
                     .flatten()
                     .filter_map(|t| t.as_str().map(String::from))
                     .collect();
-                tasks.insert(target.to_string(), tags);
+                // `runInCI` is a boolean or, since moon 2, a word: `skip`
+                // and `false` keep a task out of CI; any other runs it.
+                let run_in_ci = &task["options"]["runInCI"];
+                let in_ci =
+                    !(run_in_ci == &Value::Bool(false) || run_in_ci.as_str() == Some("skip"));
+                tasks.insert(target.to_string(), Task { tags, in_ci });
             }
         }
         Ok(tasks)
@@ -389,7 +411,10 @@ fn read_report(
         };
         let hydrated =
             op("output-hydration").is_some_and(|o| o["status"].as_str() == Some("cached"));
-        let exit = op("task-execution")
+        // A retried task's last try is the one that judged it.
+        let exit = ops
+            .iter()
+            .rfind(|o| o["meta"]["type"].as_str() == Some("task-execution"))
             .and_then(|o| o["meta"]["exitCode"].as_i64())
             .and_then(|c| i32::try_from(c).ok());
         let (outcome, replayed) = match action["status"].as_str() {
@@ -407,9 +432,13 @@ fn read_report(
             Some("cached" | "cached-from-remote") => (Outcome::Pass, true),
             _ => continue,
         };
+        let tries = ops
+            .iter()
+            .filter(|o| o["meta"]["type"].as_str() == Some("task-execution"))
+            .count();
         out.push(TaskResult {
-            took_ms: None,
-            attempts: None,
+            took_ms: report_ms(&action["duration"]),
+            attempts: u32::try_from(tries).ok().filter(|n| *n > 0),
             task: target.to_string(),
             hash,
             outcome,
@@ -426,6 +455,34 @@ fn read_report(
     out.sort_by(|a, b| a.task.cmp(&b.task));
     unjudged.sort_by(|a, b| a.task.cmp(&b.task));
     (out, unjudged)
+}
+
+/// Proposed 119: what moon's run report says of the whole run, `None`
+/// when it says nothing of it.
+fn run_detail(report: &Value) -> Option<RunDetail> {
+    let context = &report["context"];
+    // moon 2 names them `changedFiles`; moon 1 named them `touchedFiles`.
+    let changed = context["changedFiles"]
+        .as_array()
+        .or(context["touchedFiles"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.as_str().map(String::from))
+        .collect();
+    let d = RunDetail {
+        took_ms: report_ms(&report["duration"]),
+        estimate_ms: report_ms(&report["comparisonEstimate"]["duration"]),
+        changed,
+    };
+    (!d.is_empty()).then_some(d)
+}
+
+/// A duration as moon's report writes it, `{"secs": 2, "nanos": 3000000}`,
+/// in milliseconds.
+fn report_ms(v: &Value) -> Option<u64> {
+    let secs = v["secs"].as_u64()?;
+    let nanos = v["nanos"].as_u64().unwrap_or(0);
+    Some(secs * 1000 + nanos / 1_000_000)
 }
 
 /// A task's run record as moon writes it when the task ends.
@@ -800,6 +857,57 @@ mod tests {
             "{}",
             unjudged[0].reason
         );
+    }
+
+    /// A run report as moon 2.6.1 wrote it for `moon exec app:test
+    /// app:retry app:serve --ci`, trimmed: `app:retry` failed its first try
+    /// and passed its second, and `app:serve`, marked `runInCI: false`, is
+    /// absent (proposed 119; ADR 0039).
+    #[test]
+    fn reads_times_attempts_and_the_runs_estimate() {
+        let report: Value = serde_json::from_str(
+            r#"{"actions":[
+              {"label":"RunTask(app:test)","status":"passed","duration":{"secs":0,"nanos":175123708},
+               "node":{"params":{"target":"app:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"88c9720a"}},
+                             {"status":"skipped","meta":{"type":"output-hydration"}},
+                             {"status":"passed","meta":{"type":"task-execution","exitCode":0}},
+                             {"status":"passed","meta":{"type":"archive-creation"}}]},
+              {"label":"RunTask(app:retry)","status":"passed","duration":{"secs":0,"nanos":333944708},
+               "node":{"params":{"target":"app:retry"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"5cfc0d6e"}},
+                             {"status":"failed","meta":{"type":"task-execution","exitCode":1}},
+                             {"status":"passed","meta":{"type":"task-execution","exitCode":0}}]}],
+             "context":{"changedFiles":["app/f"]},
+             "duration":{"secs":0,"nanos":341842792},
+             "comparisonEstimate":{"duration":{"secs":0,"nanos":431000000}},
+             "status":"completed"}"#,
+        )
+        .unwrap();
+        let targets: Vec<String> = ["app:retry", "app:serve", "app:test"]
+            .map(String::from)
+            .to_vec();
+        // An exit `not_run` names on a first try that a retry passed is no
+        // could-not-run.
+        let (got, unjudged) = read_report(&report, &targets, &[1], "h");
+        assert!(unjudged.is_empty());
+        let short: Vec<(&str, Outcome, Option<u64>, Option<u32>)> = got
+            .iter()
+            .map(|t| (t.task.as_str(), t.outcome, t.took_ms, t.attempts))
+            .collect();
+        assert_eq!(
+            short,
+            vec![
+                ("app:retry", Outcome::Pass, Some(333), Some(2)),
+                ("app:test", Outcome::Pass, Some(175), Some(1)),
+            ]
+        );
+        let d = run_detail(&report).unwrap();
+        assert_eq!(d.took_ms, Some(341));
+        assert_eq!(d.estimate_ms, Some(431));
+        assert_eq!(d.saved_ms(), Some(90));
+        assert_eq!(d.changed, vec!["app/f".to_string()]);
+        assert_eq!(run_detail(&serde_json::json!({"actions": []})), None);
     }
 
     /// Checkpoints and run records as moon 2.6.1 writes them while a run

@@ -20,10 +20,10 @@ suites through `sluice exec main -- <command>`.
 
 ## 3. moon
 
-- [ ] 3.1 Run moon in CI mode as 1.1 decided; verify a moon e2e case (tools feature) in which a required task marked `runInCI: false` is not run and reads missing.
+- [x] 3.1 Run moon in CI mode as 1.1 decided; verify a moon e2e case (tools feature) in which a required task marked `runInCI: false` is not run and reads missing.
 - [ ] 3.2 Read `runInCI` from `moon query tasks` in `plan`, return the required targets kept out as `kept_out`, log them once per combination, and name them in `sluice status` and a waiting `submit`; verify a cli.rs case with a stand-in moon.
-- [ ] 3.3 Read each task's `duration` and `task-execution` count, and the run's duration, `comparisonEstimate` and `changedFiles`, in `read_report`; verify unit tests against a trimmed moon 2.6 `runReport.json` fixture from a real run.
-- [ ] 3.4 Set `took` on the command runner's results from the run's start and end; verify a checks unit test.
+- [x] 3.3 Read each task's `duration` and `task-execution` count, and the run's duration, `comparisonEstimate` and `changedFiles`, in `read_report`; verify unit tests against a trimmed moon 2.6 `runReport.json` fixture from a real run.
+- [x] 3.4 Set `took` on the command runner's results from the run's start and end; verify a checks unit test.
 
 ## 4. The report in the core
 
