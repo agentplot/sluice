@@ -34,14 +34,15 @@ tasks:
   # The scene the plugins' screenshots are taken of, built --fast with the
   # sluice built here and asserted, so a change to sluice that breaks it
   # fails here and not at the next retake. It reads the tools it drives from
-  # outside the tree, so it never replays. The gate runs it; CI does not,
-  # since the screenshots are taken only on a Mac.
+  # outside the tree, so it never replays. It runs only on a Mac, where the
+  # screenshots are taken, so the gate runs it and Linux CI does not. It is
+  # not kept out of CI: the gate runs moon in CI mode, which would skip it.
   screenshots-scene:
     command: 'bash plugins/screenshots-scene.sh --check'
     # The scene and the sluice it builds from this tree.
     inputs: ['/plugins/screenshots-scene.sh', '/crates/sluice/**/*', '/crates/sluice-seams/**/*', '/crates/sluice-core/**/*', '/Cargo.toml', '/Cargo.lock', '/devenv.nix', '/devenv.lock']
     tags: [check-e2e]
-    options: {runFromWorkspaceRoot: true, cache: false, runInCI: false}
+    options: {runFromWorkspaceRoot: true, cache: false, os: macos}
   # The screenshots themselves (plugins/screenshots-capture.sh), run by hand
   # in devenv shell: the gate cannot, since it drives a GUI terminal and a
   # logged-in Claude Code. No tag puts it in a tier.
