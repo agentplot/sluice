@@ -181,3 +181,57 @@ export function withChecks(): Overview {
   ];
   return doc;
 }
+
+/**
+ * main idle, and release, whose submissions come from other worktrees, as
+ * an orchestrator's agents make them: #12 under test with 3 of its 8 tasks
+ * ended, #13 to #15 queued, and two agents' checks held to it. The herdr
+ * plugin's tests name the same branch and expect the same words.
+ */
+export function withRelease(): Overview {
+  const doc = overview();
+  const main = doc.branches[0]!;
+  const task = (i: number, state: OverviewTask["state"]): OverviewTask => ({
+    target: `t${i}:test`,
+    state,
+  });
+  doc.branches = [
+    { ...main, depth: 0, candidates: [], submissions: [], recent: [] },
+    {
+      branch: "release",
+      at: "9ecc34a1b2",
+      version: 3,
+      window: 1,
+      parallel: 1,
+      depth: 4,
+      candidates: [
+        {
+          id: "c9",
+          submissions: [12],
+          revision: "x",
+          state: "testing",
+          started: "2026-10-16T19:42:00Z",
+          limit: 900,
+          targets: ["#check-fast"],
+          executor: "sandbox",
+          ran: 0,
+          replayed: 0,
+          failed: [],
+          tasks: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => task(i, i < 3 ? "passed" : "waiting")),
+        },
+      ],
+      submissions: [12, 13, 14, 15].map((id) => ({
+        id,
+        state: id === 12 ? "testing" : "queued",
+        from: { agent: "unit", worktree: `u${id}`, path: `/elsewhere/u${id}` },
+      })),
+      recent: [],
+    },
+  ];
+  doc.sessions = [1, 2].map((i) => ({
+    worktree: `/elsewhere/u${i}`,
+    branch: "release",
+    run: { started: "2026-10-16T19:44:00Z" },
+  }));
+  return doc;
+}

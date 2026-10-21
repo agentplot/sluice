@@ -140,6 +140,28 @@ sluice 0.12 or later, and stays silent in a repository with no queue. It is a
 Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
+### Naming a session's branch
+
+The status line follows the session's worktree. When several agents share
+one checkout, each working for a different branch whose submissions come
+from other worktrees, the checkout can't say which branch is whose.
+Whatever starts the session names it in the session's environment:
+
+```sh
+SLUICE_BRANCH=release claude
+```
+
+With no submission of its own, the status line then shows that branch:
+`sluice: release · 3 queued · #12 testing 3/8 · 2 checking`. That is its
+submissions in no combination under test, its oldest combination under
+test, and the agents' checks held to it. An idle branch reads `release ·
+nothing queued`, and one sluice has no records of `release · no
+records`. The band and the
+pane show that branch first, and the pane shows it even with nothing
+queued. The variable is read when the session starts. In herdr the pane
+token `sluice_branch` does the same, as
+[the herdr guide](/sluice/guides/herdr/#naming-a-panes-branch) says.
+
 ## Worktrees
 
 Ask about worktrees or a bare repository and the plugin gives the layout
