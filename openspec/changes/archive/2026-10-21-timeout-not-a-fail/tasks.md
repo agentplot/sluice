@@ -66,4 +66,4 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 5. Land
 
-- [ ] 5.1 Run `sluice exec main` and `sluice submit main`.
+- [x] 5.1 Run `sluice exec main` and `sluice submit main`.
