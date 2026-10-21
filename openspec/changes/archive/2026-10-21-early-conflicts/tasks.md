@@ -28,4 +28,4 @@ the statement. Run suites through `sluice exec main -- <command>`.
 
 ## 5. Gate
 
-- [ ] 5.1 `sluice exec main` passes; submit.
+- [x] 5.1 `sluice exec main` passes; submit.
