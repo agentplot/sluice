@@ -48,8 +48,8 @@ suites through `sluice exec main -- <command>`.
 
 ## 7. Docs
 
-- [ ] 7.1 Update `site/src/content/docs/guides/pull-requests.md` "What sluice posts" with the comment, the check's text, the checks per system and `log_lines`, plus "never require sluice's checks in a ruleset"; update `guides/github-app.md` for the permissions, and `reference/configuration.md` for `log_lines`; verify `site:prose` reports nothing and the site builds.
-- [ ] 7.2 Add a "sluice and moon's CI" section to the moon guide or the executors guide, covering CI mode, `runInCI`, base and head, and why moon's own report is not posted; update `plugins/sluice/skills/using-sluice/references/verdicts.md`; verify `site:prose` and `plugin-sluice:validate`.
+- [x] 7.1 Update `site/src/content/docs/guides/pull-requests.md` "What sluice posts" with the comment, the check's text, the checks per system and `log_lines`, plus "never require sluice's checks in a ruleset"; update `guides/github-app.md` for the permissions, and `reference/configuration.md` for `log_lines`; verify `site:prose` reports nothing and the site builds.
+- [x] 7.2 Add a "moon, as your CI runs it" section to the configuration reference's `[tests]`, covering CI mode, `runInCI`, base and head, and why moon's own report is not posted; update `plugins/sluice/skills/using-sluice/references/verdicts.md`; verify `site:prose` and `plugin-sluice:validate`.
 
 ## 8. Integration
 

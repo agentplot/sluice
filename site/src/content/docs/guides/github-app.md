@@ -107,6 +107,8 @@ ok      [forge] key /home/me/.config/sluice/app.pem reads
 ok      app 123456 makes a token for acme/widgets
 ok      the app may write acme/widgets's contents
 ok      the app may write acme/widgets's workflows
+ok      the app may write acme/widgets's checks
+ok      the app may write acme/widgets's pull requests
 ok      ruleset "main" on main lets only app 123456 through
 ```
 
