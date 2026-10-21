@@ -256,6 +256,9 @@ struct Real {
     /// The host's blocks of ports, kept with the rig: a sandboxed run
     /// writes nothing of the user's own state.
     _blocks: Scratch,
+    /// The host's session runs, the rig's own, so another agent's runs on
+    /// this host never shrink the bound it tests under (71).
+    _host: Scratch,
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
@@ -383,6 +386,7 @@ impl Real {
             ..
         } = bound;
         let blocks = Scratch::new(&format!("{name}-blocks"));
+        let host = Scratch::new(&format!("{name}-host-sessions"));
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
@@ -392,7 +396,7 @@ impl Real {
                 log: RefCell::default(),
             },
             tests: RecordedChecks {
-                inner: tests,
+                inner: tests.with_sessions(host.path().to_path_buf()),
                 requests: RefCell::default(),
                 started: RefCell::default(),
             },
@@ -407,6 +411,7 @@ impl Real {
             },
             state,
             _blocks: blocks,
+            _host: host,
             origin,
         }
     }
