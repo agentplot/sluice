@@ -541,7 +541,8 @@ pub struct RunReport {
     /// 84: what the executor held the run to.
     pub executor: Enforced,
     /// 15: required checks the run was to run that it left without a
-    /// result: skipped, or never reached. None of them passes.
+    /// result: skipped, never reached, or, in a run its time limit ended,
+    /// cut off by it (time-limit-1 66). None of them passes.
     pub missing: Vec<String>,
     /// Checks the run did not judge (could-not-run-1 114): in neither
     /// `tasks` nor `missing`.

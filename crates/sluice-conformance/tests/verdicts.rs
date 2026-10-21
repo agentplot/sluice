@@ -2,7 +2,7 @@
 
 use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultKind, ResultLine, State};
-use sluice_seams::Told;
+use sluice_seams::{Outcome, Told};
 
 fn results(h: &Harness) -> Vec<ResultLine> {
     sluice_core::records::parse_lines(h.w().results_log().as_bytes()).unwrap()
@@ -146,6 +146,60 @@ fn a_run_past_its_time_limit_is_recorded_as_timed_out_and_read_as_failed() {
     }
     assert_eq!(h.w().live_runs(), 0);
     assert!(h.w().live_places().is_empty());
+}
+
+/// A check the time limit cut off, on a host too slow that day, has no
+/// outcome: nothing is recorded under its key, so once the host keeps up
+/// the same head lands, and is never read as flaky. What ended before the
+/// limit keeps its result.
+/// satisfies: time-limit-1 66, 19, 20, 69; rule core.7
+#[test]
+fn a_check_the_time_limit_cut_off_is_recorded_under_no_key_and_the_same_head_lands() {
+    let h = Harness::bolt();
+    h.w().hangs("b:test");
+    h.work(
+        "unit/ab",
+        "agent-a",
+        &[("a/lib", Some("a2")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/ab");
+    h.settle();
+
+    let s = h.sub(one);
+    assert_eq!(s.state, State::Failed);
+    assert_eq!(s.result.as_deref(), Some("timed out"));
+    let named: Vec<(&str, &str)> = s
+        .failed
+        .iter()
+        .map(|f| (f.task.as_str(), f.hash.as_str()))
+        .collect();
+    assert_eq!(named, [("b:test", "")], "cut off, with no key");
+    let lines = results(&h);
+    assert!(lines
+        .iter()
+        .any(|r| r.task == "a:test" && r.outcome == Outcome::Pass));
+    assert!(
+        !lines.iter().any(|r| r.task == "b:test"),
+        "nothing under b:test's key: {lines:?}"
+    );
+    match &h.w().told_to("agent-a")[0].told {
+        Told::Failed {
+            failed, timed_out, ..
+        } => {
+            assert!(timed_out);
+            assert_eq!(failed, &["b:test"]);
+        }
+        other => panic!("told {other:?}"),
+    }
+
+    h.w().ends_in_time("b:test");
+    let two = h.submit("unit/ab");
+    h.settle();
+    let s = h.sub(two);
+    assert_eq!(s.state, State::Landed, "{:?}", s.failed);
+    assert!(results(&h)
+        .iter()
+        .any(|r| r.task == "b:test" && r.outcome == Outcome::Pass));
 }
 
 /// satisfies: 13, 71

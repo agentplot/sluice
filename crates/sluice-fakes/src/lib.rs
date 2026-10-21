@@ -470,9 +470,15 @@ impl World {
         self.0.borrow_mut().keeping_fails = fails;
     }
 
-    /// `task` runs past any time limit.
+    /// `task` runs past any time limit, which cuts it off: it has no
+    /// result and is named missing (time-limit-1 66).
     pub fn hangs(&self, task: &str) {
         self.0.borrow_mut().hang.insert(task.into());
+    }
+
+    /// `task` ends in time again, as on a host that keeps up once more.
+    pub fn ends_in_time(&self, task: &str) {
+        self.0.borrow_mut().hang.remove(task);
     }
 
     /// Runs leave `task` without a result, as a runner that skips it.
@@ -750,6 +756,7 @@ impl World {
                 continue;
             }
             if inner.hang.contains(&t.name) && request.limit.is_some() {
+                report.missing.push(t.name.clone());
                 report.timed_out = true;
                 break;
             }

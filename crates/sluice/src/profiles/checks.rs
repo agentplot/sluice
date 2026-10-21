@@ -843,7 +843,30 @@ impl Tests for Checks {
             },
         };
         let mut missing: Vec<String> = if ended.timed_out {
-            Vec::new()
+            // Time-limit-1 66: what ended before the limit keeps its
+            // outcome; a task the limit cut off has none, and is named as
+            // left without one. One never started is not named.
+            match (meta.runner.as_str(), meta.started_ms, request.limit) {
+                ("moon", Some(started), Some(limit)) => {
+                    let out =
+                        std::fs::read(self.runs.dir(&run.0).join("out.log")).unwrap_or_default();
+                    let judged: Vec<String> = meta
+                        .targets
+                        .iter()
+                        .filter(|t| !not_run.iter().any(|n| &n.task == *t))
+                        .cloned()
+                        .collect();
+                    let limit_ms = started.saturating_add(
+                        i64::try_from(limit)
+                            .unwrap_or(i64::MAX)
+                            .saturating_mul(1000),
+                    );
+                    let cut = Moon.cut_off(&meta.place, &out, &judged, &tasks, started, limit_ms);
+                    tasks.retain(|t| !cut.contains(&t.task));
+                    cut
+                }
+                _ => Vec::new(),
+            }
         } else {
             meta.targets
                 .iter()

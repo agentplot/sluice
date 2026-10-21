@@ -347,6 +347,101 @@ fn a_project_whose_id_holds_a_slash() {
     );
 }
 
+/// Time-limit-1 66: a run its time limit ends keeps the outcomes of the
+/// tasks that ended before it, a pass and a fail; a task it cut off has
+/// none, whether it died of the signal or caught it and exited as
+/// `bun test` does, so no fail is recorded under its key, and its log is
+/// its own. The project's id holds a `/`, as `scripts/ci`'s does.
+#[test]
+fn a_task_the_time_limit_cut_off_has_no_outcome() {
+    let repo = workspace("moon-cut-off");
+    let ws = std::fs::read_to_string(repo.dir().join(".moon/workspace.yml")).unwrap();
+    change(
+        &repo,
+        &[
+            (
+                ".moon/workspace.yml",
+                &ws.replace(
+                    "  gamma: 'gamma'\n",
+                    "  gamma: 'gamma'\n  group/many: 'group/many'\n",
+                ),
+            ),
+            (
+                "group/many/moon.yml",
+                "tasks:\n  pass:\n    command: 'true'\n  fail:\n    command: 'sh fail.sh'\n  hang:\n    command: 'sh hang.sh'\n  catch:\n    command: 'sh catch.sh'\n",
+            ),
+            ("group/many/fail.sh", "echo 'fail: broken'\nexit 3\n"),
+            (
+                "group/many/hang.sh",
+                "echo 'hang: still going'\nwhile :; do sleep 0.1; done\n",
+            ),
+            (
+                "group/many/catch.sh",
+                "trap 'exit 143' TERM\necho 'catch: still going'\nwhile :; do sleep 0.1; done\n",
+            ),
+        ],
+    );
+    let c = checks(&repo);
+    let targets = [
+        "group/many:catch",
+        "group/many:fail",
+        "group/many:hang",
+        "group/many:pass",
+    ];
+    let mut req = request(&repo, "p1", &targets, None);
+    let limit = Duration::from_secs(15);
+    req.limit = Some(limit);
+    let started = Instant::now();
+    let run = c.start(&req).unwrap();
+    // The two that end do so well inside the limit, or the test says
+    // nothing of a task that ended before it.
+    loop {
+        let tasks = c.tasks(&run).unwrap();
+        let state = |t: &str| tasks.iter().find(|x| x.target == t).map(|x| x.state);
+        if state("group/many:pass") == Some(TaskState::Passed)
+            && state("group/many:fail") == Some(TaskState::Failed)
+            && state("group/many:hang") == Some(TaskState::Running)
+            && state("group/many:catch") == Some(TaskState::Running)
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < limit - Duration::from_secs(3),
+            "group/many's tasks never ended with group/many:hang running: {tasks:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let until = Instant::now() + Duration::from_secs(120);
+    let report = loop {
+        match c.progress(&run).unwrap() {
+            Progress::Finished(r) => break r,
+            Progress::Lost => panic!("lost"),
+            Progress::Running => {}
+        }
+        assert!(Instant::now() < until, "the run never finished");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(report.timed_out);
+    assert_eq!(
+        tasks(&report),
+        [
+            ("group/many:fail".into(), Outcome::Fail, false),
+            ("group/many:pass".into(), Outcome::Pass, false)
+        ]
+    );
+    assert_eq!(report.missing, ["group/many:catch", "group/many:hang"]);
+    let logs = c
+        .logs(&run, &["group/many:catch".into(), "group/many:hang".into()])
+        .unwrap();
+    for (log, line) in logs.iter().zip(["catch: still going", "hang: still going"]) {
+        assert!(
+            log.text.contains(line) && !log.text.contains("fail: broken"),
+            "{}",
+            log.text
+        );
+    }
+}
+
 /// 15, 37: a candidate that affects no required task runs nothing and
 /// passes.
 #[test]
