@@ -68,6 +68,10 @@ pub trait Rig {
     /// returns its new head.
     fn work_on(&self, worktree: &str, on: &Rev, changes: &[(&str, Option<&str>)]) -> Rev;
 
+    /// The branch `name` at `at`, as a bolt's is kept: read without a
+    /// place of it.
+    fn branch_at(&self, name: &str, at: &Rev);
+
     /// The place `worktree` holds `paths` beyond its commits.
     fn dirty(&self, worktree: &str, paths: &[&str]);
 
@@ -325,6 +329,10 @@ impl Rig for Harness {
         let head = self.w().work(on, changes);
         self.w().session(worktree, &session.from.agent, &head);
         head
+    }
+
+    fn branch_at(&self, name: &str, at: &Rev) {
+        self.w().set_branch(name, at);
     }
 
     fn dirty(&self, worktree: &str, paths: &[&str]) {

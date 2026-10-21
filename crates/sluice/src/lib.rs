@@ -28,8 +28,8 @@ use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
 use sluice_core::records::{Event, FailedTask, State, Submission};
 use sluice_core::{
-    AmendRefusal, Clock, Forecast, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal,
-    SubmitRequest, WithdrawRefusal, Withdrew,
+    AmendRefusal, Clock, Forecast, Forecasted, Requester, Seams, Serves, Sluice, Status, Step,
+    SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Outcome, SessionPlace};
 use told::Kind;
@@ -173,6 +173,10 @@ pub enum Command {
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
+        /// With --check, the branch whose revision to forecast in place of
+        /// the worktree's head: a bolt's against the branch it lands on.
+        #[arg(long, value_name = "BRANCH", requires = "check")]
+        head: Option<String>,
         /// Only say where this worktree's last submission, or its pull
         /// request, stands.
         #[arg(long)]
@@ -652,12 +656,22 @@ pub fn run(
             priority,
             no_wait,
             check,
+            head,
             status,
             worktree,
             json,
         } => {
             if check {
-                return forecast(&s, pushers, &worktree, &branch, &after, json, out);
+                return forecast(
+                    &s,
+                    pushers,
+                    &worktree,
+                    head.as_deref(),
+                    &branch,
+                    &after,
+                    json,
+                    out,
+                );
             }
             if takes_pulls(&s, &branch)? {
                 return submit_pull(
@@ -1178,6 +1192,7 @@ fn refusal(
                 hashes(ids)
             )
         }
+        SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
     })
 }
 
@@ -1192,52 +1207,73 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
         ],
         SubmitRefusal::NotManaged => vec!["sluice overview".into()],
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
+        SubmitRefusal::NoHead(_) => vec!["sluice overview".into()],
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forecast(
     s: &Sluice<'_>,
     pushers: &dyn Pushers,
     worktree: &str,
+    from: Option<&str>,
     branch: &str,
     after: &[u64],
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    match s.forecast(worktree, branch, after)? {
+    let got = match from {
+        Some(from) => s.forecast_branch(from, branch, after)?,
+        None => s.forecast(worktree, branch, after)?,
+    };
+    let f = match got {
+        Ok(f) => f,
         Err(r) => {
             let text = refusal(&r, worktree, branch, pushers)?;
             told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
-            Ok(CONFLICT)
+            return Ok(CONFLICT);
         }
-        Ok(Forecast::Clear) => {
-            if json {
-                writeln!(out, "{}", serde_json::json!({ "conflict": null }))?;
+    };
+    if json {
+        writeln!(out, "{}", forecast_json(&f))?;
+    } else {
+        writeln!(out, "{}", forecast_text(&f.forecast, branch))?;
+    }
+    Ok(match f.forecast {
+        Forecast::Clear => LANDED,
+        Forecast::Conflict { .. } => CONFLICT,
+    })
+}
+
+/// A forecast as `submit --check --json` and `exec --json` print it: its
+/// conflict, or null, and what it was formed from (64, 65).
+pub(crate) fn forecast_json(f: &Forecasted) -> serde_json::Value {
+    let conflict = match &f.forecast {
+        Forecast::Clear => serde_json::Value::Null,
+        Forecast::Conflict { paths, with } => serde_json::json!({ "paths": paths, "with": with }),
+    };
+    serde_json::json!({
+        "conflict": conflict,
+        "head": f.head,
+        "onto": f.onto,
+        "ahead": f.ahead,
+    })
+}
+
+pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
+    match f {
+        Forecast::Clear => format!("no conflict with {branch} or anything queued"),
+        Forecast::Conflict { paths, with } => {
+            let w: Vec<String> = with
+                .iter()
+                .map(|c| format!("#{} ({}, {})", c.id, c.from.agent, c.from.worktree))
+                .collect();
+            let with = if w.is_empty() {
+                branch.to_string()
             } else {
-                writeln!(out, "no conflict with {branch} or anything queued")?;
-            }
-            Ok(LANDED)
-        }
-        Ok(Forecast::Conflict { paths, with }) => {
-            if json {
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({ "conflict": { "paths": paths, "with": with } })
-                )?;
-            } else {
-                let w: Vec<String> = with
-                    .iter()
-                    .map(|c| format!("#{} ({}, {})", c.id, c.from.agent, c.from.worktree))
-                    .collect();
-                let with = if w.is_empty() {
-                    branch.to_string()
-                } else {
-                    w.join(", ")
-                };
-                writeln!(out, "would conflict: {} with {with}", paths.join(", "))?;
-            }
-            Ok(CONFLICT)
+                w.join(", ")
+            };
+            format!("would conflict: {} with {with}", paths.join(", "))
         }
     }
 }

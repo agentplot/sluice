@@ -238,6 +238,50 @@ pub fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by(h: &impl Rig) {
     assert_eq!(h.requests()[0].required, vec!["#gate".to_string()]);
 }
 
+/// 64, 65, 47a: a branch no place holds, a bolt's, is forecast against
+/// the branch it lands on: the file, the submission it meets, the
+/// revision it was formed on and those ahead of it, and nothing written.
+/// Its own submission is left out, as submitting it again would withdraw
+/// it (67).
+pub fn a_branch_is_forecast_with_no_place_of_it(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("from a"))]);
+    let one = h.submit("unit/a");
+    let tip = h.tip();
+    let first = h.work("bolt/y", "conductor", &[("b/lib", Some("from y"))]);
+    h.branch_at("bolt/y", &first);
+    h.submit("bolt/y");
+    let head = h.work_on("bolt/y", &first, &[("a/lib", Some("from y"))]);
+    h.branch_at("bolt/y", &head);
+
+    let version = h.version();
+    let f = h
+        .sluice()
+        .forecast_branch("bolt/y", BRANCH, &[])
+        .unwrap()
+        .unwrap();
+    assert_eq!(f.head, head);
+    assert_eq!(f.onto, tip);
+    assert_eq!(f.ahead, vec![one]);
+    match f.forecast {
+        Forecast::Conflict { paths, with } => {
+            assert_eq!(paths, vec!["a/lib".to_string()]);
+            assert_eq!(with.len(), 1);
+            assert_eq!(with[0].id, one);
+        }
+        other => panic!("forecast {other:?}"),
+    }
+    assert_eq!(h.version(), version);
+    assert!(h.started().is_empty());
+
+    // A branch that is not there is refused, naming it.
+    assert_eq!(
+        h.sluice()
+            .forecast_branch("bolt/gone", BRANCH, &[])
+            .unwrap(),
+        Err(SubmitRefusal::NoHead("bolt/gone".into()))
+    );
+}
+
 /// S16: a forecast names the file and the work it would conflict with,
 /// and writes nothing.
 pub fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(h: &impl Rig) {
@@ -250,7 +294,8 @@ pub fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(h: &impl Ri
         .sluice()
         .forecast(&h.place("unit/b"), BRANCH, &[])
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .forecast;
     match f {
         Forecast::Conflict { paths, with } => {
             assert_eq!(paths, vec!["a/lib".to_string()]);
@@ -270,7 +315,8 @@ pub fn s16_a_forecast_names_the_file_and_the_work_and_writes_nothing(h: &impl Ri
         h.sluice()
             .forecast(&h.place("unit/b"), BRANCH, &[])
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .forecast,
         Forecast::Clear
     );
     let two = h.submit("unit/b");

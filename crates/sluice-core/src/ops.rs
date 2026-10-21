@@ -41,6 +41,8 @@ pub enum SubmitRefusal {
     NotManaged,
     /// `after` names submissions the branch does not hold.
     UnknownAfter(Vec<u64>),
+    /// The branch named as the head to forecast has no revision.
+    NoHead(String),
 }
 
 /// Who asks to change a submission (48, 47b; actors table).
@@ -106,6 +108,18 @@ pub enum Forecast {
         paths: Vec<String>,
         with: Vec<Contested>,
     },
+}
+
+/// A forecast with what it was formed from, so a reader can tell whether
+/// any of it has moved since and forecast again only then (64).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Forecasted {
+    pub head: Rev,
+    /// The branch's revision the head was formed on.
+    pub onto: Rev,
+    /// The submissions formed ahead of the head, in order.
+    pub ahead: Vec<u64>,
+    pub forecast: Forecast,
 }
 
 /// A branch's queue as read from its records (26, 49).
@@ -246,29 +260,66 @@ impl Sluice<'_> {
         worktree: &str,
         branch: &str,
         after: &[u64],
-    ) -> Result<Result<Forecast, SubmitRefusal>> {
+    ) -> Result<Result<Forecasted, SubmitRefusal>> {
         let session = self.seams.driver.session(worktree)?;
         if session.detached {
             return Ok(Err(SubmitRefusal::Detached));
         }
+        self.forecast_head(&session.head, &session.from.worktree, branch, after)
+    }
+
+    /// 64, 65, 47a: the same for the revision of the branch `from`, the
+    /// head a place on it would hold, read with no place of it: a bolt's
+    /// against the branch it lands on. Its own submissions are those made
+    /// from that branch (67).
+    pub fn forecast_branch(
+        &self,
+        from: &str,
+        branch: &str,
+        after: &[u64],
+    ) -> Result<Result<Forecasted, SubmitRefusal>> {
+        let Some(head) = self.seams.branch.read(from)? else {
+            return Ok(Err(SubmitRefusal::NoHead(from.into())));
+        };
+        self.forecast_head(&head, from, branch, after)
+    }
+
+    /// `own` is the work the head is, as its driver names it: submissions
+    /// of it are left out, as a submission of it would withdraw them (67).
+    fn forecast_head(
+        &self,
+        head: &Rev,
+        own: &str,
+        branch: &str,
+        after: &[u64],
+    ) -> Result<Result<Forecasted, SubmitRefusal>> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(Err(SubmitRefusal::NoBranch));
         };
         if self.rules_at(branch, &tip)?.is_none() {
             return Ok(Err(SubmitRefusal::NotManaged));
         }
+        Ok(Ok(self.forecast_onto(head, own, branch, tip, after)?))
+    }
+
+    /// The forecast on `tip`, the branch's revision as its caller just read
+    /// it: `sluice exec`'s, which read it for its run.
+    pub(crate) fn forecast_onto(
+        &self,
+        head: &Rev,
+        own: &str,
+        branch: &str,
+        tip: Rev,
+        after: &[u64],
+    ) -> Result<Forecasted> {
         let line = self.read_line(branch)?;
-        let head = session.head;
 
         // The queue as the next step would order it, with the head at the
         // back.
         const PROBE: u64 = u64::MAX;
         let mut entries = Vec::new();
         for s in line.subs.values() {
-            if s.state.is_out()
-                || s.state == State::Landing
-                || s.from.worktree == session.from.worktree
-            {
+            if s.state.is_out() || s.state == State::Landing || s.from.worktree == own {
                 continue;
             }
             entries.push(Entry {
@@ -300,21 +351,46 @@ impl Sluice<'_> {
         }
 
         let mut prev = tip.clone();
+        let mut prefix: Vec<u64> = Vec::new();
         let mut ahead: Vec<(u64, Rev)> = Vec::new();
         for id in ahead_ids {
+            prefix.push(id);
+            // A candidate a round formed on this revision with exactly these
+            // submissions is the same merge (10): taken, not formed again.
+            if let Some(c) = line
+                .doc
+                .candidates
+                .iter()
+                .find(|c| c.on == tip && c.submissions == prefix)
+            {
+                prev = c.revision.clone();
+                ahead.push((id, prev.clone()));
+                continue;
+            }
             // An entry ahead that conflicts itself would leave the chain.
-            if let Formed::Revision(r) = self.seams.branch.form(&prev, &line.sub(id)?.head)? {
-                prev = r.clone();
-                ahead.push((id, r));
+            match self.seams.branch.form(&prev, &line.sub(id)?.head)? {
+                Formed::Revision(r) => {
+                    prev = r.clone();
+                    ahead.push((id, r));
+                }
+                Formed::Conflict { .. } => {
+                    prefix.pop();
+                }
             }
         }
-        Ok(Ok(match self.seams.branch.form(&prev, &head)? {
+        let forecast = match self.seams.branch.form(&prev, head)? {
             Formed::Revision(_) => Forecast::Clear,
             Formed::Conflict { paths } => Forecast::Conflict {
-                with: self.contested(&line, &tip, &ahead, &head)?,
+                with: self.contested(&line, &tip, &ahead, head)?,
                 paths,
             },
-        }))
+        };
+        Ok(Forecasted {
+            head: head.clone(),
+            onto: tip,
+            ahead: ahead.iter().map(|(id, _)| *id).collect(),
+            forecast,
+        })
     }
 
     /// 47b, 3, 6: change a queued submission's `after` or priority, until

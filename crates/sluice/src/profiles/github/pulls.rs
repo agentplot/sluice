@@ -447,7 +447,10 @@ impl Pulls {
                 Err(r) => waiting(&[format!("refused: {}", refusal_word(&r))], None),
             });
         }
-        let forecast = match s.forecast(&place(p.number), branch, &[])? {
+        let forecast = match s
+            .forecast(&place(p.number), branch, &[])?
+            .map(|f| f.forecast)
+        {
             Ok(Forecast::Clear) => {
                 let ahead: Vec<String> = subs
                     .iter()
@@ -543,6 +546,7 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::NoBranch => "its branch is gone".into(),
         SubmitRefusal::NotManaged => "no [branches] table names its branch".into(),
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
+        SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
     }
 }
 

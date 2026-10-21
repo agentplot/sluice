@@ -453,6 +453,13 @@ impl Rig for Real {
         self.commit(dir, changes)
     }
 
+    fn branch_at(&self, name: &str, at: &Rev) {
+        git(
+            self.repo.dir(),
+            &["update-ref", &format!("refs/heads/{name}"), at.as_str()],
+        );
+    }
+
     fn dirty(&self, worktree: &str, paths: &[&str]) {
         let place = self.place(worktree);
         for path in paths {
@@ -614,6 +621,7 @@ scenarios! {
     s11_a_landing_names_its_verdict_and_leaves_the_session_place: bolt();
     s12_a_submission_cannot_loosen_the_gate_it_is_judged_by: bolt();
     s16_a_forecast_names_the_file_and_the_work_and_writes_nothing: bolt();
+    a_branch_is_forecast_with_no_place_of_it: bolt();
     every_submission_is_tested_on_top_of_every_one_ahead: bolt();
     state_and_status_read_the_records_with_no_step_running: bolt();
     a_resubmission_withdraws_the_earlier_submission_which_stays_readable: bolt();

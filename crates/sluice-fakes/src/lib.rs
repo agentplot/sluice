@@ -90,6 +90,8 @@ struct Inner {
     /// The repository's HEAD: the first branch made, as `git init` names it.
     head: Option<String>,
     moves: Vec<MoveRecord>,
+    /// How many merges were formed.
+    forms: usize,
     crash: Option<Crash>,
     // the check
     tasks: Vec<TaskDef>,
@@ -386,6 +388,16 @@ impl World {
 
     pub fn moves(&self) -> Vec<MoveRecord> {
         self.0.borrow().moves.clone()
+    }
+
+    /// How many merges have been formed, conflicts included.
+    pub fn forms(&self) -> usize {
+        self.0.borrow().forms
+    }
+
+    /// `branch` at `at`, as a bolt's is kept, with no place of it.
+    pub fn set_branch(&self, branch: &str, at: &Rev) {
+        self.0.borrow_mut().refs.insert(branch.into(), at.clone());
     }
 
     pub fn crash(&self, crash: Crash) {
@@ -957,6 +969,7 @@ impl Branch for FakeBranch {
     /// A three-way merge per path, on the merge base of the two.
     fn form(&self, onto: &Rev, head: &Rev) -> Result<Formed> {
         let mut inner = self.0 .0.borrow_mut();
+        inner.forms += 1;
         let base = World::merge_base(&inner, onto, head);
         let b = base
             .as_ref()

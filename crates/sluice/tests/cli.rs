@@ -322,6 +322,57 @@ fn a_conflict_exits_two_and_check_says_so_first() {
     );
 }
 
+/// `--check --head` forecasts a branch no worktree holds, a bolt's, and
+/// `--json` says what it was formed from: the head, the branch's revision
+/// and the submissions ahead (64, 65, 47a).
+#[test]
+fn check_forecasts_a_branch_with_no_worktree() {
+    let f = setup();
+    work(
+        &f,
+        "unit/touches",
+        "crw-1-unit-1",
+        &[("plugin/lib/plan.py", Some("one"))],
+    );
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/touches", "--no-wait"],
+    );
+    let tip = f.world.tip(BRANCH);
+    let bolt = f.world.work(&tip, &[("plugin/lib/plan.py", Some("two"))]);
+    f.world.set_branch("bolt/y", &bolt);
+
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--check", "--head", "bolt/y"]);
+    assert_eq!(code, CONFLICT);
+    assert_eq!(
+        out,
+        "would conflict: plugin/lib/plan.py with #1 (crw-1-unit-1, unit/touches)\n"
+    );
+
+    let (code, out) = sluice(
+        &f,
+        &["submit", BRANCH, "--check", "--head", "bolt/y", "--json"],
+    );
+    assert_eq!(code, CONFLICT);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["conflict"]["paths"],
+        serde_json::json!(["plugin/lib/plan.py"])
+    );
+    assert_eq!(v["conflict"]["with"][0]["id"], 1);
+    assert_eq!(v["head"], bolt.as_str());
+    assert_eq!(v["onto"], tip.as_str());
+    assert_eq!(v["ahead"], serde_json::json!([1]));
+
+    let (code, out) = sluice(
+        &f,
+        &["submit", BRANCH, "--check", "--head", "bolt/none", "--json"],
+    );
+    assert_eq!(code, CONFLICT);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["message"], "no branch bolt/none to forecast");
+}
+
 #[test]
 fn a_dirty_place_is_refused_with_exit_two() {
     let f = setup();

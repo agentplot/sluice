@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sluice_core::overview::OrderFrom;
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
-use sluice_core::{Clock, Sluice};
+use sluice_core::{Clock, Forecast, Sluice};
 use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress};
 
 use crate::sessions::SessionRun;
@@ -195,6 +195,16 @@ impl Exec<'_> {
         // next run on the host, before this one counts.
         tell_abandoned(out, json, &s.release_abandoned()?)?;
         crate::preview::tell_dropped(out, json, &s.release_unusable_previews()?)?;
+        // 64: told before it runs whether its head would form if submitted
+        // now. It decides nothing, so one that cannot be formed is passed
+        // over, and the run goes on either way.
+        let forecast = s.session_forecast(&plan, &session).ok().flatten();
+        if let Some(f) = &forecast {
+            if matches!(f.forecast, Forecast::Conflict { .. }) {
+                say(out, json, &crate::forecast_text(&f.forecast, &self.branch))?;
+            }
+        }
+        let forecast = forecast.as_ref().map(crate::forecast_json);
         let command = (!self.command.is_empty()).then(|| shell_line(&self.command));
         match &command {
             None => say(
@@ -321,7 +331,16 @@ impl Exec<'_> {
                     json,
                     "lost: the run's supervisor stopped before it reported",
                 )?;
-                self.finish(out, None, &[], false, None, &place.env, FAILED)?;
+                self.finish(
+                    out,
+                    None,
+                    &[],
+                    false,
+                    None,
+                    &place.env,
+                    forecast.as_ref(),
+                    FAILED,
+                )?;
                 return Ok(FAILED);
             }
         };
@@ -378,6 +397,7 @@ impl Exec<'_> {
             recorded,
             Some(report.timed_out),
             &place.env,
+            forecast.as_ref(),
             code,
         )?;
         Ok(code)
@@ -440,6 +460,7 @@ impl Exec<'_> {
         recorded: bool,
         timed_out: Option<bool>,
         env: &std::collections::BTreeMap<String, String>,
+        forecast: Option<&serde_json::Value>,
         code: i32,
     ) -> Result<()> {
         if !self.json {
@@ -473,6 +494,7 @@ impl Exec<'_> {
                 "not_run": report.map(|r| r.not_run.as_slice()).unwrap_or_default(),
                 "timed_out": timed_out.unwrap_or(false),
                 "ports": ports,
+                "forecast": forecast,
                 "exit": code,
             })
         )?;

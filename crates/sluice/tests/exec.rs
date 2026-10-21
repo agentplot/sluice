@@ -135,6 +135,48 @@ fn a_command_gets_the_worktrees_environment_and_its_exit() {
 }
 
 /// Every file name kept under `dir`, walked whole.
+/// 64: before it runs, exec says whether the head would form if
+/// submitted now; a conflict is told and the run goes on, and `--json`
+/// carries the forecast.
+#[test]
+fn exec_tells_a_conflict_before_it_runs_and_runs_anyway() {
+    let s = Setup::new("exec-forecast");
+    let forecast = |out: &Output| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["forecast"].clone()
+    };
+    let out = s.sluice(&["exec", "bolt/x", "--json", "--", "true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(forecast(&out)["conflict"], serde_json::Value::Null);
+    assert!(!text(&out).contains("would conflict"), "{}", text(&out));
+
+    // The branch moves on, changing what the head changed.
+    s.repo.git(&["switch", "-q", "bolt/x"]);
+    s.repo.write("a.txt", "b");
+    s.repo.git(&["add", "-A"]);
+    s.repo.git(&["commit", "-q", "-m", "b"]);
+    s.repo.git(&["switch", "-q", "main"]);
+
+    let out = s.sluice(&["exec", "bolt/x", "--json", "--", "true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        forecast(&out)["conflict"]["paths"],
+        serde_json::json!(["a.txt"])
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("would conflict: a.txt with bolt/x"),
+        "{}",
+        text(&out)
+    );
+    let out = s.sluice(&["exec", "bolt/x", "--", "true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        text(&out).starts_with("would conflict: a.txt with bolt/x\n"),
+        "{}",
+        text(&out)
+    );
+}
+
 fn file_names(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
