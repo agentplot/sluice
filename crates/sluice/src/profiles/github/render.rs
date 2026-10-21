@@ -589,7 +589,10 @@ mod tests {
         v.runs[0].detail.took_ms = Some(56_000);
         v.runs[0].detail.estimate_ms = Some(47_000);
         let s = with(None, |cx| report(&v, cx));
-        assert!(s.contains("Total time: 56s | Comparison time: 47s\n"), "{s}");
+        assert!(
+            s.contains("Total time: 56s | Comparison time: 47s\n"),
+            "{s}"
+        );
         assert!(!s.contains("Estimated savings"), "{s}");
     }
 
