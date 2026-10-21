@@ -422,6 +422,27 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
     }
 }
 
+/// satisfies: 15, 27 (ADR 0039)
+#[test]
+fn a_required_check_kept_out_of_ci_is_missing_and_named() {
+    let h = Harness::bolt();
+    h.w().keeps_out("b:test");
+    h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+    let one = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert!(results(&h).iter().all(|r| r.task != "b:test"));
+    let status = h.sluice().status(BRANCH).unwrap();
+    assert!(
+        status
+            .warnings
+            .iter()
+            .any(|w| w.contains("b:test") && w.contains("keeps out of CI")),
+        "{:?}",
+        status.warnings
+    );
+}
+
 /// satisfies: 27, 29
 #[test]
 fn a_gate_no_run_of_its_executor_can_satisfy_starts_nothing() {

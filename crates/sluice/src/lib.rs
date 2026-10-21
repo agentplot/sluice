@@ -1453,6 +1453,21 @@ fn report(
             if !not_run.is_empty() {
                 writeln!(out, "not run: {}", not_run.join(", "))?;
             }
+            // ADR 0039: a required check its task runner keeps out of CI.
+            let combination_log: Vec<_> = log
+                .iter()
+                .filter(|l| matches!(&l.event, Event::Detail { combination, .. } if *combination == t.combination))
+                .cloned()
+                .collect();
+            for task in sluice_core::ops::kept_out(&combination_log) {
+                if not_run.contains(&task.as_str()) {
+                    writeln!(
+                        out,
+                        "  {}",
+                        sluice_core::ops::kept_out_warning(branch, &task)
+                    )?;
+                }
+            }
             // Could-not-run-1 115: a test that could not run, and why.
             let could_not: Vec<&FailedTask> =
                 sub.failed.iter().filter(|f| f.not_run.is_some()).collect();

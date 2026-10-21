@@ -97,6 +97,8 @@ struct Inner {
     flaky: BTreeMap<String, VecDeque<Outcome>>,
     hang: BTreeSet<String>,
     skip: BTreeSet<String>,
+    kept_out: BTreeSet<String>,
+    took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
     /// A run whose policy sets `[tests] ready` is refused (84).
@@ -466,6 +468,18 @@ impl World {
         self.0.borrow_mut().skip.insert(task.into());
     }
 
+    /// The runner keeps `task` out of its CI mode: never run, missing, and
+    /// named kept out (ADR 0039).
+    pub fn keeps_out(&self, task: &str) {
+        self.0.borrow_mut().kept_out.insert(task.into());
+    }
+
+    /// The runner says `task` took `ms` in `attempts` tries, and the run
+    /// took the sum against an estimate of twice it (proposed 119).
+    pub fn takes(&self, task: &str, ms: u64, attempts: u32) {
+        self.0.borrow_mut().took.insert(task.into(), (ms, attempts));
+    }
+
     /// Runs leave `task` not run, for `reason` (could-not-run-1 114);
     /// `None` lets it run again.
     pub fn cannot_run(&self, task: &str, reason: Option<&str>) {
@@ -711,6 +725,11 @@ impl World {
                 report.missing.push(t.name.clone());
                 continue;
             }
+            if inner.kept_out.contains(&t.name) {
+                report.missing.push(t.name.clone());
+                report.kept_out.push(t.name.clone());
+                continue;
+            }
             if let Some(reason) = inner.cannot_run.get(&t.name) {
                 report.not_run.push(NotRun {
                     task: t.name.clone(),
@@ -757,15 +776,24 @@ impl World {
                 inner.cache.insert(key, at);
             }
             inner.observed.push((t.name.clone(), hash.clone(), outcome));
+            let took = inner.took.get(&t.name).copied();
             report.tasks.push(TaskResult {
-                took_ms: None,
-                attempts: None,
+                took_ms: took.map(|t| t.0),
+                attempts: took.map(|t| t.1),
                 task: t.name.clone(),
                 hash,
                 outcome,
                 source: Source::Ran {
                     host: inner.host.clone(),
                 },
+            });
+        }
+        let total: u64 = report.tasks.iter().filter_map(|t| t.took_ms).sum();
+        if total > 0 {
+            report.detail = Some(sluice_seams::RunDetail {
+                took_ms: Some(total),
+                estimate_ms: Some(total * 2),
+                changed: Vec::new(),
             });
         }
         report
