@@ -16,6 +16,7 @@
 //!   lock           held by the supervisor for its whole life; its pid
 //!   pgid           the command's process group, once it is spawned
 //!   out.log        the command's stdout and stderr
+//!   out.times      when out.log grew: `<length> <time>` a line (ADR 0042)
 //!   result.json    how it ended; written last, by rename
 //!   release.log    the release command's stdout and stderr
 //!   released       the release command finished; written last
@@ -325,6 +326,25 @@ impl Runs {
         Ok(RunState::Lost)
     }
 
+    /// ADR 0042: when the output of the run of the place `name` grew,
+    /// as its length then and the time, oldest first; none for a run
+    /// whose supervisor noted none.
+    pub fn times(&self, name: &str) -> Result<Vec<(u64, String)>> {
+        let path = self.dir(name).join(TIMES);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|l| {
+                let (len, at) = l.split_once(' ')?;
+                Some((len.parse().ok()?, at.to_string()))
+            })
+            .collect())
+    }
+
     /// What the run of the place `name` was asked to do.
     pub fn request(&self, name: &str) -> Result<Request> {
         let path = self.dir(name).join("request.json");
@@ -520,6 +540,7 @@ pub fn supervise(dir: &Path) -> Result<()> {
     };
     let pgid = child.id() as i32;
     write_atomic(&dir.join("pgid"), format!("{pgid}\n").as_bytes())?;
+    let mut times = Times::new(dir);
 
     let deadline = request
         .limit
@@ -535,6 +556,7 @@ pub fn supervise(dir: &Path) -> Result<()> {
             timed_out = true;
             break;
         }
+        times.note(false);
         std::thread::sleep(Duration::from_millis(100));
     }
     // Every run ends its group, so nothing it started outlives it (32).
@@ -549,6 +571,7 @@ pub fn supervise(dir: &Path) -> Result<()> {
         Some(s) => Some(s),
         None => Some(child.wait()?),
     };
+    times.note(true);
     use std::os::unix::process::ExitStatusExt;
     finish(Ended {
         exit: status.and_then(|s| s.code()),
@@ -782,6 +805,60 @@ fn read_pgid(dir: &Path) -> Result<Option<i32>> {
         }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// When the run's output grew, kept beside it (ADR 0042).
+const TIMES: &str = "out.times";
+
+/// `out.times`: a line `<length> <time>` each time `out.log` has grown,
+/// at most once a second while the command runs and once as it ends. It
+/// notes when bytes arrived, never what they say, so a runner can tell
+/// when a line it reads was printed. A note that cannot be written is
+/// left out: it decides nothing, and never fails the run.
+struct Times {
+    log: PathBuf,
+    path: PathBuf,
+    len: u64,
+    at: Option<Instant>,
+}
+
+impl Times {
+    fn new(dir: &Path) -> Self {
+        Times {
+            log: dir.join("out.log"),
+            path: dir.join(TIMES),
+            len: 0,
+            at: None,
+        }
+    }
+
+    /// Note the output's length if it grew, unless a note was made less
+    /// than a second ago and the command has not `ended`.
+    fn note(&mut self, ended: bool) {
+        let Ok(len) = std::fs::metadata(&self.log).map(|m| m.len()) else {
+            return;
+        };
+        if len <= self.len {
+            return;
+        }
+        if !ended
+            && self
+                .at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        use std::io::Write;
+        let noted = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .and_then(|mut f| writeln!(f, "{len} {}", now()));
+        if noted.is_ok() {
+            self.len = len;
+            self.at = Some(Instant::now());
+        }
     }
 }
 

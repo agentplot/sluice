@@ -189,11 +189,15 @@ impl Moon {
     /// `lastRun.json` in its state directory (`state_dir`) in the place,
     /// written at or after the run's start (C.2); its start, its time and
     /// whether it was answered from the cache are moon's checkpoints in
-    /// the run's output. Never a result: the run report is (37, 38).
+    /// the run's output. A running task started when its start checkpoint
+    /// was printed: the first of `times`, the output's length and the
+    /// time as it grew, to reach that line's end (ADR 0042). Never a
+    /// result: the run report is (37, 38).
     pub fn progress(
         &self,
         place: &Path,
         output: &[u8],
+        times: &[(u64, String)],
         targets: &[String],
         started_ms: i64,
     ) -> Vec<TaskProgress> {
@@ -204,6 +208,13 @@ impl Moon {
                 let mark = marks.get(target.as_str());
                 let ended = last_run(place, target).filter(|r| r.at >= started_ms);
                 let Some(r) = ended else {
+                    let printed = mark.and_then(|m| m.start).and_then(|end| {
+                        times
+                            .iter()
+                            .find(|(len, _)| *len >= end)
+                            .and_then(|(_, at)| chrono::DateTime::parse_from_rfc3339(at).ok())
+                            .map(|at| timestamp(at.timestamp_millis()))
+                    });
                     return TaskProgress {
                         target: target.clone(),
                         state: if mark.is_some() {
@@ -211,7 +222,7 @@ impl Moon {
                         } else {
                             TaskState::Waiting
                         },
-                        started: None,
+                        started: printed,
                         ended: None,
                         exit: None,
                     };
@@ -537,13 +548,17 @@ struct Mark {
     cached: bool,
     /// How long it took, in milliseconds, once it ended.
     took: Option<i64>,
+    /// Where its start line ends in the output, through its newline.
+    start: Option<u64>,
 }
 
 /// Each task moon's checkpoints name in a run's output. A task's own
 /// output is prefixed with its target, so no line of it is a checkpoint.
 fn checkpoints(output: &[u8]) -> BTreeMap<String, Mark> {
     let mut out: BTreeMap<String, Mark> = BTreeMap::new();
+    let mut end = 0;
     for line in output.split(|b| *b == b'\n') {
+        end = (end + line.len() + 1).min(output.len());
         let Ok(line) = std::str::from_utf8(line) else {
             continue;
         };
@@ -568,6 +583,8 @@ fn checkpoints(output: &[u8]) -> BTreeMap<String, Mark> {
         }
         if let Some(took) = parts.iter().find_map(|p| duration_ms(p)) {
             mark.took = Some(took);
+        } else if !mark.cached && mark.start.is_none() {
+            mark.start = Some(end as u64);
         }
     }
     out
@@ -943,7 +960,7 @@ mod tests {
         let targets: Vec<String> = ["a:test", "c:test", "d:test", "e:test", "f:test", "g:test"]
             .map(String::from)
             .to_vec();
-        let got = Moon.progress(&place, output.as_bytes(), &targets, start);
+        let got = Moon.progress(&place, output.as_bytes(), &[], &targets, start);
         let short: Vec<(&str, TaskState, Option<&str>, Option<&str>, Option<i32>)> = got
             .iter()
             .map(|t| {
@@ -990,6 +1007,47 @@ mod tests {
         assert_eq!(duration_ms("f8bf095b"), None);
         assert_eq!(duration_ms("cached"), None);
         std::fs::remove_dir_all(&place).unwrap();
+    }
+
+    /// ADR 0042: a running task started when its start line was printed,
+    /// the first note of the output's length to reach that line's end; a
+    /// run with no notes gives it no start.
+    #[test]
+    fn a_running_task_started_when_its_start_line_was_printed() {
+        let place =
+            std::env::temp_dir().join(format!("sluice-moon-started-{}", std::process::id()));
+        let a = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} a:test (f8bf095b)\n";
+        let b = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} b:test (3cf5763d)\n";
+        let output = format!("{a}{b}");
+        let times = [
+            // Part of a's line, before the rest of it arrived.
+            (a.len() as u64 - 3, "2026-10-21T12:00:00.250Z".to_string()),
+            (a.len() as u64, "2026-10-21T12:00:01.500Z".to_string()),
+            (output.len() as u64, "2026-10-21T12:04:00.000Z".to_string()),
+        ];
+        let targets = ["a:test", "b:test", "c:test"].map(String::from).to_vec();
+        let started = |times: &[(u64, String)]| -> Vec<(TaskState, Option<String>)> {
+            Moon.progress(&place, output.as_bytes(), times, &targets, 0)
+                .into_iter()
+                .map(|t| (t.state, t.started))
+                .collect()
+        };
+        assert_eq!(
+            started(&times),
+            [
+                (TaskState::Running, Some("2026-10-21T12:00:01Z".to_string())),
+                (TaskState::Running, Some("2026-10-21T12:04:00Z".to_string())),
+                (TaskState::Waiting, None),
+            ]
+        );
+        assert_eq!(
+            started(&[]),
+            [
+                (TaskState::Running, None),
+                (TaskState::Running, None),
+                (TaskState::Waiting, None),
+            ]
+        );
     }
 
     /// moon 2.6.1's own names, as `encode_component` makes them.

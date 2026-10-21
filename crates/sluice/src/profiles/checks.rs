@@ -1007,7 +1007,8 @@ impl Tests for Checks {
             return Ok(Vec::new());
         };
         let out = std::fs::read(self.runs.dir(&run.0).join("out.log")).unwrap_or_default();
-        Ok(Moon.progress(&meta.place, &out, &meta.targets, started))
+        let times = self.runs.times(&run.0).unwrap_or_default();
+        Ok(Moon.progress(&meta.place, &out, &times, &meta.targets, started))
     }
 }
 

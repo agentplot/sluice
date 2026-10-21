@@ -86,6 +86,27 @@ fn a_run_ends_everything_it_started() {
     assert!(group_gone(number(&r.dir("p1").join("pgid"))));
 }
 
+/// ADR 0042: the supervisor notes when the output grew, as its length
+/// and the time, and once more as the command ends.
+#[test]
+fn a_run_notes_when_its_output_grew() {
+    let dir = Scratch::new("runs-times");
+    let r = runs(dir.path());
+    r.start(
+        "p1",
+        &request(dir.path(), "echo first; sleep 1.5; echo second", None),
+    )
+    .unwrap();
+    assert!(matches!(wait(&r, "p1"), RunState::Finished(_)));
+    let times = r.times("p1").unwrap();
+    let lens: Vec<u64> = times.iter().map(|(len, _)| *len).collect();
+    assert_eq!(lens, [6, 13], "{times:?}");
+    let at = |i: usize| chrono::DateTime::parse_from_rfc3339(&times[i].1).unwrap();
+    let apart = (at(1) - at(0)).num_milliseconds();
+    assert!((1000..3000).contains(&apart), "{apart} ms apart");
+    assert_eq!(r.times("none").unwrap(), []);
+}
+
 /// 66: a run over its time limit is ended with everything it started, a
 /// member that ignores TERM included, and recorded as timed out.
 #[test]
