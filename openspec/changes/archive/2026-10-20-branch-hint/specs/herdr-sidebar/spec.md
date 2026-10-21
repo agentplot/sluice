@@ -2,14 +2,12 @@
 
 ### Requirement: The pane token says where the worktree's work stands
 
-The plugin SHALL set the token `sluice` on each pane whose worktree has a
-submission, a check under way, or commits ahead of its branch, or that has
-a branch named for it, choosing the first that holds: a live submission,
-an unanswered blame or conflict, the named branch's state, a check under
-way, commits ahead, a landing in the last 30 minutes; and SHALL clear it
+The plugin SHALL set the token `sluice` on each pane to the first that
+holds: a live submission of its worktree, an unanswered blame or conflict,
+the state of the branch named for the pane, a check under way, commits
+ahead of its branch, a landing in the last 30 minutes; and SHALL clear it
 on every other pane. A submission under test SHALL show its combination's
-task count and bar when the document lists its tasks, and never the tasks
-themselves.
+task count and bar when the document lists its tasks, never the tasks.
 
 #### Scenario: Testing
 
