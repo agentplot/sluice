@@ -152,7 +152,7 @@ fn draw(view: &VerdictView, cx: &Context, fit: Fit) -> String {
         if let Some(e) = d.estimate_ms {
             parts.push(format!("Comparison time: {}", time(e)));
         }
-        if let (Some(saved), Some(e)) = (d.saved_ms(), d.estimate_ms) {
+        if let (Some(saved @ 1..), Some(e)) = (d.saved_ms(), d.estimate_ms) {
             let pct = (saved * 100).checked_div(e).unwrap_or(0);
             parts.push(format!(
                 "Estimated savings: {} ({pct}% faster)",
@@ -581,6 +581,16 @@ mod tests {
                 replayed,
             ],
         )
+    }
+
+    #[test]
+    fn a_run_that_saved_nothing_claims_no_saving() {
+        let mut v = blamed();
+        v.runs[0].detail.took_ms = Some(56_000);
+        v.runs[0].detail.estimate_ms = Some(47_000);
+        let s = with(None, |cx| report(&v, cx));
+        assert!(s.contains("Total time: 56s | Comparison time: 47s\n"), "{s}");
+        assert!(!s.contains("Estimated savings"), "{s}");
     }
 
     #[test]
