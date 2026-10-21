@@ -322,15 +322,23 @@ through.
 Under `"fail"`, a submit names such a test `failed: <test> (flaky)`. It
 says whether the test passed or failed in this run, when and on which
 combination the same inputs did otherwise, and where that run's log is
-kept. The same inputs fail whenever they're tested, so the way on is a
-change to what the test reads. When the fail was the host's, not the
-test's, the operator can instead set it aside with `sluice set-aside`,
-and the same inputs read passed from their passes.
+kept. The same inputs fail whenever they're tested. When the fail was
+the host's or a time limit's, not the test's, the operator sets it aside
+with [`sluice set-aside`](/sluice/reference/commands/#sluice-set-aside),
+the same inputs read passed from their passes, and the same head lands.
+When the test itself is flaky, a fix to it does. A change to what the
+test reads made only to have it tested again leaves the fail under its
+key for any tree that returns to those inputs.
 
 ### `timeout`
 
-How long one combination's tests may run, for example `"20m"`. A run
-that hits it is recorded as timed out.
+How long one combination's tests may run, for example `"20m"`; an hour
+when unset. It times the tests' command, from its start: making the
+checkout and loading the toolchain come before it. A run that hits it is
+ended with everything it started, recorded as timed out, and its
+submission is blamed. Tests that ended before it keep their results. A
+test still running has none, so nothing is recorded under its key: on a
+host that was slow, the same head submitted again is tested afresh.
 
 ### `trust`
 

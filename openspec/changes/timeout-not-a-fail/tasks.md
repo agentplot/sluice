@@ -32,7 +32,7 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 3. Words
 
-- [ ] 3.1 `crates/sluice/src/lib.rs` and `words.rs`:
+- [x] 3.1 `crates/sluice/src/lib.rs` and `words.rs`:
   - a timed-out submission names the tests the limit ended, says nothing
     was recorded for them, and gives the way on;
   - a flaky failure's closing line says the same head lands once the
@@ -45,7 +45,7 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 4. Docs
 
-- [ ] 4.1 Change `plugins/sluice/skills/using-sluice/references/verdicts.md`:
+- [x] 4.1 Change `plugins/sluice/skills/using-sluice/references/verdicts.md`:
   - the `timed out` bullet;
   - the bullet on a test with no result;
   - the flaky section: an agent's one move is to stop and tell the user
@@ -53,17 +53,16 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
   Change any SKILL.md that mentions set-aside to match. Verify the
   plugin's moon tasks.
-- [ ] 4.2 Change the site:
+- [x] 4.2 Change the site:
   - `reference/commands.md`: submit's timed-out and flaky output, and
     `sluice set-aside` listing what sluice tells apart itself;
   - `reference/configuration.md`: `timeout` and `flaky`;
-  - `reference/state.md` if it says otherwise;
   - `guides/walkthrough.md` on time limits.
 
   Verify with `site:prose`.
-- [ ] 4.3 Add time-limit-1 to core.7's details in
-  `docs/architecture/core.md`, and add ADR 0041. Verify `root:format`.
-- [ ] 4.4 Verify `openspec validate timeout-not-a-fail --strict`.
+- [x] 4.3 Add time-limit-1 to core.7's details in
+  `docs/architecture/core.md`, and add ADR 0043. Verify `root:format`.
+- [x] 4.4 Verify `openspec validate timeout-not-a-fail --strict`.
 
 ## 5. Land
 

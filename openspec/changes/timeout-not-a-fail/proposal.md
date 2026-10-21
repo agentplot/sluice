@@ -52,7 +52,7 @@ and a check the limit ended has none and is recorded under no key.
   the CLI's words, `crates/sluice-fakes` (a hung test is cut off).
 - Docs: `plugins/sluice/skills/using-sluice/references/verdicts.md`; the
   site's commands, configuration and walkthrough pages;
-  `docs/architecture/core.md` (core.7's details); ADR 0041.
+  `docs/architecture/core.md` (core.7's details); ADR 0043.
 
 ## Out of scope
 

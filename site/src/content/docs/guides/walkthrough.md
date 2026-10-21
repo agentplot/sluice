@@ -111,8 +111,8 @@ What sluice does owe the tests, and nothing more:
 - a clean checkout of exactly the combination under test;
 - `SLUICE_CHECKOUT` and `SLUICE_TMP` in the environment: where the
   checkout is, and a scratch directory of its own;
-- a time limit per branch, and a run that hits it recorded as timed out,
-  not failed;
+- a time limit per branch: a run that hits it is recorded as timed out,
+  and a test still running then leaves no result under its key;
 - the test command run in its own process group, which sluice kills when
   the command exits, times out, or the checkout is removed, so a server
   left running can never break the next combination and get the wrong
