@@ -1671,11 +1671,21 @@ fn report(
             // A check with no key was left without a result (15): not run,
             // most often behind a check that failed.
             let ran: Vec<&FailedTask> = sub.failed.iter().filter(|f| !f.hash.is_empty()).collect();
+            let timed_out = sub.result.as_deref() == Some("timed out");
+            // Time-limit-1 66: in a run its time limit ended, a check with
+            // no key that could run is one the limit cut off.
+            let cut: Vec<&str> = sub
+                .failed
+                .iter()
+                .filter(|f| timed_out && f.hash.is_empty() && f.not_run.is_none())
+                .map(|f| f.task.as_str())
+                .collect();
             let not_run: Vec<&str> = sub
                 .failed
                 .iter()
                 .filter(|f| f.hash.is_empty())
                 .map(|f| f.task.as_str())
+                .filter(|t| !cut.contains(t))
                 .collect();
             // 19: read as failed for its key holding a pass and a fail.
             let flaky: Vec<&str> = ran
@@ -1683,10 +1693,12 @@ fn report(
                 .filter(|f| f.flaky.is_some())
                 .map(|f| f.task.as_str())
                 .collect();
-            let timed_out = sub.result.as_deref() == Some("timed out");
-            if timed_out {
+            if timed_out && cut.is_empty() {
                 writeln!(out, "timed out")?;
-            } else if !ran.is_empty() {
+            } else if timed_out {
+                writeln!(out, "{}", words::cut_off(&cut))?;
+            }
+            if !ran.is_empty() {
                 let named: Vec<String> = ran.iter().map(|f| failed_name(f)).collect();
                 writeln!(out, "failed: {}", named.join(", "))?;
             }
@@ -1780,20 +1792,21 @@ fn report(
                         .join(", ")
                 )?;
             }
-            if timed_out || not_run.len() > could_not.len() || ran.len() > flaky.len() {
+            if timed_out {
+                writeln!(out, "{}", words::timed_out_way_on(&cut, &same_commits))?;
+            }
+            if not_run.len() > could_not.len() || ran.len() > flaky.len() {
                 writeln!(
                     out,
                     "fix it in your worktree and submit again{same_commits}"
                 )?;
             }
             if !flaky.is_empty() {
-                writeln!(
-                    out,
-                    "the same inputs read failed whenever they are tested: submit again with a \
-                     change to what {} {}",
-                    flaky.join(", "),
-                    if flaky.len() == 1 { "reads" } else { "read" }
-                )?;
+                let other_failed = ran
+                    .iter()
+                    .filter_map(|f| f.flaky.as_ref())
+                    .all(|k| k.other.outcome == Outcome::Fail);
+                writeln!(out, "{}", words::flaky_way_on(&flaky, other_failed))?;
             }
         }
         State::Conflict => {

@@ -245,6 +245,42 @@ impl Moon {
             .collect()
     }
 
+    /// Time-limit-1 66: which of `targets` the time limit cut off, in a run
+    /// started at `started_ms` that it ended at `limit_ms` (milliseconds
+    /// since the epoch). One cut off started in the run, by its result,
+    /// its run record or its start checkpoint, and has no run record from
+    /// before the limit: moon reads one it ended as failed when it caught
+    /// the signal and exited, as `bun test` does, and as skipped when it
+    /// died of it. A replay ran nothing, so none is cut off.
+    pub fn cut_off(
+        &self,
+        place: &Path,
+        output: &[u8],
+        targets: &[String],
+        results: &[TaskResult],
+        started_ms: i64,
+        limit_ms: i64,
+    ) -> Vec<String> {
+        let marks = checkpoints(output);
+        targets
+            .iter()
+            .filter(|target| {
+                let result = results.iter().find(|r| &r.task == *target);
+                if result.is_some_and(|r| matches!(r.source, Source::Replayed { .. })) {
+                    return false;
+                }
+                let ended = last_run(place, target)
+                    .map(|r| r.at)
+                    .filter(|at| *at >= started_ms);
+                if ended.is_some_and(|at| at < limit_ms) {
+                    return false;
+                }
+                result.is_some() || ended.is_some() || marks.contains_key(target.as_str())
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The tool versions the place's `.prototools` lists, installed. Only
     /// the repository's own file is read, not the user's global one.
     fn install(&self, cx: &Context) -> Result<()> {
@@ -1048,6 +1084,64 @@ mod tests {
                 (TaskState::Waiting, None),
             ]
         );
+    }
+
+    /// Time-limit-1 66: a task the limit cut off is named however moon
+    /// read it: failed with the exit it took on the signal, as on a loaded
+    /// host, skipped, or started with no run record at all. What ended
+    /// before the limit stands, a fail too, and a replay or a task never
+    /// started is not named.
+    #[test]
+    fn a_task_the_limit_cut_off_is_named_however_moon_read_it() {
+        let place =
+            std::env::temp_dir().join(format!("sluice-moon-cut-off-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&place);
+        let record = |target: &str, exit: i32, at: i64| {
+            let dir = state_dir(&place, target).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("lastRun.json"),
+                format!(r#"{{"exitCode":{exit},"hash":"","lastRunTime":{at},"outputGlobsHash":"","target":"{target}"}}"#),
+            )
+            .unwrap();
+        };
+        let start = 1_792_341_193_000;
+        let limit = start + 3_600_000;
+        record("a:test", 0, start + 1_000);
+        record("b:test", 3, start + 2_000);
+        record("c:test", 143, limit + 40);
+        record("d:test", -1, limit + 60);
+        let report: Value = serde_json::from_str(
+            r#"{"status":"interrupted","actions":[
+              {"label":"RunTask(a:test)","status":"passed","node":{"params":{"target":"a:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"h1"}},
+                             {"status":"passed","meta":{"type":"task-execution","exitCode":0}}]},
+              {"label":"RunTask(b:test)","status":"failed","node":{"params":{"target":"b:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"h2"}},
+                             {"status":"failed","meta":{"type":"task-execution","exitCode":3}}]},
+              {"label":"RunTask(c:test)","status":"failed","node":{"params":{"target":"c:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"h3"}},
+                             {"status":"failed","meta":{"type":"task-execution","exitCode":143}}]},
+              {"label":"RunTask(d:test)","status":"skipped","node":{"params":{"target":"d:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"h4"}},
+                             {"status":"failed","meta":{"type":"task-execution"}}]},
+              {"label":"RunTask(e:test)","status":"cached","node":{"params":{"target":"e:test"}},
+               "operations":[{"status":"passed","meta":{"type":"hash-generation","hash":"h5"}},
+                             {"status":"cached","meta":{"type":"output-hydration"}}]},
+              {"label":"RunTask(g:test)","status":"skipped","node":{"params":{"target":"g:test"}},"operations":[]}
+            ]}"#,
+        )
+        .unwrap();
+        let targets: Vec<String> = [
+            "a:test", "b:test", "c:test", "d:test", "e:test", "f:test", "g:test",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (results, _) = read_report(&report, &targets, &[], "h");
+        let output = "\u{25AE}\u{25AE}\u{25AE}\u{25AE} g:test (0a1b2c3d)\n";
+        let cut = Moon.cut_off(&place, output.as_bytes(), &targets, &results, start, limit);
+        assert_eq!(cut, ["c:test", "d:test", "g:test"]);
+        std::fs::remove_dir_all(&place).unwrap();
     }
 
     /// moon 2.6.1's own names, as `encode_component` makes them.

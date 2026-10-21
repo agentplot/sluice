@@ -204,9 +204,10 @@ fn a_failure_names_its_system() {
 /// 19, 20: a test read as failed only because its inputs failed before
 /// says it is flaky: that it passed in this run, when and on which
 /// combination the same inputs failed, how the branch reads that, and
-/// where both runs' logs are kept; and it sends the submitter to change
-/// the test's inputs, not to fix their worktree. `--json` carries the
-/// same.
+/// where both runs' logs are kept; and that the same head lands once the
+/// operator sets the fail aside, or a real fix changes what the test
+/// reads, never by a change to its inputs only to have it tested again.
+/// `--json` carries the same.
 #[test]
 fn a_flaky_failure_says_so() {
     let f = setup();
@@ -277,19 +278,65 @@ fn a_flaky_failure_says_so() {
             format!("  log of this run: {this_log}"),
             format!("  log of the run that failed: {failed_log}"),
             format!(
-                "  if the host caused that fail, the operator can set it aside: \
+                "  if the host or a time limit caused that fail, the operator can set it aside: \
                  sluice set-aside tests:t-batch-cards --at {at} --reason \"…\""
             ),
             format!(
                 "  {BRANCH} reads a test that passed and failed on the same inputs as failed \
                  (flaky = \"fail\")"
             ),
-            "the same inputs read failed whenever they are tested: submit again with a change \
-             to what tests:t-batch-cards reads"
+            "the same head lands once the operator sets the other result aside, or once a \
+             real fix changes what tests:t-batch-cards reads"
                 .to_string(),
         ],
         "{out}"
     );
+}
+
+/// Time-limit-1 66: a submission whose run its time limit ended names the
+/// test the limit cut off, with its log, says nothing was recorded for it
+/// and gives the way on; the same head lands once the test ends in time,
+/// with nothing under its key to read as flaky.
+#[test]
+fn a_timed_out_submission_names_the_test_the_limit_ended() {
+    let f = setup();
+    f.world.hangs("tests:t-batch-cards");
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("slow"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(
+        lines.contains(
+            &"timed out: tests:t-batch-cards was running when the time limit ended the run"
+        ),
+        "{out}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("  log of tests:t-batch-cards: ")),
+        "{out}"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some(
+            "nothing was recorded for tests:t-batch-cards: if the host was slow, submit the \
+             same head again; if tests:t-batch-cards never ends, fix it in your worktree and \
+             submit again"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("not run:"), "{out}");
+
+    f.world.ends_in_time("tests:t-batch-cards");
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("flaky"), "{out}");
 }
 
 /// Could-not-run-1 116: the operator sets aside the fail a host caused;

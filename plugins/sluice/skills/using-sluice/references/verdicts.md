@@ -38,10 +38,23 @@ fix it in your worktree and submit again
 - The log path is under `$(git rev-parse --git-common-dir)/sluice/.logs/`
   (`.git/sluice/` in a normal clone, `project.git/sluice/` in a bare one). The last 20 failed combinations keep
   their logs.
-- `timed out`: the run hit the branch's `timeout`. Check for a test or a
-  server that never exits.
-- A test with no result (skipped, never reached) counts as failed and has
-  no `hash` or log.
+- `timed out`: the run hit the branch's `timeout`. Tests that ended before
+  it keep their results. A test still running then is named, with its log,
+  and nothing is recorded under its key:
+
+  ```
+  timed out: scripts/ci:test was running when the time limit ended the run
+    on bolt/x + #33 (990de53)
+    log of scripts/ci:test: .git/sluice/.logs/bolt/x/c7/scripts%2Fci:test.log
+  nothing was recorded for scripts/ci:test: if the host was slow, submit the same head again; if scripts/ci:test never ends, fix it in your worktree and submit again
+  ```
+
+  Read the log. A test that stopped printing is waiting on something that
+  never exits; a test still making progress on a busy host only needs the
+  same head submitted again.
+- A test with no result (skipped, never reached, or ended by the time
+  limit) counts as failed and has no `hash`. One that never started has no
+  log either.
 
 From JSON:
 
@@ -84,10 +97,12 @@ not run: cli:tools
 the host could not run cli:tools: once it can, submit again
 ```
 
-A host failure that neither `ready` nor `not_run` catches is recorded like
+sluice tells these apart on its own and records nothing for them: a run
+that never started, `[tests] ready` failing, a `not_run` exit, and a test
+the time limit ended. A host failure none of them catches is recorded like
 any fail, under the test's key. A later pass on the same key then makes the
-test read as flaky. On a branch with `flaky = "fail"`, submitting the same
-head again cannot land it:
+test read as flaky, and on a branch with `flaky = "fail"` the same head
+fails each time it is submitted:
 
 ```
 failed: checks:macbook-pro (flaky)
@@ -95,16 +110,22 @@ failed: checks:macbook-pro (flaky)
   checks:macbook-pro passed in this run and failed on the same inputs at 2026-10-17T15:28:04Z on 88de9be
   log of this run: .git/sluice/.logs/main/c64/checks:macbook-pro.log
   log of the run that failed: .git/sluice/.logs/main/c51/checks:macbook-pro.log
-  if the host caused that fail, the operator can set it aside: sluice set-aside checks:macbook-pro --at 2026-10-17T15:28:04Z --reason "…"
+  if the host or a time limit caused that fail, the operator can set it aside: sluice set-aside …
   main reads a test that passed and failed on the same inputs as failed (flaky = "fail")
-the same inputs read failed whenever they are tested: submit again with a change to what checks:macbook-pro reads
+the same head lands once the operator sets the other result aside, or once a real fix changes what checks:macbook-pro reads
 ```
 
-`sluice set-aside <test> --at <time> --reason <why>` keeps the fail's line
-and records that no gate reads it again, so the same head can land. It is
-the operator's to do, never an agent's: an agent that sets aside its own
-fails could land past any test. The plugin's guard refuses it. Tell the
-user what you found on the host, and the command.
+Read the log of the run that failed. When that fail looks like the host's
+doing (the run timed out, or the host was overloaded or broken then), you
+have one move: stop, and tell the user what you found. Give the test, the
+time of each run, what each log shows and what the host was doing. Setting
+the fail aside is the operator's ruling; once they have, submit the same
+head again.
+
+Never change what the test reads only to get it tested again. The fail
+stays under its key for any tree that returns to those inputs, and the
+change hides a failure sluice should have told apart. When the fail is the
+test's own, the test is flaky: fix it in your worktree.
 
 In JSON, such a test's `failed[].flaky` holds `here`, this run's outcome,
 and `other`, the result that contradicts it: its `outcome`, `at`,

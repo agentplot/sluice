@@ -474,10 +474,18 @@ it up.
 
 ## `sluice set-aside`
 
-A test's fail that the host caused, not the test, still sits under the
-test's key, and a later pass makes the key read as flaky. On a branch
-whose `flaky` is `"fail"`, the same inputs then never pass. The operator
-who finds the cause on the host sets the fail aside:
+sluice records nothing under a test's key for four failures it tells
+apart on its own, so none of them needs setting aside:
+
+- a run whose program never started;
+- a host that failed `[tests] ready`;
+- an exit `[tests] not_run` names;
+- a test the time limit ended.
+
+A host failure none of these catches still sits under the test's
+key, and a later pass makes the key read as flaky. On a branch whose
+`flaky` is `"fail"`, the same inputs then never pass. The operator who
+finds the cause on the host sets the fail aside:
 
 ```console
 $ sluice set-aside cli:tools --at 2026-10-17T13:05:32Z --reason "OrbStack was down"
@@ -490,8 +498,13 @@ no gate reads it from now; its line stays in the results
 recorded at once. The result's line stays in `results.jsonl`. The
 set-aside, with who made it and why, is kept in `set-aside.jsonl` beside
 it, and no branch reads the result again. An agent never sets aside a
-result; the Claude Code plugin refuses it. Under `--json`, the
-set-aside's record is printed.
+result; the Claude Code plugin refuses it, and tells the agent to bring
+the operator what it found instead. Under `--json`, the set-aside's
+record is printed.
+
+Each set-aside marks a result sluice recorded when it should not have.
+Its reason says what the host was doing, so a failure sluice could have
+told apart on its own can be taught to it.
 
 ## `sluice wait`
 
