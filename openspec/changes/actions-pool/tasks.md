@@ -26,7 +26,6 @@ credential helper and no prompt.
 ## 3. Pull requests
 
 - [ ] 3.1 Record a pull request's head runs from `sluice-pr.yml`, signed by `sluice.yml`'s sign job, and read them by key in its combination; refuse `pull_requests.checks` naming sluice's own; verify conformance tests for S40 and each pull-request-intake scenario.
-- [ ] 3.2 Post `sluice / <check> (<system>)` per required check per system beside `sluice`, with outcome and signer; verify `tests/profiles/pull_requests.rs` cases for each pull-request-status scenario.
 
 ## 4. Guides
 

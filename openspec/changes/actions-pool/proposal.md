@@ -39,9 +39,9 @@ of the path and the guide that makes it usable.
   permission to dispatch it, the environment's branch rule and the
   forge signer.
 - **Pull requests.** A trusted run on a pull request's head counts
-  toward its combination by key and system (113, S40); sluice posts
-  `sluice / <check> (<system>)` per required check per system beside
-  `sluice`; `pull_requests.checks` names other systems' checks only.
+  toward its combination by key and system (113, S40), and shows in
+  the checks per system that `pull-request-reports` posts;
+  `pull_requests.checks` names other systems' checks only.
 - **Guides.** `guides/github-actions.md`: the app and its environment,
   `sluice init actions`, the signers, submit and close the laptop,
   reading the checks on a pull request, the pool's cost and how
@@ -68,8 +68,6 @@ forge other than GitHub, reusing a key proven in another repository,
   signer.
 - `pull-request-intake`: runs on a request's head count toward its
   combination; `checks` names other systems' checks.
-- `pull-request-status`: one check run per required check per system,
-  beside the `sluice` check run.
 
 ## Impact
 
@@ -79,7 +77,7 @@ forge other than GitHub, reusing a key proven in another repository,
   `sigstore` crate, and x509 and RFC 3161 checks for GitHub's
   instance); workflow templates under
   `crates/sluice/src/profiles/github/workflows/`; `sluice init
-  actions`, `sluice job`; check runs per check and system.
+  actions`, `sluice job`.
 - The gate: actionlint covers the templates (`treefmt.nix`); recorded
   bundles are test fixtures excluded from formatting by name.
 - A hand trial on a scratch GitHub repository, which the gate cannot
