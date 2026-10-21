@@ -1834,11 +1834,22 @@ fn detail(branch: &str, s: &Submission) -> String {
                 None => what,
             }
         }
-        State::Testing | State::Passed => s
-            .tested
-            .as_ref()
-            .map(|t| combination(branch, &t.submissions))
-            .unwrap_or_default(),
+        State::Testing | State::Passed => {
+            let tested = s
+                .tested
+                .as_ref()
+                .map(|t| combination(branch, &t.submissions))
+                .unwrap_or_default();
+            // 117: what a held submission waits for, and until when.
+            match &s.held {
+                Some(h) => format!(
+                    "{tested}, held for {} until {}",
+                    combination(branch, &h.by),
+                    h.until
+                ),
+                None => tested,
+            }
+        }
         State::Conflict => s
             .conflict
             .as_ref()

@@ -218,6 +218,17 @@ pub struct Submission {
     /// moved to the remote and it was submitted again there (design D10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub was: Option<u64>,
+    /// Passed and waiting to land with a deeper candidate (117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
+}
+
+/// What a passed submission waits for under a hold (117): the deeper
+/// candidate under test, by its submissions, and when the hold runs out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub by: Vec<u64>,
+    pub until: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +356,9 @@ pub struct Candidate {
     /// and failed none on its own result.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub not_run_runs: u32,
+    /// When its verdict read passed: a hold runs from it (117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed_at: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -378,6 +392,8 @@ struct CandidateForm {
     replayed: usize,
     #[serde(default)]
     not_run_runs: u32,
+    #[serde(default)]
+    passed_at: Option<String>,
 }
 
 impl From<CandidateForm> for Candidate {
@@ -414,6 +430,7 @@ impl From<CandidateForm> for Candidate {
             ran: f.ran,
             replayed: f.replayed,
             not_run_runs: f.not_run_runs,
+            passed_at: f.passed_at,
         }
     }
 }

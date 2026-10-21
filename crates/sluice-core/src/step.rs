@@ -34,7 +34,7 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    Candidate, CandidateState, ConflictRecord, Event, FailedTask, LandingCommitRecord,
+    Candidate, CandidateState, ConflictRecord, Event, FailedTask, Held, LandingCommitRecord,
     LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State, SystemRun, Tested,
     ToldRecord,
 };
@@ -1041,6 +1041,7 @@ impl Sluice<'_> {
         self.seams.state.unpublish_candidate(&line.branch, id)?;
         let x = line.candidate_mut(id).expect("judged candidate");
         x.state = state;
+        x.passed_at = (state == CandidateState::Passed).then(|| now.to_string());
         let word = x.result_word().to_string();
         let branch = line.branch.clone();
         let branch = branch.as_str();
@@ -1119,6 +1120,7 @@ impl Sluice<'_> {
                         ran: 0,
                         replayed: 0,
                         not_run_runs: 0,
+                        passed_at: None,
                     });
                     prev = rev.clone();
                     ids.push(cid);
@@ -1339,8 +1341,20 @@ impl Sluice<'_> {
                 .iter()
                 .map(|id| line.candidate(id).expect("a chain's candidate").clone())
                 .collect();
+            for s in line.subs.values_mut() {
+                s.held = None;
+            }
             let n = landable(&cands, rules.batch);
             if n == 0 {
+                return Ok(false);
+            }
+            if let Some(held) = held(&cands, n, rules.hold, now) {
+                for c in cands[..n]
+                    .iter()
+                    .filter(|c| c.state == CandidateState::Passed)
+                {
+                    line.sub_mut(c.newest()).held = Some(held.clone());
+                }
                 return Ok(false);
             }
             let deepest = &cands[n - 1];
@@ -1372,6 +1386,7 @@ impl Sluice<'_> {
                         c.runs.clear();
                         c.opened = None;
                         c.failed.clear();
+                        c.passed_at = None;
                         line.log(now, Event::Unsigned { combination });
                     }
                     return Ok(false);
@@ -1537,15 +1552,20 @@ impl Sluice<'_> {
                 .iter()
                 .map(|id| line.candidate(id).expect("a chain's candidate"))
                 .collect();
+            let failed = cands.iter().position(|c| c.state.failed());
             let pick: Vec<String> = if !rules.batch {
                 cands
                     .iter()
                     .filter(|c| c.state == CandidateState::Formed)
                     .map(|c| c.id.clone())
                     .collect()
-            } else if cands.iter().any(|c| c.state.under_test()) {
+            } else if cands.iter().any(|c| c.state.under_test())
+                && (rules.hold.is_none() || failed.is_some())
+            {
+                // 117: only a branch with a hold tests the deepest beside
+                // one under test, and never while a failure is found out.
                 Vec::new()
-            } else if let Some(f) = cands.iter().position(|c| c.state.failed()) {
+            } else if let Some(f) = failed {
                 // The deepest failed: test the candidates it skipped (14).
                 cands[..f]
                     .iter()
@@ -2271,6 +2291,32 @@ fn landable(cands: &[Candidate], batch: bool) -> usize {
     n
 }
 
+/// 117: whether the first `n` candidates, which may land, wait instead
+/// for the deepest candidate holding them that is under test, the hold
+/// not yet run from the earliest of their verdicts; and if so, for what
+/// and until when.
+fn held(
+    cands: &[Candidate],
+    n: usize,
+    hold: Option<std::time::Duration>,
+    now: &str,
+) -> Option<Held> {
+    let hold = chrono::Duration::from_std(hold?).ok()?;
+    let by = cands[n..].iter().rev().find(|c| c.state.under_test())?;
+    let since = cands[..n]
+        .iter()
+        .filter_map(|c| c.passed_at.as_deref())
+        .min()?;
+    let until = chrono::DateTime::parse_from_rfc3339(since).ok()? + hold;
+    let now = chrono::DateTime::parse_from_rfc3339(now).ok()?;
+    (now < until).then(|| Held {
+        by: by.submissions.clone(),
+        until: until
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    })
+}
+
 /// Each queued submission's state, read from the chain (26, 49).
 fn derive_states(line: &mut Line, chain: &[String]) {
     let base = line.doc.base.clone();
@@ -2293,13 +2339,16 @@ fn derive_states(line: &mut Line, chain: &[String]) {
         if s.state.is_out() || s.state == State::Landing {
             continue;
         }
+        // Its own candidate passed: passed, though a deeper one holding it
+        // is under test, as when a hold keeps it (117).
         s.state = if !in_chain.contains(&s.id) {
             State::Waiting
+        } else if own.get(&s.id) == Some(&CandidateState::Passed) {
+            State::Passed
         } else if under_test.contains(&s.id) {
             State::Testing
         } else {
             match own.get(&s.id) {
-                Some(CandidateState::Passed) => State::Passed,
                 Some(st) if st.failed() => State::Testing,
                 _ => State::Queued,
             }
