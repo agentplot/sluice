@@ -1246,11 +1246,28 @@ has '--token sluice=3 ahead · clean'
 pass
 
 fresh 'sidebar: conflicts'
-echo '{"conflict":{"paths":["a.rs"],"with":[{"id":95,"from":{"agent":"x","worktree":"y"}}]}}' >"$FAKE/check.json"
+echo '{"conflict":{"paths":["docs/architecture/builds.md","b.rs"],"with":[{"id":95,"from":{"agent":"x","worktree":"y"}}]}}' >"$FAKE/check.json"
 feed "$(doc)"
 forecast
 tokens
+has '--token sluice=3 ahead · conflicts #95 in builds.md +1'
+# A forecast kept before it named its files says what it did then.
+for c in "$S"/checks/*; do
+  jq -c 'del(.paths)' "$c" >"$c.new" && mv "$c.new" "$c"
+done
+: >"$FAKE/herdr-calls"
+tokens
 has '--token sluice=3 ahead · conflicts #95'
+hasnt '3 ahead · conflicts #95 in'
+pass
+
+fresh 'sidebar: conflicts with what landed'
+echo '{"conflict":{"paths":["docs/spec/identity.md"],"with":[]}}' >"$FAKE/check.json"
+feed "$(doc)"
+forecast
+tokens
+has '--token sluice=3 ahead · conflicts main in identity.md'
+hasnt 'identity.md +'
 pass
 
 fresh 'sidebar: nothing changed'
@@ -1259,9 +1276,15 @@ forecast
 feed "$(doc '.at = "2026-10-16T19:46:00Z"')"
 forecast
 [ "$(grep -c 'submit main --check' "$FAKE/sluice-calls")" = 1 ] || fail "forecast again: $(cat "$FAKE/sluice-calls")"
-feed "$(doc '.branches[0].version = 2')"
+# A combination starting moves the branch's version, not what the forecast
+# rests on.
+feed "$(doc '.branches[0].version = 2 | .branches[0].candidates = [{id: "c1", submissions: [], revision: "x", state: "testing"}]')"
 forecast
-[ "$(grep -c 'submit main --check' "$FAKE/sluice-calls")" = 2 ] || fail "no forecast on a new version"
+[ "$(grep -c 'submit main --check' "$FAKE/sluice-calls")" = 1 ] || fail "forecast on a new version alone"
+# A submission waiting on the branch does.
+feed "$(doc ".branches[0].version = 3 | .branches[0].depth = 1 | .branches[0].submissions = [$(sub 96 '$other' queued)]")"
+forecast
+[ "$(grep -c 'submit main --check' "$FAKE/sluice-calls")" = 2 ] || fail "no forecast on a new submission waiting"
 pass
 
 fresh 'sidebar: forecasts off'

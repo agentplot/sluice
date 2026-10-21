@@ -2,8 +2,9 @@
 # shellcheck disable=SC1091,SC2154,SC2016 # jq programs; common.sh, sourced, sets root, lib, state and config.
 # The ahead tokens' forecasts: for each pane's worktree with commits ahead
 # of the branch it would land on and nothing else to show, how many, and,
-# when its head or the branch's version moved since the last forecast,
-# `sluice submit <branch> --check --json` run again. One at a time.
+# when its head, the branch's revision or the submissions waiting on it
+# moved since the last forecast, `sluice submit <branch> --check --json`
+# run again. One at a time.
 set -u
 . "$(dirname "$0")/../lib/common.sh"
 . "$lib/panes.sh"
@@ -45,14 +46,14 @@ EOF
     ([$p | to_entries[] | select(.value.path == $w)] | sort_by(.key | tonumber) | last | .value.branch)
       // ([$d[].sessions[] | select(.worktree == $w) | .branch] | first)
       // (if ([$d[].branches[]] | length) == 1 then $d[0].branches[0].branch else null end)
-    | . as $b | if $b == null then null else [$d[].branches[] | select(.branch == $b)] | first | {branch, at, version} end')
+    | . as $b | if $b == null then null else [$d[].branches[] | select(.branch == $b)] | first | {branch, at, ids: ([(.submissions // [])[].id] | sort)} end')
   [ "$pick" != null ] || {
     rm -f "$out"
     continue
   }
   branch=$(printf '%s' "$pick" | jq -r .branch)
   at=$(printf '%s' "$pick" | jq -r '.at // empty')
-  version=$(printf '%s' "$pick" | jq -r .version)
+  ids=$(printf '%s' "$pick" | jq -c .ids)
   head=$(git -C "$top" rev-parse --verify -q HEAD 2>/dev/null) || continue
   count=0
   [ -n "$at" ] && count=$(git -C "$top" rev-list --count "$at..HEAD" 2>/dev/null || echo 0)
@@ -60,13 +61,16 @@ EOF
     rm -f "$out"
     continue
   fi
-  pair="$head $version"
-  if [ -f "$out" ] && [ "$(jq -r '"\(.head) \(.version)"' "$out")" = "$pair" ] &&
+  # What the forecast rests on: a combination starting or ending moves the
+  # branch's version but none of these.
+  key="$head $at $ids"
+  if [ -f "$out" ] && [ "$(jq -r '.key' "$out")" = "$key" ] &&
     [ "$(jq -r '.checked' "$out")" = "$check" ]; then
     continue
   fi
   result=none
   with='[]'
+  conflicted='[]'
   if [ "$check" = true ]; then
     got=$(cd "$top" && sluice submit "$branch" --check --json 2>/dev/null)
     case $(printf '%s' "$got" | jq -r 'if has("conflict") then (if .conflict == null then "clean" else "conflicts" end) else "none" end' 2>/dev/null) in
@@ -74,12 +78,14 @@ EOF
     conflicts)
       result=conflicts
       with=$(printf '%s' "$got" | jq -c '[.conflict.with // [] | .[] | .id]')
+      conflicted=$(printf '%s' "$got" | jq -c '.conflict.paths // []')
       ;;
     esac
   fi
-  jq -n -c --arg path "$top" --arg head "$head" --argjson version "$version" --arg branch "$branch" \
-    --argjson count "$count" --arg result "$result" --argjson with "$with" --argjson checked "$check" \
-    '{path: $path, head: $head, version: $version, branch: $branch, count: $count, result: $result, with: $with, checked: $checked}' | put "$out"
+  jq -n -c --arg path "$top" --arg head "$head" --arg key "$key" --arg branch "$branch" \
+    --argjson count "$count" --arg result "$result" --argjson with "$with" --argjson paths "$conflicted" \
+    --argjson checked "$check" \
+    '{path: $path, head: $head, key: $key, branch: $branch, count: $count, result: $result, with: $with, paths: $paths, checked: $checked}' | put "$out"
   touch "$state/dirty"
 done
 IFS=$old_ifs
