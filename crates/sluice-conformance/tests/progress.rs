@@ -134,3 +134,13 @@ fn a_runner_that_cannot_say_fails_no_round() {
     h.settle();
     assert_eq!(h.sub(id).state, State::Landed);
 }
+
+/// satisfies: 26 (ADR 0042)
+#[test]
+fn one_branchs_view_is_its_part_of_the_overview() {
+    let h = Harness::bolt();
+    let (_, c) = testing(&h);
+    h.w().says_tasks(&c, &[task("a:test", TaskState::Running)]);
+    h.step();
+    assert_eq!(h.sluice().branch_view_of(BRANCH).unwrap(), branch(&h));
+}

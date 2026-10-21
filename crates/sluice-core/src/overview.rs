@@ -221,32 +221,40 @@ impl Sluice<'_> {
         let mut out = Vec::new();
         let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
-            let snapshot = self.seams.state.read(&branch)?;
-            let base = Line::load(&branch, snapshot.clone())?.doc.base;
+            let view = self.branch_view_of(&branch)?;
             if from.is_some_and(|f| f.branch == branch) {
-                order_at = base.clone().or(order_at);
+                order_at = view.at.clone().or(order_at);
             }
-            let policy = match &base {
-                Some(rev) => self.policy_at(rev)?,
-                None => None,
-            };
-            let rules = match &policy {
-                Some(p) => p.rules_for(&branch)?.cloned(),
-                None => None,
-            };
-            out.push(branch_view(BranchRead {
-                executor: policy.and_then(|p| p.limits.executor),
-                progress: self.seams.state.progress(&branch)?,
-                branch,
-                snapshot,
-                rules,
-            })?);
+            out.push(view);
         }
         // The order decides nothing, so a policy it cannot read leaves the
         // branches in name order rather than failing the overview.
         let policy = order_at.and_then(|rev| self.policy_at(&rev).ok().flatten());
         order(&mut out, policy.as_ref());
         Ok(out)
+    }
+
+    /// 26, 61: one branch's part of the overview, as last written, read
+    /// at the revision its records last saw: what `sluice status` and a
+    /// waiting command show of its combinations (ADR 0042).
+    pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
+        let snapshot = self.seams.state.read(branch)?;
+        let base = Line::load(branch, snapshot.clone())?.doc.base;
+        let policy = match &base {
+            Some(rev) => self.policy_at(rev)?,
+            None => None,
+        };
+        let rules = match &policy {
+            Some(p) => p.rules_for(branch)?.cloned(),
+            None => None,
+        };
+        branch_view(BranchRead {
+            executor: policy.and_then(|p| p.limits.executor),
+            progress: self.seams.state.progress(branch)?,
+            branch: branch.to_string(),
+            snapshot,
+            rules,
+        })
     }
 }
 
