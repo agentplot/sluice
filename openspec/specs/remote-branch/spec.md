@@ -67,12 +67,19 @@ holds the landing commit, and form the chain again otherwise.
 - **THEN** the next round finds the remote's branch unchanged, lands the submission then, and does not test it again
 
 ### Requirement: Only the branch reaches the remote
-sluice SHALL push nothing to the remote but the branch's landing
-commits: no records, no candidates and no submissions' heads.
+sluice SHALL push nothing to the remote but the branch's landing commits
+and, for a branch whose state is on the remote, refs under
+`refs/sluice/`: the branch's state, its signers' run records, submitted
+heads, open combinations, kept output and hosts' signs of life. It SHALL
+push no other ref.
 
 #### Scenario: Nothing else is pushed
-- **WHEN** three submissions are queued, tested and landed on a branch with a `remote`
+- **WHEN** three submissions are queued, tested and landed on a branch with a `remote` whose state is in the host's own files
 - **THEN** the remote holds only the branch's new commits, and no other ref on the remote changed
+
+#### Scenario: State on the remote stays under refs/sluice
+- **WHEN** three submissions are queued, tested and landed on a branch whose state is on the remote
+- **THEN** every ref sluice changed on the remote is the branch or under `refs/sluice/`
 
 ### Requirement: A branch missing on its remote is refused, naming how to make it
 A submission, a forecast or a session run on a branch whose policy names
