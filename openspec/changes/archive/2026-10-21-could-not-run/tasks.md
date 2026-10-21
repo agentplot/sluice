@@ -62,4 +62,4 @@ agentplot/blueprints; `docs/architecture/core.md`. Run suites through
 
 ## 6. Land
 
-- [ ] 6.1 Commit, run `sluice exec main` from the worktree, read every failure to its cause, then `sluice submit main`.
+- [x] 6.1 Commit, run `sluice exec main` from the worktree, read every failure to its cause, then `sluice submit main`.
