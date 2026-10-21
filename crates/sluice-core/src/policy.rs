@@ -161,6 +161,10 @@ pub struct PullRequests {
     pub reviews: u32,
     /// Checks other systems post on its head, by name, each to have passed.
     pub checks: Vec<String>,
+    /// ADR 0039: how many of the last lines of a failed check's output a
+    /// pull request's report posts, scrubbed; `None` posts none, only
+    /// where the output is kept.
+    pub log_lines: Option<usize>,
 }
 
 /// What `trust` may list on a branch whose records are this host's.
@@ -313,6 +317,7 @@ struct PullRequestsForm {
     reviews: Option<i64>,
     #[serde(default)]
     checks: Vec<String>,
+    log_lines: Option<i64>,
 }
 
 impl Policy {
@@ -523,6 +528,14 @@ impl Policy {
                         ),
                     },
                     checks: p.checks,
+                    log_lines: match p.log_lines {
+                        None => None,
+                        Some(n) if n >= 1 => Some(n as usize),
+                        Some(n) => bail!(
+                            "[branches.\"{pattern}\".pull_requests] log_lines must be at least 1, not {n}: \
+                             leave it out to post no output"
+                        ),
+                    },
                 }),
             };
             let claims = if signed {
@@ -1055,8 +1068,31 @@ batch = true
             Some(PullRequests {
                 reviews: 1,
                 checks: vec!["qa/approved".into()],
+                log_lines: None,
             })
         );
+        // ADR 0039: a failed check's output posted only as asked.
+        let asked = Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlog_lines = 40\n",
+        )
+        .unwrap();
+        assert_eq!(
+            asked
+                .rules_for("main")
+                .unwrap()
+                .unwrap()
+                .pull_requests
+                .as_ref()
+                .unwrap()
+                .log_lines,
+            Some(40)
+        );
+        let err = Policy::parse(
+            "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlog_lines = 0\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("log_lines"), "{err}");
         // Absent: work is submitted straight from a session's place.
         assert_eq!(p.rules_for("bolt/x").unwrap().unwrap().pull_requests, None);
         // An empty table takes every pull request out of draft.

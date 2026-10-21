@@ -15,10 +15,12 @@ pub mod preview;
 pub mod profiles;
 pub mod protect;
 pub mod runs;
+pub mod scrub;
 pub mod sessions;
 pub mod signing;
 pub mod telemetry;
 pub mod told;
+pub mod words;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -1473,7 +1475,7 @@ fn report(
                 sub.failed.iter().filter(|f| f.not_run.is_some()).collect();
             for f in &could_not {
                 let why = f.not_run.as_deref().unwrap_or_default();
-                writeln!(out, "  {} could not run: {why}", f.task)?;
+                writeln!(out, "  {}", words::could_not_run(&f.task, why))?;
             }
             writeln!(
                 out,
@@ -1508,22 +1510,8 @@ fn report(
                     }
                     continue;
                 };
-                let word = |o: Outcome| match o {
-                    Outcome::Pass => "passed",
-                    Outcome::Fail => "failed",
-                };
-                let place = match &k.other.worktree {
-                    Some(w) => format!("in {w}"),
-                    None => format!("on {}", k.other.combination.short()),
-                };
-                writeln!(
-                    out,
-                    "  {} {} in this run and {} on the same inputs at {} {place}",
-                    f.task,
-                    word(k.here),
-                    word(k.other.outcome),
-                    k.other.at
-                )?;
+                let word = words::outcome;
+                writeln!(out, "  {}", words::flaky(&f.task, k))?;
                 if let Some(at) = &f.log {
                     writeln!(out, "  log of this run: {at}")?;
                 }
@@ -1533,12 +1521,7 @@ fn report(
                 // Could-not-run-1 116: a fail the host caused is the
                 // operator's to set aside.
                 if k.other.outcome == Outcome::Fail {
-                    writeln!(
-                        out,
-                        "  if the host caused that fail, the operator can set it aside: \
-                         sluice set-aside {} --at {} --reason \"…\"",
-                        f.task, k.other.at
-                    )?;
+                    writeln!(out, "  {}", words::set_aside_hint(&f.task, &k.other.at))?;
                 }
             }
             if !flaky.is_empty() {

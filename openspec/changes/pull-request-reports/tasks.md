@@ -32,9 +32,9 @@ suites through `sluice exec main -- <command>`.
 
 ## 5. Shared text and scrubbing
 
-- [ ] 5.1 Move `Scrub` and `end` from `telemetry.rs` to `crates/sluice/src/scrub.rs`; verify the telemetry tests unchanged and a scrub unit test.
-- [ ] 5.2 Move the flaky, could-not-run, set-aside and nothing-run wording out of `lib.rs` into `crates/sluice/src/words.rs`; verify the cli.rs cases of a waiting `submit` unchanged.
-- [ ] 5.3 Add `pull_requests.log_lines` to the policy's parser; verify a policy unit test with and without it, and a refusal of zero.
+- [x] 5.1 Move `Scrub` and `end` from `telemetry.rs` to `crates/sluice/src/scrub.rs`; verify the telemetry tests unchanged and a scrub unit test.
+- [x] 5.2 Move the flaky, could-not-run, set-aside and nothing-run wording out of `lib.rs` into `crates/sluice/src/words.rs`; verify the cli.rs cases of a waiting `submit` unchanged.
+- [x] 5.3 Add `pull_requests.log_lines` to the policy's parser; verify a policy unit test with and without it, and a refusal of zero.
 
 ## 6. The pull request
 

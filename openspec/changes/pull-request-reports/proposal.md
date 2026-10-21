@@ -92,10 +92,10 @@ who is blamed, and where each check ran.
 
 ## Impact
 
-- **Seams:** `crates/sluice-seams` gains `TaskResult.took`/`attempts`,
-  `RunReport.detail` and `VerdictView`.
-- **Core:** `crates/sluice-core` gains `ResultLine` and `Event::Result`
-  optional fields, `verdict_view` and `Sluice::verdict_of`, and the
+- **Seams:** `crates/sluice-seams` gains `TaskResult.took_ms`/`attempts`,
+  `RunReport.detail` and `RunReport.kept_out`.
+- **Core:** `crates/sluice-core` gains `ResultLine`'s optional fields, a
+  `Detail` log line, `VerdictView` with `Sluice::verdict_of`, and the
   `pull_requests.log_lines` policy key. It depends on
   `finished-submissions` task 2.2's whole-log reader if that lands
   first.
