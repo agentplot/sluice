@@ -1,22 +1,38 @@
 // sluice's queue inside a Claude Code session: a band above the prompt, a
 // pane on /sluice, a status line, and a turn that tells an idle session its
-// submission's outcome. Everything is read from `sluice overview --json`
-// (sluice/overview@1), streamed by `--watch` (ADR 0023): the board decides
-// nothing and writes nothing of sluice's.
+// submission's outcome, or that its work has come to conflict. Everything is
+// read from `sluice overview --json` (sluice/overview@1), streamed by
+// `--watch` (ADR 0023), and from `sluice submit --check` for its own
+// worktree: the board decides nothing and writes nothing of sluice's.
 
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
 
-import type { Mine, OpenedTest, Outcome, Overview, OverviewTask } from "../types";
+import type {
+  Forecast,
+  Forecasting,
+  Mine,
+  OpenedTest,
+  Outcome,
+  Overview,
+  OverviewTask,
+} from "../types";
 import type { CheckRow } from "./board";
 import {
   bandLines,
   checkRows,
+  clearText,
   combination,
+  conflictText,
   duration,
+  forecastBranch,
+  forecastKey,
+  forecasts,
+  forecastToast,
   githubBase,
   hostLine,
   isMine,
+  latest,
   learn,
   limit,
   moving,
@@ -27,6 +43,7 @@ import {
   recentKeys,
   recentWords,
   shown,
+  signature,
   since,
   statusLine,
   submitted,
@@ -51,6 +68,7 @@ const CHECK_COLOR: Record<CheckRow["state"], string | undefined> = {
   ended: undefined,
 };
 const NO_ONE: Mine = { root: null, ids: [], pulls: [] };
+const NOT_YET: Forecasting = { key: null, head: null, told: null };
 
 const doc = atom({ plugin: "sluice-board", key: "doc" } as const, null);
 const mine = atom({ plugin: "sluice-board", key: "mine" } as const, NO_ONE);
@@ -61,6 +79,7 @@ const repo = atom({ plugin: "sluice-board", key: "repo" } as const, null);
 // Failures opened in place: their keys, and what each showed when opened.
 const opened = atom({ plugin: "sluice-board", key: "opened" } as const, []);
 const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
+const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const, NOT_YET);
 
 type Detail = OpenedTest;
 
@@ -106,13 +125,17 @@ async function blamedTests($: $, id: number): Promise<{ task: string; log?: stri
 
 type $ = EngineInterface;
 
+/** Whether the board starts turns, and forecasts the session's worktree. */
+type How = { wake: boolean; forecast: boolean };
+
 /** A new document: learn this session's submissions, tell new outcomes. */
-async function take($: $, next: Overview, cwd: string, wake: boolean) {
+async function take($: $, next: Overview, cwd: string, how: How) {
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
   await update($, mine, () => known);
   $.ui.status(statusLine(next, known));
+  if (how.forecast) void forecast($, how.wake, first);
   if (first) {
     // What happened before the session started is not news.
     await update($, told, (list) => [...new Set([...list, ...recentKeys(next)])]);
@@ -120,7 +143,83 @@ async function take($: $, next: Overview, cwd: string, wake: boolean) {
   }
   for (const o of outcomes(next, known, await read($, told))) {
     await update($, told, (list) => [...list, o.key].slice(-500));
-    await tell($, o, cwd, wake);
+    await tell($, o, cwd, how.wake);
+  }
+}
+
+/** A command's output, trimmed, or null when it did not run or failed. */
+async function output($: $, argv: string[], cwd: string): Promise<string | null> {
+  const got = await $.process.run(argv, { cwd }).catch(() => null);
+  return got && got.exitCode === 0 ? got.stdout.trim() : null;
+}
+
+// One forecast at a time: a document that comes while one runs is forecast
+// once it has ended.
+let running = false;
+let again = false;
+
+/** 64: forecast the session's worktree when what it rests on has moved. */
+async function forecast($: $, wake: boolean, quiet: boolean) {
+  if (running) {
+    again = true;
+    return;
+  }
+  running = true;
+  try {
+    let q = quiet;
+    do {
+      again = false;
+      // It decides nothing: one that fails is passed over.
+      await forecastOnce($, wake, q).catch(() => undefined);
+      q = false;
+    } while (again);
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * Tell a conflict the board has not told of, and a told one that cleared
+ * with the head unchanged; once each, kept across a reload. A conflict
+ * there when the session started is not news: a toast, not a turn.
+ */
+async function forecastOnce($: $, wake: boolean, quiet: boolean) {
+  const d = await read($, doc);
+  const m = await read($, mine);
+  if (!d || m.root === null) return;
+  const b = forecastBranch(d, m);
+  if (!b || !forecasts(b, m)) return;
+  const head = await output($, ["git", "rev-parse", "HEAD"], m.root);
+  if (!head) return;
+  const key = forecastKey(head, b, m);
+  const last = await read($, forecasting);
+  if (last.key === key) return;
+  const sameHead = last.head === head;
+  const ahead = Number(await output($, ["git", "rev-list", "--count", `${b.at}..HEAD`], m.root));
+  let f: Forecast | null = null;
+  if (ahead > 0) {
+    const got = await $.process
+      .run(["sluice", "submit", b.branch, "--check", "--json"], { cwd: m.root, timeoutMs: 120_000 })
+      .catch(() => null);
+    try {
+      const v = got ? (JSON.parse(got.stdout) as Partial<Forecast>) : null;
+      f = v && "conflict" in v ? (v as Forecast) : null;
+    } catch {
+      f = null;
+    }
+    if (!f) {
+      // It could not be formed: wait for the next move, and tell nothing.
+      await update($, forecasting, () => ({ key, head, told: sameHead ? last.told : null }));
+      return;
+    }
+  }
+  const sig = f ? signature(b.branch, f) : null;
+  await update($, forecasting, () => ({ key, head, told: sig }));
+  if (f?.conflict && sig !== last.told) {
+    $.ui.toast(forecastToast(b.branch, f.conflict));
+    if (wake && !quiet) await $.prompt.submit({ text: conflictText(b.branch, f.conflict) });
+  } else if (f && !f.conflict && last.told && sameHead) {
+    if (wake && !quiet) await $.prompt.submit({ text: clearText(b.branch, latest(d, m)) });
   }
 }
 
@@ -148,7 +247,7 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
 }
 
 /** `sluice overview --json --watch` for the session's life, else a poll. */
-async function feed($: $, cwd: string, wake: boolean) {
+async function feed($: $, cwd: string, how: How) {
   try {
     let rest = "";
     for await (const chunk of $.process.spawn({
@@ -161,7 +260,7 @@ async function feed($: $, cwd: string, wake: boolean) {
       while (nl >= 0) {
         const line = rest.slice(0, nl).trim();
         rest = rest.slice(nl + 1);
-        if (line) await take($, JSON.parse(line) as Overview, cwd, wake);
+        if (line) await take($, JSON.parse(line) as Overview, cwd, how);
         nl = rest.indexOf("\n");
       }
     }
@@ -170,7 +269,7 @@ async function feed($: $, cwd: string, wake: boolean) {
   }
   $.clock.every(3000, async () => {
     const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    if (got && got.exitCode === 0) await take($, JSON.parse(got.stdout) as Overview, cwd, wake);
+    if (got && got.exitCode === 0) await take($, JSON.parse(got.stdout) as Overview, cwd, how);
   });
 }
 
@@ -194,8 +293,11 @@ export const register: Register = (on, options) => {
       .catch(() => null);
     const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
     await update($, repo, () => base);
-    await take($, JSON.parse(probe.stdout) as Overview, cwd, wake);
-    void feed($, cwd, wake);
+    // A session whose orchestrator forecasts for it turns this off.
+    const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
+    const how = { wake, forecast: options.forecast !== false && env !== "0" };
+    await take($, JSON.parse(probe.stdout) as Overview, cwd, how);
+    void feed($, cwd, how);
     // Elapsed times move while something is under test or an agent's check
     // goes, and a finished check leaves the pane a quarter hour on.
     $.clock.every(5000, async () => {

@@ -134,6 +134,29 @@ export type Outcome = {
   paths?: string[];
 };
 
+/** A forecast, as `sluice submit <branch> --check --json` prints it (64, 65). */
+export type Forecast = {
+  conflict: {
+    paths: string[];
+    with: { id: number; from: { agent: string; worktree: string } }[];
+  } | null;
+  head?: string;
+  onto?: string;
+  ahead?: number[];
+};
+
+/** What the board last forecast on, and the conflict it told of. */
+export type Forecasting = {
+  /** The head, the branch's `at` and the others waiting, as last forecast. */
+  key: string | null;
+  head: string | null;
+  /** The conflict told, by its signature, or null. */
+  told: string | null;
+};
+
+/** The session's latest submission, as the document shows it. */
+export type Latest = { id: number; branch: string; conflict: boolean; active: boolean };
+
 /** A failed test as an opened failure shows it: its log's last lines, or why not. */
 export type OpenedTest = { task: string; log?: string; tail?: string[]; error?: string };
 
@@ -151,6 +174,8 @@ declare module "claude-code" {
       opened: string[];
       /** What each opened failure showed when it was opened. */
       details: Record<string, OpenedTest[]>;
+      /** The session's worktree's last forecast. */
+      forecasting: Forecasting;
     };
   }
 }

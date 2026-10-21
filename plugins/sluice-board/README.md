@@ -34,6 +34,17 @@ sluice's queue inside a Claude Code session.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.
+- **Forecast**: while this session's worktree has commits ahead of its
+  branch and no submission of its own queued, the board runs `sluice
+  submit <branch> --check --json` whenever the head, the branch or the
+  submissions waiting on it move. When the work comes to conflict, a toast
+  and a turn naming the files and what they are contested with, telling
+  the session to merge the branch in now; when a conflict it told of
+  clears with the head unchanged, because a submission ahead failed or
+  left, a turn saying so. A conflict already there when the session starts
+  is a toast alone. Turn it off with the `forecast` option in `/config`,
+  or start the session with `SLUICE_FORECAST=0` where something else
+  forecasts for it.
 
 It reads everything from `sluice overview --json --watch` (sluice 0.12 or
 later), in a repository with sluice's records, and is silent elsewhere. A

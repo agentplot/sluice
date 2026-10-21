@@ -430,3 +430,217 @@ test("a log it cannot read says why", async ($, on) => {
   ).toBeDefined();
   await pane.unmount();
 });
+
+/** What a forecast host answers, changed as a test goes. */
+type World = { doc: Overview; head: string; answer: object; forecasts: number };
+
+/** The fixture with #13, this session's, gone from main's queue. */
+function free(at = "9ecc34a1b2"): Overview {
+  const d = overview();
+  d.branches[0]!.at = at;
+  d.branches[0]!.submissions = d.branches[0]!.submissions.filter((s) => s.id !== 13);
+  return d;
+}
+
+const CLEAR = { conflict: null, head: "h1", onto: "9ecc34a1b2", ahead: [12, 14] };
+const LANDED = { conflict: { paths: ["docs/builds.md"], with: [] } };
+const WITH_217 = {
+  conflict: {
+    paths: ["docs/builds.md"],
+    with: [{ id: 217, from: { agent: "runner", worktree: "bolt/runner" } }],
+  },
+};
+
+/**
+ * A host whose overview is `w.doc`, read by a poll every 3 s (the watch
+ * ends at once), whose worktree is 4 commits ahead at `w.head`, and whose
+ * forecast says `w.answer`.
+ */
+function forecastHost(
+  on: On,
+  w: World,
+  seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
+) {
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e) => {
+    const argv = e.argv.join(" ");
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
+    if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
+    if (argv === "sluice overview --json") return out(JSON.stringify(w.doc));
+    if (argv === "git rev-parse HEAD") return out(`${w.head}\n`);
+    if (argv.startsWith("git rev-list --count ")) return out("4\n");
+    if (argv === "sluice submit main --check --json") {
+      w.forecasts += 1;
+      return out(JSON.stringify(w.answer));
+    }
+    return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+  });
+  on("process.spawn", async function* () {
+    // The watch ends at once, so the board polls.
+    yield* [];
+    return { value: { code: 1, signal: null } };
+  });
+  on("ui.status", ($, e) => {
+    seen.status.push(e.text);
+    return { value: undefined };
+  });
+  on("ui.toast", ($, e) => {
+    seen.toasts.push(e.text);
+    return { value: undefined };
+  });
+  on("ui.notify", () => ({ value: { isSent: true as const, channel: "terminal_bell" } }));
+  on("prompt.submit", ($, e) => {
+    seen.prompts.push(e.text);
+    return { text: e.text };
+  });
+}
+
+function nothingSeen() {
+  return { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] };
+}
+
+test("main landing a change to the same lines starts one turn, once, a reload included", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const w: World = { doc: free(), head: "h1", answer: CLEAR, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(1);
+  expect(seen.prompts).toEqual([]);
+
+  w.doc = free("b2c3d4e5f6");
+  w.answer = LANDED;
+  await clock.advance(3000);
+  expect(w.forecasts).toBe(2);
+  expect(seen.prompts).toEqual([
+    "[sluice] Your work would conflict with what main has landed, in docs/builds.md. " +
+      "Merge main into your worktree now and resolve it while it is small (check with `sluice submit --check main`).",
+  ]);
+  expect(seen.toasts).toContain("sluice: your work would conflict with main in docs/builds.md");
+
+  // Nothing it rests on moved: no forecast.
+  await clock.advance(3000);
+  expect(w.forecasts).toBe(2);
+
+  // A reload tells nothing again.
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.advance(3000);
+  expect(seen.prompts).toHaveLength(1);
+});
+
+test("a conflict with a queued submission names it, and its failing clears it once", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  // #220, this session's, waits on main: no forecast while it does.
+  const d0 = free();
+  d0.branches[0]!.submissions.push({
+    id: 220,
+    state: "queued",
+    from: { agent: "claude", worktree: "design-runner", path: ROOT },
+  });
+  const w: World = { doc: d0, head: "h1", answer: CLEAR, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(0);
+
+  // #220 is removed for a conflict with #217, queued ahead of it.
+  const d1 = free();
+  d1.branches[0]!.submissions.push({
+    id: 217,
+    state: "testing",
+    from: { agent: "runner", worktree: "bolt/runner" },
+  });
+  d1.branches[0]!.recent.push({
+    schema: "sluice/log@1",
+    at: "2026-10-16T19:45:00Z",
+    event: "conflict",
+    id: 220,
+    paths: ["docs/builds.md"],
+  });
+  w.doc = d1;
+  w.answer = WITH_217;
+  await clock.advance(3000);
+  expect(seen.prompts.some((p) => p.includes("with #217 (bolt/runner), in docs/builds.md"))).toBe(
+    true,
+  );
+  const told = seen.prompts.length;
+
+  // #217 fails; the head has not moved.
+  const d2 = free();
+  d2.branches[0]!.recent = d1.branches[0]!.recent;
+  w.doc = d2;
+  w.answer = CLEAR;
+  await clock.advance(3000);
+  expect(seen.prompts.slice(told)).toEqual([
+    "[sluice] Your work no longer conflicts with main or anything queued. #220 can be submitted again: `sluice submit main`.",
+  ]);
+  await clock.advance(3000);
+  expect(seen.prompts).toHaveLength(told + 1);
+});
+
+test("a conflict cleared by the agent's own merge starts no turn", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const w: World = { doc: free(), head: "h1", answer: CLEAR, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  w.doc = free("b2c3d4e5f6");
+  w.answer = LANDED;
+  await clock.advance(3000);
+  expect(seen.prompts).toHaveLength(1);
+
+  w.head = "h2";
+  w.answer = CLEAR;
+  await clock.advance(3000);
+  expect(w.forecasts).toBe(3);
+  expect(seen.prompts).toHaveLength(1);
+});
+
+test("a conflict there when the session starts is a toast, not a turn", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(1);
+  expect(seen.prompts).toEqual([]);
+  expect(seen.toasts).toContain("sluice: your work would conflict with main in docs/builds.md");
+});
+
+test("SLUICE_FORECAST=0 turns forecasting off", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  mock.env(on, { SLUICE_FORECAST: "0" });
+  const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
+  forecastHost(on, w, nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  w.doc = free("b2c3d4e5f6");
+  await clock.advance(3000);
+  expect(w.forecasts).toBe(0);
+});
+
+test(
+  "the forecast option turns forecasting off",
+  { options: { forecast: false } },
+  async ($, on) => {
+    const clock = mock.clock(on);
+    await clock.set(NOW);
+    const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
+    forecastHost(on, w, nothingSeen());
+    await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+    await clock.settle();
+    w.doc = free("b2c3d4e5f6");
+    await clock.advance(3000);
+    expect(w.forecasts).toBe(0);
+  },
+);

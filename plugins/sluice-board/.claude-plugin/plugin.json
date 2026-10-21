@@ -13,6 +13,12 @@
       "title": "Wake on an outcome",
       "description": "Start a turn telling an idle session when its submission lands, fails or conflicts.",
       "default": true
+    },
+    "forecast": {
+      "type": "boolean",
+      "title": "Wake on a forecast conflict",
+      "description": "Forecast this session's work when its branch or the queue moves, and start a turn when it comes to conflict or the conflict clears. SLUICE_FORECAST=0 turns it off too.",
+      "default": true
     }
   }
 }

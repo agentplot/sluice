@@ -4,12 +4,19 @@ import {
   bandLines,
   bar,
   checkRows,
+  clearText,
+  conflictText,
   duration,
   finishedWords,
+  forecastBranch,
+  forecastKey,
+  forecasts,
+  forecastToast,
   githubBase,
   heldBack,
   hostLine,
   isMine,
+  latest,
   learn,
   moving,
   outcomes,
@@ -17,6 +24,7 @@ import {
   pullOf,
   recentKeys,
   shown,
+  signature,
   statusLine,
   submitted,
   taskLines,
@@ -297,5 +305,95 @@ describe("outcomes", () => {
     expect(text).toContain("#13 to main failed: cli:test on 9a03c1e");
     expect(text).toContain("Log of cli:test: /r/sluice.git/sluice/.logs/main/c7/cli:test.log");
     expect(text).toContain("sluice exec main");
+  });
+});
+
+describe("forecasts", () => {
+  /** The fixture with #13, this session's, gone from main's queue. */
+  function free(): Overview {
+    const d = overview();
+    d.branches[0]!.submissions = d.branches[0]!.submissions.filter((s) => s.id !== 13);
+    return d;
+  }
+  const landed = { conflict: { paths: ["docs/builds.md"], with: [] }, ahead: [] };
+  const queued = {
+    conflict: {
+      paths: ["docs/builds.md", "docs/identity.md"],
+      with: [{ id: 217, from: { agent: "runner", worktree: "bolt/runner" } }],
+    },
+  };
+
+  test("not while a submission of the session's waits or is under test", () => {
+    const b = overview().branches[0]!;
+    expect(forecasts(b, ME)).toBe(false);
+    expect(forecasts(free().branches[0]!, ME)).toBe(true);
+    expect(forecasts({ ...free().branches[0]!, at: null }, ME)).toBe(false);
+  });
+
+  test("the branch: the latest submission's, else the checkout's, else the only one", () => {
+    const d = free();
+    const other = { ...d.branches[0]!, branch: "release", submissions: [], recent: [] };
+    d.branches.push(other);
+    expect(forecastBranch(d, ME)).toBeNull();
+    d.sessions = [{ worktree: ME.root!, branch: "release" }];
+    expect(forecastBranch(d, ME)?.branch).toBe("release");
+    d.branches[0]!.recent.push({ at: "2026-10-16T19:44:00Z", event: "conflict", id: 20 });
+    expect(forecastBranch(d, { ...ME, ids: [20] })?.branch).toBe("main");
+    expect(forecastBranch(free(), ME)?.branch).toBe("main");
+  });
+
+  test("the latest submission: in a queue, or named by a recent line", () => {
+    const d = free();
+    d.branches[0]!.recent.push({ at: "2026-10-16T19:44:00Z", event: "conflict", id: 20 });
+    expect(latest(d, { ...ME, ids: [20] })).toEqual({
+      id: 20,
+      branch: "main",
+      conflict: true,
+      active: false,
+    });
+    expect(latest(overview(), ME)).toEqual({
+      id: 13,
+      branch: "main",
+      conflict: false,
+      active: true,
+    });
+    expect(latest(free(), ME)).toBeNull();
+  });
+
+  test("the key: the head, the branch's revision, the others waiting in order", () => {
+    const b = free().branches[0]!;
+    expect(forecastKey("h1", b, ME)).toBe("h1 9ecc34a1b2 12,14");
+    expect(forecastKey("h1", overview().branches[0]!, ME)).toBe("h1 9ecc34a1b2 12,14");
+  });
+
+  test("a conflict's signature: the files and the submissions, in any order", () => {
+    expect(signature("main", { conflict: null })).toBeNull();
+    expect(signature("main", queued)).toBe("main|docs/builds.md,docs/identity.md|217");
+    const swapped = {
+      conflict: { ...queued.conflict, paths: ["docs/identity.md", "docs/builds.md"] },
+    };
+    expect(signature("main", swapped)).toBe(signature("main", queued));
+  });
+
+  test("the turns name the files, what they are contested with, and what to do", () => {
+    expect(conflictText("main", landed.conflict)).toBe(
+      "[sluice] Your work would conflict with what main has landed, in docs/builds.md. " +
+        "Merge main into your worktree now and resolve it while it is small (check with `sluice submit --check main`).",
+    );
+    expect(conflictText("main", queued.conflict)).toContain(
+      "with #217 (bolt/runner), in docs/builds.md, docs/identity.md.",
+    );
+    expect(forecastToast("main", queued.conflict)).toBe(
+      "sluice: your work would conflict with main in docs/builds.md +1",
+    );
+    expect(clearText("main", null)).toBe(
+      "[sluice] Your work no longer conflicts with main or anything queued.",
+    );
+    expect(clearText("main", { id: 220, branch: "main", conflict: true, active: false })).toBe(
+      "[sluice] Your work no longer conflicts with main or anything queued. #220 can be submitted again: `sluice submit main`.",
+    );
+    expect(clearText("main", { id: 220, branch: "main", conflict: false, active: false })).toBe(
+      "[sluice] Your work no longer conflicts with main or anything queued.",
+    );
   });
 });
