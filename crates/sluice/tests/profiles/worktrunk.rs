@@ -377,7 +377,7 @@ fn ctrl_c_ends_only_the_wait() {
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success(), "{}", text(&out));
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("still queued: sluice status 1"),
+        String::from_utf8_lossy(&out.stdout).contains("still waiting: sluice wait 1"),
         "{}",
         text(&out)
     );

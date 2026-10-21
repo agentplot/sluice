@@ -58,6 +58,17 @@ fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
     (code, String::from_utf8(out).unwrap())
 }
 
+/// What a waiting command says while it waits, a submission's state or
+/// its combination's progress (ADR 0042), left out where a test reads
+/// the outcome it ends with.
+fn outcome(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter(|l| {
+            !(l.starts_with('#') || l.starts_with("testing ") && !l.contains(" tasks to run, "))
+        })
+        .collect()
+}
+
 fn work(f: &Fakes, worktree: &str, agent: &str, changes: &[(&str, Option<&str>)]) {
     let head = f.world.work(&f.world.tip(BRANCH), changes);
     f.world.session(worktree, agent, &head);
@@ -75,14 +86,20 @@ fn submit_waits_and_lands() {
     let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/touches"]);
     let tip = f.world.tip(BRANCH);
     assert_eq!(code, LANDED);
+    let lines: Vec<&str> = out.lines().collect();
+    // ADR 0042: while it waits, its combination and how long it has run.
+    assert!(
+        lines[1].starts_with(&format!("testing {BRANCH} + #1 · "))
+            && lines[1].ends_with(" of 1h00m"),
+        "{out}"
+    );
     assert_eq!(
-        out,
-        format!(
-            "submission 1 to {BRANCH} · nothing queued ahead\n\
-             testing {BRANCH} + #1 · 2 tasks to run, 0 replayed\n\
-             passed · landed as {}\n",
-            &tip.0[..7]
-        )
+        [&lines[..1], &lines[2..]].concat(),
+        [
+            format!("submission 1 to {BRANCH} · nothing queued ahead"),
+            format!("testing {BRANCH} + #1 · 2 tasks to run, 0 replayed"),
+            format!("passed · landed as {}", &tip.0[..7]),
+        ]
     );
 }
 
@@ -113,7 +130,7 @@ fn submit_fails_and_names_the_combination() {
     );
     let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
     assert_eq!(code, FAILED);
-    let lines: Vec<&str> = out.lines().collect();
+    let lines = outcome(&out);
     assert_eq!(
         lines[0],
         format!("submission 2 to {BRANCH} · 1 queued ahead (#1)")
@@ -238,7 +255,7 @@ fn a_flaky_failure_says_so() {
     let at = flaky["other"]["at"].as_str().unwrap();
     let this_log = v["failed"][0]["log"].as_str().unwrap();
 
-    let lines: Vec<&str> = out.lines().collect();
+    let lines = outcome(&out);
     assert_eq!(
         lines[0],
         format!("submission 2 to {BRANCH} · nothing queued ahead")
@@ -2567,4 +2584,234 @@ fn a_held_place_is_one_entry() {
     assert_eq!(w.len(), 1, "{out}");
     assert_eq!(w[0]["holds_queued_branch"], BRANCH);
     assert!(w[0]["ports"].is_object());
+}
+
+/// `sluice` with a pause of the test's own.
+fn sluice_with(f: &Fakes, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
+    let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let code = run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out).unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+/// The combination submission `id` is under test in.
+fn tested(f: &Fakes, id: u64) -> sluice_seams::Rev {
+    let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+    sluice_seams::Rev::new(json(&out)["tested"]["combination"].as_str().unwrap())
+}
+
+/// ADR 0041: `sluice wait` runs rounds to the outcome, as a waiting
+/// submit does; a submission already decided returns at once, and no
+/// round runs.
+#[test]
+fn wait_runs_to_the_outcome() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert_eq!(out.lines().next(), Some("#1 queued"), "{out}");
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+    assert_eq!(code, LANDED);
+    assert_eq!(json(&out)["state"], "landed");
+    // No round ran: #2 is still queued.
+    let (_, out) = sluice(&f, &["status", "2", "--json"]);
+    assert_eq!(json(&out)["state"], "queued");
+}
+
+/// ADR 0041: the exits tell a blame, a conflict and a withdrawal apart,
+/// for `wait` and a waiting submit alike.
+#[test]
+fn wait_and_submit_tell_the_outcomes_apart() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(out.contains("failed: tests:t-batch-cards"), "{out}");
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("one"))],
+    );
+    work(
+        &f,
+        "unit/c",
+        "agent-c",
+        &[("plugin/lib/plan.py", Some("two"))],
+    );
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/c", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "3", "--json"]);
+    assert_eq!(code, CONFLICT, "{out}");
+    assert_eq!(json(&out)["state"], "conflict");
+
+    f.world.hold_runs(true);
+    work(&f, "unit/d", "agent-d", &[("plugin/d", Some("d"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/d", "--no-wait"]);
+    let withdraw = |n: usize| {
+        if n == 1 {
+            sluice(&f, &["withdraw", "4"]);
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &withdraw,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "4", "--json"]);
+    assert_eq!(code, sluice::WITHDRAWN, "{out}");
+    assert_eq!(json(&out)["state"], "withdrawn");
+
+    work(&f, "unit/e", "agent-e", &[("plugin/e", Some("e"))]);
+    let withdraw = |n: usize| {
+        if n == 1 {
+            sluice(&f, &["withdraw", "5"]);
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &withdraw,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["submit", BRANCH, "--worktree", "unit/e"]);
+    assert_eq!(code, sluice::WITHDRAWN, "{out}");
+}
+
+/// ADR 0041: at its timeout, `wait` returns the record as it stands and
+/// exits 5, and the submission stays in the queue; stopped with Ctrl-C,
+/// one document still.
+#[test]
+fn wait_returns_at_its_timeout_with_the_record() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "10s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    let v = json(&out);
+    assert_eq!(
+        (v["id"].as_u64(), v["state"].as_str()),
+        (Some(1), Some("testing"))
+    );
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["state"], "testing");
+
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "10s"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert!(out.contains(&format!("testing {BRANCH} + #1 · ")), "{out}");
+    assert!(out.ends_with("still waiting: sluice wait 1\n"), "{out}");
+
+    let stop = Then(Cell::new(0), |_| false);
+    let (code, out) = sluice_with(&f, &stop, &["wait", "1", "--json"]);
+    assert_eq!(code, sluice::STOPPED);
+    assert_eq!(json(&out)["state"], "testing");
+}
+
+/// ADR 0041: a branch names this worktree's last submission to it;
+/// nothing submitted, or no such submission, is not found.
+#[test]
+fn wait_finds_what_it_waits_on() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    work(&f, "unit/c", "agent-c", &[("plugin/c", Some("c"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(json(&out)["id"], 1);
+
+    let (code, out) = sluice(&f, &["wait", BRANCH, "--worktree", "unit/c", "--json"]);
+    assert_eq!(code, FAILED);
+    assert_eq!(json(&out)["error"]["kind"], "not_found");
+    assert_eq!(
+        json(&out)["error"]["message"],
+        format!("nothing submitted from unit/c to {BRANCH}")
+    );
+
+    let (code, out) = sluice(&f, &["wait", "9999", "--json"]);
+    assert_eq!(code, FAILED);
+    assert_eq!(json(&out)["error"]["message"], "no submission 9999");
+}
+
+/// ADR 0042: a waiting command says its combination's progress each time
+/// the count ended or the tasks running move, never at every round.
+#[test]
+fn wait_says_progress_when_it_moves() {
+    use sluice_seams::{TaskProgress, TaskState};
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let task = |target: &str, state: TaskState| TaskProgress {
+        target: target.into(),
+        state,
+        started: None,
+        ended: None,
+        exit: state.ended().then_some(0),
+    };
+    let between = |n: usize| match n {
+        1 => f.world.says_tasks(
+            &tested(&f, 1),
+            &[
+                task("a:test", TaskState::Running),
+                task("b:test", TaskState::Waiting),
+            ],
+        ),
+        3 => f.world.says_tasks(
+            &tested(&f, 1),
+            &[
+                task("a:test", TaskState::Passed),
+                task("b:test", TaskState::Running),
+            ],
+        ),
+        5 => {
+            f.world.hold_runs(false);
+            f.world.complete_all();
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 10,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    let said: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with(&format!("testing {BRANCH} + #1 · ")))
+        .filter(|l| !l.contains(" tasks to run, "))
+        .collect();
+    assert_eq!(said.len(), 3, "{out}");
+    assert!(
+        said[1].contains(" · 0/2 tasks · running a:test · "),
+        "{out}"
+    );
+    assert!(
+        said[2].contains(" · 1/2 tasks · running b:test · "),
+        "{out}"
+    );
 }

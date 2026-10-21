@@ -67,7 +67,12 @@ fn main() {
     // 1: whatever runs sluice's work keeps its branches protected.
     if matches!(
         cli.command,
-        Some(Command::Submit { .. } | Command::Step { .. } | Command::Run { .. })
+        Some(
+            Command::Submit { .. }
+                | Command::Wait { .. }
+                | Command::Step { .. }
+                | Command::Run { .. }
+        )
     ) {
         let ensured = std::env::current_dir()
             .map_err(anyhow::Error::from)
@@ -107,8 +112,8 @@ fn main() {
     } else {
         None
     };
-    // A watching overview reads the records about once a second; a run
-    // or a waiting submit rounds every three.
+    // A watching overview reads the records about once a second; a run,
+    // a waiting submit or `sluice wait` rounds every three.
     let every = match cli.command {
         Some(Command::Overview { .. }) => Duration::from_secs(1),
         _ => Duration::from_secs(3),

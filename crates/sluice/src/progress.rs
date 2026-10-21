@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sluice_core::overview::CandidateView;
+use sluice_core::overview::{BranchView, CandidateView};
 use sluice_core::records::CandidateState;
 use sluice_core::Sluice;
 use sluice_seams::TaskState;
@@ -27,25 +27,44 @@ pub fn lines(
     now: DateTime<Utc>,
 ) -> Result<Vec<String>> {
     let view = s.branch_view_of(branch)?;
-    let testing: Vec<&CandidateView> = view
-        .candidates
-        .iter()
-        .filter(|c| matches!(c.state, CandidateState::Starting | CandidateState::Testing))
-        .collect();
     let shown: Vec<&CandidateView> = match only {
-        None => testing,
-        Some(id) => testing
-            .iter()
-            .find(|c| c.submissions.last() == Some(&id))
-            .or_else(|| testing.iter().find(|c| c.submissions.contains(&id)))
-            .into_iter()
-            .copied()
-            .collect(),
+        None => under_test(&view).collect(),
+        Some(id) => own(&view, id).into_iter().collect(),
     };
     Ok(shown
         .into_iter()
         .map(|c| testing_line(branch, c, now))
         .collect())
+}
+
+/// The combinations of a branch under test.
+fn under_test(view: &BranchView) -> impl Iterator<Item = &CandidateView> {
+    view.candidates
+        .iter()
+        .filter(|c| matches!(c.state, CandidateState::Starting | CandidateState::Testing))
+}
+
+/// Submission `id`'s combination under test: the one whose last
+/// submission it is, else any that holds it.
+pub fn own(view: &BranchView, id: u64) -> Option<&CandidateView> {
+    under_test(view)
+        .find(|c| c.submissions.last() == Some(&id))
+        .or_else(|| under_test(view).find(|c| c.submissions.contains(&id)))
+}
+
+/// What a waiting command prints a line again for: the combination, how
+/// many of its tasks have ended and which are running; never its times.
+pub fn moved(c: &CandidateView) -> (Vec<u64>, usize, Vec<String>) {
+    let tasks = c.tasks.as_deref().unwrap_or_default();
+    (
+        c.submissions.clone(),
+        tasks.iter().filter(|t| t.state.ended()).count(),
+        tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Running)
+            .map(|t| t.target.clone())
+            .collect(),
+    )
 }
 
 /// `testing <combination>`, and its progress where there is any.
