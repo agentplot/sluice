@@ -4,12 +4,10 @@
 
 The popup and the tab bar SHALL list a repository's branches in the order
 of its overview's `branches[]`, and SHALL name no branch in their code;
-scrolling and the line counting branches with nothing queued SHALL hold
-in that order. When the focused pane has a branch named by its
-`sluice_branch` token, the popup and the dashboard SHALL show that branch
-first, even when it has nothing queued and no recent event, and leave it
-out of the count; a branch no document lists SHALL be one line,
-`<branch> · no records`.
+scrolling and the count of branches with nothing queued SHALL hold in
+that order. The popup and the dashboard SHALL show the branch the focused
+pane's `sluice_branch` token names first, even when idle, and leave it
+out of that count.
 
 #### Scenario: The policy's order
 

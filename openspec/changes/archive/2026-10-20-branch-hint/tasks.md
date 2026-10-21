@@ -22,4 +22,4 @@ suites through `sluice exec main -- <command>`.
 
 ## 4. Integration
 
-- [ ] 4.1 Verify `sluice exec main` passes, then land with `sluice submit main`.
+- [x] 4.1 Verify `sluice exec main` passes, then land with `sluice submit main`.
