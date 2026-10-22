@@ -235,7 +235,7 @@ fn row_line(r: &Row) -> String {
         check(r),
         r.took_ms.map(time).unwrap_or_default(),
         result_word(r),
-        info(r)
+        info(r, true)
     )
 }
 
@@ -269,8 +269,9 @@ fn result_word(r: &Row) -> &'static str {
     }
 }
 
-/// Where and how it ran, and anything to note.
-fn info(r: &Row) -> String {
+/// Where and how it ran, and anything to note: in markdown, or plain
+/// for a check's title, which GitHub shows as it is.
+fn info(r: &Row, markdown: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     if r.replayed {
         parts.push("from a pass the gate trusts".into());
@@ -289,7 +290,7 @@ fn info(r: &Row) -> String {
         parts.push(format!("{n} attempts"));
     }
     if r.took_ms.is_some_and(|t| t > SLOW_MS) {
-        parts.push("**slow**".into());
+        parts.push(if markdown { "**slow**" } else { "slow" }.into());
     }
     if let Some(k) = &r.flaky {
         parts.push(format!(
@@ -444,7 +445,7 @@ pub fn row_check(r: &Row, cx: &Context) -> (String, Posting) {
         _ => Status::Failure,
     };
     let mut title = result_word(r).to_lowercase();
-    let i = info(r);
+    let i = info(r, false);
     if !i.is_empty() {
         title.push_str(&format!(" · {i}"));
     }
@@ -740,6 +741,10 @@ mod tests {
         assert_eq!(name, "sluice / cli:build (linux-x64)");
         assert_eq!(p.status, Status::Success);
         assert_eq!(p.title, "passed · sandbox on h1 · signed by box");
+        r.took_ms = Some(SLOW_MS + 1);
+        let (_, p) = with(None, |cx| row_check(&r, cx));
+        assert_eq!(p.title, "passed · sandbox on h1 · signed by box · slow");
+        assert!(p.summary.contains("· **slow** |"), "{}", p.summary);
         let f = row("app:test", RowResult::Failed);
         assert_eq!(with(None, |cx| row_check(&f, cx)).1.status, Status::Failure);
     }
