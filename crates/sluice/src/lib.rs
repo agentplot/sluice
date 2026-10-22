@@ -1705,7 +1705,7 @@ fn report(
             if !not_run.is_empty() {
                 writeln!(out, "not run: {}", not_run.join(", "))?;
             }
-            // ADR 0039: a required check its task runner keeps out of CI.
+            // ADR 0044: a required check its task runner keeps out of CI.
             let combination_log: Vec<_> = log
                 .iter()
                 .filter(|l| matches!(&l.event, Event::Detail { combination, .. } if *combination == t.combination))

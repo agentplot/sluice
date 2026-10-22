@@ -1,11 +1,11 @@
-//! A submission's report (pull-requests-1 proposed 118, 119; ADR 0039):
+//! A submission's report (118, 119; ADR 0044):
 //! read from the records alone, through `Sluice::verdict_of`.
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::State;
 use sluice_core::verdict_view::{RowResult, Standing};
 
-/// satisfies: 17, 20, 26, 49 (proposed 118, 119)
+/// satisfies: 17, 20, 26, 49 (118, 119)
 #[test]
 fn the_blamed_submission_reads_its_failure_and_the_landed_one_its_pass() {
     let h = Harness::bolt();
@@ -46,7 +46,7 @@ fn the_blamed_submission_reads_its_failure_and_the_landed_one_its_pass() {
     assert_eq!(s.verdict_of(BRANCH, 999).unwrap(), None);
 }
 
-/// satisfies: 20, 21 (proposed 118)
+/// satisfies: 20, 21 (118)
 #[test]
 fn behind_a_blamed_submission_nothing_of_its_failure_is_shown() {
     let h = Harness::bolt();

@@ -487,13 +487,13 @@ impl World {
     }
 
     /// The runner keeps `task` out of its CI mode: never run, missing, and
-    /// named kept out (ADR 0039).
+    /// named kept out (ADR 0044).
     pub fn keeps_out(&self, task: &str) {
         self.0.borrow_mut().kept_out.insert(task.into());
     }
 
     /// The runner says `task` took `ms` in `attempts` tries, and the run
-    /// took the sum against an estimate of twice it (proposed 119).
+    /// took the sum against an estimate of twice it (119).
     pub fn takes(&self, task: &str, ms: u64, attempts: u32) {
         self.0.borrow_mut().took.insert(task.into(), (ms, attempts));
     }

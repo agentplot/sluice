@@ -488,15 +488,15 @@ pub struct TaskResult {
     pub hash: String,
     pub outcome: Outcome,
     pub source: Source,
-    /// Pull-requests-1 proposed 119: how long the runner says the task
+    /// Clause 119: how long the runner says the task
     /// took, in milliseconds; a replay's is what restoring it took.
     /// Shown, never read as an outcome, a replay or a flake.
     pub took_ms: Option<u64>,
-    /// Pull-requests-1 proposed 119: how many times the runner tried it.
+    /// Clause 119: how many times the runner tried it.
     pub attempts: Option<u32>,
 }
 
-/// Pull-requests-1 proposed 119: what a runner says of a whole run beyond
+/// Clause 119: what a runner says of a whole run beyond
 /// its results. Recorded with the run's result and shown; nothing reads a
 /// verdict from it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -550,7 +550,7 @@ pub struct RunReport {
     /// The run hit its time limit and was ended with everything it
     /// started (66).
     pub timed_out: bool,
-    /// Pull-requests-1 proposed 119: what the runner says of the run.
+    /// Clause 119: what the runner says of the run.
     pub detail: Option<RunDetail>,
     /// Required checks the runner keeps out of its CI mode, so never runs
     /// (moon's `runInCI: false`); each is also in `missing`.
@@ -850,7 +850,7 @@ impl Told {
 }
 
 // ---------------------------------------------------------------------------
-// A submission's report (49; pull-requests-1 proposed 118, 119; ADR 0039)
+// A submission's report (49; 118, 119; ADR 0044)
 // ---------------------------------------------------------------------------
 
 /// What a submission's report says.
@@ -868,7 +868,7 @@ pub struct VerdictView {
     /// The submissions tested in it, in chain order (10).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submissions: Vec<u64>,
-    /// What the task runner said of each run, by system (proposed 119).
+    /// What the task runner said of each run, by system (119).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<RunShown>,
     /// One per required check on each system: failed, flaky, could not
@@ -998,7 +998,7 @@ pub struct Notification {
     pub to: Submitter,
     pub told: Told,
     /// 49: the entry's report as its records hold it when told, for a
-    /// driver that shows one (ADR 0039); `None` when it could not be read.
+    /// driver that shows one (ADR 0044); `None` when it could not be read.
     pub report: Option<VerdictView>,
 }
 

@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(f.held().unwrap().posts.len(), 2);
         f.comment(&repo, n, "blamed").unwrap();
         assert_eq!(f.comments(&repo, n).unwrap(), ["blamed"]);
-        // ADR 0039: a check per check, beside `sluice`, and a comment
+        // ADR 0044: a check per check, beside `sluice`, and a comment
         // edited in place.
         f.post_named(&repo, "aaa", "sluice / a:test", None, &waiting)
             .unwrap();

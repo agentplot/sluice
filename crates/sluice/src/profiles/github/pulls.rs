@@ -289,7 +289,7 @@ impl Pulls {
         if comments.iter().any(|c| c.body.contains(&m)) {
             return Ok(());
         }
-        // ADR 0039: a pull request sent back is pointed at its report.
+        // ADR 0044: a pull request sent back is pointed at its report.
         let report = comments
             .iter()
             .find(|c| c.body.starts_with("<!-- sluice-report: "))
@@ -392,7 +392,7 @@ impl Pulls {
         Ok(true)
     }
 
-    /// ADR 0039: post what pull request `p` shows of its submission: its
+    /// ADR 0044: post what pull request `p` shows of its submission: its
     /// `sluice` check, with the report as its text once a result touches
     /// it; the report as one comment in its conversation, edited in place;
     /// and a check per required check per system.
@@ -1237,7 +1237,7 @@ impl Pulls {
             .collect();
         let outcome = Outcome::told(&n.told);
         let shown = outcome_shown(&n.branch, &outcome, &names);
-        // ADR 0039: a pull request that landed is closed, so no intake
+        // ADR 0044: a pull request that landed is closed, so no intake
         // reads it again: its report is posted with the outcome.
         let log_lines = self.log_lines.borrow().get(&n.branch).copied().flatten();
         self.show_report(
@@ -1291,7 +1291,7 @@ mod tests {
     }
 
     /// pull-request-status, a build on three systems and a result read by
-    /// key (many-hosts-3's C.5 addition; ADR 0039).
+    /// key (many-hosts-3's C.5 addition; ADR 0044).
     #[test]
     fn a_check_per_required_check_per_system() {
         let dir = std::env::temp_dir().join(format!("sluice-pulls-checks-{}", std::process::id()));

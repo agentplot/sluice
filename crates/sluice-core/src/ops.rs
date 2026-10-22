@@ -719,7 +719,7 @@ impl Sluice<'_> {
     }
 }
 
-/// ADR 0039: the required checks the latest run of each system said its
+/// ADR 0044: the required checks the latest run of each system said its
 /// task runner keeps out of CI, so never runs.
 pub fn kept_out(log: &[crate::records::LogLine]) -> Vec<String> {
     let mut seen: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();

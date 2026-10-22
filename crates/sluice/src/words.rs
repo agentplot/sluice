@@ -1,5 +1,5 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
-//! a pull request (ADR 0039).
+//! a pull request (ADR 0044).
 
 use sluice_core::records::{FlakyKey, Recorded};
 use sluice_seams::Outcome;

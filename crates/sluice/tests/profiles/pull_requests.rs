@@ -495,7 +495,7 @@ fn blamed_and_left_alone() {
     );
     // pull-request-status, blamed: one comment naming the failed check,
     // its log, and how to submit again, pointing at the report; and the
-    // report, one comment of its own (ADR 0039).
+    // report, one comment of its own (ADR 0044).
     let comments = g.comments(n);
     assert_eq!(comments.len(), 2, "{comments:?}");
     let c = comments.iter().find(|c| c.contains("told=")).unwrap();
@@ -521,7 +521,7 @@ fn blamed_and_left_alone() {
     assert!(!r.contains("it broke"), "{r}");
 }
 
-/// pull-request-status, edited not repeated (ADR 0039): one report
+/// pull-request-status, edited not repeated (ADR 0044): one report
 /// comment, edited from testing to landed.
 #[test]
 fn one_report_comment_edited_until_landed() {
@@ -559,7 +559,7 @@ fn one_report_comment_edited_until_landed() {
     assert_eq!(g.gh.forge.held().unwrap().edits.len(), edits);
 }
 
-/// S50 (proposed 118, 20): behind a blamed pull request, nothing of the
+/// S50 (118, 20): behind a blamed pull request, nothing of the
 /// failed combination is shown.
 #[test]
 fn behind_a_blamed_pull_request_no_failure_is_shown() {
@@ -582,7 +582,7 @@ fn behind_a_blamed_pull_request_no_failure_is_shown() {
     });
 }
 
-/// pull-request-status, output as asked (ADR 0039): the last lines of a
+/// pull-request-status, output as asked (ADR 0044): the last lines of a
 /// failed check's output, scrubbed.
 #[test]
 fn output_posted_as_asked_and_scrubbed() {
@@ -642,7 +642,7 @@ fn landed_and_merged_by_landing() {
     g.step();
     let pull = g.gh.forge.held().unwrap().pulls[0].clone();
     assert!(!pull.open, "GitHub shows it merged");
-    // No sent-back comment; only the report (ADR 0039).
+    // No sent-back comment; only the report (ADR 0044).
     let comments = g.comments(n);
     assert!(
         comments.iter().all(|c| !c.contains("told=")),

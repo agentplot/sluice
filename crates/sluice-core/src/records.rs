@@ -695,7 +695,7 @@ pub enum Event {
         combination: Rev,
         tasks: Vec<String>,
     },
-    /// Pull-requests-1 proposed 119: what a run's runner said of it beyond
+    /// Clause 119: what a run's runner said of it beyond
     /// its results, and the required checks it keeps out of its CI mode.
     /// Shown; nothing reads a verdict from it.
     Detail {
@@ -817,11 +817,11 @@ pub struct ResultLine {
     /// which count unsigned on a branch kept in its own files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer: Option<String>,
-    /// Pull-requests-1 proposed 119: how long the runner says it took,
+    /// Clause 119: how long the runner says it took,
     /// in milliseconds. Shown, never read for a verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub took_ms: Option<u64>,
-    /// Pull-requests-1 proposed 119: how many times the runner tried it.
+    /// Clause 119: how many times the runner tried it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempts: Option<u32>,
 }

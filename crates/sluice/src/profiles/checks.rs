@@ -1080,7 +1080,7 @@ pub fn not_run_reason(code: i32) -> String {
     format!("exited {code}, which [tests] not_run names: it could not run here")
 }
 
-/// Pull-requests-1 proposed 119: milliseconds between two RFC 3339 times,
+/// Clause 119: milliseconds between two RFC 3339 times,
 /// the command runner's time for its one command.
 fn took_ms(started: &str, ended: &str) -> Option<u64> {
     let a = chrono::DateTime::parse_from_rfc3339(started).ok()?;

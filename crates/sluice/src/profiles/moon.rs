@@ -89,7 +89,7 @@ impl Moon {
             }
         }
         let targets: Vec<String> = wanted.into_iter().collect();
-        // ADR 0039: moon runs in its CI mode, which runs no task the
+        // ADR 0044: moon runs in its CI mode, which runs no task the
         // repository keeps out of CI; each such target reads missing.
         let kept_out: Vec<String> = targets
             .iter()
@@ -162,7 +162,7 @@ impl Moon {
     /// ran, `Ran` with its outcome; one answered from the cache,
     /// `Replayed`; one that failed with an exit `not_run` names, not run
     /// (could-not-run-1 114); anything else, no result (15, 16, 38; rule
-    /// core.9). With them, what moon says of the run (proposed 119).
+    /// core.9). With them, what moon says of the run (119).
     pub fn read(
         &self,
         place: &Path,
@@ -915,7 +915,7 @@ mod tests {
     /// A run report as moon 2.6.1 wrote it for `moon exec app:test
     /// app:retry app:serve --ci`, trimmed: `app:retry` failed its first try
     /// and passed its second, and `app:serve`, marked `runInCI: false`, is
-    /// absent (proposed 119; ADR 0039).
+    /// absent (119; ADR 0044).
     #[test]
     fn reads_times_attempts_and_the_runs_estimate() {
         let report: Value = serde_json::from_str(

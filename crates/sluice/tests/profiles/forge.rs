@@ -249,7 +249,7 @@ fn forge_check_names_each_failure() {
         "{got:?}"
     );
 
-    // ADR 0039: no permission to post checks.
+    // ADR 0044: no permission to post checks.
     let mut f = Forge::new(&clock);
     f.permissions = json!({
         "contents": "write", "workflows": "write", "checks": "read", "pull_requests": "write"
@@ -524,7 +524,7 @@ fn the_apps_pull_request_calls() {
 
     app.comment(&r, a, "blamed").unwrap();
     assert_eq!(app.comments(&r, a).unwrap(), ["blamed"]);
-    // ADR 0039: the check's text reads back, a check per check is sluice's
+    // ADR 0044: the check's text reads back, a check per check is sluice's
     // and no other system's, and a comment is edited in place.
     app.post_named(&r, "aaa", "sluice / a:test (linux-x64)", None, &waiting)
         .unwrap();
