@@ -13,6 +13,7 @@ mod support;
 #[path = "forge/github.rs"]
 mod github;
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -758,13 +759,33 @@ fn submit_refuses_a_dirty_worktree() {
 fn a_waiting_submit_follows_its_pull_request() {
     let g = OnGitHub::new("pr-wait", "reviews = 1");
     let w = g.session("wait", &[("w.txt", "w\n")]);
-    let child = g
+    let mut child = g
         .command("wt", &w)
         .args(["submit", "main"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // What the submit has said so far, both streams, read as it goes.
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let readers: Vec<_> = [
+        Box::new(child.stdout.take().unwrap()) as Box<dyn std::io::Read + Send>,
+        Box::new(child.stderr.take().unwrap()),
+    ]
+    .into_iter()
+    .map(|mut stream| {
+        let heard = heard.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = stream.read(&mut buf) {
+                heard
+                    .lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        })
+    })
+    .collect();
     let until = Instant::now() + Duration::from_secs(60);
     let pull = loop {
         if let Some(p) = g.gh.forge.by_ref("unit/wait").unwrap() {
@@ -775,14 +796,25 @@ fn a_waiting_submit_follows_its_pull_request() {
         assert!(Instant::now() < until, "no pull request opened");
         std::thread::sleep(Duration::from_millis(100));
     };
-    // Reviewed a round or so after it waits.
-    std::thread::sleep(Duration::from_secs(4));
+    // Reviewed once the submit has said it waits, however long the
+    // rounds take on a loaded host.
+    while !heard.lock().unwrap().contains("waiting: needs 1 review") {
+        assert!(
+            Instant::now() < until,
+            "never said it waits: {}",
+            heard.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     g.gh.forge
         .review(pull.number, "reviewer", "APPROVED", &pull.head)
         .unwrap();
-    let out = child.wait_with_output().unwrap();
-    let said = text(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
+    let status = child.wait().unwrap();
+    for r in readers {
+        r.join().unwrap();
+    }
+    let said = heard.lock().unwrap().clone();
+    assert_eq!(status.code(), Some(0), "{said}");
     let waiting = said.find("waiting: needs 1 review").expect(&said);
     let queued = said
         .find("queued")
