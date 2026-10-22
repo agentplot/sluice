@@ -1,8 +1,8 @@
 //! A submission's report: what its session reads of the combination it
 //! was tested in (49, 26), read from the records alone, the same whatever
 //! task runner wrote the results (53) and whichever driver shows it (rules
-//! core.1, core.2; ADR 0039). A view, never a record (rule core.14), and
-//! it decides nothing (27, 30; pull-requests-1 proposed 118).
+//! core.1, core.2; ADR 0044). A view, never a record (rule core.14), and
+//! it decides nothing (27, 30; 118).
 
 use anyhow::Result;
 use sluice_seams::{Outcome, Rev};
@@ -426,7 +426,7 @@ mod tests {
     }
 
     /// Behind a blamed submission: formed again, and nothing of the
-    /// failed combination (20; proposed 118).
+    /// failed combination (20; 118).
     #[test]
     fn behind_a_blamed_submission() {
         let s = sub(serde_json::json!({"state": "queued", "failed": []}));

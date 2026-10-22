@@ -476,7 +476,7 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
     }
 }
 
-/// satisfies: 15, 27 (ADR 0039)
+/// satisfies: 15, 27 (ADR 0044)
 #[test]
 fn a_required_check_kept_out_of_ci_is_missing_and_named() {
     let h = Harness::bolt();

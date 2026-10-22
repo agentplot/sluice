@@ -1,6 +1,6 @@
 //! What reads as a secret, replaced before text leaves the host: in a
 //! telemetry body (ADR 0022) and in a failed check's output posted on a
-//! pull request (ADR 0039). It lowers the chance a secret leaves and does
+//! pull request (ADR 0044). It lowers the chance a secret leaves and does
 //! not rule it out.
 
 use regex::Regex;

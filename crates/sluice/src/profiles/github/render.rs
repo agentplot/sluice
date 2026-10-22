@@ -1,4 +1,4 @@
-//! A submission's report as a pull request shows it (ADR 0039): one
+//! A submission's report as a pull request shows it (ADR 0044): one
 //! comment, the `sluice` check's text, and a check per required check per
 //! system. Drawn from the core's [`VerdictView`] alone, the same whatever
 //! task runner wrote the results, in the layout CI reports on pull

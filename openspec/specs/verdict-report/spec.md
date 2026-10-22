@@ -98,7 +98,7 @@ result SHALL be reported with that combination (23).
 A submission tested in a combination that failed, and not blamed for
 the failure, SHALL be reported as formed again. Its report SHALL show no
 result of that combination, and name neither the blamed submission nor
-a failed check (20; pull-requests-1 proposed clause 118).
+a failed check (20; 118).
 
 #### Scenario: Behind a blamed submission
 
@@ -112,7 +112,7 @@ was tried, sluice SHALL record that with the task's result, before the
 result is read (core.7). For a run, it SHALL record how long the run
 took, the time the runner estimates it saved, and the changed files.
 The report SHALL show what was recorded, and leave out what a runner
-did not report (pull-requests-1 proposed clause 119).
+did not report (119).
 
 #### Scenario: moon's times
 

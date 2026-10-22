@@ -225,7 +225,7 @@ mod tests {
         }
     }
 
-    /// Pull-requests-1 proposed 119: a runner's time and attempts decide
+    /// Clause 119: a runner's time and attempts decide
     /// nothing; a pass tried twice is a pass, not a flake (19).
     #[test]
     fn a_runners_detail_decides_nothing() {

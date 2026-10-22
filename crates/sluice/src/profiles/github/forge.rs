@@ -101,7 +101,7 @@ pub struct Posting {
     pub status: Status,
     pub title: String,
     pub summary: String,
-    /// ADR 0039: the check's text, the submission's report; `None` posts
+    /// ADR 0044: the check's text, the submission's report; `None` posts
     /// none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -111,7 +111,7 @@ pub struct Posting {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Posted {
     pub id: u64,
-    /// Its name: `sluice`, or `sluice / <check> (<system>)` (ADR 0039).
+    /// Its name: `sluice`, or `sluice / <check> (<system>)` (ADR 0044).
     #[serde(default = "sluice_check")]
     pub name: String,
     pub posting: Posting,
@@ -130,7 +130,7 @@ pub struct Comment {
     pub url: String,
 }
 
-/// ADR 0039: the name of sluice's check of `task` on `system`.
+/// ADR 0044: the name of sluice's check of `task` on `system`.
 pub fn check_name(task: &str, system: Option<&str>) -> String {
     match system {
         Some(s) => format!("{SLUICE_CHECK} / {task} ({s})"),

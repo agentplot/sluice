@@ -391,7 +391,7 @@ impl Sluice<'_> {
         let line = self.read_line(branch)?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            // ADR 0039: the report as it stands, for a driver that shows
+            // ADR 0044: the report as it stands, for a driver that shows
             // one; a read that fails tells the outcome without it.
             let report = self.verdict_of(branch, item.submission).ok().flatten();
             self.seams.driver.notify(&Notification {
@@ -848,7 +848,7 @@ impl Sluice<'_> {
             }
             line.log(now, event);
         }
-        // Pull-requests-1 proposed 119: what the runner said of the run,
+        // Clause 119: what the runner said of the run,
         // kept for the report; no verdict reads it.
         let detail = report.detail.clone().unwrap_or_default();
         if !detail.is_empty() || !report.kept_out.is_empty() {

@@ -1,5 +1,5 @@
 ---
-number: 39
+number: 44
 title: A request shows its verdict from the records, the same for every task runner
 status: accepted
 date: 2026-10-21
@@ -10,7 +10,7 @@ decision-makers:
 # A request shows its verdict from the records, the same for every task runner
 
 Deciders: the operator, planning what a pull request shows of sluice's verdict, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 19, 20, 26, 27, 38, 49, 53, 114 to 116, C.5 (many-hosts-3's addition); `design/sluice/proposals/pull-requests-1.md` proposed clauses 118 and 119; rules core.1, core.2, core.7, core.9, core.11, core.14; ADRs 0021, 0022, 0028, 0032.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 19, 20, 26, 27, 38, 49, 53, 114 to 116, 118, 119, C.2, C.5 (many-hosts-3's addition), S50, S51; rules core.1, core.2, core.7, core.9, core.11, core.14; ADRs 0021, 0022, 0028, 0032.
 
 ## Context and problem statement
 
@@ -35,9 +35,9 @@ A runner's detail reaches the records through the check seam:
 - per task, the time it took and how often it was tried;
 - per run, its time, the runner's estimate of the time it saved, and the changed files.
 
-The detail is recorded with the result before the verdict is read (core.7), and nothing reads a verdict from it (proposed 119).
+The detail is recorded with the result before the verdict is read (core.7), and nothing reads a verdict from it (119).
 
-A submission tested in a combination another is blamed for shows that its combination is formed again, and no row of it. The core decides this, so no driver can show a failure that clause 20 keeps from it (proposed 118).
+A submission tested in a combination another is blamed for shows that its combination is formed again, and no row of it. The core decides this, so no driver can show a failure that clause 20 keeps from it (118).
 
 The moon runner also runs with moon's CI mode on (`moon exec --ci`), so a task a repository keeps out of CI with `runInCI: false` is not run, as moon's own CI would not run it. sluice still picks the targets: the branch's required checks, narrowed to those affected.
 

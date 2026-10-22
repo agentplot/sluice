@@ -58,7 +58,7 @@ pub struct RunResult {
     /// (108; rule core.9).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
-    /// Pull-requests-1 proposed 119: how long the task runner says it
+    /// Clause 119: how long the task runner says it
     /// took, in milliseconds, and how often it tried it. Shown with the
     /// result; no verifier or verdict reads them.
     #[serde(default, skip_serializing_if = "Option::is_none")]

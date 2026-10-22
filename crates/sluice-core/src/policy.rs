@@ -164,7 +164,7 @@ pub struct PullRequests {
     pub reviews: u32,
     /// Checks other systems post on its head, by name, each to have passed.
     pub checks: Vec<String>,
-    /// ADR 0039: how many of the last lines of a failed check's output a
+    /// ADR 0044: how many of the last lines of a failed check's output a
     /// pull request's report posts, scrubbed; `None` posts none, only
     /// where the output is kept.
     pub log_lines: Option<usize>,
@@ -1085,7 +1085,7 @@ hold = "5m"
                 log_lines: None,
             })
         );
-        // ADR 0039: a failed check's output posted only as asked.
+        // ADR 0044: a failed check's output posted only as asked.
         let asked = Policy::parse(
             "[branches.main]\nremote = \"origin\"\n[branches.main.pull_requests]\nlog_lines = 40\n",
         )

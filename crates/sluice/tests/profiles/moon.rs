@@ -570,7 +570,7 @@ fn every_required_task_of_every_tag() {
     assert_eq!(names(&r), ["gamma:test"]);
 }
 
-/// ADR 0039: moon runs in its CI mode, so a required task the repository
+/// ADR 0044: moon runs in its CI mode, so a required task the repository
 /// keeps out of CI is not run: it reads missing, and the run names it kept
 /// out. Each task's time and the run's own come back with the results.
 #[test]
