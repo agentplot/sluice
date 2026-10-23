@@ -41,7 +41,7 @@ Option 2 makes a failed call the hold's undoing: one draft GitHub refuses after 
 
 ### Consequences
 
-- ADR 0021's rule for a pull request sent back, a new head or a draft and a ready mark, now holds only for one a person opened by hand. Clause 120 makes that person's ready mark a standing offer; whether `sluice withdraw` on its entry ends the offer is a question for the design, and such a request still comes back at the next round.
+- ADR 0021's rule for a pull request sent back, a new head or a draft and a ready mark, now holds only for one a person opened by hand, and holds as well for one the operator or a planner withdrew. Clause 120, as amended in blueprints a7d9646, makes that person's ready mark a standing offer that the operator's withdrawal rests: such a pull request rests until a new head, or a ready mark after a draft, as one sent back does, and its `sluice` check, `waiting: withdrawn by the operator`, names who withdrew it and how to bring it back (C.5 pull request). Intake reads who withdrew it from the submission's record, so nothing new is stored. A withdrawal intake makes itself, as the pull request's agent, when the person moves it to draft or closes it, is no one else's, and keeps ADR 0021's path.
 - Marking a draft and then ready sends GitHub's ready-for-review notifications again, but only on a submit after the pull request left the queue, when its reviewers' attention is wanted anyway.
 - A pull request sent back before this landed is held at intake's first pass after it, and marked a draft then. A rollback would take such pull requests again once they are out of draft; left drafts, they stay held through it.
 - Each pass reads the timeline of every submit's pull request whose latest submission is out, one call each.

@@ -41,8 +41,9 @@ log_lines = 40               # optional: post the end of a failed test's output
   marks it ready for review at the commits it pushes, the same ones
   included.
 - One a person opened waits for its conditions again on new commits; sent
-  back, it is taken again on new commits, or once marked a draft and then
-  ready for review.
+  back, or withdrawn by the operator or a planner, it is taken again on new
+  commits, or once marked a draft and then ready for review. Withdrawn, its
+  check names who withdrew it: `waiting: withdrawn by the operator`.
 - sluice posts one check named `sluice` with the state (`waiting: …`,
   `queued behind …`, `testing …`, `failed: …`, `conflict: …`, `landed as …`)
   and comments when it sends one back.

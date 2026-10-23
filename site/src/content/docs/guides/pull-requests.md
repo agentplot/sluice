@@ -138,6 +138,7 @@ check reads:
 |---|---|
 | `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
 | `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft, and takes it again once the agent's next `sluice submit` from its branch, or a person, marks it ready for review |
+| `waiting: withdrawn by the operator` | a pull request a person opened, withdrawn with `sluice withdraw` (`by the planner` when a planner withdrew it); sluice takes it again on new commits, or once it is marked a draft and then ready for review |
 | `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
 | `queued behind #38, #40` | in the queue, behind the pull requests it names |
 | `testing main + #38 + #40 + #41` | its combination is being tested |
@@ -237,7 +238,10 @@ sequenceDiagram
   marked a draft, and waits for the agent's next `sluice submit`, with a
   fix or the same commits, or for a person to mark it ready for review.
 - **Withdrawn with `sluice withdraw`.** An agent's pull request is
-  marked a draft, and waits the same way.
+  marked a draft, and waits the same way. One a person opened stays out
+  of the queue as a blamed one does, however long its conditions hold:
+  push new commits, or mark it a draft and then ready, to bring it back.
+  Its `sluice` check names who withdrew it.
 - **Back to draft, or closed.** It leaves the queue.
 - **Merged with GitHub's button.** Don't, on a branch sluice keeps: with
   the ruleset from the previous guide only the bypass can, and sluice
