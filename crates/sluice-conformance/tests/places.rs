@@ -346,3 +346,82 @@ fn a_held_checkouts_failure_is_accepted() {
         None
     );
 }
+
+/// How each `gone` line of the log names `place`: whether its release
+/// ran, and what it printed when it failed.
+fn gone_lines(h: &Harness, place: &str) -> Vec<(bool, Option<String>)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Gone {
+                place: p,
+                worktree: None,
+                ran,
+                failed,
+            } if p == place => Some((ran, failed)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 123: a combination's checkout deleted before its result is
+/// read has the release its run stored run once when the round releases
+/// it, and is freed and logged `gone`; its submission lands, and no round
+/// runs its release again
+#[test]
+fn a_deleted_checkouts_stored_release_runs_once_and_it_is_freed() {
+    let h = Harness::bolt();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let place = h.w().live_places()[0].clone();
+    h.w().delete_checkout(&place);
+    h.w().complete(&h.w().requests()[0].revision);
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(!h.w().live_places().contains(&place));
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert_eq!(h.releases_of(&place), 0, "a release was asked of it");
+    assert_eq!(gone_lines(&h, &place), [(true, None)]);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+}
+
+/// satisfies: 123: a held checkout whose working copy is deleted since is
+/// released once by the next round, from what sluice holds, and freed
+/// whatever its release does; its branch's state no longer lists it, and
+/// no round runs its release again
+#[test]
+fn a_held_checkout_deleted_since_is_released_once_and_freed() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    h.w().delete_checkout(&place);
+    h.step();
+    assert!(!h.w().live_places().contains(&place));
+    assert_eq!(h.gone_releases_of(&place), 1);
+    let gone = gone_lines(&h, &place);
+    assert!(
+        matches!(&gone[..], [(true, Some(f))] if f.contains(shared::RELEASE_FAILS)),
+        "{gone:?}"
+    );
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert_eq!(h.releases_of(&place), 4);
+}

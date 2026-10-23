@@ -2332,7 +2332,7 @@ fn the_next_exec_frees_a_removed_worktrees_place() {
     assert!(
         log.iter().any(|l| matches!(
             &l.event,
-            sluice_core::records::Event::Gone { place, worktree: Some(w) }
+            sluice_core::records::Event::Gone { place, worktree: Some(w), .. }
                 if place == "session/unit/a" && w == "unit/a"
         )),
         "{log:?}"

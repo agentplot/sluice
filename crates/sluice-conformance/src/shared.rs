@@ -976,11 +976,12 @@ pub fn a_last_result_decides_nothing(h: &impl Rig) {
 }
 
 /// Session-runs-1 clause 97, 123: a session's place whose worktree no
-/// longer exists is no session's, and the next round on the host frees it
-/// with nothing run in its name and logs it `gone` where the branch's
-/// releases are, and no round names it again; a place whose worktree
-/// exists stays, however long since its last run, and is listed with the
-/// time of that run (25, 95; core.16).
+/// longer exists is no session's, and the next round on the host runs the
+/// release its runs stored, once, frees it and logs it `gone`, with its
+/// release run, where the branch's releases are; no round runs its release
+/// or names it again. A place whose worktree exists stays, however long
+/// since its last run, and is listed with the time of that run (25, 95;
+/// core.16).
 pub fn a_removed_worktrees_place_is_freed_by_the_next_round(h: &impl Rig) {
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
@@ -995,17 +996,78 @@ pub fn a_removed_worktrees_place_is_freed_by_the_next_round(h: &impl Rig) {
     );
     assert!(held.iter().all(|p| p.branch == BRANCH), "{held:?}");
 
-    h.remove_worktree("unit/a");
+    let (gone, kept) = removed(h, "unit/a");
+    let named = || named_gone(h, &gone);
+    assert_eq!(named(), 1, "{:?}", h.events());
+    let ran = h.events().into_iter().find_map(|e| match e {
+        Event::Gone {
+            place, ran, failed, ..
+        } if place == gone.name => Some((ran, failed)),
+        _ => None,
+    });
+    assert_eq!(ran, Some((true, None)), "{:?}", h.events());
+    // Its stored release ran once; no release was built for it.
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+    assert_eq!(h.releases_of(&gone.name), 0);
+
+    // Rounds after leave a place whose worktree exists alone, and never
+    // run or name the one freed again.
+    h.step();
+    h.step();
+    assert_eq!(s.session_places().expect("lists"), vec![kept]);
+    assert_eq!(named(), 1);
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+}
+
+/// 123: a removed worktree whose stored release fails is freed all the
+/// same and logged `gone` with what its release printed; its release is
+/// never run again, and no round counts it as a failed release.
+pub fn a_removed_worktrees_failing_release_is_freed_and_never_run_again(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.session_run("unit/a");
+    h.session_run("unit/b");
+    h.release_fails(true);
+    let (gone, kept) = removed(h, "unit/a");
+    assert_eq!(named_gone(h, &gone), 1, "{:?}", h.events());
+    let failed = h.events().into_iter().find_map(|e| match e {
+        Event::Gone {
+            place, ran, failed, ..
+        } if place == gone.name => Some((ran, failed)),
+        _ => None,
+    });
+    let Some((true, Some(failed))) = failed else {
+        panic!("{:?}", h.events());
+    };
+    assert!(failed.contains(RELEASE_FAILS), "{failed}");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+    assert_eq!(h.sluice().session_places().expect("lists"), vec![kept]);
+    assert!(
+        !h.events()
+            .iter()
+            .any(|e| matches!(e, Event::ReleaseFailed { place, .. } if *place == gone.name)),
+        "{:?}",
+        h.events()
+    );
+}
+
+/// The worktree `worktree`, whose session ran, is removed by hand, and
+/// rounds step until its place is freed: that place as listed while gone,
+/// and the place left, the other session's.
+fn removed(h: &impl Rig, worktree: &str) -> (SessionPlace, SessionPlace) {
+    let s = h.sluice();
+    h.remove_worktree(worktree);
     let listed = s.session_places().expect("the place seam lists");
     let gone: Vec<_> = listed.iter().filter(|p| p.gone).cloned().collect();
     assert_eq!(gone.len(), 1, "{listed:?}");
-    let gone = gone[0].clone();
     let kept = listed
         .iter()
         .find(|p| !p.gone)
         .cloned()
-        .expect("unit/b's place is listed");
-
+        .expect("the other session's place is listed");
     // A rig whose lock a starting child holds for a moment leaves it to
     // the round after; on the fakes the first round frees it.
     for _ in 0..50 {
@@ -1015,39 +1077,26 @@ pub fn a_removed_worktrees_place_is_freed_by_the_next_round(h: &impl Rig) {
         }
     }
     let left = s.session_places().expect("the place seam lists");
-    assert_eq!(left, vec![kept.clone()], "only unit/b's place is left");
-    let worktree = gone.worktree.to_string_lossy().into_owned();
-    let named = || {
-        h.events()
-            .into_iter()
-            .filter(|e| match e {
-                Event::Gone { place, worktree: w } => {
-                    *place == gone.name && w.as_deref() == Some(worktree.as_str())
-                }
-                Event::Released { place, .. } | Event::ReleaseFailed { place, .. } => {
-                    *place == gone.name
-                }
-                _ => false,
-            })
-            .count()
-    };
-    assert_eq!(named(), 1, "{:?}", h.events());
-    assert!(
-        h.events()
-            .iter()
-            .any(|e| matches!(e, Event::Gone { place, .. } if *place == gone.name)),
-        "{:?}",
-        h.events()
-    );
-    // Nothing ran in its name: no toolchain, no release command.
-    assert_eq!(h.releases_of(&gone.name), 0);
+    assert_eq!(left, vec![kept.clone()], "only the other place is left");
+    (gone[0].clone(), kept)
+}
 
-    // Rounds after leave a place whose worktree exists alone, and never
-    // name the one freed again.
-    h.step();
-    h.step();
-    assert_eq!(s.session_places().expect("lists"), vec![kept]);
-    assert_eq!(named(), 1);
+/// How many lines of the log name the session's place `gone`: as gone,
+/// with its worktree, or as released or failed.
+fn named_gone(h: &impl Rig, gone: &SessionPlace) -> usize {
+    let worktree = gone.worktree.to_string_lossy().into_owned();
+    h.events()
+        .into_iter()
+        .filter(|e| match e {
+            Event::Gone {
+                place, worktree: w, ..
+            } => *place == gone.name && w.as_deref() == Some(worktree.as_str()),
+            Event::Released { place, .. } | Event::ReleaseFailed { place, .. } => {
+                *place == gone.name
+            }
+            _ => false,
+        })
+        .count()
 }
 
 /// A preview of `rev` through the rig's branch, its command started and

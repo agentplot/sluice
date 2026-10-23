@@ -54,6 +54,9 @@ struct Made {
     made: Vec<String>,
     released: Vec<String>,
     asked: Vec<String>,
+    /// Each place whose working copy was gone and whose stored release
+    /// ran (123).
+    gone: Vec<String>,
 }
 
 struct RecordedPlaces {
@@ -91,7 +94,11 @@ impl Checkout for RecordedPlaces {
 
     fn release_gone(&self, name: &str) -> Result<sluice_seams::GoneRelease> {
         let gone = self.inner.release_gone(name)?;
-        self.log.borrow_mut().released.push(name.into());
+        let mut log = self.log.borrow_mut();
+        log.released.push(name.into());
+        if gone.ran {
+            log.gone.push(name.into());
+        }
         Ok(gone)
     }
 
@@ -583,6 +590,11 @@ impl Rig for Real {
         log.asked.iter().filter(|p| *p == name).count()
     }
 
+    fn gone_releases_of(&self, name: &str) -> usize {
+        let log = self.checkout.log.borrow();
+        log.gone.iter().filter(|p| *p == name).count()
+    }
+
     fn host(&self) -> String {
         sluice::profiles::checks::hostname()
     }
@@ -763,7 +775,8 @@ scenarios! {
     s30_a_landed_revision_is_previewed_at_its_addresses: preview();
     s31_the_next_landings_preview_replaces_the_last: preview();
     s32_asking_again_gives_back_the_same_preview: preview();
-    a_removed_worktrees_place_is_freed_by_the_next_round: bolt();
+    a_removed_worktrees_place_is_freed_by_the_next_round: releasing();
+    a_removed_worktrees_failing_release_is_freed_and_never_run_again: releasing();
     a_failed_release_is_held_with_what_failed: releasing();
     a_failed_release_is_tried_a_bounded_number_of_times: releasing();
     a_failed_release_is_held_after_the_retries_its_branch_names: releasing_once();

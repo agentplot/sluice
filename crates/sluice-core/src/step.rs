@@ -268,14 +268,22 @@ impl Sluice<'_> {
     /// that were dropped; only places sluice made (rule core.16). 123: a
     /// release that fails holds its place, never the round, and is tried
     /// once a round: a place tried already in this round, held, or made
-    /// by another host is passed over.
+    /// by another host is passed over. A held place of this host's whose
+    /// working copy has gone since is released once, as any gone place is.
     fn perform_releases(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let doc = self.read_line(branch)?.doc;
-        for place in &doc.release {
+        let elsewhere = |f: &crate::records::FailedRelease| {
+            f.host.as_deref().is_some_and(|h| h != self.peer.name)
+        };
+        let gone_since = doc
+            .failed_releases
+            .iter()
+            .filter(|f| f.stopped && !elsewhere(f) && self.held_gone(&f.place))
+            .map(|f| &f.place);
+        for place in doc.release.iter().chain(gone_since) {
             let passed_over = releases.iter().any(|o| o.place == *place)
                 || doc.failed_releases.iter().any(|f| {
-                    f.place == *place
-                        && (f.stopped || f.host.as_deref().is_some_and(|h| h != self.peer.name))
+                    f.place == *place && ((f.stopped && !self.held_gone(place)) || elsewhere(f))
                 });
             if passed_over {
                 continue;
@@ -286,6 +294,13 @@ impl Sluice<'_> {
             }
         }
         Ok(())
+    }
+
+    /// 123: whether the working copy of the held place `place` is gone, so
+    /// it is released once more; a place whose state cannot be read is
+    /// left held.
+    fn held_gone(&self, place: &str) -> bool {
+        self.seams.checkout.gone(place).unwrap_or(false)
     }
 
     /// 24, 45, 46: move the branch from exactly the revision the landing
@@ -2046,7 +2061,7 @@ impl Sluice<'_> {
                 .failed_releases
                 .iter()
                 .any(|f| f.place == p && f.stopped);
-            if stopped || releases.iter().any(|o| o.place == p) {
+            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
                 left = true;
                 continue;
             }

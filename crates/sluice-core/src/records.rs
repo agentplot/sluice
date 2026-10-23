@@ -811,12 +811,19 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         held: bool,
     },
-    /// 123: a place whose working copy was gone, freed with nothing run in
-    /// its name; for a session's place, its worktree.
+    /// 123: a place whose working copy was gone, released once from what
+    /// sluice held for it and freed whatever that did; for a session's
+    /// place, its worktree.
     Gone {
         place: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
+        /// A release command its runs stored was run.
+        #[serde(default)]
+        ran: bool,
+        /// The release failed, and how.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed: Option<String>,
     },
     /// An update to the branch made by anything but sluice, refused (1).
     Protected {
@@ -1103,6 +1110,8 @@ mod tests {
             Event::Gone {
                 place: "session//w/a".into(),
                 worktree: Some("/w/a".into()),
+                ran: true,
+                failed: Some("usage: scripts/preview up".into()),
             },
             Event::Released {
                 place: "sluice/try/main/48".into(),
@@ -1127,5 +1136,17 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(line.event, Event::Released { accepted: None, .. }));
+        let line: LogLine = serde_json::from_str(
+            r#"{"at":"2026-10-23T09:00:00Z","event":"gone","place":"session//w/a","worktree":"/w/a"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            line.event,
+            Event::Gone {
+                ran: false,
+                failed: None,
+                ..
+            }
+        ));
     }
 }

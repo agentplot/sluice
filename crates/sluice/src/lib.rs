@@ -2444,7 +2444,7 @@ fn release_checkout(
         Some(Releasing::Released) => {
             format!("released {name}: the release command run, its checkout removed, its ports free")
         }
-        Some(Releasing::Gone) => format!(
+        Some(Releasing::Gone { .. }) => format!(
             "freed {name}: it no longer exists, so nothing was run; its runs ended, its ports free"
         ),
         Some(Releasing::Accepted(_)) => format!(

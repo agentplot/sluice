@@ -244,32 +244,50 @@ fn a_round_never_releases_a_preview_that_is_up() {
     assert!(h.w().preview_releases().is_empty());
 }
 
-/// satisfies: previews-1 101, 123: a preview whose checkout is gone is
-/// freed with nothing run in its name, logged `gone`, and never released
+/// satisfies: previews-1 101, 123: a preview whose checkout is gone has
+/// the release its run stored run once, is freed and logged `gone` with
+/// its release run, and is never released or run again, even when that
+/// release failed
 #[test]
 fn a_preview_whose_checkout_is_gone_is_freed() {
-    let h = harness();
-    let s = h.sluice();
-    // A branch with records, where its log is kept.
-    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
-    h.submit("unit/1");
-    h.settle();
-    let rev = h.tip();
-    let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
-    let (place, made) = s.make_preview(&plan).unwrap();
-    s.start_preview(&plan, place).unwrap();
-    h.w().remove_preview_checkout(&made.name);
-    let round = s.round(BRANCH).unwrap();
-    assert_eq!(round.previews.len(), 1);
-    assert_eq!(round.previews[0].failed, None);
-    assert!(s.preview_of(&rev).unwrap().is_none());
-    assert!(h.w().preview_releases().is_empty(), "its release ran");
-    assert_eq!(h.w().freed_places(), vec![made.name.clone()]);
-    assert!(h
-        .events()
-        .iter()
-        .any(|e| matches!(e, Event::Gone { place, .. } if *place == made.name)));
-    assert!(s.round(BRANCH).unwrap().previews.is_empty());
+    for fails in [false, true] {
+        let h = harness();
+        let s = h.sluice();
+        // A branch with records, where its log is kept.
+        h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
+        h.submit("unit/1");
+        h.settle();
+        let rev = h.tip();
+        let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
+        let (place, made) = s.make_preview(&plan).unwrap();
+        s.start_preview(&plan, place).unwrap();
+        h.w().remove_preview_checkout(&made.name);
+        if fails {
+            h.w()
+                .place_release_fails(&made.name, Some(shared::RELEASE_FAILS));
+        }
+        let round = s.round(BRANCH).unwrap();
+        assert_eq!(round.previews.len(), 1);
+        assert_eq!(round.previews[0].failed, None);
+        let gone = round.previews[0].gone.clone().expect("it was gone");
+        assert!(gone.ran);
+        assert_eq!(gone.failed.is_some(), fails, "{gone:?}");
+        assert!(s.preview_of(&rev).unwrap().is_none());
+        assert!(
+            h.w().preview_releases().is_empty(),
+            "a release was asked of it"
+        );
+        assert_eq!(h.w().freed_places(), vec![made.name.clone()]);
+        assert_eq!(h.gone_releases_of(&made.name), 1);
+        assert!(h.events().iter().any(|e| matches!(
+            e,
+            Event::Gone { place, ran: true, failed, .. }
+                if *place == made.name && failed.is_some() == fails
+        )));
+        assert!(s.round(BRANCH).unwrap().previews.is_empty());
+        assert!(s.previews().unwrap().is_empty());
+        assert_eq!(h.gone_releases_of(&made.name), 1);
+    }
 }
 
 /// satisfies: previews-1 101, 123: a preview whose command failed and

@@ -131,7 +131,7 @@ pub fn tell_releases(out: &mut dyn Write, json: bool, releases: &[ReleaseOutcome
         let name = &r.place;
         let text = match &r.how {
             Releasing::Released | Releasing::Accepted(_) => continue,
-            Releasing::Gone => format!(
+            Releasing::Gone { .. } => format!(
                 "freed {name}: it no longer exists, so nothing was run; its runs ended, its ports free"
             ),
             Releasing::Failed { failed, tries, of } => {
@@ -155,7 +155,7 @@ pub fn releases_json(releases: &[ReleaseOutcome]) -> Vec<serde_json::Value> {
         .filter_map(|r| {
             let (how, failed, tries) = match &r.how {
                 Releasing::Released | Releasing::Accepted(_) => return None,
-                Releasing::Gone => ("gone", None, None),
+                Releasing::Gone { .. } => ("gone", None, None),
                 Releasing::Failed { failed, tries, .. } => ("failed", Some(failed), Some(tries)),
                 Releasing::Held { failed, tries } => ("held", Some(failed), Some(tries)),
             };

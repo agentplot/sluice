@@ -6,8 +6,8 @@
 
 use anyhow::{anyhow, Result};
 use sluice_seams::{
-    LastResult, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind, RunOutcome, RunReport,
-    RunRequest, Session, SessionPlace, Setting, Source, TaskProgress, TaskState,
+    GoneRelease, LastResult, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind, RunOutcome,
+    RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress, TaskState,
 };
 
 use crate::policy::{Policy, Rules};
@@ -66,9 +66,12 @@ pub struct Finished {
 pub struct Abandoned {
     pub worktree: String,
     pub branch: String,
-    /// Freed with nothing run; `false` when freeing failed, and `error`
-    /// says how.
+    /// Freed; `false` when freeing failed, and `error` says how.
     pub freed: bool,
+    /// The release its runs stored was run, once.
+    pub ran: bool,
+    /// That release failed, and how; it was freed all the same.
+    pub failed: Option<String>,
     pub error: Option<String>,
 }
 
@@ -459,13 +462,15 @@ impl Sluice<'_> {
         Ok(true)
     }
 
-    /// Session-runs-1 clause 97, 123, rule core.16: free every session's
-    /// place whose worktree no longer exists, with nothing run in its
-    /// name: no policy read, no toolchain and no release command, its runs
-    /// ended and its scratch directory, ports and record let go. Each is
-    /// logged `gone` in its branch's records and never tried again. A
-    /// place whose worktree exists is never released here, however old
-    /// its last run.
+    /// Session-runs-1 clause 97, 123, rule core.16: release every
+    /// session's place whose worktree no longer exists from what sluice
+    /// holds for it: the release command its last run stored, run once in
+    /// its scratch directory with its ports, no policy read and no
+    /// toolchain entered; then free it whatever that did, its runs ended
+    /// and its scratch directory, ports and record let go. Each is logged
+    /// `gone` in its branch's records with how its release went, and never
+    /// tried again. A place whose worktree exists is never released here,
+    /// however old its last run.
     ///
     /// Each takes its branch's lock, never waiting for it (rule core.14):
     /// a place whose branch a round holds is left to the next round or
@@ -486,14 +491,14 @@ impl Sluice<'_> {
                 }
             };
             let worktree = p.worktree.to_string_lossy().into_owned();
-            let error = match self.seams.checkout.free(&p.name) {
-                Ok(()) => None,
+            let (gone, error) = match self.seams.checkout.release_gone(&p.name) {
+                Ok(g) => (g, None),
                 Err(e) => {
                     tracing::warn!(
                         sluice.worktree = %worktree,
                         "freeing a removed worktree's place failed: {e:#}"
                     );
-                    Some(format!("{e:#}"))
+                    (GoneRelease::default(), Some(format!("{e:#}")))
                 }
             };
             if error.is_none() {
@@ -509,6 +514,8 @@ impl Sluice<'_> {
                             Event::Gone {
                                 place: p.name.clone(),
                                 worktree: Some(worktree.clone()),
+                                ran: gone.ran,
+                                failed: gone.failed.clone(),
                             },
                         );
                         Ok(())
@@ -519,6 +526,8 @@ impl Sluice<'_> {
                 worktree,
                 branch: p.branch,
                 freed: error.is_none(),
+                ran: gone.ran,
+                failed: gone.failed,
                 error,
             });
         }

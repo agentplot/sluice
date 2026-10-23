@@ -93,6 +93,10 @@ pub trait Rig {
     /// command run, or refused.
     fn releases_of(&self, name: &str) -> usize;
 
+    /// 123: how many times the release command the runs of the place
+    /// `name` stored was run because its working copy was gone.
+    fn gone_releases_of(&self, name: &str) -> usize;
+
     /// A policy written for the fakes, as this rig's own: its runner in
     /// place of `fake`.
     fn policy_text(&self, policy: &str) -> String {
@@ -372,6 +376,14 @@ impl Rig for Harness {
     fn releases_of(&self, name: &str) -> usize {
         self.w()
             .release_attempts()
+            .iter()
+            .filter(|p| *p == name)
+            .count()
+    }
+
+    fn gone_releases_of(&self, name: &str) -> usize {
+        self.w()
+            .gone_releases()
             .iter()
             .filter(|p| *p == name)
             .count()

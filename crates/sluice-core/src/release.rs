@@ -9,8 +9,9 @@
 //! was tried, and the round goes on with the branch's work. It is tried
 //! once a round until the branch's `release_retries` are spent, then held
 //! until the operator releases it by name or accepts its failure. A place
-//! whose working copy is gone is freed at once, with nothing run in its
-//! name, and never tried again.
+//! whose working copy is gone has the release its last run stored run
+//! once, from its scratch directory, and is freed whatever that did; it is
+//! never tried again.
 
 use anyhow::Result;
 
@@ -32,8 +33,9 @@ pub struct ReleaseOutcome {
 pub enum Releasing {
     /// Its release ran, and it is gone.
     Released,
-    /// Its working copy was gone: freed, with nothing run.
-    Gone,
+    /// Its working copy was gone: the release its runs stored was run
+    /// once, when there was one, and it was freed whatever that did.
+    Gone { ran: bool, failed: Option<String> },
     /// Freed with nothing run, at the operator's accepting that its
     /// release failed: what failed last, if its release ever did.
     Accepted(Option<String>),
@@ -48,7 +50,7 @@ impl Releasing {
     pub fn freed(&self) -> bool {
         matches!(
             self,
-            Releasing::Released | Releasing::Gone | Releasing::Accepted(_)
+            Releasing::Released | Releasing::Gone { .. } | Releasing::Accepted(_)
         )
     }
 }
@@ -89,15 +91,20 @@ impl Sluice<'_> {
 
     /// 123, 25, 34: release the combination's checkout `place` on
     /// `branch`, under the branch's lock. A checkout whose working copy is
-    /// gone is freed with nothing run and logged `gone`; one released is
-    /// logged `released`; either leaves the branch's lists. A release that
+    /// gone has its stored release run once and is freed whatever it did,
+    /// logged `gone` with how its release went; one released is logged
+    /// `released`; either leaves the branch's lists, and is never tried
+    /// again. A release that
     /// fails counts a try and is logged `release_failed`; once its tries
     /// pass the branch's `release_retries` it leaves `release` and is
     /// held. Only a failure to write the records is an error.
     pub fn release_made(&self, branch: &str, place: &str, passed: bool) -> Result<ReleaseOutcome> {
         let checkout = self.seams.checkout;
         let tried = checkout.gone(place).and_then(|gone| match gone {
-            true => checkout.free(place).map(|()| Releasing::Gone),
+            true => checkout.release_gone(place).map(|g| Releasing::Gone {
+                ran: g.ran,
+                failed: g.failed,
+            }),
             false => checkout
                 .release(place, passed)
                 .map(|()| Releasing::Released),
@@ -185,9 +192,11 @@ impl Sluice<'_> {
     fn forget_released(&self, branch: &str, place: &str, how: &Releasing) -> Result<()> {
         let now = self.now();
         let event = match how {
-            Releasing::Gone => Event::Gone {
+            Releasing::Gone { ran, failed } => Event::Gone {
                 place: place.into(),
                 worktree: None,
+                ran: *ran,
+                failed: failed.clone(),
             },
             Releasing::Accepted(failed) => Event::Released {
                 place: place.into(),

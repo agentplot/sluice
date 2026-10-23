@@ -12,7 +12,9 @@
 //! run every time, never kept (rule core.14).
 
 use anyhow::Result;
-use sluice_seams::{Limits, Place, PreviewPlace, Progress, Rev, RunHandle, RunRequest, Setting};
+use sluice_seams::{
+    GoneRelease, Limits, Place, PreviewPlace, Progress, Rev, RunHandle, RunRequest, Setting,
+};
 
 use crate::policy::{Policy, Preview};
 use crate::records::Event;
@@ -87,8 +89,11 @@ pub struct Dropped {
     pub name: String,
     pub branch: String,
     /// Its command failed: what it printed. `None`: its checkout was
-    /// gone, and it was freed with nothing run (123).
+    /// gone, and it was freed (123).
     pub failed: Option<String>,
+    /// Its checkout was gone: whether the release its run stored ran, once,
+    /// and how it failed; it was freed whatever it did (123).
+    pub gone: Option<GoneRelease>,
     /// The release failed, and how.
     pub error: Option<String>,
     /// 123: the release failed on the last try it is given, and the
@@ -302,10 +307,12 @@ impl Sluice<'_> {
 
     /// 101, rule core.16: release every preview nobody can use: one whose
     /// command failed, timed out or was lost, kept with what it printed,
-    /// and one whose checkout is gone, freed with nothing run in its name
-    /// and logged `gone` (123). A preview that is up, starting or waiting
-    /// with its checkout in place is never released here, nor one held
-    /// because its release failed on every try its branch gives it.
+    /// and one whose checkout is gone, its stored release run once from its
+    /// scratch directory and freed whatever that did, logged `gone` with
+    /// how it went and never tried again (123). A preview that is up,
+    /// starting or waiting with its checkout in place is never released
+    /// here, nor one whose checkout is in place held because its release
+    /// failed on every try its branch gives it.
     ///
     /// Each release takes its branch's lock, never waiting for it (rule
     /// core.14), and one that fails is reported and the rest go on.
@@ -313,7 +320,8 @@ impl Sluice<'_> {
         let mut out = Vec::new();
         let checkout = self.seams.checkout;
         for p in checkout.previews()? {
-            if p.failed.is_some() || p.release_failed.as_ref().is_some_and(|f| f.stopped) {
+            let held = p.release_failed.as_ref().is_some_and(|f| f.stopped);
+            if p.failed.is_some() || (held && !p.gone) {
                 continue;
             }
             let failed = match p.gone {
@@ -327,8 +335,12 @@ impl Sluice<'_> {
                 Some(l) => l,
                 None => continue,
             };
+            let mut gone = None;
             let done = match &failed {
-                None => checkout.free(&p.name).map(|()| true),
+                None => checkout.release_gone(&p.name).map(|g| {
+                    gone = Some(g);
+                    true
+                }),
                 Some(output) => {
                     let retries = self.release_retries(&p.branch);
                     checkout.release_preview(&p.name, Some(output), retries)
@@ -374,10 +386,15 @@ impl Sluice<'_> {
                     held: f.stopped,
                 }),
                 _ if !released => None,
-                (None, None) => Some(Event::Gone {
-                    place: p.name.clone(),
-                    worktree: None,
-                }),
+                (None, None) => {
+                    let g = gone.clone().unwrap_or_default();
+                    Some(Event::Gone {
+                        place: p.name.clone(),
+                        worktree: None,
+                        ran: g.ran,
+                        failed: g.failed,
+                    })
+                }
                 (Some(_), None) => Some(Event::Released {
                     place: p.name.clone(),
                     worktree: None,
@@ -398,6 +415,7 @@ impl Sluice<'_> {
                 branch: p.branch,
                 held: kept.is_some_and(|f| f.stopped),
                 failed,
+                gone,
                 error,
             });
         }
