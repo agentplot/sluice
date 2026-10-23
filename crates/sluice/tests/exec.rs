@@ -296,20 +296,26 @@ fn a_clean_run_of_the_checks_is_recorded_and_a_dirty_one_is_not() {
 
 /// Session-runs-1 clause 97, 123: a worktree removed with `rm -rf`, with
 /// nothing released, is no session's. The next `sluice exec` on the host,
-/// from another worktree, frees its place with nothing run in its name:
-/// neither the policy's toolchain nor its release command runs, its block
-/// of ports is free for the next worktree, and the branch's log names it
-/// `gone`. `sluice status` lists every worktree held, and the removed one
-/// only until it is freed.
+/// from another worktree, runs the release its runs stored, once, in its
+/// scratch directory with its port, the policy's toolchain not run again
+/// in its name, and frees its place: its block of ports goes to the next
+/// worktree, and the branch's log names it `gone` with its release run. A
+/// third `sluice exec` runs its release no more. `sluice status` lists
+/// every worktree held, and the removed one only until it is freed.
 #[test]
-fn the_next_exec_frees_a_removed_worktree() {
+fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
     let s = Setup::new("exec-removed");
     let marks = Scratch::new("exec-removed-marks");
-    // Each says where it ran, so a run in the removed worktree's name shows.
+    // Each says where it ran, so a run in the removed worktree's name
+    // shows, and the release the port it was given.
     let write = |name: &str| {
         let script = marks.path().join(format!("{name}.sh"));
         let log = marks.path().join(name);
-        std::fs::write(&script, format!("echo \"$(pwd)\" >> {}\n", log.display())).unwrap();
+        std::fs::write(
+            &script,
+            format!("echo \"$(pwd -P) $SLUICE_PORT_WEB\" >> {}\n", log.display()),
+        )
+        .unwrap();
         (script, log)
     };
     let (release, released) = write("released");
@@ -393,25 +399,29 @@ fn the_next_exec_frees_a_removed_worktree() {
     assert_eq!(doc["worktrees"][0]["removed"], true, "{doc}");
     assert!(!released.exists());
 
-    // The next run, in another worktree, frees it first, running nothing
-    // in its name.
+    // The next run, in another worktree, runs its stored release first,
+    // once, from its scratch directory with its port, and frees it.
+    let scratch = std::fs::canonicalize(s.repo.dir().join(".git/sluice/.tmp"))
+        .unwrap()
+        .join(sluice::runs::dir_name(&format!(
+            "session/{}",
+            canon_a.display()
+        )));
     let out = sluice_in(&other, &["exec", "bolt/x", "--", "true"]);
     assert!(out.status.success(), "{}", text(&out));
     let said = text(&out);
     assert!(
         said.contains(&format!(
-            "freed {}: it no longer exists, so nothing was run; its runs ended, its ports free",
+            "freed {}: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free",
             canon_a.display()
         )),
         "{said}"
     );
+    let once = format!("{} {a_port}\n", scratch.display());
+    assert_eq!(ran_in(&released), once);
     assert!(
-        !released.exists(),
-        "the release command ran: {}",
-        ran_in(&released)
-    );
-    assert!(
-        !ran_in(&tooled).contains(canon_a.to_str().unwrap()),
+        !ran_in(&tooled).contains(canon_a.to_str().unwrap())
+            && !ran_in(&tooled).contains(scratch.to_str().unwrap()),
         "the toolchain ran in its name: {}",
         ran_in(&tooled)
     );
@@ -436,13 +446,14 @@ fn the_next_exec_frees_a_removed_worktree() {
         .collect();
     assert_eq!(named.len(), 1, "{log}");
     assert!(named[0].contains("\"event\":\"gone\""), "{log}");
+    assert!(named[0].contains("\"ran\":true"), "{log}");
     let out = sluice_in(&other, &["exec", "bolt/x", "--", "true"]);
     assert!(
         !text(&out).contains(canon_a.to_str().unwrap()),
         "{}",
         text(&out)
     );
-    assert!(!released.exists());
+    assert_eq!(ran_in(&released), once, "its release ran again");
 }
 
 /// Session-runs-1 clauses 92, 97, rule core.18: each run leaves on the
