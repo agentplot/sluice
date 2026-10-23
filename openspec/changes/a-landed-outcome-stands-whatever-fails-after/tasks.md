@@ -27,4 +27,4 @@ submitting, `sluice exec main`.
 
 ## 5. Gate
 
-- [ ] 5.1 Verify `openspec validate a-landed-outcome-stands-whatever-fails-after --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
+- [x] 5.1 Verify `openspec validate a-landed-outcome-stands-whatever-fails-after --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
