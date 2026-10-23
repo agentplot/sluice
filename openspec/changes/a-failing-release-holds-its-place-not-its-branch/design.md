@@ -3,8 +3,9 @@
 ## Context
 
 See proposal.md for why. The ruling is clause 123 of
-`agentplot/blueprints:design/sluice/requirements.md` (at abc8258), with
-25 and 34; 81 and 122 bear on it. What main does today:
+`agentplot/blueprints:design/sluice/requirements.md` (at c872766), with
+25 and 34; 81, as amended there, and 122 bear on it, and C.7 names
+`release_retries`. What main does today:
 
 - A combination's checkouts to release are listed in the branch's
   records, `BranchDoc.release`. `Sluice::perform_releases`
@@ -46,8 +47,12 @@ See proposal.md for why. The ruling is clause 123 of
 - One path in the core for a combination's checkout's release, used by
   the round's releases, `recover` and a returning host's 81 release, so
   the count, the hold and the log are the same wherever it fails.
-- A checkout whose working copy is gone reaches no release command and
-  no toolchain, by any path.
+- A checkout whose working copy is gone has its stored release run at
+  most once, from what sluice holds (its last run's stored command,
+  environment and ports, in its scratch directory), enters no toolchain
+  and reads no policy, by any path; then it is freed, whatever happened.
+- A held checkout stops nothing: not its branch's round, not its host's
+  claims (81).
 - The operator can end any held checkout on the host by a name sluice
   printed.
 
@@ -58,7 +63,6 @@ See proposal.md for why. The ruling is clause 123 of
   the one stored with its run (ADR 0016). Swancloud's stale command is
   answered by the hold and the operator's release, not by reading the
   policy again.
-- Lifting 81 for a held checkout.
 
 ## Decisions
 
@@ -79,9 +83,30 @@ Two methods on `Checkout` (`crates/sluice-seams/src/lib.rs`):
   block of ports and its record let go. For a preview it also lets the
   names go and removes the record, keeping no `failed` entry.
 
+- `release_gone(name) -> Result<GoneRelease>`: the release of a place
+  whose working copy is gone (123). `GoneRelease { ran: bool, failed:
+  Option<String> }`. The profile notes on the place's record that its
+  gone release has started, then runs the release command its last run
+  stored, once, with the environment stored with it (the place's ports
+  and the toolchain's captured environment, `toolchain.sh` in the run's
+  directory, among it), with the place's scratch directory as its
+  working directory; then it does what `free` does, whatever the command
+  did. `ran` is false when no run stored a release command. A place
+  whose record already notes a started gone release is freed with
+  nothing run, so a free that failed part way and is tried again never
+  runs the release a second time. Only a failure to free (I/O) is an
+  error; the command's failure is `failed`, with its output's tail.
+
+The stored release, not the policy's, is the one sluice holds: building
+it afresh (`checks::release_request`) runs the `[tests] toolchain` in
+the place's path, which is what failed on deneb, and reads a policy the
+place never ran under.
+
 In the places profile, `Runs` gains `discard(name)` and
 `discard_all(place)`: `remove` and `remove_all_with` without the
-`release` call. `remove_worktree` already succeeds on a registered
+`release` call; and `release_gone(name, cwd)`: the stored release of the
+place's last run that has one, run as `release` runs it but in `cwd`,
+its output kept in the run's `release.log`. `remove_worktree` already succeeds on a registered
 worktree whose directory is gone: `git worktree remove --force` on a
 missing directory exits 0 and drops the registration (checked against
 git 2.54 on deneb), so `free` needs no `git worktree prune`, which
@@ -115,7 +140,9 @@ are spent it leaves `release` and stays in `failed_releases` with
 tries and reach the hold on their own.
 
 The log gains `release_failed { place, failed, tries, held }` (one per
-failed try; `held` true on the last) and `gone { place, worktree? }`;
+failed try; `held` true on the last) and `gone { place, worktree?, ran,
+failed? }`, `ran` saying whether a stored release ran and `failed` what
+it printed when it failed;
 `released` gains `accepted: Option<String>`, the failure the operator
 accepted.
 
@@ -124,8 +151,9 @@ accepted.
 `Sluice::release_made(branch, place, passed) -> Result<ReleaseOutcome>`
 in the core, called under the branch's lock:
 
-1. `checkout.gone(place)`: free it, drop it from `release`, `passed`
-   and `failed_releases`, log `gone`. Done.
+1. `checkout.gone(place)`: `release_gone` it, drop it from `release`,
+   `passed` and `failed_releases`, log `gone` with how its release
+   went. Done, whatever the release did; it is never tried again.
 2. Otherwise `checkout.release(place, passed)`. On success drop it from
    all three lists and log `released`.
 3. On error, add a try in `failed_releases`, log `release_failed`;
@@ -135,9 +163,12 @@ in the core, called under the branch's lock:
 Only a failure to write the records is returned as an error; a failed
 release is an outcome. `perform_releases` loops over `release` with it,
 skipping nothing but a stopped place; `recover` opens the stale run
-whatever its checkout's release did; `execute` (81) skips a place
-already stopped and still claims nothing while any such place exists,
-as 81 says. `Round` gains `releases: Vec<ReleaseOutcome>` (failed and
+whatever its checkout's release did; `execute` (81) runs `release_made`
+for each place it left that is not stopped, and then claims up to its
+bound whatever those releases did: a place is either released, gone or
+held once its release has been tried, and a held place bars no claim
+(81). Only a failure to write the records stops the host's claims for
+that round. `Round` gains `releases: Vec<ReleaseOutcome>` (failed and
 held this round), for the CLI to print.
 
 `release_retries` is a branch rule (`Rules.release_retries: u32`,
@@ -152,18 +183,19 @@ branch's records for each release.
 
 ### D4. A gone working copy, everywhere
 
-- `release_abandoned` calls `checkout.free(name)` for a gone worktree's
-  place, never `release_policy` or `release_session`, and logs `gone`
-  with the worktree. `Abandoned` loses `released`/`why` for `freed:
-  bool` and `error`; a failed free is the profile's I/O failing, warned
-  and tried at the next run, which runs nothing either.
-- `release_unusable_previews` calls `free` for a gone preview and logs
-  `gone`.
+- `release_abandoned` calls `checkout.release_gone(name)` for a gone
+  worktree's place, never `release_policy` or `release_session`, and
+  logs `gone` with the worktree and how its release went. `Abandoned`
+  carries `freed: bool`, `ran: bool`, `failed: Option<String>` (the
+  release's failure) and `error` (a failed free: the profile's I/O
+  failing, warned and tried at the next run, which runs nothing, D1).
+- `release_unusable_previews` calls `release_gone` for a gone preview
+  and logs `gone`.
 - `release_made` checks `gone` first (D3).
-- `Runs::release`'s fallback to `SLUICE_TMP` for a missing `cwd` goes:
-  a release command whose working copy is gone is never started, by any
-  path, so the fallback would hide a path D3 or D4 missed. It returns an
-  error naming the missing directory instead.
+- `Runs::release` keeps refusing to start a command whose working copy
+  is gone, naming the directory: the only path that runs a gone place's
+  release is `Runs::release_gone`, given the scratch directory, so a
+  path D3 or D4 missed fails loudly rather than running in a fallback.
 
 ### D5. A preview's and a worktree's failed release, on their records
 
@@ -203,8 +235,10 @@ ruling (123).
 - The try that spends the retries: "<name> is held: its release failed
   4 times: <what failed>. `sluice release <name>` runs it again;
   `sluice release <name> --accept-failure` frees it without".
-- A gone working copy: "freed <worktree>: it no longer exists, so
-  nothing was run; its runs ended, its ports free".
+- A gone working copy: "freed <worktree>: it no longer exists; its
+  release ran once from its scratch directory" (or "…its release failed
+  once from its scratch directory: <what failed>", or "…it had no
+  release to run"), then "its runs ended, its ports free".
 - `sluice status <branch>`: a "held checkouts" block, one line each
   (name, tries, what failed, since) and the two commands; `--json` adds
   `held: [{place, failed, tries, at, stopped}]`. `sluice status` with no
@@ -218,29 +252,35 @@ stopped place prints nothing on later rounds.
 ### D8. Rules and ADR
 
 ADR 0047, "A failing release holds its checkout, not its branch",
-records D1 to D4. Rule core.10's Details gain under "Not ruled out": a
-place whose working copy is gone freed without its release command, and
-a place freed at the operator's accepting its failure (123); core.16's
-"the next round or `sluice exec` releasing a session's place whose
-worktree no longer exists" becomes "freeing", running nothing. Both
-cite 123 and ADR 0047, in `docs/architecture/core.md` and the site's
-`architecture/rules.md`.
+records D1 to D4 and the amended 81. Rule core.10's Details gain under
+"Not ruled out": a place whose working copy is gone, its stored release
+run once in its scratch directory and the place freed whatever it did;
+and a place freed at the operator's accepting its failure, with nothing
+run (123). core.16's "freeing a session's place whose worktree no longer
+exists" says its stored release runs once first, no policy read and no
+toolchain entered. core.23's rule says "until each such place is
+released or held", and its Details gain under "Not ruled out": a claim
+taken while a place the host made is held, named with what failed (81,
+123). Each cites 123 and ADR 0047, in `docs/architecture/core.md` and
+the site's `architecture/rules.md`.
 
 ## Risks / Trade-offs
 
-- [A gone checkout's stack is left running] → what a removed worktree's
-  checks handed off (containers) is no longer torn down by sluice. 123
-  rules it: with no working copy the release command cannot run as it
-  was written to. `gone` in the log names the place so the operator can
-  look.
+- [A gone checkout's release written for its working copy] → a release
+  command that reads files from its tree finds none in the scratch
+  directory and fails; 123 rules it: run once, recorded in `gone` with
+  what failed, freed anyway. A release that tears down a stack by name
+  or port (containers) still works, which is why it runs.
+- [A gone checkout's release that hangs] → held to its run's time limit,
+  as every release is, then its group ended.
 - [Accepting a failure leaks what the release would have removed] →
   the operator's choice, logged with what failed.
 - [A place in `release` from an older sluice and a newer one both
   writing] → the versioned update (62) refuses the stale write; a
   release run twice is safe (ADR 0016).
-- [A returning host with a held checkout claims nothing, forever] → 81
-  as written; it is listed held, and the operator's release ends it.
-  Whether 123 lifts 81 is a question for the design.
+- [A returning host claims with a held checkout] → 81 as amended: the
+  checkout keeps its ports and disk until it is released, so the host's
+  claims run in other places beside it.
 
 ## Migration Plan
 
@@ -248,6 +288,6 @@ None beyond serde defaults: `failed_releases`, `release_failed`,
 `accepted` and the new log events default empty, and an older sluice
 reading a branch file with `failed_releases` ignores the unknown field
 (`BranchDoc` has no `deny_unknown_fields`). Deneb's vanished worktree
-place on swancloud is freed by the first round after upgrading.
-Swancloud's `sluice/try/main/48` was cleared by hand on the user's word;
-a place like it is tried and held.
+place on swancloud has its stored release run once, and is freed, by the
+first round after upgrading. Swancloud's `sluice/try/main/48` was
+cleared by hand on the user's word; a place like it is tried and held.

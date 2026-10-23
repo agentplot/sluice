@@ -4,8 +4,9 @@
 
 Says what happens when sluice releases a checkout it made or a
 worktree's place it adopted: a release that fails holds the checkout,
-never the branch, and a checkout whose working copy is gone is freed
-with nothing run (123, 25, 34).
+never the branch or its host's claims, and a checkout whose working
+copy is gone has its stored release run once and is freed whatever it
+did (123, 81, 25, 34).
 
 ## ADDED Requirements
 
@@ -74,19 +75,20 @@ reported as the submission's outcome (123, 122).
 - **THEN** the run is opened again and started in another checkout, and
   the failed checkout is held as above
 
-### Requirement: A returning host's held checkout stops only that host
+### Requirement: A held checkout bars no claim
 
 A host that releases the checkouts it left before it claims (81) SHALL
-treat a failed release as above: held, named, tried again, then reported.
-That host SHALL claim no run while it holds such a checkout (81); every
-other host SHALL go on claiming the branch's runs.
+treat a failed release as above: held, named, tried again, then
+reported. Once each checkout it left is released or held, the host
+SHALL claim the branch's open runs as usual, up to its bound; a held
+checkout SHALL never keep its host from claiming (81, 123).
 
 #### Scenario: Back with a checkout that will not release
 
 - **WHEN** host A returns with a checkout left from a lapsed claim whose
-  release fails, and host B is up
-- **THEN** host A claims nothing and shows the checkout held, and host B
-  claims and reports the branch's open runs
+  release fails, and the branch has open runs
+- **THEN** host A shows the checkout held with what failed, claims open
+  runs in other checkouts in the same round, and reports their results
 
 ### Requirement: The operator releases a held checkout by its name
 
@@ -144,26 +146,52 @@ and SHALL never release a worktree whose directory exists on its own
   keeps its ports, and `sluice status` lists it with what failed, and no
   round releases it
 
-### Requirement: A checkout whose working copy is gone is freed at once
+### Requirement: A checkout whose working copy is gone is released once and freed
 
 When the working copy of a checkout sluice holds no longer exists,
 whether a worktree's, a combination's or a preview's, the next run or
-round on the host SHALL end its runs and let go its scratch directory,
-ports and record, and SHALL run nothing in its name: no toolchain and no
-release command. Its branch's log SHALL hold `gone` naming it, and
-sluice SHALL never try it again (123).
+round on the host SHALL run its release once, from what sluice itself
+holds for it: the release command its last run stored, with the
+environment and ports stored with it, in the checkout's scratch
+directory, entering no toolchain and reading no policy. A checkout whose
+runs stored no release command SHALL have nothing run (123).
 
 #### Scenario: A worktree removed by hand
 
-- **WHEN** an agent's worktree that ran `sluice exec` is removed with
+- **WHEN** an agent's worktree that ran `sluice exec` under a policy
+  with a `[tests] toolchain` and a release command is removed with
   `rm -rf`, and another agent runs `sluice submit` and waits
-- **THEN** the first round says once that the worktree is gone and its
-  ports are free, the toolchain and the release command never run, the
-  log holds `gone` naming it, and no later round mentions it
+- **THEN** the first round runs the stored release command once, from
+  the worktree's scratch directory with the worktree's port in its
+  environment, the toolchain is not run, the round says once that the
+  worktree is gone and its ports are free, the log holds `gone` naming
+  it, and no later round runs its release or mentions it
+
+### Requirement: A gone checkout is freed whatever its release did
+
+Once a gone checkout's release has run, or found nothing to run, sluice
+SHALL end its runs and let go its scratch directory, ports and record,
+whatever the release did. Its branch's log SHALL hold `gone` naming it
+and saying how the release went, and sluice SHALL never try it again
+(123).
+
+#### Scenario: A gone checkout's release fails
+
+- **WHEN** a removed worktree's stored release command exits 2
+- **THEN** its ports and record are freed all the same, the log holds
+  `gone` with what the command printed, and the release is never run
+  again
 
 #### Scenario: A combination's checkout deleted
 
 - **WHEN** a combination's checkout directory is deleted before its
   result is read
-- **THEN** on release nothing is run in it, git no longer lists it as a
-  worktree, its ports are free, and the log holds `gone` naming it
+- **THEN** on release its stored release command runs once in its
+  scratch directory, git no longer lists it as a worktree, its ports are
+  free, and the log holds `gone` naming it
+
+#### Scenario: Nothing stored to run
+
+- **WHEN** a removed worktree's runs stored no release command
+- **THEN** nothing is run, its ports and record are freed, and the log
+  holds `gone` saying no release ran
