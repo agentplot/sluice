@@ -34,6 +34,13 @@
 //! still exists, so the core can release one whose worktree is gone
 //! (clause 97).
 //!
+//! A release of a session's place or of a preview that fails keeps the
+//! place's record, with what failed, how many times it was tried and
+//! whether it is held (123): a session's place at once, since no round
+//! releases it, and a preview once it has been tried more than its
+//! branch's `release_retries`. [`Checkout::free`] lets go of a place
+//! with nothing run in its name.
+//!
 //! A preview (previews-1 clauses 98 to 101) is a place made as a
 //! candidate's is, at a revision its branch has landed, and released only
 //! when asked, or by the core when its command failed or its checkout is
@@ -61,8 +68,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, CheckedOut, Checkout, LastResult, Limits, Place, PreviewPlace, ReleasePolicy,
-    Released, Rev, RunHandle, SessionPlace, Setting, Settings,
+    Adopted, CheckedOut, Checkout, LastResult, Limits, Place, PreviewPlace, ReleaseFailure,
+    ReleasePolicy, Released, Rev, RunHandle, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -131,6 +138,9 @@ struct Made {
     /// 97).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_result: Option<LastResult>,
+    /// A session's place or a preview: its release failed, and how (123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_failed: Option<ReleaseFailure>,
 }
 
 impl Made {
@@ -150,6 +160,7 @@ impl Made {
             run: None,
             failed: None,
             last_result: None,
+            release_failed: None,
         }
     }
 }
@@ -462,7 +473,7 @@ impl Places {
             made: made.last_run.clone().unwrap_or_default(),
             run: made.run.clone().map(RunHandle),
             failed: made.failed.clone(),
-            release_failed: None,
+            release_failed: made.release_failed.clone(),
         }
     }
 
@@ -577,6 +588,33 @@ impl Places {
         match std::fs::remove_file(self.record(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
+        }
+    }
+
+    /// 123: keep on the place `name`'s record, while it is there, that its
+    /// release failed with `e`: one more try, held once `stop` says so of
+    /// its tries, and held still once held.
+    fn keep_failure(&self, name: &str, e: &anyhow::Error, stop: impl Fn(u32) -> bool) {
+        let kept = (|| -> Result<()> {
+            let _lock = self.lock_records()?;
+            let Some(mut made) = self.read_record(name)? else {
+                return Ok(());
+            };
+            let before = made.release_failed.take();
+            let tries = before.as_ref().map_or(0, |f| f.tries) + 1;
+            made.release_failed = Some(ReleaseFailure {
+                failed: format!("{e:#}"),
+                tries,
+                at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                stopped: before.is_some_and(|f| f.stopped) || stop(tries),
+            });
+            self.write_record(name, &made)
+        })();
+        if let Err(k) = kept {
+            tracing::warn!(
+                sluice.place = name,
+                "keeping a failed release on its place failed: {k:#}"
+            );
         }
     }
 
@@ -1171,23 +1209,31 @@ impl Checkout for Places {
         if made.kind != Kind::Session {
             bail!("place {name} is a candidate's, not a session's");
         }
-        // 95: the policy's release command, built now, under the executor
-        // its runs had; the last run's only when no policy is given.
-        let (with, released) = match policy {
-            None => (ReleaseWith::LastRun, Released::LastRun),
-            Some(p) => {
-                let build = self
-                    .release
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("no release command builder is bound"))?;
-                let place = self.session_place(name, &made)?;
-                let request = build(&place, &p.tests, &p.limits, &self.runs.release_dir(name))?;
-                (ReleaseWith::Fresh(request), Released::Policy)
-            }
-        };
-        self.runs.remove_all_with(name, with)?;
-        self.let_go(name, made.block)?;
-        Ok(released)
+        let released = (|| {
+            // 95: the policy's release command, built now, under the
+            // executor its runs had; the last run's only when no policy is
+            // given.
+            let (with, released) = match policy {
+                None => (ReleaseWith::LastRun, Released::LastRun),
+                Some(p) => {
+                    let build = self
+                        .release
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("no release command builder is bound"))?;
+                    let place = self.session_place(name, &made)?;
+                    let request = build(&place, &p.tests, &p.limits, &self.runs.release_dir(name))?;
+                    (ReleaseWith::Fresh(request), Released::Policy)
+                }
+            };
+            self.runs.remove_all_with(name, with)?;
+            self.let_go(name, made.block)?;
+            Ok(released)
+        })();
+        // 123: held at once: no round releases a session's place (25).
+        if let Err(e) = &released {
+            self.keep_failure(name, e, |_| true);
+        }
+        released
     }
 
     fn session_places(&self) -> Result<Vec<SessionPlace>> {
@@ -1232,7 +1278,7 @@ impl Checkout for Places {
                 ports: made.ports,
                 last_run: made.last_run,
                 last_result: made.last_result,
-                release_failed: None,
+                release_failed: made.release_failed,
             });
         }
         out.sort_by(|a, b| a.worktree.cmp(&b.worktree));
@@ -1432,7 +1478,7 @@ impl Checkout for Places {
             .collect())
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>, _retries: u32) -> Result<bool> {
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
         let Some(made) = self.read_record(name)? else {
             // A stop part way may have left its run: end it all the same.
             self.runs.remove(name)?;
@@ -1442,8 +1488,12 @@ impl Checkout for Places {
             bail!("place {name} is not a preview");
         }
         // 34: everything started in it ends, its release command included
-        // (ADR 0016), before its checkout goes.
-        self.runs.remove(name)?;
+        // (ADR 0016), before its checkout goes; 123: a release command that
+        // fails keeps the preview, held once its tries are spent.
+        if let Err(e) = self.runs.remove(name) {
+            self.keep_failure(name, &e, |tries| tries > retries);
+            return Err(e);
+        }
         self.remove_worktree(&self.worktree_path(name))?;
         let tmp = self.tmp(name);
         if tmp.exists() {

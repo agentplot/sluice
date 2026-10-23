@@ -1087,3 +1087,202 @@ fn checked_out_lists_the_worktrees_on_a_branch() {
     assert_eq!(found[0].head.0, repo.rev("main"));
     p.release(NAME, false).unwrap();
 }
+
+/// A run of the place `name` in `place` that ends at once, whose release
+/// command runs `release`.
+fn ended_run(r: &Runs, name: &str, place: &Place, release: &str) {
+    r.start(
+        name,
+        &Request {
+            argv: vec!["/usr/bin/true".into()],
+            cwd: place.path.clone(),
+            env: place.env.clone(),
+            limit: None,
+            grace: 1,
+            meta: serde_json::Value::Null,
+            release: Some(vec!["/bin/sh".into(), "-c".into(), release.into()]),
+        },
+    )
+    .unwrap();
+    while matches!(r.state(name).unwrap(), sluice::runs::RunState::Running) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// 123: a combination's checkout deleted by hand is gone; its release is
+/// refused rather than run, and it is freed with nothing run in its name:
+/// its run removed, git no longer listing it, its scratch directory and
+/// record gone and its block of ports free.
+#[test]
+fn a_deleted_checkout_is_gone_and_freed_with_nothing_run() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-gone");
+    let blocks = support::Scratch::new("places-gone-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web"], &base().to_string());
+    let place = p.materialize(NAME, &rev, &settings).unwrap();
+    let r = runs(&repo);
+    let marker = repo.dir().with_extension("gone-released");
+    let _ = std::fs::remove_file(&marker);
+    ended_run(&r, NAME, &place, &format!("touch {}", marker.display()));
+    assert!(!p.gone(NAME).unwrap());
+    assert!(!p.gone("sluice/try/bolt/x/99").unwrap(), "no record");
+
+    std::fs::remove_dir_all(&place.path).unwrap();
+    assert!(p.gone(NAME).unwrap());
+    let e = p.release(NAME, false).unwrap_err();
+    assert!(format!("{e:#}").contains("was not run"), "{e:#}");
+    p.free(NAME).unwrap();
+    assert!(!marker.exists(), "the release command ran");
+    assert!(!r.dir(NAME).exists());
+    left_behind(&repo, &place);
+    assert!(p.made().unwrap().is_empty());
+    assert!(!p.gone(NAME).unwrap());
+
+    let next = p
+        .materialize("sluice/try/bolt/x/2", &rev, &settings)
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&place, "SLUICE_PORT_WEB")
+    );
+    p.release("sluice/try/bolt/x/2", false).unwrap();
+}
+
+/// 123, core.16: a session's place freed at its failure's acceptance has
+/// its runs removed and its scratch directory and ports let go, with no
+/// release command run, and its worktree left as it was.
+#[test]
+fn freeing_a_sessions_place_leaves_its_worktree() {
+    let _ports = ports_lock();
+    let (repo, _) = scratch("places-session-free");
+    let blocks = support::Scratch::new("places-session-free-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let session = repo.dir().with_extension("session");
+    let settings = ported(&["web"], "41350");
+    let (before, listed) = (others(&repo), worktrees(&repo));
+    let place = p
+        .adopt(session.to_str().unwrap(), "bolt/x", &settings, "now")
+        .unwrap();
+    let r = runs(&repo);
+    let marker = repo.dir().with_extension("session-freed");
+    let _ = std::fs::remove_file(&marker);
+    let run = r.next_run(&place.name).unwrap();
+    ended_run(&r, &run, &place, &format!("touch {}", marker.display()));
+    assert!(!p.gone(&place.name).unwrap());
+
+    p.free(&place.name).unwrap();
+    assert!(!marker.exists(), "the release command ran");
+    assert!(!r.dir(&run).exists());
+    assert!(!place.tmp.exists());
+    assert!(p.session_places().unwrap().is_empty());
+    assert!(session.join("work").exists());
+    assert_eq!(others(&repo), before);
+    assert_eq!(worktrees(&repo), listed, "the worktree is still listed");
+    let other = another_session(&repo, "after-free");
+    let next = p
+        .adopt(other.to_str().unwrap(), "bolt/x", &settings, "now")
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&place, "SLUICE_PORT_WEB")
+    );
+    p.release(&next.name, false).unwrap();
+}
+
+/// 123: a session's place whose release command fails keeps its record,
+/// held at once, with what failed and its tries, its ports and its scratch
+/// directory; freed, it is gone.
+#[test]
+fn a_failed_session_release_keeps_its_place_with_what_failed() {
+    let _ports = ports_lock();
+    let (repo, _) = scratch("places-session-failed");
+    let blocks = support::Scratch::new("places-session-failed-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let session = repo.dir().with_extension("session");
+    let place = p
+        .adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &ported(&["web"], "41400"),
+            "now",
+        )
+        .unwrap();
+    let r = runs(&repo);
+    let run = r.next_run(&place.name).unwrap();
+    ended_run(&r, &run, &place, "echo usage: scripts/preview up; exit 2");
+
+    let e = p.release_session(&place.name, None).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("usage: scripts/preview up"),
+        "{e:#}"
+    );
+    let held = p.session_places().unwrap();
+    assert_eq!(held.len(), 1);
+    let failure = held[0].release_failed.clone().expect("what failed is kept");
+    assert!(
+        failure.failed.contains("usage: scripts/preview up"),
+        "{failure:?}"
+    );
+    assert_eq!((failure.tries, failure.stopped), (1, true));
+    assert_eq!(
+        held[0].ports.get("SLUICE_PORT_WEB"),
+        place.env.get("SLUICE_PORT_WEB"),
+        "its ports are kept"
+    );
+    assert!(place.tmp.exists());
+
+    p.release_session(&place.name, None).unwrap_err();
+    let again = p.session_places().unwrap()[0]
+        .release_failed
+        .clone()
+        .unwrap();
+    assert_eq!(again.tries, 2);
+
+    p.free(&place.name).unwrap();
+    assert!(p.session_places().unwrap().is_empty());
+    assert!(!place.tmp.exists());
+    assert!(session.exists());
+}
+
+/// 123: a preview whose release command fails keeps its record with what
+/// failed, held once tried more than the retries it was given; freed, its
+/// checkout and record go with nothing run.
+#[test]
+fn a_failed_preview_release_is_held_once_its_retries_are_spent() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-preview-release-failed");
+    let blocks = support::Scratch::new("places-preview-release-failed-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let name = preview_name(&rev);
+    let (place, _) = p
+        .preview(
+            &name,
+            &rev,
+            "main",
+            &ported(&["web"], "41850"),
+            &BTreeMap::new(),
+            "now",
+        )
+        .unwrap();
+    let r = runs(&repo);
+    ended_run(&r, &name, &place, "echo usage: scripts/preview up; exit 2");
+    p.preview_run(&name, &sluice_seams::RunHandle(name.clone()))
+        .unwrap();
+
+    p.release_preview(&name, None, 1).unwrap_err();
+    let kept = p.previews().unwrap()[0].release_failed.clone().unwrap();
+    assert!(
+        kept.failed.contains("usage: scripts/preview up"),
+        "{kept:?}"
+    );
+    assert_eq!((kept.tries, kept.stopped), (1, false));
+    assert!(place.path.exists());
+    p.release_preview(&name, None, 1).unwrap_err();
+    let kept = p.previews().unwrap()[0].release_failed.clone().unwrap();
+    assert_eq!((kept.tries, kept.stopped), (2, true));
+
+    p.free(&name).unwrap();
+    left_behind(&repo, &place);
+    assert!(p.previews().unwrap().is_empty());
+}
