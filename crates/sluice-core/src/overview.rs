@@ -311,9 +311,10 @@ impl Sluice<'_> {
 }
 
 /// The host's runs against its bound (71; session-runs-1 clauses 89, 91;
-/// ADR 0035): the bound, the repository's candidates under test, the
-/// host's session runs, and the part of the bound session runs never take.
-/// It decides nothing; `session_capacity` reads the same numbers.
+/// ADR 0035): the bound, the submissions' runs running on the host, every
+/// repository's, the host's session runs, and the part of the bound
+/// session runs never take. It decides nothing; `session_capacity` reads
+/// the same numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Room {
     pub bound: usize,

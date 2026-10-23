@@ -1,7 +1,14 @@
-//! The instance's own settings, never a policy's: how many runs it has
-//! under test at once and how many cores each is given (71; ADR
-//! 0012; `docs/plans/phase-1-integrations.md` section 4), and the
-//! identity it pushes as on a forge (C.4 pushed refs).
+//! The host's own settings, never a policy's: how many checks run on it
+//! at once and how many cores each is given (71, S60; ADR 0012;
+//! `docs/plans/phase-1-integrations.md` section 4), and the identity it
+//! pushes as on a forge (C.4 pushed refs).
+//!
+//! `[runs] max` is the host's bound, shared by every repository on it and
+//! every instance of sluice serving them: a run of any of them starts only
+//! while the host's count of running checks, kept in its state
+//! (`crate::host_count`), is under it. Each run is given the cores divided
+//! by the bound, so the bound's runs together use what sluice may use and
+//! no more.
 //!
 //! `$XDG_CONFIG_HOME/sluice/config.toml` (default `~/.config`):
 //!
@@ -38,7 +45,8 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
-    /// The most runs under test at once.
+    /// The most checks running on the host at once, every repository's
+    /// together (71).
     pub bound: usize,
     /// The runs of the bound kept for submissions, which session runs never
     /// take (91).
@@ -234,8 +242,9 @@ impl Instance {
         })
     }
 
-    /// The cores each run is given, so `bound` runs at once use what
-    /// sluice may use and no more.
+    /// The cores each run is given, so the host's `bound` runs at once,
+    /// whatever repositories they are of, use what sluice may use and no
+    /// more (71).
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
     }
@@ -311,8 +320,8 @@ mod tests {
         out
     }
 
-    /// 71: the bound is the instance's, a quarter of its cores unless
-    /// its configuration says otherwise; each run gets an equal share.
+    /// 71: the bound is the host's, a quarter of its cores unless its
+    /// configuration says otherwise; each run gets an equal share.
     #[test]
     fn the_bound_and_each_runs_share() {
         let none = Instance::from_file(None, 16).unwrap();
@@ -320,6 +329,9 @@ mod tests {
         assert_eq!(Instance::from_file(None, 2).unwrap().bound, 1);
         let two = with("[runs]\nmax = 2\n", 16).unwrap();
         assert_eq!((two.bound, two.jobs()), (2, 8));
+        // S60: eighteen cores and a bound of three, six cores each.
+        let s60 = with("[runs]\nmax = 3\n", 18).unwrap();
+        assert_eq!((s60.bound, s60.jobs()), (3, 6));
         assert_eq!(with("[runs]\nmax = 32\n", 16).unwrap().jobs(), 1);
         assert!(with("[runs]\nmax = 0\n", 16).is_err());
         assert!(with("[runs]\nmin = 1\n", 16).is_err());

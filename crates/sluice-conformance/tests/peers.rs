@@ -203,6 +203,24 @@ fn a_full_host_claims_nothing() {
     assert!(claims(&h).is_empty());
 }
 
+/// satisfies: 71, 75: a claim whose start the host refuses at its bound
+/// runs nothing and is given up, open to another host
+#[test]
+fn a_claim_refused_at_the_bound_is_open_to_another_host() {
+    use sluice_core::records::RunState;
+    let h = peers();
+    opened(&h);
+    h.w().refuse_next_start();
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b"]);
+    assert!(h.w().requests().is_empty(), "nothing of it ran");
+    assert_eq!(runs(&h), [(None, RunState::Open)]);
+    as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b", "c"]);
+    assert_eq!(runs(&h), [(Some("c".into()), RunState::Testing)]);
+    assert_eq!(h.w().requests().len(), 1);
+}
+
 /// satisfies: 79, 107: a host whose signer the gate does not trust takes
 /// no run of it
 #[test]
@@ -381,6 +399,36 @@ fn the_overview_shows_hosts_their_room_and_a_lapse() {
     let hosts = as_signer(&h, "lead", None).hosts().unwrap();
     assert!(hosts[0].lapsed);
     assert_eq!(hosts[0].room, 0);
+}
+
+/// satisfies: 71, 75; the run-claims spec's "A host full with another
+/// repository's runs claims nothing"
+#[test]
+fn a_host_full_with_another_repositorys_runs_claims_nothing() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(2);
+    h.w().be_host("b");
+    h.w().other_runs(2);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert!(claims(&h).is_empty());
+}
+
+/// satisfies: 71, 107; the run-claims spec's "Another repository's runs
+/// leave less room"
+#[test]
+fn another_repositorys_runs_leave_less_room_in_a_hosts_sign_of_life() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(4);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(h.w().live_runs(), 1, "b runs main's combination");
+    h.w().be_host("b");
+    h.w().other_runs(1);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let hosts = as_signer(&h, "lead", None).hosts().unwrap();
+    assert_eq!(hosts[0].host, "b");
+    assert_eq!((hosts[0].held, hosts[0].room), (2, 2));
 }
 
 /// Design D8, rule core.22: a passing verdict written into the state with
