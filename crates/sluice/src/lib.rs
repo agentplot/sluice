@@ -90,7 +90,7 @@ Examples:
   $ sluice submit main --after 12,14 --priority 5
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
   3    sluice itself failed; the cause is on stderr
@@ -106,7 +106,7 @@ Examples:
   $ sluice wait main                     this worktree's last submission to main
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: it was blamed, or its pull request closed; or no such submission
   2    a conflict
   3    sluice itself failed; the cause is on stderr
