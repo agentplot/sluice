@@ -1019,7 +1019,7 @@ pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
     assert!(
         h.events().iter().any(|e| matches!(
             e,
-            Event::Released { place, worktree: Some(w) } if *place == gone.name && *w == worktree
+            Event::Released { place, worktree: Some(w), .. } if *place == gone.name && *w == worktree
         )),
         "{:?}",
         h.events()

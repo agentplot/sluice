@@ -497,6 +497,7 @@ impl Sluice<'_> {
                             Event::Released {
                                 place: p.name.clone(),
                                 worktree: Some(worktree.clone()),
+                                accepted: None,
                             },
                         );
                         Ok(())

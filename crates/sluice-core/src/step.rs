@@ -45,6 +45,10 @@ use crate::{verdict, Serves, Sluice, OUTPUT};
 /// row that leave a check not run and fail none on its own result.
 pub const NOT_RUN_BOUND: u32 = 3;
 
+/// 123: how many more times a checkout's release that failed is tried
+/// when the branch's policy names no `release_retries`.
+pub const RELEASE_RETRIES: u32 = 3;
+
 /// A round: how its step went, the session places it released because
 /// their worktrees no longer exist (session-runs-1 clause 97), and the
 /// previews it released because nobody can use them (previews-1 clause
@@ -194,6 +198,7 @@ impl Sluice<'_> {
                     Event::Released {
                         place: place.clone(),
                         worktree: None,
+                        accepted: None,
                     },
                 );
                 Ok(())
@@ -230,6 +235,7 @@ impl Sluice<'_> {
                         Event::Released {
                             place: place.clone(),
                             worktree: None,
+                            accepted: None,
                         },
                     );
                 }

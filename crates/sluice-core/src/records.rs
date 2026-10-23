@@ -568,6 +568,9 @@ pub struct BranchDoc {
     /// caches are saved as they are released (35).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub passed: Vec<String>,
+    /// 123: each place whose release failed, still tried or held.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_releases: Vec<FailedRelease>,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
     /// 72: the instance that keeps the branch, on a branch whose records
@@ -591,10 +594,33 @@ impl BranchDoc {
             landing: None,
             release: Vec::new(),
             passed: Vec::new(),
+            failed_releases: Vec::new(),
             outbox: Vec::new(),
             lead: None,
         }
     }
+}
+
+/// 123: a place whose release failed. It stays in the branch's `release`
+/// while it is tried; once its tries pass the branch's `release_retries`
+/// it leaves `release`, `stopped`, and is held until the operator releases
+/// it or accepts its failure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedRelease {
+    pub place: String,
+    /// What failed, the end of what the release command printed included.
+    pub failed: String,
+    /// How many times its release was tried, the first included.
+    pub tries: u32,
+    /// When it last failed.
+    pub at: String,
+    /// It is tried no more: held.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
+    /// The instance that made it, on a branch whose records are on its
+    /// remote: only that host can release it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +762,26 @@ pub enum Event {
         place: String,
         /// A session's place released because this, its worktree, no
         /// longer exists (session-runs-1 clause 97).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
+        /// 123: freed at the operator's accepting that its release failed,
+        /// with nothing run: what failed last, if its release ever did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accepted: Option<String>,
+    },
+    /// 123: a release that failed, and how many times it has been tried;
+    /// `held` on the try that spent its retries.
+    ReleaseFailed {
+        place: String,
+        failed: String,
+        tries: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        held: bool,
+    },
+    /// 123: a place whose working copy was gone, freed with nothing run in
+    /// its name; for a session's place, its worktree.
+    Gone {
+        place: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
     },
@@ -904,4 +950,69 @@ pub fn to_document<T: Serialize>(value: &T) -> Vec<u8> {
     let mut v = serde_json::to_vec_pretty(value).expect("a record serializes");
     v.push(b'\n');
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{to_document, BranchDoc, Event, FailedRelease, LogLine};
+
+    /// 123: a branch file written before failed releases reads with none,
+    /// and one holding them, and the new events, reads back as written.
+    #[test]
+    fn failed_releases_read_and_round_trip() {
+        let old = r#"{"schema":"sluice/branch@1","branch":"main","log":"sluice/log@1",
+            "release":["sluice/try/main/48"],"outbox":[]}"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.failed_releases.is_empty());
+        assert_eq!(doc.release, ["sluice/try/main/48"]);
+        let written = String::from_utf8(to_document(&doc)).unwrap();
+        assert!(!written.contains("failed_releases"), "{written}");
+
+        let mut doc = BranchDoc::new("main");
+        doc.failed_releases.push(FailedRelease {
+            place: "sluice/try/main/48".into(),
+            failed: "usage: scripts/preview up".into(),
+            tries: 4,
+            at: "2026-10-23T09:00:00Z".into(),
+            stopped: true,
+            host: Some("deneb".into()),
+        });
+        let back: BranchDoc = serde_json::from_slice(&to_document(&doc)).unwrap();
+        assert_eq!(back.failed_releases, doc.failed_releases);
+
+        for event in [
+            Event::ReleaseFailed {
+                place: "sluice/try/main/48".into(),
+                failed: "usage: scripts/preview up".into(),
+                tries: 4,
+                held: true,
+            },
+            Event::Gone {
+                place: "session//w/a".into(),
+                worktree: Some("/w/a".into()),
+            },
+            Event::Released {
+                place: "sluice/try/main/48".into(),
+                worktree: None,
+                accepted: Some("usage: scripts/preview up".into()),
+            },
+        ] {
+            let line = LogLine {
+                schema: super::LOG_SCHEMA.into(),
+                at: "2026-10-23T09:00:00Z".into(),
+                event,
+            };
+            let text = serde_json::to_string(&line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<LogLine>(&text).unwrap(),
+                line,
+                "{text}"
+            );
+        }
+        let line: LogLine = serde_json::from_str(
+            r#"{"at":"2026-10-23T09:00:00Z","event":"released","place":"sluice/try/main/48"}"#,
+        )
+        .unwrap();
+        assert!(matches!(line.event, Event::Released { accepted: None, .. }));
+    }
 }
