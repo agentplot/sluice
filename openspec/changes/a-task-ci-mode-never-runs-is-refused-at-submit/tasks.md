@@ -6,7 +6,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 1. The policy's lines and the seam
 
-- [ ] 1.1 `crates/sluice-core/src/policy.rs`: `RulesForm::required` as
+- [x] 1.1 `crates/sluice-core/src/policy.rs`: `RulesForm::required` as
   `Vec<toml::Spanned<String>>`; `Rules` keeps each required entry's line
   in the policy text beside `required`, which keeps its form for every
   other reader. Add unit tests for an entry on one line and for one of a
