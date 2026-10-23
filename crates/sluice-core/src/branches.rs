@@ -8,7 +8,7 @@
 //! 121: the operator accepts the revision a held branch is read at, under
 //! the same lock; it moves nothing.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use sluice_seams::{Moved, Rev};
 
 use crate::records::Event;
@@ -97,16 +97,21 @@ impl Sluice<'_> {
         let Some(read) = self.seams.branch.read(branch)? else {
             return Ok(Err(AcceptRefusal::Absent));
         };
+        // A refusal writes nothing, not even records for a branch that has
+        // none.
+        let Some(hold) = self.read_line(branch)?.doc.held else {
+            return Ok(Err(AcceptRefusal::NotHeld(read)));
+        };
+        if hold.read != read || !names(revision, &read) {
+            return Ok(Err(AcceptRefusal::NotHeldAt {
+                held: hold.read,
+                read,
+            }));
+        }
         let now = self.now();
         self.update(branch, |l| {
-            let Some(hold) = l.doc.held.clone() else {
-                return Ok(Err(AcceptRefusal::NotHeld(read.clone())));
-            };
-            if hold.read != read || !names(revision, &read) {
-                return Ok(Err(AcceptRefusal::NotHeldAt {
-                    held: hold.read,
-                    read: read.clone(),
-                }));
+            if l.doc.held.as_ref() != Some(&hold) {
+                bail!("{branch}'s hold changed while its revision was accepted");
             }
             l.doc.landed = Some(read.clone());
             l.doc.held = None;
@@ -117,15 +122,17 @@ impl Sluice<'_> {
                     lacked: hold.lacks.clone(),
                 },
             );
-            Ok(Ok(Acceptance {
-                revision: read.clone(),
-                lacked: hold.lacks,
-            }))
-        })
+            Ok(())
+        })?;
+        Ok(Ok(Acceptance {
+            revision: read,
+            lacked: hold.lacks,
+        }))
     }
 
     /// 104: make `branch` at `from`'s current revision, when the policy
-    /// there gives it a gate and its records hold nothing still queued.
+    /// there gives it a gate and its records hold nothing still queued;
+    /// that revision is the one its reads must contain (121).
     pub fn make_branch(&self, branch: &str, from: &str) -> Result<Result<Rev, MakeRefusal>> {
         let Some(_lock) = self.seams.state.lock(branch)? else {
             return Ok(Err(MakeRefusal::Busy));
@@ -150,7 +157,17 @@ impl Sluice<'_> {
             return Ok(Err(MakeRefusal::Queued(queued)));
         }
         Ok(match self.seams.branch.make(branch, &at)? {
-            Moved::Moved => Ok(at),
+            Moved::Moved => {
+                // 121: it stands on the revision it was made at until its
+                // first landing, whatever a branch of its name removed
+                // before had landed.
+                self.update(branch, |l| {
+                    l.doc.landed = Some(at.clone());
+                    l.doc.held = None;
+                    Ok(())
+                })?;
+                Ok(at)
+            }
             Moved::Elsewhere(found) => Err(MakeRefusal::Present(found)),
         })
     }
@@ -179,7 +196,16 @@ impl Sluice<'_> {
             return Ok(Err(RemoveRefusal::NotLanded(tip)));
         }
         Ok(match self.seams.branch.remove(branch, &tip)? {
-            Moved::Moved => Ok(tip),
+            Moved::Moved => {
+                // 121: no reader sees a hold on a branch that is gone.
+                if self.read_line(branch)?.doc.held.is_some() {
+                    self.update(branch, |l| {
+                        l.doc.held = None;
+                        Ok(())
+                    })?;
+                }
+                Ok(tip)
+            }
             Moved::Elsewhere(found) => Err(RemoveRefusal::Elsewhere(found)),
         })
     }

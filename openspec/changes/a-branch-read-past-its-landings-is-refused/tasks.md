@@ -25,7 +25,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 ## 4. Accepting a revision
 
 - [x] 4.1 `Sluice::accept_branch(branch, revision)` in `branches.rs` under the branch's lock: absent → exit 1; not held, or the read or the hold's `read` not the revision given → refusal naming what the branch reads; otherwise set `landed`, clear `held`, log `accepted`; verify conformance cases for each outcome, and that the next round logs `moved` and forms on the accepted revision.
-- [ ] 4.2 `make_branch` writes `landed` as the made revision and clears `held` once the move succeeds, nothing on a refusal; `remove_branch` clears `held` once its move succeeds; verify conformance cases for a bolt removed and made again from a revision lacking its old landing, which is not held, and for a held branch removed, whose records then hold no hold.
+- [x] 4.2 `make_branch` writes `landed` as the made revision and clears `held` once the move succeeds, nothing on a refusal; `remove_branch` clears `held` once its move succeeds; verify conformance cases for a bolt removed and made again from a revision lacking its old landing, which is not held, and for a held branch removed, whose records then hold no hold.
 - [ ] 4.3 `sluice branch accept <branch> <revision> [--json]` in `lib.rs` and `branch.rs`, exits 0, 1, 2 as create and delete, help with an example; verify `tests/cli.rs` cases for each exit and the JSON document, and `tests/usage.rs` for the help.
 
 ## 5. Saying it
