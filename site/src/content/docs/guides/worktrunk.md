@@ -84,8 +84,6 @@ submitted. A team can mix them, some agents on `wt submit` and some on
 Everything `sluice submit` takes, `wt submit` takes: `--check` to ask
 whether the work would conflict, `--no-wait` to return once queued,
 `--after` to land behind named submissions, and `--json` for scripts.
-On a fleet, `--remote` makes the submit only submit and wait, and a
-`sluice run` elsewhere runs the rounds.
 
 sluice never touches an agent's worktree. It tests each combination in a
 clean checkout of its own, made with `git worktree add --detach` and
