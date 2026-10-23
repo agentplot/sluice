@@ -2949,3 +2949,66 @@ fn branch_accept_says_what_it_recorded() {
         )
     );
 }
+
+/// The line a held branch is said with.
+fn held_text(read: &str, lacks: &str) -> String {
+    format!(
+        "held: {BRANCH} reads {}, which lacks the landing {}; put the landing back on \
+         {BRANCH}, or run sluice branch accept {BRANCH} {}",
+        &read[..7],
+        &lacks[..7],
+        &read[..7]
+    )
+}
+
+/// 121: `sluice step` says the branch is held, with both revisions and
+/// the two ways out; under `--json`, the outcome `held` and the hold.
+#[test]
+fn step_says_a_branch_is_held() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    assert_eq!(
+        sluice(&f, &["step", BRANCH]),
+        (0, format!("{}\n", held_text(&made, &landing)))
+    );
+    let (code, out) = sluice(&f, &["step", BRANCH, "--json"]);
+    assert_eq!(code, 0);
+    let v = json(&out);
+    assert_eq!(v["outcome"], "held");
+    assert_eq!(
+        (&v["held"]["read"], &v["held"]["lacks"]),
+        (&serde_json::json!(made), &serde_json::json!(landing))
+    );
+    assert!(v["held"]["since"].is_string());
+}
+
+/// 121: `sluice run` says a hold once, not on every pass, and again for
+/// another revision read lacking the landing.
+#[test]
+fn run_says_a_hold_once() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    // Read at another revision lacking it after the second pass.
+    let beside = f.world.work(
+        &sluice_seams::Rev::new(made.clone()),
+        &[("plugin/c", Some("c"))],
+    );
+    let world = f.world.clone();
+    let at = beside.clone();
+    let pause = Then(Cell::new(0), move |n| {
+        if n == 2 {
+            world.set_branch(BRANCH, &at);
+        }
+        true
+    });
+    let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "5"]);
+    assert_eq!(code, 0);
+    let held: Vec<&str> = out.lines().filter(|l| l.starts_with("held: ")).collect();
+    assert_eq!(
+        held,
+        [held_text(&made, &landing), held_text(&beside.0, &landing)],
+        "{out}"
+    );
+}

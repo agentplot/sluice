@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
-use sluice_core::records::{Event, FailedTask, State, Submission};
+use sluice_core::records::{BranchHold, Event, FailedTask, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Forecasted, Requester, Seams, Serves, Sluice, Status, Step,
     SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
@@ -829,16 +829,20 @@ pub fn run(
                     Step::Contended => "contended",
                     Step::Held => "held",
                 };
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({
-                        "branch": branch,
-                        "outcome": outcome,
-                        "released": exec::abandoned_json(&round.released),
-                        "previews_released": preview::dropped_json(&round.previews),
-                    })
-                )?;
+                let mut doc = serde_json::json!({
+                    "branch": branch,
+                    "outcome": outcome,
+                    "released": exec::abandoned_json(&round.released),
+                    "previews_released": preview::dropped_json(&round.previews),
+                });
+                if let Some(hold) = &round.held {
+                    doc["held"] = held_json(hold);
+                }
+                writeln!(out, "{doc}")?;
+                return Ok(0);
+            }
+            if let Some(hold) = &round.held {
+                writeln!(out, "{}", held_line(&branch, hold))?;
                 return Ok(0);
             }
             let word = match round.step {
@@ -855,6 +859,8 @@ pub fn run(
             let s = s.serving(Serves::Every);
             s.check_host_systems()?;
             let mut n = 0;
+            // 121: each branch's hold as last said, so it is said once.
+            let mut said: BTreeMap<String, BranchHold> = BTreeMap::new();
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
@@ -874,6 +880,21 @@ pub fn run(
                         let round = s.round(&branch)?;
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
+                        match round.held {
+                            Some(hold) => {
+                                let new = said.get(&branch).is_none_or(|h| {
+                                    (&h.read, &h.lacks) != (&hold.read, &hold.lacks)
+                                });
+                                if new {
+                                    writeln!(out, "{}", held_line(&branch, &hold))?;
+                                    said.insert(branch.clone(), hold);
+                                }
+                            }
+                            None if round.step == Step::Stepped => {
+                                said.remove(&branch);
+                            }
+                            None => {}
+                        }
                     }
                 }
                 n += 1;
@@ -1272,6 +1293,21 @@ pub fn run(
             other => anyhow::bail!("sluice runs no {other} hook"),
         },
     }
+}
+
+/// 121: a branch held because the revision it is read at lacks its last
+/// landing, with both revisions and the two ways out.
+pub(crate) fn held_line(branch: &str, hold: &BranchHold) -> String {
+    let (read, lacks) = (hold.read.short(), hold.lacks.short());
+    format!(
+        "held: {branch} reads {read}, which lacks the landing {lacks}; \
+         put the landing back on {branch}, or run sluice branch accept {branch} {read}"
+    )
+}
+
+/// 121: the hold as `--json` carries it.
+pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
+    serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
 }
 
 pub(crate) fn hashes(ids: &[u64]) -> String {
