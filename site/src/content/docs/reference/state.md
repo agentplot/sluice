@@ -143,6 +143,29 @@ its [`[signing]`](/sluice/reference/configuration/#signing) names. sluice counts
 only once the signature checks against a signer the branch's policy
 names.
 
+## A branch's own record
+
+`branch.json` holds the queue's own state: the revision its
+combinations are formed on, the combinations, a landing under way and
+the outcomes still to tell. Two fields say what a round reads the
+branch against:
+
+- `landed`: the revision every later read of the branch must contain.
+  A landing sets it to the revision it landed, `sluice branch accept`
+  to the revision accepted, and `sluice branch create` to the revision
+  it made the branch at. A record an older sluice wrote has none. The
+  next round takes the log's last `landed` line, or the revision the
+  queue was last formed on when that one lacks the landing, as for a
+  branch deleted and made again.
+- `held`: while the revision the branch was last read at lacks
+  `landed`, `{"read": "10e4791a2b", "lacks": "c43609b8e1", "since":
+  "2026-10-23T09:16:40Z"}`. Nothing is formed or landed on the branch
+  meanwhile. It goes on the first round that reads a revision holding
+  `landed`, or with `sluice branch accept`.
+
+Both are left out when there is nothing to say, so `sluice/branch@1`
+is unchanged, and an older sluice reading them passes over them.
+
 ## A submission
 
 ```json
@@ -224,6 +247,15 @@ run:
 `landing` is written before the branch moves and `landed` after, so a
 round that crashes between the two is finished correctly by the next
 one.
+
+`held` is logged once for each revision a held branch is read at, with
+the landing it lacks, and `accepted` when the operator accepts that
+revision with `sluice branch accept`:
+
+```json
+{"schema":"sluice/log@1","event":"held","read":"10e4791a2b","lacks":"c43609b8e1"}
+{"schema":"sluice/log@1","event":"accepted","revision":"10e4791a2b","lacked":"c43609b8e1"}
+```
 
 `released` is logged when a combination's checkout is released, and
 when a run or round releases the checkout of a worktree that no longer

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, Context, Result};
-use sluice_seams::{Changes, Snapshot};
+use sluice_seams::{Changes, Rev, Snapshot};
 
 use crate::records::{
     finished_file, parse_lines, submission_file, to_document, to_line, BranchDoc, Candidate, Event,
@@ -119,6 +119,23 @@ impl Line {
             Some(bytes) => parse_lines(bytes),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// The revision of the last landing the log records, as read: lines
+    /// appended since are not among them.
+    pub fn last_landed(&self) -> Result<Option<Rev>> {
+        let Some(bytes) = self.original.get(LOG_FILE) else {
+            return Ok(None);
+        };
+        let text = std::str::from_utf8(bytes)?;
+        for l in text.lines().rev().filter(|l| !l.trim().is_empty()) {
+            let line: LogLine = serde_json::from_str(l)
+                .with_context(|| format!("reading {}'s {LOG_FILE}", self.branch))?;
+            if let Event::Landed { to, .. } = line.event {
+                return Ok(Some(to));
+            }
+        }
+        Ok(None)
     }
 
     pub fn log(&mut self, at: &str, event: Event) {

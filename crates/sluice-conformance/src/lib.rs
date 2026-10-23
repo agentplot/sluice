@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use sluice_core::line::Line;
-use sluice_core::records::{parse_lines, Event, LogLine, ResultLine, Submission};
+use sluice_core::records::{parse_lines, BranchDoc, Event, LogLine, ResultLine, Submission};
 use sluice_core::session::Recorded;
 use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
@@ -239,6 +239,13 @@ pub trait Rig {
         let s = self.sluice();
         let bytes = s.seams().state.results().expect("results read");
         parse_lines(&bytes).expect("the results log parses")
+    }
+
+    /// The branch's own document, `branch.json`.
+    fn doc(&self) -> BranchDoc {
+        let s = self.sluice();
+        let snap = s.seams().state.read(BRANCH).expect("records read");
+        Line::load(BRANCH, snap).expect("the records parse").doc
     }
 
     fn log(&self) -> Vec<LogLine> {
