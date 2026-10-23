@@ -23,7 +23,7 @@ submitting, `sluice exec main`.
 
 ## 4. Docs
 
-- [ ] 4.1 `site/src/content/docs/reference/commands.md`'s exit codes: `0` is landed whatever failed after the landing, with what failed on stderr after `sluice: after the landing:`; `3` is sluice failing with the submission not landed. The using-sluice skill's exit line the same; verify `site:prose`, `plugin_docs.rs` and `plugins/sluice:validate`.
+- [x] 4.1 `site/src/content/docs/reference/commands.md`'s exit codes: `0` is landed whatever failed after the landing, with what failed on stderr after `sluice: after the landing:`; `3` is sluice failing with the submission not landed. The using-sluice skill's exit line the same; verify `site:prose`, `plugin_docs.rs` and `plugins/sluice:validate`.
 
 ## 5. Gate
 

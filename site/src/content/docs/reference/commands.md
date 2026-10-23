@@ -556,17 +556,33 @@ once its submission is decided, the submission's record.
 
 | exit | meaning |
 |---|---|
-| `0` | landed |
+| `0` | landed, whatever failed after the landing: what failed is on stderr, after `sluice: after the landing:` |
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
 | `4` | withdrawn while it was waited on |
 | `5` | `sluice wait --timeout` ran out; the submission stays queued |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
+A submission has landed once its branch holds its work, and nothing that
+fails after that changes it. A waiting submit or `sluice wait` whose
+round moves the branch and then fails, releasing the combination's
+checkout or telling the outcome, prints the landing and exits `0`. What
+failed is on stderr, on its own line:
+
+```console
+passed · landed as b7d2e94
+sluice: after the landing: the release command of … ended exit status: 1: usage: scripts/preview up
+```
+
+Under `--json`, stdout holds the submission's record alone, its `state`
+`landed`. When the round stopped before recording the landing, the
+record is the one the next round writes.
+
 Every command, not only submit, exits `3` when sluice itself fails (a
 repository it cannot open, a record it cannot read), with the cause on
-stderr, and `64` when it cannot read its command line: an unknown
-command, flag or value, or a missing argument. `64` is kept apart from
+stderr. A waiting submit or `sluice wait` does so only while the
+submission has not landed. A command exits `64` when it cannot read its
+command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
 

@@ -33,10 +33,12 @@ sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
 ```
 
-Exit codes: `0` landed, `1` failed (this submission was blamed), `2` a
-conflict or a refusal, `4` withdrawn, `5` still waiting (`sluice wait
---timeout` ran out), `130` stopped with Ctrl-C (the submission stays
-queued).
+Exit codes: `0` landed, whatever failed after the landing (what failed is
+on stderr, after `sluice: after the landing:`), `1` failed (this
+submission was blamed), `2` a conflict or a refusal, `3` sluice itself
+failed and the submission has not landed (the cause is on stderr), `4`
+withdrawn, `5` still waiting (`sluice wait --timeout` ran out), `130`
+stopped with Ctrl-C (the submission stays queued).
 
 A waiting submit also runs sluice's rounds, so it is what moves the queue on
 a single machine. Prefer it when your tool call can outlast the verdict,
