@@ -132,6 +132,14 @@ fn s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped() {
     )));
 }
 
+/// satisfies: S59, 125, 6, 12, 17, 18, 5, 50
+#[test]
+fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own() {
+    shared::s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(&Harness::new(
+        &policy(true, "fail", 4),
+    ));
+}
+
 /// satisfies: S10, 26, 49, 59
 #[test]
 fn s10_stopped_and_started_again_it_runs_nothing_already_judged() {
