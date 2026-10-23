@@ -27,7 +27,7 @@ group.
 ## 4. Docs and the decision
 
 - [x] 4.1 Write the next-numbered ADR in `docs/adr/`: a pull request a submit opened is a draft until its submitter acts. Cover the marker as ownership, the hold read from the log and the timeline, the submit under intake's lock, and GraphQL for draft state. It narrows ADR 0021's sent-back sentence to pull requests opened by hand. Cite clauses 120, 54, 67, C.5 and S56. Verify with `root:adrs`.
-- [ ] 4.2 Update `site/src/content/docs/guides/pull-requests.md` ("When things change" and the check table: `waiting: the next submit`) and `site/src/content/docs/reference/commands.md` (replace the same-head paragraph and its console example with a same-head submit that is taken). Verify with `site:prose`, every warning cleared.
+- [x] 4.2 Update `site/src/content/docs/guides/pull-requests.md` ("When things change" and the check table: `waiting: the next submit`) and `site/src/content/docs/reference/commands.md` (replace the same-head paragraph and its console example with a same-head submit that is taken). Verify with `site:prose`, every warning cleared.
 - [ ] 4.3 Update the plugins' references: `plugins/sluice/skills/using-sluice/references/verdicts.md` (the sent-back paragraph), `references/submit.md` and `plugins/sluice/skills/setting-up-sluice/references/profiles/pull-requests.md` (a submit's pull request sent back is a draft until the next submit). Verify with `plugin-sluice:validate` and the `plugin_docs` test under `cli:test`.
 
 ## 5. Integration
