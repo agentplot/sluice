@@ -25,7 +25,9 @@ use chrono::{DateTime, Utc};
 use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
-use sluice_core::{Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest};
+use sluice_core::{
+    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest,
+};
 use sluice_seams::{
     Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
 };
@@ -126,6 +128,15 @@ impl Group {
 /// A group submit's token: when it was made and its first head, short.
 fn group_token(at: DateTime<Utc>, first: &Rev) -> String {
     format!("{}-{}", at.format("%Y%m%dT%H%M%SZ"), first.short())
+}
+
+/// 125: a pull request bound to a group intake has not taken: the group's
+/// size, what of the group it waits for, and what it lacks itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Bound {
+    n: usize,
+    on: Vec<String>,
+    missing: Vec<String>,
 }
 
 /// The line written into a comment, naming the notification it tells, so
@@ -364,7 +375,7 @@ impl Pulls {
         let pulls = forge.pulls(&t.repo, branch)?;
         let mut status = s.status(branch)?;
         self.register(&t.repo, &status.submissions);
-        let names = names(&status.submissions);
+        let mut names = names(&status.submissions);
 
         // A submitted pull request closed, back in draft or on another
         // head leaves the queue.
@@ -398,16 +409,27 @@ impl Pulls {
             .filter(|p| p.from_repo(&t.repo))
             .map(|p| place(p.number))
             .collect();
-        let latest = s.latest_of(branch, &open)?;
+        let mut latest = s.latest_of(branch, &open)?;
         let pushed = self.pushed(&t.remote)?;
-        for p in pulls.iter().filter(|p| p.from_repo(&t.repo)) {
+        let ours: Vec<&Pull> = pulls.iter().filter(|p| p.from_repo(&t.repo)).collect();
+        for p in &ours {
             self.known.borrow_mut().insert(
                 place(p.number),
                 Known {
                     remote: t.remote.clone(),
-                    pull: p.clone(),
+                    pull: (*p).clone(),
                 },
             );
+        }
+        // 125: a group is taken whole, before any of it is considered alone.
+        let (taken, waits) = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest)?;
+        if taken {
+            status = s.status(branch)?;
+            self.register(&t.repo, &status.submissions);
+            names = self::names(&status.submissions);
+            latest = s.latest_of(branch, &open)?;
+        }
+        for p in ours {
             let shown = self.consider(
                 s,
                 forge,
@@ -416,6 +438,7 @@ impl Pulls {
                 branch,
                 p,
                 latest.get(&place(p.number)),
+                waits.get(&p.number),
                 &status.submissions,
                 &log,
                 &names,
@@ -543,6 +566,7 @@ impl Pulls {
         branch: &str,
         p: &Pull,
         latest: Option<&Submission>,
+        group: Option<&Bound>,
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
@@ -573,30 +597,14 @@ impl Pulls {
                 _ => return Ok(queue_shown(branch, e, subs, names)),
             }
         }
-        // Waiting: what is missing, and where it would land now.
-        let mut missing = Vec::new();
-        if p.draft {
-            missing.push("a draft".to_string());
-        } else {
-            let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
-            if have < t.conditions.reviews {
-                let need = t.conditions.reviews - have;
-                missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
-            }
-            if !t.conditions.checks.is_empty() {
-                let checks = forge.checks(&t.repo, &p.head)?;
-                for name in &t.conditions.checks {
-                    if !checks
-                        .iter()
-                        .any(|c| &c.name == name && c.standing == Standing::Passed)
-                    {
-                        missing.push(name.clone());
-                    }
-                }
-            }
-        }
+        // Waiting: what is missing, and where it would land now. One of a
+        // group waits for its group whole, and is taken only with it.
+        let missing = match group {
+            Some(g) => g.missing.clone(),
+            None => self.missing(forge, t, p)?,
+        };
         self.fetch_head(pushed, p)?;
-        if missing.is_empty() {
+        if missing.is_empty() && group.is_none() {
             let accepted = s.submit(&SubmitRequest {
                 worktree: place(p.number),
                 branch: branch.into(),
@@ -649,7 +657,140 @@ impl Pulls {
             }
             Err(r) => format!("forecast: none, {}", refusal_word(&r)),
         };
-        Ok(waiting(&missing, Some(forecast)))
+        Ok(match group {
+            Some(g) => waiting_in_group(&missing, g, forecast),
+            None => waiting(&missing, Some(forecast)),
+        })
+    }
+
+    /// What pull request `p` lacks before sluice takes it: out of draft,
+    /// and its reviews and checks on its head (C.7).
+    fn missing(&self, forge: &dyn Forge, t: &Target, p: &Pull) -> Result<Vec<String>> {
+        let mut missing = Vec::new();
+        if p.draft {
+            missing.push("a draft".to_string());
+            return Ok(missing);
+        }
+        let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
+        if have < t.conditions.reviews {
+            let need = t.conditions.reviews - have;
+            missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
+        }
+        if !t.conditions.checks.is_empty() {
+            let checks = forge.checks(&t.repo, &p.head)?;
+            for name in &t.conditions.checks {
+                if !checks
+                    .iter()
+                    .any(|c| &c.name == name && c.standing == Standing::Passed)
+                {
+                    missing.push(name.clone());
+                }
+            }
+        }
+        Ok(missing)
+    }
+
+    /// 125: each group of bound pull requests submitted whole, through one
+    /// group submit in its order, once every one of it is open, out of
+    /// draft, at its marked head and meeting its conditions; whether any
+    /// was, and what each request of a group not taken waits for. A
+    /// request is bound to the group its body marks it one of while its
+    /// head is the marked head and it has had no submission at that head.
+    #[allow(clippy::too_many_arguments)]
+    fn take_groups(
+        &self,
+        s: &Sluice<'_>,
+        forge: &dyn Forge,
+        t: &Target,
+        pushed: &PushedRefs,
+        branch: &str,
+        pulls: &[&Pull],
+        latest: &BTreeMap<String, Submission>,
+    ) -> Result<(bool, BTreeMap<u64, Bound>)> {
+        let mut groups: BTreeMap<String, Vec<(Group, &Pull)>> = BTreeMap::new();
+        for p in pulls {
+            let Some(g) = Group::of(&p.body) else {
+                continue;
+            };
+            let submitted = latest
+                .get(&place(p.number))
+                .is_some_and(|e| e.head.0 == p.head);
+            if g.head == p.head && !submitted {
+                groups.entry(g.token.clone()).or_default().push((g, *p));
+            }
+        }
+        let mut taken = false;
+        let mut bound = BTreeMap::new();
+        for members in groups.values() {
+            let n = members[0].0.n;
+            let mut by_k: BTreeMap<usize, &Pull> = BTreeMap::new();
+            let mut agree = true;
+            for (g, p) in members {
+                agree &= g.n == n && by_k.insert(g.k, p).is_none();
+            }
+            let mut missing = BTreeMap::new();
+            for p in by_k.values() {
+                missing.insert(p.number, self.missing(forge, t, p)?);
+            }
+            let absent: Vec<usize> = (1..=n).filter(|k| !by_k.contains_key(k)).collect();
+            let ready = missing.values().all(Vec::is_empty);
+            let mut refused = None;
+            if agree && absent.is_empty() && ready {
+                for p in by_k.values() {
+                    self.fetch_head(pushed, p)?;
+                }
+                let req = GroupRequest {
+                    branch: branch.into(),
+                    worktrees: by_k.values().map(|p| place(p.number)).collect(),
+                    after: Vec::new(),
+                    priority: 0,
+                };
+                match s.submit_group(&req)? {
+                    Ok(accepted) => {
+                        for (a, p) in accepted.iter().zip(by_k.values()) {
+                            self.entries.borrow_mut().insert(
+                                a.id,
+                                Entry {
+                                    repo: t.repo.clone(),
+                                    number: p.number,
+                                    head: p.head.clone(),
+                                },
+                            );
+                        }
+                        taken = true;
+                        continue;
+                    }
+                    Err(r) => refused = r.first().map(|(_, r)| refusal_word(r)),
+                }
+            }
+            for p in by_k.values() {
+                let mut on: Vec<String> = missing
+                    .iter()
+                    .filter(|(number, m)| **number != p.number && !m.is_empty())
+                    .map(|(number, _)| format!("#{number}"))
+                    .collect();
+                on.extend(
+                    absent
+                        .iter()
+                        .map(|k| format!("the request marked {k}/{n}, not open")),
+                );
+                if !agree {
+                    on.push("its group's marks, which disagree".into());
+                }
+                if let Some(r) = &refused {
+                    on.push(format!("the group, refused: {r}"));
+                }
+                bound.insert(
+                    p.number,
+                    Bound {
+                        n,
+                        on,
+                        missing: missing[&p.number].clone(),
+                    },
+                );
+            }
+        }
+        Ok((taken, bound))
     }
 
     /// The pull request's head on this host, fetched unless it is here.
@@ -774,6 +915,38 @@ fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
         },
         lines,
     }
+}
+
+/// 125: one of a group intake has not taken, which waits for what it
+/// lacks itself, or else for the rest of its group.
+fn waiting_in_group(missing: &[String], g: &Bound, forecast: String) -> Shown {
+    let together = format!(
+        "One of a group of {} submitted together, which sluice takes only all together, once \
+         each is ready.",
+        g.n
+    );
+    let mut shown = if missing.is_empty() {
+        let on = g.on.join(", ");
+        Shown {
+            posting: Posting {
+                text: None,
+                status: Status::Queued,
+                title: format!("waiting for its group: {on}"),
+                summary: format!("{together} It waits for {on}."),
+            },
+            lines: Vec::new(),
+        }
+    } else {
+        let mut w = waiting(missing, None);
+        w.posting.summary = format!("{}\n\n{together}", w.posting.summary);
+        w
+    };
+    shown.posting.summary.push_str(&format!(
+        "\n\n{}",
+        forecast.replacen("forecast:", "Forecast:", 1)
+    ));
+    shown.lines.push(forecast);
+    shown
 }
 
 fn queued(branch: &str, ahead: &[String]) -> Shown {

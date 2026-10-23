@@ -44,12 +44,22 @@ struct OnGitHub {
 
 impl OnGitHub {
     fn new(name: &str, conditions: &str) -> OnGitHub {
+        OnGitHub::with(name, conditions, "")
+    }
+
+    /// `main` testing only its longest combination (C.7 `batch`).
+    fn batched(name: &str, conditions: &str) -> OnGitHub {
+        OnGitHub::with(name, conditions, "batch = true\n")
+    }
+
+    /// `main` with `lines` in its table beside its remote and time limit.
+    fn with(name: &str, conditions: &str, lines: &str) -> OnGitHub {
         let repo = Repo::new(name);
         repo.write(
             ".config/sluice.toml",
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-                 [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n\n\
+                 [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n{lines}\n\
                  [branches.main.pull_requests]\n{conditions}\n"
             ),
         );
@@ -1107,4 +1117,194 @@ fn a_waiting_group_submit_follows_each_pull_request() {
             "{said}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// pull-request-intake, a group's pull requests (125)
+// ---------------------------------------------------------------------------
+
+/// A person approves pull request `n` at its head.
+fn approve(g: &OnGitHub, n: u64) {
+    let head = g.gh.forge.pull(&github::repo(), n).unwrap().unwrap().head;
+    g.gh.forge.review(n, "reviewer", "APPROVED", &head).unwrap();
+}
+
+/// What sluice's check on pull request `n`'s head reads, its title.
+fn shows(g: &OnGitHub, n: u64) -> String {
+    let head = g.gh.forge.pull(&github::repo(), n).unwrap().unwrap().head;
+    g.posted(&head).map(|p| p.1).unwrap_or_default()
+}
+
+/// Two of a group of three ready: none is submitted, and each of the two
+/// says it waits for the third; once the third is reviewed, one round
+/// submits all three in the group's order, and the first combination
+/// formed holds all three.
+#[test]
+fn two_of_a_group_ready_submits_none() {
+    let g = OnGitHub::batched("pr-group-two", "reviews = 1");
+    let names = ["t1", "t2", "t3"];
+    let out = g.submit_group(&g.sessions(&names), &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
+    approve(&g, ns[0]);
+    approve(&g, ns[1]);
+    g.step();
+    g.step();
+    for n in &ns {
+        assert!(g.of(*n).is_empty(), "{:?}", g.subs());
+    }
+    for n in &ns[..2] {
+        assert_eq!(shows(&g, *n), format!("waiting for its group: #{}", ns[2]));
+    }
+    assert_eq!(shows(&g, ns[2]), "waiting: needs 1 review");
+
+    approve(&g, ns[2]);
+    g.step();
+    let ids: Vec<u64> = ns
+        .iter()
+        .map(|n| g.of(*n)[0]["id"].as_u64().unwrap())
+        .collect();
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "in the group's order: {ids:?}"
+    );
+    g.step_until("landed", |g| {
+        ns.iter()
+            .all(|n| g.of(*n).first().is_some_and(|s| s["state"] == "landed"))
+    });
+    for n in &ns {
+        let tested = &g.of(*n)[0]["tested"]["submissions"];
+        assert_eq!(
+            *tested,
+            serde_json::json!(ids),
+            "one combination of all three"
+        );
+    }
+}
+
+/// A round between the opens: with two of a group of three open, no round
+/// submits either; once the third is open, the next round submits all
+/// three, and the first combination formed holds all three.
+#[test]
+fn a_round_between_a_groups_opens_submits_none() {
+    let g = OnGitHub::batched("pr-group-between", "");
+    let mut ns = Vec::new();
+    let mark = |k: usize, n: u64, head: &str| {
+        g.gh.forge
+            .edit(
+                &github::repo(),
+                n,
+                &format!("<!-- sluice: agent=ops -->\n<!-- sluice: group=t {k}/3 head={head} -->"),
+            )
+            .unwrap();
+    };
+    for k in 1..=2 {
+        let (n, head) = g.by_hand(
+            &format!("unit/o{k}"),
+            &[(&format!("o{k}.txt"), Some("o\n"))],
+            false,
+        );
+        mark(k, n, &head);
+        ns.push(n);
+    }
+    g.step();
+    g.step();
+    for n in &ns {
+        assert!(g.of(*n).is_empty(), "{:?}", g.subs());
+        assert_eq!(
+            shows(&g, *n),
+            "waiting for its group: the request marked 3/3, not open"
+        );
+    }
+    let (n, head) = g.by_hand("unit/o3", &[("o3.txt", Some("o\n"))], false);
+    mark(3, n, &head);
+    ns.push(n);
+    g.step();
+    let ids: Vec<u64> = ns
+        .iter()
+        .map(|n| g.of(*n)[0]["id"].as_u64().unwrap())
+        .collect();
+    g.step_until("landed", |g| {
+        ns.iter()
+            .all(|n| g.of(*n).first().is_some_and(|s| s["state"] == "landed"))
+    });
+    for n in &ns {
+        assert_eq!(g.of(*n)[0]["tested"]["submissions"], serde_json::json!(ids));
+    }
+}
+
+/// One of a group closed before it is taken: the others are not
+/// submitted and say they wait for it, until a submit names one of them
+/// again, alone.
+#[test]
+fn one_of_a_group_closed_holds_the_rest() {
+    let g = OnGitHub::new("pr-group-closed", "reviews = 1");
+    let names = ["c1", "c2", "c3"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
+    g.gh.forge.close(ns[1]).unwrap();
+    approve(&g, ns[0]);
+    approve(&g, ns[2]);
+    g.step();
+    g.step();
+    for n in [ns[0], ns[2]] {
+        assert!(g.of(n).is_empty(), "{:?}", g.subs());
+        assert_eq!(
+            shows(&g, n),
+            "waiting for its group: the request marked 2/3, not open"
+        );
+    }
+    let out = g.wt_submit(&ws[0], &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    approve(&g, ns[0]);
+    g.step();
+    assert_eq!(g.of(ns[0]).len(), 1, "{:?}", g.subs());
+    assert!(g.of(ns[2]).is_empty(), "{:?}", g.subs());
+}
+
+/// Each its own once taken: a commit pushed to the second of a group
+/// already submitted withdraws only the second's submission; the first
+/// and third are tested without it and land, and the second is submitted
+/// again alone on its new head.
+#[test]
+fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
+    let g = OnGitHub::new("pr-group-new-head", "");
+    let names = ["h1", "h2", "h3"];
+    let ws: Vec<PathBuf> = names
+        .iter()
+        .map(|n| g.session(n, &[(&format!("{n}.txt"), "x\n"), ("slow", "x\n")]))
+        .collect();
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
+    g.step();
+    let first: Vec<u64> = ns
+        .iter()
+        .map(|n| g.of(*n)[0]["id"].as_u64().expect("submitted together"))
+        .collect();
+    g.commit_in(&ws[1], &[("h2-more.txt", "more\n")]);
+    g.repo
+        .git(&["push", "-q", "origin", "unit/h2:refs/heads/unit/h2"]);
+    g.step();
+    assert_eq!(g.of(ns[1])[0]["state"], "withdrawn", "{:?}", g.subs());
+    for n in [ns[0], ns[2]] {
+        assert_ne!(g.of(n)[0]["state"], "withdrawn", "{:?}", g.subs());
+    }
+    g.step_until("landed", |g| {
+        ns.iter()
+            .all(|n| g.of(*n).iter().any(|s| s["state"] == "landed"))
+    });
+    for n in [ns[0], ns[2]] {
+        let landed = g
+            .of(n)
+            .into_iter()
+            .find(|s| s["state"] == "landed")
+            .unwrap();
+        let tested = landed["tested"]["submissions"].as_array().unwrap().clone();
+        assert!(!tested.contains(&serde_json::json!(first[1])), "{landed}");
+    }
+    let again = g.of(ns[1]);
+    assert_eq!(again.len(), 2, "submitted again alone: {again:?}");
 }
