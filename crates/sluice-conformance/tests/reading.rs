@@ -3,9 +3,10 @@
 //! the fakes.
 
 use sluice_conformance::{Harness, Rig, BRANCH};
-use sluice_core::records::{BranchHold, Event, State};
+use sluice_core::line::Line;
+use sluice_core::records::{to_document, BranchHold, Event, State, BRANCH_FILE};
 use sluice_core::Step;
-use sluice_seams::Rev;
+use sluice_seams::{Changes, Rev, Written};
 
 /// A bolt that has landed one submission: the harness, the revision it
 /// was made at, and the landing.
@@ -150,4 +151,59 @@ fn a_run_under_test_finishes_and_lands_once_the_landing_is_back() {
     assert_eq!(h.started().len(), started, "no new run");
     assert_eq!(h.doc().held, None);
     assert!(!h.events().iter().any(|e| matches!(e, Event::Moved { .. })));
+}
+
+/// The branch's records as an earlier sluice left them: no revision a
+/// read must contain, and `base` as given when it is.
+fn written_before(h: &Harness, base: Option<&Rev>) {
+    let s = h.sluice();
+    let lock = s.seams().state.lock(BRANCH).unwrap().expect("the lock");
+    let snapshot = s.seams().state.read(BRANCH).unwrap();
+    let version = snapshot.version;
+    let mut doc = Line::load(BRANCH, snapshot).unwrap().doc;
+    doc.landed = None;
+    if let Some(b) = base {
+        doc.base = Some(b.clone());
+    }
+    let mut changes = Changes::default();
+    changes.put.insert(BRANCH_FILE.into(), to_document(&doc));
+    let written = s.seams().state.write(BRANCH, version, changes).unwrap();
+    assert!(matches!(written, Written::Written(_)));
+    drop(lock);
+    assert_eq!(h.doc().landed, None);
+}
+
+/// satisfies: 121, 26
+#[test]
+fn an_older_branchs_records_hold_it_by_their_last_landing() {
+    let (h, made, landing) = landed_once();
+    written_before(&h, None);
+    h.branch_at(BRANCH, &made);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/b");
+    assert_eq!(h.step(), Step::Held);
+    assert_eq!(h.sub(two).state, State::Queued);
+    assert_eq!(held_lines(&h), vec![(made, landing.clone())]);
+    assert_eq!(h.doc().landed, Some(landing), "taken and written");
+}
+
+/// satisfies: 121, 104, 105
+#[test]
+fn an_older_branch_removed_and_made_again_stands_on_its_new_revision() {
+    let (h, made, landing) = landed_once();
+    // An earlier sluice removed it, made it again where the landing is
+    // not, and formed on that revision.
+    let again = h.w().work(&made, &[("c/lib", Some("made again"))]);
+    h.branch_at(BRANCH, &again);
+    written_before(&h, Some(&again));
+    h.work_on("unit/a", &again, &[("a/more", Some("a3"))]);
+    let two = h.submit("unit/a");
+    assert_eq!(h.step(), Step::Stepped);
+    assert_eq!(h.doc().landed, Some(again.clone()), "taken from base");
+    assert_ne!(h.doc().landed, Some(landing));
+    h.settle();
+    let s = h.sub(two);
+    assert_eq!(s.state, State::Landed);
+    assert_eq!(s.tested.unwrap().on, again);
+    assert!(held_lines(&h).is_empty());
 }

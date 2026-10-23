@@ -554,6 +554,18 @@ impl Sluice<'_> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             bail!("{branch} does not exist");
         };
+        // 121: records written before the revision a read must contain take
+        // the log's last landing, or `base` when `base` lacks it: a branch
+        // removed and made again, whose log holds the removed one's
+        // landings, which bind no reading of it.
+        if line.doc.landed.is_none() {
+            line.doc.landed = match (line.last_landed()?, &line.doc.base) {
+                (Some(last), Some(base)) if !self.seams.branch.contains(base, &last)? => {
+                    Some(base.clone())
+                }
+                (last, _) => last,
+            };
+        }
         // 121: a read lacking the landing the branch must contain is a
         // branch whose reading and records disagree. Nothing is polled,
         // formed, started or landed, and `base` stays the revision last
