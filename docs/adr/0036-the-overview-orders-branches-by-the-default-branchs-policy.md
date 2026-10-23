@@ -10,7 +10,7 @@ decision-makers:
 # The overview orders branches by the default branch's policy
 
 Deciders: the operator, planning the board's and the herdr plugin's branch order, 2026-10-20.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27, 56, C.7; rules core.1, core.15; ADRs 0007, 0026.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 27, 56, C.7; rules core.1, core.15; ADRs 0007, 0046.
 
 ## Context and problem statement
 
@@ -24,7 +24,7 @@ The overview lists the branches with records in name order, so `bolt/*` comes be
 
 ## Decision outcome
 
-Option 2. The default branch is where a repository's policy is written and read by a person. The overview reads it at the default branch's revision as its records last saw it, never fetching (ADR 0026), or at its local revision when it has no records. A branch's place is the index of the `[branches]` table its gate comes from, so a pattern's matches stand together in name order; branches no table names come last. The policy keeps its tables in file order.
+Option 2. The default branch is where a repository's policy is written and read by a person. The overview reads it at the default branch's revision as its records last saw it, never fetching (ADR 0046), or at its local revision when it has no records. A branch's place is the index of the `[branches]` table its gate comes from, so a pattern's matches stand together in name order; branches no table names come last. The policy keeps its tables in file order.
 
 Option 1 has no single order when two branches' policies disagree. Option 3 puts a fact of the repository in each host's settings.
 
