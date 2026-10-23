@@ -70,7 +70,14 @@ passed · landed as b7d2e94
 
 - The pull request waits while it is a draft or misses a review or a check
   the policy names, then joins the queue.
-- New commits send it back to waiting.
+- A submit of new commits replaces its submission in the queue
+  (`withdrew its submission 12`), and the new commits wait for their
+  conditions.
+- Sent back (blamed, timed out, in conflict, withdrawn), or moved by
+  commits no submit pushed, it is a draft until your next submit, whose
+  line ends `marked ready for review`; the check reads
+  `waiting: the next submit`. The same commits submitted again are
+  tested again.
 - sluice posts a `sluice` check on its latest commit with the state, and a
   comment when it sends one back.
 - A submit following a pull request exits `1` when it is closed without

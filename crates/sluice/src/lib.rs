@@ -1475,15 +1475,7 @@ fn await_submission(
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            let code = report(
-                s,
-                &sub,
-                &branch,
-                &BTreeMap::new(),
-                Reached::Now,
-                waiting.json,
-                out,
-            )?;
+            let code = report(s, &sub, &branch, &BTreeMap::new(), waiting.json, out)?;
             if let Some(e) = after {
                 after_landing(&e);
             }
@@ -1606,25 +1598,12 @@ fn after_landing(e: &anyhow::Error) {
     telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
-/// Whose outcome a waiting submit ends with.
-#[derive(Clone, Copy)]
-enum Reached {
-    /// The submission it waited on: queued, tested, decided.
-    Now,
-    /// Pull request `n`'s submission on the same head, sent back before
-    /// this submit, which queued and ran nothing: a pull request sent
-    /// back is submitted again only on a new head, or once marked a draft
-    /// and then ready for review (pull-request-intake).
-    Before(u64),
-}
-
 /// A submission's outcome, as a waiting submit ends with it.
 fn report(
     s: &Sluice<'_>,
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
-    reached: Reached,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -1642,60 +1621,28 @@ fn report(
         return Ok(exit_for(sub));
     }
     let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
-    match reached {
-        Reached::Now => {
-            if let Some(t) = &sub.tested {
-                // Only its last test: the same head on the same revision is
-                // the same combination, tested again on a resubmission.
-                let last = log.iter().rposition(|l| {
-                    matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
-                });
-                let (mut ran, mut replayed) = (0, 0);
-                for l in &log[last.unwrap_or(0)..] {
-                    match &l.event {
-                        Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
-                        Event::Replayed { combination, .. } if *combination == t.combination => {
-                            replayed += 1
-                        }
-                        _ => {}
-                    }
+    if let Some(t) = &sub.tested {
+        // Only its last test: the same head on the same revision is
+        // the same combination, tested again on a resubmission.
+        let last = log.iter().rposition(|l| {
+            matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
+        });
+        let (mut ran, mut replayed) = (0, 0);
+        for l in &log[last.unwrap_or(0)..] {
+            match &l.event {
+                Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
+                Event::Replayed { combination, .. } if *combination == t.combination => {
+                    replayed += 1
                 }
-                writeln!(
-                    out,
-                    "testing {} · {ran} tasks to run, {replayed} replayed",
-                    combination(&t.submissions)
-                )?;
+                _ => {}
             }
         }
-        Reached::Before(n) => {
-            // When it was sent back: its last blame or conflict (17, 12).
-            let at = log
-                .iter()
-                .rev()
-                .find(|l| match &l.event {
-                    Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
-                    _ => false,
-                })
-                .map_or_else(|| "an earlier round".to_string(), |l| l.at.clone());
-            let what = if sub.state == State::Conflict {
-                "found conflicting"
-            } else {
-                "tested and blamed"
-            };
-            writeln!(
-                out,
-                "#{n}'s head {} was {what} at {at}: nothing was queued or run again",
-                sub.head.short()
-            )?;
-        }
+        writeln!(
+            out,
+            "testing {} · {ran} tasks to run, {replayed} replayed",
+            combination(&t.submissions)
+        )?;
     }
-    // How a pull request sent back on its head is tested again.
-    let same_commits = match reached {
-        Reached::Now => String::new(),
-        Reached::Before(n) => format!(
-            ", or mark #{n} a draft and then ready for review to test the same commits again"
-        ),
-    };
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -1819,22 +1766,20 @@ fn report(
             if !could_not.is_empty() {
                 writeln!(
                     out,
-                    "the host could not run {}: once it can, submit again{same_commits}",
-                    could_not
-                        .iter()
-                        .map(|f| f.task.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "{}",
+                    words::could_not_run_way_on(
+                        &could_not
+                            .iter()
+                            .map(|f| f.task.as_str())
+                            .collect::<Vec<_>>()
+                    )
                 )?;
             }
             if timed_out {
-                writeln!(out, "{}", words::timed_out_way_on(&cut, &same_commits))?;
+                writeln!(out, "{}", words::timed_out_way_on(&cut))?;
             }
             if not_run.len() > could_not.len() || ran.len() > flaky.len() {
-                writeln!(
-                    out,
-                    "fix it in your worktree and submit again{same_commits}"
-                )?;
+                writeln!(out, "{}", words::fix_way_on())?;
             }
             if !flaky.is_empty() {
                 let other_failed = ran
@@ -1856,11 +1801,7 @@ fn report(
                     w.from.worktree
                 )?;
             }
-            writeln!(
-                out,
-                "merge or rebase onto {} in your worktree and submit again{same_commits}",
-                branch
-            )?;
+            writeln!(out, "{}", words::conflict_way_on(branch))?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
@@ -2014,22 +1955,6 @@ fn submit_pull(
             }
         }
     };
-    // A pull request already sent back on the head just pushed: intake
-    // submits it again only once it is marked a draft and then ready for
-    // review, so a decision on that submission is no run of this submit's.
-    let sent_back = if !opens {
-        None
-    } else {
-        let head = seams.driver.session(worktree)?.head;
-        match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub, _)
-                if sub.head == head && matches!(sub.state, State::Failed | State::Conflict) =>
-            {
-                Some(sub.id)
-            }
-            _ => None,
-        }
-    };
     let mut last: Option<(String, Vec<String>)> = None;
     loop {
         intake(pulls, seams, clock, branch);
@@ -2051,12 +1976,7 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
-                let reached = if sent_back == Some(sub.id) {
-                    Reached::Before(number)
-                } else {
-                    Reached::Now
-                };
-                return report(s, &sub, branch, &names, reached, json, out);
+                return report(s, &sub, branch, &names, json, out);
             }
             Followed::Closed => {
                 if json {
@@ -2139,7 +2059,7 @@ fn submit_pull(
                     Ok(Followed::Done(_, names)) => names,
                     _ => BTreeMap::new(),
                 };
-                let code = report(s, &sub, branch, &names, Reached::Now, json, out)?;
+                let code = report(s, &sub, branch, &names, json, out)?;
                 after_landing(&e);
                 return Ok(code);
             }

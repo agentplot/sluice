@@ -395,21 +395,25 @@ the pull request is open, and `wt submit main --status` reports its
 state later. `wt submit` removes the worktree only when the pull request
 lands; sent back, the worktree stays for the fix.
 
-A pull request sent back runs nothing more when submitted again with no
-new commits. sluice tests the same commits again only once the pull
-request is marked a draft and then ready for review. The submit says
-so, with the failure it was sent back for:
+A pull request a submit opened is the agent's. When its submission
+leaves the queue without landing, blamed, in conflict, withdrawn, or on
+commits no submit pushed, sluice marks it a draft, and no round takes it
+again in the agent's name. The next submit marks it ready for review at
+the commits it pushes, the same ones included, and sluice takes them
+like any others. After a run the time limit ended, with no new commits:
 
 ```console
 $ wt submit main
-pushed unit/batch-review · updated #41: Batch review cards
-#41's head 8d41b6c was tested and blamed at 2026-10-11T09:21:50Z: nothing was queued or run again
-failed: tests:t-batch-cards
-  on main + #38 + #41 (e20a6f9)
-  #38 passed on its own, so the failure is from this submission
-  log of tests:t-batch-cards: .git/sluice/.logs/main/c7/tests:t-batch-cards.log
-fix it in your worktree and submit again, or mark #41 a draft and then ready for review to test the same commits again
+pushed unit/batch-review · updated #41: Batch review cards · marked ready for review
+queued behind #38
+testing main + #38 + #41
+testing main + #38 + #41 · 2 tasks to run, 0 replayed
+passed · landed as c41f0a2
 ```
+
+A submit of new commits while the pull request is still in the queue
+withdraws its submission there, and the new commits wait for their
+conditions; the submit says `withdrew its submission 12`.
 
 ## `sluice branch`
 

@@ -107,6 +107,7 @@ impl FileForge {
             h.next += 1;
             h.pulls.push(Pull {
                 number,
+                node_id: format!("PR_{number}"),
                 title: head_ref.into(),
                 body: String::new(),
                 author: author.into(),
@@ -295,6 +296,10 @@ impl Forge for FileForge {
     fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
         self.with_pull(number, |p| p.body = body.into())
     }
+
+    fn set_draft(&self, _: &Repo, number: u64, draft: bool) -> Result<()> {
+        FileForge::set_draft(self, number, draft)
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +385,26 @@ mod tests {
         f.set_draft(n, true).unwrap();
         f.set_draft(n, false).unwrap();
         assert_eq!(f.readied(&repo, n).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Through the forge interface, as sluice marks it: a draft and then
+    /// ready again is one new ready time on the timeline.
+    #[test]
+    fn a_draft_then_ready_is_one_ready_time() {
+        let (f, repo, dir) = forge("draft-ready");
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let forge: &dyn Forge = &f;
+        forge.set_draft(&repo, n, true).unwrap();
+        assert!(forge.pull(&repo, n).unwrap().unwrap().draft);
+        assert!(forge.readied(&repo, n).unwrap().is_empty());
+        forge.set_draft(&repo, n, false).unwrap();
+        let p = forge.pull(&repo, n).unwrap().unwrap();
+        assert!(!p.draft);
+        assert_eq!(p.node_id, format!("PR_{n}"));
+        assert_eq!(forge.readied(&repo, n).unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
