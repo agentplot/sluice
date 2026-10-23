@@ -39,7 +39,12 @@
 //! whether it is held (123): a session's place at once, since no round
 //! releases it, and a preview once it has been tried more than its
 //! branch's `release_retries`. [`Checkout::free`] lets go of a place
-//! with nothing run in its name.
+//! with nothing run in its name. A place whose working copy is gone has
+//! the release its last run stored run once, in its scratch directory,
+//! with the ports and environment stored with it, and is then freed
+//! whatever it did ([`Checkout::release_gone`]); its record notes the
+//! release started first, so a free that fails part way and is tried
+//! again runs nothing.
 //!
 //! A preview (previews-1 clauses 98 to 101) is a place made as a
 //! candidate's is, at a revision its branch has landed, and released only
@@ -68,8 +73,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, CheckedOut, Checkout, LastResult, Limits, Place, PreviewPlace, ReleaseFailure,
-    ReleasePolicy, Released, Rev, RunHandle, SessionPlace, Setting, Settings,
+    Adopted, CheckedOut, Checkout, GoneRelease, LastResult, Limits, Place, PreviewPlace,
+    ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -141,6 +146,10 @@ struct Made {
     /// A session's place or a preview: its release failed, and how (123).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     release_failed: Option<ReleaseFailure>,
+    /// Its working copy was gone, and the release its runs stored was
+    /// started then: never started again (123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gone_release: Option<String>,
 }
 
 impl Made {
@@ -161,6 +170,7 @@ impl Made {
             failed: None,
             last_result: None,
             release_failed: None,
+            gone_release: None,
         }
     }
 }
@@ -1183,6 +1193,36 @@ impl Checkout for Places {
         }
         // A session's worktree stays (25, rule core.16).
         self.let_go(name, made.and_then(|m| m.block))
+    }
+
+    fn release_gone(&self, name: &str) -> Result<GoneRelease> {
+        // 123: noted before it starts, so it never starts twice.
+        let start = {
+            let _lock = self.lock_records()?;
+            match self.read_record(name)? {
+                Some(mut made) if made.gone_release.is_none() => {
+                    made.gone_release =
+                        Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                    self.write_record(name, &made)?;
+                    true
+                }
+                _ => false,
+            }
+        };
+        let mut gone = GoneRelease::default();
+        if start {
+            let tmp = self.tmp(name);
+            std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+            match self.runs.release_gone(name, &tmp) {
+                Ok(ran) => gone.ran = ran,
+                Err(e) => {
+                    gone.ran = true;
+                    gone.failed = Some(format!("{e:#}"));
+                }
+            }
+        }
+        self.free(name)?;
+        Ok(gone)
     }
 
     fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {

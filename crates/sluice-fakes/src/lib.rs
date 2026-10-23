@@ -16,11 +16,11 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, HostRun,
-    LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace,
-    Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest,
-    Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress,
-    TaskResult, Tests, Written,
+    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease, Guard,
+    HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place,
+    PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport,
+    RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog,
+    TaskProgress, TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -181,6 +181,11 @@ struct Inner {
     release_attempts: Vec<String>,
     /// Places freed with nothing run (123).
     freed: Vec<String>,
+    /// Each place whose working copy was gone and whose stored release
+    /// ran, in order (123).
+    gone_releases: Vec<String>,
+    /// Places whose runs stored no release command.
+    stored_none: BTreeSet<String>,
     /// Candidates' places whose checkout was deleted by hand.
     deleted: BTreeSet<String>,
     /// How each session place's release at its asking failed.
@@ -921,6 +926,17 @@ impl World {
     /// The places freed with nothing run, in order.
     pub fn freed_places(&self) -> Vec<String> {
         self.0.borrow().freed.clone()
+    }
+
+    /// Each place whose working copy was gone and whose stored release
+    /// ran, in order: a release command run from what sluice held (123).
+    pub fn gone_releases(&self) -> Vec<String> {
+        self.0.borrow().gone_releases.clone()
+    }
+
+    /// The runs of the place `name` stored no release command.
+    pub fn stores_no_release(&self, name: &str) {
+        self.0.borrow_mut().stored_none.insert(name.into());
     }
 
     /// The released places whose candidate passed, so whose caches were
@@ -1699,8 +1715,33 @@ impl Checkout for FakeCheckout {
     fn free(&self, name: &str) -> Result<()> {
         // Rule core.16: the worktree of a session's place is left as it is.
         self.drop_place_as(name, false, true);
-        self.0 .0.borrow_mut().previews.remove(name);
+        let mut inner = self.0 .0.borrow_mut();
+        inner.previews.remove(name);
+        inner.stored_none.remove(name);
         Ok(())
+    }
+
+    fn release_gone(&self, name: &str) -> Result<GoneRelease> {
+        let mut gone = GoneRelease::default();
+        {
+            let mut inner = self.0 .0.borrow_mut();
+            let held = inner.places.contains_key(name)
+                || inner.adopted.iter().any(|a| a == name)
+                || inner.previews.contains_key(name);
+            if held && !inner.stored_none.contains(name) {
+                // 123: the release its runs stored, once, failing as the
+                // world says its release fails.
+                inner.gone_releases.push(name.into());
+                gone.ran = true;
+                gone.failed = inner
+                    .place_release_fails
+                    .get(name)
+                    .or(inner.release_fails.as_ref())
+                    .map(|m| format!("the release command of {name} ended exit status: 2: {m}"));
+            }
+        }
+        self.free(name)?;
+        Ok(gone)
     }
 
     fn preview(

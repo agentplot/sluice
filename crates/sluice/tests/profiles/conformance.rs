@@ -89,6 +89,12 @@ impl Checkout for RecordedPlaces {
         Ok(())
     }
 
+    fn release_gone(&self, name: &str) -> Result<sluice_seams::GoneRelease> {
+        let gone = self.inner.release_gone(name)?;
+        self.log.borrow_mut().released.push(name.into());
+        Ok(gone)
+    }
+
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         self.inner.adopt(worktree, branch, checkout, at)
     }

@@ -34,9 +34,10 @@
 //! run did, in a group of its own held to the run's time limit, before
 //! the run's directory is removed; a release that fails is an error, and
 //! is run again by the next removal. A release command whose working copy
-//! is gone is never started (123): [`Runs::discard`] and
-//! [`Runs::discard_all`] end and remove such a place's runs, running no
-//! release.
+//! is gone is never started there (123): [`Runs::release_gone`] runs the
+//! one a place's last run stored, once, in the directory it is given, and
+//! [`Runs::discard`] and [`Runs::discard_all`] end and remove a place's
+//! runs, running no release.
 //!
 //! This module names no tool: the runners and executors in `profiles`
 //! say what to run, and the place seam's profiles end a place's run
@@ -416,30 +417,69 @@ impl Runs {
         remove_dir(&dir)
     }
 
+    /// 123: end the runs of the place `name`, then run once, in `cwd`, the
+    /// release command its last run that stored one stored, with the
+    /// environment stored with it, as a release is run: how a place whose
+    /// working copy is gone is released. Its toolchain is not entered
+    /// again: the command reads what the run captured of it. `false` when
+    /// no run stored one, or its release finished already; an error says
+    /// how it failed. The runs stay, for [`Runs::discard`].
+    pub fn release_gone(&self, name: &str, cwd: &Path) -> Result<bool> {
+        let until = Instant::now() + Duration::from_secs(30);
+        let dirs = if is_session(name) && session_run(name).is_none() {
+            let runs = self.end_all(name)?;
+            runs.into_iter().rev().map(|(_, d)| d).collect()
+        } else {
+            self.end(name)?;
+            let dir = self.dir(name);
+            self.let_go(&dir, until)?;
+            vec![dir]
+        };
+        for dir in dirs {
+            if stored_release(&dir)?.is_some() {
+                return self.release_in(&dir, Some(cwd));
+            }
+        }
+        Ok(false)
+    }
+
     /// Run the release command of the run in `dir`, if it has one and it
     /// has not finished yet, as one group held to the run's time limit.
     fn release(&self, dir: &Path) -> Result<()> {
+        self.release_in(dir, None).map(|_| ())
+    }
+
+    /// Run the release command of the run in `dir` as [`Runs::release`]
+    /// does, in `cwd` or, given none, in the run's own working copy, which
+    /// must exist; whether it ran.
+    fn release_in(&self, dir: &Path, cwd: Option<&Path>) -> Result<bool> {
         let done = dir.join("released");
-        if done.exists() || !dir.join("request.json").exists() {
-            return Ok(());
+        if done.exists() {
+            return Ok(false);
         }
-        let request: Request = serde_json::from_slice(&std::fs::read(dir.join("request.json"))?)?;
-        let Some((program, args)) = request.release.as_deref().and_then(|a| a.split_first()) else {
-            return Ok(());
+        let Some(request) = stored_release(dir)? else {
+            return Ok(false);
         };
-        // 123: a place whose working copy is gone has nothing to release by
-        // command; it is freed, never released.
-        if !request.cwd.is_dir() {
-            bail!(
+        let (program, args) = request
+            .release
+            .as_deref()
+            .and_then(|a| a.split_first())
+            .expect("a stored release names its command");
+        let cwd = match cwd {
+            Some(c) => c,
+            // 123: a place whose working copy is gone is released only
+            // through `release_gone`, never in a fallback.
+            None if !request.cwd.is_dir() => bail!(
                 "the release command of {} was not run: its working copy no longer exists",
                 request.cwd.display()
-            );
-        }
+            ),
+            None => &request.cwd,
+        };
         let log = dir.join("release.log");
         let out = File::create(&log)?;
         let mut child = Command::new(program)
             .args(args)
-            .current_dir(&request.cwd)
+            .current_dir(cwd)
             .env_clear()
             .envs(&request.env)
             .stdin(Stdio::null())
@@ -476,13 +516,30 @@ impl Runs {
             );
         }
         write_atomic(&done, b"")?;
-        Ok(())
+        Ok(true)
     }
 
     /// Whether a supervisor holds the run's lock.
     fn supervised(&self, dir: &Path) -> Result<bool> {
         supervised(dir)
     }
+}
+
+/// The request of the run in `dir` when it stored a release command.
+fn stored_release(dir: &Path) -> Result<Option<Request>> {
+    let path = dir.join("request.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let request: Request =
+        serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display()))?;
+    Ok(request
+        .release
+        .as_ref()
+        .is_some_and(|a| !a.is_empty())
+        .then_some(request))
 }
 
 /// Whether a supervisor holds the lock of the run directory `dir`: while
@@ -982,6 +1039,33 @@ mod tests {
         assert!(runs.dir("sluice/try/main/1").exists());
         runs.discard("sluice/try/main/1").unwrap();
         assert!(!runs.dir("sluice/try/main/1").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 123: a gone place's stored release runs once in the directory given,
+    /// its output kept in its run's `release.log`; a session's from its
+    /// last run that stored one; and nothing runs where none was stored.
+    #[test]
+    fn a_gone_places_stored_release_runs_once_where_it_is_told() {
+        let root = scratch("release-gone");
+        let runs = Runs::new(&root, "sluice".into());
+        let (cwd, marker) = (root.join("gone"), root.join("released"));
+        let tmp = root.join("place");
+        ended_run(&runs, "sluice/try/main/1", &cwd, &marker);
+        assert!(runs.release_gone("sluice/try/main/1", &tmp).unwrap());
+        assert!(marker.exists());
+        assert!(runs.dir("sluice/try/main/1").join("release.log").exists());
+        std::fs::remove_file(&marker).unwrap();
+        assert!(!runs.release_gone("sluice/try/main/1", &tmp).unwrap());
+        assert!(!marker.exists(), "a finished release ran again");
+
+        let session = format!("session/{}", cwd.display());
+        ended_run(&runs, &format!("{session}#1"), &cwd, &marker);
+        std::fs::create_dir_all(runs.dir(&format!("{session}#2"))).unwrap();
+        assert!(runs.release_gone(&session, &tmp).unwrap());
+        assert!(marker.exists());
+
+        assert!(!runs.release_gone("sluice/try/main/9", &tmp).unwrap());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

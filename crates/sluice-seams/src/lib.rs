@@ -220,6 +220,15 @@ pub struct PreviewPlace {
     pub release_failed: Option<ReleaseFailure>,
 }
 
+/// How the release of a place whose working copy was gone went (123).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoneRelease {
+    /// A release command its runs stored was run.
+    pub ran: bool,
+    /// It failed, and how: the end of what it printed included.
+    pub failed: Option<String>,
+}
+
 /// How a session's place was released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Released {
@@ -258,6 +267,16 @@ pub trait Checkout {
     /// command runs and no cache is saved; a session's worktree is left as
     /// it is (25, rule core.16). Nothing when there is no such place.
     fn free(&self, name: &str) -> Result<()>;
+
+    /// 123: release the place `name`, whose working copy is gone, from
+    /// what sluice itself holds for it: the release command its last run
+    /// stored, run once with the environment and ports stored with it, in
+    /// the place's scratch directory, entering no toolchain and reading no
+    /// policy; then free it as [`Checkout::free`] does, whatever the command
+    /// did. A place whose gone release has started once is freed with
+    /// nothing run, so the command never runs twice. Only a failure to free
+    /// is an error; the command's failure is in what is returned.
+    fn release_gone(&self, name: &str) -> Result<GoneRelease>;
 
     /// 81: every candidate's place this host made and has not released,
     /// by name: what a returning host releases before it claims again.

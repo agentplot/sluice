@@ -1286,3 +1286,180 @@ fn a_failed_preview_release_is_held_once_its_retries_are_spent() {
     left_behind(&repo, &place);
     assert!(p.previews().unwrap().is_empty());
 }
+
+/// A run of the place `name` in `place` that ends at once, as the check
+/// seam starts one under `[tests] toolchain`: the toolchain, which notes
+/// each time it runs in `tooled`, is run once as the run is prepared, and
+/// the release command its request stores reads what it printed rather
+/// than running it again.
+fn tooled_run(r: &Runs, name: &str, place: &Place, tooled: &std::path::Path, release: &str) {
+    let dir = r.prepare(name).unwrap();
+    let script = dir.join("toolchain.sh");
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "echo ran >> {}; echo export FROM_TOOLCHAIN=yes",
+            tooled.display()
+        ))
+        .output()
+        .unwrap();
+    std::fs::write(&script, out.stdout).unwrap();
+    r.start(
+        name,
+        &Request {
+            argv: vec!["/usr/bin/true".into()],
+            cwd: place.path.clone(),
+            env: place.env.clone(),
+            limit: None,
+            grace: 1,
+            meta: serde_json::Value::Null,
+            release: Some(vec![
+                "bash".into(),
+                "-c".into(),
+                r#"source "$0" >&2; exec "$@""#.into(),
+                script.display().to_string(),
+                "/bin/sh".into(),
+                "-c".into(),
+                release.into(),
+            ]),
+        },
+    )
+    .unwrap();
+    while matches!(r.state(name).unwrap(), sluice::runs::RunState::Running) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// 123: a combination's checkout deleted by hand has the release its run
+/// stored run once, from its scratch directory with its port and what its
+/// toolchain gave the run, the toolchain not run again; then it is freed:
+/// git no longer lists it, its scratch directory and record are gone and
+/// its block of ports is free. A second release of it runs nothing.
+#[test]
+fn a_deleted_checkouts_stored_release_runs_once_from_its_scratch_directory() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-release-gone");
+    let blocks = support::Scratch::new("places-release-gone-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web"], "41900");
+    let place = p.materialize(NAME, &rev, &settings).unwrap();
+    let tmp = std::fs::canonicalize(&place.tmp).unwrap();
+    let r = runs(&repo);
+    let marker = repo.dir().with_extension("gone-release");
+    let tooled = repo.dir().with_extension("gone-toolchain");
+    for m in [&marker, &tooled] {
+        let _ = std::fs::remove_file(m);
+    }
+    tooled_run(
+        &r,
+        NAME,
+        &place,
+        &tooled,
+        &format!(
+            "echo \"$(pwd -P) $SLUICE_PORT_WEB $FROM_TOOLCHAIN\" >> {}",
+            marker.display()
+        ),
+    );
+    assert_eq!(std::fs::read_to_string(&tooled).unwrap(), "ran\n");
+
+    std::fs::remove_dir_all(&place.path).unwrap();
+    assert!(p.gone(NAME).unwrap());
+    let gone = p.release_gone(NAME).unwrap();
+    assert_eq!((gone.ran, gone.failed), (true, None));
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        format!(
+            "{} {} yes\n",
+            tmp.display(),
+            port(&place, "SLUICE_PORT_WEB")
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(&tooled).unwrap(),
+        "ran\n",
+        "the toolchain ran again"
+    );
+    assert!(!r.dir(NAME).exists());
+    left_behind(&repo, &place);
+    assert!(p.made().unwrap().is_empty());
+
+    let again = p.release_gone(NAME).unwrap();
+    assert_eq!((again.ran, again.failed), (false, None));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+
+    let next = p
+        .materialize("sluice/try/bolt/x/2", &rev, &settings)
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&place, "SLUICE_PORT_WEB")
+    );
+    p.release("sluice/try/bolt/x/2", false).unwrap();
+}
+
+/// 123: a gone checkout whose stored release exits 2 is freed all the
+/// same, the release's failure returned with what it printed; one whose
+/// gone release was noted started, as a free that stopped part way leaves
+/// it, runs nothing; and one whose runs stored no release runs nothing.
+#[test]
+fn a_gone_checkout_is_freed_whatever_its_stored_release_did() {
+    let _ports = ports_lock();
+    let (repo, rev) = scratch("places-release-gone-fails");
+    let blocks = support::Scratch::new("places-release-gone-fails-blocks");
+    let p = places(&repo).with_blocks(blocks.path().to_path_buf());
+    let settings = ported(&["web"], "41950");
+    let place = p.materialize(NAME, &rev, &settings).unwrap();
+    let r = runs(&repo);
+    ended_run(&r, NAME, &place, "echo usage: scripts/preview up; exit 2");
+    std::fs::remove_dir_all(&place.path).unwrap();
+    let gone = p.release_gone(NAME).unwrap();
+    assert!(gone.ran);
+    let failed = gone.failed.expect("its failure is returned");
+    assert!(
+        failed.contains("exit status: 2") && failed.contains("usage: scripts/preview up"),
+        "{failed}"
+    );
+    left_behind(&repo, &place);
+    assert!(p.made().unwrap().is_empty());
+    assert!(!p.gone(NAME).unwrap());
+    let next = p
+        .materialize("sluice/try/bolt/x/2", &rev, &settings)
+        .unwrap();
+    assert_eq!(
+        port(&next, "SLUICE_PORT_WEB"),
+        port(&place, "SLUICE_PORT_WEB"),
+        "its block of ports is free"
+    );
+
+    // Its gone release noted started before: nothing runs again.
+    let marker = repo.dir().with_extension("gone-noted");
+    let _ = std::fs::remove_file(&marker);
+    ended_run(
+        &r,
+        "sluice/try/bolt/x/2",
+        &next,
+        &format!("touch {}", marker.display()),
+    );
+    std::fs::remove_dir_all(&next.path).unwrap();
+    let record = repo
+        .dir()
+        .join(".git/sluice/.places/sluice%2Ftry%2Fbolt%2Fx%2F2.json");
+    let mut made: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    made["gone_release"] = "2026-10-23T09:00:00Z".into();
+    std::fs::write(&record, serde_json::to_vec(&made).unwrap()).unwrap();
+    let gone = p.release_gone("sluice/try/bolt/x/2").unwrap();
+    assert_eq!((gone.ran, gone.failed), (false, None));
+    assert!(!marker.exists(), "a started gone release ran again");
+    left_behind(&repo, &next);
+
+    // No run stored a release.
+    let third = p
+        .materialize("sluice/try/bolt/x/3", &rev, &settings)
+        .unwrap();
+    std::fs::remove_dir_all(&third.path).unwrap();
+    let gone = p.release_gone("sluice/try/bolt/x/3").unwrap();
+    assert_eq!((gone.ran, gone.failed), (false, None));
+    left_behind(&repo, &third);
+    assert!(p.made().unwrap().is_empty());
+}
