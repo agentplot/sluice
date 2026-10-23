@@ -8,7 +8,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 
 ## 1. Decisions
 
-- [ ] 1.1 Write the ADR (the next free number after 0046) for design D1 to D6: one revision the branch must contain, kept in the branch's document; the hold as a field and a log line; runs left alone; `sluice branch accept`; `sluice branch create` setting the revision. Name clause 121 in core.6's Details ("Rules out: … a candidate formed on a revision that lacks the branch's last landing (121)") in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`; verify `site:prose` and `openspec validate a-branch-read-past-its-landings-is-refused --strict` (by hand: no gate task runs openspec).
+- [x] 1.1 Write the ADR (the next free number after 0046) for design D1 to D6: one revision the branch must contain, kept in the branch's document; the hold as a field and a log line; runs left alone; `sluice branch accept`; `sluice branch create` setting the revision. Name clause 121 in core.6's Details ("Rules out: … a candidate formed on a revision that lacks the branch's last landing (121)") in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md`; verify `site:prose` and `openspec validate a-branch-read-past-its-landings-is-refused --strict` (by hand: no gate task runs openspec).
 
 ## 2. The records
 
