@@ -1344,7 +1344,9 @@ fn submitted_by_the_operators_ops() {
 /// draft, and nothing is submitted or landed in the agent's name, though
 /// its review holds. The agent's next `wt submit` marks it ready at the
 /// new head, and it lands. A pull request opened by hand whose head moves
-/// the same way is submitted again once its review holds.
+/// the same way is submitted again once its review holds. One opened by
+/// hand that the operator withdrew is not submitted again, though its
+/// review holds, until its author pushes a new head.
 #[test]
 fn s56_a_refused_request_waits_for_its_submitter() {
     let g = OnGitHub::new("pr-s56", "reviews = 1");
@@ -1440,5 +1442,26 @@ fn s56_a_refused_request_waits_for_its_submitter() {
         g.of(hand)
             .iter()
             .any(|s| s["state"] == "landed" && s["head"] == moved.as_str())
+    });
+
+    // Opened by hand and withdrawn by the operator: its offer rests, its
+    // review holding, until its author pushes a new head.
+    let (rest, rest_head) = g.by_hand("unit/rest", &[("slow", Some("x\n"))], false);
+    approve(rest, &rest_head);
+    g.step_until("the withdrawn one submitted", |g| !g.of(rest).is_empty());
+    let id = g.of(rest)[0]["id"].as_u64().unwrap().to_string();
+    let out = g.sluice(&["withdraw", &id, "--as", "operator"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let subs = g.of_after(rest, 3);
+    assert_eq!(subs.len(), 1, "never submitted again: {subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn");
+    assert_eq!(
+        g.posted(&rest_head).unwrap().1,
+        "waiting: withdrawn by the operator"
+    );
+    let pushed = g.push_more("unit/rest", "rest.txt");
+    approve(rest, &pushed);
+    g.step_until("the withdrawn one submitted again", |g| {
+        g.of(rest).iter().any(|s| s["head"] == pushed.as_str())
     });
 }
