@@ -186,3 +186,25 @@ fn withdrawal_by_submitter_planner_or_operator_only() {
 fn state_and_status_read_the_records_with_no_step_running() {
     shared::state_and_status_read_the_records_with_no_step_running(&Harness::bolt());
 }
+
+/// satisfies: 71; the run-bound spec's "The bound is the host's, across
+/// every repository": another repository's run on the host leaves one run
+/// of a bound of two, whatever `main`'s window allows
+#[test]
+fn another_repositorys_run_leaves_less_of_the_hosts_bound() {
+    let h = Harness::bolt();
+    h.w().host_limit(2);
+    h.w().hold_runs(true);
+    h.w().other_runs(1);
+    for n in 1..=3 {
+        h.work(
+            &format!("unit/{n}"),
+            "agent",
+            &[(&format!("a/{n}"), Some("ok"))],
+        );
+        h.submit(&format!("unit/{n}"));
+    }
+    h.step();
+    assert_eq!(h.w().started().len(), 1);
+    assert_eq!(h.w().live_runs(), 1);
+}

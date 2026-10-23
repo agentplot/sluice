@@ -1466,17 +1466,18 @@ impl Sluice<'_> {
         }
     }
 
-    /// 71: how many more runs this instance starts now: its bound less the
-    /// runs holding a place in the records of the branches it serves,
-    /// `line` as this step has it, and less the host's session runs
-    /// (session-runs-1 clause 89).
+    /// 71: how many more runs this instance starts now: the host's bound
+    /// less the checks running on the host, every repository's of both
+    /// kinds (session-runs-1 clause 89), and less the runs this instance
+    /// has marked starting on the branches it serves, `line` as this step
+    /// has it, which the host's count holds only once they start. A run
+    /// whose checks ended counts no longer, its result read or not.
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let sessions = self.seams.tests.running()?.sessions;
-        let mut under = sessions + self.held_here(line);
+        let mut under = self.seams.tests.running()?.total() + self.starting_here(line);
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
-                    under += self.held_here(&self.read_line(&b)?);
+                    under += self.starting_here(&self.read_line(&b)?);
                 }
             }
         }
@@ -1485,25 +1486,22 @@ impl Sluice<'_> {
 
     /// Session-runs-1 clauses 89 and 91: how many session runs may start
     /// now: the bound less `reserved`, the part kept for submissions'
-    /// runs, less the candidates under test on every branch and the
-    /// session runs. A session run belongs to the host, not to a branch an
-    /// instance serves, so every branch's runs count against it.
+    /// runs, less the checks running on the host. A session run belongs
+    /// to the host, not to a branch an instance serves, so every
+    /// repository's runs count against it (71).
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
         Ok(self.room(reserved)?.for_sessions())
     }
 
     /// 71, session-runs-1 clauses 89 and 91: the host's bound and what
-    /// counts against it, as `session_capacity` decides on it, for a
-    /// person to read (ADR 0035).
+    /// counts against it, every repository's runs, as `session_capacity`
+    /// decides on it, for a person to read (ADR 0035).
     pub fn room(&self, reserved: usize) -> Result<Room> {
-        let mut queue = 0;
-        for b in self.seams.state.branches()? {
-            queue += self.held_here(&self.read_line(&b)?);
-        }
+        let running = self.seams.tests.running()?;
         Ok(Room {
             bound: self.seams.tests.bound()?,
-            queue,
-            sessions: self.seams.tests.running()?.sessions,
+            queue: running.queue,
+            sessions: running.sessions,
             reserve: reserved,
         })
     }
@@ -1659,6 +1657,17 @@ impl Sluice<'_> {
     /// branch keeps no claims (75).
     fn mine(&self, run: &SystemRun) -> bool {
         run.host.as_deref().is_none_or(|h| h == self.peer.name)
+    }
+
+    /// Runs this instance marked starting in `line` and has not started:
+    /// not yet in the host's count (71).
+    fn starting_here(&self, line: &Line) -> usize {
+        line.doc
+            .candidates
+            .iter()
+            .flat_map(|c| &c.runs)
+            .filter(|r| r.state == RunState::Starting && self.mine(r))
+            .count()
     }
 
     /// Runs holding a place on this host, in `line`.
