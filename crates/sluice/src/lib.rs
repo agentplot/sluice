@@ -1473,9 +1473,9 @@ fn await_submission(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
-        Waited::Decided(sub) => {
+        Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            return report(
+            let code = report(
                 s,
                 &sub,
                 &branch,
@@ -1483,7 +1483,11 @@ fn await_submission(
                 Reached::Now,
                 waiting.json,
                 out,
-            );
+            )?;
+            if let Some(e) = after {
+                after_landing(&e);
+            }
+            return Ok(code);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
@@ -1497,8 +1501,9 @@ fn await_submission(
 
 /// How a wait ended.
 enum Waited {
-    /// Landed, failed, conflict or withdrawn.
-    Decided(Submission),
+    /// Landed, failed, conflict or withdrawn; when it landed in a round
+    /// that then failed, what failed after the landing (122).
+    Decided(Submission, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
@@ -1523,7 +1528,7 @@ fn wait_on(
     let mut first = true;
     loop {
         if sub.state.is_out() {
-            return Ok(Waited::Decided(sub));
+            return Ok(Waited::Decided(sub, None));
         }
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
@@ -1562,13 +1567,35 @@ fn wait_on(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Ok(Waited::Undecided(sub, STOPPED));
                 }
-                return Err(e);
+                return match landed(s, id) {
+                    Some(sub) => Ok(Waited::Decided(sub, Some(e))),
+                    None => Err(e),
+                };
             }
         }
         sub = s
             .state(id)?
             .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))?;
     }
+}
+
+/// 122: submission `id` as landed, when its work is on its branch: its
+/// record, or the record the next round writes when the round that moved
+/// the branch stopped before writing it (24). `None` when it is not, or
+/// when the records cannot be read, which leaves the round's own error
+/// the outcome.
+fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
+    let to = s.landed_as(id).ok()??;
+    let mut sub = s.state(id).ok()??;
+    sub.state = State::Landed;
+    sub.landed_as = Some(to);
+    Some(sub)
+}
+
+/// 122: what failed after a landing, said apart from its outcome, on
+/// stderr and to telemetry as sluice failing itself is.
+fn after_landing(e: &anyhow::Error) {
+    telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
 /// Whose outcome a waiting submit ends with.

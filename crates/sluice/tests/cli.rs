@@ -2862,3 +2862,184 @@ fn wait_says_progress_when_it_moves() {
         "{out}"
     );
 }
+
+/// What `test` says on stderr, which the harness keeps from the test
+/// itself: it runs alone in a child of this binary, which must pass.
+/// `None` in that child, which runs the test's body.
+fn stderr_of(test: &str) -> Option<String> {
+    if std::env::var("SLUICE_TEST_ALONE").as_deref() == Ok(test) {
+        return None;
+    }
+    let out = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", test, "--nocapture"])
+    .env("SLUICE_TEST_ALONE", test)
+    .output()
+    .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success() && said.contains(&format!("test {test} ... ok")),
+        "{test}, alone:\n{said}{err}"
+    );
+    Some(err)
+}
+
+/// The lines of `err` saying what failed after a landing (122).
+fn after_the_landing(err: &str) -> Vec<&str> {
+    err.lines()
+        .filter(|l| l.starts_with("sluice: after the landing: "))
+        .collect()
+}
+
+/// 122: a release that fails after the landing, in the round a waiting
+/// submit ran, leaves the submission landed: the outcome as for any
+/// landing, exit 0, and what failed on stderr. The next round releases
+/// the place.
+#[test]
+fn a_release_failing_after_the_landing_leaves_it_landed() {
+    if let Some(err) = stderr_of("a_release_failing_after_the_landing_leaves_it_landed") {
+        let said = after_the_landing(&err);
+        assert_eq!(said.len(), 1, "{err}");
+        assert!(
+            said[0].contains("the release command of ") && said[0].ends_with(" failed"),
+            "{err}"
+        );
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    f.world.fail_next_release();
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert_eq!(
+        outcome(&out).last().copied(),
+        Some(format!("passed · landed as {}", &tip.0[..7]).as_str()),
+        "{out}"
+    );
+    assert_eq!(f.world.live_places().len(), 1);
+    sluice(&f, &["step", BRANCH]);
+    assert!(f.world.live_places().is_empty());
+}
+
+/// 122: telling the outcome fails after the landing, in the round
+/// `sluice wait` ran: landed, exit 0, and the telling's failure on stderr.
+#[test]
+fn telling_failing_after_the_landing_leaves_it_landed() {
+    if let Some(err) = stderr_of("telling_failing_after_the_landing_leaves_it_landed") {
+        assert_eq!(
+            after_the_landing(&err),
+            ["sluice: after the landing: crashed after telling 1:landed"],
+            "{err}"
+        );
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.crash_after_next_notify();
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+}
+
+/// 122: under `--json`, a landing whose release then fails is one
+/// document, the submission's record, landed; what failed is on stderr.
+#[test]
+fn a_landing_whose_release_fails_is_one_document_under_json() {
+    if let Some(err) = stderr_of("a_landing_whose_release_fails_is_one_document_under_json") {
+        assert_eq!(after_the_landing(&err).len(), 1, "{err}");
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.fail_next_release();
+    let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    let v = json(&out);
+    assert_eq!(v["state"], "landed");
+    assert_eq!(v["landed_as"], f.world.tip(BRANCH).0);
+}
+
+/// 122, 24: the round a waiting submit ran moves the branch and fails
+/// writing that it landed: the submission is reported landed as the
+/// landing's commit, and the next round records it so.
+#[test]
+fn a_landing_the_round_did_not_record_is_reported_landed() {
+    if let Some(err) = stderr_of("a_landing_the_round_did_not_record_is_reported_landed") {
+        assert_eq!(after_the_landing(&err).len(), 1, "{err}");
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    // Between the submit's rounds, another process records the landing
+    // and stops before the move; the submit's next round makes the move,
+    // and its write confirming it fails.
+    let between = |n: usize| {
+        if n == 1 {
+            f.world.crash(sluice_fakes::Crash::BeforeMove);
+            assert!(f.sluice().step(BRANCH).is_err());
+            f.world.crash_next_write();
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["state"], "landing");
+    sluice(&f, &["step", BRANCH]);
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(
+        (
+            json(&out)["state"].as_str(),
+            json(&out)["landed_as"].as_str()
+        ),
+        (Some("landed"), Some(tip.0.as_str()))
+    );
+}
+
+/// 122: a round that fails before the branch moved is sluice failing
+/// itself, as before: the submission is not reported landed.
+#[test]
+fn a_round_failing_before_the_landing_is_an_error() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let between = |n: usize| {
+        if n == 1 {
+            f.world.crash(sluice_fakes::Crash::BeforeMove);
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &between,
+    };
+    let cli = Cli::try_parse_from(["sluice", "submit", BRANCH, "--worktree", "unit/a"]).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
+    assert!(format!("{e:#}").contains("crashed before moving"), "{e:#}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(!out.contains("landed as"), "{out}");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["state"], "landing");
+}
