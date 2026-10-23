@@ -113,5 +113,6 @@ docs/adr/**
 adrs.toml
 site/src/content/docs/guides/parallel-and-batch.md
 site/src/content/docs/reference/configuration.md
+site/src/content/docs/reference/state.md
 plugins/sluice/skills/**
 ```
