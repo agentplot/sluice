@@ -20,7 +20,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 
 - [x] 3.1 The local-refs profile's `contains` answers `false` when the revision asked of is not a commit on this host, instead of failing; verify a case in `tests/local_refs.rs` with an unknown object id.
 - [x] 3.2 `decide` checks the read against `landed` before touching `base`: held, it records `held` (one log line per revision read), writes, and returns `Step::Held` without polling, forming, starting or landing; otherwise it clears `held` and goes on as today; `step_locked` skips `perform`'s new work but still tells the outbox and releases decided places; verify conformance cases over the fakes, using `set_branch` to put the branch back: behind the landing holds; beside it holds; a hand commit on top forms (S8 as today); three held rounds write one `held` line; a run under test on the landing finishes and lands once the landing is back, with no new run.
-- [ ] 3.3 S57 as a conformance scenario in `crates/sluice-conformance/tests/scenarios.rs`, `/// satisfies: S57, 121, 22, 45`: two landings, the branch then read at an older revision, nothing formed or landed and both revisions recorded; then each way out, the landing back and the operator's acceptance, forms the queue and lands it; verify `cargo test -p sluice-conformance`.
+- [x] 3.3 S57 as a conformance scenario in `crates/sluice-conformance/tests/scenarios.rs`, `/// satisfies: S57, 121, 22, 45`: two landings, the branch then read at an older revision, nothing formed or landed and both revisions recorded; then each way out, the landing back and the operator's acceptance, forms the queue and lands it; verify `cargo test -p sluice-conformance`.
 
 ## 4. Accepting a revision
 
