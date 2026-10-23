@@ -1,8 +1,12 @@
 //! The statement's scenarios (section 11), for a bolt's branch on one host.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use sluice_conformance::{policy, shared, Crash, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
-use sluice_core::Forecast;
+use sluice_core::{Forecast, Step};
+use sluice_fakes::Fakes;
 use sluice_seams::Outcome;
 
 /// satisfies: S1, 1, 10, 11, 22, 23, 33, 34, 37, 42, 43, 44, 45, 47, 50
@@ -130,6 +134,50 @@ fn s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped() {
     shared::s9_deepest_first_finds_the_culprit_by_testing_what_it_skipped(&Harness::new(&policy(
         true, "fail", 4,
     )));
+}
+
+/// satisfies: S59, 125, 6, 12, 17, 18, 5, 50
+#[test]
+fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own() {
+    shared::s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(&Harness::new(
+        &policy(true, "fail", 4),
+    ));
+}
+
+/// satisfies: 125, 62, 26
+#[test]
+fn a_round_between_an_acts_numbering_and_its_write_sees_none_of_it() {
+    let h = Harness::new(&policy(true, "fail", 4));
+    for (w, p) in [
+        ("unit/1", "a/one"),
+        ("unit/2", "b/two"),
+        ("unit/3", "c/three"),
+    ] {
+        h.work(w, &format!("agent-{w}"), &[(p, Some("x"))]);
+    }
+    // Another process runs a round each time the act takes a number.
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let saw = seen.clone();
+    h.w().after_allocating(move |world, _| {
+        let other = Fakes::of(world.clone());
+        assert_eq!(other.sluice().step(BRANCH).unwrap(), Step::Stepped);
+        saw.borrow_mut()
+            .push(other.sluice().status(BRANCH).unwrap().submissions.len());
+    });
+    let ids = h.submit_group(&["unit/1", "unit/2", "unit/3"]);
+    assert_eq!(*seen.borrow(), vec![0, 0, 0], "none of the act");
+    assert!(h.tested().is_empty(), "nothing formed on any of it");
+    let queued: Vec<u64> = h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .submissions
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(queued, ids, "and after it, all three");
+    h.step();
+    assert_eq!(h.tested(), vec![ids]);
 }
 
 /// satisfies: S10, 26, 49, 59
