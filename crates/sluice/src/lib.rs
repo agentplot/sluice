@@ -1592,6 +1592,14 @@ fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
     Some(sub)
 }
 
+/// The latest submission to `branch` on `head`, as a pull request's is
+/// taken in on the head its worktree pushed; `None` when there is none or
+/// the records cannot be read.
+fn taken_in(s: &Sluice<'_>, branch: &str, head: &sluice_seams::Rev) -> Option<u64> {
+    let all = s.history(branch).ok()?;
+    all.iter().rev().find(|x| x.head == *head).map(|x| x.id)
+}
+
 /// 122: what failed after a landing, said apart from its outcome, on
 /// stderr and to telemetry as sluice failing itself is.
 fn after_landing(e: &anyhow::Error) {
@@ -2116,7 +2124,24 @@ fn submit_pull(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
                 }
-                return Err(e);
+                // 122: as `wait_on`, for the submission the pull request
+                // was taken in as, on the head its worktree pushed.
+                let Some(sub) = seams
+                    .driver
+                    .session(worktree)
+                    .ok()
+                    .and_then(|w| taken_in(s, branch, &w.head))
+                    .and_then(|id| landed(s, id))
+                else {
+                    return Err(e);
+                };
+                let names = match pulls.follow(seams, clock, branch, number) {
+                    Ok(Followed::Done(_, names)) => names,
+                    _ => BTreeMap::new(),
+                };
+                let code = report(s, &sub, branch, &names, Reached::Now, json, out)?;
+                after_landing(&e);
+                return Ok(code);
             }
         }
         if !pause.pause() {
