@@ -1,6 +1,6 @@
 //! Submission and order: A.1 and A.2, and the driver's operations.
 
-use sluice_conformance::{shared, Harness, Rig};
+use sluice_conformance::{shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
 use sluice_core::{AmendRefusal, Requester, WithdrawRefusal, Withdrew};
 
@@ -207,4 +207,78 @@ fn another_repositorys_run_leaves_less_of_the_hosts_bound() {
     h.step();
     assert_eq!(h.w().started().len(), 1);
     assert_eq!(h.w().live_runs(), 1);
+}
+
+/// The run states of `main`'s candidates' runs, with whether each has a
+/// place and a claim.
+fn run_states(h: &Harness) -> Vec<(sluice_core::records::RunState, bool, bool)> {
+    let s = h.sluice();
+    let line =
+        sluice_core::line::Line::load(BRANCH, s.seams().state.read(BRANCH).unwrap()).unwrap();
+    line.doc
+        .candidates
+        .iter()
+        .flat_map(|c| &c.runs)
+        .map(|r| (r.state, r.place.is_some(), r.host.is_some()))
+        .collect()
+}
+
+/// satisfies: 71, 16; the run-bound spec's "Two rounds race for one free
+/// run": a start the check seam refuses at the host's bound runs nothing,
+/// releases its place, records no run and blames no one, and a later
+/// round starts it
+#[test]
+fn a_start_refused_at_the_bound_waits_for_a_later_round() {
+    use sluice_core::records::RunState;
+    let h = Harness::bolt();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    // Another repository takes the host's last run after this round counts.
+    h.w().refuse_next_start();
+    h.step();
+    assert!(h.w().started().is_empty(), "nothing of it ran");
+    assert!(h.w().live_places().is_empty(), "its place was released");
+    assert_eq!(run_states(&h), [(RunState::Open, false, false)]);
+    assert!(h.w().results_log().is_empty(), "no run is recorded");
+    assert!(!h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Blamed { .. } | Event::Ran { .. })));
+    assert_eq!(h.sub(one).state, State::Testing);
+
+    h.step();
+    assert_eq!(h.w().started().len(), 1);
+    assert_eq!(run_states(&h), [(RunState::Testing, true, false)]);
+    h.w().hold_runs(false);
+    h.w().complete_all();
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 71; a start refused at the bound starts no further run that
+/// round: the run decided behind it goes back to open with no place made
+#[test]
+fn a_refused_start_starts_no_further_run_that_round() {
+    use sluice_core::records::RunState;
+    let h = Harness::bolt();
+    h.w().host_limit(2);
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.submit("unit/a");
+    h.submit("unit/b");
+    h.w().refuse_next_start();
+    h.step();
+    assert!(h.w().started().is_empty());
+    assert_eq!(h.w().made_places().len(), 1, "only the refused run's place");
+    assert_eq!(
+        run_states(&h),
+        [
+            (RunState::Open, false, false),
+            (RunState::Open, false, false)
+        ]
+    );
+    h.step();
+    assert_eq!(h.w().started().len(), 2);
 }

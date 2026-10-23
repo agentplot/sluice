@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle, RunRequest,
-    Source, TaskLog, Written,
+    AtBound, Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle,
+    RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span};
 
@@ -421,7 +421,10 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 33, 37: make each decided run's place and start its checks.
+    /// 33, 37: make each decided run's place and start its checks. 71: a
+    /// run the host has no room for, by its count before the place is made
+    /// or by the check seam's refusal after, goes back to open for a later
+    /// round, and no further run starts this step.
     fn perform_starts(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
         let starting: Vec<(Candidate, usize)> = line
@@ -456,6 +459,8 @@ impl Sluice<'_> {
                 rules.trust
             );
         }
+        let bound = self.seams.tests.bound()?;
+        let mut full = false;
         for (c, i) in starting {
             let r = &c.runs[i];
             let _span = info_span!(
@@ -468,12 +473,19 @@ impl Sluice<'_> {
             )
             .entered();
             let name = r.place.clone().expect("a starting run has a place");
+            // Another repository's run, or another instance's, took the
+            // host's last run since this one was decided.
+            full = full || self.seams.tests.running()?.total() >= bound;
+            if full {
+                self.reopen(branch, &c.id, i, &name, false)?;
+                continue;
+            }
             let place = self
                 .seams
                 .checkout
                 .materialize(&name, &c.revision, &policy.checkout)?;
             let since = (line.doc.verified && c.on == base).then(|| c.on.clone());
-            let run = self.seams.tests.start(&RunRequest {
+            let started = self.seams.tests.start(&RunRequest {
                 place,
                 revision: c.revision.clone(),
                 required: if r.checks.is_empty() {
@@ -489,7 +501,18 @@ impl Sluice<'_> {
                 // through a trusted pass recorded for its key.
                 replay: !r.no_replay,
                 system: r.system.clone(),
-            })?;
+            });
+            let run = match started {
+                Ok(run) => run,
+                // Refused before anything of it ran: no run, no outcome.
+                Err(e) if e.downcast_ref::<AtBound>().is_some() => {
+                    self.seams.checkout.release(&name, false)?;
+                    self.reopen(branch, &c.id, i, &name, true)?;
+                    full = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
                     if let Some(xr) = x.runs.get_mut(i) {
@@ -503,6 +526,40 @@ impl Sluice<'_> {
             })?;
         }
         Ok(())
+    }
+
+    /// 71: run `i` of candidate `cand`, decided into `place` and not
+    /// started, is open again, its claim given up so any host with room
+    /// may take it; `released` when its place was made and let go.
+    fn reopen(
+        &self,
+        branch: &str,
+        cand: &str,
+        i: usize,
+        place: &str,
+        released: bool,
+    ) -> Result<()> {
+        let now = self.now();
+        self.update(branch, |l| {
+            if let Some(r) = l.candidate_mut(cand).and_then(|c| c.runs.get_mut(i)) {
+                if r.state == RunState::Starting && r.place.as_deref() == Some(place) {
+                    r.state = RunState::Open;
+                    r.place = None;
+                    r.run = None;
+                    r.host = None;
+                }
+            }
+            if released {
+                l.log(
+                    &now,
+                    Event::Released {
+                        place: place.to_string(),
+                        worktree: None,
+                    },
+                );
+            }
+            Ok(())
+        })
     }
 
     // -----------------------------------------------------------------------

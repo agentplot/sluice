@@ -123,6 +123,8 @@ struct Inner {
     tasks_fail: bool,
     hold: bool,
     crash_start: bool,
+    /// The next start finds the host at its bound (71).
+    refuse_start: bool,
     host_limit: Option<usize>,
     /// Other repositories' runs going on each host, by host (71).
     other_runs: BTreeMap<String, usize>,
@@ -529,6 +531,12 @@ impl World {
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
+    }
+
+    /// The next start is refused at the host's bound, as when another
+    /// repository's run took the last one after the round counted (71).
+    pub fn refuse_next_start(&self) {
+        self.0.borrow_mut().refuse_start = true;
     }
 
     /// Runs started from now stay running until completed.
@@ -1258,7 +1266,9 @@ impl Tests for FakeTests {
         // 71: admitted against the host's count, other repositories' runs
         // among it, before anything of the run runs.
         let running = FakeTests::count(&inner);
-        if running.total() >= inner.host_limit.unwrap_or(usize::MAX) {
+        if running.total() >= inner.host_limit.unwrap_or(usize::MAX)
+            || std::mem::take(&mut inner.refuse_start)
+        {
             return Err(AtBound.into());
         }
         if inner.not_ready && request.tests.contains_key("ready") {

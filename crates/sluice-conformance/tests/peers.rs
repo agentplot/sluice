@@ -203,6 +203,24 @@ fn a_full_host_claims_nothing() {
     assert!(claims(&h).is_empty());
 }
 
+/// satisfies: 71, 75: a claim whose start the host refuses at its bound
+/// runs nothing and is given up, open to another host
+#[test]
+fn a_claim_refused_at_the_bound_is_open_to_another_host() {
+    use sluice_core::records::RunState;
+    let h = peers();
+    opened(&h);
+    h.w().refuse_next_start();
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b"]);
+    assert!(h.w().requests().is_empty(), "nothing of it ran");
+    assert_eq!(runs(&h), [(None, RunState::Open)]);
+    as_signer(&h, "c", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b", "c"]);
+    assert_eq!(runs(&h), [(Some("c".into()), RunState::Testing)]);
+    assert_eq!(h.w().requests().len(), 1);
+}
+
 /// satisfies: 79, 107: a host whose signer the gate does not trust takes
 /// no run of it
 #[test]
