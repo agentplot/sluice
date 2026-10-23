@@ -87,8 +87,18 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Say what a round or a run freed because its worktree no longer exists
-/// (session-runs-1 clause 97; 123).
+/// 123: how the release of a place whose working copy was gone went, as
+/// a line says it.
+pub fn gone_release(ran: bool, failed: Option<&str>) -> String {
+    match (ran, failed) {
+        (_, Some(f)) => format!("its release failed once from its scratch directory: {f}"),
+        (true, None) => "its release ran once from its scratch directory".into(),
+        (false, None) => "it had no release to run".into(),
+    }
+}
+
+/// Say what a round or a run freed because its worktree no longer exists,
+/// and how its stored release went (session-runs-1 clause 97; 123).
 pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -> Result<()> {
     for a in released {
         let text = match &a.error {
@@ -97,8 +107,9 @@ pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -
                 a.worktree
             ),
             None => format!(
-                "freed {}: it no longer exists, so nothing was run; its runs ended, its ports free",
-                a.worktree
+                "freed {}: it no longer exists; {}; its runs ended, its ports free",
+                a.worktree,
+                gone_release(a.ran, a.failed.as_deref())
             ),
         };
         say(out, json, &text)?;
@@ -116,6 +127,8 @@ pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
                 "worktree": a.worktree,
                 "branch": a.branch,
                 "freed": a.freed,
+                "ran": a.ran,
+                "failed": a.failed,
                 "error": a.error,
             })
         })
@@ -131,8 +144,9 @@ pub fn tell_releases(out: &mut dyn Write, json: bool, releases: &[ReleaseOutcome
         let name = &r.place;
         let text = match &r.how {
             Releasing::Released | Releasing::Accepted(_) => continue,
-            Releasing::Gone { .. } => format!(
-                "freed {name}: it no longer exists, so nothing was run; its runs ended, its ports free"
+            Releasing::Gone { ran, failed } => format!(
+                "freed {name}: it no longer exists; {}; its runs ended, its ports free",
+                gone_release(*ran, failed.as_deref())
             ),
             Releasing::Failed { failed, tries, of } => {
                 format!("could not release {name} (try {tries} of {of}): {failed}")
@@ -155,17 +169,21 @@ pub fn releases_json(releases: &[ReleaseOutcome]) -> Vec<serde_json::Value> {
         .filter_map(|r| {
             let (how, failed, tries) = match &r.how {
                 Releasing::Released | Releasing::Accepted(_) => return None,
-                Releasing::Gone { .. } => ("gone", None, None),
+                Releasing::Gone { failed, .. } => ("gone", failed.as_ref(), None),
                 Releasing::Failed { failed, tries, .. } => ("failed", Some(failed), Some(tries)),
                 Releasing::Held { failed, tries } => ("held", Some(failed), Some(tries)),
             };
-            Some(serde_json::json!({
+            let mut doc = serde_json::json!({
                 "place": r.place,
                 "branch": r.branch,
                 "release": how,
                 "failed": failed,
                 "tries": tries,
-            }))
+            });
+            if let Releasing::Gone { ran, .. } = &r.how {
+                doc["ran"] = (*ran).into();
+            }
+            Some(doc)
         })
         .collect()
 }

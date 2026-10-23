@@ -2296,13 +2296,12 @@ fn a_landing_leaves_a_sessions_place_alone() {
 // clause 97)
 // ---------------------------------------------------------------------------
 
-const GONE: &str =
-    "freed unit/a: it no longer exists, so nothing was run; its runs ended, its ports free";
+const GONE: &str = "freed unit/a: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free";
 
-/// 97, 123: the next `sluice exec` on the host frees the place of a
-/// worktree removed unreleased, with no release command run, says so
-/// first, and logs it `gone` in the branch's records; the worktree it runs
-/// in is left alone.
+/// 97, 123: the next `sluice exec` on the host runs the release a removed
+/// worktree's runs stored, once, frees its place, says so first, and logs
+/// it `gone` in the branch's records with its release run; no release is
+/// built from the policy, and the worktree it runs in is left alone.
 #[test]
 fn the_next_exec_frees_a_removed_worktrees_place() {
     let f = setup_releasing();
@@ -2324,7 +2323,8 @@ fn the_next_exec_frees_a_removed_worktrees_place() {
     let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
     assert_eq!(code, LANDED, "{out}");
     assert_eq!(out.lines().next(), Some(GONE), "{out}");
-    assert!(f.world.session_releases().is_empty(), "its release ran");
+    assert!(f.world.session_releases().is_empty(), "a release was built");
+    assert_eq!(f.world.gone_releases(), ["session/unit/a"]);
     assert_eq!(f.world.freed_places(), ["session/unit/a"]);
     assert_eq!(f.world.adopted_places(), ["session/unit/b"]);
     let snap = sluice_seams::State::read(&f.state, BRANCH).unwrap();
@@ -2332,16 +2332,17 @@ fn the_next_exec_frees_a_removed_worktrees_place() {
     assert!(
         log.iter().any(|l| matches!(
             &l.event,
-            sluice_core::records::Event::Gone { place, worktree: Some(w), .. }
+            sluice_core::records::Event::Gone { place, worktree: Some(w), ran: true, failed: None }
                 if place == "session/unit/a" && w == "unit/a"
         )),
         "{log:?}"
     );
 
-    // Freed once: the next run names it no more.
+    // Freed once: the next run names it no more, and runs nothing of it.
     let (_, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
     assert!(!out.contains("unit/a"), "{out}");
     assert_eq!(f.world.freed_places().len(), 1);
+    assert_eq!(f.world.gone_releases().len(), 1);
 }
 
 /// 97, 123: the next round, `sluice step` or a pass of `sluice run`,
@@ -3089,37 +3090,53 @@ fn a_waiting_submit_says_a_held_checkout_once() {
 }
 
 /// 97, 123: a waiting submit says once that a removed worktree was freed
-/// with nothing run; the waits after say nothing of it.
+/// and that its stored release ran, or what that release printed when it
+/// failed; the waits after say nothing of it and run nothing of it.
 #[test]
 fn a_waiting_submit_says_a_removed_worktree_was_freed_once() {
-    let f = setup_releasing();
-    work(
-        &f,
-        "unit/a",
-        "agent-a",
-        &[("plugin/lib/plan.py", Some("p2"))],
-    );
-    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
-    f.world.remove_worktree("unit/a");
-    work(
-        &f,
-        "unit/b",
-        "agent-b",
-        &[("plugin/lib/plan.py", Some("p3"))],
-    );
-    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert_eq!(out.lines().filter(|l| *l == GONE).count(), 1, "{out}");
-    work(
-        &f,
-        "unit/c",
-        "agent-c",
-        &[("plugin/lib/plan.py", Some("p4"))],
-    );
-    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/c"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert!(!out.contains("unit/a"), "{out}");
-    assert!(f.world.session_releases().is_empty());
+    for fails in [false, true] {
+        let f = setup_releasing();
+        work(
+            &f,
+            "unit/a",
+            "agent-a",
+            &[("plugin/lib/plan.py", Some("p2"))],
+        );
+        exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+        f.world.remove_worktree("unit/a");
+        if fails {
+            f.world
+                .place_release_fails("session/unit/a", Some(RELEASE_FAILS));
+        }
+        work(
+            &f,
+            "unit/b",
+            "agent-b",
+            &[("plugin/lib/plan.py", Some("p3"))],
+        );
+        let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+        assert_eq!(code, LANDED, "{out}");
+        let said = match fails {
+            false => GONE.to_string(),
+            true => format!(
+                "freed unit/a: it no longer exists; its release failed once from its scratch directory: \
+                 the release command of session/unit/a ended exit status: 2: {RELEASE_FAILS}; \
+                 its runs ended, its ports free"
+            ),
+        };
+        assert_eq!(out.lines().filter(|l| *l == said).count(), 1, "{out}");
+        work(
+            &f,
+            "unit/c",
+            "agent-c",
+            &[("plugin/lib/plan.py", Some("p4"))],
+        );
+        let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/c"]);
+        assert_eq!(code, LANDED, "{out}");
+        assert!(!out.contains("unit/a"), "{out}");
+        assert!(f.world.session_releases().is_empty());
+        assert_eq!(f.world.gone_releases(), ["session/unit/a"]);
+    }
 }
 
 /// 123: `sluice status` marks a worktree whose release failed, with what

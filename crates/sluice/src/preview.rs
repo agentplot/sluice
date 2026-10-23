@@ -50,10 +50,14 @@ pub fn tell_dropped(out: &mut dyn Write, json: bool, dropped: &[Dropped]) -> Res
                 "released {}: its command failed; `sluice previews` shows what it printed",
                 d.name
             ),
-            (None, None) => format!(
-                "freed {}: its checkout no longer exists, so nothing was run; its ports and names free",
-                d.name
-            ),
+            (None, None) => {
+                let gone = d.gone.clone().unwrap_or_default();
+                format!(
+                    "freed {}: its checkout no longer exists; {}; its ports and names free",
+                    d.name,
+                    crate::exec::gone_release(gone.ran, gone.failed.as_deref())
+                )
+            }
         };
         say(out, json, &text)?;
     }
@@ -66,14 +70,18 @@ pub fn dropped_json(dropped: &[Dropped]) -> Vec<serde_json::Value> {
     dropped
         .iter()
         .map(|d| {
-            serde_json::json!({
+            let mut doc = serde_json::json!({
                 "name": d.name,
                 "branch": d.branch,
                 "released": d.error.is_none(),
                 "failed": d.failed.is_some(),
                 "error": d.error,
                 "held": d.held,
-            })
+            });
+            if let Some(g) = &d.gone {
+                doc["gone"] = serde_json::json!({"ran": g.ran, "failed": g.failed});
+            }
+            doc
         })
         .collect()
 }
