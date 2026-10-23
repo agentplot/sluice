@@ -348,3 +348,57 @@ fn s27_a_sessions_place_stays_until_it_is_released() {
 fn a_removed_worktrees_place_is_freed_by_the_next_round() {
     shared::a_removed_worktrees_place_is_freed_by_the_next_round(&Harness::bolt());
 }
+
+/// satisfies: S57, 121, 22, 45
+#[test]
+fn s57_a_branch_read_from_an_older_copy_is_held_until_restored_or_accepted() {
+    for accept in [false, true] {
+        let h = Harness::bolt();
+        let mut landings = Vec::new();
+        for (unit, file) in [("unit/1", "a/one"), ("unit/2", "b/two")] {
+            h.work(unit, unit, &[(file, Some("x"))]);
+            let id = h.submit(unit);
+            h.settle();
+            assert_eq!(h.sub(id).state, State::Landed);
+            landings.push(h.tip());
+        }
+        let (first, second) = (landings[0].clone(), landings[1].clone());
+        // The round now reads the branch from another copy, the remote's,
+        // which a refused landing left at the first landing.
+        h.branch_at(BRANCH, &first);
+        h.work_on("unit/1", &first, &[("c/three", Some("x"))]);
+        let three = h.submit("unit/1");
+        let (forms, moves) = (h.w().forms(), h.moves());
+        h.settle();
+        assert_eq!((h.w().forms(), h.moves()), (forms, moves), "{accept}");
+        assert_eq!(h.sub(three).state, State::Queued);
+        let held: Vec<(sluice_seams::Rev, sluice_seams::Rev)> = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Held { read, lacks } => Some((read, lacks)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(held, vec![(first.clone(), second.clone())]);
+
+        // The operator accepts the copy's revision, naming it, or puts
+        // the second landing back on it; the queue is formed on it.
+        let on = if accept {
+            h.sluice()
+                .accept_branch(BRANCH, first.as_str())
+                .unwrap()
+                .unwrap();
+            first
+        } else {
+            h.branch_at(BRANCH, &second);
+            second
+        };
+        h.settle();
+        let s = h.sub(three);
+        assert_eq!(s.state, State::Landed, "{accept}");
+        assert_eq!(s.tested.unwrap().on, on);
+        assert_eq!(h.w().parents(&h.tip())[0], on);
+        assert_eq!(h.doc().held, None);
+    }
+}

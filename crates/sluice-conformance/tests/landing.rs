@@ -131,3 +131,19 @@ fn a_landing_moved_over_by_hand_before_it_was_recorded_still_counts() {
         .iter()
         .any(|e| matches!(e, Event::Refused { .. })));
 }
+
+/// satisfies: 121, 22, 45
+#[test]
+fn each_landing_is_the_revision_the_branch_must_then_contain() {
+    let h = Harness::bolt();
+    assert_eq!(h.doc().landed, None);
+    for (n, file) in ["a/one", "b/two"].into_iter().enumerate() {
+        let unit = format!("unit/{n}");
+        h.work(&unit, "agent", &[(file, Some("x"))]);
+        let id = h.submit(&unit);
+        h.settle();
+        assert_eq!(h.sub(id).state, State::Landed);
+        assert_eq!(h.doc().landed, Some(h.tip()), "after landing {file}");
+    }
+    assert_eq!(h.w().moves().len(), 2);
+}

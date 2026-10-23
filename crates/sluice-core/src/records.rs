@@ -577,6 +577,25 @@ pub struct BranchDoc {
     /// are on its remote; `None` until one takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead: Option<String>,
+    /// 121: the revision every read of the branch must contain: its last
+    /// landing, the revision the operator accepted, or the one sluice
+    /// made it at. `None` in records written before it, until a round
+    /// takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<Rev>,
+    /// 121: the branch was last read at a revision lacking `landed`, and
+    /// nothing is formed or landed on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<BranchHold>,
+}
+
+/// 121: a branch read at a revision that lacks the landing its records
+/// say it must contain, and since when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchHold {
+    pub read: Rev,
+    pub lacks: Rev,
+    pub since: String,
 }
 
 impl BranchDoc {
@@ -597,6 +616,8 @@ impl BranchDoc {
             failed_releases: Vec::new(),
             outbox: Vec::new(),
             lead: None,
+            landed: None,
+            held: None,
         }
     }
 }
@@ -751,6 +772,18 @@ pub enum Event {
     Landed {
         ids: Vec<u64>,
         to: Rev,
+    },
+    /// 121: the branch was read at a revision lacking the landing it must
+    /// contain; one line for each revision read so.
+    Held {
+        read: Rev,
+        lacks: Rev,
+    },
+    /// 121: the operator accepted the revision a held branch was read at,
+    /// which lacked the landing named.
+    Accepted {
+        revision: Rev,
+        lacked: Rev,
     },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
@@ -954,7 +987,87 @@ pub fn to_document<T: Serialize>(value: &T) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{to_document, BranchDoc, Event, FailedRelease, LogLine};
+    use super::*;
+
+    /// A document written before the hold existed reads as before, with
+    /// no revision it must contain and no hold, and writes back unchanged.
+    #[test]
+    fn a_branch_document_without_the_hold_reads_as_before() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "bolt/x",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert_eq!(doc.landed, None);
+        assert_eq!(doc.held, None);
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+    }
+
+    #[test]
+    fn a_branch_document_with_the_hold_round_trips() {
+        let mut doc = BranchDoc::new("bolt/x");
+        doc.landed = Some(Rev::new("c43609b"));
+        doc.held = Some(BranchHold {
+            read: Rev::new("10e4791"),
+            lacks: Rev::new("c43609b"),
+            since: "2026-10-23T12:00:00Z".into(),
+        });
+        let bytes = to_document(&doc);
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["landed"], "c43609b");
+        assert_eq!(
+            v["held"],
+            serde_json::json!({
+                "read": "10e4791", "lacks": "c43609b", "since": "2026-10-23T12:00:00Z",
+            })
+        );
+        assert_eq!(serde_json::from_slice::<BranchDoc>(&bytes).unwrap(), doc);
+    }
+
+    #[test]
+    fn the_hold_and_the_acceptance_are_log_lines() {
+        let lines = [
+            Event::Held {
+                read: Rev::new("10e4791"),
+                lacks: Rev::new("c43609b"),
+            },
+            Event::Accepted {
+                revision: Rev::new("10e4791"),
+                lacked: Rev::new("c43609b"),
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|event| {
+                let line = LogLine {
+                    schema: LOG_SCHEMA.into(),
+                    at: "2026-10-23T12:00:00Z".into(),
+                    event: event.clone(),
+                };
+                String::from_utf8(to_line(&line)).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"held\",\"read\":\"10e4791\",\"lacks\":\"c43609b\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"accepted\",\"revision\":\"10e4791\",\"lacked\":\"c43609b\"}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back.into_iter().map(|l| l.event).collect::<Vec<_>>(), lines);
+    }
 
     /// 123: a branch file written before failed releases reads with none,
     /// and one holding them, and the new events, reads back as written.
@@ -998,7 +1111,7 @@ mod tests {
             },
         ] {
             let line = LogLine {
-                schema: super::LOG_SCHEMA.into(),
+                schema: LOG_SCHEMA.into(),
                 at: "2026-10-23T09:00:00Z".into(),
                 event,
             };

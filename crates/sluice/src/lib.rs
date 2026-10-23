@@ -30,12 +30,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
-use sluice_core::records::{Event, FailedTask, State, Submission};
+use sluice_core::records::{BranchHold, Event, FailedTask, State, Submission};
 use sluice_core::{
     AmendRefusal, Clock, Forecast, Forecasted, Requester, Seams, Serves, Sluice, Status, Step,
     SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
-use sluice_seams::{Outcome, SessionPlace};
+use sluice_seams::{Outcome, Rev, SessionPlace};
 use told::Kind;
 
 /// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
@@ -420,11 +420,11 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
-    // branches-1 104, 105.
+    // branches-1 104, 105; 121.
     /// Make or remove a branch sluice lands on, on its remote when its
-    /// policy names one.
+    /// policy names one, or accept the revision a held branch is read at.
     #[command(
-        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main"
+        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main\n  $ sluice branch accept feature/x 10e4791"
     )]
     Branch {
         #[command(subcommand)]
@@ -594,6 +594,19 @@ pub enum BranchCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Accept the revision a held branch is read at, which lacks its last
+    /// landing, as the one it stands on: the next round forms the queue on
+    /// it. The operator's to do, never a session's.
+    #[command(after_help = "Example:\n  $ sluice branch accept feature/x 10e4791")]
+    Accept {
+        /// The held branch.
+        branch: String,
+        /// The revision it is held at, as `sluice status <branch>` names it.
+        revision: String,
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -687,7 +700,10 @@ impl Cli {
                     command: ForgeCommand::Check { json, .. },
                 }
                 | Command::Branch {
-                    command: BranchCommand::Create { json, .. } | BranchCommand::Delete { json, .. },
+                    command:
+                        BranchCommand::Create { json, .. }
+                        | BranchCommand::Delete { json, .. }
+                        | BranchCommand::Accept { json, .. },
                 },
             ) => *json,
             Some(_) => false,
@@ -821,18 +837,23 @@ pub fn run(
                     Step::Busy => "busy",
                     Step::Led => "led",
                     Step::Contended => "contended",
+                    Step::Held => "held",
                 };
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({
-                        "branch": branch,
-                        "outcome": outcome,
-                        "released": exec::abandoned_json(&round.released),
-                        "previews_released": preview::dropped_json(&round.previews),
-                        "releases": exec::releases_json(&round.releases),
-                    })
-                )?;
+                let mut doc = serde_json::json!({
+                    "branch": branch,
+                    "outcome": outcome,
+                    "released": exec::abandoned_json(&round.released),
+                    "previews_released": preview::dropped_json(&round.previews),
+                    "releases": exec::releases_json(&round.releases),
+                });
+                if let Some(hold) = &round.held {
+                    doc["held"] = held_json(hold);
+                }
+                writeln!(out, "{doc}")?;
+                return Ok(0);
+            }
+            if let Some(hold) = &round.held {
+                writeln!(out, "{}", held_line(&branch, hold))?;
                 return Ok(0);
             }
             let word = match round.step {
@@ -840,6 +861,7 @@ pub fn run(
                 Step::Busy => "busy: another round holds the lock",
                 Step::Led => "led: another host keeps the branch, and its lease has not passed",
                 Step::Contended => "contended: the records moved; nothing done",
+                Step::Held => "held",
             };
             writeln!(out, "{branch}: {word}")?;
             Ok(0)
@@ -848,6 +870,8 @@ pub fn run(
             let s = s.serving(Serves::Every);
             s.check_host_systems()?;
             let mut n = 0;
+            // 121: each branch's hold as last said, so it is said once.
+            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
@@ -868,6 +892,10 @@ pub fn run(
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
                         exec::tell_releases(out, false, &round.releases)?;
+                        if matches!(round.step, Step::Stepped | Step::Held) {
+                            let said = said.entry(branch.clone()).or_default();
+                            tell_hold(out, &branch, round.held.as_ref(), said)?;
+                        }
                     }
                 }
                 n += 1;
@@ -1286,6 +1314,39 @@ pub fn run(
     }
 }
 
+/// 121: a branch held because the revision it is read at lacks its last
+/// landing, with both revisions and the two ways out.
+pub(crate) fn held_line(branch: &str, hold: &BranchHold) -> String {
+    let (read, lacks) = (hold.read.short(), hold.lacks.short());
+    format!(
+        "held: {branch} reads {read}, which lacks the landing {lacks}; \
+         put the landing back on {branch}, or run sluice branch accept {branch} {read}"
+    )
+}
+
+/// 121: say `branch`'s hold once: when it begins, and again for another
+/// revision read lacking the landing. `said` is what was said last.
+fn tell_hold(
+    out: &mut dyn Write,
+    branch: &str,
+    hold: Option<&BranchHold>,
+    said: &mut Option<(Rev, Rev)>,
+) -> Result<()> {
+    let now = hold.map(|h| (h.read.clone(), h.lacks.clone()));
+    if now != *said {
+        if let Some(h) = hold {
+            writeln!(out, "{}", held_line(branch, h))?;
+        }
+        *said = now;
+    }
+    Ok(())
+}
+
+/// 121: the hold as `--json` carries it.
+pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
+    serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
+}
+
 pub(crate) fn hashes(ids: &[u64]) -> String {
     ids.iter()
         .map(|i| format!("#{i}"))
@@ -1550,6 +1611,8 @@ fn wait_on(
     let (id, branch) = (sub.id, sub.branch.clone());
     type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
     let mut said: Option<Moved> = told.map(|t| (t, None));
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
     let mut first = true;
     loop {
         if sub.state.is_out() {
@@ -1573,6 +1636,9 @@ fn wait_on(
                     },
                 }
                 said = Some(now);
+            }
+            if let Some(v) = &view {
+                tell_hold(out, &branch, v.held.as_ref(), &mut said_hold)?;
             }
         }
         if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
@@ -2029,6 +2095,8 @@ fn submit_pull(
         }
     };
     let mut last: Option<(String, Vec<String>)> = None;
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
     loop {
         intake(pulls, seams, clock, branch);
         match pulls.follow(seams, clock, branch, number)? {
@@ -2120,6 +2188,9 @@ fn submit_pull(
             Ok(round) => {
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
+                if !json && matches!(round.step, Step::Stepped | Step::Held) {
+                    tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
+                }
             }
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
@@ -2259,6 +2330,9 @@ fn write_status(
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
     }
+    if let Some(hold) = &status.held {
+        writeln!(out, "{}", held_line(&status.branch, hold))?;
+    }
     write_failed_releases(&status.failed_releases, out)?;
     for t in testing {
         writeln!(out, "  {t}")?;
@@ -2330,7 +2404,7 @@ fn write_failed_releases(
 }
 
 fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value {
-    let held: Vec<serde_json::Value> = status
+    let held_checkouts: Vec<serde_json::Value> = status
         .failed_releases
         .iter()
         .map(|f| {
@@ -2354,7 +2428,8 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "submissions": submissions,
         "warnings": status.warnings,
         "stale": status.stale,
-        "held": held,
+        "held": status.held.as_ref().map(held_json),
+        "held_checkouts": held_checkouts,
     })
 }
 

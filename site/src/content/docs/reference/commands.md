@@ -13,7 +13,7 @@ sidebar:
 | `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
-| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch. `--json` for scripts. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch, and `held` when the revision it reads lacks the branch's last landing ([below](#sluice-branch)). `--json` for scripts. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
 | `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
@@ -24,6 +24,7 @@ sidebar:
 | `sluice release <name>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. Given a checkout held because its release failed, `sluice/try/<branch>/<n>`, run its release once more. `--accept-failure` frees either without running the release command. `--json` for scripts. |
 | `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
 | `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
+| `sluice branch accept <branch> <revision>` | Accept the revision a held branch is read at, which lacks its last landing, as the one it stands on: the next round forms the queue on it. The operator's to do, never an agent's. `--json` for scripts. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. `--json` for scripts. |
 
 ## Forecasting a conflict
@@ -214,7 +215,7 @@ sluice/try/main/48 is held: its release failed 4 times: … `sluice release slui
 ```
 
 `sluice status <branch>` lists the branch's held checkouts, and
-`--json` as `held`, each with `place`, `failed`, `tries`, `at`,
+`--json` as `held_checkouts`, each with `place`, `failed`, `tries`, `at`,
 `stopped` (tried no more) and, on a branch whose state is on its
 remote, the `host` that made it:
 
@@ -267,6 +268,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
+| `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
@@ -496,8 +498,42 @@ $ sluice branch delete bolt/payments
 refused: #12 still queued on bolt/payments; wait for them to land, or withdraw them
 ```
 
-Both exit `0` when done, `1` when a branch they name doesn't exist, and
-`2` on a refusal.
+A branch is held when the revision a round reads it at lacks the last
+landing sluice recorded there. A hand that moved it back does that, and
+so does a branch that landed in this host's own refs gaining a `remote`
+whose copy is older. While it is held, no combination is formed and
+nothing lands; tests already running go on, and their results are read
+once the hold ends. `sluice step`, `sluice run`, `sluice status
+<branch>`, `sluice overview` and a waiting submit or `sluice wait` say
+so, naming both revisions:
+
+```console
+$ sluice step bolt/payments
+held: bolt/payments reads 10e4791, which lacks the landing c43609b; put the landing back on bolt/payments, or run sluice branch accept bolt/payments 10e4791
+```
+
+The hold ends by itself on the first round that reads the branch at a
+revision holding the landing again, as when the landing is pushed back
+to the remote. A commit on top of the landing never holds the branch:
+the queue is formed on it as it stands.
+
+`sluice branch accept <branch> <revision>` is the other way out: the
+operator accepts the revision read as the one the branch stands on,
+naming it as `held` names it, whole or by seven characters or more. It
+is logged, every later read must contain it, and the next round forms
+the queue on it. It moves no branch, and is refused unless the branch
+is held at that revision and still read there. A branch sluice makes
+stands on the revision it was made at, so a branch deleted and made
+again owes nothing to the landings of the one deleted.
+
+```console
+$ sluice branch accept bolt/payments 10e4791
+accepted bolt/payments at 10e4791a2b5c6d7e8f90a1b2c3d4e5f6a7b8c9d0, which lacks the landing c43609b8e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6; the next round forms the queue on it
+```
+
+All three exit `0` when done, `1` when a branch they name doesn't exist,
+and `2` on a refusal. A round that holds a branch is no failure:
+`sluice step` exits `0`, saying `held`.
 
 ## `sluice forge check`
 
@@ -641,7 +677,8 @@ else they say goes to stderr:
 
 | Command | Document |
 |---|---|
-| `sluice step` | `{"branch","outcome","released","previews_released","releases"}`: `outcome` is `stepped`, `busy` or `contended`; `released` and `previews_released` name the worktrees and previews the round freed because they were gone or released because their command failed, and `releases` each combination's checkout whose release failed, was held or found gone, with `release` (`failed`, `held` or `gone`), `failed` and `tries` |
+| `sluice step` | `{"branch","outcome","released","previews_released","releases"}`: `outcome` is `stepped`, `busy`, `led`, `contended` or `held`; `released` and `previews_released` name the worktrees and previews the round freed because they were gone or released because their command failed, and `releases` each combination's checkout whose release failed, was held or found gone, with `release` (`failed`, `held` or `gone`), `failed` and `tries`. A held round adds `held`, with `read`, `lacks` and `since` |
+| `sluice branch` | `{"branch","created","from"}`, `{"branch","deleted","into"}` or `{"branch","accepted","lacked"}` |
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
 | `sluice set-aside` | `{"schema","at","task","hash","run_at","branch","combination","reason","by"}`, the record kept |
