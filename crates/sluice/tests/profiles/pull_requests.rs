@@ -279,6 +279,44 @@ impl OnGitHub {
             .output()
             .unwrap()
     }
+
+    /// The pull request from `head_ref`, as GitHub holds it now.
+    fn pull_from(&self, head_ref: &str) -> sluice::profiles::github::forge::Pull {
+        self.gh
+            .forge
+            .by_ref(head_ref)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no pull request from {head_ref}"))
+    }
+
+    /// A commit of `changes` in the worktree `dir`, pushed to GitHub by git
+    /// alone, as a fix another submission lands on its branch would be:
+    /// no submit pushes it. Returns the new head.
+    fn push_from(&self, dir: &Path, changes: &[(&str, &str)]) -> String {
+        let head = self.commit_in(dir, changes);
+        let branch = self.repo.git(&[
+            "-C",
+            dir.to_str().unwrap(),
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+        ]);
+        self.repo.git(&[
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/heads/{branch}"),
+        ]);
+        head
+    }
+
+    /// The submissions from pull request `n`, after `steps` more rounds.
+    fn of_after(&self, n: u64, steps: usize) -> Vec<Value> {
+        for _ in 0..steps {
+            self.step();
+        }
+        self.of(n)
+    }
 }
 
 fn text(out: &Output) -> String {
@@ -522,6 +560,112 @@ fn blamed_and_left_alone() {
     assert!(!r.contains("it broke"), "{r}");
 }
 
+/// The crew #127/#128 case (120, S56): a pull request `wt submit` opened
+/// is queued, and a commit no submit pushed moves its head. Its
+/// submission is withdrawn, sluice marks it a draft, and no round submits
+/// it in its agent's name, whatever its conditions.
+#[test]
+fn a_new_head_no_submit_pushed() {
+    let g = OnGitHub::new("pr-held-new-head", "");
+    let w = g.session("held", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/held").number;
+    assert_eq!(g.of(n).len(), 1, "queued: {:?}", g.subs());
+    let main = g.main_on_github();
+    let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
+    let subs = g.of_after(n, 4);
+    assert_eq!(subs.len(), 1, "never submitted again: {subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn", "{subs:?}");
+    let pull = g.pull_from("unit/held");
+    assert!(pull.open && pull.draft, "{pull:?}");
+    assert_eq!(pull.head, new);
+    assert_eq!(g.main_on_github(), main, "nothing landed");
+    assert_eq!(
+        g.posted(&new).map(|p| (p.0, p.1)),
+        Some((Status::Queued, "waiting: the next submit".into()))
+    );
+}
+
+/// Withdrawn by the operator: a pull request `wt submit` opened, its
+/// submission withdrawn with `sluice withdraw`, is marked a draft, and no
+/// later round submits it.
+#[test]
+fn withdrawn_by_the_operator() {
+    let g = OnGitHub::new("pr-held-withdrawn", "");
+    let w = g.session("pulled", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/pulled");
+    let id = g.of(pull.number)[0]["id"].as_u64().unwrap().to_string();
+    let out = g.sluice(&["withdraw", &id, "--as", "operator"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let subs = g.of_after(pull.number, 3);
+    assert_eq!(subs.len(), 1, "never submitted again: {subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn");
+    assert!(g.pull_from("unit/pulled").draft);
+    assert_eq!(
+        g.posted(&pull.head).unwrap().1,
+        "waiting: the next submit",
+        "{:?}",
+        g.posted(&pull.head)
+    );
+}
+
+/// Marked ready by a person: a pull request `wt submit` opened, held and
+/// marked a draft after its head moved, is submitted at its new head once
+/// a person marks it ready for review on GitHub.
+#[test]
+fn held_then_marked_ready_by_a_person() {
+    let g = OnGitHub::new("pr-held-ready", "");
+    let w = g.session("readied", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/readied").number;
+    let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
+    assert_eq!(g.of_after(n, 2).len(), 1);
+    assert!(g.pull_from("unit/readied").draft);
+    g.gh.forge.set_draft(n, false).unwrap();
+    let subs = g.of_after(n, 1);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], new.as_str());
+    assert_ne!(subs[1]["state"], "withdrawn", "{subs:?}");
+}
+
+/// Held when it cannot be marked a draft: GitHub refuses the draft, and
+/// no round submits the pull request; its check says it waits for the
+/// next submit, and each round tries the draft again, until one is taken.
+#[test]
+fn held_when_github_refuses_the_draft() {
+    let g = OnGitHub::new("pr-held-refused", "");
+    let w = g.session("refused", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/refused").number;
+    g.gh.refuse_drafts(true);
+    let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
+    for _ in 0..3 {
+        let out = g.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert!(
+            text(&out).contains(&format!(
+                "#{n} waits for the next submit, and GitHub would not mark it a draft"
+            )) && text(&out).contains("Resource not accessible by integration"),
+            "{}",
+            text(&out)
+        );
+    }
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "never submitted again: {subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn");
+    assert!(!g.pull_from("unit/refused").draft);
+    assert_eq!(g.posted(&new).unwrap().1, "waiting: the next submit");
+    g.gh.refuse_drafts(false);
+    g.step();
+    assert!(g.pull_from("unit/refused").draft);
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+}
+
 /// pull-request-status, edited not repeated (ADR 0044): one report
 /// comment, edited from testing to landed.
 #[test]
@@ -620,6 +764,51 @@ fn the_check_names_what_is_missing() {
         summary.contains("Forecast: merges onto main without conflict"),
         "{summary}"
     );
+}
+
+/// A pull request held for its submitter says so: one `wt submit` opened,
+/// blamed, is a draft whose check reads "waiting: the next submit",
+/// naming the next submit from its branch and the ready mark; its one
+/// comment names the failed check, links to the report, and says sluice
+/// marked it a draft and what submits it again.
+#[test]
+fn a_submits_pull_request_sent_back_says_so() {
+    let g = OnGitHub::new("pr-held-blamed", "");
+    let w = g.session("blamed", &[("broken", "x\n")]);
+    let out = g.wt_submit(&w, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let pull = g.pull_from("unit/blamed");
+    assert!(pull.draft, "{pull:?}");
+    assert_eq!(g.of_after(pull.number, 2).len(), 1, "{:?}", g.subs());
+    let (status, title, summary) = g.posted(&pull.head).unwrap();
+    assert_eq!(
+        (status, title.as_str()),
+        (Status::Queued, "waiting: the next submit")
+    );
+    assert!(
+        summary.contains(
+            "The next `sluice submit main` from `unit/blamed`, or marking it ready for review, \
+             submits it again."
+        ),
+        "{summary}"
+    );
+    let told: Vec<String> = g
+        .comments(pull.number)
+        .into_iter()
+        .filter(|c| c.contains("told="))
+        .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    let c = &told[0];
+    assert!(c.contains("`sh check.sh` failed"), "{c}");
+    assert!(c.contains("[sluice's report]("), "{c}");
+    assert!(
+        c.contains(
+            "sluice marked it a draft. The next `sluice submit main` from `unit/blamed`, or \
+             marking it ready for review, submits it again."
+        ),
+        "{c}"
+    );
+    assert!(!c.contains("Push a fix"), "{c}");
 }
 
 /// Landed, merged by landing: the check is success and reads landed;
