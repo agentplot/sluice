@@ -107,6 +107,7 @@ impl FileForge {
             h.next += 1;
             h.pulls.push(Pull {
                 number,
+                node_id: format!("PR_{number}"),
                 title: head_ref.into(),
                 body: String::new(),
                 author: author.into(),
@@ -294,6 +295,10 @@ impl Forge for FileForge {
 
     fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
         self.with_pull(number, |p| p.body = body.into())
+    }
+
+    fn set_draft(&self, _: &Repo, number: u64, draft: bool) -> Result<()> {
+        FileForge::set_draft(self, number, draft)
     }
 }
 

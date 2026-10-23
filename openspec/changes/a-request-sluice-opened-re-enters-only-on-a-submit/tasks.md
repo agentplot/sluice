@@ -7,8 +7,8 @@ group.
 
 ## 1. GitHub can mark a pull request a draft or ready
 
-- [ ] 1.1 Add `node_id` to `Pull` (`profiles/github/forge.rs`), read from REST's `node_id` in `rest.rs` and defaulting to empty in the file fake's serde. Add `Forge::set_draft(repo, number, draft)`. Verify with `cargo check -p sluice` and the existing `rest.rs` unit tests under `cli:test`.
-- [ ] 1.2 Implement `set_draft` on the app as one GraphQL mutation (`convertPullRequestToDraft` or `markPullRequestReadyForReview`, keyed by `pullRequestId`) posted to `{api}/graphql` with the installation token. An `errors` array is an error even on HTTP 200. Verify with a unit test in `rest.rs` that builds both request bodies and reads an error reply as an error, under `cli:test`.
+- [x] 1.1 Add `node_id` to `Pull` (`profiles/github/forge.rs`), read from REST's `node_id` in `rest.rs` and defaulting to empty in the file fake's serde. Add `Forge::set_draft(repo, number, draft)`. Verify with `cargo check -p sluice` and the existing `rest.rs` unit tests under `cli:test`.
+- [x] 1.2 Implement `set_draft` on the app as one GraphQL mutation (`convertPullRequestToDraft` or `markPullRequestReadyForReview`, keyed by `pullRequestId`) posted to `{api}/graphql` with the installation token. An `errors` array is an error even on HTTP 200. Verify with a unit test in `rest.rs` that builds both request bodies and reads an error reply as an error, under `cli:test`.
 - [ ] 1.3 Make `FileForge` implement `set_draft` with its existing `set_draft`, which records the ready time on the timeline. Make the test fake in `tests/profiles/forge/github.rs` answer `POST /graphql` for both mutations from it, and give it a switch that refuses them. Verify with a fake.rs unit test that a convert then a ready leaves one new ready time, under `cli:test`.
 
 ## 2. Intake holds a submit's pull request until its submitter acts
