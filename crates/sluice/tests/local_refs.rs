@@ -314,6 +314,19 @@ fn contains_answers_ancestry() {
     assert!(!r.contains(&b, &other).unwrap());
 }
 
+/// 121: a revision that is no commit on this host, as another host's
+/// landing a remote has since lost, is contained in nothing read here.
+#[test]
+fn contains_answers_no_for_a_commit_this_host_lacks() {
+    let repo = Repo::new("contains-unknown");
+    let r = refs(&repo);
+    let a = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let unknown = Rev::new("0123456789abcdef0123456789abcdef01234567");
+    assert!(!r.contains(&a, &unknown).unwrap());
+    let blob = rev(repo.git(&["rev-parse", "bolt/x:a"]).trim().to_string());
+    assert!(!r.contains(&a, &blob).unwrap());
+}
+
 /// The common directory is the same from a linked worktree.
 #[test]
 fn the_common_dir_is_one_from_every_worktree() {
