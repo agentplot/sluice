@@ -42,7 +42,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 ## 7. Docs
 
 - [x] 7.1 `reference/commands.md`: `sluice branch accept` in the table and the `sluice branch` section, `held` in step's outputs and exits; `reference/state.md`: `landed` and `held` in `branch.json`, the `held` and `accepted` log lines; `README.md`'s `sluice branch` row; verify `site:prose`.
-- [ ] 7.2 `guides/github.md`: where it says to push `main` by hand once after adding `remote`, say what sluice does if the remote's copy is older than what landed locally, and the two ways out; verify `site:prose`.
+- [x] 7.2 `guides/github.md`: where it says to push `main` by hand once after adding `remote`, say what sluice does if the remote's copy is older than what landed locally, and the two ways out; verify `site:prose`.
 
 ## 8. Gate
 

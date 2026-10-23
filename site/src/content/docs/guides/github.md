@@ -24,6 +24,22 @@ sluice reads the policy from `main` as it stands before a landing, so
 the landing that adds `remote` lands on your machine only. Push `main`
 to GitHub by hand that once; sluice pushes every landing after it.
 
+If GitHub's `main` is still older than what landed on your machine when
+the next round reads it, sluice doesn't build on it: that would drop
+the landings GitHub lacks. It holds `main` instead. Nothing is tested
+or landed, and `sluice step`, `sluice status main` and a waiting submit
+say so, naming GitHub's revision and the landing it lacks:
+
+```console
+$ sluice step main
+held: main reads 10e4791, which lacks the landing c43609b; put the landing back on main, or run sluice branch accept main 10e4791
+```
+
+There are two ways out. Push your machine's `main` to GitHub, and the
+next round lands the queue on it. Or, if GitHub's revision is the one
+to keep, accept it with `sluice branch accept main 10e4791`, and the
+queue is formed on it from then on.
+
 With `remote` set, GitHub's copy of `main` is the real one:
 
 - **Every round fetches it first.** Whoever runs the round (a waiting
