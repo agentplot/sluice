@@ -574,7 +574,6 @@ impl Sluice<'_> {
             if tip != lacks && !self.seams.branch.contains(&tip, &lacks)? {
                 let hold = line.doc.held.as_ref();
                 if hold.is_none_or(|h| h.read != tip || h.lacks != lacks) {
-                    info!(monotonic_counter.sluice.held = 1u64, sluice.branch = branch);
                     line.log(
                         &now,
                         Event::Held {
