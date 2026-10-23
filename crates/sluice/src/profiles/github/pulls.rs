@@ -375,35 +375,46 @@ impl Pulls {
                     pull: p.clone(),
                 },
             );
-            let shown = self.consider(
-                s,
-                forge,
-                &t,
-                &pushed,
-                branch,
-                p,
-                latest.get(&place(p.number)),
-                &status.submissions,
-                &log,
-                &names,
-            )?;
-            let report = match latest.get(&place(p.number)) {
-                Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
-                _ => None,
-            };
             self.log_lines
                 .borrow_mut()
                 .insert(branch.to_string(), t.conditions.log_lines);
-            self.show_report(
-                forge,
-                &t.repo,
-                p.number,
-                &p.head,
-                t.conditions.log_lines,
-                &names,
-                shown,
-                report.as_ref(),
-            )?;
+            // 128: what sluice reads of one pull request, or cannot,
+            // decides that pull request alone; the next round reads it
+            // again.
+            let step = || -> Result<()> {
+                let shown = self.consider(
+                    s,
+                    forge,
+                    &t,
+                    &pushed,
+                    branch,
+                    p,
+                    latest.get(&place(p.number)),
+                    &status.submissions,
+                    &log,
+                    &names,
+                )?;
+                let report = match latest.get(&place(p.number)) {
+                    Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
+                    _ => None,
+                };
+                self.show_report(
+                    forge,
+                    &t.repo,
+                    p.number,
+                    &p.head,
+                    t.conditions.log_lines,
+                    &names,
+                    shown,
+                    report.as_ref(),
+                )
+            };
+            if let Err(e) = step() {
+                crate::telemetry::warn(&format!(
+                    "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
+                    place(p.number)
+                ));
+            }
         }
         Ok(true)
     }
@@ -521,7 +532,8 @@ impl Pulls {
         // no round submits it in its agent's name before then (120, S56).
         let from = submits(p);
         let held = match latest.filter(|e| from.is_some() && left_unlanded(e)) {
-            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))?,
+            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))
+                .with_context(|| format!("reading {here}'s timeline"))?,
             None => false,
         };
         // Its draft shows the hold, and is not the hold: one GitHub
@@ -544,7 +556,9 @@ impl Pulls {
             match e.state {
                 State::Withdrawn => {
                     if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
-                        if !retried_by_hand(forge, &t.repo, p, log, e.id)? {
+                        if !retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?
+                        {
                             rests = Some(by);
                         }
                     }
@@ -556,7 +570,8 @@ impl Pulls {
                     // back; a submit's, once it is no longer held.
                     let retried = match from {
                         Some(_) => !held,
-                        None => retried_by_hand(forge, &t.repo, p, log, e.id)?,
+                        None => retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?,
                     };
                     if !retried {
                         let outcome = Outcome::of(e)?;
@@ -581,13 +596,18 @@ impl Pulls {
         } else if p.draft {
             missing.push("a draft".to_string());
         } else {
-            let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
+            let reviews = forge
+                .reviews(&t.repo, p.number)
+                .with_context(|| format!("reading {here}'s reviews"))?;
+            let have = approvals(&reviews, &p.head);
             if have < t.conditions.reviews {
                 let need = t.conditions.reviews - have;
                 missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
             }
             if !t.conditions.checks.is_empty() {
-                let checks = forge.checks(&t.repo, &p.head)?;
+                let checks = forge
+                    .checks(&t.repo, &p.head)
+                    .with_context(|| format!("reading {here}'s checks"))?;
                 for name in &t.conditions.checks {
                     if !checks
                         .iter()
