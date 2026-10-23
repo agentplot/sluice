@@ -10,7 +10,7 @@ decision-makers:
 # A reader sees the queue through one overview, and plugins live outside the core
 
 Deciders: the user, settling the shared contract between the Claude Code plugin plan and the herdr plugin plan, and building the OpenSpec change `overview`, 2026-10-16.
-Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 49, 52, 61 to 63; ADRs 0003, 0008, 0018, 0020, 0021; rules core.1, core.11, core.14, core.15.
+Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 49, 52, 61 to 63; ADRs 0003, 0008, 0018, 0020, 0045; rules core.1, core.11, core.14, core.15.
 
 ## Context and problem statement
 

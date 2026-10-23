@@ -12,10 +12,8 @@ local refs otherwise, each a move leased on what it read (ADR 0026).
 `<other>`'s current revision, read through the branch seam, only when
 `<other>` and `<branch>` are both given a gate by the policy at that
 revision, `<branch>`'s records hold no submission still in a chain, and
-`<branch>` is absent. The branch SHALL be made on the remote that
-policy names for it, by a push leased on the branch being absent, or in
-local refs when it names none. It SHALL take the branch's lock and
-print the revision it made.
+`<branch>` is absent. It SHALL take the branch's lock and print the
+revision it made.
 
 #### Scenario: A bolt is made at main's revision
 - **WHEN** `sluice branch create bolt/x --from main` runs and `bolt/x` is absent
@@ -24,6 +22,11 @@ print the revision it made.
 #### Scenario: A branch already there is refused
 - **WHEN** `sluice branch create bolt/x --from main` runs and `bolt/x` exists
 - **THEN** nothing moves and the command exits 2 naming the revision `bolt/x` holds
+
+### Requirement: sluice makes a branch on the remote its policy names
+`sluice branch create` SHALL make the branch on the remote the policy
+at `<other>`'s revision names for it, by a push leased on the branch
+being absent, or in local refs when it names none.
 
 #### Scenario: With no remote, the same in local refs
 - **WHEN** the policy names no `remote` for `bolt/*`

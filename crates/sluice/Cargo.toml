@@ -46,6 +46,11 @@ sha2.workspace = true
 name = "moon"
 path = "tests/profiles/moon.rs"
 
+# A binary of its own: telemetry, once on, is on for the whole process.
+[[test]]
+name = "moon_telemetry"
+path = "tests/profiles/moon_telemetry.rs"
+
 [[test]]
 name = "places"
 path = "tests/profiles/places.rs"
