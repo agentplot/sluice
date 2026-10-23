@@ -166,10 +166,10 @@ fn the_branchs_own_revision_decides() {
     assert!(out.status.success(), "{}", text(&out));
 }
 
-/// A deletion is allowed only when no submission still needs the branch.
-#[test]
-fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
-    let (repo, held) = protected("protect-delete");
+/// A protected repository whose `bolt/x` holds submission #1, from a
+/// session on `unit/s`; no worktree holds `bolt/x`.
+fn queued(name: &str) -> Repo {
+    let (repo, held) = protected(name);
     repo.git(&["worktree", "remove", held.to_str().unwrap()]);
     let session = repo.dir().with_extension("session");
     let _ = std::fs::remove_dir_all(&session);
@@ -193,6 +193,13 @@ fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", text(&out));
+    repo
+}
+
+/// A deletion is allowed only when no submission still needs the branch.
+#[test]
+fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
+    let repo = queued("protect-delete");
     let out = repo.git_raw(&["branch", "-D", "bolt/x"]);
     assert_eq!(out.status.code(), Some(128), "{}", text(&out));
     assert!(text(&out).contains("#1"), "{}", text(&out));
@@ -205,6 +212,33 @@ fn a_branch_with_submissions_in_its_queue_is_not_deleted() {
     assert!(out.status.success(), "{}", text(&out));
     let out = repo.git_raw(&["branch", "-D", "bolt/x"]);
     assert!(out.status.success(), "{}", text(&out));
+}
+
+/// git's `pack-refs`, which `git fetch` runs in its maintenance, writes
+/// a protected branch into `packed-refs` and prunes its loose file, its
+/// value unchanged: allowed, its queue full or not. A deletion of the
+/// loose file alone, or a move or deletion once it is packed, is refused.
+#[test]
+fn packing_a_protected_branch_is_allowed() {
+    let repo = queued("protect-pack");
+    let tip = repo.rev("bolt/x");
+    let refused = |args: &[&str]| {
+        let out = repo.git_raw(args);
+        assert_eq!(out.status.code(), Some(128), "git {args:?}: {}", text(&out));
+        assert_eq!(repo.rev("bolt/x"), tip, "git {args:?} moved it");
+    };
+    refused(&["update-ref", "-d", "refs/heads/bolt/x", &tip]);
+    let events = protected_events(&repo).len();
+
+    let out = repo.git_raw(&["pack-refs", "--all", "--prune"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!repo.dir().join(".git/refs/heads/bolt/x").exists());
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), events);
+
+    refused(&["update-ref", "refs/heads/bolt/x", "unit/a"]);
+    refused(&["update-ref", "-d", "refs/heads/bolt/x", &tip]);
+    refused(&["branch", "-D", "bolt/x"]);
 }
 
 /// 3: a hook already there still runs, with the same updates, and its
