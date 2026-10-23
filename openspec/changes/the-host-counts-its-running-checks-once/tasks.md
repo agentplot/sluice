@@ -35,4 +35,4 @@
 
 ## 7. The gate
 
-- [ ] 7.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes.
+- [x] 7.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes.
