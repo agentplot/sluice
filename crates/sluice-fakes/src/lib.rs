@@ -163,6 +163,8 @@ struct Inner {
     /// Each session place released, and the `[tests] release` it was
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
+    /// The next release of a candidate's place fails, its place kept.
+    fail_release: bool,
     saved: Vec<String>,
     /// Previews made and not yet released, by name.
     previews: BTreeMap<String, PreviewPlace>,
@@ -841,6 +843,12 @@ impl World {
 
     pub fn released_places(&self) -> Vec<String> {
         self.0.borrow().released.clone()
+    }
+
+    /// The next release of a candidate's place fails and keeps the place,
+    /// as a release command that fails does.
+    pub fn fail_next_release(&self) {
+        self.0.borrow_mut().fail_release = true;
     }
 
     /// A kept log's text, by where the records seam said it is (20).
@@ -1563,6 +1571,9 @@ impl Checkout for FakeCheckout {
             !self.0 .0.borrow().worktrees.contains_key(name) && !name.starts_with("session/"),
             "sluice released a session's place {name}"
         );
+        if std::mem::take(&mut self.0 .0.borrow_mut().fail_release) {
+            bail!("the release command of {name} failed");
+        }
         self.drop_place(name, passed);
         Ok(())
     }
