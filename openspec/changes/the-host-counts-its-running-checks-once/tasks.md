@@ -30,7 +30,7 @@
 ## 6. Docs
 
 - [x] 6.1 Write the ADR (design D6) as the next free number in `docs/adr/`, add it to `adrs.toml`, and mark ADR 0012 superseded in part by it. Verify `root:format` passes over `adrs.toml`; no gate task reads the ADR's Markdown (core.21), so it is checked by review against D1 and D2.
-- [ ] 6.2 Say on the site that `[runs] max` caps every repository on the host together, and that with no `max` the quarter of the cores is shared by them all: `site/src/content/docs/guides/parallel-and-batch.md` (*The host's bound*) and `site/src/content/docs/reference/configuration.md` (`[runs]`, `SLUICE_JOBS`). Verify `site:prose` passes with no warning.
+- [x] 6.2 Say on the site that `[runs] max` caps every repository on the host together, and that with no `max` the quarter of the cores is shared by them all: `site/src/content/docs/guides/parallel-and-batch.md` (*The host's bound*) and `site/src/content/docs/reference/configuration.md` (`[runs]`, `SLUICE_JOBS`). Verify `site:prose` passes with no warning.
 - [ ] 6.3 Say the same in the plugin's skills: `plugins/sluice/skills/setting-up-sluice/SKILL.md` and `plugins/sluice/skills/using-sluice/SKILL.md` and `references/exec.md`. Verify the plugin docs test passes (`crates/sluice/tests/plugin_docs.rs`, `cli:test`).
 
 ## 7. The gate
