@@ -13,7 +13,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 ## 2. The records
 
 - [x] 2.1 `BranchDoc` gains `landed: Option<Rev>` and `held: Option<Held>` (`read`, `lacks`, `since`), both skipped when absent; `Event` gains `Held { read, lacks }` and `Accepted { revision, lacked }`; verify unit tests in `records.rs` that a document without the fields reads as before and one with them round-trips.
-- [ ] 2.2 The landing confirmation in `perform_landing` sets `landed` to the landing's `to` in the write that logs `landed`; verify the conformance landing tests and a case that `landed` equals the tip after two landings.
+- [x] 2.2 The landing confirmation in `perform_landing` sets `landed` to the landing's `to` in the write that logs `landed`; verify the conformance landing tests and a case that `landed` equals the tip after two landings.
 - [ ] 2.3 A document with no `landed` takes it on the round's first read and writes it: the log's last `landed` line's `to` when `base` is absent or contains it, otherwise `base`; verify conformance cases with records written without the field: a read lacking the last landing holds; a branch removed and made again, `base` on the new branch, is not held and takes `base` (spec: records written before the hold existed).
 
 ## 3. The hold

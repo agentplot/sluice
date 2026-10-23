@@ -328,6 +328,8 @@ impl Sluice<'_> {
                     l.doc.release.extend(release);
                     l.doc.base = Some(intent.to.clone());
                     l.doc.verified = same_gate;
+                    // 121: every later read of the branch must contain it.
+                    l.doc.landed = Some(intent.to.clone());
                     Ok(true)
                 })?;
                 span.record("sluice.outcome", "landed");
