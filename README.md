@@ -263,9 +263,9 @@ Setting up a host to receive it: [docs/telemetry.md](docs/telemetry.md).
 | Release binaries | Apple silicon | x86-64, ARM |
 | Sandboxed checks | ✓ Seatbelt | planned: bubblewrap, Landlock |
 
-Each host runs its own queue today. Several hosts sharing one branch's
-queue, as peers coordinating through the git remote or through a central
-server, is designed and not yet built.
+Several hosts, macOS and Linux among them, share one branch's queue as
+peers through its git remote, with no server: see *On many hosts* under
+[Quick start](#quick-start).
 
 ## How it is built
 
