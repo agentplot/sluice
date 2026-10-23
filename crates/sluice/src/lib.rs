@@ -2277,6 +2277,9 @@ fn write_status(
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
     }
+    if let Some(hold) = &status.held {
+        writeln!(out, "{}", held_line(&status.branch, hold))?;
+    }
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -2316,6 +2319,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "submissions": submissions,
         "warnings": status.warnings,
         "stale": status.stale,
+        "held": status.held.as_ref().map(held_json),
     })
 }
 

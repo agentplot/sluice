@@ -31,7 +31,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 ## 5. Saying it
 
 - [x] 5.1 `sluice step` text and `--json` (`"step": "held"`, `held`), and `sluice run` printing the line once per hold; verify `tests/cli.rs` over the fakes.
-- [ ] 5.2 `sluice status <branch>` prints the hold above the queue and carries `held` under `--json`; the overview's branch view and text the same; verify `tests/cli.rs` cases with `status_lists_the_queue` and the overview's tests unchanged for a branch not held.
+- [x] 5.2 `sluice status <branch>` prints the hold above the queue and carries `held` under `--json`; the overview's branch view and text the same; verify `tests/cli.rs` cases with `status_lists_the_queue` and the overview's tests unchanged for a branch not held.
 - [ ] 5.3 A waiting `sluice submit` and `sluice wait` print the hold's line once in text; their `--json` record is unchanged; verify `tests/cli.rs` cases for both, with a timeout.
 
 ## 6. Over real git

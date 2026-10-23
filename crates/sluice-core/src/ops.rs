@@ -141,6 +141,9 @@ pub struct Status {
     /// 80: the remote the branch's state could not be read from just now,
     /// so what is shown is what was last fetched from it.
     pub stale: Option<String>,
+    /// 121: the branch was last read at a revision lacking its last
+    /// landing, and nothing is formed or landed on it.
+    pub held: Option<crate::records::BranchHold>,
 }
 
 impl Status {
@@ -711,6 +714,7 @@ impl Sluice<'_> {
                 .count(),
             window: line.doc.window,
             parallel,
+            held: line.doc.held.clone(),
             finished: line.finished.len(),
             submissions: line.subs.into_values().collect(),
             warnings,

@@ -3012,3 +3012,58 @@ fn run_says_a_hold_once() {
         "{out}"
     );
 }
+
+/// 121: `sluice status <branch>` and `sluice overview` show the hold
+/// above the queue, and under `held` in JSON, for as long as it lasts.
+#[test]
+fn status_and_overview_show_a_hold_while_it_lasts() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    sluice(&f, &["step", BRANCH]);
+    let held = held_text(&made, &landing);
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            format!(
+                "{BRANCH} at {} · 1 in the queue · testing 0 at once (up to 4)",
+                &landing[..7]
+            ),
+            held.clone(),
+            "  #2  queued    agent-b  unit/b".to_string(),
+            format!("1 no longer in the queue: sluice status {BRANCH} --all"),
+        ],
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(
+        (&v["held"]["read"], &v["held"]["lacks"]),
+        (&serde_json::json!(made), &serde_json::json!(landing))
+    );
+
+    let (_, out) = sluice(&f, &["overview"]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines[0].starts_with(&format!("{BRANCH} at ")), "{out}");
+    assert_eq!(lines[1], format!("  {held}"), "{out}");
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    assert_eq!(v["branches"][0]["held"]["read"], serde_json::json!(made));
+    assert_eq!(
+        v["branches"][0]["held"]["lacks"],
+        serde_json::json!(landing)
+    );
+
+    // The landing is put back: the next round ends the hold.
+    f.world.set_branch(BRANCH, &sluice_seams::Rev::new(landing));
+    sluice(&f, &["step", BRANCH]);
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("held: "), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert!(v["held"].is_null(), "{v}");
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    assert!(v["branches"][0].get("held").is_none(), "{v}");
+}
