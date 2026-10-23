@@ -225,13 +225,32 @@ run:
 round that crashes between the two is finished correctly by the next
 one.
 
-`released` is logged when a combination's checkout is released, and
-when a run or round releases the checkout of a worktree that no longer
-exists, which also names the worktree:
+`released` is logged when a combination's checkout is released. One
+freed at the operator's `--accept-failure` carries `accepted`, what had
+failed of its release:
 
 ```json
-{"schema":"sluice/log@1","event":"released","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c"}
+{"schema":"sluice/log@1","event":"released","place":"sluice/try/main/48","accepted":"the release command of /home/me/repo/.git/sluice/.places/sluice+2Ftry+2Fmain+2F48 ended exit status: 2: usage: scripts/preview up"}
 ```
+
+`release_failed` is logged for each try of a release that failed, with
+what failed and how many tries so far; `held` is true on the try after
+which it is tried no more. `gone` is logged when a run or round frees a
+checkout whose directory no longer exists, with nothing run in its name,
+and for a worktree also names the worktree:
+
+```json
+{"schema":"sluice/log@1","event":"release_failed","place":"sluice/try/main/48","failed":"…: usage: scripts/preview up","tries":4,"held":true}
+{"schema":"sluice/log@1","event":"gone","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c"}
+```
+
+While a checkout's release is failing, `branch.json` keeps it in
+`failed_releases`: its `place`, what `failed`, its `tries`, when it was
+last tried (`at`), `stopped` once it is held, and on a branch whose
+state is on its remote the `host` that made it. It leaves the list once
+it is released, freed or found gone. A worktree's or a preview's own
+release that failed is kept on its record in `.places/` or `.previews/`
+as `release_failed`, since those are the host's alone.
 
 Full example files are in the repository under
 [docs/examples/state](https://github.com/agentplot/sluice/tree/main/docs/examples/state).
