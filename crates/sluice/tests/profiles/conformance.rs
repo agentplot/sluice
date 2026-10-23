@@ -709,6 +709,26 @@ fn narrow() -> String {
     bolt().replace("[\"#gate\"]", "[\"a:test\"]")
 }
 
+/// The bolt policy with a release command that exits 2, printing what a
+/// failing release prints, while the rig's `RELEASE_OK` is gone (123).
+fn releasing() -> String {
+    bolt().replace(
+        "[tests]\n",
+        &format!(
+            "[tests]\nrelease = \"test -e RELEASE_OK || {{ echo {}; exit 2; }}\"\n",
+            shared::RELEASE_FAILS
+        ),
+    )
+}
+
+/// [`releasing`], trying a failed release once more before it is held.
+fn releasing_once() -> String {
+    releasing().replace(
+        "timeout = \"20m\"\n",
+        "timeout = \"20m\"\nrelease_retries = 1\n",
+    )
+}
+
 scenarios! {
     s1_two_heads_pass_and_land_in_order: bolt();
     s2_a_conflict_is_told_before_any_check_runs: bolt();
@@ -738,6 +758,11 @@ scenarios! {
     s31_the_next_landings_preview_replaces_the_last: preview();
     s32_asking_again_gives_back_the_same_preview: preview();
     a_removed_worktrees_place_is_freed_by_the_next_round: bolt();
+    a_failed_release_is_held_with_what_failed: releasing();
+    a_failed_release_is_tried_a_bounded_number_of_times: releasing();
+    a_failed_release_is_held_after_the_retries_its_branch_names: releasing_once();
+    a_release_that_succeeds_on_a_retry_is_listed_no_more: releasing();
+    a_held_checkout_never_holds_its_branch: releasing();
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: cached();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
