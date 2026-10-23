@@ -19,7 +19,7 @@ submitting, `sluice exec main`.
 
 ## 3. The real binary
 
-- [ ] 3.1 A tools-tier test, `crates/sluice/tests/landed.rs`, added to the `tools` task in `crates/sluice/moon.yml`: a real repository under local refs whose policy runs `command = "true"` with a `[tests] release` command that fails once the landing changed it, as swancloud's did; `sluice submit <branch>` from a session worktree exits 0, prints `passed · landed as <rev>`, the branch is at that revision, and stderr has the `sluice: after the landing:` line naming the release command. Verify `sluice exec main -- cargo test -p sluice --features tools --test landed`.
+- [x] 3.1 A tools-tier test, `crates/sluice/tests/landed.rs`, added to the `tools` task in `crates/sluice/moon.yml`: a real repository under local refs whose policy runs `command = "true"` with a `[tests] release` command that fails once the landing changed it, as swancloud's did; `sluice submit <branch>` from a session worktree exits 0, prints `passed · landed as <rev>`, the branch is at that revision, and stderr has the `sluice: after the landing:` line naming the release command. Verify `sluice exec main -- cargo test -p sluice --features tools --test landed`.
 
 ## 4. Docs
 
