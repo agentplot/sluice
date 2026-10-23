@@ -12,7 +12,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
   other reader. Add unit tests for an entry on one line and for one of a
   `required` array written across lines (switchboard-kit's form). Verify
   `cargo test -p sluice-core --lib policy`.
-- [ ] 1.2 `crates/sluice-seams/src/lib.rs`: `Tests::kept_out(worktree,
+- [x] 1.2 `crates/sluice-seams/src/lib.rs`: `Tests::kept_out(worktree,
   tests, required)` returning each kept-out task with the required entry
   that names it, defaulting to none, with its doc comment citing ADR
   0047. Verify `cargo check --workspace --all-targets`.
