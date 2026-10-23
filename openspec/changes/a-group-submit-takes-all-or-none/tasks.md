@@ -24,4 +24,4 @@ sluice --test cli group`.
 
 ## 4. Integration
 
-- [ ] 4.1 Run the gate's checks with `sluice exec main` on the committed change and confirm every task passes, the S59 scenario among them.
+- [x] 4.1 Run the gate's checks with `sluice exec main` on the committed change and confirm every task passes, the S59 scenario among them.
