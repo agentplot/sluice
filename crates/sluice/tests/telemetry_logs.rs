@@ -489,7 +489,8 @@ fn a_run_s_checks_join_the_round() {
             peers: Default::default(),
             systems: None,
         },
-    );
+    )
+    .with_running(repo.dir().join(".git/host-running"));
     let tmp = repo.dir().join(".git/sluice/.tmp/p1");
     std::fs::create_dir_all(&tmp).unwrap();
     let revision = repo.rev("HEAD");

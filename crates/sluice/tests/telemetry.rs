@@ -450,7 +450,8 @@ fn telemetry_is_off_unless_asked() {
             peers: Default::default(),
             systems: None,
         },
-    );
+    )
+    .with_running(repo.dir().join(".git/host-running"));
     let tmp = repo.dir().join(".git/sluice/.tmp/p1");
     std::fs::create_dir_all(&tmp).unwrap();
     let request = RunRequest {
