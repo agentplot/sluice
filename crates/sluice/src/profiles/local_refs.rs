@@ -300,7 +300,18 @@ impl Branch for LocalRefs {
     }
 
     fn contains(&self, tip: &Rev, rev: &Rev) -> Result<bool> {
-        let (tip, rev) = (self.id(tip)?, self.id(rev)?);
+        let tip = self.id(tip)?;
+        // 121: a commit this host does not have, as another host's landing
+        // the remote has since lost, is in no revision read here.
+        let rev = ObjectId::from_hex(rev.as_str().as_bytes())
+            .map_err(|e| anyhow!("{rev} is not an object id: {e}"))?;
+        let found = self
+            .repo
+            .try_find_object(rev)
+            .map_err(|e| anyhow!("reading {rev}: {e}"))?;
+        if !found.is_some_and(|o| o.kind == gix::object::Kind::Commit) {
+            return Ok(false);
+        }
         let out = self.git(&[
             "merge-base",
             "--is-ancestor",

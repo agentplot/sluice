@@ -2862,3 +2862,248 @@ fn wait_says_progress_when_it_moves() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A branch read without its last landing is held (121)
+// ---------------------------------------------------------------------------
+
+/// Land one submission on `BRANCH`, then have the branch read at the
+/// revision it was made at: that revision, and the landing it lacks.
+fn read_behind(f: &Fakes) -> (String, String) {
+    let made = f.world.tip(BRANCH);
+    work(f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    f.world.set_branch(BRANCH, &made);
+    (made.0, landing.0)
+}
+
+/// C.5 branch: `sluice branch accept` exits 0 when recorded, 1 for no
+/// such branch and 2 on a refusal, naming it, as create and delete do.
+#[test]
+fn branch_accept_exits_as_create_and_delete() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    f.world
+        .set_branch(BRANCH, &sluice_seams::Rev::new(landing.clone()));
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &landing]),
+        (
+            CONFLICT,
+            format!(
+                "refused: {BRANCH} is not held; it reads {landing}, which holds its last landing\n"
+            )
+        )
+    );
+    f.world
+        .set_branch(BRANCH, &sluice_seams::Rev::new(made.clone()));
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &landing]),
+        (
+            CONFLICT,
+            format!("refused: {BRANCH} is held at {made}, not at {landing}\n")
+        )
+    );
+    let (code, out) = sluice(&f, &["branch", "accept", BRANCH, &landing, "--json"]);
+    assert_eq!(code, CONFLICT);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"error": {
+            "kind": "refused",
+            "message": format!("{BRANCH} is held at {made}, not at {landing}"),
+            "next": [format!("sluice status {BRANCH}")],
+        }})
+    );
+    assert_eq!(
+        sluice(&f, &["branch", "accept", "bolt/none", &made]),
+        (FAILED, "no branch bolt/none\n".to_string())
+    );
+
+    let (code, out) = sluice(&f, &["branch", "accept", BRANCH, &made[..7], "--json"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({ "branch": BRANCH, "accepted": made, "lacked": landing })
+    );
+    assert_eq!(
+        sluice(&f, &["step", BRANCH]),
+        (0, format!("{BRANCH}: stepped\n"))
+    );
+}
+
+#[test]
+fn branch_accept_says_what_it_recorded() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &made]),
+        (
+            0,
+            format!(
+                "accepted {BRANCH} at {made}, which lacks the landing {landing}; \
+                 the next round forms the queue on it\n"
+            )
+        )
+    );
+}
+
+/// The line a held branch is said with.
+fn held_text(read: &str, lacks: &str) -> String {
+    format!(
+        "held: {BRANCH} reads {}, which lacks the landing {}; put the landing back on \
+         {BRANCH}, or run sluice branch accept {BRANCH} {}",
+        &read[..7],
+        &lacks[..7],
+        &read[..7]
+    )
+}
+
+/// 121: `sluice step` says the branch is held, with both revisions and
+/// the two ways out; under `--json`, the outcome `held` and the hold.
+#[test]
+fn step_says_a_branch_is_held() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    assert_eq!(
+        sluice(&f, &["step", BRANCH]),
+        (0, format!("{}\n", held_text(&made, &landing)))
+    );
+    let (code, out) = sluice(&f, &["step", BRANCH, "--json"]);
+    assert_eq!(code, 0);
+    let v = json(&out);
+    assert_eq!(v["outcome"], "held");
+    assert_eq!(
+        (&v["held"]["read"], &v["held"]["lacks"]),
+        (&serde_json::json!(made), &serde_json::json!(landing))
+    );
+    assert!(v["held"]["since"].is_string());
+}
+
+/// 121: `sluice run` says a hold once, not on every pass, and again for
+/// another revision read lacking the landing.
+#[test]
+fn run_says_a_hold_once() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    // Read at another revision lacking it after the second pass.
+    let beside = f.world.work(
+        &sluice_seams::Rev::new(made.clone()),
+        &[("plugin/c", Some("c"))],
+    );
+    let world = f.world.clone();
+    let at = beside.clone();
+    let pause = Then(Cell::new(0), move |n| {
+        if n == 2 {
+            world.set_branch(BRANCH, &at);
+        }
+        true
+    });
+    let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "5"]);
+    assert_eq!(code, 0);
+    let held: Vec<&str> = out.lines().filter(|l| l.starts_with("held: ")).collect();
+    assert_eq!(
+        held,
+        [held_text(&made, &landing), held_text(&beside.0, &landing)],
+        "{out}"
+    );
+}
+
+/// 121: `sluice status <branch>` and `sluice overview` show the hold
+/// above the queue, and under `held` in JSON, for as long as it lasts.
+#[test]
+fn status_and_overview_show_a_hold_while_it_lasts() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+    sluice(&f, &["step", BRANCH]);
+    let held = held_text(&made, &landing);
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            format!(
+                "{BRANCH} at {} · 1 in the queue · testing 0 at once (up to 4)",
+                &landing[..7]
+            ),
+            held.clone(),
+            "  #2  queued    agent-b  unit/b".to_string(),
+            format!("1 no longer in the queue: sluice status {BRANCH} --all"),
+        ],
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(
+        (&v["held"]["read"], &v["held"]["lacks"]),
+        (&serde_json::json!(made), &serde_json::json!(landing))
+    );
+
+    let (_, out) = sluice(&f, &["overview"]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines[0].starts_with(&format!("{BRANCH} at ")), "{out}");
+    assert_eq!(lines[1], format!("  {held}"), "{out}");
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    assert_eq!(v["branches"][0]["held"]["read"], serde_json::json!(made));
+    assert_eq!(
+        v["branches"][0]["held"]["lacks"],
+        serde_json::json!(landing)
+    );
+
+    // The landing is put back: the next round ends the hold.
+    f.world.set_branch(BRANCH, &sluice_seams::Rev::new(landing));
+    sluice(&f, &["step", BRANCH]);
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("held: "), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert!(v["held"].is_null(), "{v}");
+    let v = json(&sluice(&f, &["overview", "--json"]).1);
+    assert!(v["branches"][0].get("held").is_none(), "{v}");
+}
+
+/// 121: a waiting `sluice wait` and `sluice submit` say a hold once in
+/// their text; their `--json` record is the submission's, as before.
+#[test]
+fn a_waiting_submission_says_its_branchs_hold_once() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    let held = held_text(&made, &landing);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+
+    let (code, out) = sluice(&f, &["wait", "2", "--timeout", "10s"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(out.lines().filter(|l| *l == held).count(), 1, "{out}");
+    assert!(out.ends_with("still waiting: sluice wait 2\n"), "{out}");
+    let (code, out) = sluice(&f, &["wait", "2", "--timeout", "10s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    let v = json(&out);
+    assert_eq!(
+        (v["id"].as_u64(), v["state"].as_str()),
+        (Some(2), Some("queued"))
+    );
+    assert!(v.get("held").is_none(), "{v}");
+
+    // A waiting submit, stopped after a few rounds.
+    work(&f, "unit/c", "agent-c", &[("plugin/c", Some("c"))]);
+    let stop = Then(Cell::new(0), |n| n < 4);
+    let (code, out) = sluice_with(&f, &stop, &["submit", BRANCH, "--worktree", "unit/c"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(out.lines().filter(|l| *l == held).count(), 1, "{out}");
+    work(&f, "unit/d", "agent-d", &[("plugin/d", Some("d"))]);
+    let stop = Then(Cell::new(0), |n| n < 4);
+    let (code, out) = sluice_with(
+        &f,
+        &stop,
+        &["submit", BRANCH, "--worktree", "unit/d", "--json"],
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(json(&out)["state"], "queued");
+}

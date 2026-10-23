@@ -18,7 +18,7 @@ use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
+    parse_lines, BranchHold, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
 };
 use crate::Sluice;
 
@@ -68,6 +68,10 @@ pub struct BranchView {
     /// The latest `landed`, `blamed` and `conflict` lines of the branch's
     /// log, oldest first, exactly as written.
     pub recent: Vec<serde_json::Value>,
+    /// 121: the branch was last read at a revision lacking its last
+    /// landing, and nothing is formed or landed on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<BranchHold>,
 }
 
 /// One candidate: a combination under test or judged.
@@ -152,6 +156,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         candidates,
         submissions,
         recent: recent(&log, RECENT)?,
+        held: line.doc.held.clone(),
     })
 }
 
@@ -532,6 +537,7 @@ mod tests {
             candidates: Vec::new(),
             submissions: Vec::new(),
             recent,
+            held: None,
         }
     }
 
