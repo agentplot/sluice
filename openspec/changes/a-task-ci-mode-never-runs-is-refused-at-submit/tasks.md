@@ -19,7 +19,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 2. The refusal in the core
 
-- [ ] 2.1 `crates/sluice-core/src/ops.rs`: `SubmitRefusal::KeptOut`, each
+- [x] 2.1 `crates/sluice-core/src/ops.rs`: `SubmitRefusal::KeptOut`, each
   with task, required entry and line; `Sluice::submit` asks the seam in
   the submitting worktree after its existing refusals and before
   `publish_head`, with the gate read at the branch's tip. An error from

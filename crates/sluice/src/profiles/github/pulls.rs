@@ -670,6 +670,13 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::NotManaged => "no [branches] table names its branch".into(),
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
+        SubmitRefusal::KeptOut(kept) => format!(
+            "its branch requires {}, which the task runner keeps out of CI",
+            kept.iter()
+                .map(|k| k.task.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

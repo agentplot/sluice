@@ -1,7 +1,9 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
-//! a pull request (ADR 0044).
+//! a pull request (ADR 0044), and a required check that can never pass
+//! (ADR 0047).
 
 use sluice_core::records::{FlakyKey, Recorded};
+use sluice_core::KeptOut;
 use sluice_seams::Outcome;
 
 /// `passed` or `failed`.
@@ -87,4 +89,30 @@ pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
 /// Could-not-run-1 115: a check that could not run, and why.
 pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
+}
+
+/// ADR 0047: a submission refused because `branch` requires checks the
+/// task runner in the submitting worktree keeps out of CI: each, through
+/// the tag that names it, with its line of the policy, and the way on.
+pub fn kept_out_refusal(branch: &str, kept: &[KeptOut]) -> String {
+    let mut s = String::from("refused: ");
+    for k in kept {
+        let through = if k.entry == k.task {
+            String::new()
+        } else {
+            format!(" through {}", k.entry)
+        };
+        s.push_str(&format!(
+            "{branch} requires {}{through} (.config/sluice.toml line {}), which the task runner \
+             in this worktree keeps out of CI, so it is never run and {branch} cannot pass while \
+             it is required\n",
+            k.task, k.line
+        ));
+    }
+    let which = if kept.len() == 1 { "it" } else { "each" };
+    s.push_str(&format!(
+        "let {which} run in CI in this worktree, or drop it from {branch}'s policy in the same \
+         submission that lets it run, and submit again"
+    ));
+    s
 }

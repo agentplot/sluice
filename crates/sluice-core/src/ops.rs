@@ -3,6 +3,7 @@
 //! keeps, runs a check or moves a branch (1; rule core.4).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use sluice_seams::{Contested, Formed, Rev};
@@ -28,6 +29,10 @@ pub struct Accepted {
     pub ahead: Vec<u64>,
     /// The earlier submission from the same place it withdrew (67).
     pub withdrew: Vec<u64>,
+    /// What the submitter should know of a submission taken: that the
+    /// runner could not be asked which required checks it keeps out of
+    /// CI, and why (ADR 0047).
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +48,22 @@ pub enum SubmitRefusal {
     UnknownAfter(Vec<u64>),
     /// The branch named as the head to forecast has no revision.
     NoHead(String),
+    /// ADR 0047: the branch's gate requires checks the runner, in the
+    /// submitting worktree, keeps out of CI, so the branch cannot pass.
+    KeptOut(Vec<KeptOut>),
+}
+
+/// ADR 0047: a check the branch's gate requires that the runner keeps out
+/// of CI in the submitting worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptOut {
+    /// The task, as the runner names it.
+    pub task: String,
+    /// The required entry that names it: the task, or a tag it carries.
+    pub entry: String,
+    /// The line of `.config/sluice.toml`, at the branch's revision, the
+    /// entry is written on.
+    pub line: usize,
 }
 
 /// Who asks to change a submission (48, 47b; actors table).
@@ -183,6 +204,14 @@ impl Sluice<'_> {
         if !unknown.is_empty() {
             return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
         }
+        let mut warnings = Vec::new();
+        if let Some(path) = &session.from.path {
+            match self.kept_out_in(&req.branch, &tip, Path::new(path))? {
+                Ok(kept) if !kept.is_empty() => return Ok(Err(SubmitRefusal::KeptOut(kept))),
+                Ok(_) => {}
+                Err(why) => warnings.push(why),
+            }
+        }
         // 82: the head is fetchable by every host before it is submitted.
         self.seams.state.publish_head(&req.branch, &session.head)?;
         let id = self.seams.state.allocate_id()?;
@@ -258,8 +287,13 @@ impl Sluice<'_> {
                 id,
                 ahead,
                 withdrew,
+                warnings: Vec::new(),
             })
         })?;
+        let accepted = Accepted {
+            warnings,
+            ..accepted
+        };
         // 111: work on a branch whose records are on its remote may be
         // taken by no instance now running: the first pool is asked to
         // advance the branch. A wake that is lost delays it and loses
@@ -283,6 +317,58 @@ impl Sluice<'_> {
             }
         }
         Ok(Ok(accepted))
+    }
+
+    /// ADR 0047: the checks `branch`'s gate at `tip` requires that the
+    /// runner keeps out of CI in the worktree at `worktree`, which holds
+    /// the head to submit (2). The gate and its lines are the branch's
+    /// (56); only the runner's own setting is the worktree's. `Err` says
+    /// why the runner could not be asked, for a warning: the submission
+    /// is taken unchecked. Writes nothing.
+    pub fn kept_out_in(
+        &self,
+        branch: &str,
+        tip: &Rev,
+        worktree: &Path,
+    ) -> Result<std::result::Result<Vec<KeptOut>, String>> {
+        let Some(policy) = self.policy_at(tip)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        let Some(rules) = policy.rules_for(branch)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        if rules.required.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        let kept = match self
+            .seams
+            .tests
+            .kept_out(worktree, &policy.tests, &rules.required)
+        {
+            Ok(k) => k,
+            Err(e) => {
+                return Ok(Err(format!(
+                    "could not check which of {branch}'s required checks the task runner in \
+                     this worktree keeps out of CI, so the submission was taken unchecked: {e:#}"
+                )))
+            }
+        };
+        Ok(Ok(kept
+            .into_iter()
+            .map(|k| {
+                let line = rules
+                    .required
+                    .iter()
+                    .position(|r| *r == k.entry)
+                    .and_then(|i| rules.required_lines.get(i).copied())
+                    .unwrap_or(0);
+                KeptOut {
+                    task: k.task,
+                    entry: k.entry,
+                    line,
+                }
+            })
+            .collect()))
     }
 
     /// 64, 65, 47a: the conflicts a place's head would meet if submitted

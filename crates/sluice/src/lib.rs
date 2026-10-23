@@ -1313,6 +1313,7 @@ fn refusal(
             )
         }
         SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
+        SubmitRefusal::KeptOut(kept) => words::kept_out_refusal(branch, kept),
     })
 }
 
@@ -1328,6 +1329,7 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
         SubmitRefusal::NotManaged => vec!["sluice overview".into()],
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
         SubmitRefusal::NoHead(_) => vec!["sluice overview".into()],
+        SubmitRefusal::KeptOut(_) => vec![format!("sluice status {branch}")],
     }
 }
 
