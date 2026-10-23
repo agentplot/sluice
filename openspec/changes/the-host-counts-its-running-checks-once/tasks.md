@@ -24,7 +24,7 @@
 
 ## 5. S60 on real repositories
 
-- [ ] 5.1 Add `three_repositories_share_the_hosts_bound` to the `bound` module of `crates/sluice/tests/instance.rs`: three repositories sharing one `XDG_STATE_HOME` and a host config of `max = 3`, four submissions across them (two in one), a `sluice run` going in each at once, the check script recording runs alive and `SLUICE_JOBS` as the existing test's does. Assert at most three alive at once, three reached, all four ran and landed, and every run's `SLUICE_JOBS` is the test host's cores divided by three, never below one (`cli:tools`).
+- [x] 5.1 Add `three_repositories_share_the_hosts_bound` to the `bound` module of `crates/sluice/tests/instance.rs`: three repositories sharing one `XDG_STATE_HOME` and a host config of `max = 3`, four submissions across them (two in one), a `sluice run` going in each at once, the check script recording runs alive and `SLUICE_JOBS` as the existing test's does. Assert at most three alive at once, three reached, all four ran and landed, and every run's `SLUICE_JOBS` is the test host's cores divided by three, never below one (`cli:tools`).
 - [ ] 5.2 Assert the moon runner hands the share on: in `crates/sluice/tests/profiles/moon.rs`, a run's `request.json` `argv` holds `--concurrency` followed by the `SLUICE_JOBS` its environment carries (`cli:tools`).
 
 ## 6. Docs
