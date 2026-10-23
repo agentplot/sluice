@@ -2090,6 +2090,18 @@ impl Sluice<'_> {
         self.perform_starts(branch)
     }
 
+    /// 123, 56: how many more times a failed release of a place on
+    /// `branch` is tried, read from the branch's current revision; the
+    /// default when it names none or cannot be read, so a branch that
+    /// cannot be read never stops a release.
+    pub(crate) fn release_retries(&self, branch: &str) -> u32 {
+        let rules = match self.seams.branch.read(branch) {
+            Ok(Some(tip)) => self.rules_at(branch, &tip).ok().flatten(),
+            _ => None,
+        };
+        rules.map_or(RELEASE_RETRIES, |r| r.release_retries)
+    }
+
     /// The name of the next place on the branch.
     fn next_place(&self, line: &mut Line) -> String {
         let place = format!("sluice/try/{}/{}", line.branch, line.doc.next_place);

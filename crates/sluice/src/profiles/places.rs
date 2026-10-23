@@ -462,6 +462,7 @@ impl Places {
             made: made.last_run.clone().unwrap_or_default(),
             run: made.run.clone().map(RunHandle),
             failed: made.failed.clone(),
+            release_failed: None,
         }
     }
 
@@ -1096,7 +1097,7 @@ impl Checkout for Places {
             return Ok(());
         }
         if name.starts_with(PREVIEW) {
-            self.release_preview(name, None)?;
+            self.release_preview(name, None, 0)?;
             return Ok(());
         }
         // 34: everything started in it ends first, its release command
@@ -1119,6 +1120,30 @@ impl Checkout for Places {
                 }
             }
         }
+        self.let_go(name, made.and_then(|m| m.block))
+    }
+
+    fn gone(&self, name: &str) -> Result<bool> {
+        Ok(self
+            .read_record(name)?
+            .and_then(|m| m.path)
+            .is_some_and(|p| !p.is_dir()))
+    }
+
+    fn free(&self, name: &str) -> Result<()> {
+        let made = self.read_record(name)?;
+        // 123: everything started in it ends, and nothing runs in its
+        // name: no release command, no cache saved.
+        self.runs.discard(name)?;
+        if let Some(made) = made.as_ref().filter(|m| m.kind != Kind::Session) {
+            match made.method.as_str() {
+                METHOD => self.remove_worktree(&self.worktree_path(name))?,
+                other => {
+                    bail!("place {name} was made by {other:?}, which this sluice cannot remove")
+                }
+            }
+        }
+        // A session's worktree stays (25, rule core.16).
         self.let_go(name, made.and_then(|m| m.block))
     }
 
@@ -1207,6 +1232,7 @@ impl Checkout for Places {
                 ports: made.ports,
                 last_run: made.last_run,
                 last_result: made.last_result,
+                release_failed: None,
             });
         }
         out.sort_by(|a, b| a.worktree.cmp(&b.worktree));
@@ -1406,7 +1432,7 @@ impl Checkout for Places {
             .collect())
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+    fn release_preview(&self, name: &str, failed: Option<&str>, _retries: u32) -> Result<bool> {
         let Some(made) = self.read_record(name)? else {
             // A stop part way may have left its run: end it all the same.
             self.runs.remove(name)?;

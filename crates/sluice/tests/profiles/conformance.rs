@@ -77,6 +77,16 @@ impl Checkout for RecordedPlaces {
         Ok(())
     }
 
+    fn gone(&self, name: &str) -> Result<bool> {
+        self.inner.gone(name)
+    }
+
+    fn free(&self, name: &str) -> Result<()> {
+        self.inner.free(name)?;
+        self.log.borrow_mut().released.push(name.into());
+        Ok(())
+    }
+
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         self.inner.adopt(worktree, branch, checkout, at)
     }
@@ -130,8 +140,8 @@ impl Checkout for RecordedPlaces {
         self.inner.previews()
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
-        self.inner.release_preview(name, failed)
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
+        self.inner.release_preview(name, failed, retries)
     }
 }
 

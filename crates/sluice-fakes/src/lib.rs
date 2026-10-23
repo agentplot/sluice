@@ -18,9 +18,9 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, HostRun,
     LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace,
-    Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session,
-    SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult,
-    Tests, Written,
+    Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest,
+    Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress,
+    TaskResult, Tests, Written,
 };
 
 /// A tree: path to content.
@@ -170,6 +170,19 @@ struct Inner {
     preview_releases: Vec<(String, bool)>,
     /// Preview commands started from now fail.
     preview_fails: bool,
+    /// Every release from now fails, with this (123).
+    release_fails: Option<String>,
+    /// The release of these places fails, each with what it says.
+    place_release_fails: BTreeMap<String, String>,
+    /// Every release asked of the place seam, by place, in order: what
+    /// would run a release command.
+    release_attempts: Vec<String>,
+    /// Places freed with nothing run (123).
+    freed: Vec<String>,
+    /// Candidates' places whose checkout was deleted by hand.
+    deleted: BTreeSet<String>,
+    /// How each session place's release at its asking failed.
+    session_release_failed: BTreeMap<String, ReleaseFailure>,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
     // the driver
@@ -870,6 +883,38 @@ impl World {
         }
     }
 
+    /// Every release from now fails, saying `message`; `None` lets them
+    /// succeed again.
+    pub fn release_fails(&self, message: Option<&str>) {
+        self.0.borrow_mut().release_fails = message.map(str::to_string);
+    }
+
+    /// The release of the place `name` fails from now, saying `message`;
+    /// `None` lets it succeed again.
+    pub fn place_release_fails(&self, name: &str, message: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match message {
+            Some(m) => inner.place_release_fails.insert(name.into(), m.into()),
+            None => inner.place_release_fails.remove(name),
+        };
+    }
+
+    /// A candidate's place's checkout is deleted by hand, with nothing
+    /// released: its record stays.
+    pub fn delete_checkout(&self, name: &str) {
+        self.0.borrow_mut().deleted.insert(name.into());
+    }
+
+    /// Every release asked of the place seam, by place, in order.
+    pub fn release_attempts(&self) -> Vec<String> {
+        self.0.borrow().release_attempts.clone()
+    }
+
+    /// The places freed with nothing run, in order.
+    pub fn freed_places(&self) -> Vec<String> {
+        self.0.borrow().freed.clone()
+    }
+
     /// The released places whose candidate passed, so whose caches were
     /// saved (35).
     pub fn saved_places(&self) -> Vec<String> {
@@ -1358,13 +1403,25 @@ impl Tests for FakeTests {
 impl FakeCheckout {
     /// A place's removal, with everything started in it ended.
     fn drop_place(&self, name: &str, passed: bool) {
+        self.drop_place_as(name, passed, false);
+    }
+
+    /// A place's removal, released or, when `freed`, freed with nothing
+    /// run.
+    fn drop_place_as(&self, name: &str, passed: bool, freed: bool) {
         let mut inner = self.0 .0.borrow_mut();
         inner.adopted.retain(|a| a != name);
         inner.adopted_for.remove(name);
         inner.adopted_at.remove(name);
         inner.last_results.remove(name);
+        inner.session_release_failed.remove(name);
+        inner.deleted.remove(name);
         if inner.places.remove(name).is_some() {
-            inner.released.push(name.into());
+            if freed {
+                inner.freed.push(name.into());
+            } else {
+                inner.released.push(name.into());
+            }
             if passed {
                 inner.saved.push(name.into());
             }
@@ -1375,6 +1432,42 @@ impl FakeCheckout {
                 }
             }
         }
+    }
+
+    /// A release asked of the place `name`: counted, and refused with
+    /// what the world says its release fails with.
+    fn attempt(&self, name: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.release_attempts.push(name.into());
+        match inner
+            .place_release_fails
+            .get(name)
+            .or(inner.release_fails.as_ref())
+        {
+            Some(m) => bail!("the release command of {name} ended exit status: 2: {m}"),
+            None => Ok(()),
+        }
+    }
+
+    /// When the world's clock says it is.
+    fn now(&self) -> String {
+        self.0 .0.borrow().now.to_rfc3339()
+    }
+}
+
+/// `failure` with one more try, failing now with `e`, held when `stop`.
+fn failed_again(
+    failure: Option<&ReleaseFailure>,
+    e: &anyhow::Error,
+    at: String,
+    stop: impl Fn(u32) -> bool,
+) -> ReleaseFailure {
+    let tries = failure.map_or(0, |f| f.tries) + 1;
+    ReleaseFailure {
+        failed: format!("{e:#}"),
+        tries,
+        at,
+        stopped: failure.is_some_and(|f| f.stopped) || stop(tries),
     }
 }
 
@@ -1469,6 +1562,14 @@ impl Checkout for FakeCheckout {
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
             return Ok(Released::Nothing);
         }
+        if let Err(e) = self.attempt(name) {
+            // 123: kept, held: no round releases a session's place.
+            let at = self.now();
+            let mut inner = self.0 .0.borrow_mut();
+            let failure = failed_again(inner.session_release_failed.get(name), &e, at, |_| true);
+            inner.session_release_failed.insert(name.into(), failure);
+            return Err(e);
+        }
         self.drop_place(name, false);
         let release = policy.and_then(|p| match p.tests.get("release") {
             Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
@@ -1501,6 +1602,7 @@ impl Checkout for FakeCheckout {
                     last_run: inner.adopted_at.get(name).cloned(),
                     gone: !inner.worktrees.contains_key(worktree),
                     last_result: inner.last_results.get(name).cloned(),
+                    release_failed: inner.session_release_failed.get(name).cloned(),
                 }
             })
             .collect())
@@ -1563,7 +1665,30 @@ impl Checkout for FakeCheckout {
             !self.0 .0.borrow().worktrees.contains_key(name) && !name.starts_with("session/"),
             "sluice released a session's place {name}"
         );
+        if self.0 .0.borrow().places.contains_key(name) {
+            self.attempt(name)?;
+        }
         self.drop_place(name, passed);
+        Ok(())
+    }
+
+    fn gone(&self, name: &str) -> Result<bool> {
+        let inner = self.0 .0.borrow();
+        if let Some(p) = inner.previews.get(name) {
+            return Ok(p.gone);
+        }
+        if let Some(worktree) = name.strip_prefix("session/") {
+            return Ok(
+                inner.adopted.iter().any(|a| a == name) && !inner.worktrees.contains_key(worktree)
+            );
+        }
+        Ok(inner.places.contains_key(name) && inner.deleted.contains(name))
+    }
+
+    fn free(&self, name: &str) -> Result<()> {
+        // Rule core.16: the worktree of a session's place is left as it is.
+        self.drop_place_as(name, false, true);
+        self.0 .0.borrow_mut().previews.remove(name);
         Ok(())
     }
 
@@ -1621,6 +1746,7 @@ impl Checkout for FakeCheckout {
             run: None,
             gone: false,
             failed: None,
+            release_failed: None,
         };
         inner.places.insert(name.into(), rev.clone());
         inner.made.push(name.into());
@@ -1642,10 +1768,18 @@ impl Checkout for FakeCheckout {
         Ok(self.0 .0.borrow().previews.values().cloned().collect())
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
         let Some(p) = self.0 .0.borrow().previews.get(name).cloned() else {
             return Ok(false);
         };
+        if let Err(e) = self.attempt(name) {
+            // 123: kept with what failed, held once its tries are spent.
+            let failure = failed_again(p.release_failed.as_ref(), &e, self.now(), |t| t > retries);
+            if let Some(q) = self.0 .0.borrow_mut().previews.get_mut(name) {
+                q.release_failed = Some(failure);
+            }
+            return Err(e);
+        }
         self.drop_place(name, false);
         let mut inner = self.0 .0.borrow_mut();
         inner.preview_releases.push((name.into(), failed.is_some()));
@@ -1658,6 +1792,7 @@ impl Checkout for FakeCheckout {
                         run: None,
                         gone: false,
                         failed: Some(output.into()),
+                        release_failed: None,
                         ..p
                     },
                 );

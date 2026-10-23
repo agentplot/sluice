@@ -257,7 +257,18 @@ impl Sluice<'_> {
     /// 101, rule core.16: release the preview `name` at its caller's
     /// asking; `false` when there is none.
     pub fn release_preview(&self, name: &str) -> Result<bool> {
-        self.seams.checkout.release_preview(name, None)
+        let branch = self
+            .seams
+            .checkout
+            .previews()?
+            .into_iter()
+            .find(|p| p.name == name)
+            .map(|p| p.branch);
+        let retries = match branch {
+            Some(b) => self.release_retries(&b),
+            None => crate::step::RELEASE_RETRIES,
+        };
+        self.seams.checkout.release_preview(name, None, retries)
     }
 
     /// 101, rule core.16: release every preview nobody can use: one whose
@@ -282,11 +293,11 @@ impl Sluice<'_> {
                 Some(l) => l,
                 None => continue,
             };
-            let (released, error) = match self
-                .seams
-                .checkout
-                .release_preview(&p.name, failed.as_deref())
-            {
+            let (released, error) = match self.seams.checkout.release_preview(
+                &p.name,
+                failed.as_deref(),
+                self.release_retries(&p.branch),
+            ) {
                 Ok(r) => (r, None),
                 Err(e) => {
                     tracing::warn!(sluice.preview = %p.name, "releasing a preview failed: {e:#}");

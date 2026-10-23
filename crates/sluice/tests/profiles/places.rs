@@ -896,11 +896,11 @@ fn a_preview_is_made_kept_apart_and_released() {
     p.release(NAME, false).unwrap();
     p.release(&adopted.name, false).unwrap();
 
-    assert!(p.release_preview(&name, None).unwrap());
+    assert!(p.release_preview(&name, None, 3).unwrap());
     left_behind(&repo, &place);
     assert!(!record.exists());
     assert!(p.previews().unwrap().is_empty());
-    assert!(!p.release_preview(&name, None).unwrap());
+    assert!(!p.release_preview(&name, None, 3).unwrap());
     let held = std::fs::read_dir(blocks.path())
         .unwrap()
         .filter(|e| {
@@ -993,7 +993,7 @@ fn a_failed_preview_is_kept_holding_nothing() {
     p.preview_run(&name, &sluice_seams::RunHandle(name.clone()))
         .unwrap();
 
-    assert!(p.release_preview(&name, Some("broken\n")).unwrap());
+    assert!(p.release_preview(&name, Some("broken\n"), 3).unwrap());
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
         format!("released {}\n", place.env["SLUICE_NAME_WEB"])
@@ -1003,7 +1003,7 @@ fn a_failed_preview_is_kept_holding_nothing() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].failed.as_deref(), Some("broken\n"));
     assert!(kept[0].ports.is_empty() && kept[0].run.is_none() && !kept[0].gone);
-    assert!(p.release_preview(&name, None).unwrap());
+    assert!(p.release_preview(&name, None, 3).unwrap());
     assert!(p.previews().unwrap().is_empty());
 }
 
@@ -1034,7 +1034,7 @@ fn a_name_another_preview_holds_takes_the_longer_revision() {
         other.to_string(),
     )
     .unwrap();
-    p.release_preview(&name, None).unwrap();
+    p.release_preview(&name, None, 3).unwrap();
 
     let (_, again) = p
         .preview(&name, &rev, "main", &settings, &BTreeMap::new(), "now")
@@ -1045,8 +1045,8 @@ fn a_name_another_preview_holds_takes_the_longer_revision() {
         long.starts_with(&format!("web-{}--", &rev.as_str()[..12])),
         "{long}"
     );
-    p.release_preview(&name, None).unwrap();
-    p.release_preview(&format!("preview/{}", &rival[..12]), None)
+    p.release_preview(&name, None, 3).unwrap();
+    p.release_preview(&format!("preview/{}", &rival[..12]), None, 3)
         .unwrap();
 }
 
