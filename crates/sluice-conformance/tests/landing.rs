@@ -30,6 +30,39 @@ fn a_crash_between_the_landing_intent_and_the_move_is_finished_by_the_next_step(
     }
 }
 
+/// satisfies: 122, 24
+#[test]
+fn a_submissions_work_is_on_its_branch_once_the_branch_holds_its_landing() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    let s = h.sluice();
+    assert_eq!(s.landed_as(one).unwrap(), None, "queued");
+    h.step();
+    // The landing is recorded, and the branch has not moved.
+    h.w().crash(Crash::BeforeMove);
+    assert!(h.sluice().step(BRANCH).is_err());
+    assert_eq!(h.sub(one).state, State::Landing);
+    assert_eq!(s.landed_as(one).unwrap(), None, "not moved");
+
+    // The branch moved and the write confirming it failed: the record
+    // still says landing, and the work is on the branch all the same,
+    // past a commit added on top.
+    h.w().crash_next_write();
+    assert!(h.sluice().step(BRANCH).is_err());
+    assert_eq!(h.sub(one).state, State::Landing);
+    let landing = h.tip();
+    assert_eq!(s.landed_as(one).unwrap(), Some(landing.clone()));
+    h.w().hand_commit(BRANCH, &[("c/lib", Some("c2"))]);
+    assert_eq!(s.landed_as(one).unwrap(), Some(landing.clone()));
+
+    // The next round records it landed, as the same commit.
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert_eq!(h.sub(one).landed_as, Some(landing.clone()));
+    assert_eq!(s.landed_as(one).unwrap(), Some(landing));
+}
+
 /// satisfies: 51, 50
 #[test]
 fn a_notification_repeated_after_a_crash_carries_the_same_id_and_outcome() {

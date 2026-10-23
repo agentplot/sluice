@@ -1174,6 +1174,60 @@ fn sent_back_keeps_the_worktree() {
     assert!(w.exists());
 }
 
+/// 122: a waiting submit whose pull request's submission lands, and whose
+/// round then fails releasing the combination's checkout, reports it
+/// landed, exits 0, and says what failed on stderr.
+#[test]
+fn a_landing_stands_when_its_release_then_fails() {
+    let g = OnGitHub::new("pr-release", "");
+    // The release runs the script the checkout holds, which the
+    // submission breaks, as a landed script taking other arguments does.
+    let policy = std::fs::read_to_string(g.repo.dir().join(".config/sluice.toml")).unwrap();
+    g.repo.write(
+        ".config/sluice.toml",
+        &policy.replace(
+            "command = \"sh check.sh\"\n",
+            "command = \"sh check.sh\"\nrelease = \"sh release.sh\"\n",
+        ),
+    );
+    g.repo.write("release.sh", "exit 0\n");
+    g.repo.git(&["add", "-A"]);
+    g.repo.git(&["commit", "-q", "-m", "release a checkout"]);
+    g.repo.git(&["push", "-q", "origin", "main"]);
+    let w = g.session(
+        "release",
+        &[("release.sh", "echo release.sh takes only up\nexit 1\n")],
+    );
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let n = g.gh.forge.by_ref("unit/release").unwrap().unwrap().number;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("testing main + #{n} ·")),
+        "{stdout}"
+    );
+    let main = g.main_on_github();
+    assert!(
+        stdout.ends_with(&format!("passed · landed as {}\n", &main[..7])),
+        "{}",
+        text(&out)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let after: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("sluice: after the landing: "))
+        .collect();
+    assert_eq!(after.len(), 1, "{stderr}");
+    assert!(
+        after[0].contains("the release command of ") && after[0].contains("takes only up"),
+        "{stderr}"
+    );
+}
+
 /// Blamed, then submitted again on the same head (120): the submit marks
 /// the pull request ready for review, intake takes the same head, and its
 /// checks run again; the submit follows that test to its outcome.

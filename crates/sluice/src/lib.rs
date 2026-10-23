@@ -90,7 +90,7 @@ Examples:
   $ sluice submit main --after 12,14 --priority 5
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
   3    sluice itself failed; the cause is on stderr
@@ -106,7 +106,7 @@ Examples:
   $ sluice wait main                     this worktree's last submission to main
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: it was blamed, or its pull request closed; or no such submission
   2    a conflict
   3    sluice itself failed; the cause is on stderr
@@ -1534,9 +1534,13 @@ fn await_submission(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
-        Waited::Decided(sub) => {
+        Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            return report(s, &sub, &branch, &BTreeMap::new(), waiting.json, out);
+            let code = report(s, &sub, &branch, &BTreeMap::new(), waiting.json, out)?;
+            if let Some(e) = after {
+                after_landing(&e);
+            }
+            return Ok(code);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
@@ -1550,8 +1554,9 @@ fn await_submission(
 
 /// How a wait ended.
 enum Waited {
-    /// Landed, failed, conflict or withdrawn.
-    Decided(Submission),
+    /// Landed, failed, conflict or withdrawn; when it landed in a round
+    /// that then failed, what failed after the landing (122).
+    Decided(Submission, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
@@ -1578,7 +1583,7 @@ fn wait_on(
     let mut first = true;
     loop {
         if sub.state.is_out() {
-            return Ok(Waited::Decided(sub));
+            return Ok(Waited::Decided(sub, None));
         }
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
@@ -1620,13 +1625,43 @@ fn wait_on(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Ok(Waited::Undecided(sub, STOPPED));
                 }
-                return Err(e);
+                return match landed(s, id) {
+                    Some(sub) => Ok(Waited::Decided(sub, Some(e))),
+                    None => Err(e),
+                };
             }
         }
         sub = s
             .state(id)?
             .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))?;
     }
+}
+
+/// 122: submission `id` as landed, when its work is on its branch: its
+/// record, or the record the next round writes when the round that moved
+/// the branch stopped before writing it (24). `None` when it is not, or
+/// when the records cannot be read, which leaves the round's own error
+/// the outcome.
+fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
+    let to = s.landed_as(id).ok()??;
+    let mut sub = s.state(id).ok()??;
+    sub.state = State::Landed;
+    sub.landed_as = Some(to);
+    Some(sub)
+}
+
+/// The latest submission to `branch` on `head`, as a pull request's is
+/// taken in on the head its worktree pushed; `None` when there is none or
+/// the records cannot be read.
+fn taken_in(s: &Sluice<'_>, branch: &str, head: &sluice_seams::Rev) -> Option<u64> {
+    let all = s.history(branch).ok()?;
+    all.iter().rev().find(|x| x.head == *head).map(|x| x.id)
+}
+
+/// 122: what failed after a landing, said apart from its outcome, on
+/// stderr and to telemetry as sluice failing itself is.
+fn after_landing(e: &anyhow::Error) {
+    telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
 /// A submission's outcome, as a waiting submit ends with it.
@@ -2082,7 +2117,24 @@ fn submit_pull(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
                 }
-                return Err(e);
+                // 122: as `wait_on`, for the submission the pull request
+                // was taken in as, on the head its worktree pushed.
+                let Some(sub) = seams
+                    .driver
+                    .session(worktree)
+                    .ok()
+                    .and_then(|w| taken_in(s, branch, &w.head))
+                    .and_then(|id| landed(s, id))
+                else {
+                    return Err(e);
+                };
+                let names = match pulls.follow(seams, clock, branch, number) {
+                    Ok(Followed::Done(_, names)) => names,
+                    _ => BTreeMap::new(),
+                };
+                let code = report(s, &sub, branch, &names, json, out)?;
+                after_landing(&e);
+                return Ok(code);
             }
         }
         if !pause.pause() {
