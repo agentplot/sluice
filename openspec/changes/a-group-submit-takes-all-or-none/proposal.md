@@ -91,6 +91,7 @@ crates/sluice-core/src/lib.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/profiles/github/pulls.rs
 crates/sluice/src/profiles/github/fake.rs
+crates/sluice/src/profiles/worktrunk/mod.rs
 crates/sluice-conformance/src/**
 crates/sluice-fakes/src/**
 crates/sluice-conformance/tests/scenarios.rs
