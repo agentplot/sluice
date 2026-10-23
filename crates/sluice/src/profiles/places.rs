@@ -31,8 +31,8 @@
 //! once, removes its scratch directory and lets its block go, and never
 //! removes the worktree. Its record keeps when its last run started, and
 //! `session_places` lists every such record with whether its worktree
-//! still exists, so the core can release one whose worktree is gone
-//! (clause 97).
+//! still exists, so the core can free one whose worktree is gone, with
+//! nothing run in its name (clause 97; 123).
 //!
 //! A release of a session's place or of a preview that fails keeps the
 //! place's record, with what failed, how many times it was tried and
@@ -43,8 +43,8 @@
 //!
 //! A preview (previews-1 clauses 98 to 101) is a place made as a
 //! candidate's is, at a revision its branch has landed, and released only
-//! when asked, or by the core when its command failed or its checkout is
-//! gone. Its record, `kind: "preview"`, is kept apart from the others, at
+//! when asked, or by the core when its command failed; one whose checkout
+//! is gone is freed. Its record, `kind: "preview"`, is kept apart from the others, at
 //! `<common>/sluice/.previews/<name>.json` beside its checkout, so a
 //! sluice that predates previews never reads one. Each port it holds is
 //! given a name too, `SLUICE_NAME_<NAME>`: one DNS label made of the
