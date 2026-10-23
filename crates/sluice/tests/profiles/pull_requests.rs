@@ -1256,3 +1256,108 @@ fn submitted_by_the_operators_ops() {
     assert_eq!(landed["from"]["agent"], "madswan-ops", "{subs:?}");
     assert_eq!(landed["head"], fixed.as_str());
 }
+
+/// S56 (120): an agent's pull request, refused for a conflict, waits for
+/// its submitter. A fix pushed to its branch, standing for one another
+/// submission landed there, moves its head; over several rounds it is a
+/// draft, and nothing is submitted or landed in the agent's name, though
+/// its review holds. The agent's next `wt submit` marks it ready at the
+/// new head, and it lands. A pull request opened by hand whose head moves
+/// the same way is submitted again once its review holds.
+#[test]
+fn s56_a_refused_request_waits_for_its_submitter() {
+    let g = OnGitHub::new("pr-s56", "reviews = 1");
+    let approve = |n: u64, head: &str| {
+        g.gh.forge.review(n, "reviewer", "APPROVED", head).unwrap();
+    };
+    // Three changes to one file, each off the same `main`: the first
+    // lands, so the agent's and the hand-opened one conflict.
+    let w = g.session("s56", &[("plan.py", "agent\n")]);
+    let (hand, hand_head) = g.by_hand("unit/hand", &[("plan.py", Some("hand\n"))], false);
+    let (first, first_head) = g.by_hand("unit/first", &[("plan.py", Some("first\n"))], false);
+    approve(first, &first_head);
+    g.step_until("the first landed", |g| {
+        g.of(first).iter().any(|s| s["state"] == "landed")
+    });
+    // A fix of the agent's branch onto GitHub's `main`: a merge keeping
+    // the branch's tree, which merges onto `main` without conflict.
+    let fix_onto_main = |dir: &Path| {
+        g.repo.git(&["fetch", "-q", "origin", "main"]);
+        let main = g.main_on_github();
+        let at = dir.to_str().unwrap();
+        g.repo.git(&[
+            "-C",
+            at,
+            "merge",
+            "-q",
+            "-s",
+            "ours",
+            &main,
+            "-m",
+            "Fix onto main",
+        ]);
+        let branch = g.repo.git(&["-C", at, "rev-parse", "--abbrev-ref", "HEAD"]);
+        g.repo.git(&[
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/heads/{branch}"),
+        ]);
+        g.repo.git(&["-C", at, "rev-parse", "HEAD"])
+    };
+
+    // The agent's pull request, refused for a conflict.
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/s56");
+    let n = pull.number;
+    approve(n, &pull.head);
+    g.step_until("conflict", |g| {
+        g.of(n).iter().any(|s| s["state"] == "conflict")
+    });
+
+    // Its head moves, and its review holds on the new head: still held.
+    let main = g.main_on_github();
+    let fixed = fix_onto_main(&w);
+    approve(n, &fixed);
+    let subs = g.of_after(n, 3);
+    assert_eq!(subs.len(), 1, "nothing submitted in its name: {subs:?}");
+    assert_eq!(subs[0]["state"], "conflict");
+    let pull = g.pull_from("unit/s56");
+    assert!(pull.draft && pull.head == fixed, "{pull:?}");
+    assert_eq!(g.main_on_github(), main, "nothing landed in its name");
+    assert_eq!(g.posted(&fixed).unwrap().1, "waiting: the next submit");
+
+    // The agent's next submit marks it ready at the new head, and it
+    // lands.
+    let out = g.wt_submit(&w, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("marked ready for review"), "{said}");
+    assert!(said.contains("landed as"), "{said}");
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], fixed.as_str());
+    assert_eq!(subs[1]["state"], "landed");
+    assert_eq!(subs[1]["from"]["agent"], "unit/s56");
+
+    // Opened by hand, refused the same way and its head moved the same
+    // way: submitted again once its review holds on the new head.
+    approve(hand, &hand_head);
+    g.step_until("the hand-opened conflict", |g| {
+        g.of(hand).iter().any(|s| s["state"] == "conflict")
+    });
+    g.repo.git(&["switch", "-q", "unit/hand"]);
+    let moved = fix_onto_main(g.repo.dir());
+    g.repo.git(&["switch", "-q", "--detach", "main"]);
+    let subs = g.of_after(hand, 2);
+    assert_eq!(subs.len(), 1, "waits for its review: {subs:?}");
+    assert!(!g.pull_from("unit/hand").draft);
+    assert_eq!(g.posted(&moved).unwrap().1, "waiting: needs 1 review");
+    approve(hand, &moved);
+    g.step_until("the hand-opened landed", |g| {
+        g.of(hand)
+            .iter()
+            .any(|s| s["state"] == "landed" && s["head"] == moved.as_str())
+    });
+}
