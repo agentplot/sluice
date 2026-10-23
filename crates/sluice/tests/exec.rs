@@ -84,7 +84,7 @@ impl Setup {
 
     /// `sluice` started in this setup's worktree on `host`'s host, its
     /// configuration and state, as another repository on that host runs
-    /// it; its stdout piped.
+    /// it; its stdout piped, its stderr the test's.
     fn spawn_on(&self, host: &Setup, args: &[&str]) -> Child {
         support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
             .args(args)
@@ -97,7 +97,7 @@ impl Setup {
             .env_remove("GIT_WORK_TREE")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap()
     }
@@ -631,4 +631,49 @@ fn an_exec_waits_for_another_repositorys_run_on_the_host() {
         std::fs::read_to_string(a.worktree.join("ran")).unwrap(),
         "ran\n"
     );
+}
+
+/// 71; the exec-checks spec's "Another repository's submission": another
+/// repository's combination running on the host counts in this
+/// repository's `room.queue`, and no branch here shows it under test.
+#[test]
+fn the_overview_counts_another_repositorys_combination_in_its_room() {
+    let a = Setup::at("exec-room-a", "a");
+    let b = Setup::at("exec-room-b", "b");
+    let marks = Scratch::new("exec-room-marks");
+    let (started, go) = (marks.path().join("started"), marks.path().join("go"));
+    a.policy(&portless());
+    b.policy(&portless());
+    b.repo.write(
+        "check.sh",
+        &format!(
+            "touch '{}'; while [ ! -e '{}' ]; do sleep 0.05; done\n",
+            started.display(),
+            go.display()
+        ),
+    );
+    b.repo.git(&["commit", "-q", "-am", "a check that holds"]);
+    b.repo.git(&["branch", "-f", "bolt/x", "main"]);
+    host_bound(&a.config, 3);
+
+    let on_host = |s: &Setup, args: &[&str]| {
+        let out = s.spawn_on(&a, args).wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    on_host(&b, &["submit", "bolt/x", "--no-wait", "--json"]);
+    on_host(&b, &["step", "bolt/x"]);
+    eventually("the other repository's combination running", || {
+        started.exists()
+    });
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&on_host(&a, &["overview", "--json"])).unwrap();
+    std::fs::write(&go, "").unwrap();
+    assert_eq!(doc["room"]["bound"], 3, "{doc}");
+    assert_eq!(doc["room"]["queue"], 1, "{doc}");
+    assert_eq!(doc["room"]["sessions"], 0, "{doc}");
+    for branch in doc["branches"].as_array().unwrap() {
+        assert_eq!(branch["candidates"], serde_json::json!([]), "{doc}");
+    }
 }
