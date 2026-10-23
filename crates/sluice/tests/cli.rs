@@ -2858,3 +2858,134 @@ fn wait_says_progress_when_it_moves() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A checkout held because its release failed (123)
+// ---------------------------------------------------------------------------
+
+const RELEASE_FAILS: &str = "usage: scripts/preview up";
+
+/// A submission landed while every release fails, and rounds until its
+/// checkout is held; the checkout's name.
+fn held_checkout(f: &Fakes) -> String {
+    f.world.release_fails(Some(RELEASE_FAILS));
+    work(
+        f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = sluice(f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    for _ in 0..4 {
+        sluice(f, &["step", BRANCH]);
+    }
+    let place = format!("sluice/try/{BRANCH}/1");
+    assert!(f.world.live_places().contains(&place));
+    place
+}
+
+/// 123: `sluice release <name>` runs a held checkout's release once
+/// more: failing again, it exits 1 saying what failed and the checkout
+/// stays; once it succeeds, the checkout is gone.
+#[test]
+fn release_by_name_releases_a_held_checkout() {
+    let f = setup();
+    let place = held_checkout(&f);
+    let tries = f.world.release_attempts().len();
+
+    let (code, out) = sluice(&f, &["release", &place]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(
+        out.starts_with(&format!("could not release {place}: ")) && out.contains(RELEASE_FAILS),
+        "{out}"
+    );
+    assert!(out.contains("--accept-failure"), "{out}");
+    assert_eq!(f.world.release_attempts().len(), tries + 1);
+    assert!(f.world.live_places().contains(&place));
+
+    f.world.release_fails(None);
+    let (code, out) = sluice(&f, &["release", &place, "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"place": place, "released": true, "accepted": false, "failed": null})
+    );
+    assert!(!f.world.live_places().contains(&place));
+}
+
+/// 123: `--accept-failure` frees a held checkout with no release run.
+#[test]
+fn release_accepting_the_failure_frees_a_held_checkout() {
+    let f = setup();
+    let place = held_checkout(&f);
+    let tries = f.world.release_attempts().len();
+    let (code, out) = sluice(&f, &["release", &place, "--accept-failure"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "freed {place} without its release command: its runs ended, its checkout removed, its ports free\n"
+        )
+    );
+    assert_eq!(f.world.release_attempts().len(), tries, "its release ran");
+    assert_eq!(f.world.freed_places(), std::slice::from_ref(&place));
+    assert!(!f.world.live_places().contains(&place));
+}
+
+/// 123: a name that names no checkout here is nothing to release.
+#[test]
+fn release_of_an_unknown_checkout_is_nothing() {
+    let f = setup();
+    for name in [
+        format!("sluice/try/{BRANCH}/7"),
+        "sluice/try/nothing".to_string(),
+    ] {
+        let (code, out) = sluice(&f, &["release", &name]);
+        assert_eq!((code, out.as_str()), (LANDED, "nothing to release\n"));
+    }
+}
+
+/// 123: a worktree whose release fails exits 1 with what failed and keeps
+/// its place; `--accept-failure` then frees the place with no release run
+/// and leaves the worktree.
+#[test]
+fn release_accepting_the_failure_frees_a_worktrees_place() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.release_fails(Some(RELEASE_FAILS));
+    let (code, out) = release(&f, &["--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(
+        out.starts_with("could not release unit/a: ") && out.contains(RELEASE_FAILS),
+        "{out}"
+    );
+    assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
+
+    let (code, out) = release(&f, &["--worktree", "unit/a", "--accept-failure", "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"worktree": "unit/a", "released": true, "accepted": true})
+    );
+    assert!(f.world.adopted_places().is_empty());
+    assert_eq!(f.world.freed_places(), ["session/unit/a"]);
+    assert!(f.world.session_releases().is_empty());
+    assert!(sluice_seams::Driver::session(&f.driver, "unit/a").is_ok());
+    let snap = sluice_seams::State::read(&f.state, BRANCH).unwrap();
+    let log = sluice_core::line::Line::read_log(&snap).unwrap();
+    assert!(
+        log.iter().any(|l| matches!(
+            &l.event,
+            sluice_core::records::Event::Released { place, accepted: Some(a), .. }
+                if place == "session/unit/a" && a.contains(RELEASE_FAILS)
+        )),
+        "{log:?}"
+    );
+}

@@ -53,6 +53,10 @@ impl Releasing {
     }
 }
 
+/// What `released` says was accepted of a place whose release never
+/// failed: the operator's word is the ruling (123).
+const NEVER_FAILED: &str = "no release had failed";
+
 /// A place leaves the branch's lists of places to release.
 fn forget(l: &mut Line, place: &str) {
     l.doc.release.retain(|p| p != place);
@@ -152,6 +156,30 @@ impl Sluice<'_> {
         }))
     }
 
+    /// 123: log in `branch`'s records that `place` was freed at the
+    /// operator's accepting what failed of its release.
+    pub(crate) fn log_accepted(
+        &self,
+        branch: &str,
+        place: &str,
+        worktree: Option<&str>,
+        failed: Option<String>,
+    ) -> Result<()> {
+        if branch.is_empty() {
+            return Ok(());
+        }
+        let now = self.now();
+        let event = Event::Released {
+            place: place.into(),
+            worktree: worktree.map(str::to_string),
+            accepted: Some(failed.unwrap_or_else(|| NEVER_FAILED.into())),
+        };
+        self.update(branch, |l| {
+            l.log(&now, event.clone());
+            Ok(())
+        })
+    }
+
     /// A place released, freed or accepted leaves the branch's lists, and
     /// the log says how.
     fn forget_released(&self, branch: &str, place: &str, how: &Releasing) -> Result<()> {
@@ -164,11 +192,7 @@ impl Sluice<'_> {
             Releasing::Accepted(failed) => Event::Released {
                 place: place.into(),
                 worktree: None,
-                accepted: Some(
-                    failed
-                        .clone()
-                        .unwrap_or_else(|| "no release had failed".into()),
-                ),
+                accepted: Some(failed.clone().unwrap_or_else(|| NEVER_FAILED.into())),
             },
             _ => Event::Released {
                 place: place.into(),

@@ -382,14 +382,23 @@ pub enum Command {
     },
     /// Release this worktree: run the policy's release command, end what
     /// its runs left running, free its ports. The worktree stays. Given a
-    /// preview, release the preview.
-    #[command(after_help = "Examples:\n  $ sluice release\n  $ sluice release 2eb676c")]
+    /// preview, or a checkout held because its release failed, release
+    /// that.
+    #[command(
+        after_help = "Examples:\n  $ sluice release\n  $ sluice release 2eb676c\n  $ sluice release sluice/try/main/48 --accept-failure"
+    )]
     Release {
-        /// A preview, by its name or its revision.
-        preview: Option<String>,
+        /// A preview, by its name or its revision, or a held checkout, by
+        /// its name.
+        name: Option<String>,
         /// The worktree to release.
         #[arg(long, default_value = ".")]
         worktree: String,
+        /// Free what sluice holds for it without running the release
+        /// command: its runs ended, the checkout sluice made removed, its
+        /// ports let go.
+        #[arg(long)]
+        accept_failure: bool,
         /// One JSON document on stdout; the rest on stderr.
         #[arg(long)]
         json: bool,
@@ -1168,24 +1177,42 @@ pub fn run(
         .run(&s, out),
         Command::Previews { json } => preview::list(&s, host, json, out),
         Command::Release {
-            preview: Some(name),
+            name: Some(name),
+            accept_failure,
             json,
             ..
-        } => preview::release(&s, host, &name, json, out),
+        } if name.starts_with(CHECKOUT) => release_checkout(&s, &name, accept_failure, json, out),
         Command::Release {
-            preview: None,
+            name: Some(name),
+            accept_failure,
+            json,
+            ..
+        } => preview::release(&s, host, &name, accept_failure, json, out),
+        Command::Release {
+            name: None,
             worktree,
+            accept_failure,
             json,
         } => {
-            let released = exec::release(&s, host, &worktree, json, out)?;
+            let released = exec::release(&s, host, &worktree, accept_failure, json, out)?;
             if json {
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({ "worktree": released.worktree, "released": released.released })
-                )?;
+                let mut doc = serde_json::json!({
+                    "worktree": released.worktree,
+                    "released": released.released,
+                });
+                if accept_failure {
+                    doc["accepted"] = released.accepted.into();
+                }
+                if let Some(f) = &released.failed {
+                    doc["failed"] = f.clone().into();
+                }
+                writeln!(out, "{doc}")?;
             }
-            Ok(LANDED)
+            Ok(if released.failed.is_some() {
+                FAILED
+            } else {
+                LANDED
+            })
         }
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
@@ -2263,6 +2290,74 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "warnings": status.warnings,
         "stale": status.stale,
     })
+}
+
+/// The names of a combination's checkout begin so: `sluice/try/<branch>/<n>`.
+const CHECKOUT: &str = "sluice/try/";
+
+/// 123: `sluice release sluice/try/<branch>/<n>`: the held checkout of
+/// that name on this host, its release run once more under its branch's
+/// lock, or with `accept` freed with nothing run. Exits 1, saying what
+/// failed, when its release fails again.
+fn release_checkout(
+    s: &Sluice<'_>,
+    name: &str,
+    accept: bool,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    use sluice_core::release::Releasing;
+    let branch = name
+        .strip_prefix(CHECKOUT)
+        .and_then(|rest| rest.rsplit_once('/'))
+        .filter(|(b, n)| !b.is_empty() && !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        .map(|(b, _)| b);
+    let outcome = match branch {
+        Some(b) => {
+            let _lock = s.seams().state.wait_lock(b)?;
+            s.release_held(b, name, accept)?
+        }
+        None => None,
+    };
+    let how = outcome.map(|o| o.how);
+    let failed = match &how {
+        Some(Releasing::Failed { failed, .. } | Releasing::Held { failed, .. }) => {
+            Some(failed.clone())
+        }
+        _ => None,
+    };
+    let text = match &how {
+        None => "nothing to release".to_string(),
+        Some(Releasing::Released) => {
+            format!("released {name}: the release command run, its checkout removed, its ports free")
+        }
+        Some(Releasing::Gone) => format!(
+            "freed {name}: it no longer exists, so nothing was run; its runs ended, its ports free"
+        ),
+        Some(Releasing::Accepted(_)) => format!(
+            "freed {name} without its release command: its runs ended, its checkout removed, its ports free"
+        ),
+        Some(Releasing::Failed { failed, .. } | Releasing::Held { failed, .. }) => format!(
+            "could not release {name}: {failed}\n\
+             `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+        ),
+    };
+    if json {
+        writeln!(std::io::stderr(), "{text}")?;
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "place": name,
+                "released": how.as_ref().is_some_and(Releasing::freed),
+                "accepted": matches!(how, Some(Releasing::Accepted(_))),
+                "failed": failed,
+            })
+        )?;
+    } else {
+        writeln!(out, "{text}")?;
+    }
+    Ok(if failed.is_some() { FAILED } else { LANDED })
 }
 
 /// Session-runs-1 clause 97: every worktree sluice holds ports or runs

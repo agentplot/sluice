@@ -287,11 +287,14 @@ pub fn list(s: &Sluice<'_>, host: &dyn Host, json: bool, out: &mut dyn Write) ->
 
 /// `sluice release <preview>`: release a preview at its caller's asking
 /// (101; rule core.16). The name may be given whole, `preview/<rev>`, or
-/// as the revision.
+/// as the revision. A release that fails exits 1, saying what failed, and
+/// leaves the preview held (123); with `accept`, it is freed with nothing
+/// run.
 pub fn release(
     s: &Sluice<'_>,
     host: &dyn Host,
     preview: &str,
+    accept: bool,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -309,25 +312,46 @@ pub fn release(
         .previews()?
         .into_iter()
         .find(|p| p.name == name);
-    let released = s.release_preview(&name)?;
+    let released = match accept {
+        true => s.accept_preview(&name),
+        false => s.release_preview(&name),
+    };
+    let (released, failed) = match released {
+        Ok(r) => (r, None),
+        Err(e) => (false, Some(format!("{e:#}"))),
+    };
     if released {
         if let Some(p) = place {
             host.end_session(&p.path.to_string_lossy())?;
         }
     }
-    if json {
-        writeln!(
-            out,
-            "{}",
-            serde_json::json!({ "preview": name, "released": released })
-        )?;
-    } else if released {
-        writeln!(
-            out,
+    let text = match (&failed, released) {
+        (Some(e), _) => format!(
+            "could not release {name}: {e}\n\
+             `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+        ),
+        (None, true) if accept => format!(
+            "freed {name} without its release command: its command's run ended, its checkout removed, its ports and names free"
+        ),
+        (None, true) => format!(
             "released {name}: its command's run ended, the release command run, its ports and names free"
-        )?;
+        ),
+        (None, false) => "nothing to release".into(),
+    };
+    if json {
+        if failed.is_some() {
+            writeln!(std::io::stderr(), "{text}")?;
+        }
+        let mut doc = serde_json::json!({ "preview": name, "released": released });
+        if accept {
+            doc["accepted"] = released.into();
+        }
+        if let Some(f) = &failed {
+            doc["failed"] = f.clone().into();
+        }
+        writeln!(out, "{doc}")?;
     } else {
-        writeln!(out, "nothing to release")?;
+        writeln!(out, "{text}")?;
     }
-    Ok(LANDED)
+    Ok(if failed.is_some() { FAILED } else { LANDED })
 }

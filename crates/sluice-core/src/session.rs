@@ -432,6 +432,33 @@ impl Sluice<'_> {
         })
     }
 
+    /// 123, rule core.16: free the session's place of `worktree` at its
+    /// session's or driver's accepting that its release failed: nothing
+    /// run in its name, its runs ended and its scratch directory, ports
+    /// and record let go, the worktree left as it is (25); logged
+    /// `released` with what was accepted in its branch's records, under
+    /// the branch's lock. `false` when sluice holds no place for it.
+    pub fn accept_session(&self, worktree: &str) -> Result<bool> {
+        let Some(adopted) = self.seams.checkout.adopted(worktree)? else {
+            return Ok(false);
+        };
+        let failed = self
+            .seams
+            .checkout
+            .session_places()?
+            .into_iter()
+            .find(|p| p.name == adopted.name)
+            .and_then(|p| p.release_failed)
+            .map(|f| f.failed);
+        let _lock = match adopted.branch.is_empty() {
+            true => None,
+            false => Some(self.seams.state.wait_lock(&adopted.branch)?),
+        };
+        self.seams.checkout.free(&adopted.name)?;
+        self.log_accepted(&adopted.branch, &adopted.name, Some(worktree), failed)?;
+        Ok(true)
+    }
+
     /// Session-runs-1 clause 97, 123, rule core.16: free every session's
     /// place whose worktree no longer exists, with nothing run in its
     /// name: no policy read, no toolchain and no release command, its runs

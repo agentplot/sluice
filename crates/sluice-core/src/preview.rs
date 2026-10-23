@@ -275,6 +275,31 @@ impl Sluice<'_> {
         self.seams.checkout.release_preview(name, None, retries)
     }
 
+    /// 123: free the preview `name` at its caller's accepting that its
+    /// release failed: nothing run in its name, its checkout removed and
+    /// its ports and names let go; logged `released` with what was
+    /// accepted in its branch's records, under the branch's lock. `false`
+    /// when there is none.
+    pub fn accept_preview(&self, name: &str) -> Result<bool> {
+        let Some(p) = self
+            .seams
+            .checkout
+            .previews()?
+            .into_iter()
+            .find(|p| p.name == name)
+        else {
+            return Ok(false);
+        };
+        let _lock = self.seams.state.wait_lock(&p.branch)?;
+        self.seams.checkout.free(name)?;
+        // Where its branch keeps a log, as its release is logged.
+        if self.seams.state.branches()?.contains(&p.branch) {
+            let failed = p.release_failed.map(|f| f.failed);
+            self.log_accepted(&p.branch, name, None, failed)?;
+        }
+        Ok(true)
+    }
+
     /// 101, rule core.16: release every preview nobody can use: one whose
     /// command failed, timed out or was lost, kept with what it printed,
     /// and one whose checkout is gone, freed with nothing run in its name
