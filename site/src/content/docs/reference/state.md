@@ -153,7 +153,7 @@ branch against:
 - `landed`: the revision every later read of the branch must contain.
   A landing sets it to the revision it landed, `sluice branch accept`
   to the revision accepted, and `sluice branch create` to the revision
-  it made the branch at. A record an older sluice wrote has none; the
+  it made the branch at. A record an older sluice wrote has none. The
   next round takes the log's last `landed` line, or the revision the
   queue was last formed on when that one lacks the landing, as for a
   branch deleted and made again.
