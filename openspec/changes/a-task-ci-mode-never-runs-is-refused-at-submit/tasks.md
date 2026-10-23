@@ -25,7 +25,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
   `publish_head`, with the gate read at the branch's tip. An error from
   the seam takes the submission and returns a warning on `Accepted`.
   Verify `cargo check --workspace --all-targets`.
-- [ ] 2.2 `crates/sluice-fakes`: `keeps_out` also answers `kept_out` for
+- [x] 2.2 `crates/sluice-fakes`: `keeps_out` also answers `kept_out` for
   the required entries it names, and a switch makes `kept_out` fail.
   Add to `crates/sluice-conformance/tests/verdicts.rs`:
   `a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused`
