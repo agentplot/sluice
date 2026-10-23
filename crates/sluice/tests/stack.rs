@@ -337,7 +337,8 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             peers: Default::default(),
             systems: None,
         },
-    );
+    )
+    .with_running(blocks.path().join("running"));
     let checkout = Settings::from([
         ("ports".into(), Setting::List(vec!["web".into()])),
         ("ports_from".into(), Setting::Text("41400".into())),

@@ -79,6 +79,7 @@ fn checks(repo: &Repo) -> Checks {
             systems: None,
         },
     )
+    .with_running(repo.dir().join(".git/host-running"))
 }
 
 fn moon() -> Settings {

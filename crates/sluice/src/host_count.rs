@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use sluice_seams::Running;
 
 use crate::runs::{flat_name, supervised};
 
@@ -57,10 +58,8 @@ pub struct Entry {
     pub kind: Kind,
     /// The repository, as its common git directory.
     pub repository: PathBuf,
-    /// The branch the run is for, where its place names one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// The name of the place the run is given.
+    /// The name of the place the run is given, which names a
+    /// combination's branch.
     pub place: String,
     /// Its run directory: the run counts while a supervisor holds this
     /// directory's lock.
@@ -69,13 +68,6 @@ pub struct Entry {
     pub pid: u32,
     /// When it was admitted, RFC 3339.
     pub admitted: String,
-}
-
-/// The checks running on the host, by kind.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Running {
-    pub queue: usize,
-    pub sessions: usize,
 }
 
 /// The running checks of the host whose state is under `dir`.
@@ -316,7 +308,6 @@ mod tests {
         Entry {
             kind,
             repository: run_dir.join("../../.."),
-            branch: Some("main".into()),
             place: "sluice/try/main/1".into(),
             run_dir: run_dir.to_path_buf(),
             pid: std::process::id(),
