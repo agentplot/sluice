@@ -1637,6 +1637,30 @@ fn exec_waits_for_room() {
     assert_eq!(f.world.started().len(), 1);
 }
 
+/// 71: a start the check seam refuses at the host's bound, another
+/// repository's run having taken the last one after the count was read,
+/// waits as one the count refused, says so once, and starts on the next
+/// try.
+#[test]
+fn exec_waits_on_a_start_refused_at_the_bound() {
+    let f = setup();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    f.world.refuse_next_start();
+    let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        out.matches("waiting: the host is at its bound\n").count(),
+        1,
+        "{out}"
+    );
+    assert_eq!(f.world.started().len(), 1);
+}
+
 /// 91: a session run never uses what the reserve keeps; stopped while
 /// waiting, nothing ran and nothing is recorded.
 #[test]

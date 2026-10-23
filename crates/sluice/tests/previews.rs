@@ -181,6 +181,27 @@ fn a_preview_waits_for_room_and_never_takes_the_reserve() {
     assert_eq!(f.world.started().len(), 1);
 }
 
+/// 71, 102: a start the check seam refuses at the host's bound waits as
+/// one the count refused, and starts on the next try.
+#[test]
+fn a_preview_waits_on_a_start_refused_at_the_bound() {
+    let f = setup();
+    let rev = f.world.tip(BRANCH);
+    f.world.refuse_next_start();
+    let (code, out) = sluice_with(
+        &f,
+        0,
+        &Then(Cell::new(0), |_| true),
+        &["preview", BRANCH, rev.as_str()],
+    );
+    assert_eq!(code, LANDED, "{out}");
+    assert!(
+        out.starts_with("waiting: the host is at its bound\n"),
+        "{out}"
+    );
+    assert_eq!(f.world.started().len(), 1);
+}
+
 /// 102: stopped while it waits, nothing ran; asked again, the same
 /// preview is taken up.
 #[test]

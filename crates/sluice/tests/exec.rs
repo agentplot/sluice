@@ -7,8 +7,10 @@
 #[path = "support/mod.rs"]
 mod support;
 
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use support::{Repo, Scratch};
 
@@ -80,6 +82,33 @@ impl Setup {
             .unwrap()
     }
 
+    /// `sluice` started in this setup's worktree on `host`'s host, its
+    /// configuration and state, as another repository on that host runs
+    /// it; its stdout piped.
+    fn spawn_on(&self, host: &Setup, args: &[&str]) -> Child {
+        support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
+            .args(args)
+            .current_dir(&self.worktree)
+            .env("XDG_CONFIG_HOME", host.config.path())
+            .env("XDG_STATE_HOME", host.state.path())
+            .env_remove("SLUICE_AGENT")
+            .env_remove("SLUICE_OTEL")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Commit `policy` on `bolt/x`, as the branch's policy.
+    fn policy(&self, policy: &str) {
+        self.repo.write(".config/sluice.toml", policy);
+        self.repo.git(&["commit", "-q", "-am", "the policy"]);
+        self.repo.git(&["branch", "-f", "bolt/x", "main"]);
+    }
+
     fn results(&self) -> String {
         std::fs::read_to_string(self.repo.dir().join(".git/sluice/results.jsonl"))
             .unwrap_or_default()
@@ -94,6 +123,40 @@ impl Setup {
             Err(_) => Vec::new(),
         }
     }
+}
+
+/// The host's configuration in `config`: a bound of `max`.
+fn host_bound(config: &Scratch, max: usize) {
+    std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+    std::fs::write(
+        config.path().join("sluice/config.toml"),
+        format!("[runs]\nmax = {max}\n"),
+    )
+    .unwrap();
+}
+
+/// Wait until `done` holds, for at most a minute.
+fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let until = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < until, "{what} never happened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The lines `child` prints, as they come.
+fn lines_of(child: &mut Child) -> std::sync::mpsc::Receiver<String> {
+    let out = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(out).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
 }
 
 fn text(out: &Output) -> String {
@@ -513,4 +576,59 @@ fn a_worktrees_last_result_says_its_head_outcome_and_whether_it_was_recorded() {
     let out = s.sluice(&["release"]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(held(&s).is_null(), "released");
+}
+
+/// The policy with no ports, so a test of the host's bound probes none.
+fn portless() -> String {
+    POLICY.replace("ports = [\"web\"]\nports_from = \"41500\"\n", "")
+}
+
+/// 71, 89; the exec-checks spec's "An agent waits on another repository's
+/// queue" and the run-bound spec's "Another repository's agent run holds
+/// the bound": on a host whose bound is one, another repository's `sluice
+/// exec` holds the one run; this repository's waits, saying so, and runs
+/// once that one ends.
+#[test]
+fn an_exec_waits_for_another_repositorys_run_on_the_host() {
+    let a = Setup::at("exec-host-a", "a");
+    let b = Setup::at("exec-host-b", "b");
+    a.policy(&portless());
+    b.policy(&portless());
+    host_bound(&a.config, 1);
+
+    let mut holding = b.spawn_on(
+        &a,
+        &[
+            "exec",
+            "bolt/x",
+            "--",
+            "sh",
+            "-c",
+            "touch started; while [ ! -e go ]; do sleep 0.05; done",
+        ],
+    );
+    eventually("the other repository's run starting", || {
+        b.worktree.join("started").exists()
+    });
+
+    let mut waiting = a.spawn_on(&a, &["exec", "bolt/x", "--", "sh", "-c", "echo ran > ran"]);
+    let said = lines_of(&mut waiting);
+    let until = Instant::now() + Duration::from_secs(60);
+    loop {
+        let line = said
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .expect("exec says it waits");
+        if line == "waiting: the host is at its bound" {
+            break;
+        }
+    }
+    assert!(!a.worktree.join("ran").exists(), "it waits before it runs");
+
+    std::fs::write(b.worktree.join("go"), "").unwrap();
+    assert!(holding.wait().unwrap().success());
+    assert!(waiting.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(a.worktree.join("ran")).unwrap(),
+        "ran\n"
+    );
 }

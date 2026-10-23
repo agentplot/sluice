@@ -19,7 +19,7 @@
 
 ## 4. Agents' runs and previews wait on the whole host
 
-- [ ] 4.1 In `crates/sluice/src/exec.rs` and `crates/sluice/src/preview.rs`, treat a start refused with `AtBound` as the host being at its bound: print the waiting line once and go round the wait loop (design D4). Verify with a test in `crates/sluice/tests/exec.rs`: bound 1, a second repository's `sluice exec` running a command that holds until told, and this repository's `sluice exec` prints `waiting: the host is at its bound`, then runs once the first ends (`cli:tools`).
+- [x] 4.1 In `crates/sluice/src/exec.rs` and `crates/sluice/src/preview.rs`, treat a start refused with `AtBound` as the host being at its bound: print the waiting line once and go round the wait loop (design D4). Verify with a test in `crates/sluice/tests/exec.rs`: bound 1, a second repository's `sluice exec` running a command that holds until told, and this repository's `sluice exec` prints `waiting: the host is at its bound`, then runs once the first ends (`cli:tools`).
 - [ ] 4.2 Verify `sluice overview --json`'s `room` across repositories with a test in `crates/sluice/tests/exec.rs` for the *Another repository's submission* scenario: another repository's combination running, and this repository's `room.queue` is 1 while none of its branches shows it under test (`cli:tools`).
 
 ## 5. S60 on real repositories
