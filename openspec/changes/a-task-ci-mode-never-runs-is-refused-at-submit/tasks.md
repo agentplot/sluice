@@ -40,7 +40,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 3. The moon profile
 
-- [ ] 3.1 `crates/sluice/src/profiles/moon.rs` and `checks.rs`: one
+- [x] 3.1 `crates/sluice/src/profiles/moon.rs` and `checks.rs`: one
   function from moon's tasks and the required entries to the kept-out
   list, used by `Moon::plan` and by `Checks::kept_out`, which sets up the
   run's environment and toolchain in the worktree (into a scratch
