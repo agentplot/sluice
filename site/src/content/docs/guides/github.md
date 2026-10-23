@@ -35,7 +35,7 @@ $ sluice step main
 held: main reads 10e4791, which lacks the landing c43609b; put the landing back on main, or run sluice branch accept main 10e4791
 ```
 
-There are two ways out. Push your machine's `main` to GitHub, and the
+Either of two things ends the hold. Push your machine's `main` to GitHub, and the
 next round lands the queue on it. Or, if GitHub's revision is the one
 to keep, accept it with `sluice branch accept main 10e4791`, and the
 queue is formed on it from then on.
