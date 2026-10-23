@@ -31,6 +31,12 @@ tasks:
     inputs: ['/.claude-plugin/**/*', '/plugins/*/.claude-plugin/plugin.json', '/plugins/check-marketplace.sh', '/plugins/claude.sh', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # No two decision records share a number (check-adrs.sh).
+  adrs:
+    command: 'sh check-adrs.sh'
+    inputs: ['/docs/adr/*.md', '/check-adrs.sh']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
   # The scene the plugins' screenshots are taken of, built --fast with the
   # sluice built here and asserted, so a change to sluice that breaks it
   # fails here and not at the next retake. It reads the tools it drives from
