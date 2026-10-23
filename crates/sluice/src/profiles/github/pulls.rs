@@ -535,9 +535,20 @@ impl Pulls {
                 ));
             }
         }
+        // Who withdrew a hand-opened pull request, when it was someone
+        // other than its own agent: it rests as one sent back does, and only
+        // its person's act, a new head or a ready mark, offers it again
+        // (120, C.5).
+        let mut rests = None;
         if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
             match e.state {
-                State::Withdrawn => {}
+                State::Withdrawn => {
+                    if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
+                        if !retried_by_hand(forge, &t.repo, p, log, e.id)? {
+                            rests = Some(by);
+                        }
+                    }
+                }
                 State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names)),
                 State::Failed | State::Conflict => {
                     // Sent back: one opened by hand is submitted again only
@@ -565,6 +576,8 @@ impl Pulls {
         let mut missing = Vec::new();
         if held {
             missing.push(NEXT_SUBMIT.to_string());
+        } else if let Some(by) = rests {
+            missing.push(format!("{WITHDRAWN_BY}{}", withdrawer(by)));
         } else if p.draft {
             missing.push("a draft".to_string());
         } else {
@@ -743,6 +756,28 @@ fn submits(p: &Pull) -> Option<&str> {
     marked_agent(&p.body).map(|_| p.head_ref.as_str())
 }
 
+/// What a pull request opened by hand waits for once someone other than
+/// its own agent withdrew it, before who that was.
+const WITHDRAWN_BY: &str = "withdrawn by ";
+
+/// Who withdrew `e`, when it was not its own agent: the operator, a
+/// planner or another agent, never intake, which withdraws a pull
+/// request's submission as its agent.
+fn withdrawn_by_another(e: &Submission) -> Option<&str> {
+    e.withdrawn
+        .as_ref()
+        .map(|w| w.by.as_str())
+        .filter(|by| *by != e.from.agent)
+}
+
+/// A withdrawal's `by` in a pull request's words.
+fn withdrawer(by: &str) -> String {
+    match by {
+        "operator" | "planner" => format!("the {by}"),
+        agent => agent.to_string(),
+    }
+}
+
 /// Out of the queue without landing: withdrawn, blamed or conflicting.
 fn left_unlanded(e: &Submission) -> bool {
     matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
@@ -774,8 +809,8 @@ fn readied_since(forge: &dyn Forge, repo: &Repo, number: u64, at: DateTime<Utc>)
 }
 
 /// Whether pull request `p`, opened by hand and sent back as submission
-/// `id`, was marked ready for review after it was sent back: intake then
-/// submits the same head again.
+/// `id`, or withdrawn by someone other than its agent, was marked ready
+/// for review after it left: intake then submits the same head again.
 fn retried_by_hand(
     forge: &dyn Forge,
     repo: &Repo,
@@ -864,8 +899,11 @@ fn waiting(
     forecast: Option<String>,
 ) -> Shown {
     let held = missing.iter().any(|m| m == NEXT_SUBMIT);
+    let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
     let title = if held {
         format!("waiting: {NEXT_SUBMIT}")
+    } else if let Some(who) = rests {
+        format!("waiting: {WITHDRAWN_BY}{who}")
     } else if missing.iter().any(|m| m == "a draft") {
         "waiting: a draft".to_string()
     } else {
@@ -876,6 +914,11 @@ fn waiting(
         summary.push(format!(
             "Its submission left the queue, and sluice marked it a draft. {}",
             next_submit(branch, from.unwrap_or("its branch"))
+        ));
+    } else if let Some(who) = rests {
+        summary.push(format!(
+            "Withdrawn from {branch}'s queue by {who}. New commits, or marking it a draft and \
+             then ready for review, submit it again."
         ));
     } else if missing.iter().any(|m| m == "a draft") {
         summary.push("A draft: sluice takes it once it is marked ready for review.".to_string());
@@ -1709,6 +1752,46 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("Forecast: merges onto main"), "{s}");
+    }
+
+    /// pull-request-status, withdrawn by the operator: a hand-opened pull
+    /// request someone other than its agent withdrew is queued, names who
+    /// withdrew it, and says new commits or a ready mark after draft submit
+    /// it again; intake's own withdrawal, as its agent, is no one else's.
+    #[test]
+    fn what_a_withdrawn_pull_request_shows() {
+        let w = waiting(
+            "main",
+            None,
+            &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
+            Some("forecast: merges onto main without conflict".into()),
+        );
+        assert_eq!(w.posting.status, Status::Queued);
+        assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
+        let s = &w.posting.summary;
+        assert!(
+            s.contains("Withdrawn from main's queue by the operator")
+                && s.contains("New commits, or marking it a draft and then ready for review")
+                && !s.contains("sluice marked it a draft"),
+            "{s}"
+        );
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+        assert_eq!(withdrawer("planner"), "the planner");
+        assert_eq!(withdrawer("crw-2"), "crw-2");
+
+        let sub = |by: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 4, "branch": "main",
+                "head": "h", "from": { "agent": "person", "worktree": "pull/4" },
+                "submitted": "2026-10-23T10:00:00Z", "after": [], "priority": 0, "attempt": 1,
+                "state": "withdrawn",
+                "withdrawn": { "by": by, "at": "2026-10-23T10:00:05Z" },
+            }))
+            .unwrap()
+        };
+        assert_eq!(withdrawn_by_another(&sub("operator")), Some("operator"));
+        assert_eq!(withdrawn_by_another(&sub("planner")), Some("planner"));
+        assert_eq!(withdrawn_by_another(&sub("person")), None);
     }
 
     /// pull-request-status, blamed: a submit's pull request is told it is
