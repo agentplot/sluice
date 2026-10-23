@@ -113,10 +113,11 @@ fn a_preview_is_released_after_its_branch_is_gone() {
     assert_eq!(text(&out), "no previews\n");
 }
 
-/// 101: a preview whose checkout is removed by hand is released by the
-/// next `sluice previews`, its release command run and its port freed.
+/// 101, 123: a preview whose checkout is removed by hand is freed by the
+/// next `sluice previews`, its port and names let go and its release
+/// command never run.
 #[test]
-fn a_removed_checkout_is_released_by_the_next_listing() {
+fn a_removed_checkout_is_freed_by_the_next_listing() {
     let s = Setup::new("preview-checkout-gone", 42010, "true");
     let doc = s.preview();
     let checkout = doc["checkout"].as_str().unwrap();
@@ -126,13 +127,16 @@ fn a_removed_checkout_is_released_by_the_next_listing() {
     assert_eq!(
         text(&out),
         format!(
-            "released {}: its checkout no longer exists\nno previews\n",
+            "freed {}: its checkout no longer exists, so nothing was run; its ports and names free\nno previews\n",
             doc["name"].as_str().unwrap()
         )
     );
-    assert!(std::fs::read_to_string(&s.log)
-        .unwrap()
-        .starts_with("released "));
+    assert!(
+        std::fs::read_to_string(&s.log)
+            .unwrap_or_default()
+            .is_empty(),
+        "its release command ran"
+    );
     assert!(s.held().is_empty());
 }
 

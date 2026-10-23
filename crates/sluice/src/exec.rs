@@ -86,34 +86,27 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Say what a round or a run released because its worktree no longer
-/// exists (session-runs-1 clause 97).
+/// Say what a round or a run freed because its worktree no longer exists
+/// (session-runs-1 clause 97; 123).
 pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -> Result<()> {
     for a in released {
-        let text = match (&a.released, &a.why) {
-            (None, why) => format!(
-                "could not release {}, whose worktree no longer exists: {}",
-                a.worktree,
-                why.as_deref().unwrap_or("no reason given")
+        let text = match &a.error {
+            Some(e) => format!(
+                "could not free {}, whose worktree no longer exists: {e}",
+                a.worktree
             ),
-            (Some(_), why) => {
-                let mut t = format!(
-                    "released {}: the worktree no longer exists; its runs ended, the release command run, its ports free",
-                    a.worktree
-                );
-                if let Some(why) = why {
-                    t.push_str(&format!(" ({why})"));
-                }
-                t
-            }
+            None => format!(
+                "freed {}: it no longer exists, so nothing was run; its runs ended, its ports free",
+                a.worktree
+            ),
         };
         say(out, json, &text)?;
     }
     Ok(())
 }
 
-/// What a round or a run released because its worktree no longer exists,
-/// as a JSON document lists it.
+/// What a round or a run freed because its worktree no longer exists, as
+/// a JSON document lists it.
 pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
     released
         .iter()
@@ -121,8 +114,8 @@ pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
             serde_json::json!({
                 "worktree": a.worktree,
                 "branch": a.branch,
-                "released": a.released.is_some(),
-                "why": a.why,
+                "freed": a.freed,
+                "error": a.error,
             })
         })
         .collect()

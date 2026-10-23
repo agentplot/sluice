@@ -86,10 +86,14 @@ pub struct PreviewView {
 pub struct Dropped {
     pub name: String,
     pub branch: String,
-    /// Its command failed: what it printed. `None`: its checkout was gone.
+    /// Its command failed: what it printed. `None`: its checkout was
+    /// gone, and it was freed with nothing run (123).
     pub failed: Option<String>,
     /// The release failed, and how.
     pub error: Option<String>,
+    /// 123: the release failed on the last try it is given, and the
+    /// preview is held until it is released by name.
+    pub held: bool,
 }
 
 impl Sluice<'_> {
@@ -273,31 +277,39 @@ impl Sluice<'_> {
 
     /// 101, rule core.16: release every preview nobody can use: one whose
     /// command failed, timed out or was lost, kept with what it printed,
-    /// and one whose checkout is gone. A preview that is up, starting or
-    /// waiting with its checkout in place is never released here.
+    /// and one whose checkout is gone, freed with nothing run in its name
+    /// and logged `gone` (123). A preview that is up, starting or waiting
+    /// with its checkout in place is never released here, nor one held
+    /// because its release failed on every try its branch gives it.
     ///
     /// Each release takes its branch's lock, never waiting for it (rule
     /// core.14), and one that fails is reported and the rest go on.
     pub fn release_unusable_previews(&self) -> Result<Vec<Dropped>> {
         let mut out = Vec::new();
-        for p in self.seams.checkout.previews()? {
-            if p.failed.is_some() {
+        let checkout = self.seams.checkout;
+        for p in checkout.previews()? {
+            if p.failed.is_some() || p.release_failed.as_ref().is_some_and(|f| f.stopped) {
                 continue;
             }
-            let failed = match self.preview_state(&p)? {
-                PreviewState::Failed(output) => Some(output),
-                _ if p.gone => None,
-                _ => continue,
+            let failed = match p.gone {
+                true => None,
+                false => match self.preview_state(&p)? {
+                    PreviewState::Failed(output) => Some(output),
+                    _ => continue,
+                },
             };
             let _lock = match self.seams.state.lock(&p.branch)? {
                 Some(l) => l,
                 None => continue,
             };
-            let (released, error) = match self.seams.checkout.release_preview(
-                &p.name,
-                failed.as_deref(),
-                self.release_retries(&p.branch),
-            ) {
+            let done = match &failed {
+                None => checkout.free(&p.name).map(|()| true),
+                Some(output) => {
+                    let retries = self.release_retries(&p.branch);
+                    checkout.release_preview(&p.name, Some(output), retries)
+                }
+            };
+            let (released, error) = match done {
                 Ok(r) => (r, None),
                 Err(e) => {
                     tracing::warn!(sluice.preview = %p.name, "releasing a preview failed: {e:#}");
@@ -307,6 +319,15 @@ impl Sluice<'_> {
             if !released && error.is_none() {
                 continue;
             }
+            // 123: what the profile kept of a release that failed.
+            let kept = match &error {
+                Some(_) => checkout
+                    .previews()?
+                    .into_iter()
+                    .find(|q| q.name == p.name)
+                    .and_then(|q| q.release_failed),
+                None => None,
+            };
             // ADR 0022: once, where the failure is kept, for telemetry.
             if let (true, Some(output)) = (released, &failed) {
                 tracing::event!(
@@ -320,23 +341,37 @@ impl Sluice<'_> {
                     output
                 );
             }
-            if released && self.seams.state.branches()?.contains(&p.branch) {
-                let now = self.now();
-                self.update(&p.branch, |l| {
-                    l.log(
-                        &now,
-                        Event::Released {
-                            place: p.name.clone(),
-                            worktree: None,
-                            accepted: None,
-                        },
-                    );
-                    Ok(())
-                })?;
+            let event = match (&failed, &kept) {
+                (_, Some(f)) => Some(Event::ReleaseFailed {
+                    place: p.name.clone(),
+                    failed: f.failed.clone(),
+                    tries: f.tries,
+                    held: f.stopped,
+                }),
+                _ if !released => None,
+                (None, None) => Some(Event::Gone {
+                    place: p.name.clone(),
+                    worktree: None,
+                }),
+                (Some(_), None) => Some(Event::Released {
+                    place: p.name.clone(),
+                    worktree: None,
+                    accepted: None,
+                }),
+            };
+            if let Some(event) = event {
+                if self.seams.state.branches()?.contains(&p.branch) {
+                    let now = self.now();
+                    self.update(&p.branch, |l| {
+                        l.log(&now, event.clone());
+                        Ok(())
+                    })?;
+                }
             }
             out.push(Dropped {
                 name: p.name,
                 branch: p.branch,
+                held: kept.is_some_and(|f| f.stopped),
                 failed,
                 error,
             });

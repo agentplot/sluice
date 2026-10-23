@@ -41,12 +41,19 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
 pub fn tell_dropped(out: &mut dyn Write, json: bool, dropped: &[Dropped]) -> Result<()> {
     for d in dropped {
         let text = match (&d.error, &d.failed) {
+            (Some(e), _) if d.held => format!(
+                "{name} is held: its release failed: {e}. `sluice release {name}` runs it again",
+                name = d.name
+            ),
             (Some(e), _) => format!("could not release {}: {e}", d.name),
             (None, Some(_)) => format!(
                 "released {}: its command failed; `sluice previews` shows what it printed",
                 d.name
             ),
-            (None, None) => format!("released {}: its checkout no longer exists", d.name),
+            (None, None) => format!(
+                "freed {}: its checkout no longer exists, so nothing was run; its ports and names free",
+                d.name
+            ),
         };
         say(out, json, &text)?;
     }
@@ -65,6 +72,7 @@ pub fn dropped_json(dropped: &[Dropped]) -> Vec<serde_json::Value> {
                 "released": d.error.is_none(),
                 "failed": d.failed.is_some(),
                 "error": d.error,
+                "held": d.held,
             })
         })
         .collect()

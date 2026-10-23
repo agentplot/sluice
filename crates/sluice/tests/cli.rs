@@ -2295,14 +2295,15 @@ fn a_landing_leaves_a_sessions_place_alone() {
 // clause 97)
 // ---------------------------------------------------------------------------
 
-const GONE: &str = "released unit/a: the worktree no longer exists; its runs ended, the release command run, its ports free";
+const GONE: &str =
+    "freed unit/a: it no longer exists, so nothing was run; its runs ended, its ports free";
 
-/// 97: the next `sluice exec` on the host releases the place of a worktree
-/// removed unreleased, under the policy's release command, says so first,
-/// and logs the release in the branch's records; the worktree it runs in
-/// is left alone.
+/// 97, 123: the next `sluice exec` on the host frees the place of a
+/// worktree removed unreleased, with no release command run, says so
+/// first, and logs it `gone` in the branch's records; the worktree it runs
+/// in is left alone.
 #[test]
-fn the_next_exec_releases_a_removed_worktrees_place() {
+fn the_next_exec_frees_a_removed_worktrees_place() {
     let f = setup_releasing();
     work(
         &f,
@@ -2322,35 +2323,30 @@ fn the_next_exec_releases_a_removed_worktrees_place() {
     let (code, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
     assert_eq!(code, LANDED, "{out}");
     assert_eq!(out.lines().next(), Some(GONE), "{out}");
-    assert_eq!(
-        f.world.session_releases(),
-        [(
-            "session/unit/a".to_string(),
-            Some("sh release.sh".to_string())
-        )]
-    );
+    assert!(f.world.session_releases().is_empty(), "its release ran");
+    assert_eq!(f.world.freed_places(), ["session/unit/a"]);
     assert_eq!(f.world.adopted_places(), ["session/unit/b"]);
     let snap = sluice_seams::State::read(&f.state, BRANCH).unwrap();
     let log = sluice_core::line::Line::read_log(&snap).unwrap();
     assert!(
         log.iter().any(|l| matches!(
             &l.event,
-            sluice_core::records::Event::Released { place, worktree: Some(w), .. }
+            sluice_core::records::Event::Gone { place, worktree: Some(w) }
                 if place == "session/unit/a" && w == "unit/a"
         )),
         "{log:?}"
     );
 
-    // Released once: the next run finds nothing more to release.
+    // Freed once: the next run names it no more.
     let (_, out) = exec(&f, &[BRANCH, "--worktree", "unit/b"]);
-    assert!(!out.contains("released"), "{out}");
-    assert_eq!(f.world.session_releases().len(), 1);
+    assert!(!out.contains("unit/a"), "{out}");
+    assert_eq!(f.world.freed_places().len(), 1);
 }
 
-/// 97: the next round, `sluice step` or a pass of `sluice run`, releases
-/// it as well and says so.
+/// 97, 123: the next round, `sluice step` or a pass of `sluice run`,
+/// frees it as well and says so.
 #[test]
-fn the_next_round_releases_a_removed_worktrees_place() {
+fn the_next_round_frees_a_removed_worktrees_place() {
     for args in [&["step", BRANCH][..], &["run", "--rounds", "1"][..]] {
         let f = setup_releasing();
         work(
@@ -2427,11 +2423,11 @@ fn status_lists_the_worktrees_held() {
         "release one with: sluice release --worktree <worktree>"
     );
 
-    // A removed worktree is listed as such until a run or round releases it.
+    // A removed worktree is listed as such until a run or round frees it.
     f.world.remove_worktree("unit/a");
     let (_, out) = sluice(&f, &["status"]);
     assert!(
-        out.contains("(removed: released by the next run or round)"),
+        out.contains("(removed: freed by the next run or round, with nothing run)"),
         "{out}"
     );
     assert!(f.world.session_releases().is_empty(), "status released");

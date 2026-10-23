@@ -88,8 +88,9 @@ pub trait Rig {
     /// does, or succeeds again.
     fn release_fails(&self, fails: bool);
 
-    /// How many times the release of the place `name` was asked of the
-    /// place seam: a release command run, or refused.
+    /// How many times the release of the place `name`, a combination's, a
+    /// session's or a preview's, was asked of the place seam: a release
+    /// command run, or refused.
     fn releases_of(&self, name: &str) -> usize;
 
     /// A policy written for the fakes, as this rig's own: its runner in
