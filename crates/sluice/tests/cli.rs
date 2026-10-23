@@ -3067,3 +3067,43 @@ fn status_and_overview_show_a_hold_while_it_lasts() {
     let v = json(&sluice(&f, &["overview", "--json"]).1);
     assert!(v["branches"][0].get("held").is_none(), "{v}");
 }
+
+/// 121: a waiting `sluice wait` and `sluice submit` say a hold once in
+/// their text; their `--json` record is the submission's, as before.
+#[test]
+fn a_waiting_submission_says_its_branchs_hold_once() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    let held = held_text(&made, &landing);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+
+    let (code, out) = sluice(&f, &["wait", "2", "--timeout", "10s"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(out.lines().filter(|l| *l == held).count(), 1, "{out}");
+    assert!(out.ends_with("still waiting: sluice wait 2\n"), "{out}");
+    let (code, out) = sluice(&f, &["wait", "2", "--timeout", "10s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    let v = json(&out);
+    assert_eq!(
+        (v["id"].as_u64(), v["state"].as_str()),
+        (Some(2), Some("queued"))
+    );
+    assert!(v.get("held").is_none(), "{v}");
+
+    // A waiting submit, stopped after a few rounds.
+    work(&f, "unit/c", "agent-c", &[("plugin/c", Some("c"))]);
+    let stop = Then(Cell::new(0), |n| n < 4);
+    let (code, out) = sluice_with(&f, &stop, &["submit", BRANCH, "--worktree", "unit/c"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(out.lines().filter(|l| *l == held).count(), 1, "{out}");
+    work(&f, "unit/d", "agent-d", &[("plugin/d", Some("d"))]);
+    let stop = Then(Cell::new(0), |n| n < 4);
+    let (code, out) = sluice_with(
+        &f,
+        &stop,
+        &["submit", BRANCH, "--worktree", "unit/d", "--json"],
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(json(&out)["state"], "queued");
+}

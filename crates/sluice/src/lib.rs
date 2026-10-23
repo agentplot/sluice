@@ -35,7 +35,7 @@ use sluice_core::{
     AmendRefusal, Clock, Forecast, Forecasted, Requester, Seams, Serves, Sluice, Status, Step,
     SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
-use sluice_seams::{Outcome, SessionPlace};
+use sluice_seams::{Outcome, Rev, SessionPlace};
 use told::Kind;
 
 /// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
@@ -860,7 +860,7 @@ pub fn run(
             s.check_host_systems()?;
             let mut n = 0;
             // 121: each branch's hold as last said, so it is said once.
-            let mut said: BTreeMap<String, BranchHold> = BTreeMap::new();
+            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
@@ -880,20 +880,9 @@ pub fn run(
                         let round = s.round(&branch)?;
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
-                        match round.held {
-                            Some(hold) => {
-                                let new = said.get(&branch).is_none_or(|h| {
-                                    (&h.read, &h.lacks) != (&hold.read, &hold.lacks)
-                                });
-                                if new {
-                                    writeln!(out, "{}", held_line(&branch, &hold))?;
-                                    said.insert(branch.clone(), hold);
-                                }
-                            }
-                            None if round.step == Step::Stepped => {
-                                said.remove(&branch);
-                            }
-                            None => {}
+                        if matches!(round.step, Step::Stepped | Step::Held) {
+                            let said = said.entry(branch.clone()).or_default();
+                            tell_hold(out, &branch, round.held.as_ref(), said)?;
                         }
                     }
                 }
@@ -1305,6 +1294,24 @@ pub(crate) fn held_line(branch: &str, hold: &BranchHold) -> String {
     )
 }
 
+/// 121: say `branch`'s hold once: when it begins, and again for another
+/// revision read lacking the landing. `said` is what was said last.
+fn tell_hold(
+    out: &mut dyn Write,
+    branch: &str,
+    hold: Option<&BranchHold>,
+    said: &mut Option<(Rev, Rev)>,
+) -> Result<()> {
+    let now = hold.map(|h| (h.read.clone(), h.lacks.clone()));
+    if now != *said {
+        if let Some(h) = hold {
+            writeln!(out, "{}", held_line(branch, h))?;
+        }
+        *said = now;
+    }
+    Ok(())
+}
+
 /// 121: the hold as `--json` carries it.
 pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
     serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
@@ -1574,6 +1581,8 @@ fn wait_on(
     let (id, branch) = (sub.id, sub.branch.clone());
     type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
     let mut said: Option<Moved> = told.map(|t| (t, None));
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
     let mut first = true;
     loop {
         if sub.state.is_out() {
@@ -1597,6 +1606,9 @@ fn wait_on(
                     },
                 }
                 said = Some(now);
+            }
+            if let Some(v) = &view {
+                tell_hold(out, &branch, v.held.as_ref(), &mut said_hold)?;
             }
         }
         if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
@@ -2050,6 +2062,8 @@ fn submit_pull(
         }
     };
     let mut last: Option<(String, Vec<String>)> = None;
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
     loop {
         intake(pulls, seams, clock, branch);
         match pulls.follow(seams, clock, branch, number)? {
@@ -2138,7 +2152,12 @@ fn submit_pull(
             }
         }
         match s.round(branch) {
-            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Ok(round) => {
+                exec::tell_abandoned(out, json, &round.released)?;
+                if !json && matches!(round.step, Step::Stepped | Step::Held) {
+                    tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
+                }
+            }
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
