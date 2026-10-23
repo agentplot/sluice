@@ -1,5 +1,5 @@
 ---
-number: 21
+number: 45
 title: A preview is a place sluice makes at a landed revision and releases when asked
 status: accepted
 date: 2026-10-14
