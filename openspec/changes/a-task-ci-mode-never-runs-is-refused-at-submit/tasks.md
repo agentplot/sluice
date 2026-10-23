@@ -48,7 +48,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
   `moon query tasks`; a command runner answers none. Verify
   `cargo test -p sluice --lib` and the existing
   `a_task_kept_out_of_ci_is_not_run` still pass.
-- [ ] 3.2 Add to `crates/sluice/tests/profiles/moon.rs`, on a real moon:
+- [x] 3.2 Add to `crates/sluice/tests/profiles/moon.rs`, on a real moon:
   `a_required_task_kept_out_of_ci_is_named_before_any_run` (a task
   required by name and one through a tag, each named with its entry; a
   task in CI is not named) and

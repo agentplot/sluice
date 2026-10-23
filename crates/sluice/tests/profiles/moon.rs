@@ -832,3 +832,71 @@ fn proven_drops_a_key_the_tree_does_not_bear_out() {
     std::fs::write(&blob, forged).unwrap();
     assert_eq!(c.proven(&run, &report).unwrap(), ["beta:test"]);
 }
+
+/// ADR 0047: before any run, moon in the worktree names each required
+/// task it keeps out of CI, with the entry that requires it: one by its
+/// name, one through a tag. A task in CI is not named, and nothing runs.
+#[test]
+fn a_required_task_kept_out_of_ci_is_named_before_any_run() {
+    let repo = workspace("moon-kept-out");
+    repo.write(
+        "gamma/moon.yml",
+        "tasks:\n  test:\n    command: 'true'\n    inputs: ['value.txt']\n    tags: [check-tools]\n  \
+         serve:\n    command: 'touch served'\n    tags: [check-tools]\n    options:\n      runInCI: false\n  \
+         integration:\n    command: 'touch integrated'\n    options:\n      runInCI: skip\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "kept out"]);
+    let c = checks(&repo);
+    let required = [
+        "#check-fast".to_string(),
+        "#check-tools".to_string(),
+        "gamma:integration".to_string(),
+    ];
+    let kept: Vec<(String, String)> = c
+        .kept_out(repo.dir(), &moon(), &required)
+        .unwrap()
+        .into_iter()
+        .map(|k| (k.task, k.entry))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            (
+                "gamma:integration".to_string(),
+                "gamma:integration".to_string()
+            ),
+            ("gamma:serve".to_string(), "#check-tools".to_string()),
+        ]
+    );
+    assert!(!repo.dir().join("gamma/served").exists(), "nothing ran");
+    assert!(!repo.dir().join("gamma/integrated").exists(), "nothing ran");
+}
+
+/// ADR 0047: asking moon, with the repository's toolchain set up, leaves
+/// the worktree as it was, so the next submit from it is not refused as
+/// holding more than its commits (2); the toolchain's script is kept in
+/// sluice's state, and gone once moon has answered.
+#[test]
+fn asking_moon_leaves_the_worktree_clean() {
+    let repo = workspace("moon-kept-out-clean");
+    let c = checks(&repo);
+    let mut tests = moon();
+    tests.insert(
+        "toolchain".into(),
+        Setting::List(vec!["echo".into(), "export SLUICE_TOOLCHAIN=1".into()]),
+    );
+    let kept = c
+        .kept_out(repo.dir(), &tests, &["#check-fast".to_string()])
+        .unwrap();
+    assert!(kept.is_empty(), "{kept:?}");
+    assert_eq!(
+        repo.git(&["status", "--porcelain", "--untracked-files=all"]),
+        ""
+    );
+    let runs = repo.dir().join(".git/sluice/.runs");
+    let left: Vec<_> = std::fs::read_dir(&runs)
+        .map(|d| d.map(|e| e.unwrap().file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+}
