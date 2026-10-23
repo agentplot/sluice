@@ -21,11 +21,13 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
-use sluice_core::{Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest};
+use sluice_core::{
+    Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
+};
 use sluice_seams::{
     Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
 };
@@ -195,9 +197,8 @@ impl Pulls {
         }))
     }
 
-    /// Intake's lock on `branch`, or `None` when another process holds it:
-    /// that process takes the branch's pull requests in this round.
-    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+    /// The file of intake's lock on `branch`, and its path.
+    fn lock_file(&self, branch: &str) -> Result<(std::fs::File, PathBuf)> {
         std::fs::create_dir_all(&self.locks)?;
         let path = self.locks.join(format!("{}.lock", lock_name(branch)));
         let file = std::fs::OpenOptions::new()
@@ -206,11 +207,26 @@ impl Pulls {
             .write(true)
             .open(&path)
             .with_context(|| path.display().to_string())?;
+        Ok((file, path))
+    }
+
+    /// Intake's lock on `branch`, or `None` when another process holds it:
+    /// that process takes the branch's pull requests in this round.
+    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+        let (file, path) = self.lock_file(branch)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e).context(path.display().to_string()),
         }
+    }
+
+    /// Intake's lock on `branch`, waited for: a submit holds it while it
+    /// changes its pull request, so no pass reads it halfway.
+    fn wait_lock(&self, branch: &str) -> Result<std::fs::File> {
+        let (file, path) = self.lock_file(branch)?;
+        file.lock().context(path.display().to_string())?;
+        Ok(file)
     }
 
     /// The commit messages of `tip..head`, oldest first.
@@ -505,7 +521,7 @@ impl Pulls {
         // no round submits it in its agent's name before then (120, S56).
         let from = submits(p);
         let held = match latest.filter(|e| from.is_some() && left_unlanded(e)) {
-            Some(e) => !readied_since(forge, &t.repo, p.number, left_at(log, e))?,
+            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))?,
             None => false,
         };
         // Its draft shows the hold, and is not the hold: one GitHub
@@ -529,14 +545,7 @@ impl Pulls {
                     // back; a submit's, once it is no longer held.
                     let retried = match from {
                         Some(_) => !held,
-                        None => {
-                            let removed = removal(log, e.id);
-                            !p.draft
-                                && forge
-                                    .readied(&t.repo, p.number)?
-                                    .iter()
-                                    .any(|at| removed.is_some_and(|r| *at > r))
-                        }
+                        None => retried_by_hand(forge, &t.repo, p, log, e.id)?,
                     };
                     if !retried {
                         let outcome = Outcome::of(e)?;
@@ -739,22 +748,102 @@ fn left_unlanded(e: &Submission) -> bool {
     matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
 }
 
-/// The second `e` left the queue, from the log: no earlier than its
-/// submission, should the log not say.
-fn left_at(log: &[sluice_core::records::LogLine], e: &Submission) -> DateTime<Utc> {
-    removal(log, e.id)
-        .or_else(|| {
-            DateTime::parse_from_rfc3339(&e.submitted)
-                .ok()
-                .map(|t| t.with_timezone(&Utc))
-        })
-        .unwrap_or(DateTime::<Utc>::MIN_UTC)
+/// The second from which a ready mark is its submitter's act after `e`
+/// left the queue: the second it left, from the log, as GitHub and the
+/// log both keep whole seconds. Never the second `e` was submitted in,
+/// whose ready mark is the act that submitted it.
+fn acts_from(log: &[sluice_core::records::LogLine], e: &Submission) -> DateTime<Utc> {
+    let submitted = DateTime::parse_from_rfc3339(&e.submitted)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let left = removal(log, e.id).unwrap_or(submitted);
+    if left > submitted {
+        left
+    } else {
+        submitted + chrono::TimeDelta::seconds(1)
+    }
 }
 
 /// Whether pull request `number` was marked ready for review at or after
-/// `at`, to the second the log and GitHub both keep.
+/// `at`, to the whole second.
 fn readied_since(forge: &dyn Forge, repo: &Repo, number: u64, at: DateTime<Utc>) -> Result<bool> {
-    Ok(forge.readied(repo, number)?.iter().any(|r| *r >= at))
+    Ok(forge
+        .readied(repo, number)?
+        .iter()
+        .any(|r| r.trunc_subsecs(0) >= at))
+}
+
+/// Whether pull request `p`, opened by hand and sent back as submission
+/// `id`, was marked ready for review after it was sent back: intake then
+/// submits the same head again.
+fn retried_by_hand(
+    forge: &dyn Forge,
+    repo: &Repo,
+    p: &Pull,
+    log: &[sluice_core::records::LogLine],
+    id: u64,
+) -> Result<bool> {
+    let removed = removal(log, id);
+    Ok(!p.draft
+        && forge
+            .readied(repo, p.number)?
+            .iter()
+            .any(|at| removed.is_some_and(|r| *at > r)))
+}
+
+/// A submit's ready mark on pull request `number`, a draft first unless
+/// it is one, so that GitHub's timeline holds a ready mark at or after
+/// `left`, the second from which it is the act after its submission left
+/// the queue. GitHub's clock may be behind the host's: a mark read back
+/// before `left` is made again the next second, three times at most.
+fn mark_ready(
+    forge: &dyn Forge,
+    repo: &Repo,
+    number: u64,
+    draft: bool,
+    left: Option<DateTime<Utc>>,
+) -> Result<()> {
+    const TRIES: usize = 3;
+    let mut draft = draft;
+    let mut newest = None;
+    for tried in 1..=TRIES {
+        if !draft {
+            forge.set_draft(repo, number, true)?;
+        }
+        forge.set_draft(repo, number, false)?;
+        draft = false;
+        let Some(left) = left else {
+            return Ok(());
+        };
+        newest = forge
+            .readied(repo, number)?
+            .into_iter()
+            .map(|r| r.trunc_subsecs(0))
+            .max();
+        if newest.is_some_and(|r| r >= left) {
+            return Ok(());
+        }
+        if tried < TRIES {
+            let into = Utc::now().timestamp_subsec_millis();
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(
+                1000 - into.min(999),
+            )));
+        }
+    }
+    let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let left = left.map(at).unwrap_or_default();
+    match newest {
+        Some(r) => bail!(
+            "#{number}'s ready mark reads {} on GitHub, and a submit's counts from {left}, when \
+             its submission left the queue, after {TRIES} tries: GitHub's clock may be behind \
+             this host's; submit again",
+            at(r)
+        ),
+        None => bail!(
+            "GitHub's timeline of #{number} holds no ready mark after {TRIES} tries, and a \
+             submit's counts from {left}, when its submission left the queue; submit again"
+        ),
+    }
 }
 
 /// The way on for a submit's pull request held for its submitter: the next
@@ -1209,6 +1298,7 @@ impl crate::PullRequests for Pulls {
             return Ok(Err(SubmitRefusal::NotManaged));
         };
         let forge = self.forge(branch)?;
+        let _lock = self.wait_lock(branch)?;
         let head_ref = session.from.worktree.clone();
         self.pushed(&t.remote)?
             .push_branch(&session.head, &head_ref)?;
@@ -1238,12 +1328,39 @@ impl crate::PullRequests for Pulls {
                 )
             }
         };
+        let mut said = format!(
+            "pushed {head_ref} · {word} #{}: {}",
+            pull.number, pull.title
+        );
+        // The submit is its submitter's act (120). The submission on an
+        // older head leaves the queue, withdrawn by the submit itself (67),
+        // and a ready mark follows the latest leaving, so intake reads the
+        // act as given.
+        let here = place(pull.number);
+        let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
+        if let Some(e) = latest
+            .get(&here)
+            .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != session.head)
+        {
+            // Landing since it was read: it lands, and the new head waits.
+            if let Ok(Withdrew::Now) =
+                s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+            {
+                said.push_str(&format!(" · withdrew its submission {}", e.id));
+            }
+        }
+        let latest = s
+            .latest_of(branch, std::slice::from_ref(&here))?
+            .remove(&here);
+        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+        let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
+        if pull.draft || left.is_some() {
+            mark_ready(forge, &t.repo, pull.number, pull.draft, left)?;
+            said.push_str(" · marked ready for review");
+        }
         Ok(Ok(Opened {
             number: pull.number,
-            said: format!(
-                "pushed {head_ref} · {word} #{}: {}",
-                pull.number, pull.title
-            ),
+            said,
         }))
     }
 
@@ -1294,7 +1411,21 @@ impl crate::PullRequests for Pulls {
         if let Some(e) = &latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
-                return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                // Sent back on this head, and marked ready since: intake
+                // takes it again, so that verdict is no longer its outcome.
+                let again = match &pull {
+                    Some(p) if p.open && e.state != State::Landed => {
+                        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+                        match submits(p) {
+                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
+                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
+                        }
+                    }
+                    _ => false,
+                };
+                if !again {
+                    return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                }
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
@@ -1628,6 +1759,53 @@ mod tests {
         .is_none());
     }
 
+    /// A submit's ready mark: a draft first unless it is one, read back,
+    /// and made again the next second while it reads before the second
+    /// it counts from, three times at most, then refused naming both
+    /// times.
+    #[test]
+    fn a_submits_ready_mark_is_read_back() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let f = FileForge::new(&dir.join("github.json"), &repo);
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let now = || Utc::now().trunc_subsecs(0);
+        // Out of draft and nothing to count from: a draft, then ready.
+        mark_ready(&f, &repo, n, false, None).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 1);
+        assert!(!f.pull(&repo, n).unwrap().unwrap().draft);
+        // A draft already: ready, and read back at the second it counts
+        // from.
+        f.set_draft(n, true).unwrap();
+        mark_ready(&f, &repo, n, true, Some(now())).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 2);
+        // GitHub a second behind: made again the next second.
+        let next = now() + chrono::TimeDelta::seconds(1);
+        mark_ready(&f, &repo, n, false, Some(next)).unwrap();
+        let marks = f.readied(&repo, n).unwrap();
+        assert!(marks.len() >= 4, "{marks:?}");
+        assert!(marks.last().unwrap().trunc_subsecs(0) >= next, "{marks:?}");
+        // Never at or after it: refused after three tries.
+        let later = now() + chrono::TimeDelta::seconds(60);
+        let before = f.readied(&repo, n).unwrap().len();
+        let e = mark_ready(&f, &repo, n, false, Some(later))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), before + 3);
+        let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert!(
+            e.contains(&format!("counts from {}", at(later)))
+                && e.contains("ready mark reads 20")
+                && e.contains("after 3 tries"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The second a submission left the queue: its withdrawal, blame or
     /// conflict, whichever the log holds last for it.
     #[test]
@@ -1658,5 +1836,28 @@ mod tests {
         assert_eq!(removal(&log, 1), Some(at("2026-10-23T10:00:00Z")));
         assert_eq!(removal(&log, 2), Some(at("2026-10-23T10:00:05Z")));
         assert_eq!(removal(&log, 3), None);
+        // A ready mark counts from the second it left; one in the second
+        // it was submitted in is the act that submitted it.
+        let sub = |id: u64, submitted: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+                "head": "h", "from": { "agent": "unit/a", "worktree": "pull/4" },
+                "submitted": submitted, "after": [], "priority": 0, "attempt": 1,
+                "state": "failed",
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            acts_from(&log, &sub(2, "2026-10-23T09:59:00Z")),
+            at("2026-10-23T10:00:05Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(1, "2026-10-23T10:00:00Z")),
+            at("2026-10-23T10:00:01Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(3, "2026-10-23T10:01:00Z")),
+            at("2026-10-23T10:01:01Z")
+        );
     }
 }
