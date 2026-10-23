@@ -8,7 +8,7 @@ submitting, `sluice exec main`.
 
 ## 1. Whether a submission's work is on its branch
 
-- [ ] 1.1 Add a read beside `Sluice::state` in `crates/sluice-core/src/ops.rs` that says whether a submission's work is on its branch and as which commit: its record's `landed_as` when `landed`; else the commit for it in the branch's landing intent when the branch read is the intent's `to` or contains it, as `perform_landing` confirms a landing; else none. It writes nothing (rule core.4). Verify unit tests over the fakes for a landed submission, a landing whose branch moved and whose confirming write failed (the fakes' `crash_next_write` at that write), a landing intent whose branch has not moved, and a queued submission.
+- [x] 1.1 Add a read beside `Sluice::state` in `crates/sluice-core/src/ops.rs` that says whether a submission's work is on its branch and as which commit: its record's `landed_as` when `landed`; else the commit for it in the branch's landing intent when the branch read is the intent's `to` or contains it, as `perform_landing` confirms a landing; else none. It writes nothing (rule core.4). Verify unit tests over the fakes for a landed submission, a landing whose branch moved and whose confirming write failed (the fakes' `crash_next_write` at that write), a landing intent whose branch has not moved, and a queued submission.
 
 ## 2. The waiting commands
 
