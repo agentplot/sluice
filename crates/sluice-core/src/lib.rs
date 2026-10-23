@@ -14,6 +14,7 @@ pub mod overview;
 pub mod policy;
 pub mod preview;
 pub mod records;
+pub mod release;
 pub mod session;
 pub mod step;
 pub mod text;

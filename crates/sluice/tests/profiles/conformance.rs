@@ -48,11 +48,12 @@ while IFS="$tab" read -r task path content; do
 done <RULES
 "#;
 
-/// The places the core made and released.
+/// The places the core made and released, and each release it asked for.
 #[derive(Default)]
 struct Made {
     made: Vec<String>,
     released: Vec<String>,
+    asked: Vec<String>,
 }
 
 struct RecordedPlaces {
@@ -72,6 +73,7 @@ impl Checkout for RecordedPlaces {
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
+        self.log.borrow_mut().asked.push(name.into());
         self.inner.release(name, passed)?;
         self.log.borrow_mut().released.push(name.into());
         Ok(())
@@ -270,6 +272,9 @@ struct Real {
     /// this host never shrink the bound it tests under (71).
     _host: Scratch,
     rules: PathBuf,
+    /// While it exists, a release command written to test for its path,
+    /// `RELEASE_OK` in the policy, succeeds; without it, it exits 2 (123).
+    release_ok: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
     branch: RecordedRefs,
@@ -336,7 +341,12 @@ impl Real {
         let policy = policy.as_str();
         let rules = repo.dir().join(".git/rig-rules");
         std::fs::write(&rules, "").unwrap();
-        repo.write(".config/sluice.toml", &real_policy(policy));
+        let release_ok = repo.dir().join(".git/rig-release-ok");
+        std::fs::write(&release_ok, "").unwrap();
+        repo.write(
+            ".config/sluice.toml",
+            &real_policy(policy).replace("RELEASE_OK", &release_ok.display().to_string()),
+        );
         repo.write(
             ".moon/workspace.yml",
             "projects:\n  a: 'a'\n  b: 'b'\n  c: 'c'\n\
@@ -401,6 +411,7 @@ impl Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
             rules,
+            release_ok,
             checkout: RecordedPlaces {
                 inner: checkout.with_blocks(blocks.path().to_path_buf()),
                 log: RefCell::default(),
@@ -550,6 +561,18 @@ impl Rig for Real {
 
     fn policy_text(&self, policy: &str) -> String {
         real_policy(policy)
+    }
+
+    fn release_fails(&self, fails: bool) {
+        match fails {
+            true => std::fs::remove_file(&self.release_ok).unwrap(),
+            false => std::fs::write(&self.release_ok, "").unwrap(),
+        }
+    }
+
+    fn releases_of(&self, name: &str) -> usize {
+        let log = self.checkout.log.borrow();
+        log.asked.iter().filter(|p| *p == name).count()
     }
 
     fn host(&self) -> String {

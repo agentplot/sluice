@@ -1143,3 +1143,136 @@ pub fn s32_asking_again_gives_back_the_same_preview(h: &impl Rig) {
     assert_eq!(s.preview_of(&rev).unwrap(), Some(up.clone()));
     assert!(s.release_preview(&up.name).unwrap());
 }
+
+/// What a failing release command prints, in the scenarios of 123.
+pub const RELEASE_FAILS: &str = "usage: scripts/preview up";
+
+/// Step until `done`, a round at a time, as a waiting submit does: at once
+/// on the fakes, and between a rig's runs on the real profiles.
+fn step_until(h: &impl Rig, what: &str, done: impl Fn() -> bool) {
+    for _ in 0..3000 {
+        if done() {
+            return;
+        }
+        h.step();
+        if !done() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    panic!("{what} never came");
+}
+
+/// A submission from `unit/a` landed while every release fails; its
+/// checkout's name.
+fn landed_with_its_release_failing(h: &impl Rig) -> String {
+    h.release_fails(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    step_until(h, "#1's landing", || h.sub(one).state == State::Landed);
+    h.made_places()[0].clone()
+}
+
+/// Each failed try of `place`'s release the log holds: its tries and
+/// whether it held the place.
+fn failed_tries(h: &impl Rig, place: &str) -> Vec<(u32, bool)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::ReleaseFailed {
+                place: p,
+                failed,
+                tries,
+                held,
+            } if p == place => {
+                assert!(failed.contains(RELEASE_FAILS), "{failed}");
+                Some((tries, held))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// 123, 122: a combination's checkout whose release command fails stays,
+/// and the branch's state names it with what failed and one try; the log
+/// holds `release_failed` naming it, and its submission landed all the
+/// same.
+pub fn a_failed_release_is_held_with_what_failed(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    assert!(h.live_places().contains(&place), "{place} was removed");
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].place, place);
+    assert!(held[0].failed.contains(RELEASE_FAILS), "{held:?}");
+    assert_eq!((held[0].tries, held[0].stopped), (1, false));
+    assert_eq!(failed_tries(h, &place), [(1, false)]);
+}
+
+/// 123: with no `release_retries`, a release that fails on every try is
+/// run four times in all, one a round, held on the fourth, and run no
+/// more by the rounds after.
+pub fn a_failed_release_is_tried_a_bounded_number_of_times(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    step_until(h, "the hold", || h.releases_of(&place) >= 4);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.releases_of(&place), 4);
+    assert_eq!(
+        failed_tries(h, &place),
+        [(1, false), (2, false), (3, false), (4, true)]
+    );
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!((held[0].tries, held[0].stopped), (4, true), "{held:?}");
+    assert!(h.live_places().contains(&place));
+}
+
+/// 123, 56: with `release_retries = 1`, a release that fails twice holds
+/// its checkout after the second failure, with what failed.
+pub fn a_failed_release_is_held_after_the_retries_its_branch_names(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    step_until(h, "the hold", || h.releases_of(&place) >= 2);
+    h.step();
+    assert_eq!(h.releases_of(&place), 2);
+    assert_eq!(failed_tries(h, &place), [(1, false), (2, true)]);
+}
+
+/// 123: a release that fails once and succeeds on the next round leaves
+/// no checkout and no failure in the branch's state, and the log holds
+/// `released` naming it.
+pub fn a_release_that_succeeds_on_a_retry_is_listed_no_more(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    h.release_fails(false);
+    h.step();
+    assert!(!h.live_places().contains(&place), "{place} is left");
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+    let events = h.events();
+    let failed = events
+        .iter()
+        .position(|e| matches!(e, Event::ReleaseFailed { place: p, .. } if *p == place));
+    let released = events
+        .iter()
+        .position(|e| matches!(e, Event::Released { place: p, .. } if *p == place));
+    assert!(failed < released && failed.is_some(), "{events:?}");
+}
+
+/// 123, 122: a held checkout never holds its branch: the round that tries
+/// its release again starts a waiting submission's combination in a new
+/// checkout, and that submission lands when it passes.
+pub fn a_held_checkout_never_holds_its_branch(h: &impl Rig) {
+    let first = landed_with_its_release_failing(h);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.releases_of(&first), 2, "the round tried it again");
+    let made = h.made_places();
+    assert_eq!(made.len(), 2, "the round started #{two}: {made:?}");
+    assert_ne!(made[1], first);
+    step_until(h, "#2's landing", || h.sub(two).state == State::Landed);
+    assert!(h.live_places().contains(&first));
+    assert_eq!(h.tested().last(), Some(&vec![two]));
+}

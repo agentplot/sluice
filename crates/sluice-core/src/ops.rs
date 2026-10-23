@@ -141,6 +141,9 @@ pub struct Status {
     /// 80: the remote the branch's state could not be read from just now,
     /// so what is shown is what was last fetched from it.
     pub stale: Option<String>,
+    /// 123: the branch's checkouts whose release failed, still tried or
+    /// held.
+    pub failed_releases: Vec<crate::records::FailedRelease>,
 }
 
 impl Status {
@@ -712,6 +715,7 @@ impl Sluice<'_> {
             window: line.doc.window,
             parallel,
             finished: line.finished.len(),
+            failed_releases: line.doc.failed_releases.clone(),
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch),
