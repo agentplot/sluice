@@ -64,19 +64,68 @@ fn marked_agent(body: &str) -> Option<String> {
     })
 }
 
-/// `body` naming `agent`, in place of any agent it named.
-fn with_marker(body: &str, agent: &str) -> String {
+/// `body` naming `agent` and, with `group`, marked one of that group, in
+/// place of any agent and group it named.
+fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
     let kept: Vec<&str> = body
         .lines()
-        .filter(|l| !l.trim().starts_with("<!-- sluice: agent="))
+        .filter(|l| {
+            let l = l.trim();
+            !l.starts_with("<!-- sluice: agent=") && !l.starts_with(GROUP_MARK)
+        })
         .collect();
     let kept = kept.join("\n");
     let kept = kept.trim_end();
-    if kept.is_empty() {
-        marker(agent)
-    } else {
-        format!("{kept}\n\n{}", marker(agent))
+    let mut marks = marker(agent);
+    if let Some(g) = group {
+        marks.push('\n');
+        marks.push_str(&g.marker());
     }
+    if kept.is_empty() {
+        marks
+    } else {
+        format!("{kept}\n\n{marks}")
+    }
+}
+
+const GROUP_MARK: &str = "<!-- sluice: group=";
+
+/// 125: a pull request opened by a group submit, as its body marks it:
+/// the act's token, its place `k` of `n`, and the head it was opened at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Group {
+    token: String,
+    k: usize,
+    n: usize,
+    head: String,
+}
+
+impl Group {
+    /// `<!-- sluice: group=<token> <k>/<n> head=<oid> -->`
+    fn marker(&self) -> String {
+        format!(
+            "{GROUP_MARK}{} {}/{} head={} -->",
+            self.token, self.k, self.n, self.head
+        )
+    }
+
+    /// The group a pull request's body marks it one of, if any.
+    fn of(body: &str) -> Option<Group> {
+        body.lines().find_map(|l| {
+            let rest = l.trim().strip_prefix(GROUP_MARK)?.strip_suffix("-->")?;
+            let mut words = rest.split_whitespace();
+            let token = words.next()?.to_string();
+            let (k, n) = words.next()?.split_once('/')?;
+            let head = words.next()?.strip_prefix("head=")?.to_string();
+            let (k, n) = (k.parse().ok()?, n.parse().ok()?);
+            (words.next().is_none() && (1..=n).contains(&k)).then_some(Group { token, k, n, head })
+        })
+    }
+}
+
+/// A group submit's token: when it was made and its first head, short.
+fn group_token(at: DateTime<Utc>, first: &Rev) -> String {
+    format!("{}-{}", at.format("%Y%m%dT%H%M%SZ"), first.short())
 }
 
 /// The line written into a comment, naming the notification it tells, so
@@ -1080,54 +1129,107 @@ impl crate::PullRequests for Pulls {
         worktree: &str,
         branch: &str,
     ) -> Result<Result<Opened, SubmitRefusal>> {
-        let session = seams.driver.session(worktree)?;
-        if session.detached {
-            return Ok(Err(SubmitRefusal::Detached));
-        }
-        if !session.dirty.is_empty() {
-            return Ok(Err(SubmitRefusal::Dirty(session.dirty)));
+        Ok(
+            match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
+                Ok(mut opened) => Ok(opened.remove(0)),
+                Err(mut refused) => Err(refused.remove(0).1),
+            },
+        )
+    }
+
+    /// 125: every worktree read before anything is pushed, and a refusal
+    /// for each refused; then, in order, each request marked one of the
+    /// group before its head reaches it: an open request's body edited
+    /// before its branch is pushed, a new one opened with the mark once
+    /// its branch is. One worktree is marked one of no group.
+    fn open_group(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        worktrees: &[String],
+        branch: &str,
+    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+        let mut refused = Vec::new();
+        let mut sessions: Vec<Session> = Vec::new();
+        for (k, worktree) in worktrees.iter().enumerate() {
+            let session = seams.driver.session(worktree)?;
+            let before = worktrees[..k]
+                .iter()
+                .zip(&sessions)
+                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _)) = before {
+                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+            } else if session.detached {
+                refused.push((worktree.clone(), SubmitRefusal::Detached));
+            } else if !session.dirty.is_empty() {
+                refused.push((
+                    worktree.clone(),
+                    SubmitRefusal::Dirty(session.dirty.clone()),
+                ));
+            }
+            sessions.push(session);
         }
         let s = Sluice::new(seams, clock);
-        let Some(t) = self.target(&s, branch)? else {
-            return Ok(Err(SubmitRefusal::NotManaged));
+        let target = self.target(&s, branch)?;
+        if target.is_none() {
+            for w in worktrees {
+                refused.push((w.clone(), SubmitRefusal::NotManaged));
+            }
+        }
+        let (Some(t), true) = (target, refused.is_empty()) else {
+            return Ok(Err(refused));
         };
         let forge = self.forge(branch)?;
-        let head_ref = session.from.worktree.clone();
-        self.pushed(&t.remote)?
-            .push_branch(&session.head, &head_ref)?;
-        let open = forge
-            .pulls(&t.repo, branch)?
-            .into_iter()
-            .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
-        let agent = &session.from.agent;
-        let (pull, word) = match open {
-            Some(p) => {
-                if marked_agent(&p.body).as_deref() != Some(agent.as_str()) {
-                    forge.edit(&t.repo, p.number, &with_marker(&p.body, agent))?;
+        let pushed = self.pushed(&t.remote)?;
+        let open = forge.pulls(&t.repo, branch)?;
+        let n = sessions.len();
+        let token = group_token(clock.now(), &sessions[0].head);
+        let mut opened = Vec::new();
+        for (k, session) in sessions.iter().enumerate() {
+            let head_ref = session.from.worktree.clone();
+            let agent = &session.from.agent;
+            let group = (n > 1).then(|| Group {
+                token: token.clone(),
+                k: k + 1,
+                n,
+                head: session.head.0.clone(),
+            });
+            let existing = open
+                .iter()
+                .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
+            let (number, title, word) = match existing {
+                Some(p) => {
+                    if marked_agent(&p.body).as_deref() != Some(agent.as_str())
+                        || Group::of(&p.body) != group
+                    {
+                        forge.edit(
+                            &t.repo,
+                            p.number,
+                            &with_marks(&p.body, agent, group.as_ref()),
+                        )?;
+                    }
+                    pushed.push_branch(&session.head, &head_ref)?;
+                    (p.number, p.title.clone(), "updated")
                 }
-                (p, "updated")
-            }
-            None => {
-                let messages = self.messages(&t.tip, &session.head)?;
-                let title = messages
-                    .first()
-                    .and_then(|m| m.lines().next())
-                    .unwrap_or(&head_ref)
-                    .to_string();
-                let body = with_marker(&messages.join("\n\n"), agent);
-                (
-                    forge.open(&t.repo, branch, &head_ref, &title, &body)?,
-                    "opened",
-                )
-            }
-        };
-        Ok(Ok(Opened {
-            number: pull.number,
-            said: format!(
-                "pushed {head_ref} · {word} #{}: {}",
-                pull.number, pull.title
-            ),
-        }))
+                None => {
+                    pushed.push_branch(&session.head, &head_ref)?;
+                    let messages = self.messages(&t.tip, &session.head)?;
+                    let title = messages
+                        .first()
+                        .and_then(|m| m.lines().next())
+                        .unwrap_or(&head_ref)
+                        .to_string();
+                    let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
+                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body)?;
+                    (p.number, p.title, "opened")
+                }
+            };
+            opened.push(Opened {
+                number,
+                said: format!("pushed {head_ref} · {word} #{number}: {title}"),
+            });
+        }
+        Ok(Ok(opened))
     }
 
     fn find(
@@ -1395,13 +1497,43 @@ mod tests {
         assert_eq!(number("pull/7"), Some(7));
         assert_eq!(number("unit/x"), None);
         assert_eq!(number("pull/x"), None);
-        let body = with_marker("Adds review cards.", "crw-1");
+        let body = with_marks("Adds review cards.", "crw-1", None);
         assert_eq!(marked_agent(&body).as_deref(), Some("crw-1"));
-        let again = with_marker(&body, "crw-2");
+        let again = with_marks(&body, "crw-2", None);
         assert_eq!(marked_agent(&again).as_deref(), Some("crw-2"));
         assert_eq!(again.matches("sluice: agent=").count(), 1);
         assert!(again.starts_with("Adds review cards."));
         assert_eq!(marked_agent("by hand"), None);
+    }
+
+    /// 125: a group mark sits beside the agent mark, reads back as
+    /// written, and a body written with no group drops it.
+    #[test]
+    fn a_group_mark_reads_back_and_is_dropped() {
+        let g = Group {
+            token: group_token(
+                DateTime::parse_from_rfc3339("2026-10-23T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+                &Rev::new("0123456789abcdef"),
+            ),
+            k: 2,
+            n: 3,
+            head: "0123456789abcdef".into(),
+        };
+        assert_eq!(
+            g.marker(),
+            "<!-- sluice: group=20261023T120000Z-0123456 2/3 head=0123456789abcdef -->"
+        );
+        let body = with_marks("Adds review cards.", "crw-1", Some(&g));
+        assert_eq!(Group::of(&body), Some(g.clone()));
+        assert_eq!(marked_agent(&body).as_deref(), Some("crw-1"));
+        let again = with_marks(&body, "crw-1", Some(&g));
+        assert_eq!(again.matches("sluice: group=").count(), 1);
+        let single = with_marks(&body, "crw-1", None);
+        assert_eq!(Group::of(&single), None);
+        assert!(single.starts_with("Adds review cards."));
+        assert_eq!(Group::of("<!-- sluice: group=t 4/3 head=x -->"), None);
     }
 
     #[test]

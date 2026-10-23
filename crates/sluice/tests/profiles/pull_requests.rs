@@ -952,3 +952,159 @@ fn submit_again_on_a_head_sent_back() {
     );
     assert!(w.exists());
 }
+
+// ---------------------------------------------------------------------------
+// group-submit, under pull requests (125)
+// ---------------------------------------------------------------------------
+
+impl OnGitHub {
+    /// Sessions `unit/<name>` for each of `names`, each with one commit of
+    /// its own file.
+    fn sessions(&self, names: &[&str]) -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|n| self.session(n, &[(&format!("{n}.txt"), "x\n")]))
+            .collect()
+    }
+
+    /// `sluice submit main` of `worktrees` as one act, then `rest`.
+    fn submit_group(&self, worktrees: &[PathBuf], rest: &[&str]) -> Output {
+        let mut args = vec!["submit", "main"];
+        for w in worktrees {
+            args.extend(["--worktree", w.to_str().unwrap()]);
+        }
+        args.extend(rest);
+        self.sluice(&args)
+    }
+
+    /// The open pull request from `unit/<name>`.
+    fn pull_of(&self, name: &str) -> sluice::profiles::github::forge::Pull {
+        self.gh
+            .forge
+            .by_ref(&format!("unit/{name}"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("no pull request from unit/{name}"))
+    }
+}
+
+/// The group mark of a pull request's body: its token and the rest.
+fn group_mark(body: &str) -> Option<(String, String)> {
+    body.lines().find_map(|l| {
+        let (token, rest) = l.strip_prefix("<!-- sluice: group=")?.split_once(' ')?;
+        Some((token.to_string(), rest.to_string()))
+    })
+}
+
+/// Three worktrees submitted as one act: each branch is on GitHub, each
+/// has an open pull request into `main` marked 1, 2 and 3 of 3 of one
+/// group at its head, and the answer names each with what it waits for.
+/// One of them submitted alone afterwards is marked one of no group.
+#[test]
+fn a_group_submit_opens_every_pull_request_marked() {
+    let g = OnGitHub::new("pr-group", "reviews = 1");
+    let names = ["g1", "g2", "g3"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    let mut token = None;
+    for (k, name) in names.iter().enumerate() {
+        let pull = g.pull_of(name);
+        assert!(pull.open && !pull.draft && pull.base == "main");
+        let head = github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")).unwrap();
+        assert_eq!(pull.head, head);
+        assert!(pull
+            .body
+            .contains(&format!("<!-- sluice: agent=unit/{name} -->")));
+        let (t, rest) = group_mark(&pull.body).unwrap_or_else(|| panic!("{}", pull.body));
+        assert_eq!(rest, format!("{}/3 head={head} -->", k + 1));
+        assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
+        let n = pull.number;
+        assert!(
+            said.contains(&format!(
+                "pushed unit/{name} · opened #{n}: Change {name}.txt"
+            )),
+            "{said}"
+        );
+        assert!(
+            said.contains(&format!("#{n} waiting: needs 1 review")),
+            "{said}"
+        );
+        assert!(g.of(n).is_empty());
+    }
+
+    let out = g.wt_submit(&ws[0], &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_of("g1");
+    assert_eq!(group_mark(&pull.body), None, "{}", pull.body);
+    assert!(pull.body.contains("<!-- sluice: agent=unit/g1 -->"));
+}
+
+/// A group whose second worktree holds more than its commits is refused
+/// whole: it names the file, exits 2, and pushes and opens nothing for
+/// either.
+#[test]
+fn a_group_submit_with_a_dirty_worktree_pushes_nothing() {
+    let g = OnGitHub::new("pr-group-dirty", "");
+    let ws = g.sessions(&["d1", "d2"]);
+    std::fs::write(ws[1].join("d2.txt"), "changed\n").unwrap();
+    let out = g.submit_group(&ws, &[]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(text(&out).contains("d2.txt"), "{}", text(&out));
+    for name in ["d1", "d2"] {
+        assert_eq!(
+            github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")),
+            None
+        );
+    }
+    assert!(g.gh.forge.held().unwrap().pulls.is_empty());
+}
+
+/// A waiting act follows each pull request: it says each one's state as
+/// it reaches it, then each one's outcome in the order given, and exits 0
+/// once all three land.
+#[test]
+fn a_waiting_group_submit_follows_each_pull_request() {
+    let g = OnGitHub::new("pr-group-wait", "");
+    let names = ["w1", "w2", "w3"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    let lines: Vec<&str> = said.lines().collect();
+    let mut at = Vec::new();
+    for (name, w) in names.iter().zip(&ws) {
+        let n = g.pull_of(name).number;
+        assert!(
+            g.of(n).iter().any(|s| s["state"] == "landed"),
+            "{:?}",
+            g.subs()
+        );
+        let header = format!("#{n} from {}:", w.display());
+        let i = lines
+            .iter()
+            .position(|l| *l == header)
+            .unwrap_or_else(|| panic!("{header:?} in {said}"));
+        assert!(
+            lines[..i]
+                .iter()
+                .any(|l| l.starts_with(&format!("#{n} queued"))
+                    || l.starts_with(&format!("#{n} testing"))),
+            "#{n}'s states before its outcome: {said}"
+        );
+        at.push(i);
+    }
+    assert!(
+        at.windows(2).all(|w| w[0] < w[1]),
+        "in the order given: {said}"
+    );
+    for (k, i) in at.iter().enumerate() {
+        let end = at.get(k + 1).copied().unwrap_or(lines.len());
+        assert!(
+            lines[*i..end]
+                .iter()
+                .any(|l| l.starts_with("passed · landed as ")),
+            "{said}"
+        );
+    }
+}
