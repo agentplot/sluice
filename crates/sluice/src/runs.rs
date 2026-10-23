@@ -33,7 +33,10 @@
 //! group does not reach. It runs once the run's group has ended, as the
 //! run did, in a group of its own held to the run's time limit, before
 //! the run's directory is removed; a release that fails is an error, and
-//! is run again by the next removal.
+//! is run again by the next removal. A release command whose working copy
+//! is gone is never started (123): [`Runs::discard`] and
+//! [`Runs::discard_all`] end and remove such a place's runs, running no
+//! release.
 //!
 //! This module names no tool: the runners and executors in `profiles`
 //! say what to run, and the place seam's profiles end a place's run
@@ -177,22 +180,7 @@ impl Runs {
     pub fn remove_all_with(&self, place: &str, with: ReleaseWith) -> Result<()> {
         assert!(is_session(place), "{place} is no session's place");
         let parent = self.root.join(flat_name(place));
-        let runs = numbered(&parent)?;
-        for (n, _) in &runs {
-            self.end(&format!("{place}#{n}"))?;
-        }
-        let until = Instant::now() + Duration::from_secs(30);
-        for (_, dir) in &runs {
-            while self.supervised(dir)? {
-                if Instant::now() >= until {
-                    bail!(
-                        "the supervisor of {} still holds it 30 s after its run ended",
-                        dir.display()
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
+        let runs = self.end_all(place)?;
         match with {
             ReleaseWith::LastRun => {
                 if let Some((_, last)) = runs
@@ -212,12 +200,44 @@ impl Runs {
                 self.release(&dir)?;
             }
         }
-        match std::fs::remove_dir_all(&parent) {
-            Err(e) if e.kind() != ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("removing {}", parent.display()))
-            }
-            _ => Ok(()),
+        remove_dir(&parent)
+    }
+
+    /// 123: end every run of the session's place `place` and remove them
+    /// all, running no release command.
+    pub fn discard_all(&self, place: &str) -> Result<()> {
+        assert!(is_session(place), "{place} is no session's place");
+        self.end_all(place)?;
+        remove_dir(&self.root.join(flat_name(place)))
+    }
+
+    /// End every run of the session's place `place` and wait for their
+    /// supervisors to let go; the runs, numbered.
+    fn end_all(&self, place: &str) -> Result<Vec<(u64, PathBuf)>> {
+        let runs = numbered(&self.root.join(flat_name(place)))?;
+        for (n, _) in &runs {
+            self.end(&format!("{place}#{n}"))?;
         }
+        let until = Instant::now() + Duration::from_secs(30);
+        for (_, dir) in &runs {
+            self.let_go(dir, until)?;
+        }
+        Ok(runs)
+    }
+
+    /// Wait until no supervisor holds the run in `dir`, refusing once
+    /// `until` has passed.
+    fn let_go(&self, dir: &Path, until: Instant) -> Result<()> {
+        while self.supervised(dir)? {
+            if Instant::now() >= until {
+                bail!(
+                    "the supervisor of {} still holds it 30 s after its run ended",
+                    dir.display()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
     }
 
     /// Start `request` in a new run directory for the place `name`, under
@@ -377,23 +397,23 @@ impl Runs {
         }
         self.end(name)?;
         let dir = self.dir(name);
-        let until = Instant::now() + Duration::from_secs(30);
-        while self.supervised(&dir)? {
-            if Instant::now() >= until {
-                bail!(
-                    "the supervisor of {} still holds it 30 s after its run ended",
-                    dir.display()
-                );
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        self.let_go(&dir, Instant::now() + Duration::from_secs(30))?;
         self.release(&dir)?;
-        match std::fs::remove_dir_all(&dir) {
-            Err(e) if e.kind() != ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("removing {}", dir.display()))
-            }
-            _ => Ok(()),
+        remove_dir(&dir)
+    }
+
+    /// 123: end the run of the place `name` and remove its directory, as
+    /// [`Runs::remove`] does, running no release command: how a place
+    /// whose working copy is gone, or whose release's failure was
+    /// accepted, is freed.
+    pub fn discard(&self, name: &str) -> Result<()> {
+        if is_session(name) && session_run(name).is_none() {
+            return self.discard_all(name);
         }
+        self.end(name)?;
+        let dir = self.dir(name);
+        self.let_go(&dir, Instant::now() + Duration::from_secs(30))?;
+        remove_dir(&dir)
     }
 
     /// Run the release command of the run in `dir`, if it has one and it
@@ -407,24 +427,19 @@ impl Runs {
         let Some((program, args)) = request.release.as_deref().and_then(|a| a.split_first()) else {
             return Ok(());
         };
+        // 123: a place whose working copy is gone has nothing to release by
+        // command; it is freed, never released.
+        if !request.cwd.is_dir() {
+            bail!(
+                "the release command of {} was not run: its working copy no longer exists",
+                request.cwd.display()
+            );
+        }
         let log = dir.join("release.log");
         let out = File::create(&log)?;
-        // A session's worktree removed before its release (session-runs-1
-        // clause 97): the command runs in the place's scratch directory,
-        // which the release removes only after it.
-        let cwd = if request.cwd.is_dir() {
-            request.cwd.clone()
-        } else {
-            request
-                .env
-                .get("SLUICE_TMP")
-                .map(PathBuf::from)
-                .filter(|t| t.is_dir())
-                .unwrap_or_else(|| dir.to_path_buf())
-        };
         let mut child = Command::new(program)
             .args(args)
-            .current_dir(&cwd)
+            .current_dir(&request.cwd)
             .env_clear()
             .envs(&request.env)
             .stdin(Stdio::null())
@@ -862,6 +877,16 @@ impl Times {
     }
 }
 
+/// Remove the run directory `dir`, if it is there.
+fn remove_dir(dir: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("removing {}", dir.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Write `path` whole or not at all: a temporary file, then a rename.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
@@ -876,7 +901,89 @@ fn now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{dir_name, flat_name};
+    use super::{dir_name, flat_name, write_atomic, Request, Runs};
+    use std::path::Path;
+
+    /// A run of the place `name` that has ended, its request carrying a
+    /// release command that writes `marker`, in the working copy `cwd`.
+    fn ended_run(runs: &Runs, name: &str, cwd: &Path, marker: &Path) {
+        let dir = runs.dir(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let request = Request {
+            argv: vec!["/usr/bin/true".into()],
+            cwd: cwd.to_path_buf(),
+            env: Default::default(),
+            limit: Some(10),
+            grace: 1,
+            meta: serde_json::Value::Null,
+            release: Some(vec!["/usr/bin/touch".into(), marker.display().to_string()]),
+        };
+        write_atomic(
+            &dir.join("request.json"),
+            &serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        let ended = r#"{"exit":0,"signal":null,"timed_out":false,"started":"","ended":""}"#;
+        write_atomic(&dir.join("result.json"), ended.as_bytes()).unwrap();
+    }
+
+    fn scratch(what: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("sluice-{what}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("place")).unwrap();
+        root
+    }
+
+    /// 123: a run discarded is removed with its release command never run,
+    /// where its removal runs it.
+    #[test]
+    fn a_discarded_run_runs_no_release() {
+        let root = scratch("discard");
+        let runs = Runs::new(&root, "sluice".into());
+        let (cwd, marker) = (root.join("place"), root.join("released"));
+        ended_run(&runs, "sluice/try/main/1", &cwd, &marker);
+        runs.discard("sluice/try/main/1").unwrap();
+        assert!(!runs.dir("sluice/try/main/1").exists());
+        assert!(!marker.exists(), "the release command ran");
+
+        ended_run(&runs, "sluice/try/main/2", &cwd, &marker);
+        let release_log = runs.dir("sluice/try/main/2").join("release.log");
+        runs.discard("sluice/try/main/2").unwrap();
+        assert!(!release_log.exists());
+
+        let session = format!("session/{}", cwd.display());
+        ended_run(&runs, &format!("{session}#1"), &cwd, &marker);
+        ended_run(&runs, &format!("{session}#2"), &cwd, &marker);
+        runs.discard(&session).unwrap();
+        assert!(!runs.dir(&format!("{session}#1")).exists());
+        assert!(!marker.exists(), "a session's release command ran");
+
+        // Removed, the same run's release command runs.
+        ended_run(&runs, "sluice/try/main/3", &cwd, &marker);
+        runs.remove("sluice/try/main/3").unwrap();
+        assert!(marker.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 123: a release command whose working copy is gone is never started;
+    /// the refusal names the directory, and the run stays to be freed.
+    #[test]
+    fn a_release_whose_working_copy_is_gone_is_refused() {
+        let root = scratch("gone");
+        let runs = Runs::new(&root, "sluice".into());
+        let (cwd, marker) = (root.join("gone"), root.join("released"));
+        ended_run(&runs, "sluice/try/main/1", &cwd, &marker);
+        let e = runs.remove("sluice/try/main/1").unwrap_err();
+        assert!(
+            format!("{e:#}").contains(&format!("{} was not run", cwd.display())),
+            "{e:#}"
+        );
+        assert!(!marker.exists());
+        assert!(runs.dir("sluice/try/main/1").exists());
+        runs.discard("sluice/try/main/1").unwrap();
+        assert!(!runs.dir("sluice/try/main/1").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     /// A name that fits is written as it was before names were shortened.
     #[test]
