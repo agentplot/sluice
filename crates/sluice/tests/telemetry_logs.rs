@@ -2,14 +2,15 @@
 //! a failure's output as an OTLP log record under the span of the round
 //! that read the verdict, scrubbed, as much of it as the host asks and
 //! none at `off`; a failed preview's, and sluice's warnings; a round's
-//! spans and what they carry; a run's checks joined to the round; and
-//! OTLP over HTTP to the collector, whose absence fails nothing. Each test
-//! runs alone in a process of its own, since the exporters' subscriber is
-//! the process's.
+//! spans, how they nest and what they carry; a run's checks joined to the
+//! round; and OTLP over HTTP to the collector, whose absence fails
+//! nothing. Each test runs alone in a process of its own, since the
+//! exporters' subscriber is the process's.
 
 mod support;
 
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use opentelemetry::logs::{AnyValue, Severity};
+use opentelemetry::trace::{SpanId, TraceId};
 use opentelemetry::Value;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLogRecord};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
@@ -388,6 +390,77 @@ fn a_round_s_spans_carry_what_they_are_of() {
     assert_eq!(count("sluice.replayed").as_deref(), Some("0"));
     let blame = span(&spans, "sluice.blame");
     assert!(value(&blame, "sluice.candidate").is_some());
+    telemetry.finish();
+}
+
+/// Each round is one trace of its own, rooted at `sluice.round`: its
+/// recover, decide and perform beneath it, and what it forms, starts,
+/// reads, blames and lands beneath those.
+#[test]
+fn a_round_is_one_trace_rooted_at_sluice_round() {
+    if !alone("a_round_is_one_trace_rooted_at_sluice_round") {
+        return;
+    }
+    let (telemetry, spans, _) = start(Logs::Off);
+    let f = setup();
+    assert_eq!(
+        submit(&f, "unit/a", &[("tests/t_a.py", Some("broken"))]),
+        FAILED
+    );
+    assert_eq!(
+        submit(&f, "unit/b", &[("lib/a.py", Some("changed"))]),
+        LANDED
+    );
+    telemetry.flush();
+
+    let all = spans.get_finished_spans().unwrap();
+    let by_id: HashMap<SpanId, &SpanData> =
+        all.iter().map(|s| (s.span_context.span_id(), s)).collect();
+    // The span `s` is beneath, in its own trace.
+    let parent = |s: &SpanData| {
+        let p = by_id
+            .get(&s.parent_span_id)
+            .unwrap_or_else(|| panic!("{} has no parent: {s:?}", s.name));
+        assert_eq!(
+            p.span_context.trace_id(),
+            s.span_context.trace_id(),
+            "{} is not in {}'s trace",
+            s.name,
+            p.name
+        );
+        p.name.to_string()
+    };
+    let named = |name: &str| -> Vec<&SpanData> { all.iter().filter(|s| s.name == name).collect() };
+
+    let rounds = named("sluice.round");
+    for round in &rounds {
+        assert_eq!(round.parent_span_id, SpanId::INVALID, "{round:?}");
+    }
+    let traces: HashSet<TraceId> = rounds.iter().map(|r| r.span_context.trace_id()).collect();
+    assert_eq!(traces.len(), rounds.len(), "two rounds share a trace");
+
+    let phases = ["sluice.recover", "sluice.decide", "sluice.perform"];
+    for phase in phases {
+        let found = named(phase);
+        assert!(!found.is_empty(), "no {phase} span");
+        for s in found {
+            assert_eq!(parent(s), "sluice.round");
+        }
+    }
+    for step in [
+        "sluice.form",
+        "sluice.start",
+        "sluice.verdict",
+        "sluice.blame",
+        "sluice.land",
+    ] {
+        let found = named(step);
+        assert!(!found.is_empty(), "no {step} span");
+        for s in found {
+            let p = parent(s);
+            assert!(phases.contains(&p.as_str()), "{step} is beneath {p}");
+        }
+    }
     telemetry.finish();
 }
 
