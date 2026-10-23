@@ -85,6 +85,7 @@ None.
 
 ```
 crates/sluice-core/src/ops.rs
+crates/sluice-conformance/tests/landing.rs
 crates/sluice/src/lib.rs
 crates/sluice-fakes/src/lib.rs
 crates/sluice/tests/cli.rs
