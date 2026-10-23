@@ -215,10 +215,11 @@ fn claims(h: &Harness) -> Vec<String> {
 }
 
 /// satisfies: 123, 81: a host back with a checkout from a lapsed claim
-/// whose release fails holds it, named, and claims nothing, while another
-/// host claims and reports the branch's open runs
+/// whose release fails names it with what failed and, in the same round,
+/// claims the branch's open run in another checkout and reports its
+/// result; the checkout is tried again and held, and never bars a claim
 #[test]
-fn a_host_whose_leftover_checkout_will_not_release_claims_nothing() {
+fn a_host_whose_leftover_checkout_will_not_release_claims_all_the_same() {
     let h = peers();
     h.w().hold_runs(true);
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
@@ -233,30 +234,41 @@ fn a_host_whose_leftover_checkout_will_not_release_claims_nothing() {
     h.w().hold_runs(false);
     on(&h, "c", Some("box")).step(BRANCH).unwrap();
     assert_eq!(claims(&h), ["b", "c"]);
+    for _ in 0..3 {
+        on(&h, "c", Some("box")).step(BRANCH).unwrap();
+        on(&h, "lead", None).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
 
     // b returns, and its leftover checkout will not release.
     h.w()
         .place_release_fails(&left, Some(shared::RELEASE_FAILS));
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
     let two = h.submit("unit/b");
-    for _ in 0..6 {
-        on(&h, "lead", None).step(BRANCH).unwrap();
-        on(&h, "b", Some("box")).step(BRANCH).unwrap();
-        on(&h, "c", Some("box")).step(BRANCH).unwrap();
-    }
-    assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(two).state, State::Landed);
-    let after = &claims(&h)[2..];
-    assert!(
-        after.iter().any(|c| c == "c"),
-        "c claimed #{two}'s run: {after:?}"
-    );
-    assert!(!after.iter().any(|c| c == "b"), "{after:?}");
-    assert!(h.w().live_places().contains(&left));
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    on(&h, "b", Some("box")).step(BRANCH).unwrap();
     let held = h.sluice().status(BRANCH).unwrap().failed_releases;
     assert_eq!(held.len(), 1, "{held:?}");
     assert_eq!(held[0].place, left);
+    assert!(held[0].failed.contains(shared::RELEASE_FAILS), "{held:?}");
     assert_eq!(held[0].host.as_deref(), Some("b"));
+    assert_eq!(claims(&h)[2..], ["b"], "b claimed #{two}'s run at once");
+    let claimed = h.w().live_places();
+    assert!(claimed.len() == 2 && claimed.contains(&left), "{claimed:?}");
+
+    for _ in 0..6 {
+        on(&h, "lead", None).step(BRANCH).unwrap();
+        on(&h, "b", Some("box")).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(two).state, State::Landed);
+    // #1's run lapsed under b, so a result of b's is #2's.
+    assert!(
+        h.results().iter().any(|r| r.host.as_deref() == Some("b")),
+        "b reported #{two}'s result: {:?}",
+        h.results()
+    );
+    assert!(h.w().live_places().contains(&left));
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
     assert!(held[0].stopped, "held once its retries are spent: {held:?}");
     assert_eq!(h.releases_of(&left), 4);
 }

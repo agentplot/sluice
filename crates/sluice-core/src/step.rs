@@ -2015,9 +2015,11 @@ impl Sluice<'_> {
     /// 75, 77, 81: what an instance that does not keep `branch` does for
     /// it: shows it is alive, releases the places it made that no claim of
     /// its own holds, reports its runs that ended, and claims open runs it
-    /// may take, earliest first, up to its bound, then starts them. 123:
-    /// while a place it made is left, its release failed or held, it
-    /// claims nothing; the branch goes on through the other hosts.
+    /// may take, earliest first, up to its bound, then starts them. 81,
+    /// 123: it claims once each place it left has been released, gone or
+    /// held, whatever their releases did: a held place bars no claim, and
+    /// keeps its ports and disk beside the places the claims are run in.
+    /// Only a failure to write the records stops its claims for the round.
     fn execute(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(());
@@ -2051,7 +2053,6 @@ impl Sluice<'_> {
             .filter_map(|r| r.place.clone())
             .collect();
         let prefix = format!("sluice/try/{branch}/");
-        let mut left = false;
         for p in self.seams.checkout.made()? {
             if !p.starts_with(&prefix) || held.contains(&p) {
                 continue;
@@ -2062,11 +2063,9 @@ impl Sluice<'_> {
                 .iter()
                 .any(|f| f.place == p && f.stopped);
             if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
-                left = true;
                 continue;
             }
             let outcome = self.release_made(branch, &p, false)?;
-            left |= !outcome.how.freed();
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -2119,7 +2118,6 @@ impl Sluice<'_> {
                     })?;
                     if let Some(p) = place {
                         let outcome = self.release_made(branch, &p, false)?;
-                        left |= !outcome.how.freed();
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }
@@ -2160,7 +2158,6 @@ impl Sluice<'_> {
                     })?;
                     if let Some(p) = place {
                         let outcome = self.release_made(branch, &p, passed)?;
-                        left |= !outcome.how.freed();
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }
@@ -2170,13 +2167,10 @@ impl Sluice<'_> {
         }
 
         // 75, 76, 71: claims, earliest first, up to this host's bound, of
-        // candidates fetched from the remote (82); 81: none while a place
-        // this host made is left.
+        // candidates fetched from the remote (82); 81, 123: whatever the
+        // releases above did.
         self.seams.state.fetch_candidates(branch)?;
-        let mut room = match left {
-            true => 0,
-            false => self.capacity(&self.read_line(branch)?)?,
-        };
+        let mut room = self.capacity(&self.read_line(branch)?)?;
         while room > 0 {
             let claimed = self.update(branch, |l| {
                 let now = self.now();
