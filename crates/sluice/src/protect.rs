@@ -259,9 +259,34 @@ fn command_of(pid: i32) -> Option<String> {
     (!args.is_empty()).then(|| args.join(" "))
 }
 
+/// Whether deleting `branch`, at `cur`, leaves it at `cur`: git's
+/// `pack-refs` writes the branch into `packed-refs` at the value it holds,
+/// then prunes the loose file in a transaction that leaves `packed-refs`
+/// alone. Every other deletion locks `packed-refs` before the hook runs,
+/// to take the branch out of it.
+fn pruned(branch: &str, cur: &Rev) -> Result<bool> {
+    let common = PathBuf::from(git(
+        &std::env::current_dir()?,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?);
+    if common.join("packed-refs.lock").exists() {
+        return Ok(false);
+    }
+    let packed = match std::fs::read_to_string(common.join("packed-refs")) {
+        Ok(packed) => packed,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    let name = format!("refs/heads/{branch}");
+    Ok(packed
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .any(|(id, n)| n == name && id == cur.as_str()))
+}
+
 /// `sluice hook reference-transaction <state>`: refuse, in `prepared`,
-/// any update to a protected branch that is not a creation or a no-op.
-/// Returns the exit: 0 allows, 1 refuses.
+/// any update to a protected branch that is not a creation or leaves its
+/// value as it was. Returns the exit: 0 allows, 1 refuses.
 pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
     // Symbolic refs are resolved only in `prepared`: in `preparing` a
     // commit on a checked-out branch arrives as HEAD.
@@ -292,7 +317,7 @@ pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
         }
         let why = if deleting {
             let needing = s.needing(branch)?;
-            if needing.is_empty() {
+            if needing.is_empty() || pruned(branch, &cur)? {
                 continue;
             }
             let ids: Vec<String> = needing.iter().map(|i| format!("#{i}")).collect();

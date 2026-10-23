@@ -460,6 +460,52 @@ test("the wake can be turned off", { options: { wake: false } }, async ($, on) =
   expect(seen.toasts).toContain("sluice: #13 was blamed");
 });
 
+test("/sluice opens the pane to close on Escape, and closes it when open", async ($, on) => {
+  const seen = {
+    prompts: [] as string[],
+    toasts: [] as string[],
+    status: [] as (string | undefined)[],
+  };
+  host(on, [overview()], seen);
+  // The engine's record of the open panes.
+  const open = new Set<string>();
+  const opens: { closeOnEscape?: true }[] = [];
+  on("ui.open", ($, e) => {
+    opens.push(e);
+    open.add(e.id);
+    return { value: { isPlaced: true as const } };
+  });
+  on("ui.close", ($, e) => {
+    open.delete(e.id);
+    return { value: undefined };
+  });
+  on("ui.panes", () => ({
+    value: [...open].map((id) => ({
+      id,
+      title: id,
+      isShown: true,
+      isFocused: false,
+      isPlaced: true,
+    })),
+  }));
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  const slash = {
+    command: "sluice",
+    args: "",
+    origin: { kind: "composer" as const },
+    presentation: { isFullscreen: true, columns: 200 },
+  };
+
+  expect((await $.command.run(slash)).text).toBe("sluice's queue is open in a pane.");
+  expect([...open]).toEqual(["sluice"]);
+  expect(opens.map((o) => o.closeOnEscape)).toEqual([true]);
+  expect((await $.command.run(slash)).text).toBe("sluice's pane is closed.");
+  expect([...open]).toEqual([]);
+  await $.command.run(slash);
+  expect([...open]).toEqual(["sluice"]);
+  expect(opens.length).toBe(2);
+});
+
 test("a failure opens in place, folds, and moves no one", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);

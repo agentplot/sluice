@@ -1,5 +1,5 @@
 ---
-number: 26
+number: 46
 title: Status reads a branch where its records last saw it
 status: accepted
 date: 2026-10-16

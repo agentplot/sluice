@@ -788,7 +788,7 @@ fn status_lists_the_queue() {
 
 /// `status <branch>` reads the branch at the revision its records last
 /// saw, as the overview does, and asks the branch itself nothing: a
-/// commit made since is shown by the next round (ADR 0026).
+/// commit made since is shown by the next round (ADR 0046).
 #[test]
 fn status_reads_the_revision_the_records_saw() {
     let f = setup();
