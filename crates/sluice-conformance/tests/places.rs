@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, State};
+use sluice_core::release::Releasing;
 use sluice_core::{Peer, Sluice};
 
 /// satisfies: 25, 31, 32, 33, 34, 35
@@ -258,4 +259,90 @@ fn a_host_whose_leftover_checkout_will_not_release_claims_nothing() {
     assert_eq!(held[0].host.as_deref(), Some("b"));
     assert!(held[0].stopped, "held once its retries are spent: {held:?}");
     assert_eq!(h.releases_of(&left), 4);
+}
+
+/// A submission landed while every release fails, and rounds until its
+/// checkout is held; the checkout's name.
+fn held_checkout(h: &Harness) -> String {
+    h.release_fails(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    let place = h.made_places()[0].clone();
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert!(
+        held.iter().any(|f| f.place == place && f.stopped),
+        "{held:?}"
+    );
+    place
+}
+
+/// satisfies: 123: the operator releases a held checkout by its name,
+/// running its release once more whatever its tries: still failing, it
+/// stays held with what failed; once it succeeds, it is gone, its
+/// branch's state no longer lists it, and the log holds `released`
+#[test]
+fn a_held_checkout_is_released_by_its_name() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let s = h.sluice();
+    // The operator's release holds the branch's lock, as `sluice release`
+    // takes it.
+    let _lock = s.seams().state.wait_lock(BRANCH).unwrap();
+    let again = s.release_held(BRANCH, &place, false).unwrap().unwrap();
+    assert!(
+        matches!(&again.how, Releasing::Held { failed, tries: 5 } if failed.contains(shared::RELEASE_FAILS)),
+        "{again:?}"
+    );
+    assert_eq!(h.releases_of(&place), 5);
+    assert!(h.w().live_places().contains(&place));
+    let held = s.status(BRANCH).unwrap().failed_releases;
+    assert_eq!((held[0].tries, held[0].stopped), (5, true), "{held:?}");
+
+    h.release_fails(false);
+    let done = s.release_held(BRANCH, &place, false).unwrap().unwrap();
+    assert_eq!(done.how, Releasing::Released);
+    assert!(!h.w().live_places().contains(&place));
+    assert!(s.status(BRANCH).unwrap().failed_releases.is_empty());
+    assert!(matches!(
+        h.events().last(),
+        Some(Event::Released { place: p, accepted: None, .. }) if *p == place
+    ));
+    // Nothing more of that name to release.
+    assert_eq!(s.release_held(BRANCH, &place, false).unwrap(), None);
+}
+
+/// satisfies: 123: the operator accepts a held checkout's failure: it is
+/// freed with no release run, its branch's state no longer lists it, and
+/// the log holds `released` with the failure accepted
+#[test]
+fn a_held_checkouts_failure_is_accepted() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let s = h.sluice();
+    // The operator's release holds the branch's lock, as `sluice release`
+    // takes it.
+    let _lock = s.seams().state.wait_lock(BRANCH).unwrap();
+    let accepted = s.release_held(BRANCH, &place, true).unwrap().unwrap();
+    assert!(
+        matches!(&accepted.how, Releasing::Accepted(Some(f)) if f.contains(shared::RELEASE_FAILS)),
+        "{accepted:?}"
+    );
+    assert_eq!(h.releases_of(&place), 4, "its release ran again");
+    assert_eq!(h.w().freed_places(), vec![place.clone()]);
+    assert!(!h.w().live_places().contains(&place));
+    assert!(s.status(BRANCH).unwrap().failed_releases.is_empty());
+    assert!(matches!(
+        h.events().last(),
+        Some(Event::Released { place: p, accepted: Some(f), .. })
+            if *p == place && f.contains(shared::RELEASE_FAILS)
+    ));
+    assert_eq!(
+        s.release_held(BRANCH, "sluice/try/bolt/x/99", true)
+            .unwrap(),
+        None
+    );
 }
