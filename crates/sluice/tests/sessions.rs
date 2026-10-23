@@ -256,13 +256,15 @@ fn the_check_seam_counts_the_hosts_session_runs() {
             systems: None,
         },
     )
-    .with_sessions(dir.path().join("sessions"));
-    assert_eq!(checks.sessions().unwrap(), 0);
+    .with_sessions(dir.path().join("sessions"))
+    .with_running(dir.path().join("running"));
+    let sessions = || checks.running().unwrap().sessions;
+    assert_eq!(sessions(), 0);
     let (run_dir, a) = supervisor(dir.path(), "run-a");
     let s = checks.host_sessions().unwrap();
     s.begin(&s.lock().unwrap(), &run("/work/a", &run_dir))
         .unwrap();
-    assert_eq!(checks.sessions().unwrap(), 1);
+    assert_eq!(sessions(), 1);
     drop(a);
-    assert_eq!(checks.sessions().unwrap(), 0);
+    assert_eq!(sessions(), 0);
 }

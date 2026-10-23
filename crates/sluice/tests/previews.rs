@@ -101,7 +101,7 @@ fn a_preview_returns_its_addresses_once_its_command_starts() {
     );
     assert_eq!(req.place.env["SLUICE_NAME_WEB"], p.names["SLUICE_NAME_WEB"]);
     // 102: counted while it runs.
-    assert_eq!(sluice_seams::Tests::sessions(&f.tests).unwrap(), 1);
+    assert_eq!(sluice_seams::Tests::running(&f.tests).unwrap().sessions, 1);
     f.world.complete(&rev);
     let (_, out) = sluice(&f, &["previews"]);
     assert!(
@@ -109,7 +109,7 @@ fn a_preview_returns_its_addresses_once_its_command_starts() {
         "{out}"
     );
     assert_eq!(
-        sluice_seams::Tests::sessions(&f.tests).unwrap(),
+        sluice_seams::Tests::running(&f.tests).unwrap().sessions,
         0,
         "an ended command counts against nothing"
     );

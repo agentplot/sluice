@@ -1584,7 +1584,7 @@ fn exec_runs_the_affected_checks_against_the_branch() {
     assert_eq!(f.world.observed().len(), 1, "only the affected check ran");
     assert_eq!(f.world.adopted_places(), ["session/unit/a"]);
     assert_eq!(
-        sluice_seams::Tests::sessions(&f.tests).unwrap(),
+        sluice_seams::Tests::running(&f.tests).unwrap().sessions,
         0,
         "the run is no longer counted"
     );

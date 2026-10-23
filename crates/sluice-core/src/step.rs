@@ -1471,7 +1471,7 @@ impl Sluice<'_> {
     /// `line` as this step has it, and less the host's session runs
     /// (session-runs-1 clause 89).
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let sessions = self.seams.tests.sessions()?;
+        let sessions = self.seams.tests.running()?.sessions;
         let mut under = sessions + self.held_here(line);
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
@@ -1503,7 +1503,7 @@ impl Sluice<'_> {
         Ok(Room {
             bound: self.seams.tests.bound()?,
             queue,
-            sessions: self.seams.tests.sessions()?,
+            sessions: self.seams.tests.running()?.sessions,
             reserve: reserved,
         })
     }

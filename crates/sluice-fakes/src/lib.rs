@@ -18,7 +18,7 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard, HostRun,
     LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place, PreviewPlace,
-    Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Session,
+    Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running, Session,
     SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult,
     Tests, Written,
 };
@@ -63,6 +63,8 @@ struct TaskDef {
 #[derive(Clone, Debug)]
 struct RunState {
     request: RunRequest,
+    /// The host that started it, whose count it is in (71).
+    host: String,
     complete: bool,
     lost: bool,
     killed: bool,
@@ -72,6 +74,14 @@ struct RunState {
 impl RunState {
     fn live(&self) -> bool {
         !self.killed && !self.lost && self.report.is_none()
+    }
+
+    /// A submission's run, as the host counts it: neither a session's nor
+    /// a preview's, whose runs `sluice exec` and `sluice preview` record
+    /// beside the session runs.
+    fn queue(&self) -> bool {
+        let place = &self.request.place.name;
+        !place.starts_with("session/") && !place.starts_with("preview/")
     }
 }
 
@@ -1226,8 +1236,10 @@ impl Tests for FakeTests {
             bail!("crashed before starting a run in {}", request.place.name);
         }
         let complete = !inner.hold;
+        let host = inner.host.clone();
         inner.runs.push(RunState {
             request: request.clone(),
+            host,
             complete,
             lost: false,
             killed: false,
@@ -1298,15 +1310,18 @@ impl Tests for FakeTests {
         })
     }
 
-    fn sessions(&self) -> Result<usize> {
-        Ok(self
-            .0
-             .0
-            .borrow()
-            .sessions
-            .values()
-            .filter(|(r, _)| *r)
-            .count())
+    /// The submissions' runs this host started that still go, and the
+    /// session runs.
+    fn running(&self) -> Result<Running> {
+        let inner = self.0 .0.borrow();
+        Ok(Running {
+            queue: inner
+                .runs
+                .iter()
+                .filter(|r| r.live() && r.queue() && r.host == inner.host)
+                .count(),
+            sessions: inner.sessions.values().filter(|(r, _)| *r).count(),
+        })
     }
 
     fn session_runs(&self) -> Result<Vec<HostRun>> {
@@ -1985,13 +2000,15 @@ mod tests {
     #[test]
     fn session_runs_are_counted_while_they_run() {
         let f = Fakes::new();
-        assert_eq!(f.tests.sessions().unwrap(), 0);
+        let sessions = || f.tests.running().unwrap().sessions;
+        assert_eq!(sessions(), 0);
         f.world.session_run("/w/a", true);
         f.world.session_run("/w/b", true);
         f.world.session_run("/w/gone", false);
-        assert_eq!(f.tests.sessions().unwrap(), 2);
+        assert_eq!(sessions(), 2);
         f.world.kill_session("/w/a");
-        assert_eq!(f.tests.sessions().unwrap(), 1);
+        assert_eq!(sessions(), 1);
+        assert_eq!(f.tests.running().unwrap().queue, 0);
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {

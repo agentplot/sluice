@@ -49,10 +49,12 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, Enforced, HostRun, Limits, Network, NotRun, Outcome, Place, Progress, RunHandle,
-    RunReport, RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult, Tests,
+    RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult,
+    Tests,
 };
 
 use super::moon::Moon;
+use crate::host_count::HostCount;
 use crate::instance::Instance;
 use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
 
@@ -163,6 +165,8 @@ pub struct Checks {
     pool: Option<Box<dyn Launcher>>,
     /// The host's session runs, when not the host's own directory.
     sessions: Option<Sessions>,
+    /// The host's running checks, when not the host's own directory.
+    running: Option<HostCount>,
 }
 
 impl Checks {
@@ -172,6 +176,7 @@ impl Checks {
             runs: Runs::new(common, program),
             instance,
             sessions: None,
+            running: None,
             pool: None,
         }
     }
@@ -188,12 +193,27 @@ impl Checks {
         self
     }
 
-    /// The host's session runs: the count a session run is started under,
-    /// with their lock (session-runs-1 clauses 89, 91).
+    /// The same profile, counting the host's running checks under `dir`.
+    pub fn with_running(mut self, dir: PathBuf) -> Self {
+        self.running = Some(HostCount::new(dir));
+        self
+    }
+
+    /// The host's session runs, with what each `sluice exec` keeps of its
+    /// run (session-runs-1 clauses 89, 91; ADR 0035).
     pub fn host_sessions(&self) -> Result<Sessions> {
         match &self.sessions {
             Some(s) => Ok(s.clone()),
             None => Sessions::host(),
+        }
+    }
+
+    /// The host's running checks, every repository's: the count every run
+    /// is admitted against (71).
+    pub fn host_count(&self) -> Result<HostCount> {
+        match &self.running {
+            Some(c) => Ok(c.clone()),
+            None => HostCount::host(),
         }
     }
 
@@ -955,8 +975,11 @@ impl Tests for Checks {
         })
     }
 
-    fn sessions(&self) -> Result<usize> {
-        Ok(self.host_sessions()?.running()?.len())
+    fn running(&self) -> Result<Running> {
+        Ok(Running {
+            queue: self.host_count()?.running()?.queue,
+            sessions: self.host_sessions()?.running()?.len(),
+        })
     }
 
     /// A command runner's one key is sluice's own; a moon task's is
