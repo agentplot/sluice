@@ -268,12 +268,15 @@ failed of its release:
 `release_failed` is logged for each try of a release that failed, with
 what failed and how many tries so far; `held` is true on the try after
 which it is tried no more. `gone` is logged when a run or round frees a
-checkout whose directory no longer exists, with nothing run in its name,
-and for a worktree also names the worktree:
+checkout whose directory no longer exists, once it has run the release
+command its last run stored, once, from its scratch directory. `ran`
+says whether its runs stored one to run, and `failed` what it printed
+when it failed; the checkout is freed either way and never tried again.
+For a worktree it also names the worktree:
 
 ```json
 {"schema":"sluice/log@1","event":"release_failed","place":"sluice/try/main/48","failed":"…: usage: scripts/preview up","tries":4,"held":true}
-{"schema":"sluice/log@1","event":"gone","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c"}
+{"schema":"sluice/log@1","event":"gone","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c","ran":true}
 ```
 
 While a checkout's release is failing, `branch.json` keeps it in

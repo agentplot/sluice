@@ -173,19 +173,28 @@ warning: /home/me/repo/main has main checked out: sluice moves main under it and
 ```
 
 A worktree removed without a release is no agent's. The next `sluice
-exec` on the host, or the next round, frees what sluice held for it:
-its runs end and its ports are free. Nothing runs in its name, neither
-the toolchain nor the release command, since the directory they would
-run in is gone; what its runs handed off is left for a person to find
-([ADR 0047](/sluice/decisions/0047/)). That command says so first, and
-the branch's state logs it `gone`, once:
+exec` on the host, or the next round, releases it from what sluice
+holds for it. The release command its last run stored runs once, in its
+scratch directory, with its ports and the environment its runs had.
+Neither the toolchain nor the policy is read again, since the directory
+they would run in is gone ([ADR 0047](/sluice/decisions/0047/)).
+Whatever that command does, the worktree's runs end, its ports are free,
+and it is never tried again. A release that tears a stack down by name
+or port still does. One that reads files from the worktree finds none
+and fails, and what it would have removed is left for a person to find.
+That command says so first. The branch's state logs it `gone`, with how
+its release went, once:
 
 ```console
 $ sluice exec bolt/concurrent-units
-freed /home/me/wt/unit-c: it no longer exists, so nothing was run; its runs ended, its ports free
+freed /home/me/wt/unit-c: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free
 running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
 …
 ```
+
+When its release fails, sluice says `its release failed once from its
+scratch directory:` and what it printed; when its runs stored none, `it
+had no release to run`.
 
 Until then, `sluice status` lists it as removed.
 
@@ -234,11 +243,13 @@ and stays held if it fails again. `sluice release sluice/try/main/48
 --accept-failure` gives up on it: its runs end, the checkout sluice made
 is removed and its ports are free, and the release command is not run, so
 whatever it would have removed is left. A checkout is released on the
-host that made it. A host holding one claims no runs of its branch until
-it is released, and the branch goes on through the other hosts.
+host that made it. A held checkout doesn't keep its host from claiming:
+the host claims runs of its branch as any other does, in other
+checkouts. The held one keeps its ports and disk until it is released.
 
-A checkout whose directory someone deleted is freed at once, with
-nothing run, and logged `gone`.
+A checkout whose directory someone deleted, held or not, has the release
+its run stored run once from its scratch directory by the next round, is
+freed whatever that did, and is logged `gone`.
 
 ## `sluice overview`
 
@@ -389,8 +400,10 @@ no submission waits on it.
 
 `sluice previews` lists the host's previews the same way, as a list
 with `--json`. It first releases any preview whose command failed, and
-frees any whose checkout someone removed by hand, running nothing in
-its name. `sluice release <preview>` releases one: its command's run
+any whose checkout someone removed by hand. For the latter, the release
+its command's run stored runs once in its scratch directory, with its
+ports and names; the preview is freed whatever that did, and never
+tried again. `sluice release <preview>` releases one: its command's run
 ends, the release command runs in the checkout, the checkout is removed
 and its ports and names are free. No round, step or landing ever
 releases a preview that is up. A preview whose release command fails is
@@ -697,7 +710,7 @@ else they say goes to stderr:
 
 | Command | Document |
 |---|---|
-| `sluice step` | `{"branch","outcome","released","previews_released","releases"}`: `outcome` is `stepped`, `busy`, `led`, `contended` or `held`; `released` and `previews_released` name the worktrees and previews the round freed because they were gone or released because their command failed, and `releases` each combination's checkout whose release failed, was held or found gone, with `release` (`failed`, `held` or `gone`), `failed` and `tries`. A held round adds `held`, with `read`, `lacks` and `since` |
+| `sluice step` | `{"branch","outcome","released","previews_released","releases"}`: `outcome` is `stepped`, `busy`, `led`, `contended` or `held`; `released` and `previews_released` name the worktrees and previews the round freed because they were gone or released because their command failed, and `releases` each combination's checkout whose release failed, was held or found gone, with `release` (`failed`, `held` or `gone`), `failed` and `tries`. A worktree or checkout found gone carries `ran`, whether its stored release ran, and `failed`, what it printed when it failed; a preview found gone carries them under `gone`. A held round adds `held`, with `read`, `lacks` and `since` |
 | `sluice branch` | `{"branch","created","from"}`, `{"branch","deleted","into"}` or `{"branch","accepted","lacked"}` |
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
