@@ -119,4 +119,14 @@ site/src/content/docs/reference/commands.md
 site/src/content/docs/reference/state.md
 site/src/content/docs/guides/github.md
 README.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/.openspec.yaml
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/design.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/proposal.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/specs/branch-lifecycle/spec.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/specs/branch-reading/spec.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/specs/remote-branch/spec.md
+openspec/changes/archive/2026-10-23-a-branch-read-past-its-landings-is-refused/tasks.md
+openspec/specs/branch-lifecycle/spec.md
+openspec/specs/branch-reading/spec.md
+openspec/specs/remote-branch/spec.md
 ```
