@@ -566,6 +566,87 @@ fn blamed_and_left_alone() {
     assert!(!r.contains("it broke"), "{r}");
 }
 
+/// A pull request opened by hand, approved and submitted, whose
+/// submission the operator withdraws with `sluice withdraw`; returns its
+/// number and head.
+fn withdrawn_by_hand(g: &OnGitHub, name: &str) -> (u64, String) {
+    let (n, head) = g.by_hand(name, &[("slow", Some("x\n"))], false);
+    g.gh.forge.review(n, "reviewer", "APPROVED", &head).unwrap();
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().unwrap().to_string();
+    let out = g.sluice(&["withdraw", &id, "--as", "operator"]);
+    assert!(out.status.success(), "{}", text(&out));
+    (n, head)
+}
+
+/// Withdrawn by the operator, opened by hand (120, C.5): its conditions
+/// holding, no later round submits it; its check names the operator and
+/// how to bring it back, and no comment is left.
+#[test]
+fn withdrawn_by_the_operator_opened_by_hand() {
+    let g = OnGitHub::new("pr-rests", "reviews = 1");
+    let (n, head) = withdrawn_by_hand(&g, "unit/rests");
+    let subs = g.of_after(n, 4);
+    assert_eq!(subs.len(), 1, "never submitted again: {subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn");
+    assert_eq!(subs[0]["withdrawn"]["by"], "operator");
+    assert!(!g.pull_from("unit/rests").draft);
+    let (status, title, summary) = g.posted(&head).unwrap();
+    assert_eq!(
+        (status, title.as_str()),
+        (Status::Queued, "waiting: withdrawn by the operator")
+    );
+    assert!(
+        summary.contains("by the operator")
+            && summary.contains("New commits, or marking it a draft and then ready for review")
+            && summary.contains("Forecast:"),
+        "{summary}"
+    );
+    assert!(
+        !g.comments(n).iter().any(|c| c.contains("told=")),
+        "{:?}",
+        g.comments(n)
+    );
+}
+
+/// Withdrawn by the operator, then retried by its author: marked draft and
+/// then ready, with no new commits, the same head is submitted again.
+#[test]
+fn withdrawn_by_the_operator_then_retried_by_its_author() {
+    let g = OnGitHub::new("pr-rests-retried", "reviews = 1");
+    let (n, head) = withdrawn_by_hand(&g, "unit/rests-retried");
+    assert_eq!(g.of_after(n, 2).len(), 1, "{:?}", g.subs());
+    // The ready-for-review event must be later than the withdrawal, to the
+    // second GitHub and the records keep.
+    std::thread::sleep(Duration::from_millis(1100));
+    g.gh.forge.set_draft(n, true).unwrap();
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "a draft waits: {:?}", g.subs());
+    g.gh.forge.set_draft(n, false).unwrap();
+    let subs = g.of_after(n, 1);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], head.as_str());
+    assert_ne!(subs[1]["state"], "withdrawn", "{subs:?}");
+}
+
+/// Withdrawn by the operator, then a new commit: the new head is
+/// submitted once its conditions hold on it.
+#[test]
+fn withdrawn_by_the_operator_then_a_new_commit() {
+    let g = OnGitHub::new("pr-rests-new-head", "reviews = 1");
+    let (n, _) = withdrawn_by_hand(&g, "unit/rests-moved");
+    assert_eq!(g.of_after(n, 2).len(), 1, "{:?}", g.subs());
+    let new = g.push_more("unit/rests-moved", "m.txt");
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "waits for its review: {:?}", g.subs());
+    assert_eq!(g.posted(&new).unwrap().1, "waiting: needs 1 review");
+    g.gh.forge.review(n, "reviewer", "APPROVED", &new).unwrap();
+    let subs = g.of_after(n, 1);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], new.as_str());
+    assert_ne!(subs[1]["state"], "withdrawn", "{subs:?}");
+}
+
 /// The crew #127/#128 case (120, S56): a pull request `wt submit` opened
 /// is queued, and a commit no submit pushed moves its head. Its
 /// submission is withdrawn, sluice marks it a draft, and no round submits
