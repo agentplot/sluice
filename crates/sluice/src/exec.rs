@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use sluice_core::overview::OrderFrom;
+use sluice_core::release::{ReleaseOutcome, Releasing};
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Forecast, Sluice};
 use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress};
@@ -117,6 +118,54 @@ pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
                 "freed": a.freed,
                 "error": a.error,
             })
+        })
+        .collect()
+}
+
+/// 123: say what a round did with each combination's checkout whose
+/// release failed, was held, or whose working copy was gone. A held
+/// checkout is said once, on the round that held it; the rounds after try
+/// it no more and say nothing of it.
+pub fn tell_releases(out: &mut dyn Write, json: bool, releases: &[ReleaseOutcome]) -> Result<()> {
+    for r in releases {
+        let name = &r.place;
+        let text = match &r.how {
+            Releasing::Released | Releasing::Accepted(_) => continue,
+            Releasing::Gone => format!(
+                "freed {name}: it no longer exists, so nothing was run; its runs ended, its ports free"
+            ),
+            Releasing::Failed { failed, tries, of } => {
+                format!("could not release {name} (try {tries} of {of}): {failed}")
+            }
+            Releasing::Held { failed, tries } => format!(
+                "{name} is held: its release failed {tries} times: {failed}. \
+                 `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+            ),
+        };
+        say(out, json, &text)?;
+    }
+    Ok(())
+}
+
+/// What a round did with the checkouts whose release failed, was held or
+/// found gone, as a JSON document lists it.
+pub fn releases_json(releases: &[ReleaseOutcome]) -> Vec<serde_json::Value> {
+    releases
+        .iter()
+        .filter_map(|r| {
+            let (how, failed, tries) = match &r.how {
+                Releasing::Released | Releasing::Accepted(_) => return None,
+                Releasing::Gone => ("gone", None, None),
+                Releasing::Failed { failed, tries, .. } => ("failed", Some(failed), Some(tries)),
+                Releasing::Held { failed, tries } => ("held", Some(failed), Some(tries)),
+            };
+            Some(serde_json::json!({
+                "place": r.place,
+                "branch": r.branch,
+                "release": how,
+                "failed": failed,
+                "tries": tries,
+            }))
         })
         .collect()
 }

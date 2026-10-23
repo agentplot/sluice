@@ -1483,6 +1483,7 @@ fn step_under_json() {
         json(&out),
         serde_json::json!({
             "branch": BRANCH, "outcome": "stepped", "released": [], "previews_released": [],
+            "releases": [],
         })
     );
     assert_eq!(
@@ -2988,4 +2989,159 @@ fn release_accepting_the_failure_frees_a_worktrees_place() {
         )),
         "{log:?}"
     );
+}
+
+/// The fakes' setup with `release_retries = 1`.
+fn setup_one_retry() -> Fakes {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!("{POLICY}release_retries = 1\n"),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f
+}
+
+/// 123: a waiting submit says each failed try of a checkout's release
+/// and the hold, once, on the round that held it; the waits after say
+/// nothing of it. `sluice status <branch>` lists it held with what
+/// failed and its tries, and how to release it; `--json` as `held`.
+#[test]
+fn a_waiting_submit_says_a_held_checkout_once() {
+    let f = setup_one_retry();
+    let first = format!("sluice/try/{BRANCH}/1");
+    f.world.place_release_fails(&first, Some(RELEASE_FAILS));
+    let mut said = Vec::new();
+    for (unit, file) in [("unit/a", "p2"), ("unit/b", "p3"), ("unit/c", "p4")] {
+        work(&f, unit, unit, &[("plugin/lib/plan.py", Some(file))]);
+        let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", unit]);
+        assert_eq!(code, LANDED, "{out}");
+        said.push(out);
+    }
+    let tried = |out: &str| {
+        out.lines()
+            .filter(|l| l.starts_with(&format!("could not release {first} (try 1 of 2): ")))
+            .count()
+    };
+    let held = |out: &str| {
+        out.lines()
+            .filter(|l| l.starts_with(&format!("{first} is held: its release failed 2 times: ")))
+            .count()
+    };
+    assert_eq!(tried(&said[0]), 1, "{}", said[0]);
+    assert!(said[0].contains(RELEASE_FAILS), "{}", said[0]);
+    assert_eq!(held(&said[1]), 1, "{}", said[1]);
+    assert!(
+        said[1].contains(&format!(
+            "`sluice release {first} --accept-failure` frees it without"
+        )),
+        "{}",
+        said[1]
+    );
+    assert!(!said[2].contains(&first), "{}", said[2]);
+    assert_eq!(
+        f.world
+            .release_attempts()
+            .iter()
+            .filter(|p| **p == first)
+            .count(),
+        2
+    );
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("held checkouts, whose release failed:\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("  {first}  2 tries, held, last at ")),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "    | the release command of {first} ended exit status: 2: {RELEASE_FAILS}"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("sluice release <checkout> --accept-failure"),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let doc = json(&out);
+    let held = doc["held"].as_array().expect("held is listed");
+    assert_eq!(held.len(), 1, "{doc}");
+    assert_eq!(held[0]["place"], first);
+    assert_eq!(held[0]["tries"], 2);
+    assert_eq!(held[0]["stopped"], true);
+    assert!(held[0]["failed"].as_str().unwrap().contains(RELEASE_FAILS));
+    assert!(held[0]["at"].is_string());
+}
+
+/// 97, 123: a waiting submit says once that a removed worktree was freed
+/// with nothing run; the waits after say nothing of it.
+#[test]
+fn a_waiting_submit_says_a_removed_worktree_was_freed_once() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.remove_worktree("unit/a");
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(out.lines().filter(|l| *l == GONE).count(), 1, "{out}");
+    work(
+        &f,
+        "unit/c",
+        "agent-c",
+        &[("plugin/lib/plan.py", Some("p4"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/c"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!out.contains("unit/a"), "{out}");
+    assert!(f.world.session_releases().is_empty());
+}
+
+/// 123: `sluice status` marks a worktree whose release failed, with what
+/// failed, until it is released or its failure accepted.
+#[test]
+fn status_marks_a_worktree_whose_release_failed() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(&f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.release_fails(Some(RELEASE_FAILS));
+    release(&f, &["--worktree", "unit/a"]);
+    let (_, out) = sluice(&f, &["status"]);
+    assert!(
+        out.contains("    its release failed (1 try): sluice release runs it again"),
+        "{out}"
+    );
+    assert!(out.contains(RELEASE_FAILS), "{out}");
+    let (_, out) = sluice(&f, &["status", "--json"]);
+    let doc = json(&out);
+    let failed = &doc["worktrees"][0]["release_failed"];
+    assert_eq!(failed["tries"], 1, "{doc}");
+    assert_eq!(failed["stopped"], true, "{doc}");
 }

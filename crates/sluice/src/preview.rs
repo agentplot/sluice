@@ -95,6 +95,9 @@ pub(crate) fn preview_json(v: &PreviewView) -> serde_json::Value {
     if let PreviewState::Failed(output) = &v.state {
         doc["output"] = output.clone().into();
     }
+    if let Some(f) = &p.release_failed {
+        doc["release_failed"] = serde_json::json!(f);
+    }
     doc
 }
 
@@ -119,6 +122,22 @@ fn write_preview(v: &PreviewView, out: &mut dyn Write) -> Result<()> {
     }
     if let PreviewState::Failed(output) = &v.state {
         for line in output.trim_end().lines() {
+            writeln!(out, "  | {line}")?;
+        }
+    }
+    // 123: kept until it is released by name, or its failure accepted.
+    if let Some(f) = &p.release_failed {
+        let tries = match f.tries {
+            1 => "1 try".to_string(),
+            n => format!("{n} tries"),
+        };
+        let held = if f.stopped { ", held" } else { "" };
+        writeln!(
+            out,
+            "  its release failed ({tries}{held}): sluice release {} runs it again, with --accept-failure frees it without",
+            p.name
+        )?;
+        for line in f.failed.trim_end().lines() {
             writeln!(out, "  | {line}")?;
         }
     }

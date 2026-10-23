@@ -814,6 +814,7 @@ pub fn run(
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, json, &round.released)?;
             preview::tell_dropped(out, json, &round.previews)?;
+            exec::tell_releases(out, json, &round.releases)?;
             if json {
                 let outcome = match round.step {
                     Step::Stepped => "stepped",
@@ -829,6 +830,7 @@ pub fn run(
                         "outcome": outcome,
                         "released": exec::abandoned_json(&round.released),
                         "previews_released": preview::dropped_json(&round.previews),
+                        "releases": exec::releases_json(&round.releases),
                     })
                 )?;
                 return Ok(0);
@@ -865,6 +867,7 @@ pub fn run(
                         let round = s.round(&branch)?;
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
+                        exec::tell_releases(out, false, &round.releases)?;
                     }
                 }
                 n += 1;
@@ -1583,7 +1586,10 @@ fn wait_on(
             intake(pulls, s.seams(), waiting.clock, &branch);
         }
         match s.round(&branch) {
-            Ok(round) => exec::tell_abandoned(out, waiting.json, &round.released)?,
+            Ok(round) => {
+                exec::tell_abandoned(out, waiting.json, &round.released)?;
+                exec::tell_releases(out, waiting.json, &round.releases)?;
+            }
             Err(e) => {
                 // Ctrl-C reaches the tools a round runs in the foreground.
                 if INTERRUPTED.load(Ordering::SeqCst) {
@@ -2111,7 +2117,10 @@ fn submit_pull(
             }
         }
         match s.round(branch) {
-            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Ok(round) => {
+                exec::tell_abandoned(out, json, &round.released)?;
+                exec::tell_releases(out, json, &round.releases)?;
+            }
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
@@ -2250,6 +2259,7 @@ fn write_status(
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
     }
+    write_failed_releases(&status.failed_releases, out)?;
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -2278,7 +2288,62 @@ fn write_status(
     Ok(())
 }
 
+/// 123: the branch's checkouts whose release failed, each with how many
+/// tries and what failed, and how to release one or give up on it.
+fn write_failed_releases(
+    failed: &[sluice_core::records::FailedRelease],
+    out: &mut dyn Write,
+) -> Result<()> {
+    if failed.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "held checkouts, whose release failed:")?;
+    let w = failed.iter().map(|f| f.place.len()).max().unwrap_or(0);
+    for f in failed {
+        let tries = match f.tries {
+            1 => "1 try".to_string(),
+            n => format!("{n} tries"),
+        };
+        let now = match f.stopped {
+            true => "held",
+            false => "tried again by the next round",
+        };
+        let host = f
+            .host
+            .as_ref()
+            .map_or(String::new(), |h| format!(", on {h}"));
+        writeln!(
+            out,
+            "  {:<w$}  {tries}, {now}{host}, last at {}",
+            f.place, f.at
+        )?;
+        for line in f.failed.trim_end().lines() {
+            writeln!(out, "    | {line}")?;
+        }
+    }
+    writeln!(
+        out,
+        "release one with: sluice release <checkout>, or without its release command: \
+         sluice release <checkout> --accept-failure"
+    )?;
+    Ok(())
+}
+
 fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value {
+    let held: Vec<serde_json::Value> = status
+        .failed_releases
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "place": f.place,
+                "failed": f.failed,
+                "tries": f.tries,
+                "at": f.at,
+                "stopped": f.stopped,
+                "host": f.host,
+            })
+        })
+        .collect();
     serde_json::json!({
         "branch": status.branch,
         "at": status.at,
@@ -2289,6 +2354,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "submissions": submissions,
         "warnings": status.warnings,
         "stale": status.stale,
+        "held": held,
     })
 }
 
@@ -2395,6 +2461,21 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
             );
         }
         writeln!(out, "{}", line.trim_end())?;
+        // 123: held until its release runs again, or its failure is
+        // accepted.
+        if let Some(f) = &p.release_failed {
+            writeln!(
+                out,
+                "    its release failed ({}): sluice release runs it again, sluice release --accept-failure frees it without",
+                match f.tries {
+                    1 => "1 try".to_string(),
+                    n => format!("{n} tries"),
+                }
+            )?;
+            for l in f.failed.trim_end().lines() {
+                writeln!(out, "    | {l}")?;
+            }
+        }
     }
     writeln!(
         out,
@@ -2478,6 +2559,9 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
     });
     if let Some(r) = &p.last_result {
         v["last_result"] = serde_json::json!(r);
+    }
+    if let Some(f) = &p.release_failed {
+        v["release_failed"] = serde_json::json!(f);
     }
     v
 }
