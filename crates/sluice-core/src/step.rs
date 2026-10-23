@@ -34,9 +34,9 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    Candidate, CandidateState, ConflictRecord, Event, FailedTask, Held, LandingCommitRecord,
-    LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State, SystemRun, Tested,
-    ToldRecord,
+    BranchHold, Candidate, CandidateState, ConflictRecord, Event, FailedTask, Held,
+    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State,
+    SystemRun, Tested, ToldRecord,
 };
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
@@ -54,6 +54,9 @@ pub struct Round {
     pub step: Step,
     pub released: Vec<crate::session::Abandoned>,
     pub previews: Vec<crate::preview::Dropped>,
+    /// 121: the hold, as the records keep it, of a round that held the
+    /// branch.
+    pub held: Option<BranchHold>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +69,19 @@ pub enum Step {
     /// The records were written between this step's read and its write;
     /// nothing was done (62).
     Contended,
+    /// 121: the branch was read at a revision lacking the landing it must
+    /// contain; nothing was formed, started or landed.
+    Held,
     Stepped,
+}
+
+/// What a round's decide step did.
+enum Decided {
+    Written,
+    /// 121: it wrote the hold and nothing else.
+    Held,
+    /// Its write was refused (62).
+    Contended,
 }
 
 impl Sluice<'_> {
@@ -87,10 +102,15 @@ impl Sluice<'_> {
         let previews =
             info_span!("sluice.previews").in_scope(|| self.release_unusable_previews())?;
         let step = self.step_locked(branch, &round)?;
+        let held = match step {
+            Step::Held => self.read_line(branch)?.doc.held,
+            _ => None,
+        };
         Ok(Round {
             step,
             released,
             previews,
+            held,
         })
     }
 
@@ -107,9 +127,22 @@ impl Sluice<'_> {
             return Ok(Step::Led);
         }
         info_span!("sluice.recover").in_scope(|| self.recover(branch))?;
-        if !info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
-            round.record("sluice.step", "contended");
-            return Ok(Step::Contended);
+        match info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
+            Decided::Written => {}
+            Decided::Contended => {
+                round.record("sluice.step", "contended");
+                return Ok(Step::Contended);
+            }
+            Decided::Held => {
+                // 121: nothing new to start or land; an earlier round's
+                // outcomes are still told and its places released.
+                info_span!("sluice.perform").in_scope(|| {
+                    self.perform_releases(branch)?;
+                    self.perform_outbox(branch)
+                })?;
+                round.record("sluice.step", "held");
+                return Ok(Step::Held);
+            }
         }
         info_span!("sluice.perform").in_scope(|| self.perform(branch))?;
         round.record("sluice.step", "stepped");
@@ -511,9 +544,8 @@ impl Sluice<'_> {
     // 2. Decide
     // -----------------------------------------------------------------------
 
-    /// Everything a round decides, written in one write. `false` when the
-    /// write was refused.
-    fn decide(&self, branch: &str) -> Result<bool> {
+    /// Everything a round decides, written in one write.
+    fn decide(&self, branch: &str) -> Result<Decided> {
         let mut line = self.read_line(branch)?;
         if line.doc.landing.is_some() {
             bail!("{branch} has a landing left unfinished");
@@ -522,6 +554,35 @@ impl Sluice<'_> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             bail!("{branch} does not exist");
         };
+        // 121: a read lacking the landing the branch must contain is a
+        // branch whose reading and records disagree. Nothing is polled,
+        // formed, started or landed, and `base` stays the revision last
+        // formed on, so a landing put back keeps every candidate (10, 17).
+        if let Some(lacks) = line.doc.landed.clone() {
+            if tip != lacks && !self.seams.branch.contains(&tip, &lacks)? {
+                let hold = line.doc.held.as_ref();
+                if hold.is_none_or(|h| h.read != tip || h.lacks != lacks) {
+                    info!(monotonic_counter.sluice.held = 1u64, sluice.branch = branch);
+                    line.log(
+                        &now,
+                        Event::Held {
+                            read: tip.clone(),
+                            lacks: lacks.clone(),
+                        },
+                    );
+                    line.doc.held = Some(BranchHold {
+                        read: tip,
+                        lacks,
+                        since: now,
+                    });
+                }
+                return Ok(match self.write(&line)? {
+                    Written::Written(_) => Decided::Held,
+                    Written::Refused => Decided::Contended,
+                });
+            }
+        }
+        line.doc.held = None;
         if line.doc.base.as_ref() != Some(&tip) {
             // Moved by something other than this branch's landing (S8), or
             // never read: every candidate is formed again on it (10, 24).
@@ -591,7 +652,11 @@ impl Sluice<'_> {
                 sluice.branch = branch
             );
         }
-        Ok(written)
+        Ok(if written {
+            Decided::Written
+        } else {
+            Decided::Contended
+        })
     }
 
     /// Design D10: what this host had queued on the branch in its own

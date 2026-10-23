@@ -811,6 +811,7 @@ pub fn run(
                     Step::Busy => "busy",
                     Step::Led => "led",
                     Step::Contended => "contended",
+                    Step::Held => "held",
                 };
                 writeln!(
                     out,
@@ -829,6 +830,7 @@ pub fn run(
                 Step::Busy => "busy: another round holds the lock",
                 Step::Led => "led: another host keeps the branch, and its lease has not passed",
                 Step::Contended => "contended: the records moved; nothing done",
+                Step::Held => "held",
             };
             writeln!(out, "{branch}: {word}")?;
             Ok(0)
