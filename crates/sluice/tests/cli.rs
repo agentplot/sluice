@@ -2862,3 +2862,90 @@ fn wait_says_progress_when_it_moves() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A branch read without its last landing is held (121)
+// ---------------------------------------------------------------------------
+
+/// Land one submission on `BRANCH`, then have the branch read at the
+/// revision it was made at: that revision, and the landing it lacks.
+fn read_behind(f: &Fakes) -> (String, String) {
+    let made = f.world.tip(BRANCH);
+    work(f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    f.world.set_branch(BRANCH, &made);
+    (made.0, landing.0)
+}
+
+/// C.5 branch: `sluice branch accept` exits 0 when recorded, 1 for no
+/// such branch and 2 on a refusal, naming it, as create and delete do.
+#[test]
+fn branch_accept_exits_as_create_and_delete() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    f.world
+        .set_branch(BRANCH, &sluice_seams::Rev::new(landing.clone()));
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &landing]),
+        (
+            CONFLICT,
+            format!(
+                "refused: {BRANCH} is not held; it reads {landing}, which holds its last landing\n"
+            )
+        )
+    );
+    f.world
+        .set_branch(BRANCH, &sluice_seams::Rev::new(made.clone()));
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &landing]),
+        (
+            CONFLICT,
+            format!("refused: {BRANCH} is held at {made}, not at {landing}\n")
+        )
+    );
+    let (code, out) = sluice(&f, &["branch", "accept", BRANCH, &landing, "--json"]);
+    assert_eq!(code, CONFLICT);
+    assert_eq!(
+        json(&out),
+        serde_json::json!({"error": {
+            "kind": "refused",
+            "message": format!("{BRANCH} is held at {made}, not at {landing}"),
+            "next": [format!("sluice status {BRANCH}")],
+        }})
+    );
+    assert_eq!(
+        sluice(&f, &["branch", "accept", "bolt/none", &made]),
+        (FAILED, "no branch bolt/none\n".to_string())
+    );
+
+    let (code, out) = sluice(&f, &["branch", "accept", BRANCH, &made[..7], "--json"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({ "branch": BRANCH, "accepted": made, "lacked": landing })
+    );
+    assert_eq!(
+        sluice(&f, &["step", BRANCH]),
+        (0, format!("{BRANCH}: stepped\n"))
+    );
+}
+
+#[test]
+fn branch_accept_says_what_it_recorded() {
+    let f = setup();
+    let (made, landing) = read_behind(&f);
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(
+        sluice(&f, &["branch", "accept", BRANCH, &made]),
+        (
+            0,
+            format!(
+                "accepted {BRANCH} at {made}, which lacks the landing {landing}; \
+                 the next round forms the queue on it\n"
+            )
+        )
+    );
+}

@@ -89,6 +89,16 @@ fn wait_help_lists_the_exits_and_a_bad_timeout_exits_usage() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("--timeout"));
 }
 
+/// C.5 branch: accepting a held branch's revision is a `sluice branch`
+/// command, with an example.
+#[test]
+fn branch_accept_help_has_an_example() {
+    let text = help(&["branch", "accept", "--help"]);
+    assert!(text.contains("<BRANCH> <REVISION>"), "{text}");
+    assert!(text.contains("$ sluice branch accept "), "{text}");
+    assert!(help(&["branch", "--help"]).contains("accept"));
+}
+
 #[test]
 fn only_the_root_help_names_the_telemetry_flags() {
     let text = help(&["--help"]);

@@ -411,11 +411,11 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
-    // branches-1 104, 105.
+    // branches-1 104, 105; 121.
     /// Make or remove a branch sluice lands on, on its remote when its
-    /// policy names one.
+    /// policy names one, or accept the revision a held branch is read at.
     #[command(
-        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main"
+        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main\n  $ sluice branch accept feature/x 10e4791"
     )]
     Branch {
         #[command(subcommand)]
@@ -585,6 +585,19 @@ pub enum BranchCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Accept the revision a held branch is read at, which lacks its last
+    /// landing, as the one it stands on: the next round forms the queue on
+    /// it. The operator's to do, never a session's.
+    #[command(after_help = "Example:\n  $ sluice branch accept feature/x 10e4791")]
+    Accept {
+        /// The held branch.
+        branch: String,
+        /// The revision it is held at, as `sluice status <branch>` names it.
+        revision: String,
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -678,7 +691,10 @@ impl Cli {
                     command: ForgeCommand::Check { json, .. },
                 }
                 | Command::Branch {
-                    command: BranchCommand::Create { json, .. } | BranchCommand::Delete { json, .. },
+                    command:
+                        BranchCommand::Create { json, .. }
+                        | BranchCommand::Delete { json, .. }
+                        | BranchCommand::Accept { json, .. },
                 },
             ) => *json,
             Some(_) => false,
