@@ -316,8 +316,13 @@ export const register: Register = (on, options) => {
     return started;
   });
 
+  // /sluice opens the pane, and closes it when it is open; Escape closes it too.
   on("command.run", { command: "sluice" }, async ($) => {
-    const opened = await $.ui.open({ id: PANE, title: "sluice" });
+    if ((await $.ui.panes()).some((p) => p.id === PANE)) {
+      await $.ui.close({ id: PANE });
+      return { text: "sluice's pane is closed." };
+    }
+    const opened = await $.ui.open({ id: PANE, title: "sluice", closeOnEscape: true });
     return {
       text: opened.isPlaced
         ? "sluice's queue is open in a pane."
