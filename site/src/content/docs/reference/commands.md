@@ -452,21 +452,25 @@ the pull request is open, and `wt submit main --status` reports its
 state later. `wt submit` removes the worktree only when the pull request
 lands; sent back, the worktree stays for the fix.
 
-A pull request sent back runs nothing more when submitted again with no
-new commits. sluice tests the same commits again only once the pull
-request is marked a draft and then ready for review. The submit says
-so, with the failure it was sent back for:
+A pull request a submit opened is the agent's. When its submission
+leaves the queue without landing, blamed, in conflict, withdrawn, or on
+commits no submit pushed, sluice marks it a draft, and no round takes it
+again in the agent's name. The next submit marks it ready for review at
+the commits it pushes, the same ones included, and sluice takes them
+like any others. After a run the time limit ended, with no new commits:
 
 ```console
 $ wt submit main
-pushed unit/batch-review · updated #41: Batch review cards
-#41's head 8d41b6c was tested and blamed at 2026-10-11T09:21:50Z: nothing was queued or run again
-failed: tests:t-batch-cards
-  on main + #38 + #41 (e20a6f9)
-  #38 passed on its own, so the failure is from this submission
-  log of tests:t-batch-cards: .git/sluice/.logs/main/c7/tests:t-batch-cards.log
-fix it in your worktree and submit again, or mark #41 a draft and then ready for review to test the same commits again
+pushed unit/batch-review · updated #41: Batch review cards · marked ready for review
+queued behind #38
+testing main + #38 + #41
+testing main + #38 + #41 · 2 tasks to run, 0 replayed
+passed · landed as c41f0a2
 ```
+
+A submit of new commits while the pull request is still in the queue
+withdraws its submission there, and the new commits wait for their
+conditions; the submit says `withdrew its submission 12`.
 
 ## `sluice branch`
 
@@ -647,17 +651,33 @@ once its submission is decided, the submission's record.
 
 | exit | meaning |
 |---|---|
-| `0` | landed |
+| `0` | landed, whatever failed after the landing: what failed is on stderr, after `sluice: after the landing:` |
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
 | `4` | withdrawn while it was waited on |
 | `5` | `sluice wait --timeout` ran out; the submission stays queued |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
+A submission has landed once its branch holds its work, and nothing that
+fails after that changes it. A waiting submit or `sluice wait` whose
+round moves the branch and then fails, releasing the combination's
+checkout or telling the outcome, prints the landing and exits `0`. What
+failed is on stderr, on its own line:
+
+```console
+passed · landed as b7d2e94
+sluice: after the landing: the release command of … ended exit status: 1: usage: scripts/preview up
+```
+
+Under `--json`, stdout holds the submission's record alone, its `state`
+`landed`. When the round stopped before recording the landing, the
+record is the one the next round writes.
+
 Every command, not only submit, exits `3` when sluice itself fails (a
 repository it cannot open, a record it cannot read), with the cause on
-stderr, and `64` when it cannot read its command line: an unknown
-command, flag or value, or a missing argument. `64` is kept apart from
+stderr. A waiting submit or `sluice wait` does so only while the
+submission has not landed. A command exits `64` when it cannot read its
+command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
 

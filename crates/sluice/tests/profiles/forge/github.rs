@@ -3,9 +3,14 @@
 //! the app makes, answered from a [`FileForge`]. Given the bare
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
-//! GitHub does.
+//! GitHub does. It marks a pull request a draft or ready for review
+//! through GraphQL, as GitHub alone does, unless told to refuse. Each
+//! test crate that includes it uses a part.
+
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -27,6 +32,8 @@ pub fn repo() -> Repo {
 pub struct GitHub {
     pub forge: Arc<FileForge>,
     pub fake: Fake,
+    /// While set, GraphQL refuses to mark a pull request a draft or ready.
+    refuse: Arc<AtomicBool>,
 }
 
 impl GitHub {
@@ -36,18 +43,76 @@ impl GitHub {
         let forge = Arc::new(FileForge::new(file, &repo()));
         let held = forge.clone();
         let bare = bare.map(Path::to_path_buf);
+        let refuse = Arc::new(AtomicBool::new(false));
+        let refusing = refuse.clone();
         let fake = Fake::start(move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
             }
+            if r.method == "POST" && r.path == "/graphql" {
+                return graphql(&held, refusing.load(Ordering::SeqCst), r);
+            }
             answer(&held, bare.as_deref(), r)
         });
-        GitHub { forge, fake }
+        GitHub {
+            forge,
+            fake,
+            refuse,
+        }
     }
 
     pub fn url(&self) -> &str {
         self.fake.url()
     }
+
+    /// Refuse, or take again, a request to mark a pull request a draft or
+    /// ready for review.
+    pub fn refuse_drafts(&self, refuse: bool) {
+        self.refuse.store(refuse, Ordering::SeqCst);
+    }
+}
+
+/// GitHub's GraphQL API, for the two mutations sluice makes: a pull
+/// request, by its node id, marked a draft or ready for review. GraphQL
+/// answers a request it refuses with 200 and `errors`.
+fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
+    let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    let query = body["query"].as_str().unwrap_or_default();
+    let error = |kind: &str, message: &str| {
+        json(
+            200,
+            json!({ "data": null, "errors": [{ "type": kind, "message": message }] }),
+        )
+    };
+    let (mutation, draft) = if query.contains("convertPullRequestToDraft") {
+        ("convertPullRequestToDraft", true)
+    } else if query.contains("markPullRequestReadyForReview") {
+        ("markPullRequestReadyForReview", false)
+    } else {
+        return error("UNKNOWN", &format!("the fake answers no {query}"));
+    };
+    if refuse {
+        return error("FORBIDDEN", "Resource not accessible by integration");
+    }
+    let id = body["variables"]["id"].as_str().unwrap_or_default();
+    let Some(n) = forge
+        .held()
+        .unwrap()
+        .pulls
+        .iter()
+        .find(|p| p.node_id == id)
+        .map(|p| p.number)
+    else {
+        return error(
+            "NOT_FOUND",
+            &format!("Could not resolve to a node with the global id of '{id}'"),
+        );
+    };
+    forge.set_draft(n, draft).unwrap();
+    json(
+        200,
+        json!({ "data": { mutation: { "pullRequest": { "isDraft": draft } } } }),
+    )
 }
 
 /// GitHub's pull requests follow their branches.
@@ -108,6 +173,7 @@ pub fn set_ref(bare: &Path, name: &str, to: &str) {
 fn pull_json(p: &Pull) -> Value {
     json!({
         "number": p.number,
+        "node_id": p.node_id,
         "title": p.title,
         "body": p.body,
         "user": { "login": p.author },

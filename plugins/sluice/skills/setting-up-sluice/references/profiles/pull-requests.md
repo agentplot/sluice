@@ -33,8 +33,16 @@ log_lines = 40               # optional: post the end of a failed test's output
 - `sluice submit` / `wt submit` push the worktree's branch and open or update
   its pull request instead of queueing the head.
 - A pull request waits while it is a draft or misses a review or check, then
-  joins the queue. It never waits inside the queue. New commits send it back
-  to waiting.
+  joins the queue. It never waits inside the queue.
+- One a submit opened names its agent in its description. Sent back
+  (blamed, timed out, in conflict, withdrawn), or moved by commits no submit
+  pushed, sluice marks it a draft, and it waits for the next submit from its
+  branch or a person's ready mark: `waiting: the next submit`. A submit
+  marks it ready for review at the commits it pushes, the same ones
+  included.
+- One a person opened waits for its conditions again on new commits; sent
+  back, it is taken again on new commits, or once marked a draft and then
+  ready for review.
 - sluice posts one check named `sluice` with the state (`waiting: …`,
   `queued behind …`, `testing …`, `failed: …`, `conflict: …`, `landed as …`)
   and comments when it sends one back.

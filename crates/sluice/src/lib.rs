@@ -90,7 +90,7 @@ Examples:
   $ sluice submit main --after 12,14 --priority 5
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
   3    sluice itself failed; the cause is on stderr
@@ -106,7 +106,7 @@ Examples:
   $ sluice wait main                     this worktree's last submission to main
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: it was blamed, or its pull request closed; or no such submission
   2    a conflict
   3    sluice itself failed; the cause is on stderr
@@ -1564,17 +1564,13 @@ fn await_submission(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
-        Waited::Decided(sub) => {
+        Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            return report(
-                s,
-                &sub,
-                &branch,
-                &BTreeMap::new(),
-                Reached::Now,
-                waiting.json,
-                out,
-            );
+            let code = report(s, &sub, &branch, &BTreeMap::new(), waiting.json, out)?;
+            if let Some(e) = after {
+                after_landing(&e);
+            }
+            return Ok(code);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
@@ -1588,8 +1584,9 @@ fn await_submission(
 
 /// How a wait ended.
 enum Waited {
-    /// Landed, failed, conflict or withdrawn.
-    Decided(Submission),
+    /// Landed, failed, conflict or withdrawn; when it landed in a round
+    /// that then failed, what failed after the landing (122).
+    Decided(Submission, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
@@ -1616,7 +1613,7 @@ fn wait_on(
     let mut first = true;
     loop {
         if sub.state.is_out() {
-            return Ok(Waited::Decided(sub));
+            return Ok(Waited::Decided(sub, None));
         }
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
@@ -1661,7 +1658,10 @@ fn wait_on(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Ok(Waited::Undecided(sub, STOPPED));
                 }
-                return Err(e);
+                return match landed(s, id) {
+                    Some(sub) => Ok(Waited::Decided(sub, Some(e))),
+                    None => Err(e),
+                };
             }
         }
         sub = s
@@ -1670,16 +1670,31 @@ fn wait_on(
     }
 }
 
-/// Whose outcome a waiting submit ends with.
-#[derive(Clone, Copy)]
-enum Reached {
-    /// The submission it waited on: queued, tested, decided.
-    Now,
-    /// Pull request `n`'s submission on the same head, sent back before
-    /// this submit, which queued and ran nothing: a pull request sent
-    /// back is submitted again only on a new head, or once marked a draft
-    /// and then ready for review (pull-request-intake).
-    Before(u64),
+/// 122: submission `id` as landed, when its work is on its branch: its
+/// record, or the record the next round writes when the round that moved
+/// the branch stopped before writing it (24). `None` when it is not, or
+/// when the records cannot be read, which leaves the round's own error
+/// the outcome.
+fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
+    let to = s.landed_as(id).ok()??;
+    let mut sub = s.state(id).ok()??;
+    sub.state = State::Landed;
+    sub.landed_as = Some(to);
+    Some(sub)
+}
+
+/// The latest submission to `branch` on `head`, as a pull request's is
+/// taken in on the head its worktree pushed; `None` when there is none or
+/// the records cannot be read.
+fn taken_in(s: &Sluice<'_>, branch: &str, head: &sluice_seams::Rev) -> Option<u64> {
+    let all = s.history(branch).ok()?;
+    all.iter().rev().find(|x| x.head == *head).map(|x| x.id)
+}
+
+/// 122: what failed after a landing, said apart from its outcome, on
+/// stderr and to telemetry as sluice failing itself is.
+fn after_landing(e: &anyhow::Error) {
+    telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
 /// A submission's outcome, as a waiting submit ends with it.
@@ -1688,7 +1703,6 @@ fn report(
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
-    reached: Reached,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -1706,60 +1720,28 @@ fn report(
         return Ok(exit_for(sub));
     }
     let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
-    match reached {
-        Reached::Now => {
-            if let Some(t) = &sub.tested {
-                // Only its last test: the same head on the same revision is
-                // the same combination, tested again on a resubmission.
-                let last = log.iter().rposition(|l| {
-                    matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
-                });
-                let (mut ran, mut replayed) = (0, 0);
-                for l in &log[last.unwrap_or(0)..] {
-                    match &l.event {
-                        Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
-                        Event::Replayed { combination, .. } if *combination == t.combination => {
-                            replayed += 1
-                        }
-                        _ => {}
-                    }
+    if let Some(t) = &sub.tested {
+        // Only its last test: the same head on the same revision is
+        // the same combination, tested again on a resubmission.
+        let last = log.iter().rposition(|l| {
+            matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
+        });
+        let (mut ran, mut replayed) = (0, 0);
+        for l in &log[last.unwrap_or(0)..] {
+            match &l.event {
+                Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
+                Event::Replayed { combination, .. } if *combination == t.combination => {
+                    replayed += 1
                 }
-                writeln!(
-                    out,
-                    "testing {} · {ran} tasks to run, {replayed} replayed",
-                    combination(&t.submissions)
-                )?;
+                _ => {}
             }
         }
-        Reached::Before(n) => {
-            // When it was sent back: its last blame or conflict (17, 12).
-            let at = log
-                .iter()
-                .rev()
-                .find(|l| match &l.event {
-                    Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
-                    _ => false,
-                })
-                .map_or_else(|| "an earlier round".to_string(), |l| l.at.clone());
-            let what = if sub.state == State::Conflict {
-                "found conflicting"
-            } else {
-                "tested and blamed"
-            };
-            writeln!(
-                out,
-                "#{n}'s head {} was {what} at {at}: nothing was queued or run again",
-                sub.head.short()
-            )?;
-        }
+        writeln!(
+            out,
+            "testing {} · {ran} tasks to run, {replayed} replayed",
+            combination(&t.submissions)
+        )?;
     }
-    // How a pull request sent back on its head is tested again.
-    let same_commits = match reached {
-        Reached::Now => String::new(),
-        Reached::Before(n) => format!(
-            ", or mark #{n} a draft and then ready for review to test the same commits again"
-        ),
-    };
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -1883,22 +1865,20 @@ fn report(
             if !could_not.is_empty() {
                 writeln!(
                     out,
-                    "the host could not run {}: once it can, submit again{same_commits}",
-                    could_not
-                        .iter()
-                        .map(|f| f.task.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "{}",
+                    words::could_not_run_way_on(
+                        &could_not
+                            .iter()
+                            .map(|f| f.task.as_str())
+                            .collect::<Vec<_>>()
+                    )
                 )?;
             }
             if timed_out {
-                writeln!(out, "{}", words::timed_out_way_on(&cut, &same_commits))?;
+                writeln!(out, "{}", words::timed_out_way_on(&cut))?;
             }
             if not_run.len() > could_not.len() || ran.len() > flaky.len() {
-                writeln!(
-                    out,
-                    "fix it in your worktree and submit again{same_commits}"
-                )?;
+                writeln!(out, "{}", words::fix_way_on())?;
             }
             if !flaky.is_empty() {
                 let other_failed = ran
@@ -1920,11 +1900,7 @@ fn report(
                     w.from.worktree
                 )?;
             }
-            writeln!(
-                out,
-                "merge or rebase onto {} in your worktree and submit again{same_commits}",
-                branch
-            )?;
+            writeln!(out, "{}", words::conflict_way_on(branch))?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
@@ -2078,22 +2054,6 @@ fn submit_pull(
             }
         }
     };
-    // A pull request already sent back on the head just pushed: intake
-    // submits it again only once it is marked a draft and then ready for
-    // review, so a decision on that submission is no run of this submit's.
-    let sent_back = if !opens {
-        None
-    } else {
-        let head = seams.driver.session(worktree)?.head;
-        match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub, _)
-                if sub.head == head && matches!(sub.state, State::Failed | State::Conflict) =>
-            {
-                Some(sub.id)
-            }
-            _ => None,
-        }
-    };
     let mut last: Option<(String, Vec<String>)> = None;
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
@@ -2117,12 +2077,7 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
-                let reached = if sent_back == Some(sub.id) {
-                    Reached::Before(number)
-                } else {
-                    Reached::Now
-                };
-                return report(s, &sub, branch, &names, reached, json, out);
+                return report(s, &sub, branch, &names, json, out);
             }
             Followed::Closed => {
                 if json {
@@ -2196,7 +2151,24 @@ fn submit_pull(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
                 }
-                return Err(e);
+                // 122: as `wait_on`, for the submission the pull request
+                // was taken in as, on the head its worktree pushed.
+                let Some(sub) = seams
+                    .driver
+                    .session(worktree)
+                    .ok()
+                    .and_then(|w| taken_in(s, branch, &w.head))
+                    .and_then(|id| landed(s, id))
+                else {
+                    return Err(e);
+                };
+                let names = match pulls.follow(seams, clock, branch, number) {
+                    Ok(Followed::Done(_, names)) => names,
+                    _ => BTreeMap::new(),
+                };
+                let code = report(s, &sub, branch, &names, json, out)?;
+                after_landing(&e);
+                return Ok(code);
             }
         }
         if !pause.pause() {

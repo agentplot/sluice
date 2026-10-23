@@ -554,6 +554,38 @@ impl Sluice<'_> {
         self.finished_sub(&branch, id)
     }
 
+    /// 122: the commit submission `id`'s work is on its branch as, if it
+    /// is: its record's `landed_as` once it landed; or, while the records
+    /// hold the landing that lands it, its commit there once the branch is
+    /// at the landing's revision or past it, as a round confirms a landing
+    /// (24). Read with no step running; it writes nothing (rule core.4).
+    pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
+        let Some(branch) = self.find(id)? else {
+            return Ok(None);
+        };
+        let line = self.read_line(&branch)?;
+        let Some(sub) = line.subs.get(&id) else {
+            let finished = self.finished_sub(&branch, id)?;
+            return Ok(finished
+                .filter(|s| s.state == State::Landed)
+                .and_then(|s| s.landed_as));
+        };
+        if sub.state == State::Landed {
+            return Ok(sub.landed_as.clone());
+        }
+        let Some(intent) = &line.doc.landing else {
+            return Ok(None);
+        };
+        let Some(commit) = intent.commits.iter().find(|c| c.id == id) else {
+            return Ok(None);
+        };
+        let moved = match self.seams.branch.read(&branch)? {
+            Some(at) => at == intent.to || self.seams.branch.contains(&at, &intent.to)?,
+            None => false,
+        };
+        Ok(moved.then(|| commit.commit.clone()))
+    }
+
     /// Design D10: the submission that `old`, a submission of this host's
     /// own records, became when the branch's records moved to its remote.
     pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {

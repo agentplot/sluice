@@ -55,7 +55,7 @@ fn help(args: &[&str]) -> String {
 fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
     let text = help(&["submit", "--help"]);
     for exit in [
-        "0    landed",
+        "0    landed, whatever failed after the landing (said on stderr)",
         "1    failed",
         "2    a conflict",
         "3    sluice itself failed",
@@ -74,7 +74,7 @@ fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
 fn wait_help_lists_the_exits_and_a_bad_timeout_exits_usage() {
     let text = help(&["wait", "--help"]);
     for exit in [
-        "0    landed",
+        "0    landed, whatever failed after the landing (said on stderr)",
         "1    failed",
         "2    a conflict",
         "4    withdrawn",
