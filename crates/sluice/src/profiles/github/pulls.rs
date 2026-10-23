@@ -21,11 +21,13 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
-use sluice_core::{Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest};
+use sluice_core::{
+    Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
+};
 use sluice_seams::{
     Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
 };
@@ -195,9 +197,8 @@ impl Pulls {
         }))
     }
 
-    /// Intake's lock on `branch`, or `None` when another process holds it:
-    /// that process takes the branch's pull requests in this round.
-    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+    /// The file of intake's lock on `branch`, and its path.
+    fn lock_file(&self, branch: &str) -> Result<(std::fs::File, PathBuf)> {
         std::fs::create_dir_all(&self.locks)?;
         let path = self.locks.join(format!("{}.lock", lock_name(branch)));
         let file = std::fs::OpenOptions::new()
@@ -206,11 +207,26 @@ impl Pulls {
             .write(true)
             .open(&path)
             .with_context(|| path.display().to_string())?;
+        Ok((file, path))
+    }
+
+    /// Intake's lock on `branch`, or `None` when another process holds it:
+    /// that process takes the branch's pull requests in this round.
+    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+        let (file, path) = self.lock_file(branch)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e).context(path.display().to_string()),
         }
+    }
+
+    /// Intake's lock on `branch`, waited for: a submit holds it while it
+    /// changes its pull request, so no pass reads it halfway.
+    fn wait_lock(&self, branch: &str) -> Result<std::fs::File> {
+        let (file, path) = self.lock_file(branch)?;
+        file.lock().context(path.display().to_string())?;
+        Ok(file)
     }
 
     /// The commit messages of `tip..head`, oldest first.
@@ -499,26 +515,58 @@ impl Pulls {
         names: &BTreeMap<u64, String>,
     ) -> Result<Shown> {
         let here = place(p.number);
+        // A submit's pull request whose submission left the queue without
+        // landing waits for its submitter's act, a submit or a person's
+        // ready mark, at or after the second it left: whatever its head,
+        // no round submits it in its agent's name before then (120, S56).
+        let from = submits(p);
+        let held = match latest.filter(|e| from.is_some() && left_unlanded(e)) {
+            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))?,
+            None => false,
+        };
+        // Its draft shows the hold, and is not the hold: one GitHub
+        // refuses holds it all the same, and the next pass tries again.
+        if held && !p.draft {
+            if let Err(e) = forge.set_draft(&t.repo, p.number, true) {
+                crate::telemetry::warn(&format!(
+                    "sluice: warning: #{} waits for the next submit, and GitHub would not mark \
+                     it a draft: {e:#}",
+                    p.number
+                ));
+            }
+        }
+        // Who withdrew a hand-opened pull request, when it was someone
+        // other than its own agent: it rests as one sent back does, and only
+        // its person's act, a new head or a ready mark, offers it again
+        // (120, C.5).
+        let mut rests = None;
         if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
             match e.state {
-                State::Withdrawn => {}
+                State::Withdrawn => {
+                    if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
+                        if !retried_by_hand(forge, &t.repo, p, log, e.id)? {
+                            rests = Some(by);
+                        }
+                    }
+                }
                 State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names)),
                 State::Failed | State::Conflict => {
-                    // Sent back: submitted again only once it is marked
-                    // ready for review after it was sent back.
-                    let removed = removal(log, e.id);
-                    let retried = !p.draft
-                        && forge
-                            .readied(&t.repo, p.number)?
-                            .iter()
-                            .any(|at| removed.is_some_and(|r| *at > r));
+                    // Sent back: one opened by hand is submitted again only
+                    // once it is marked ready for review after it was sent
+                    // back; a submit's, once it is no longer held.
+                    let retried = match from {
+                        Some(_) => !held,
+                        None => retried_by_hand(forge, &t.repo, p, log, e.id)?,
+                    };
                     if !retried {
                         let outcome = Outcome::of(e)?;
-                        if let Some(body) = comment(branch, &outcome, names) {
+                        if let Some(body) = comment(branch, &outcome, names, from) {
                             let id = format!("{}:{}", e.id, e.state.word());
                             self.comment_once(forge, &t.repo, p.number, &id, &body)?;
                         }
-                        return Ok(outcome_shown(branch, &outcome, names));
+                        if !held {
+                            return Ok(outcome_shown(branch, &outcome, names));
+                        }
                     }
                 }
                 _ => return Ok(queue_shown(branch, e, subs, names)),
@@ -526,7 +574,11 @@ impl Pulls {
         }
         // Waiting: what is missing, and where it would land now.
         let mut missing = Vec::new();
-        if p.draft {
+        if held {
+            missing.push(NEXT_SUBMIT.to_string());
+        } else if let Some(by) = rests {
+            missing.push(format!("{WITHDRAWN_BY}{}", withdrawer(by)));
+        } else if p.draft {
             missing.push("a draft".to_string());
         } else {
             let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
@@ -567,7 +619,12 @@ impl Pulls {
                     let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
                     queued(branch, &ahead)
                 }
-                Err(r) => waiting(&[format!("refused: {}", refusal_word(&r))], None),
+                Err(r) => waiting(
+                    branch,
+                    from,
+                    &[format!("refused: {}", refusal_word(&r))],
+                    None,
+                ),
             });
         }
         let forecast = match s
@@ -600,7 +657,7 @@ impl Pulls {
             }
             Err(r) => format!("forecast: none, {}", refusal_word(&r)),
         };
-        Ok(waiting(&missing, Some(forecast)))
+        Ok(waiting(branch, from, &missing, Some(forecast)))
     }
 
     /// The pull request's head on this host, fetched unless it is here.
@@ -673,26 +730,197 @@ fn refusal_word(r: &SubmitRefusal) -> String {
     }
 }
 
-/// When submission `id` was blamed or found conflicting, from the log.
+/// When submission `id` left the queue without landing, withdrawn, blamed
+/// or found conflicting, from the log.
 fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Utc>> {
     log.iter()
         .rev()
         .find(|l| match &l.event {
-            Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
+            Event::Withdrawn { id: i, .. }
+            | Event::Blamed { id: i, .. }
+            | Event::Conflict { id: i, .. } => *i == id,
             _ => false,
         })
         .and_then(|l| DateTime::parse_from_rfc3339(&l.at).ok())
         .map(|t| t.with_timezone(&Utc))
 }
 
-fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
-    let title = if missing.iter().any(|m| m == "a draft") {
+/// What a pull request a submit opened or updated waits for once its
+/// submission left the queue.
+const NEXT_SUBMIT: &str = "the next submit";
+
+/// The branch a submit's pull request is submitted from, `None` for one a
+/// person opened by hand: a submit names its agent in the body, and is
+/// the act that stands for the pull request from then on.
+fn submits(p: &Pull) -> Option<&str> {
+    marked_agent(&p.body).map(|_| p.head_ref.as_str())
+}
+
+/// What a pull request opened by hand waits for once someone other than
+/// its own agent withdrew it, before who that was.
+const WITHDRAWN_BY: &str = "withdrawn by ";
+
+/// Who withdrew `e`, when it was not its own agent: the operator, a
+/// planner or another agent, never intake, which withdraws a pull
+/// request's submission as its agent.
+fn withdrawn_by_another(e: &Submission) -> Option<&str> {
+    e.withdrawn
+        .as_ref()
+        .map(|w| w.by.as_str())
+        .filter(|by| *by != e.from.agent)
+}
+
+/// A withdrawal's `by` in a pull request's words.
+fn withdrawer(by: &str) -> String {
+    match by {
+        "operator" | "planner" => format!("the {by}"),
+        agent => agent.to_string(),
+    }
+}
+
+/// Out of the queue without landing: withdrawn, blamed or conflicting.
+fn left_unlanded(e: &Submission) -> bool {
+    matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
+}
+
+/// The second from which a ready mark is its submitter's act after `e`
+/// left the queue: the second it left, from the log, as GitHub and the
+/// log both keep whole seconds. Never the second `e` was submitted in,
+/// whose ready mark is the act that submitted it.
+fn acts_from(log: &[sluice_core::records::LogLine], e: &Submission) -> DateTime<Utc> {
+    let submitted = DateTime::parse_from_rfc3339(&e.submitted)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let left = removal(log, e.id).unwrap_or(submitted);
+    if left > submitted {
+        left
+    } else {
+        submitted + chrono::TimeDelta::seconds(1)
+    }
+}
+
+/// Whether pull request `number` was marked ready for review at or after
+/// `at`, to the whole second.
+fn readied_since(forge: &dyn Forge, repo: &Repo, number: u64, at: DateTime<Utc>) -> Result<bool> {
+    Ok(forge
+        .readied(repo, number)?
+        .iter()
+        .any(|r| r.trunc_subsecs(0) >= at))
+}
+
+/// Whether pull request `p`, opened by hand and sent back as submission
+/// `id`, or withdrawn by someone other than its agent, was marked ready
+/// for review after it left: intake then submits the same head again.
+fn retried_by_hand(
+    forge: &dyn Forge,
+    repo: &Repo,
+    p: &Pull,
+    log: &[sluice_core::records::LogLine],
+    id: u64,
+) -> Result<bool> {
+    let removed = removal(log, id);
+    Ok(!p.draft
+        && forge
+            .readied(repo, p.number)?
+            .iter()
+            .any(|at| removed.is_some_and(|r| *at > r)))
+}
+
+/// A submit's ready mark on pull request `number`, a draft first unless
+/// it is one, so that GitHub's timeline holds a ready mark at or after
+/// `left`, the second from which it is the act after its submission left
+/// the queue. GitHub's clock may be behind the host's: a mark read back
+/// before `left` is made again the next second, three times at most.
+fn mark_ready(
+    forge: &dyn Forge,
+    repo: &Repo,
+    number: u64,
+    draft: bool,
+    left: Option<DateTime<Utc>>,
+) -> Result<()> {
+    const TRIES: usize = 3;
+    let mut draft = draft;
+    let mut newest = None;
+    for tried in 1..=TRIES {
+        if !draft {
+            forge.set_draft(repo, number, true)?;
+        }
+        forge.set_draft(repo, number, false)?;
+        draft = false;
+        let Some(left) = left else {
+            return Ok(());
+        };
+        newest = forge
+            .readied(repo, number)?
+            .into_iter()
+            .map(|r| r.trunc_subsecs(0))
+            .max();
+        if newest.is_some_and(|r| r >= left) {
+            return Ok(());
+        }
+        if tried < TRIES {
+            let into = Utc::now().timestamp_subsec_millis();
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(
+                1000 - into.min(999),
+            )));
+        }
+    }
+    let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let left = left.map(at).unwrap_or_default();
+    match newest {
+        Some(r) => bail!(
+            "#{number}'s ready mark reads {} on GitHub, and a submit's counts from {left}, when \
+             its submission left the queue, after {TRIES} tries: GitHub's clock may be behind \
+             this host's; submit again",
+            at(r)
+        ),
+        None => bail!(
+            "GitHub's timeline of #{number} holds no ready mark after {TRIES} tries, and a \
+             submit's counts from {left}, when its submission left the queue; submit again"
+        ),
+    }
+}
+
+/// The way on for a submit's pull request held for its submitter: the next
+/// submit from `from`, or a ready mark.
+fn next_submit(branch: &str, from: &str) -> String {
+    format!(
+        "The next `sluice submit {branch}` from `{from}`, or marking it ready for review, \
+         submits it again."
+    )
+}
+
+/// What a waiting pull request into `branch` shows: `from` is the branch
+/// a submit's pull request is submitted from.
+fn waiting(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    forecast: Option<String>,
+) -> Shown {
+    let held = missing.iter().any(|m| m == NEXT_SUBMIT);
+    let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
+    let title = if held {
+        format!("waiting: {NEXT_SUBMIT}")
+    } else if let Some(who) = rests {
+        format!("waiting: {WITHDRAWN_BY}{who}")
+    } else if missing.iter().any(|m| m == "a draft") {
         "waiting: a draft".to_string()
     } else {
         format!("waiting: needs {}", missing.join(", "))
     };
     let mut summary = Vec::new();
-    if missing.iter().any(|m| m == "a draft") {
+    if held {
+        summary.push(format!(
+            "Its submission left the queue, and sluice marked it a draft. {}",
+            next_submit(branch, from.unwrap_or("its branch"))
+        ));
+    } else if let Some(who) = rests {
+        summary.push(format!(
+            "Withdrawn from {branch}'s queue by {who}. New commits, or marking it a draft and \
+             then ready for review, submit it again."
+        ));
+    } else if missing.iter().any(|m| m == "a draft") {
         summary.push("A draft: sluice takes it once it is marked ready for review.".to_string());
     } else {
         let named: Vec<String> = missing
@@ -908,10 +1136,22 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
     }
 }
 
-/// The comment on a pull request sent back; none for a landing.
-fn comment(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Option<String> {
-    let again = "Push a fix to submit again, or mark this pull request a draft and then ready \
-                 for review to submit the same commits again.";
+/// The comment on a pull request sent back; none for a landing. `from` is
+/// the branch a submit's pull request is submitted from: sluice marks it a
+/// draft, and only its submitter's act brings it back.
+fn comment(
+    branch: &str,
+    o: &Outcome,
+    names: &BTreeMap<u64, String>,
+    from: Option<&str>,
+) -> Option<String> {
+    let drafted = from.map(|f| format!("sluice marked it a draft. {}", next_submit(branch, f)));
+    let again = match &drafted {
+        Some(d) => d.clone(),
+        None => "Push a fix to submit again, or mark this pull request a draft and then ready \
+                 for review to submit the same commits again."
+            .to_string(),
+    };
     match o {
         Outcome::Landed { .. } => None,
         Outcome::Failed {
@@ -945,13 +1185,23 @@ fn comment(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Option<S
             Some(s)
         }
         Outcome::Conflict { paths, with } => {
+            let way = match &drafted {
+                Some(d) => format!("Merge or rebase onto {branch}. {d}"),
+                None => format!(
+                    "Merge or rebase onto {branch} and push, or mark this pull request a draft \
+                     and then ready for review to submit the same commits again."
+                ),
+            };
             Some(format!(
-            "sluice sent this pull request back: it no longer merges with what is ahead of it. \
-             `{}` conflicts with {}.\n\nMerge or rebase onto {branch} and push, or mark this pull \
-             request a draft and then ready for review to submit the same commits again.",
-            paths.join("`, `"),
-            if with.is_empty() { branch.to_string() } else { with.join(", ") }
-        ))
+                "sluice sent this pull request back: it no longer merges with what is ahead of \
+                 it. `{}` conflicts with {}.\n\n{way}",
+                paths.join("`, `"),
+                if with.is_empty() {
+                    branch.to_string()
+                } else {
+                    with.join(", ")
+                }
+            ))
         }
     }
 }
@@ -1091,6 +1341,7 @@ impl crate::PullRequests for Pulls {
             return Ok(Err(SubmitRefusal::NotManaged));
         };
         let forge = self.forge(branch)?;
+        let _lock = self.wait_lock(branch)?;
         let head_ref = session.from.worktree.clone();
         self.pushed(&t.remote)?
             .push_branch(&session.head, &head_ref)?;
@@ -1120,12 +1371,39 @@ impl crate::PullRequests for Pulls {
                 )
             }
         };
+        let mut said = format!(
+            "pushed {head_ref} · {word} #{}: {}",
+            pull.number, pull.title
+        );
+        // The submit is its submitter's act (120). The submission on an
+        // older head leaves the queue, withdrawn by the submit itself (67),
+        // and a ready mark follows the latest leaving, so intake reads the
+        // act as given.
+        let here = place(pull.number);
+        let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
+        if let Some(e) = latest
+            .get(&here)
+            .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != session.head)
+        {
+            // Landing since it was read: it lands, and the new head waits.
+            if let Ok(Withdrew::Now) =
+                s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+            {
+                said.push_str(&format!(" · withdrew its submission {}", e.id));
+            }
+        }
+        let latest = s
+            .latest_of(branch, std::slice::from_ref(&here))?
+            .remove(&here);
+        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+        let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
+        if pull.draft || left.is_some() {
+            mark_ready(forge, &t.repo, pull.number, pull.draft, left)?;
+            said.push_str(" · marked ready for review");
+        }
         Ok(Ok(Opened {
             number: pull.number,
-            said: format!(
-                "pushed {head_ref} · {word} #{}: {}",
-                pull.number, pull.title
-            ),
+            said,
         }))
     }
 
@@ -1176,7 +1454,21 @@ impl crate::PullRequests for Pulls {
         if let Some(e) = &latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
-                return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                // Sent back on this head, and marked ready since: intake
+                // takes it again, so that verdict is no longer its outcome.
+                let again = match &pull {
+                    Some(p) if p.open && e.state != State::Landed => {
+                        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+                        match submits(p) {
+                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
+                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
+                        }
+                    }
+                    _ => false,
+                };
+                if !again {
+                    return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                }
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
@@ -1250,7 +1542,22 @@ impl Pulls {
             shown,
             n.report.as_ref(),
         )?;
-        if let Some(body) = comment(&n.branch, &outcome, &names) {
+        if matches!(outcome, Outcome::Landed { .. }) {
+            return Ok(());
+        }
+        // Its body, as intake read it this round, says whether a submit
+        // opened it.
+        let known = self
+            .known
+            .borrow()
+            .get(&place(e.number))
+            .map(|k| k.pull.clone());
+        let pull = match known {
+            Some(p) => Some(p),
+            None => forge.pull(&e.repo, e.number)?,
+        };
+        let from = pull.as_ref().and_then(submits);
+        if let Some(body) = comment(&n.branch, &outcome, &names, from) {
             self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
         }
         Ok(())
@@ -1406,6 +1713,8 @@ mod tests {
     #[test]
     fn what_a_waiting_pull_request_shows() {
         let w = waiting(
+            "main",
+            None,
             &["1 review".into(), "qa/approved".into()],
             Some("forecast: merges onto main without conflict".into()),
         );
@@ -1415,8 +1724,223 @@ mod tests {
         );
         assert_eq!(w.lines, ["forecast: merges onto main without conflict"]);
         assert_eq!(
-            waiting(&["a draft".into()], None).posting.title,
+            waiting("main", None, &["a draft".into()], None)
+                .posting
+                .title,
             "waiting: a draft"
+        );
+    }
+
+    /// pull-request-status: a submit's pull request held for its
+    /// submitter is queued, and names the next submit from its branch and
+    /// the ready mark.
+    #[test]
+    fn what_a_held_pull_request_shows() {
+        let w = waiting(
+            "main",
+            Some("unit/review"),
+            &[NEXT_SUBMIT.into()],
+            Some("forecast: merges onto main without conflict".into()),
+        );
+        assert_eq!(w.posting.status, Status::Queued);
+        assert_eq!(w.posting.title, "waiting: the next submit");
+        let s = &w.posting.summary;
+        assert!(
+            s.contains("sluice marked it a draft")
+                && s.contains("The next `sluice submit main` from `unit/review`")
+                && s.contains("marking it ready for review"),
+            "{s}"
+        );
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+    }
+
+    /// pull-request-status, withdrawn by the operator: a hand-opened pull
+    /// request someone other than its agent withdrew is queued, names who
+    /// withdrew it, and says new commits or a ready mark after draft submit
+    /// it again; intake's own withdrawal, as its agent, is no one else's.
+    #[test]
+    fn what_a_withdrawn_pull_request_shows() {
+        let w = waiting(
+            "main",
+            None,
+            &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
+            Some("forecast: merges onto main without conflict".into()),
+        );
+        assert_eq!(w.posting.status, Status::Queued);
+        assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
+        let s = &w.posting.summary;
+        assert!(
+            s.contains("Withdrawn from main's queue by the operator")
+                && s.contains("New commits, or marking it a draft and then ready for review")
+                && !s.contains("sluice marked it a draft"),
+            "{s}"
+        );
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+        assert_eq!(withdrawer("planner"), "the planner");
+        assert_eq!(withdrawer("crw-2"), "crw-2");
+
+        let sub = |by: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 4, "branch": "main",
+                "head": "h", "from": { "agent": "person", "worktree": "pull/4" },
+                "submitted": "2026-10-23T10:00:00Z", "after": [], "priority": 0, "attempt": 1,
+                "state": "withdrawn",
+                "withdrawn": { "by": by, "at": "2026-10-23T10:00:05Z" },
+            }))
+            .unwrap()
+        };
+        assert_eq!(withdrawn_by_another(&sub("operator")), Some("operator"));
+        assert_eq!(withdrawn_by_another(&sub("planner")), Some("planner"));
+        assert_eq!(withdrawn_by_another(&sub("person")), None);
+    }
+
+    /// pull-request-status, blamed: a submit's pull request is told it is
+    /// a draft until the next submit or a ready mark; one opened by hand
+    /// keeps today's words.
+    #[test]
+    fn the_comment_on_a_pull_request_sent_back() {
+        let names = BTreeMap::from([(4, "#4".to_string())]);
+        let failed = Outcome::Failed {
+            tasks: vec!["sh check.sh".into()],
+            logs: Vec::new(),
+            combination: Rev::new("c1c1c1c1"),
+            ids: vec![4],
+            timed_out: false,
+        };
+        let conflict = Outcome::Conflict {
+            paths: vec!["plan.py".into()],
+            with: vec!["#3".into()],
+        };
+        for o in [&failed, &conflict] {
+            let mine = comment("main", o, &names, Some("unit/review")).unwrap();
+            assert!(
+                mine.contains(
+                    "sluice marked it a draft. The next `sluice submit main` from \
+                     `unit/review`, or marking it ready for review, submits it again."
+                ),
+                "{mine}"
+            );
+            assert!(
+                !mine.contains("Push a fix") && !mine.contains("and push"),
+                "{mine}"
+            );
+            let by_hand = comment("main", o, &names, None).unwrap();
+            assert!(
+                by_hand.contains("draft and then ready for review to submit the same commits"),
+                "{by_hand}"
+            );
+            assert!(!by_hand.contains("sluice marked it a draft"), "{by_hand}");
+        }
+        assert!(comment(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("l1")
+            },
+            &names,
+            Some("unit/review")
+        )
+        .is_none());
+    }
+
+    /// A submit's ready mark: a draft first unless it is one, read back,
+    /// and made again the next second while it reads before the second
+    /// it counts from, three times at most, then refused naming both
+    /// times.
+    #[test]
+    fn a_submits_ready_mark_is_read_back() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let f = FileForge::new(&dir.join("github.json"), &repo);
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let now = || Utc::now().trunc_subsecs(0);
+        // Out of draft and nothing to count from: a draft, then ready.
+        mark_ready(&f, &repo, n, false, None).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 1);
+        assert!(!f.pull(&repo, n).unwrap().unwrap().draft);
+        // A draft already: ready, and read back at the second it counts
+        // from.
+        f.set_draft(n, true).unwrap();
+        mark_ready(&f, &repo, n, true, Some(now())).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 2);
+        // GitHub a second behind: made again the next second.
+        let next = now() + chrono::TimeDelta::seconds(1);
+        mark_ready(&f, &repo, n, false, Some(next)).unwrap();
+        let marks = f.readied(&repo, n).unwrap();
+        assert!(marks.len() >= 4, "{marks:?}");
+        assert!(marks.last().unwrap().trunc_subsecs(0) >= next, "{marks:?}");
+        // Never at or after it: refused after three tries.
+        let later = now() + chrono::TimeDelta::seconds(60);
+        let before = f.readied(&repo, n).unwrap().len();
+        let e = mark_ready(&f, &repo, n, false, Some(later))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), before + 3);
+        let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert!(
+            e.contains(&format!("counts from {}", at(later)))
+                && e.contains("ready mark reads 20")
+                && e.contains("after 3 tries"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The second a submission left the queue: its withdrawal, blame or
+    /// conflict, whichever the log holds last for it.
+    #[test]
+    fn when_a_submission_left() {
+        use sluice_core::records::LogLine;
+        let line = |at: &str, event: Event| LogLine {
+            schema: sluice_core::records::LOG_SCHEMA.into(),
+            at: at.into(),
+            event,
+        };
+        let log = [
+            line(
+                "2026-10-23T10:00:00Z",
+                Event::Blamed {
+                    id: 1,
+                    combination: Rev::new("c"),
+                },
+            ),
+            line(
+                "2026-10-23T10:00:05Z",
+                Event::Withdrawn {
+                    id: 2,
+                    by: "unit/a".into(),
+                },
+            ),
+        ];
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        assert_eq!(removal(&log, 1), Some(at("2026-10-23T10:00:00Z")));
+        assert_eq!(removal(&log, 2), Some(at("2026-10-23T10:00:05Z")));
+        assert_eq!(removal(&log, 3), None);
+        // A ready mark counts from the second it left; one in the second
+        // it was submitted in is the act that submitted it.
+        let sub = |id: u64, submitted: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+                "head": "h", "from": { "agent": "unit/a", "worktree": "pull/4" },
+                "submitted": submitted, "after": [], "priority": 0, "attempt": 1,
+                "state": "failed",
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            acts_from(&log, &sub(2, "2026-10-23T09:59:00Z")),
+            at("2026-10-23T10:00:05Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(1, "2026-10-23T10:00:00Z")),
+            at("2026-10-23T10:00:01Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(3, "2026-10-23T10:01:00Z")),
+            at("2026-10-23T10:01:01Z")
         );
     }
 }

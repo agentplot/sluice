@@ -101,8 +101,9 @@ waiting: needs 1 review, qa/approved
 ```
 
 The agent's branch is pushed, and the pull request is opened with the
-branch's commit messages. Submitting again from the same worktree
-updates the same pull request.
+branch's commit messages. Its description names the agent, which makes
+it the agent's pull request. Submitting again from the same worktree
+updates the same pull request and marks it ready for review.
 
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
@@ -136,6 +137,8 @@ check reads:
 | the check reads | means |
 |---|---|
 | `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
+| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft, and takes it again once the agent's next `sluice submit` from its branch, or a person, marks it ready for review |
+| `waiting: withdrawn by the operator` | a pull request a person opened, withdrawn with `sluice withdraw` (`by the planner` when a planner withdrew it); sluice takes it again on new commits, or once it is marked a draft and then ready for review |
 | `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
 | `queued behind #38, #40` | in the queue, behind the pull requests it names |
 | `testing main + #38 + #40 + #41` | its combination is being tested |
@@ -217,14 +220,28 @@ sequenceDiagram
 
 ## When things change
 
-- **New commits on a pull request.** It leaves the queue and waits
-  again. GitHub drops the old review if your repository dismisses stale
-  reviews, and QA tests the new commits. sluice forms the combinations
-  behind it again without it.
-- **Sent back as the blamed submission, or for a conflict.** It stays open with
-  the comment saying why. Push a fix and it waits for its conditions
-  again. To retry the same commits, mark it a draft and then ready
-  again.
+- **New commits on a pull request a person opened.** It leaves the
+  queue and waits again. GitHub drops the old review if your repository
+  dismisses stale reviews, and QA tests the new commits. sluice forms
+  the combinations behind it again without it.
+- **New commits on an agent's pull request.** Commits the agent's own
+  submit pushes replace its submission in the queue, and wait for their
+  conditions. Commits that arrive any other way, such as a fix another
+  submission lands on its branch, take it out of the queue, and sluice
+  marks it a draft. No round takes it again in the agent's name until
+  the agent's next `sluice submit`, or a person marking it ready for
+  review.
+- **Sent back as the blamed submission, or for a conflict.** It stays
+  open with the comment saying why. A pull request a person opened waits
+  for a fix: push one and it waits for its conditions again, or mark it
+  a draft and then ready to retry the same commits. An agent's is
+  marked a draft, and waits for the agent's next `sluice submit`, with a
+  fix or the same commits, or for a person to mark it ready for review.
+- **Withdrawn with `sluice withdraw`.** An agent's pull request is
+  marked a draft, and waits the same way. One a person opened stays out
+  of the queue as a blamed one does, however long its conditions hold:
+  push new commits, or mark it a draft and then ready, to bring it back.
+  Its `sluice` check names who withdrew it.
 - **Back to draft, or closed.** It leaves the queue.
 - **Merged with GitHub's button.** Don't, on a branch sluice keeps: with
   the ruleset from the previous guide only the bypass can, and sluice
