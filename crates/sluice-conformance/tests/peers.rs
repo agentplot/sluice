@@ -401,6 +401,36 @@ fn the_overview_shows_hosts_their_room_and_a_lapse() {
     assert_eq!(hosts[0].room, 0);
 }
 
+/// satisfies: 71, 75; the run-claims spec's "A host full with another
+/// repository's runs claims nothing"
+#[test]
+fn a_host_full_with_another_repositorys_runs_claims_nothing() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(2);
+    h.w().be_host("b");
+    h.w().other_runs(2);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert!(claims(&h).is_empty());
+}
+
+/// satisfies: 71, 107; the run-claims spec's "Another repository's runs
+/// leave less room"
+#[test]
+fn another_repositorys_runs_leave_less_room_in_a_hosts_sign_of_life() {
+    let h = peers();
+    opened(&h);
+    h.w().host_limit(4);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(h.w().live_runs(), 1, "b runs main's combination");
+    h.w().be_host("b");
+    h.w().other_runs(1);
+    as_signer(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let hosts = as_signer(&h, "lead", None).hosts().unwrap();
+    assert_eq!(hosts[0].host, "b");
+    assert_eq!((hosts[0].held, hosts[0].room), (2, 2));
+}
+
 /// Design D8, rule core.22: a passing verdict written into the state with
 /// no signed results behind it lands nothing; the combination is tested
 /// again.

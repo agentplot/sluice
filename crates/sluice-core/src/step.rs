@@ -1727,16 +1727,6 @@ impl Sluice<'_> {
             .count()
     }
 
-    /// Runs holding a place on this host, in `line`.
-    fn held_here(&self, line: &Line) -> usize {
-        line.doc
-            .candidates
-            .iter()
-            .flat_map(|c| &c.runs)
-            .filter(|r| r.state.held() && self.mine(r))
-            .count()
-    }
-
     /// 75, 79, 87, 107: whether this instance may take `run`: open and
     /// unclaimed, of the system it is, and, on a branch whose records are
     /// on its remote, signed by a signer the gate trusts for what the gate
@@ -1986,11 +1976,13 @@ impl Sluice<'_> {
         let home = self.home_system(&tip)?;
         let me = self.peer.name.clone();
         let line = self.read_line(branch)?;
+        // 107, 71: the room a lead reads is the host's, every repository's
+        // runs counted.
         let beat = serde_json::json!({
             "host": me,
             "signer": self.peer.signer,
             "system": home,
-            "held": self.held_here(&line),
+            "held": self.seams.tests.running()?.total(),
             "bound": self.seams.tests.bound()?,
             "at": self.now(),
         });
