@@ -1313,6 +1313,12 @@ fn refusal(
             )
         }
         SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
+        SubmitRefusal::NamedTwice(earlier) if earlier == worktree => {
+            format!("refused: {worktree} is named twice")
+        }
+        SubmitRefusal::NamedTwice(earlier) => {
+            format!("refused: {worktree} is {earlier}'s worktree, named twice")
+        }
     })
 }
 
@@ -1328,6 +1334,7 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
         SubmitRefusal::NotManaged => vec!["sluice overview".into()],
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
         SubmitRefusal::NoHead(_) => vec!["sluice overview".into()],
+        SubmitRefusal::NamedTwice(_) => vec![],
     }
 }
 

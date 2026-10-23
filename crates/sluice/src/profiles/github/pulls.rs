@@ -670,6 +670,7 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::NotManaged => "no [branches] table names its branch".into(),
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
+        SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
     }
 }
 
