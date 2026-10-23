@@ -227,6 +227,27 @@ let
     '';
   };
 
+  # OpenSpec, which root:specs validates openspec/specs with: the release
+  # the specs are written with, built as nixpkgs builds its older one. Bump
+  # the version, then each hash from the mismatch the build reports.
+  openspec = pkgs.openspec.overrideAttrs (
+    finalAttrs: _: {
+      version = "1.14.3";
+      src = pkgs.fetchFromGitHub {
+        owner = "Fission-AI";
+        repo = "OpenSpec";
+        tag = "v${finalAttrs.version}";
+        hash = "sha256-tdTX0nkDe/aNZgLckh6/B6BtoSb40w0Y5qzg+d1LjHU=";
+      };
+      pnpmDeps = pkgs.fetchPnpmDeps {
+        inherit (finalAttrs) pname version src;
+        pnpm = pkgs.pnpm_10;
+        fetcherVersion = 3;
+        hash = "sha256-fKm4sBdTDeQfIiE0k301jtRbiuJrBE7YIEBu8RZxuXI=";
+      };
+    }
+  );
+
 in
 {
   # The system tools are this file's, pinned by devenv.lock; the application
@@ -247,6 +268,7 @@ in
     worktrunk
     vale
     claude
+    openspec
     # The board's type check (plugin-board:typecheck); its engine-types
     # ask for 5.4 or later.
     pkgs.typescript
