@@ -46,4 +46,4 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 
 ## 8. Gate
 
-- [ ] 8.1 Verify `sluice exec main` passes with everything committed.
+- [x] 8.1 Verify `sluice exec main` passes with everything committed.
