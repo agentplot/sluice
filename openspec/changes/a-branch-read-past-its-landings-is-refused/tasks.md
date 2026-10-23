@@ -36,7 +36,7 @@ Read first: this change's proposal, specs and design; clauses 121, 22,
 
 ## 6. Over real git
 
-- [ ] 6.1 S57 end to end in `tests/remote_branch.rs`: two submissions land on `bolt/x` in local refs, the second adding `remote = "origin"`, origin holding an older `bolt/x`; a third submission is queued; `sluice step` holds and names both revisions, origin and the local branch untouched; then (a) pushing the second landing to origin, and (b) in a second test, `sluice branch accept`, each lands the third submission; verify `sluice exec main -- cargo test -p sluice --test remote_branch`.
+- [x] 6.1 S57 end to end in `tests/remote_branch.rs`: two submissions land on `bolt/x` in local refs, the second adding `remote = "origin"`, origin holding an older `bolt/x`; a third submission is queued; `sluice step` holds and names both revisions, origin and the local branch untouched; then (a) pushing the second landing to origin, and (b) in a second test, `sluice branch accept`, each lands the third submission; verify `sluice exec main -- cargo test -p sluice --test remote_branch`.
 - [ ] 6.2 `a_push_from_elsewhere_refuses_the_landing_and_the_next_round_lands` and the other `remote_branch.rs` cases still pass unchanged, a push on top of the landing being formed on as before; verify the same command.
 
 ## 7. Docs
