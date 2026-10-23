@@ -2504,7 +2504,7 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
         );
         if p.gone {
             line = format!(
-                "{}  (removed: freed by the next run or round, with nothing run)",
+                "{}  (removed: the next run or round runs its stored release once and frees it)",
                 line.trim_end()
             );
         }

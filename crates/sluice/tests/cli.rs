@@ -2429,7 +2429,7 @@ fn status_lists_the_worktrees_held() {
     f.world.remove_worktree("unit/a");
     let (_, out) = sluice(&f, &["status"]);
     assert!(
-        out.contains("(removed: freed by the next run or round, with nothing run)"),
+        out.contains("(removed: the next run or round runs its stored release once and frees it)"),
         "{out}"
     );
     assert!(f.world.session_releases().is_empty(), "status released");

@@ -31,8 +31,9 @@
 //! once, removes its scratch directory and lets its block go, and never
 //! removes the worktree. Its record keeps when its last run started, and
 //! `session_places` lists every such record with whether its worktree
-//! still exists, so the core can free one whose worktree is gone, with
-//! nothing run in its name (clause 97; 123).
+//! still exists, so the core can release one whose worktree is gone:
+//! its stored release run once from its scratch directory, then freed
+//! (clause 97; 123).
 //!
 //! A release of a session's place or of a preview that fails keeps the
 //! place's record, with what failed, how many times it was tried and
