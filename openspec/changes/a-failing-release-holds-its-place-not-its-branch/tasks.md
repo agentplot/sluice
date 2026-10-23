@@ -28,7 +28,7 @@ for the gate's checks once committed.
 
 ## 4. Rules and docs
 
-- [ ] 4.1 Write ADR 0047 "A failing release holds its checkout, not its branch" in `docs/adr/` (front matter as 0046), citing 123, 25, 34 and 81, the swancloud and deneb cases, and D1 to D4; verify `bun run build` in `site/` renders it under `/sluice/decisions/0047/`.
+- [x] 4.1 Write ADR 0047 "A failing release holds its checkout, not its branch" in `docs/adr/` (front matter as 0046), citing 123, 25, 34 and 81, the swancloud and deneb cases, and D1 to D4; verify `bun run build` in `site/` renders it under `/sluice/decisions/0047/`.
 - [ ] 4.2 Update core.10 and core.16 in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md` as design D8 says, citing 123 and ADR 0047; verify every comment in `crates/` that cites core.10 or core.16 still reads true.
 - [ ] 4.3 Document `sluice release <name>`, `--accept-failure` and the held checkouts in `sluice status` on `site/src/content/docs/reference/commands.md`; `release_retries` on `reference/configuration.md`; `failed_releases`, the `release_failed` and `gone` events and `released`'s `accepted` on `reference/state.md`, replacing the sentence on a removed worktree's release; verify `moon run site:prose` reports no warning.
 - [ ] 4.4 Run `sluice exec main` (`:#check-fast`, `:#check-tools`, `:#check-e2e`) and `openspec validate a-failing-release-holds-its-place-not-its-branch --strict`; verify all pass.
