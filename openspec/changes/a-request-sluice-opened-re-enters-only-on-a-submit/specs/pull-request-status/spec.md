@@ -30,3 +30,14 @@ review.
 #### Scenario: A draft a person made
 - **WHEN** a person marks a hand-opened pull request a draft
 - **THEN** its `sluice` check reads "waiting: a draft", as it does today
+
+### Requirement: A pull request withdrawn by the operator says so
+The `sluice` check on a pull request opened by hand, whose submission
+the operator or a planner withdrew and that has had no new head or
+ready mark since, SHALL be queued, name who withdrew it, and say that
+new commits, or marking it a draft and then ready for review, submit it
+again.
+
+#### Scenario: Withdrawn by the operator
+- **WHEN** the operator withdraws the submission of a pull request a person opened by hand
+- **THEN** its `sluice` check reads "waiting: withdrawn by the operator", its summary says the operator withdrew it and that new commits or marking it draft and then ready submits it again, and no comment is left

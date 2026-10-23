@@ -20,10 +20,10 @@ draft and wait for its submitter's act.
 - **THEN** its submission is withdrawn
 
 ### Requirement: A pull request sent back is not resubmitted unchanged
-A pull request opened by hand whose submission was blamed for a failure
-or removed for a conflict SHALL be submitted again only on a new head,
-or after it is moved to draft and back to ready for review on the same
-head.
+A pull request opened by hand whose submission was blamed for a failure,
+removed for a conflict, or withdrawn by the operator or a planner SHALL
+be submitted again only on a new head, or after it is moved to draft and
+back to ready for review on the same head.
 
 #### Scenario: Blamed, then retried
 - **WHEN** a hand-opened pull request's submission is blamed, and its author marks it draft and then ready again without new commits
@@ -32,6 +32,18 @@ head.
 #### Scenario: Blamed and left alone
 - **WHEN** a hand-opened pull request's submission is blamed and nothing changes on it
 - **THEN** no later round submits it again
+
+#### Scenario: Withdrawn by the operator, opened by hand
+- **WHEN** the operator runs `sluice withdraw` on the submission of a pull request a person opened by hand, and nothing changes on it
+- **THEN** no later round submits it again, however long its conditions hold
+
+#### Scenario: Withdrawn by the operator, then retried by its author
+- **WHEN** the operator withdrew a hand-opened pull request's submission, and its author marks it draft and then ready again without new commits
+- **THEN** the next round submits the same head again once its conditions hold
+
+#### Scenario: Withdrawn by the operator, then a new commit
+- **WHEN** the operator withdrew a hand-opened pull request's submission, and its author pushes a new commit
+- **THEN** the next round submits the new head once its conditions hold
 
 ## ADDED Requirements
 

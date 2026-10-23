@@ -4,8 +4,10 @@
 
 See proposal.md for why. The design rests on clauses 120, 3, 5, 54 and
 67, C.5's pull request driver and S56, in
-`agentplot/blueprints:design/sluice/requirements.md` (e9d5666, unchanged
-on main for these clauses).
+`agentplot/blueprints:design/sluice/requirements.md`, as clause 120,
+C.5's pull request row and S56 stand after a7d9646, which adds that the
+operator's withdrawal of a request a person opened rests that person's
+offer.
 
 Where the code stands (`crates/sluice/src/profiles/github/pulls.rs`):
 
@@ -21,6 +23,12 @@ Where the code stands (`crates/sluice/src/profiles/github/pulls.rs`):
 - A blamed or conflicting submission on the same head is resubmitted
   only when GitHub's timeline holds a `ready_for_review` later than the
   blame or conflict line in the log (`removal`, `Forge::readied`).
+- A withdrawn submission on the same head falls through `consider`'s
+  `State::Withdrawn => {}` arm to the conditions, so a hand-opened pull
+  request the operator withdrew is submitted again at the next pass.
+  The submission's record keeps who withdrew it (`Submission.withdrawn`,
+  `Withdrawal.by`: `operator`, `planner`, or an agent's name), and the
+  log's `withdrawn` line keeps the same `by`.
 - `Pulls::open`, the driver half of `sluice submit`, pushes the branch
   and opens the pull request, or updates the open one's body with the
   agent marker `<!-- sluice: agent=… -->`. It never touches its draft
@@ -50,12 +58,14 @@ Where the code stands (`crates/sluice/src/profiles/github/pulls.rs`):
 - Everything is derived each pass from GitHub and the branch's log, as
   intake is today. Nothing new is stored, and the core does not change
   (rules core.2, core.11, core.14).
+- A pull request a person opened by hand is that person's standing
+  offer, and only the person's own act, a new head or a ready mark,
+  renews it once someone else has withdrawn it.
 
 **Non-Goals:**
 
-- Pull requests a person opened by hand keep today's rules.
-- Requeueing on `sluice withdraw` of a hand-opened request (see the
-  proposal's out-of-scope list).
+- Pull requests a person opened by hand keep today's rules for a new
+  head, a draft and a close.
 
 ## Decisions
 
@@ -104,6 +114,43 @@ the new head in the agent's name, which is the incident. (b) Add a log
 event for the submit's act. Rejected: it puts a pull request notion
 into the core's records (rule core.2), and the timeline already holds
 the act.
+
+### A hand-opened pull request someone else withdrew rests
+
+For a pull request with no agent marker, intake treats a latest
+submission on the current head that is `Withdrawn`, by anyone other
+than the pull request's own agent (its author, the name intake
+withdraws and submits it under), as it treats a blamed or conflicting
+one: `retried_by_hand` decides, so it is submitted again only when it
+is out of draft and GitHub's timeline holds a ready mark after the
+withdrawal's log line. A new head is the person's act too, and needs no
+rule: the latest submission is then on another head, and the pull
+request waits for its conditions there as today. The `by` is read from
+the submission's record, so nothing new is stored.
+
+The operator's `sluice withdraw` is the case clause 120 names. The
+planner's withdrawal, the only other a hand-opened pull request can
+meet (clause 5), is held to the same rule, since it is no more the
+person's act than the operator's.
+
+A withdrawal under the pull request's own agent is left as today.
+Intake makes those itself, when the person moves the pull request to
+draft or closes it, and the person's later ready mark already brings it
+back through the draft. Reading those as rests too would hang the
+person's ready mark on the host's clock against GitHub's, for no act
+of anyone else's to protect.
+
+While it rests, its `sluice` check is queued and titled
+`waiting: withdrawn by the operator` (or `by the planner`), with a
+summary saying who withdrew it and that new commits, or marking it a
+draft and then ready for review, submit it again. sluice leaves no
+comment: the check says it, as C.5 asks, and the operator's withdrawal
+was the operator's own act, not a verdict to explain. Its forecast is
+posted as for any waiting pull request.
+
+*Alternative:* end the offer only on the operator's withdrawal and
+leave the planner's to come back. Rejected: the person did not act in
+either case, which is what clause 120 turns on.
 
 ### Withdrawals intake makes mark the draft
 
@@ -183,6 +230,10 @@ cannot be marked a draft" scenario.
 - [A person deletes the agent marker from the body] → the pull request
   is then theirs, and it works as one opened by hand. That is the
   person's act.
+- [A hand-opened pull request the operator withdrew before this ships]
+  → it rests from the first pass, and its check says so. If it was
+  already submitted again by the old intake, its latest submission is
+  the new one, and nothing changes for it.
 
 ## Migration Plan
 
