@@ -44,12 +44,18 @@ struct OnGitHub {
 
 impl OnGitHub {
     fn new(name: &str, conditions: &str) -> OnGitHub {
+        OnGitHub::with_timeout(name, conditions, "1m")
+    }
+
+    /// `main` on GitHub whose runs the time limit `timeout` ends: one
+    /// shorter than five seconds ends the run of a head with `slow`.
+    fn with_timeout(name: &str, conditions: &str, timeout: &str) -> OnGitHub {
         let repo = Repo::new(name);
         repo.write(
             ".config/sluice.toml",
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
-                 [branches.main]\nremote = \"origin\"\ntimeout = \"1m\"\n\n\
+                 [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n\n\
                  [branches.main.pull_requests]\n{conditions}\n"
             ),
         );
@@ -1087,57 +1093,166 @@ fn sent_back_keeps_the_worktree() {
     assert!(w.exists());
 }
 
-/// A submit again on the head of a pull request already sent back queues
-/// and runs nothing, since such a pull request is submitted again only on
-/// a new head or once marked a draft and then ready for review
-/// (pull-request-intake), and says so: when it was blamed, its failure
-/// again (20), and both ways on, never a test as if one had just run.
+/// Blamed, then submitted again on the same head (120): the submit marks
+/// the pull request ready for review, intake takes the same head, and its
+/// checks run again; the submit follows that test to its outcome.
 #[test]
-fn submit_again_on_a_head_sent_back() {
+fn blamed_then_submitted_again_on_the_same_head() {
     let g = OnGitHub::new("pr-same-head", "");
     let w = g.session("again", &[("broken", "x\n")]);
     let out = g.wt_submit(&w, &[]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
-    let pull = g.gh.forge.by_ref("unit/again").unwrap().unwrap();
+    let pull = g.pull_from("unit/again");
     let n = pull.number;
+    assert!(pull.draft, "{pull:?}");
 
     let out = g.wt_submit(&w, &[]);
     let said = text(&out);
     assert_eq!(out.status.code(), Some(1), "{said}");
-    assert_eq!(g.of(n).len(), 1, "nothing queued: {:?}", g.subs());
-    assert!(!said.contains("tasks to run"), "{said}");
-    let lines: Vec<&str> = said.lines().collect();
-    let at = lines
-        .iter()
-        .position(|l| l.starts_with(&format!("#{n}'s head ")))
-        .unwrap_or_else(|| panic!("{said}"));
-    let blamed = lines[at]
-        .strip_prefix(&format!(
-            "#{n}'s head {} was tested and blamed at ",
-            &pull.head[..7]
-        ))
-        .and_then(|l| l.strip_suffix(": nothing was queued or run again"))
-        .unwrap_or_else(|| panic!("{said}"));
     assert!(
-        chrono::DateTime::parse_from_rfc3339(blamed).is_ok(),
+        said.contains(&format!("updated #{n}")) && said.contains("marked ready for review"),
         "{said}"
     );
-    assert_eq!(lines[at + 1], "failed: sh check.sh", "{said}");
+    assert!(!said.contains("nothing was queued or run again"), "{said}");
     assert!(
-        lines[at + 2].starts_with(&format!("  on main + #{n} (")),
+        said.contains(&format!("testing main + #{n} · 1 tasks to run")),
         "{said}"
     );
+    assert!(said.contains("failed: sh check.sh"), "{said}");
     assert!(
-        lines[at + 3].starts_with("  log of sh check.sh: "),
+        said.lines()
+            .last()
+            .is_some_and(|l| l == "fix it in your worktree and submit again"),
         "{said}"
     );
-    assert_eq!(
-        lines[at + 4..],
-        [format!(
-            "fix it in your worktree and submit again, or mark #{n} a draft and then ready \
-             for review to test the same commits again"
-        )],
-        "{said}"
-    );
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], pull.head.as_str());
+    assert_eq!(subs[1]["state"], "failed", "{subs:?}");
+    // Sent back again: held for the next submit, as before.
+    assert!(g.pull_from("unit/again").draft);
+    assert_eq!(g.of_after(n, 2).len(), 2, "{:?}", g.subs());
     assert!(w.exists());
+}
+
+/// Timed out, then submitted again on the same head: the advice to submit
+/// the same head again is one sluice takes, never "nothing was queued or
+/// run again".
+#[test]
+fn timed_out_then_submitted_again_on_the_same_head() {
+    let g = OnGitHub::with_timeout("pr-timed-out", "", "2s");
+    let w = g.session("slowly", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains("if the host was slow, submit the same head again"),
+        "{said}"
+    );
+    assert!(!said.contains("draft"), "{said}");
+    let n = g.pull_from("unit/slowly").number;
+
+    let out = g.wt_submit(&w, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(!said.contains("nothing was queued or run again"), "{said}");
+    assert!(said.contains(&format!("testing main + #{n} ·")), "{said}");
+    assert!(said.contains("timed out"), "{said}");
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["result"], "timed out", "{subs:?}");
+}
+
+/// A submit on a queued pull request replaces its submission: the submit
+/// withdraws the old head's submission itself, and the new head is taken
+/// with no draft and no hold.
+#[test]
+fn a_new_head_submitted_while_queued() {
+    let g = OnGitHub::new("pr-replaced", "");
+    let w = g.session("replaced", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/replaced").number;
+    let first = g.of(n);
+    assert_eq!(first.len(), 1, "{first:?}");
+    let new = g.commit_in(&w, &[("more.txt", "more\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains(&format!("withdrew its submission {}", first[0]["id"])),
+        "{said}"
+    );
+    let pull = g.pull_from("unit/replaced");
+    assert!(!pull.draft && pull.head == new, "{pull:?}");
+    let subs = g.of_after(n, 1);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[0]["state"], "withdrawn");
+    assert_eq!(subs[0]["withdrawn"]["by"], "unit/replaced");
+    assert_eq!(subs[1]["head"], new.as_str());
+    assert_ne!(subs[1]["state"], "withdrawn", "{subs:?}");
+    assert_ne!(
+        g.posted(&new).map(|p| p.1),
+        Some("waiting: the next submit".into())
+    );
+}
+
+/// Submitted by the operator's ops: an agent's pull request, sent back, is
+/// submitted from a second worktree on the same branch with ops's fix. It
+/// is ready for review at the head pushed, names ops as its agent, and
+/// lands.
+#[test]
+fn submitted_by_the_operators_ops() {
+    let g = OnGitHub::new("pr-ops", "");
+    let w = g.session("unit-1", &[("broken", "x\n")]);
+    let out = g.wt_submit(&w, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let n = g.pull_from("unit/unit-1").number;
+    assert!(g.pull_from("unit/unit-1").draft);
+
+    let ops = g.repo.dir().with_extension("ops");
+    let _ = std::fs::remove_dir_all(&ops);
+    g.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-f",
+        ops.to_str().unwrap(),
+        "unit/unit-1",
+    ]);
+    g.repo
+        .git(&["-C", ops.to_str().unwrap(), "rm", "-q", "broken"]);
+    g.repo.git(&[
+        "-C",
+        ops.to_str().unwrap(),
+        "commit",
+        "-q",
+        "-m",
+        "ops's fix",
+    ]);
+    let fixed = g
+        .repo
+        .git(&["-C", ops.to_str().unwrap(), "rev-parse", "HEAD"]);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &ops)
+        .env("SLUICE_AGENT", "madswan-ops")
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("marked ready for review"), "{said}");
+    let pull = g.pull_from("unit/unit-1");
+    assert!(!pull.draft && pull.head == fixed, "{pull:?}");
+    assert!(
+        pull.body.contains("<!-- sluice: agent=madswan-ops -->")
+            && !pull.body.contains("agent=unit/unit-1"),
+        "{}",
+        pull.body
+    );
+    g.step_until("landed", |g| g.of(n).iter().any(|s| s["state"] == "landed"));
+    let subs = g.of(n);
+    let landed = subs.iter().find(|s| s["state"] == "landed").unwrap();
+    assert_eq!(landed["from"]["agent"], "madswan-ops", "{subs:?}");
+    assert_eq!(landed["head"], fixed.as_str());
 }
