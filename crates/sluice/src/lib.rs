@@ -32,8 +32,8 @@ use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
 use sluice_core::records::{Event, FailedTask, State, Submission};
 use sluice_core::{
-    AmendRefusal, Clock, Forecast, Forecasted, Requester, Seams, Serves, Sluice, Status, Step,
-    SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, Clock, Forecast, Forecasted, GroupRequest, Requester, Seams, Serves,
+    Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Outcome, SessionPlace};
 use told::Kind;
@@ -88,6 +88,7 @@ Examples:
   $ sluice submit main
   $ sluice submit main --no-wait
   $ sluice submit main --after 12,14 --priority 5
+  $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
 
 Exit codes:
   0    landed
@@ -96,7 +97,10 @@ Exit codes:
   3    sluice itself failed; the cause is on stderr
   4    withdrawn while it waited
   64   a command line sluice cannot read
-  130  stopped with Ctrl-C; the submission stays queued";
+  130  stopped with Ctrl-C; the submission stays queued
+
+Several worktrees are submitted all or none; the exit is 0 when every one
+landed, and otherwise the exit of the first, in the order given, that did not.";
 
 /// `sluice wait --help`'s examples and exits (ADR 0041).
 const WAIT_AFTER_HELP: &str = "\
@@ -214,9 +218,10 @@ pub enum Command {
         /// request, stands.
         #[arg(long)]
         status: bool,
-        /// The worktree to submit from.
+        /// The worktree to submit from; given more than once, every one's
+        /// head as one act, in the order given.
         #[arg(long, default_value = ".")]
-        worktree: String,
+        worktree: Vec<String>,
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
@@ -713,6 +718,32 @@ pub fn run(
             worktree,
             json,
         } => {
+            // 125: several worktrees are one act, which neither forecasts
+            // nor reports one worktree's last submission.
+            if worktree.len() > 1 && (check || status) {
+                let flag = if check { "--check" } else { "--status" };
+                writeln!(
+                    out,
+                    "sluice submit: {flag} takes one worktree; give --worktree once with it"
+                )?;
+                return Ok(USAGE);
+            }
+            if worktree.len() > 1 {
+                let req = GroupRequest {
+                    branch,
+                    worktrees: worktree,
+                    after,
+                    priority,
+                };
+                if takes_pulls(&s, &req.branch)? {
+                    anyhow::bail!(
+                        "{} takes pull requests, which take one worktree",
+                        req.branch
+                    );
+                }
+                return submit_group(&s, pushers, clock, req, no_wait, json, pause, out);
+            }
+            let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
             if check {
                 return forecast(
                     &s,
@@ -1435,10 +1466,7 @@ fn submit(
         return Ok(0);
     }
     if !json {
-        let ahead = match accepted.ahead.len() {
-            0 => "nothing queued ahead".to_string(),
-            n => format!("{n} queued ahead ({})", hashes(&accepted.ahead)),
-        };
+        let ahead = queued_ahead(&accepted.ahead);
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
     }
     if no_wait {
@@ -1454,6 +1482,170 @@ fn submit(
         pause,
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
+}
+
+/// What a submission was queued behind, as a submit says it.
+fn queued_ahead(ahead: &[u64]) -> String {
+    match ahead.len() {
+        0 => "nothing queued ahead".to_string(),
+        n => format!("{n} queued ahead ({})", hashes(ahead)),
+    }
+}
+
+/// 125: `sluice submit` of several worktrees as one act: every head in the
+/// order given, all queued or none. Waiting, it waits on each in that
+/// order, which runs the rounds that decide the rest (rule core.4), then
+/// reports each one's outcome in order, and exits with the first, in
+/// that order, that did not land. Under `--json`, one document however it
+/// ends.
+#[allow(clippy::too_many_arguments)]
+fn submit_group(
+    s: &Sluice<'_>,
+    pushers: &dyn Pushers,
+    clock: &dyn Clock,
+    req: GroupRequest,
+    no_wait: bool,
+    json: bool,
+    pause: &dyn Pause,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let branch = &req.branch;
+    let accepted = match s.submit_group(&req)? {
+        Ok(a) => a,
+        Err(refused) => return refused_group(&req, &refused, pushers, json, out),
+    };
+    let items: Vec<(&String, Accepted)> = req.worktrees.iter().zip(accepted).collect();
+    if json && no_wait {
+        let submissions: Vec<serde_json::Value> = items
+            .iter()
+            .map(|(w, a)| serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead }))
+            .collect();
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({ "branch": branch, "submissions": submissions })
+        )?;
+        return Ok(0);
+    }
+    if !json {
+        for (w, a) in &items {
+            let ahead = queued_ahead(&a.ahead);
+            writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
+        }
+    }
+    if no_wait {
+        return Ok(0);
+    }
+    let waiting = Waiting {
+        clock,
+        pulls: None,
+        deadline: None,
+        json,
+        pause,
+    };
+    // Each in turn; once stopped, the rest as they stand.
+    let mut subs = Vec::new();
+    let mut stopped = None;
+    for (_, a) in &items {
+        let sub = s.state(a.id)?.expect("a submission just made");
+        if stopped.is_some() {
+            subs.push(sub);
+            continue;
+        }
+        match wait_on(s, &waiting, sub, Some(State::Queued), out)? {
+            Waited::Decided(sub) => subs.push(sub),
+            Waited::Undecided(sub, code) => {
+                stopped = Some(code);
+                subs.push(sub);
+            }
+        }
+    }
+    if json {
+        let mut submissions = Vec::new();
+        for ((w, _), sub) in items.iter().zip(&subs) {
+            let mut record = serde_json::to_value(sub)?;
+            record["worktree"] = serde_json::json!(w);
+            submissions.push(record);
+        }
+        let doc = serde_json::json!({ "branch": branch, "submissions": submissions });
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        for ((w, _), sub) in items.iter().zip(&subs) {
+            writeln!(out, "submission {} from {w}:", sub.id)?;
+            if sub.state.is_out() {
+                report(s, sub, branch, &BTreeMap::new(), Reached::Now, false, out)?;
+            } else {
+                writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+            }
+        }
+    }
+    if let Some(code) = stopped {
+        return Ok(code);
+    }
+    Ok(subs
+        .iter()
+        .map(exit_for)
+        .find(|c| *c != LANDED)
+        .unwrap_or(LANDED))
+}
+
+/// A refused act: each refused worktree with why, said once each, and
+/// nothing submitted.
+fn refused_group(
+    req: &GroupRequest,
+    refused: &[(String, SubmitRefusal)],
+    pushers: &dyn Pushers,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let branch = &req.branch;
+    let again = format!(
+        "sluice submit {branch} {}",
+        req.worktrees
+            .iter()
+            .map(|w| format!("--worktree {w}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let (mut texts, mut next, mut worktrees) = (Vec::new(), Vec::new(), Vec::new());
+    for (w, r) in refused {
+        let text = refusal(r, w, branch, pushers)?;
+        if !texts.contains(&text) {
+            texts.push(text);
+        }
+        for n in refusal_next(r, branch) {
+            let n = if n == format!("sluice submit {branch}") {
+                again.clone()
+            } else {
+                n
+            };
+            if !next.contains(&n) {
+                next.push(n);
+            }
+        }
+        if !worktrees.contains(w) {
+            worktrees.push(w.clone());
+        }
+    }
+    if json {
+        let message: Vec<&str> = texts
+            .iter()
+            .map(|t| t.strip_prefix("refused: ").unwrap_or(t))
+            .collect();
+        let mut doc = told::document(Kind::Refused, &message.join("\n"), &next);
+        doc["error"]["worktrees"] = serde_json::json!(worktrees);
+        writeln!(out, "{doc}")?;
+    } else {
+        for t in &texts {
+            writeln!(out, "{t}")?;
+        }
+        writeln!(
+            out,
+            "nothing submitted: the {} worktrees are submitted together or not at all",
+            req.worktrees.len()
+        )?;
+    }
+    Ok(CONFLICT)
 }
 
 /// How a command waits on a submission.

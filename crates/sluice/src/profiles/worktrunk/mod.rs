@@ -150,6 +150,8 @@ impl Submit {
         let read = crate::Cli::try_parse_from(
             std::iter::once(OsString::from("sluice")).chain(sluice.iter().cloned()),
         );
+        // Several worktrees are one act of `sluice submit`'s, and none is
+        // removed.
         let remove = match read.map(|c| c.command) {
             Ok(Some(crate::Command::Submit {
                 branch,
@@ -158,9 +160,9 @@ impl Submit {
                 status: false,
                 worktree,
                 ..
-            })) if !keep => Some(Waiting {
+            })) if !keep && worktree.len() == 1 => Some(Waiting {
                 branch,
-                worktree: worktree.into(),
+                worktree: worktree[0].clone().into(),
             }),
             _ => None,
         };
