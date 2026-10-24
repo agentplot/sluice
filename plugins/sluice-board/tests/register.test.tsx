@@ -358,6 +358,39 @@ test("PREVIEWS: each preview's name, branch@rev7 and state, and its addresses li
   await pane.unmount();
 });
 
+test("a link that is not https: is drawn as a link on every surface, the engine plain on desktop", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [withPreviews("http://localhost:4001")], nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // The kit reports the tree a surface is handed, never what it paints: on
+  // desktop the engine draws this link's text plain (LinkProps.href), and the
+  // tree keeps the Link. So the test pins what the kit marks, the same Link
+  // handed to both surfaces and taken by each; an engine that refused it, or
+  // a kit that marked it plain, fails here rather than opening nothing.
+  for (const surface of ["desktop", "terminal"] as const) {
+    const pane = await $.ui.mount({
+      plugin: "sluice-board",
+      surface,
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+    await expect(pane.drawn()).resolves.toBeDefined();
+    const row = await pane.find({ type: "Text", text: /web: / });
+    expect(row?.children.slice(-2)).toEqual([
+      "  web: ",
+      {
+        type: "Link",
+        props: { href: "http://localhost:4001" },
+        children: ["http://localhost:4001"],
+      },
+    ]);
+    await pane.unmount();
+  }
+});
+
 test("no PREVIEWS while there are none", async ($, on) => {
   const pane = await paneOf($, on, overview());
   expect(await pane.find({ type: "Text", text: "PREVIEWS" })).toBeUndefined();
