@@ -306,6 +306,15 @@ in
       export MOON_HOME
     fi
     unset _moon_root _moon_common _moon_cache
+    # A sluice run is handed its share of the host's cores (SLUICE_JOBS):
+    # cargo builds and runs tests with that many, so the runs the host's
+    # bound lets go at once share its cores rather than each taking them
+    # all. A session's own shell, with no SLUICE_JOBS, keeps every core.
+    if [ -n "''${SLUICE_JOBS:-}" ]; then
+      CARGO_BUILD_JOBS="$SLUICE_JOBS"
+      RUST_TEST_THREADS="$SLUICE_JOBS"
+      export CARGO_BUILD_JOBS RUST_TEST_THREADS
+    fi
     # Only activates: sluice sources this inside its executor, where
     # nothing may be installed.
     ${activate}
