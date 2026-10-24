@@ -1,0 +1,17 @@
+# Tasks
+
+## 1. The host's settings state the cores sluice may use
+
+- [x] 1.1 In `crates/sluice/src/instance.rs`, add `cores: Option<i64>` to `RunsForm` and `Instance::from_host(path, given, all)` (design D2): `processors` is the host's limit where `given < all`, `cores` where stated, and `all` otherwise; refuse a stated `cores` below one, above `all`, or where `given < all`, with the three messages of design D4; and compute the default bound, with no `max`, as a quarter of `processors` once it is decided (design D3). Keep `from_file(path, processors)` as `from_host(path, processors, processors)`. Verify with unit tests in the module (`cargo test -p sluice instance`, part of `cli:test`): a host of eighteen cores giving all of them with `max = 3, cores = 12` gives `jobs() == 4` (*A Mac keeps six cores for its agents*); `cores = 8` and no `max` gives bound 2 and `jobs() == 4`; a host giving six of sixteen with `max = 2` and no `cores` gives `jobs() == 3`; with nothing stated on eighteen cores and `max = 3`, `jobs() == 6`; and `cores = 0`, `cores = 24` on eighteen, and `cores = 4` on a host giving six of sixteen are each refused with their message, which names the host's cores and, in the last, the six it gives.
+- [x] 1.2 In `Instance::read()`, pass `available_parallelism()` as `given` and the host's online logical CPUs as `all`, read with `nix::libc::sysconf(_SC_NPROCESSORS_ONLN)` and taken as `given` where it fails or reports fewer (design D1). Verify with a unit test that on this host `read`'s two counts satisfy `given <= all`, and on macOS `given == all` (`cli:test`).
+- [x] 1.3 Update the module docs of `instance.rs`: `cores` in the example, what sluice may use and when the keeper states it (71), and the default bound as a quarter of it; and `processors`'s doc comment to say it is the host's limit, the stated `cores`, or all the host's cores. Verify `cargo doc -p sluice --no-deps` builds with no warning.
+- [x] 1.4 In `crates/sluice/tests/instance.rs`, add a test beside `three_repositories_share_the_hosts_bound` that runs one repository's `sluice run` under a host config of `max = 2` and `cores = 2`: where this host gives sluice all its cores, the run's `SLUICE_JOBS` is 1; where it gives fewer, `sluice run` exits non-zero naming `[runs] cores` and nothing runs. Verify it passes under `cli:tools`.
+
+## 2. The docs say when to set `cores`
+
+- [x] 2.1 In `site/src/content/docs/reference/configuration.md`, add `cores` to the host's example and to `[runs]` (design D5): the cores sluice may use; each run's share and, with no `max`, the bound follow from it; a Mac never limits sluice, so its keeper sets `cores` to leave the rest for the sessions beside it; and the three refusals. In `site/src/content/docs/guides/parallel-and-batch.md`, *The host's bound*, say in a sentence that `cores` keeps the bound's runs to fewer cores than the host has. Verify `site:prose` passes with no warning.
+- [x] 2.2 Add `cores` to the host's example in `README.md`, and to the host example and the `[runs] max` bullet of `plugins/sluice/skills/setting-up-sluice/SKILL.md`, where "Each run is given the cores divided by `max`" becomes the cores sluice may use. Verify the plugin docs test passes (`crates/sluice/tests/plugin_docs.rs`, `cli:test`); the README is checked by review, since no gate task reads Markdown outside the site (core.21).
+
+## 3. The gate
+
+- [x] 3.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes.

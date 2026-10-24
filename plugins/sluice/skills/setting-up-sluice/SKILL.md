@@ -113,9 +113,11 @@ Then choose, and tell the user why:
 - Set the host's `[runs] max` (step 5) to how many runs the host holds at
   once. It caps every branch of every repository on the host together,
   agents' `sluice exec` runs and previews too: every sluice on the host
-  reads one count. With no `max`, a quarter of the cores is shared by every
-  repository on the host. Leave room in it for what else the host runs,
-  agents' sessions included; sluice reads nothing of how busy the host is.
+  reads one count. With no `max`, a quarter of the cores sluice may use is
+  shared by every repository on the host. Leave room in it for what else the
+  host runs, agents' sessions included; sluice reads nothing of how busy the
+  host is. On a Mac, which gives sluice every core, set `[runs] cores` too,
+  to the cores sluice may use, so the runs leave the rest to the sessions.
 - Every run gets its own checkout and its own ports. Check the tests write
   nothing outside the checkout (a fixed output directory, a lock file, a port
   they choose themselves): two overlapping runs collide there and fail
@@ -153,12 +155,16 @@ Host settings live in `~/.config/sluice/config.toml`, not the repository:
 ```toml
 [runs]
 max = 2         # runs at once on this host, every repository's; default a quarter of the cores
+cores = 12      # the cores sluice may use; default what the host gives it, every core on a Mac
 reserved = 1    # of those, kept for submissions; agents' `sluice exec` never takes them
 ```
 
-Each run is given the cores divided by `max` (`SLUICE_JOBS`, and moon's
-`--concurrency`), so the runs going at once, whatever their repositories,
-use the host's cores and no more.
+Each run is given the cores sluice may use divided by `max` (`SLUICE_JOBS`,
+and moon's `--concurrency`), so the runs going at once, whatever their
+repositories, use those cores and no more. Without `cores`, sluice may use
+what the host gives it: its CPU affinity or cgroup quota on Linux, and every
+core where the host sets neither, as on a Mac. sluice refuses a `cores` below
+1, above the host's cores, or on a host that already limits it.
 
 A repository whose tests bring up a stack of containers sets `max` to how
 many stacks fit in memory at once.

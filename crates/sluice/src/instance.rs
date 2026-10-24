@@ -6,15 +6,22 @@
 //! `[runs] max` is the host's bound, shared by every repository on it and
 //! every instance of sluice serving them: a run of any of them starts only
 //! while the host's count of running checks, kept in its state
-//! (`crate::host_count`), is under it. Each run is given the cores divided
-//! by the bound, so the bound's runs together use what sluice may use and
-//! no more.
+//! (`crate::host_count`), is under it. Each run is given the cores sluice
+//! may use divided by the bound, so the bound's runs together use what
+//! sluice may use and no more.
+//!
+//! What sluice may use is what the host gives it, its affinity or its
+//! cgroup quota on Linux; where the host gives no such limit, as a Mac
+//! never does, `[runs] cores` states it, and stated nowhere it is all the
+//! host's cores (71). With no `max`, the bound is a quarter of what sluice
+//! may use, never fewer than one.
 //!
 //! `$XDG_CONFIG_HOME/sluice/config.toml` (default `~/.config`):
 //!
 //! ```toml
 //! [runs]
 //! max = 2
+//! cores = 12
 //! reserved = 1
 //!
 //! [forge]
@@ -51,8 +58,9 @@ pub struct Instance {
     /// The runs of the bound kept for submissions, which session runs never
     /// take (91).
     pub reserved: usize,
-    /// The cores sluice may use: the process's affinity and its
-    /// cgroup's quota where the host has them.
+    /// The cores sluice may use: the host's limit, its affinity or its
+    /// cgroup quota, where it gives one; else `[runs] cores` where the
+    /// host's settings state it; else all the host's cores (71).
     pub processors: usize,
     /// The app sluice pushes as, where the host names one.
     pub forge: Option<Forge>,
@@ -148,20 +156,29 @@ struct ForgeForm {
 #[serde(deny_unknown_fields)]
 struct RunsForm {
     max: Option<i64>,
+    cores: Option<i64>,
     reserved: Option<i64>,
     systems: Option<Vec<String>>,
 }
 
 impl Instance {
     /// The instance's settings from its configuration file, or the
-    /// defaults where it has none: a quarter of the cores, never
-    /// fewer than one.
+    /// defaults where it has none: a quarter of the cores sluice may use,
+    /// never fewer than one.
     pub fn read() -> Result<Instance> {
-        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
-        Instance::from_file(config_path().as_deref(), processors)
+        let (given, all) = host_cores();
+        Instance::from_host(config_path().as_deref(), given, all)
     }
 
+    /// The settings on a host that gives sluice all of its `processors`
+    /// cores.
     pub fn from_file(path: Option<&Path>, processors: usize) -> Result<Instance> {
+        Instance::from_host(path, processors, processors)
+    }
+
+    /// The settings on a host of `all` cores that gives sluice `given` of
+    /// them: fewer where its affinity or quota limits sluice (71).
+    pub fn from_host(path: Option<&Path>, given: usize, all: usize) -> Result<Instance> {
         let text = match path.map(std::fs::read_to_string) {
             Some(Ok(t)) => t,
             Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -171,6 +188,21 @@ impl Instance {
         };
         let form: ConfigForm = toml::from_str(&text)
             .with_context(|| format!("reading {}", path.unwrap_or(Path::new("")).display()))?;
+        // What sluice may use (71): the host's limit where it gives one, the
+        // keeper's `cores` where it gives none, and all its cores otherwise.
+        let processors = match form.runs.cores {
+            None if given < all => given,
+            None => all,
+            Some(n) if n < 1 => bail!("[runs] cores must be at least 1, not {n}"),
+            Some(n) if n as usize > all => {
+                bail!("[runs] cores = {n} is more than this host's {all} cores")
+            }
+            Some(n) if given < all => bail!(
+                "[runs] cores = {n}, but this host already gives sluice {given} of its {all} \
+                 cores by its affinity or quota, and that is what sluice may use: leave cores out"
+            ),
+            Some(n) => n as usize,
+        };
         let bound = match form.runs.max {
             None => (processors / 4).max(1),
             Some(n) if n >= 1 => n as usize,
@@ -280,6 +312,17 @@ fn private_key(what: &str, path: &str, home: Option<&Path>) -> Result<PathBuf> {
     Ok(key)
 }
 
+/// The cores the host gives sluice and all the host's cores: its affinity
+/// and cgroup quota, which macOS has neither of, and its online logical
+/// CPUs, taken as the first where the host cannot say or says fewer (71).
+pub fn host_cores() -> (usize, usize) {
+    let given = std::thread::available_parallelism().map_or(1, |n| n.get());
+    // SAFETY: sysconf reads a value and touches no memory of ours.
+    let online = unsafe { nix::libc::sysconf(nix::libc::_SC_NPROCESSORS_ONLN) };
+    let all = usize::try_from(online).map_or(given, |n| n.max(given));
+    (given, all)
+}
+
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
@@ -311,11 +354,19 @@ mod tests {
     use super::*;
 
     fn with(text: &str, processors: usize) -> Result<Instance> {
+        on(text, processors, processors)
+    }
+
+    /// The settings `text` gives on a host of `all` cores that gives sluice
+    /// `given` of them.
+    fn on(text: &str, given: usize, all: usize) -> Result<Instance> {
+        static FILES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("sluice-instance-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("{processors}-{}.toml", text.len()));
+        let n = FILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("{n}.toml"));
         std::fs::write(&path, text).unwrap();
-        let out = Instance::from_file(Some(&path), processors);
+        let out = Instance::from_host(Some(&path), given, all);
         let _ = std::fs::remove_file(&path);
         out
     }
@@ -341,6 +392,57 @@ mod tests {
                 .bound,
             2
         );
+    }
+
+    /// 71: what sluice may use is the host's limit where it gives one, the
+    /// keeper's `cores` where it gives none, and all its cores otherwise;
+    /// each run's share and the default bound follow from it.
+    #[test]
+    fn the_cores_sluice_may_use() {
+        // A Mac keeps six cores for its agents.
+        let mac = on("[runs]\nmax = 3\ncores = 12\n", 18, 18).unwrap();
+        assert_eq!((mac.processors, mac.bound, mac.jobs()), (12, 3, 4));
+        // Stated cores and no bound: a quarter of them.
+        let eight = on("[runs]\ncores = 8\n", 18, 18).unwrap();
+        assert_eq!((eight.bound, eight.jobs()), (2, 4));
+        // A quota of six of sixteen cores, and nothing stated.
+        let quota = on("[runs]\nmax = 2\n", 6, 16).unwrap();
+        assert_eq!((quota.processors, quota.jobs()), (6, 3));
+        assert_eq!(on("", 6, 16).unwrap().bound, 1);
+        // A Mac with nothing stated, as before.
+        let s60 = on("[runs]\nmax = 3\n", 18, 18).unwrap();
+        assert_eq!((s60.processors, s60.jobs()), (18, 6));
+    }
+
+    /// 71: a `cores` sluice cannot honour is refused, naming the setting
+    /// and the host's cores.
+    #[test]
+    fn stated_cores_sluice_cannot_honour() {
+        let err = |text: &str, given, all| on(text, given, all).unwrap_err().to_string();
+        assert_eq!(
+            err("[runs]\ncores = 0\n", 18, 18),
+            "[runs] cores must be at least 1, not 0"
+        );
+        assert_eq!(
+            err("[runs]\ncores = 24\n", 18, 18),
+            "[runs] cores = 24 is more than this host's 18 cores"
+        );
+        assert_eq!(
+            err("[runs]\ncores = 4\n", 6, 16),
+            "[runs] cores = 4, but this host already gives sluice 6 of its 16 cores by its \
+             affinity or quota, and that is what sluice may use: leave cores out"
+        );
+    }
+
+    /// The two counts `read` takes: the host never gives sluice more cores
+    /// than it has, and a Mac gives it all of them (71).
+    #[test]
+    fn the_hosts_cores() {
+        let (given, all) = host_cores();
+        assert!(1 <= given && given <= all, "{given} of {all}");
+        if cfg!(target_os = "macos") {
+            assert_eq!(given, all);
+        }
     }
 
     /// The `[forge]` table: absent, present, and a key others may read
