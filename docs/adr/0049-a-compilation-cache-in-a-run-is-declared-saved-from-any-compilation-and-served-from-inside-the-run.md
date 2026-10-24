@@ -9,7 +9,7 @@ decision-makers:
 
 # A compilation cache in a run is declared, saved from any compilation, and served from inside the run
 
-Status: accepted by the user on 2026-10-24, on their card ("Approved"). Amendment below: proposed to the user on 2026-10-24, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-24, on their card ("Approved").
 
 Deciders: madswan-design, 2026-10-24, on the question of slc-2's code stage of the chore `rustc-outputs-are-shared-across-places-with-sccache` (bolt runs-share-the-hosts-cores); the user on their card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 34, 35, 108 and the sandbox row of C.2; rules core.10, core.12; swancloud signal 2026-10-24-crw-4-ops-45537fbd/01 (deneb's load from cold per-place Rust builds).
@@ -38,12 +38,10 @@ Option 1 for sluice's runs, with option 3 taken at once as the chore's narrowed 
 
 ## Amendment: one server at a time holds the cache's directory; an unconfined run uses the host's one server
 
-Status: proposed to the user on 2026-10-24, as `briefs.15` has it; accepted only on their yes.
-
 Deciders: madswan-design, 2026-10-24, on the finding of slc-2's construct of `a-run-compiles-through-a-declared-compilation-cache`.
 Sources: sccache 0.17.0 `docs/Local.md` ("The local storage only supports a single sccache server at a time. Multiple concurrent servers will race and cause spurious build failures"), `src/lru_disk_cache/mod.rs` (`LruDiskCache::init` deletes every `.sccachetmp*` file, another server's write in progress) and `src/cache/disk.rs`, as the construct read them; clauses 34, 35; rule core.10; the executor rows of C.2.
 
-Option 1 as decided put one server in every place over one directory, which the cache's own maker says races: a spurious compile failure would change what a check reports, which clause 35's last sentence forbids. The decision is amended in two parts, and the rest stands.
+Status: proposed to the user on 2026-10-24, as `briefs.15` has it; accepted only on their yes. Option 1 as decided put one server in every place over one directory, which the cache's own maker says races: a spurious compile failure would change what a check reports, which clause 35's last sentence forbids. The decision is amended in two parts, and the rest stands.
 
 1. **A run whose executor confines nothing** (the open executor) sends its compiles to the host's one compile server, the keeper's, started outside any run as a host service, the way a run reaches the host's container engine; the policy declares the cache, the keeper runs the server, and the run starts and ends nothing of it (34, core.10 hold). Its compiles were never confined, so nothing is lost by compiling through a process outside the run.
 2. **A run whose executor confines it** (sandbox, container) keeps its compiles inside: a server of its own in its process group, over the declared directory, which bears one server at a time; the run holds the directory's lock for its life, and a run that finds the lock held compiles without the cache. The directory, its lock included, is the one path outside the place the executor lets the run write.
