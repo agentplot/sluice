@@ -456,3 +456,40 @@ fn s57_a_branch_read_from_an_older_copy_is_held_until_restored_or_accepted() {
         assert_eq!(h.doc().held, None);
     }
 }
+
+/// satisfies: S64, 124, 122
+#[test]
+fn s64_a_levelling_git_holds_the_lock_on_is_tried_again_by_the_next_round() {
+    let h = Harness::bolt();
+    h.w().on_remote(BRANCH);
+    let made = h.tip();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    // git holds the lock on this host's bolt/x while the landing is pushed,
+    // and lets it go before the next round.
+    let lock = "git holds the lock on refs/heads/bolt/x";
+    h.w().fail_levels(1, lock);
+    for _ in 0..8 {
+        if h.sub(one).state == State::Landed {
+            break;
+        }
+        h.step();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    let landing = h.tip();
+    assert_eq!(h.w().copy_of(BRANCH), Some(made.clone()));
+    let behind = h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .copy
+        .expect("the copy behind");
+    assert_eq!(
+        (behind.at, behind.lacks, behind.why.as_str()),
+        (Some(made), landing.clone(), lock)
+    );
+
+    h.step();
+    assert_eq!(h.w().copy_of(BRANCH), Some(landing));
+    assert_eq!(h.sluice().status(BRANCH).unwrap().copy, None);
+}
