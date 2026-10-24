@@ -721,3 +721,36 @@ export function pullOf(worktree: string): number | null {
   const m = worktree.match(/^pull\/(\d+)$/);
   return m ? Number(m[1]) : null;
 }
+
+/** Each remote's GitHub base as the board resolved it, or null when it is not on GitHub. */
+export type Remotes = Record<string, string | null>;
+
+/**
+ * Where a branch's landings are on GitHub: its remote's repository, or null
+ * for a branch with no remote, which lands in this host's repository alone.
+ */
+export function commitBase(b: OverviewBranch, remotes: Remotes): string | null {
+  return b.remote ? (remotes[b.remote] ?? null) : null;
+}
+
+/**
+ * Where a branch's pull requests are on GitHub: its remote's repository, or
+ * origin's when the overview names none, the repository the board knows best.
+ */
+export function pullBase(b: OverviewBranch, remotes: Remotes): string | null {
+  return remotes[b.remote ?? "origin"] ?? null;
+}
+
+/**
+ * The pull requests a recent line's own submissions came from: a landing's
+ * ids, a blame's or a conflict's id, never what is in a conflict's way.
+ */
+export function pullsOf(b: OverviewBranch, r: Recent): number[] {
+  const own = r.event === "landed" ? (r.ids ?? []) : r.id !== undefined ? [r.id] : [];
+  const from = b.recent_from ?? {};
+  return own
+    .map((id) => from[String(id)])
+    .filter((w): w is string => w !== undefined)
+    .map(pullOf)
+    .filter((n): n is number => n !== null);
+}

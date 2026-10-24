@@ -208,6 +208,38 @@ test("the band and the pane show the queue on every surface", async ($, on) => {
   }
 });
 
+test("a branch that lands on another remote links its pull requests there", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d = overview();
+  d.branches[0]!.remote = "upstream";
+  // Two documents name it: it is resolved once.
+  host(
+    on,
+    [d, d],
+    nothingSeen(),
+    {},
+    {
+      "git remote get-url origin": "git@github.com:fork-owner/sluice.git\n",
+      "git remote get-url upstream": "https://github.com/agentplot/sluice.git\n",
+    },
+  );
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(ran.filter((r) => r === "git remote get-url upstream")).toHaveLength(1);
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const link = await pane.find({ type: "Link", text: "PR 41" });
+  expect(link?.props.href).toBe("https://github.com/agentplot/sluice/pull/41");
+  await pane.unmount();
+});
+
 test("the pane leaves out branches with nothing queued and no event this quarter hour", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);

@@ -6,6 +6,7 @@ import {
   checkLines,
   checkRows,
   clearText,
+  commitBase,
   conflictLines,
   conflictText,
   duration,
@@ -33,7 +34,9 @@ import {
   openedText,
   outcomes,
   progress,
+  pullBase,
   pullOf,
+  pullsOf,
   recentInWay,
   recentKeys,
   shown,
@@ -412,6 +415,50 @@ describe("links to pull requests", () => {
   test("a submission from a pull request", () => {
     expect(pullOf("pull/41")).toBe(41);
     expect(pullOf("plugin-board")).toBe(null);
+  });
+
+  const SLUICE = "https://github.com/agentplot/sluice";
+  const remotes = {
+    origin: "https://github.com/fork-owner/sluice",
+    upstream: SLUICE,
+    mirror: null,
+  };
+
+  test("a landing's commit: at the branch's remote, and nowhere for a branch with none", () => {
+    const b = overview().branches[0]!;
+    expect(commitBase({ ...b, remote: "origin" }, remotes)).toBe(
+      "https://github.com/fork-owner/sluice",
+    );
+    expect(commitBase({ ...b, remote: "upstream" }, remotes)).toBe(SLUICE);
+    expect(commitBase(b, remotes)).toBeNull();
+    // A remote off GitHub, and one never resolved.
+    expect(commitBase({ ...b, remote: "mirror" }, remotes)).toBeNull();
+    expect(commitBase({ ...b, remote: "elsewhere" }, remotes)).toBeNull();
+  });
+
+  test("a pull request: at the branch's remote, else at origin", () => {
+    const b = overview().branches[0]!;
+    expect(pullBase({ ...b, remote: "upstream" }, remotes)).toBe(SLUICE);
+    expect(pullBase(b, remotes)).toBe("https://github.com/fork-owner/sluice");
+    expect(pullBase({ ...b, remote: "mirror" }, remotes)).toBeNull();
+    expect(pullBase(b, {})).toBeNull();
+  });
+
+  test("a recent line's pull requests: its own submissions', from where they came", () => {
+    const b = {
+      ...overview().branches[0]!,
+      recent_from: { "11": "pull/41", "12": "unit/a", "9": "pull/40", "217": "pull/39" },
+    };
+    const landed = { at: "2026-10-16T19:41:00Z", event: "landed", ids: [11, 12], to: "9ecc34a1b2" };
+    expect(pullsOf(b, landed)).toEqual([41]);
+    expect(pullsOf(b, { at: "2026-10-16T19:42:00Z", event: "blamed", id: 9 })).toEqual([40]);
+    // What is in a conflict's way is not its own.
+    const conflict = { at: "2026-10-16T19:44:00Z", event: "conflict", id: 218, with: [217] };
+    expect(pullsOf(b, conflict)).toEqual([]);
+    expect(pullsOf({ ...b, recent_from: { "218": "pull/42" } }, conflict)).toEqual([42]);
+    // A sluice older than recent_from, or a line whose ids it lacks.
+    expect(pullsOf(overview().branches[0]!, landed)).toEqual([]);
+    expect(pullsOf(b, { ...landed, ids: [13] })).toEqual([]);
   });
 });
 

@@ -54,6 +54,7 @@ import {
   outcomes,
   plural,
   progress,
+  pullBase,
   pullOf,
   recentInWay,
   recentKeys,
@@ -168,6 +169,20 @@ type $ = EngineInterface;
 type How = { wake: boolean; forecast: boolean };
 
 /**
+ * Each remote a branch names that the board has not resolved: its GitHub
+ * base, read once with `git remote get-url`. Its URL is never kept, so one
+ * carrying credentials leaves none in the board's state.
+ */
+async function learnRemotes($: $, next: Overview, cwd: string) {
+  const known = await read($, remotes);
+  const named = next.branches.map((b) => b.remote).filter((r): r is string => r !== undefined);
+  for (const name of [...new Set(named)].filter((r) => !(r in known))) {
+    const url = await output($, ["git", "remote", "get-url", name], cwd);
+    await update($, remotes, (all) => ({ ...all, [name]: url ? githubBase(url) : null }));
+  }
+}
+
+/**
  * A new document: learn this session's submissions, tell new outcomes. An
  * error document is the band's one line, and the last document stays.
  */
@@ -178,6 +193,7 @@ async function take($: $, next: unknown, cwd: string, how: How) {
     return;
   }
   await update($, error, () => null);
+  await learnRemotes($, next, cwd);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
@@ -496,7 +512,7 @@ export const register: Register = (on, options) => {
       ) : null;
     const d = await read($, doc);
     const m = await read($, mine);
-    const base = (await read($, remotes)).origin ?? null;
+    const bases = await read($, remotes);
     await read($, now);
     if (!d) {
       // No overview: why sluice could not be read, and what to do; or the
@@ -694,6 +710,7 @@ export const register: Register = (on, options) => {
             {b.submissions.length > 0 && <Text bold>QUEUED</Text>}
             {b.submissions.map((s) => {
               const pull = pullOf(s.from.worktree);
+              const base = pullBase(b, bases);
               return (
                 <Text key={`sub-${b.branch}-${s.id}`}>
                   {"  "}#{s.id} {s.state.padEnd(9)}{" "}
