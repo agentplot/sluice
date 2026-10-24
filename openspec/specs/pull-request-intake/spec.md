@@ -177,11 +177,7 @@ together, in one pass and one write, in the group's order, once every
 one of them is open, out of draft and meets its conditions on the head
 it was marked at. Until then each SHALL wait, its state naming the pull
 requests of its group it waits for. The group SHALL bind a pull request
-only until it is first submitted at that head. Once a group's pull
-requests are submitted, by intake or by the act itself, a new head on
-one SHALL withdraw that submission alone; one a submit opened SHALL be
-marked a draft and wait for its submitter's act, as any pull request a
-submit opened does, and the others SHALL stay queued (120, 125).
+only until it is first submitted at that head.
 
 #### Scenario: Two of three are ready
 
@@ -197,6 +193,14 @@ submit opened does, and the others SHALL stay queued (120, 125).
 
 - **WHEN** one pull request of a group is closed before the group is submitted, and a person has marked the others ready for review
 - **THEN** the others are not submitted and say they wait for it, until a new submit names them again
+
+### Requirement: A new head on one of a submitted group withdraws that one alone
+
+Once a group's pull requests are submitted, by intake or by the act
+itself, a new head on one SHALL withdraw that submission alone; one a
+submit opened SHALL be marked a draft and wait for its submitter's act,
+as any pull request a submit opened does, and the others SHALL stay
+queued (120, 125).
 
 #### Scenario: Each its own after it is taken
 
