@@ -1,5 +1,5 @@
 ---
-number: 50
+number: 53
 title: The host's ref of a branch on a remote is sluice's copy, levelled by its rounds
 status: accepted
 date: 2026-10-23
