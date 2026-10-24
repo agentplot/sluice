@@ -125,9 +125,16 @@ impl OnGitHub {
 
     /// One round of `main`, its pull requests taken in first.
     fn step(&self) {
+        let said = self.round();
+        assert!(!said.contains("warning"), "{said}");
+    }
+
+    /// One round of `main`, its pull requests taken in first: what it
+    /// said, warnings and all.
+    fn round(&self) -> String {
         let out = self.sluice(&["step", "main"]);
         assert!(out.status.success(), "{}", text(&out));
-        assert!(!text(&out).contains("warning"), "{}", text(&out));
+        text(&out)
     }
 
     /// `main`'s submissions.
@@ -180,6 +187,14 @@ impl OnGitHub {
             .open_by("person", "main", name, &head, draft, None)
             .unwrap();
         (n, head)
+    }
+
+    /// GitHub serves no head for pull request `n`: its branch is gone,
+    /// and `refs/pull/<n>/head` with it.
+    fn no_head(&self, n: u64) {
+        let pull = self.gh.forge.pull(&github::repo(), n).unwrap().unwrap();
+        github::delete_ref(self.bare.path(), &format!("refs/heads/{}", pull.head_ref));
+        github::delete_ref(self.bare.path(), &format!("refs/pull/{n}/head"));
     }
 
     /// What sluice's check on `head` reads.
@@ -829,6 +844,116 @@ fn output_posted_as_asked_and_scrubbed() {
     assert!(r.contains("[redacted]") && !r.contains("ghp_"), "{r}");
 }
 
+/// S63 (128): GitHub serves no head for one of two pull requests opened by
+/// hand, the one it lists first, whose branch is gone. Each round names it
+/// and that it has no head, and the other is submitted; once its branch is
+/// pushed again, the next round submits it. Closed, one with no head is
+/// named no more.
+#[test]
+fn s63_a_request_sluice_cannot_fetch_holds_no_other() {
+    let g = OnGitHub::new("pr-s63", "reviews = 0");
+    let (gone, gone_head) = g.by_hand("unit/gone", &[("gone.txt", Some("g\n"))], false);
+    let (fine, fine_head) = g.by_hand("unit/fine", &[("slow", Some("x\n"))], false);
+    g.no_head(gone);
+    let named = |said: &str, n: u64| {
+        said.contains(&format!("pull/{n}: ")) && said.contains(&format!("pull/{n} has no head"))
+    };
+    let said = g.round();
+    assert!(named(&said, gone), "{said}");
+    assert!(g.of(gone).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(fine).len(), 1, "{:?}", g.subs());
+    let (_, title, _) = g.posted(&fine_head).unwrap();
+    assert!(
+        title.starts_with("queued") || title.starts_with("testing"),
+        "{title}"
+    );
+    // Read again each round, until GitHub serves its head.
+    for _ in 0..2 {
+        let said = g.round();
+        assert!(named(&said, gone), "{said}");
+        assert!(g.of(gone).is_empty(), "{:?}", g.subs());
+    }
+    g.repo
+        .git(&["push", "-q", "origin", "unit/gone:refs/heads/unit/gone"]);
+    g.step();
+    let subs = g.of(gone);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["head"], gone_head.as_str());
+    // Closed, it is no longer read.
+    let (third, _) = g.by_hand("unit/third", &[("third.txt", Some("t\n"))], false);
+    g.no_head(third);
+    let said = g.round();
+    assert!(named(&said, third), "{said}");
+    g.gh.forge.close(third).unwrap();
+    g.step();
+    assert!(g.of(third).is_empty(), "{:?}", g.subs());
+}
+
+/// 128: GitHub answers an error for one pull request's reviews. The round
+/// names it and its reviews, and submits the other, whose review holds;
+/// once its reviews can be read, the next round submits it.
+#[test]
+fn reviews_that_cannot_be_read_hold_no_other() {
+    let g = OnGitHub::new("pr-no-reviews", "reviews = 1");
+    let (one, one_head) = g.by_hand("unit/one", &[("one.txt", Some("1\n"))], false);
+    let (two, two_head) = g.by_hand("unit/two", &[("two.txt", Some("2\n"))], false);
+    g.gh.forge
+        .review(one, "reviewer", "APPROVED", &one_head)
+        .unwrap();
+    g.gh.forge
+        .review(two, "reviewer", "APPROVED", &two_head)
+        .unwrap();
+    g.gh.fail_reviews(one, true);
+    let said = g.round();
+    assert!(
+        said.contains(&format!("pull/{one}: reading pull/{one}'s reviews")),
+        "{said}"
+    );
+    assert!(g.of(one).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(two).len(), 1, "{:?}", g.subs());
+    g.gh.fail_reviews(one, false);
+    g.step();
+    let subs = g.of(one);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["head"], one_head.as_str());
+}
+
+/// A failure that is no one pull request's: GitHub answers an error for the
+/// list of `main`'s pull requests. Each round warns that taking in `main`'s
+/// pull requests failed, nothing is submitted or withdrawn, and the
+/// submission already queued is tested and lands.
+#[test]
+fn a_failed_list_ends_intake_and_the_queue_still_lands() {
+    let g = OnGitHub::new("pr-no-list", "");
+    let (n, head) = g.by_hand("unit/listed", &[("slow", Some("x\n"))], false);
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    g.gh.fail_pulls(true);
+    let until = Instant::now() + Duration::from_secs(60);
+    loop {
+        let said = g.round();
+        assert!(
+            said.contains("sluice: warning: taking in main's pull requests: GET ")
+                && said.contains("500 Server Error")
+                && !said.contains(&format!("pull/{n}: ")),
+            "{said}"
+        );
+        let subs = g.of(n);
+        assert_eq!(subs.len(), 1, "{subs:?}");
+        assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
+        if subs[0]["state"] == "landed" {
+            break;
+        }
+        assert!(Instant::now() < until, "never landed: {subs:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let landed = g.main_on_github();
+    assert_eq!(
+        github::rev(g.bare.path(), &format!("{landed}^2")).unwrap(),
+        head
+    );
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-status
 // ---------------------------------------------------------------------------
@@ -963,6 +1088,30 @@ fn a_conflict_seen_early() {
         summary.contains(&format!("conflicts with #{a} in plan.py")),
         "{summary}"
     );
+}
+
+/// 128: a draft whose head GitHub serves none of is only a draft. The
+/// round names it, submits the pull request that is ready, and posts the
+/// draft's check as a draft's, with no forecast.
+#[test]
+fn a_draft_whose_head_cannot_be_fetched_is_only_a_draft() {
+    let g = OnGitHub::new("pr-draft-no-head", "");
+    let (draft, draft_head) = g.by_hand("unit/drafted", &[("d.txt", Some("d\n"))], true);
+    let (ready, _) = g.by_hand("unit/ready", &[("r.txt", Some("r\n"))], false);
+    g.no_head(draft);
+    let said = g.round();
+    assert!(
+        said.contains(&format!("pull/{draft}: pull/{draft} has no head")),
+        "{said}"
+    );
+    assert!(g.of(draft).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(ready).len(), 1, "{:?}", g.subs());
+    let (status, title, summary) = g.posted(&draft_head).unwrap();
+    assert_eq!(
+        (status, title.as_str()),
+        (Status::Queued, "waiting: a draft")
+    );
+    assert!(!summary.contains("Forecast:"), "{summary}");
 }
 
 // ---------------------------------------------------------------------------

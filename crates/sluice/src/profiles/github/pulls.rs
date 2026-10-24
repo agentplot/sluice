@@ -127,6 +127,22 @@ struct Shown {
     lines: Vec<String>,
 }
 
+/// What intake makes of one pull request this round: what to post on it,
+/// if anything, and what of it sluice could not read, if anything.
+struct Considered {
+    shown: Option<Shown>,
+    failed: Option<anyhow::Error>,
+}
+
+impl From<Shown> for Considered {
+    fn from(shown: Shown) -> Considered {
+        Considered {
+            shown: Some(shown),
+            failed: None,
+        }
+    }
+}
+
 /// A branch with pull requests, read at its revision.
 struct Target {
     remote: String,
@@ -375,35 +391,50 @@ impl Pulls {
                     pull: p.clone(),
                 },
             );
-            let shown = self.consider(
-                s,
-                forge,
-                &t,
-                &pushed,
-                branch,
-                p,
-                latest.get(&place(p.number)),
-                &status.submissions,
-                &log,
-                &names,
-            )?;
-            let report = match latest.get(&place(p.number)) {
-                Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
-                _ => None,
-            };
             self.log_lines
                 .borrow_mut()
                 .insert(branch.to_string(), t.conditions.log_lines);
-            self.show_report(
-                forge,
-                &t.repo,
-                p.number,
-                &p.head,
-                t.conditions.log_lines,
-                &names,
-                shown,
-                report.as_ref(),
-            )?;
+            // 128: what sluice reads of one pull request, or cannot,
+            // decides that pull request alone; the next round reads it
+            // again.
+            let step = || -> Result<Option<anyhow::Error>> {
+                let c = self.consider(
+                    s,
+                    forge,
+                    &t,
+                    &pushed,
+                    branch,
+                    p,
+                    latest.get(&place(p.number)),
+                    &status.submissions,
+                    &log,
+                    &names,
+                )?;
+                if let Some(shown) = c.shown {
+                    let report = match latest.get(&place(p.number)) {
+                        Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
+                        _ => None,
+                    };
+                    self.show_report(
+                        forge,
+                        &t.repo,
+                        p.number,
+                        &p.head,
+                        t.conditions.log_lines,
+                        &names,
+                        shown,
+                        report.as_ref(),
+                    )?;
+                }
+                Ok(c.failed)
+            };
+            match step() {
+                Ok(None) => {}
+                Ok(Some(e)) | Err(e) => crate::telemetry::warn(&format!(
+                    "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
+                    place(p.number)
+                )),
+            }
         }
         Ok(true)
     }
@@ -499,7 +530,7 @@ impl Pulls {
     }
 
     /// Where pull request `p` stands this round, submitting it if it is
-    /// ready.
+    /// ready; with the failure to fetch its head, if it could not be.
     #[allow(clippy::too_many_arguments)]
     fn consider(
         &self,
@@ -513,7 +544,7 @@ impl Pulls {
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
-    ) -> Result<Shown> {
+    ) -> Result<Considered> {
         let here = place(p.number);
         // A submit's pull request whose submission left the queue without
         // landing waits for its submitter's act, a submit or a person's
@@ -521,7 +552,8 @@ impl Pulls {
         // no round submits it in its agent's name before then (120, S56).
         let from = submits(p);
         let held = match latest.filter(|e| from.is_some() && left_unlanded(e)) {
-            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))?,
+            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))
+                .with_context(|| format!("reading {here}'s timeline"))?,
             None => false,
         };
         // Its draft shows the hold, and is not the hold: one GitHub
@@ -544,19 +576,22 @@ impl Pulls {
             match e.state {
                 State::Withdrawn => {
                     if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
-                        if !retried_by_hand(forge, &t.repo, p, log, e.id)? {
+                        if !retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?
+                        {
                             rests = Some(by);
                         }
                     }
                 }
-                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names)),
+                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names).into()),
                 State::Failed | State::Conflict => {
                     // Sent back: one opened by hand is submitted again only
                     // once it is marked ready for review after it was sent
                     // back; a submit's, once it is no longer held.
                     let retried = match from {
                         Some(_) => !held,
-                        None => retried_by_hand(forge, &t.repo, p, log, e.id)?,
+                        None => retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?,
                     };
                     if !retried {
                         let outcome = Outcome::of(e)?;
@@ -565,11 +600,11 @@ impl Pulls {
                             self.comment_once(forge, &t.repo, p.number, &id, &body)?;
                         }
                         if !held {
-                            return Ok(outcome_shown(branch, &outcome, names));
+                            return Ok(outcome_shown(branch, &outcome, names).into());
                         }
                     }
                 }
-                _ => return Ok(queue_shown(branch, e, subs, names)),
+                _ => return Ok(queue_shown(branch, e, subs, names).into()),
             }
         }
         // Waiting: what is missing, and where it would land now.
@@ -581,13 +616,18 @@ impl Pulls {
         } else if p.draft {
             missing.push("a draft".to_string());
         } else {
-            let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
+            let reviews = forge
+                .reviews(&t.repo, p.number)
+                .with_context(|| format!("reading {here}'s reviews"))?;
+            let have = approvals(&reviews, &p.head);
             if have < t.conditions.reviews {
                 let need = t.conditions.reviews - have;
                 missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
             }
             if !t.conditions.checks.is_empty() {
-                let checks = forge.checks(&t.repo, &p.head)?;
+                let checks = forge
+                    .checks(&t.repo, &p.head)
+                    .with_context(|| format!("reading {here}'s checks"))?;
                 for name in &t.conditions.checks {
                     if !checks
                         .iter()
@@ -598,7 +638,16 @@ impl Pulls {
                 }
             }
         }
-        self.fetch_head(pushed, p)?;
+        // 128: a waiting pull request needs its head only for its
+        // forecast, and is shown waiting without one; one missing nothing
+        // is not submitted, and nothing new is posted on it.
+        if let Err(e) = self.fetch_head(pushed, p) {
+            return Ok(Considered {
+                shown: (p.draft || !missing.is_empty())
+                    .then(|| waiting(branch, from, &missing, None)),
+                failed: Some(e),
+            });
+        }
         if missing.is_empty() {
             let accepted = s.submit(&SubmitRequest {
                 worktree: place(p.number),
@@ -606,7 +655,7 @@ impl Pulls {
                 after: Vec::new(),
                 priority: 0,
             })?;
-            return Ok(match accepted {
+            return Ok(Considered::from(match accepted {
                 Ok(a) => {
                     self.entries.borrow_mut().insert(
                         a.id,
@@ -625,7 +674,7 @@ impl Pulls {
                     &[format!("refused: {}", refusal_word(&r))],
                     None,
                 ),
-            });
+            }));
         }
         let forecast = match s
             .forecast(&place(p.number), branch, &[])?
@@ -657,7 +706,7 @@ impl Pulls {
             }
             Err(r) => format!("forecast: none, {}", refusal_word(&r)),
         };
-        Ok(waiting(branch, from, &missing, Some(forecast)))
+        Ok(waiting(branch, from, &missing, Some(forecast)).into())
     }
 
     /// The pull request's head on this host, fetched unless it is here.
@@ -1729,6 +1778,20 @@ mod tests {
                 .title,
             "waiting: a draft"
         );
+    }
+
+    /// pull-request-status, a draft with no head: shown as a draft, with
+    /// no forecast (128).
+    #[test]
+    fn a_draft_with_no_head_shows_no_forecast() {
+        let w = waiting("main", None, &["a draft".into()], None);
+        assert_eq!(w.posting.title, "waiting: a draft");
+        assert!(
+            !w.posting.summary.contains("Forecast:"),
+            "{}",
+            w.posting.summary
+        );
+        assert!(w.lines.is_empty(), "{:?}", w.lines);
     }
 
     /// pull-request-status: a submit's pull request held for its
