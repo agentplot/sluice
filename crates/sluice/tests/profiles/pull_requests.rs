@@ -302,6 +302,13 @@ impl OnGitHub {
     /// A session's worktree on `unit/<name>` off `main`, with one commit
     /// of `changes`.
     fn session(&self, name: &str, changes: &[(&str, &str)]) -> PathBuf {
+        let dir = self.worktree(name);
+        self.commit_in(&dir, changes);
+        dir
+    }
+
+    /// A session's worktree on `unit/<name>` off `main`, with no commit.
+    fn worktree(&self, name: &str) -> PathBuf {
         let dir = self.repo.dir().with_extension(format!("s-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         self.repo.git(&[
@@ -313,8 +320,17 @@ impl OnGitHub {
             dir.to_str().unwrap(),
             "main",
         ]);
-        self.commit_in(&dir, changes);
         dir
+    }
+
+    /// A commit in the worktree `dir` writing `path`, its message
+    /// `message`. Returns the new head.
+    fn commit_message(&self, dir: &Path, path: &str, message: &str) -> String {
+        std::fs::write(dir.join(path), format!("{path}\n")).unwrap();
+        let dir = dir.to_str().unwrap();
+        self.repo.git(&["-C", dir, "add", "-A"]);
+        self.repo.git(&["-C", dir, "commit", "-q", "-m", message]);
+        self.repo.git(&["-C", dir, "rev-parse", "HEAD"])
     }
 
     fn commit_in(&self, dir: &Path, changes: &[(&str, &str)]) -> String {
@@ -1237,6 +1253,121 @@ fn submit_opens_then_updates_a_pull_request() {
     assert_eq!(held.pulls.len(), 1);
     assert_eq!(held.pulls[0].head, again);
     assert!(w.exists());
+}
+
+/// A message of `chars` characters: `subject`, a blank line, a body.
+fn long_message(subject: &str, chars: usize) -> String {
+    let body = "x".repeat(chars - subject.chars().count() - 2);
+    format!("{subject}\n\n{body}")
+}
+
+/// The line a description gives the commits it holds by subject alone.
+fn more_commits(r: usize, name: &str) -> String {
+    let s = if r == 1 { "" } else { "s" };
+    format!(
+        "{r} more commit{s}, each by its subject; all of them in full: \
+         https://github.com/o/r/compare/main...unit/{name}"
+    )
+}
+
+/// A bolt too long for one description: GitHub takes the request, its
+/// description the first two messages whole, the line counting the third
+/// with the compare view, the third's subject and the agent's mark, no
+/// longer than GitHub holds; the fake refuses a longer one as GitHub does.
+#[test]
+fn a_bolt_too_long_for_one_description() {
+    let g = OnGitHub::new("pr-long-bolt", "reviews = 1");
+    let w = g.worktree("long");
+    let ms: Vec<String> = (1..=3)
+        .map(|k| long_message(&format!("Add part {k}"), 30_000))
+        .collect();
+    for (k, m) in ms.iter().enumerate() {
+        g.commit_message(&w, &format!("part-{k}.txt"), m);
+    }
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/long");
+    assert!(pull.open, "{pull:?}");
+    assert_eq!(
+        pull.body,
+        format!(
+            "{}\n\n{}\n\n{}\n\n- Add part 3\n\n<!-- sluice: agent=unit/long -->",
+            ms[0],
+            ms[1],
+            more_commits(1, "long")
+        )
+    );
+    assert!(pull.body.chars().count() <= 65_536);
+}
+
+/// One message longer than GitHub holds: no part of its body, the line
+/// counting it with the compare view, its subject and the agent's mark.
+#[test]
+fn one_message_longer_than_github_holds() {
+    let g = OnGitHub::new("pr-long-message", "reviews = 1");
+    let w = g.worktree("huge");
+    g.commit_message(&w, "huge.txt", &long_message("Add the huge file", 70_000));
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/huge");
+    assert!(pull.open, "{pull:?}");
+    assert_eq!(
+        pull.body,
+        format!(
+            "{}\n\n- Add the huge file\n\n<!-- sluice: agent=unit/huge -->",
+            more_commits(1, "huge")
+        )
+    );
+}
+
+/// A new commit, submitted again: the description holds both messages,
+/// oldest first, then the agent's mark.
+#[test]
+fn a_new_commit_submitted_again_is_described() {
+    let g = OnGitHub::new("pr-described-again", "reviews = 1");
+    let w = g.worktree("again");
+    g.commit_message(&w, "first.txt", "Add the first file");
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        g.pull_from("unit/again").body,
+        "Add the first file\n\n<!-- sluice: agent=unit/again -->"
+    );
+    g.commit_message(&w, "second.txt", "Add the second file");
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        g.pull_from("unit/again").body,
+        "Add the first file\n\nAdd the second file\n\n<!-- sluice: agent=unit/again -->"
+    );
+}
+
+/// Submitted again at the same head: the second submit does not edit the
+/// pull request's description.
+#[test]
+fn submitted_again_at_the_same_head_edits_nothing() {
+    let g = OnGitHub::new("pr-same-head", "reviews = 1");
+    let w = g.session("same", &[("same.txt", "same\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/same").number;
+    let edits = || {
+        let edit = format!("/repos/o/r/pulls/{n}");
+        g.gh.fake
+            .requests()
+            .iter()
+            .filter(|r| r.method == "PATCH" && r.path == edit)
+            .count()
+    };
+    let before = edits();
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("updated #{n}")),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(edits(), before);
 }
 
 /// A worktree holding more than its commits is refused as today, and

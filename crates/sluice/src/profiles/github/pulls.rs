@@ -100,7 +100,6 @@ pub const DESCRIPTION_LIMIT: usize = 65_536;
 
 /// GitHub's compare view of the request's branch `head_ref` against
 /// `branch`, every commit of the request in full.
-#[cfg_attr(not(test), expect(dead_code))]
 fn compare_address(repo: &Repo, branch: &str, head_ref: &str) -> String {
     format!(
         "https://github.com/{}/{}/compare/{branch}...{head_ref}",
@@ -115,7 +114,6 @@ fn compare_address(repo: &Repo, branch: &str, head_ref: &str) -> String {
 /// rest and linking `compare`, and each one's subject; then the marks.
 /// When even every subject cannot be named, no message is whole, and the
 /// subjects are named in order as many as fit, the others counted.
-#[cfg_attr(not(test), expect(dead_code))]
 fn description(messages: &[String], agent: &str, group: Option<&Group>, compare: &str) -> String {
     let len = |s: &str| s.chars().count();
     let messages: Vec<String> = messages
@@ -1929,9 +1927,9 @@ impl crate::PullRequests for Pulls {
 
     /// 125: every worktree read before anything is pushed, and a refusal
     /// for each refused; then, in order, each request marked one of the
-    /// group before its head reaches it: an open request's body edited
-    /// before its branch is pushed, a new one opened a draft with the mark
-    /// once its branch is. Then the group is taken whole or left drafts
+    /// group before its head reaches it: an open request's description
+    /// written for its head before its branch is pushed, a new one opened
+    /// a draft with it once its branch is. Then the group is taken whole or left drafts
     /// ([`Pulls::take_act`]). One worktree is marked one of no group and
     /// marked ready, for intake to take on its conditions.
     fn open_group(
@@ -2005,12 +2003,15 @@ impl crate::PullRequests for Pulls {
             let existing = open
                 .iter()
                 .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
+            // C.5: the description of the head submitted, its commits'
+            // messages as many as GitHub holds; the head is in the
+            // repository's objects before it is pushed.
+            let messages = self.messages(&t.tip, head)?;
+            let compare = compare_address(&t.repo, branch, &head_ref);
+            let body = description(&messages, agent, group.as_ref(), &compare);
             let (pull, word) = match existing {
                 Some(p) => {
-                    let body = with_marks(&p.body, agent, group.as_ref());
-                    if marked_agent(&p.body).as_deref() != Some(agent.as_str())
-                        || Group::of(&p.body) != group
-                    {
+                    if p.body != body {
                         forge.edit(&t.repo, p.number, &body)?;
                     }
                     push()?;
@@ -2018,13 +2019,11 @@ impl crate::PullRequests for Pulls {
                 }
                 None => {
                     push()?;
-                    let messages = self.messages(&t.tip, head)?;
                     let title = messages
                         .first()
                         .and_then(|m| m.lines().next())
                         .unwrap_or(&head_ref)
                         .to_string();
-                    let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
                     // A group's request is opened a draft, which the act
                     // marks ready only once it takes the group (125).
                     let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
