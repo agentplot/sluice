@@ -1488,6 +1488,7 @@ impl Checkout for FakeCheckout {
             path: format!("/fake/places/{name}").into(),
             tmp: format!("/fake/tmp/{name}").into(),
             env: Default::default(),
+            compile_cache: None,
         })
     }
 
@@ -1514,6 +1515,7 @@ impl Checkout for FakeCheckout {
             path: worktree.into(),
             tmp: format!("/fake/tmp/{name}").into(),
             env: Default::default(),
+            compile_cache: None,
         })
     }
 
@@ -1643,6 +1645,7 @@ impl Checkout for FakeCheckout {
             path: p.path.clone(),
             tmp: format!("/fake/tmp/{}", p.name).into(),
             env: p.ports.clone().into_iter().chain(p.names.clone()).collect(),
+            compile_cache: None,
         };
         if let Some(p) = inner.previews.get(name) {
             return Ok((place(p), p.clone()));

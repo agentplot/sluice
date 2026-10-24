@@ -441,6 +441,7 @@ impl Places {
                 .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
             tmp: self.tmp(name),
             env,
+            compile_cache: None,
         })
     }
 
@@ -490,6 +491,7 @@ impl Places {
                 .unwrap_or_else(|| self.worktree_path(name)),
             tmp: self.tmp(name),
             env,
+            compile_cache: None,
         })
     }
 
@@ -1045,6 +1047,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
+            compile_cache: None,
         })
     }
 
@@ -1309,6 +1312,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
+            compile_cache: None,
         })
     }
 

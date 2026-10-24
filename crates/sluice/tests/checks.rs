@@ -51,6 +51,7 @@ fn request(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
             path: repo.dir().to_path_buf(),
             tmp,
             env: Default::default(),
+            compile_cache: None,
         },
         revision: sluice_seams::Rev::new(repo.rev("HEAD")),
         required: vec![],

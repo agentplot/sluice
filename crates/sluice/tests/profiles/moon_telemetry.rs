@@ -59,6 +59,7 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
             path: place,
             tmp: scratch.path().join("tmp"),
             env: Default::default(),
+            compile_cache: None,
         },
         revision: Rev::new("0".repeat(40)),
         required: vec!["#check-fast".into()],

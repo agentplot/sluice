@@ -500,6 +500,7 @@ fn a_run_s_checks_join_the_round() {
             path: repo.dir().to_path_buf(),
             tmp: tmp.clone(),
             env: Default::default(),
+            compile_cache: None,
         },
         revision: Rev::new(revision.clone()),
         required: vec![],
