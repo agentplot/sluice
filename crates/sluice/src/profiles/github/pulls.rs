@@ -66,18 +66,22 @@ fn marked_agent(body: &str) -> Option<String> {
     })
 }
 
-/// `body` naming `agent` and, with `group`, marked one of that group, in
-/// place of any agent and group it named.
-fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
-    let kept: Vec<&str> = body
+/// `text` without any line that names an agent or a group.
+fn unmarked(text: &str) -> String {
+    let kept: Vec<&str> = text
         .lines()
         .filter(|l| {
             let l = l.trim();
             !l.starts_with("<!-- sluice: agent=") && !l.starts_with(GROUP_MARK)
         })
         .collect();
-    let kept = kept.join("\n");
-    let kept = kept.trim_end();
+    kept.join("\n").trim_end().to_string()
+}
+
+/// `body` naming `agent` and, with `group`, marked one of that group, in
+/// place of any agent and group it named.
+fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
+    let kept = unmarked(body);
     let mut marks = marker(agent);
     if let Some(g) = group {
         marks.push('\n');
@@ -88,6 +92,84 @@ fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
     } else {
         format!("{kept}\n\n{marks}")
     }
+}
+
+/// The characters GitHub holds in a pull request's description: a longer
+/// one it refuses with `422 Validation Failed`.
+pub const DESCRIPTION_LIMIT: usize = 65_536;
+
+/// GitHub's compare view of the request's branch `head_ref` against
+/// `branch`, every commit of the request in full.
+#[cfg_attr(not(test), expect(dead_code))]
+fn compare_address(repo: &Repo, branch: &str, head_ref: &str) -> String {
+    format!(
+        "https://github.com/{}/{}/compare/{branch}...{head_ref}",
+        repo.owner, repo.name
+    )
+}
+
+/// C.5 pull request: a request's description from its commits' messages,
+/// oldest first, each whole, a blank line between them, then the marks,
+/// when that fits [`DESCRIPTION_LIMIT`]. Otherwise the first messages, as
+/// many as fit with every other commit named; then a line counting the
+/// rest and linking `compare`, and each one's subject; then the marks.
+/// When even every subject cannot be named, no message is whole, and the
+/// subjects are named in order as many as fit, the others counted.
+#[cfg_attr(not(test), expect(dead_code))]
+fn description(messages: &[String], agent: &str, group: Option<&Group>, compare: &str) -> String {
+    let len = |s: &str| s.chars().count();
+    let messages: Vec<String> = messages
+        .iter()
+        .map(|m| unmarked(m).trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
+    let all = with_marks(&messages.join("\n\n"), agent, group);
+    if len(&all) <= DESCRIPTION_LIMIT {
+        return all;
+    }
+    let n = messages.len();
+    let subjects: Vec<&str> = messages
+        .iter()
+        .map(|m| m.lines().next().unwrap_or_default().trim())
+        .collect();
+    let count = |r: usize| {
+        let s = if r == 1 { "" } else { "s" };
+        format!("{r} more commit{s}, each by its subject; all of them in full: {compare}")
+    };
+    let others = |r: usize| format!("and {r} more, in the compare view");
+    // Each length counts the line breaks before its part: the marks follow
+    // a blank line, a named subject is `- <subject>` and its line break.
+    let marks = 2 + len(&with_marks("", agent, group));
+    let named = |s: &str| len(s) + 3;
+    // The first `k` messages, each with the blank line after it, then the
+    // count line, a blank line and the other subjects.
+    let mut whole: usize = messages.iter().map(|m| len(m) + 2).sum();
+    let mut rest = 0;
+    for k in (0..n).rev() {
+        whole -= len(&messages[k]) + 2;
+        rest += named(subjects[k]);
+        if whole + len(&count(n - k)) + 2 + rest - 1 + marks <= DESCRIPTION_LIMIT {
+            let list: Vec<String> = subjects[k..].iter().map(|s| format!("- {s}")).collect();
+            let mut parts = messages[..k].to_vec();
+            parts.push(count(n - k));
+            parts.push(list.join("\n"));
+            return with_marks(&parts.join("\n\n"), agent, group);
+        }
+    }
+    let mut room = len(&count(n)) + 2;
+    let mut j = 0;
+    while j < n && room + named(subjects[j]) + len(&others(n - j - 1)) + marks <= DESCRIPTION_LIMIT
+    {
+        room += named(subjects[j]);
+        j += 1;
+    }
+    let mut list: Vec<String> = subjects[..j].iter().map(|s| format!("- {s}")).collect();
+    list.push(others(n - j));
+    with_marks(
+        &format!("{}\n\n{}", count(n), list.join("\n")),
+        agent,
+        group,
+    )
 }
 
 const GROUP_MARK: &str = "<!-- sluice: group=";
@@ -2356,6 +2438,145 @@ mod tests {
         assert_eq!(Group::of(&single), None);
         assert!(single.starts_with("Adds review cards."));
         assert_eq!(Group::of("<!-- sluice: group=t 4/3 head=x -->"), None);
+    }
+
+    const COMPARE: &str = "https://github.com/o/r/compare/main...unit/x";
+
+    /// A request's marks with no group and with one.
+    fn groups() -> [Option<Group>; 2] {
+        [
+            None,
+            Some(Group {
+                token: "20261024T120000Z-0123456".into(),
+                k: 1,
+                n: 2,
+                head: "0123456789abcdef0123456789abcdef01234567".into(),
+            }),
+        ]
+    }
+
+    /// A message of `chars` characters: `subject`, a blank line, a body.
+    fn message(subject: &str, chars: usize) -> String {
+        let body = "x".repeat(chars - subject.chars().count() - 2);
+        format!("{subject}\n\n{body}")
+    }
+
+    /// `body` no longer than GitHub holds, its marks read back.
+    fn reads_back(body: &str, group: Option<&Group>) {
+        let chars = body.chars().count();
+        assert!(chars <= DESCRIPTION_LIMIT, "{chars} characters");
+        assert_eq!(marked_agent(body).as_deref(), Some("crw-1"));
+        assert_eq!(Group::of(body).as_ref(), group);
+    }
+
+    #[test]
+    fn the_compare_view_of_a_request() {
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(compare_address(&repo, "main", "unit/x"), COMPARE);
+    }
+
+    /// C.5 pull request: every message fits, so the description is each
+    /// message whole, oldest first, then the marks.
+    #[test]
+    fn a_description_holds_every_message_that_fits() {
+        let ms = vec![
+            "Add the first file".to_string(),
+            "Add the second file\n\nIts body.".to_string(),
+        ];
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            assert_eq!(body, with_marks(&ms.join("\n\n"), "crw-1", g.as_ref()));
+            assert!(!body.contains("more commit"), "{body}");
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: three messages of 30,000 characters: two whole, the third
+    /// named by its subject after the line counting it.
+    #[test]
+    fn a_description_too_long_names_the_rest_by_subject() {
+        let ms: Vec<String> = (1..=3)
+            .map(|k| message(&format!("Commit {k}"), 30_000))
+            .collect();
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "{}\n\n{}\n\n1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- Commit 3",
+                ms[0], ms[1]
+            );
+            assert_eq!(body, with_marks(&text, "crw-1", g.as_ref()));
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: a message longer than the limit is never cut: its subject is
+    /// named, and no part of its body is in the description.
+    #[test]
+    fn a_message_longer_than_the_limit_is_named_by_its_subject() {
+        let ms = vec![message("One long commit", 70_000)];
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- One long commit"
+            );
+            assert_eq!(body, with_marks(&text, "crw-1", g.as_ref()));
+            assert!(!body.contains("xx"), "{body}");
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: 70 subjects of 1,000 characters cannot all be named: none of
+    /// the messages is whole, the subjects are named in order as many as
+    /// fit, each whole, and the others counted.
+    #[test]
+    fn more_subjects_than_the_limit_holds_are_counted() {
+        let ms: Vec<String> = (0..70)
+            .map(|k| format!("{k:02}{}", "s".repeat(998)))
+            .collect();
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let head =
+                format!("70 more commits, each by its subject; all of them in full: {COMPARE}\n\n");
+            assert!(body.starts_with(&head), "{}", &body[..200]);
+            let named: Vec<&str> = body.lines().filter_map(|l| l.strip_prefix("- ")).collect();
+            let j = named.len();
+            assert!(j > 0 && j < 70, "{j} named");
+            assert_eq!(
+                named,
+                ms[..j].iter().map(String::as_str).collect::<Vec<_>>()
+            );
+            assert!(
+                body.contains(&format!("\nand {} more, in the compare view\n", 70 - j)),
+                "{}",
+                &body[body.len() - 300..]
+            );
+            // One more subject would not fit.
+            assert!(body.chars().count() + 1_002 > DESCRIPTION_LIMIT);
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: the limit is counted in characters: a message of 39,000
+    /// two-byte characters is held whole, though its bytes pass it.
+    #[test]
+    fn a_description_is_measured_in_characters() {
+        let long = |k: usize| format!("Écrit le fichier {k}\n\n{}", "é".repeat(39_000));
+        for g in groups() {
+            let one = description(&[long(1)], "crw-1", g.as_ref(), COMPARE);
+            assert!(one.len() > DESCRIPTION_LIMIT, "{} bytes", one.len());
+            assert_eq!(one, with_marks(&long(1), "crw-1", g.as_ref()));
+            reads_back(&one, g.as_ref());
+            let two = description(&[long(1), long(2)], "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "{}\n\n1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- Écrit le fichier 2",
+                long(1)
+            );
+            assert_eq!(two, with_marks(&text, "crw-1", g.as_ref()));
+            reads_back(&two, g.as_ref());
+        }
     }
 
     #[test]
