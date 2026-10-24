@@ -1,5 +1,5 @@
 ---
-number: 47
+number: 48
 title: A group submit is one write, in order of submission
 status: accepted
 date: 2026-10-23

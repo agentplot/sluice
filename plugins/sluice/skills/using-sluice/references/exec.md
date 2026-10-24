@@ -30,8 +30,11 @@ recorded 2 results under their keys for 8d41b6c
 - Runs the tests your head affects against the branch, reading the
   branch's policy, never your worktree's.
 - Counts against the host's bound (`[runs] max` in
-  `~/.config/sluice/config.toml`) while it runs and waits while it is full.
-  It never takes the share `[runs] reserved` keeps for submissions.
+  `~/.config/sluice/config.toml`) while it runs and waits while it is full,
+  saying `waiting: the host is at its bound`. The bound counts every
+  repository's runs on the host, queues and agents alike, so another
+  repository's runs can make it wait. It never takes the share
+  `[runs] reserved` keeps for submissions.
 - Holds the branch's executor, memory, network and time limit while it
   runs.
 - Gives the worktree the same ports on every run (`SLUICE_PORT_<NAME>`) and
