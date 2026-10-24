@@ -22,4 +22,4 @@ Run suites through `sluice exec main -- <command>`; before submitting,
 
 ## 4. Gate
 
-- [ ] 4.1 Verify `openspec validate a-requests-description-fits-the-forges-limit --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
+- [x] 4.1 Verify `openspec validate a-requests-description-fits-the-forges-limit --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
