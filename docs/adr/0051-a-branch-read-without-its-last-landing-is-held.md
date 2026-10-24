@@ -1,5 +1,5 @@
 ---
-number: 48
+number: 51
 title: A branch read without its last landing is held
 status: accepted
 date: 2026-10-23
