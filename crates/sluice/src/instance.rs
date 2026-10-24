@@ -158,8 +158,8 @@ impl Instance {
     /// defaults where it has none: a quarter of the cores sluice may use,
     /// never fewer than one.
     pub fn read() -> Result<Instance> {
-        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
-        Instance::from_file(config_path().as_deref(), processors)
+        let (given, all) = host_cores();
+        Instance::from_host(config_path().as_deref(), given, all)
     }
 
     /// The settings on a host that gives sluice all of its `processors`
@@ -304,6 +304,17 @@ fn private_key(what: &str, path: &str, home: Option<&Path>) -> Result<PathBuf> {
     Ok(key)
 }
 
+/// The cores the host gives sluice and all the host's cores: its affinity
+/// and cgroup quota, which macOS has neither of, and its online logical
+/// CPUs, taken as the first where the host cannot say or says fewer (71).
+pub fn host_cores() -> (usize, usize) {
+    let given = std::thread::available_parallelism().map_or(1, |n| n.get());
+    // SAFETY: sysconf reads a value and touches no memory of ours.
+    let online = unsafe { nix::libc::sysconf(nix::libc::_SC_NPROCESSORS_ONLN) };
+    let all = usize::try_from(online).map_or(given, |n| n.max(given));
+    (given, all)
+}
+
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
@@ -413,6 +424,17 @@ mod tests {
             "[runs] cores = 4, but this host already gives sluice 6 of its 16 cores by its \
              affinity or quota, and that is what sluice may use: leave cores out"
         );
+    }
+
+    /// The two counts `read` takes: the host never gives sluice more cores
+    /// than it has, and a Mac gives it all of them (71).
+    #[test]
+    fn the_hosts_cores() {
+        let (given, all) = host_cores();
+        assert!(1 <= given && given <= all, "{given} of {all}");
+        if cfg!(target_os = "macos") {
+            assert_eq!(given, all);
+        }
     }
 
     /// The `[forge]` table: absent, present, and a key others may read
