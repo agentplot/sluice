@@ -689,7 +689,22 @@ record is the one the next round writes.
 Every command, not only submit, exits `3` when sluice itself fails (a
 repository it cannot open, a record it cannot read), with the cause on
 stderr. A waiting submit or `sluice wait` does so only while the
-submission has not landed. A command exits `64` when it cannot read its
+submission has not landed.
+
+A waiting submit or `sluice wait` whose read the forge answers with a 5xx,
+GitHub unable to answer just then, reads again, a pause apart, for five
+minutes. Past them it exits `3` as well, saying it could not read, apart
+from any outcome:
+
+```console
+could not read #77: sluice wait main
+sluice: could not read #77 for 5m03s, so whether it landed is not known: GET /repos/o/r/pulls/77: 503 Service Unavailable
+```
+
+Under `--json`, stdout holds the error document, with that command in its
+`next`. Whether the submission landed is not known then: only its
+record says, and the command in `next` reads it again. An outcome is only
+ever reported from the records. A command exits `64` when it cannot read its
 command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.

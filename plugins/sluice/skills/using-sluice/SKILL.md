@@ -36,9 +36,16 @@ wt submit main                  # the same under worktrunk; removes the worktree
 Exit codes: `0` landed, whatever failed after the landing (what failed is
 on stderr, after `sluice: after the landing:`), `1` failed (this
 submission was blamed), `2` a conflict or a refusal, `3` sluice itself
-failed and the submission has not landed (the cause is on stderr), `4`
-withdrawn, `5` still waiting (`sluice wait --timeout` ran out), `130`
-stopped with Ctrl-C (the submission stays queued).
+failed and the submission has not landed, or it could not read the forge
+for five minutes and whether it landed is not known (the cause is on
+stderr), `4` withdrawn, `5` still waiting (`sluice wait --timeout` ran out),
+`130` stopped with Ctrl-C (the submission stays queued).
+
+A waiting submit or `sluice wait` reads again through a forge's 5xx
+answers, a pause apart, for five minutes. Past them it says `could not read
+#12: sluice wait 12` and exits `3`; under `--json`, the error document with
+that command in `next`. That is no outcome: never take it for a failure.
+Run the command it names, which reads the submission's record again.
 
 A waiting submit also runs sluice's rounds, so it is what moves the queue on
 a single machine. Prefer it when your tool call can outlast the verdict,
