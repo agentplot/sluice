@@ -1138,6 +1138,38 @@ fn overview_shows_every_branch_at_a_glance() {
     assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
 }
 
+/// 26, 49, 61: the overview names the worktree each submission its recent
+/// lines name came from, the landed #1 read from the finished records.
+#[test]
+fn overview_names_where_recent_submissions_came_from() {
+    let f = setup();
+    three_submissions(&f);
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let b = &v["branches"][0];
+    let mut named: Vec<u64> = b["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| {
+            r["ids"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![r["id"].clone()])
+        })
+        .map(|id| id.as_u64().unwrap())
+        .collect();
+    named.sort_unstable();
+    assert_eq!(named, [1, 2], "{json}");
+    assert_eq!(
+        b["recent_from"],
+        serde_json::json!({"1": "unit/touches", "2": "unit/batch-review"}),
+        "{json}"
+    );
+}
+
 /// ADR 0028: a combination under test carries its run's tasks, as a
 /// round kept them, and its text line says how many have ended.
 #[test]
