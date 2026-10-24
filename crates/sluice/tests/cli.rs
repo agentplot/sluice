@@ -207,7 +207,8 @@ fn a_failure_names_its_system() {
 /// where both runs' logs are kept; and that the same head lands once the
 /// operator sets the fail aside, or a real fix changes what the test
 /// reads, never by a change to its inputs only to have it tested again.
-/// `--json` carries the same.
+/// `--json` carries the same, with when and on which host each run was,
+/// and so does the overview's combination while it is listed.
 #[test]
 fn a_flaky_failure_says_so() {
     let f = setup();
@@ -239,6 +240,21 @@ fn a_flaky_failure_says_so() {
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let flaky = &v["failed"][0]["flaky"];
     assert_eq!(flaky["here"], "pass", "{json}");
+    // When and where each run was, from the lines recorded before the
+    // verdict: this run's `ran` line, and the run it contradicts.
+    let last_ran = |f: &Fakes| {
+        let log = String::from_utf8(f.world.files(BRANCH)["log.jsonl"].clone()).unwrap();
+        log.lines()
+            .rev()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|l| l["event"] == "ran" && l["task"] == "tests:t-batch-cards")
+            .unwrap()
+    };
+    let ran = last_ran(&f);
+    assert_eq!(ran["outcome"], "pass", "{ran}");
+    assert_eq!(flaky["at"], ran["at"], "{json}");
+    assert_eq!(flaky["host"], "fake-host", "{json}");
+    assert_eq!(flaky["other"]["host"], "fake-host", "{json}");
     assert_eq!(flaky["other"]["outcome"], "fail", "{json}");
     assert_eq!(flaky["other"]["log"], failed_log.as_str(), "{json}");
     assert!(
@@ -291,6 +307,59 @@ fn a_flaky_failure_says_so() {
         ],
         "{out}"
     );
+
+    // A combination whose failure waits on one ahead of it to be blamed
+    // (18) is listed in the overview, with when and where each run was:
+    // on a branch whose window has room for both.
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{out}");
+    f.world.hold_runs(true);
+    work(
+        &f,
+        "unit/ahead",
+        "crw-1-unit-1",
+        &[("plugin/ahead", Some("a"))],
+    );
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/ahead", "--no-wait"],
+    );
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/batch-review",
+            "--no-wait",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    f.world.complete(&tested(&f, 3));
+    sluice(&f, &["step", BRANCH]);
+    let (_, ov) = sluice(&f, &["overview", "--json"]);
+    let ov: serde_json::Value = serde_json::from_str(&ov).unwrap();
+    let c = ov["branches"][0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["submissions"] == serde_json::json!([2, 3]))
+        .unwrap_or_else(|| panic!("{ov:#}"));
+    let listed = &c["failed"][0]["flaky"];
+    assert_eq!(c["state"], "failed", "{c:#}");
+    assert_eq!(listed["here"], "pass", "{c:#}");
+    assert_eq!(listed["at"], last_ran(&f)["at"], "{c:#}");
+    assert_eq!(listed["host"], "fake-host", "{c:#}");
+    assert_eq!(listed["other"]["host"], "fake-host", "{c:#}");
 }
 
 /// Time-limit-1 66: a submission whose run its time limit ended names the
