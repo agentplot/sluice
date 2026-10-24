@@ -1461,6 +1461,32 @@ fn wait_follows_a_pull_request() {
     assert_eq!(doc["state"], "landed");
 }
 
+/// A pull request taken in, out of time: `sluice wait <branch>` follows its
+/// submission, and ends with that submission's record, as `sluice wait
+/// <id>` does.
+#[test]
+fn wait_follows_a_pull_requests_submission() {
+    let g = OnGitHub::new("pr-wait-taken", "");
+    let w = g.session("taken", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let record: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(record["id"], id, "{record}");
+    assert!(
+        record["state"] == "queued" || record["state"] == "testing",
+        "{record}"
+    );
+    assert!(record.get("pull_request").is_none(), "{record}");
+}
+
 #[test]
 fn sent_back_keeps_the_worktree() {
     let g = OnGitHub::new("pr-sent-back", "");

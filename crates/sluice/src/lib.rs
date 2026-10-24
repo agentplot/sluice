@@ -2439,6 +2439,8 @@ fn submit_pull(
     let mut said_hold = None;
     let what = format!("#{number}");
     let mut unread = Unread::default();
+    // The submission the pull request was last read taken in as.
+    let mut taken: Option<u64> = None;
     loop {
         intake(pulls, seams, clock, branch);
         let followed = match pulls.follow(seams, clock, branch, number) {
@@ -2533,16 +2535,28 @@ fn submit_pull(
                     }
                     last = Some(now);
                 }
+                taken = submission.map(|x| x.id);
             }
             None => {}
         }
         if no_wait || status {
             return Ok(0);
         }
-        // Undecided: as it stands, the document `--status` prints, or
-        // where to read it again.
+        // Undecided: taken in, its submission's record as it stands now, as
+        // `sluice wait <id>` ends; otherwise the document `--status`
+        // prints, or where to read it again.
         let still = |out: &mut dyn Write, code: i32| -> Result<i32> {
-            if json {
+            let sub = match taken {
+                Some(id) => s.state(id)?,
+                None => None,
+            };
+            if let Some(sub) = sub {
+                if json {
+                    writeln!(out, "{}", record_json(&sub, copy.as_ref())?)?;
+                } else {
+                    writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+                }
+            } else if json {
                 let state = last.as_ref().map_or("waiting", |l| l.0.as_str());
                 let doc = serde_json::json!({
                     "pull_request": number, "branch": branch, "state": state,

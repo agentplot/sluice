@@ -17,7 +17,7 @@ submitting, `sluice exec main`.
 
 ## 3. The wait follows the submission
 
-- [ ] 3.1 In `submit_pull`'s `still` ending, when the last `Followed::Open` carried a submission, read its record again with `Sluice::state` and print it under `--json` as `await_submission` does, and in words `still waiting: sluice wait <id>`; otherwise as today. Verify in `pull_requests.rs`: `sluice wait main --timeout 2s --json` on a request taken in whose check is slow (the `slow` file of `CHECK`, under a policy timeout above five seconds) exits `WAITING` with the submission's record, `state` `queued` or `testing`; and `wait_follows_a_pull_request`, a request waiting for a review, still exits `WAITING` with the request's document. Same test run as 2.1.
+- [x] 3.1 In `submit_pull`'s `still` ending, when the last `Followed::Open` carried a submission, read its record again with `Sluice::state` and print it under `--json` as `await_submission` does, and in words `still waiting: sluice wait <id>`; otherwise as today. Verify in `pull_requests.rs`: `sluice wait main --timeout 2s --json` on a request taken in whose check is slow (the `slow` file of `CHECK`, under a policy timeout above five seconds) exits `WAITING` with the submission's record, `state` `queued` or `testing`; and `wait_follows_a_pull_request`, a request waiting for a review, still exits `WAITING` with the request's document. Same test run as 2.1.
 
 ## 4. Docs
 
