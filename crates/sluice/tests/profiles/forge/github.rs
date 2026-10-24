@@ -7,8 +7,9 @@
 //! through GraphQL, as GitHub alone does, unless told to refuse. It
 //! answers an error for a pull request's reviews, or for the list of pull
 //! requests, while told to fail them, and answers a read of a pull
-//! request 503 as often as told to. Each test crate that includes it
-//! uses a part.
+//! request 503 as often as told to. It refuses a pull request whose body
+//! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
+//! it. Each test crate that includes it uses a part.
 
 #![allow(dead_code)]
 
@@ -28,6 +29,8 @@ pub const APP: u64 = 4242;
 pub const INSTALLATION: u64 = 7;
 /// The pull request calls' prefix.
 const REPO: &str = "/repos/o/r";
+/// The characters GitHub holds in a pull request's body.
+const BODY_LIMIT: usize = 65_536;
 
 pub fn repo() -> Repo {
     Repo::from_url("https://github.com/o/r.git").unwrap()
@@ -313,6 +316,20 @@ fn server_error() -> Answer {
     json(500, json!({ "message": "Server Error" }))
 }
 
+/// GitHub refusing a pull request's body longer than it holds.
+fn too_long() -> Answer {
+    json(
+        422,
+        json!({
+            "message": "Validation Failed",
+            "errors": [{
+                "resource": "PullRequest", "field": "body", "code": "custom",
+                "message": format!("body is too long (maximum is {BODY_LIMIT} characters)"),
+            }],
+        }),
+    )
+}
+
 fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request) -> Answer {
     let (path, query) = r.path.split_once('?').unwrap_or((&r.path, ""));
     let param = |k: &str| {
@@ -361,6 +378,13 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
             let base = param("base").unwrap_or_default();
             let ps = forge.pulls(&repo, &base).unwrap();
             json(200, Value::Array(ps.iter().map(pull_json).collect()))
+        }
+        ("POST", ["pulls"]) | ("PATCH", ["pulls", _])
+            if body["body"]
+                .as_str()
+                .is_some_and(|b| b.chars().count() > BODY_LIMIT) =>
+        {
+            too_long()
         }
         ("POST", ["pulls"]) => {
             let p = forge
