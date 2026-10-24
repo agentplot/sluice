@@ -224,6 +224,8 @@ struct Inner {
     next_id: u64,
     crash_writes: usize,
     interfere: usize,
+    /// What another process does on the host once an id is allocated.
+    after_allocating: Option<Rc<dyn Fn(&World, u64)>>,
     // the clock
     now: DateTime<Utc>,
 }
@@ -257,7 +259,12 @@ impl Default for Fakes {
 
 impl Fakes {
     pub fn new() -> Self {
-        let world = World::new();
+        Fakes::of(World::new())
+    }
+
+    /// Fakes over `world`: another process on the same host, seeing what
+    /// the first sees.
+    pub fn of(world: World) -> Self {
         Fakes {
             checkout: FakeCheckout(world.clone()),
             tests: FakeTests(world.clone()),
@@ -1096,6 +1103,13 @@ impl World {
     /// Another writer writes the records just before the next write.
     pub fn interfere_next_write(&self) {
         self.0.borrow_mut().interfere += 1;
+    }
+
+    /// Another process does `then` with the world each time an id is
+    /// allocated, before the allocating call goes on: a round run between
+    /// a submit's numbering and its write.
+    pub fn after_allocating(&self, then: impl Fn(&World, u64) + 'static) {
+        self.0.borrow_mut().after_allocating = Some(Rc::new(then));
     }
 
     /// A branch's record file as written.
@@ -2138,6 +2152,11 @@ impl State for FakeState {
         let mut inner = self.0 .0.borrow_mut();
         let id = inner.next_id;
         inner.next_id += 1;
+        let then = inner.after_allocating.clone();
+        drop(inner);
+        if let Some(then) = then {
+            then(&self.0, id);
+        }
         Ok(id)
     }
 
