@@ -37,7 +37,7 @@ use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHE
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
-use crate::{Followed, Opened};
+use crate::{Followed, GroupRefused, Opened};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -1700,7 +1700,10 @@ impl crate::PullRequests for Pulls {
         Ok(
             match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
                 Ok(mut opened) => Ok(opened.remove(0)),
-                Err(mut refused) => Err(refused.remove(0).1),
+                Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
+                Err(GroupRefused::Short { .. }) => {
+                    bail!("a submit of one worktree read its pull request's conditions")
+                }
             },
         )
     }
@@ -1716,7 +1719,7 @@ impl crate::PullRequests for Pulls {
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
-    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
         for (k, worktree) in worktrees.iter().enumerate() {
@@ -1745,7 +1748,7 @@ impl crate::PullRequests for Pulls {
             }
         }
         let (Some(t), true) = (target, refused.is_empty()) else {
-            return Ok(Err(refused));
+            return Ok(Err(GroupRefused::Worktrees(refused)));
         };
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
@@ -1845,6 +1848,7 @@ impl crate::PullRequests for Pulls {
                 number,
                 said,
                 copy: submitted.copy.clone(),
+                submission: None,
             });
         }
         Ok(Ok(opened))
