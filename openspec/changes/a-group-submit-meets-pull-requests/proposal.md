@@ -126,6 +126,7 @@ crates/sluice/src/profiles/github/forge.rs
 crates/sluice/src/profiles/github/rest.rs
 crates/sluice/src/profiles/github/fake.rs
 crates/sluice/tests/profiles/pull_requests.rs
+crates/sluice/tests/profiles/forge.rs
 crates/sluice/tests/profiles/forge/github.rs
 crates/sluice/tests/cli.rs
 docs/adr/0048-a-group-submit-is-one-write-in-order-of-submission.md
