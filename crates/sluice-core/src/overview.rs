@@ -58,6 +58,12 @@ pub struct BranchView {
     pub window: usize,
     /// The window's upper bound, as the policy states it.
     pub parallel: Option<usize>,
+    /// The git remote the policy lands the branch on (C.4, C.7), by its
+    /// name, never its URL, which can carry credentials: a reader resolves
+    /// it and decides what it links to, so the core names no forge (rule
+    /// core.1). `None` for a branch kept in this host's repository.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     /// Submissions still in a chain: queued, waiting, testing, passed or
     /// landing.
     pub depth: usize,
@@ -148,6 +154,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         version: line.version,
         window: line.doc.window,
         parallel: rules.as_ref().map(|r| r.parallel),
+        remote: rules.as_ref().and_then(|r| r.remote.clone()),
         depth: submissions.len(),
         candidates,
         submissions,
@@ -529,11 +536,49 @@ mod tests {
             version: 0,
             window: 0,
             parallel: None,
+            remote: None,
             depth: 0,
             candidates: Vec::new(),
             submissions: Vec::new(),
             recent,
         }
+    }
+
+    /// A branch's view from its record files, under `policy`'s gate for
+    /// it.
+    fn read(policy: &str, files: &[(&str, String)]) -> BranchView {
+        let rules = Policy::parse(policy)
+            .unwrap()
+            .rules_for("main")
+            .unwrap()
+            .cloned();
+        branch_view(BranchRead {
+            branch: "main".into(),
+            snapshot: Snapshot {
+                version: 1,
+                files: files
+                    .iter()
+                    .map(|(p, b)| (p.to_string(), b.clone().into_bytes()))
+                    .collect(),
+            },
+            rules,
+            executor: None,
+            progress: BTreeMap::new(),
+        })
+        .unwrap()
+    }
+
+    /// C.4, C.7: a branch names the remote its policy lands it on, and
+    /// a branch kept in this host's repository names none.
+    #[test]
+    fn a_branch_names_its_remote_by_the_policys_name() {
+        let on = read("[branches.main]\nrequired = []\nremote = \"origin\"\n", &[]);
+        assert_eq!(on.remote.as_deref(), Some("origin"));
+        assert_eq!(serde_json::to_value(&on).unwrap()["remote"], "origin");
+        let local = read("[branches.main]\nrequired = []\n", &[]);
+        assert_eq!(local.remote, None);
+        let json = serde_json::to_value(&local).unwrap();
+        assert!(json.get("remote").is_none(), "{json}");
     }
 
     #[test]

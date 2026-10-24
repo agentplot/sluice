@@ -2,7 +2,7 @@
 
 ## 1. A branch names its remote
 
-- [ ] 1.1 Add `remote: Option<String>` to `BranchView` in `crates/sluice-core/src/overview.rs`, skipped when `None`, set in `branch_view` from `rules.remote`, with a comment citing C.4, C.7 and rule core.1 (the name, never the URL; the board resolves it); update the unit tests' `view` helper; verify a new unit test in `overview.rs` gives `Some("origin")` for rules with `remote = "origin"` and leaves the field out of the JSON for rules with none: `sluice exec main -- cargo test -p sluice-core overview`
+- [x] 1.1 Add `remote: Option<String>` to `BranchView` in `crates/sluice-core/src/overview.rs`, skipped when `None`, set in `branch_view` from `rules.remote`, with a comment citing C.4, C.7 and rule core.1 (the name, never the URL; the board resolves it); update the unit tests' `view` helper; verify a new unit test in `overview.rs` gives `Some("origin")` for rules with `remote = "origin"` and leaves the field out of the JSON for rules with none: `sluice exec main -- cargo test -p sluice-core overview`
 - [ ] 1.2 In `crates/sluice-conformance/tests/peers.rs`, assert `branch_view_of(BRANCH)` names `origin` as `remote` on the peers policy (`remote = "origin"`), and in `crates/sluice/tests/cli.rs`'s `overview_shows_every_branch_at_a_glance` that a local branch's JSON has no `remote`; verify `sluice exec main -- cargo test -p sluice-conformance --test peers` and `sluice exec main -- cargo test -p sluice --test cli overview_shows_every_branch`
 
 ## 2. A branch names where its recent submissions came from
