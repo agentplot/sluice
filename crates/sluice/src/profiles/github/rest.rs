@@ -115,6 +115,12 @@ fn posting_json(name: &str, posting: &Posting) -> Value {
     v
 }
 
+/// The body of the REST request that opens a pull request, a draft or
+/// ready for review.
+fn open_request(base: &str, head_ref: &str, title: &str, body: &str, draft: bool) -> Value {
+    json!({ "title": title, "head": head_ref, "base": base, "body": body, "draft": draft })
+}
+
 /// The GraphQL request that marks the pull request `node_id` a draft, or
 /// ready for review.
 fn draft_request(node_id: &str, draft: bool) -> Value {
@@ -330,13 +336,13 @@ impl Forge for App {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull> {
         let token = self.token(repo)?;
         let v = self.post_api(
             &Self::repo_path(repo, "/pulls"),
             &token,
-            &json!({ "title": title, "head": head_ref, "base": base, "body": body, "draft": false })
-                .to_string(),
+            &open_request(base, head_ref, title, body, draft).to_string(),
         )?;
         pull(&v)
     }
@@ -428,6 +434,31 @@ mod tests {
             "{e}"
         );
         assert!(graphql_reply(&json!({ "errors": [] })).is_ok());
+    }
+
+    /// A pull request is opened a draft only when asked.
+    #[test]
+    fn opening_a_draft_or_ready() {
+        let draft = open_request("main", "unit/a", "A", "body", true);
+        assert_eq!(draft["draft"], true);
+        assert_eq!(
+            (
+                &draft["base"],
+                &draft["head"],
+                &draft["title"],
+                &draft["body"]
+            ),
+            (
+                &json!("main"),
+                &json!("unit/a"),
+                &json!("A"),
+                &json!("body")
+            )
+        );
+        assert_eq!(
+            open_request("main", "unit/a", "A", "", false)["draft"],
+            false
+        );
     }
 
     #[test]
