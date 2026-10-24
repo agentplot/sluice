@@ -22,4 +22,4 @@
 
 ## 5. The gate
 
-- [ ] 5.1 Commit, then run the gate's checks: `sluice exec main` passes
+- [x] 5.1 Commit, then run the gate's checks: `sluice exec main` passes
