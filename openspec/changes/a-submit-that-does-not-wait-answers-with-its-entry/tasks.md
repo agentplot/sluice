@@ -8,7 +8,7 @@ submitting, `sluice exec main`.
 
 ## 1. The request's submission, from the seam
 
-- [ ] 1.1 Add `submission: Option<Submission>` to `Followed::Open` in `crates/sluice/src/lib.rs`, documented as the submission intake took for the request on its current head, undecided. In `follow` (`crates/sluice/src/profiles/github/pulls.rs`) fill it with the request's latest entry when it is not out and its head is the request's current head, and with `None` otherwise; update the one match in `submit_pull` to bind it. Verify `cargo check -p sluice --features tools` and `pulls.rs`'s unit tests (`sluice exec main -- cargo test -p sluice --lib profiles::github::pulls`).
+- [x] 1.1 Add `submission: Option<Submission>` to `Followed::Open` in `crates/sluice/src/lib.rs`, documented as the submission intake took for the request on its current head, undecided. In `follow` (`crates/sluice/src/profiles/github/pulls.rs`) fill it with the request's latest entry when it is not out and its head is the request's current head, and with `None` otherwise; update the one match in `submit_pull` to bind it. Verify `cargo check -p sluice --features tools` and `pulls.rs`'s unit tests (`sluice exec main -- cargo test -p sluice --lib profiles::github::pulls`).
 
 ## 2. The no-wait answer
 

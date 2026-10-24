@@ -491,7 +491,17 @@ pub struct Opened {
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
-    Open { title: String, lines: Vec<String> },
+    Open {
+        title: String,
+        lines: Vec<String>,
+        /// The submission intake took for it on its current head,
+        /// undecided; `None` while it waits to be taken in (C.5 pull
+        /// request, 120).
+        submission: Option<Submission>,
+        /// What each submission is called on a pull request, as
+        /// [`Followed::Done`] names them.
+        names: BTreeMap<u64, String>,
+    },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
@@ -2469,7 +2479,12 @@ fn submit_pull(
                 }
                 return Ok(FAILED);
             }
-            Some(Followed::Open { title, lines }) => {
+            Some(Followed::Open {
+                title,
+                lines,
+                submission: _,
+                names: _,
+            }) => {
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
@@ -2615,7 +2630,7 @@ fn submit_pull_group(
                 }
             };
             match followed {
-                Followed::Open { title, lines } => {
+                Followed::Open { title, lines, .. } => {
                     let now = (title, lines);
                     if last[i].as_ref() != Some(&now) {
                         if !json {
