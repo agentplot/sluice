@@ -18,7 +18,7 @@
 
 ## 4. Docs
 
-- [ ] 4.1 In `site/src/content/docs/reference/commands.md`'s overview table, add `remote` and `recent_from` to the `branches[]` rows (the remote's name from the policy, never its URL, left out for a branch with no remote; each id the recent lines name to the worktree it came from, a pull request's as `pull/<n>`) and a row for `branches[].candidates[].failed[].flaky` (`here`, `at`, `host`, and `other` with `outcome`, `at`, `host`, `branch`, `combination`, `log`), saying the new fields are left out of records written before them; verify `sluice exec main -- moon run site:prose` clears every Vale warning
+- [x] 4.1 In `site/src/content/docs/reference/commands.md`'s overview table, add `remote` and `recent_from` to the `branches[]` rows (the remote's name from the policy, never its URL, left out for a branch with no remote; each id the recent lines name to the worktree it came from, a pull request's as `pull/<n>`) and a row for `branches[].candidates[].failed[].flaky` (`here`, `at`, `host`, and `other` with `outcome`, `at`, `host`, `branch`, `combination`, `log`), saying the new fields are left out of records written before them; verify `sluice exec main -- moon run site:prose` clears every Vale warning
 
 ## 5. The gate
 
