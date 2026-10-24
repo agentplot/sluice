@@ -31,7 +31,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 
 ## 4. A flaky failure shows both runs
 
-- [ ] 4.1 Add `flakyLines` to `board.ts` (design D5); verify `board.test.ts`: `this run: passed 19:42 on devbox` and `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa`, and with no `at` or `host`, `this run: passed` and `the run it contradicts: failed · main 4f1c2aa`, in the board's checks
+- [x] 4.1 Add `flakyLines` to `board.ts` (design D5); verify `board.test.ts`: `this run: passed 19:42 on devbox` and `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa`, and with no `at` or `host`, `this run: passed` and `the run it contradicts: failed · main 4f1c2aa`, in the board's checks
 - [ ] 4.2 Make `open()` read the other run's log tail, and `view()` draw both runs (design D5); verify `register.test.tsx` tests, with `sluice status 9 --json` answering a flaky `cli:test` and the `log of` row's candidate carrying the same: both logs read, each tail under its heading; the other's log absent reads `its log was not kept`; this run's log unreadable shows the path and why, with the other run still shown; `ran` holds only `sluice status 9 --json` and the `tail`s; in the board's checks
 - [ ] 4.3 Say in the README and the guide that an opened flaky failure shows this run and the run it contradicts, each with its time, host and log; verify `sluice exec main -- moon run site:prose` clears every Vale warning
 

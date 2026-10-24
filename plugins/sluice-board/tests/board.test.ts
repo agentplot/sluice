@@ -12,6 +12,7 @@ import {
   emptyLines,
   errorLine,
   finishedWords,
+  flakyLines,
   flipped,
   forecastBranch,
   forecastKey,
@@ -43,7 +44,7 @@ import {
   unreadReason,
   wakeText,
 } from "../hooks/board";
-import type { Mine, Overview } from "../types";
+import type { Flaky, Mine, Overview } from "../types";
 import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
 
 const ME: Mine = { root: "/work/sluice/plugin-board", ids: [], pulls: [] };
@@ -490,6 +491,39 @@ describe("outcomes", () => {
     );
     expect(text).toContain("failed: cli:build (linux-arm64), cli:test on 9a03c1e");
     expect(text).toContain("Log of cli:build (linux-arm64): /l/cli:build.log");
+  });
+});
+
+describe("a flaky failure", () => {
+  test("this run and the run it contradicts, each with its time and host", () => {
+    const f: Flaky = {
+      here: "pass",
+      at: "2026-10-16T19:42:05Z",
+      host: "devbox",
+      other: {
+        outcome: "fail",
+        at: "2026-10-16T19:10:30Z",
+        branch: "main",
+        combination: "4f1c2aa0e1",
+        host: "mac-studio",
+      },
+    };
+    expect(flakyLines(f)).toEqual([
+      "this run: passed 19:42 on devbox",
+      "the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa",
+    ]);
+  });
+
+  test("a record from before times and hosts leaves them out", () => {
+    // Cast: sluice always wrote the other run's time; a record with none still reads.
+    const old = {
+      here: "pass",
+      other: { outcome: "fail", branch: "main", combination: "4f1c2aa0e1" },
+    } as Flaky;
+    expect(flakyLines(old)).toEqual([
+      "this run: passed",
+      "the run it contradicts: failed · main 4f1c2aa",
+    ]);
   });
 });
 

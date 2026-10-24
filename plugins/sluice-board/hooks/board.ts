@@ -2,6 +2,7 @@
 // pure functions over the document, so the tests need no sluice running.
 
 import type {
+  Flaky,
   Forecast,
   LastResult,
   Latest,
@@ -45,6 +46,25 @@ export function hostsLine(hosts: readonly OverviewHost[]): string {
 /** A failed test by name, and the system it failed on where there is one. */
 export function failedName(f: OverviewFailed): string {
   return f.system ? `${f.task} (${f.system})` : f.task;
+}
+
+/** ` 19:42 on devbox`: when and where a run ran, each left out when the record lacks it. */
+function ranAt(at: string | undefined, host: string | undefined): string {
+  const time = at ? at.slice(11, 16) : "";
+  return `${time ? ` ${time}` : ""}${host ? ` on ${host}` : ""}`;
+}
+
+/**
+ * The headings of a flaky failure's two runs: this run's outcome, time and
+ * host, then the run it contradicts, with its branch and combination too.
+ */
+export function flakyLines(f: Flaky): [string, string] {
+  const word = (o: "pass" | "fail") => (o === "pass" ? "passed" : "failed");
+  const o = f.other;
+  return [
+    `this run: ${word(f.here)}${ranAt(f.at, f.host)}`,
+    `the run it contradicts: ${word(o.outcome)}${ranAt(o.at, o.host)} · ${o.branch} ${o.combination.slice(0, 7)}`,
+  ];
 }
 
 /** `2m10s`, `45s`, `1h03m`. */
