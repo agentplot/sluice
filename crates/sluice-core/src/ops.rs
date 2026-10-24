@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sluice_seams::{Contested, Formed, Rev, Session};
 
 use crate::line::Line;
@@ -18,6 +18,18 @@ pub struct SubmitRequest {
     /// The session's place, as its driver names it.
     pub worktree: String,
     pub branch: String,
+    pub after: Vec<u64>,
+    pub priority: i64,
+}
+
+/// 125: several places' heads submitted to one branch as one act.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupRequest {
+    pub branch: String,
+    /// The places, as their driver names them, in the order their heads
+    /// land.
+    pub worktrees: Vec<String>,
+    /// Every submission of the act lands after these, alike.
     pub after: Vec<u64>,
     pub priority: i64,
 }
@@ -48,6 +60,8 @@ pub enum SubmitRefusal {
     UnknownAfter(Vec<u64>),
     /// The branch named as the head to forecast has no revision.
     NoHead(String),
+    /// 125: a group names this place already, as the place given.
+    NamedTwice(String),
     /// ADR 0048: the branch's gate requires checks the runner, in the
     /// submitting worktree, keeps out of CI, so the branch cannot pass.
     KeptOut(Vec<KeptOut>),
@@ -179,121 +193,122 @@ impl Status {
 
 impl Sluice<'_> {
     /// 47, 1, 2, 3, 67: admit a head to a branch's queue, and nothing
-    /// more.
+    /// more: a group of one.
     pub fn submit(&self, req: &SubmitRequest) -> Result<Result<Accepted, SubmitRefusal>> {
-        let session = self.seams.driver.session(&req.worktree)?;
-        if session.detached {
-            return Ok(Err(SubmitRefusal::Detached));
-        }
-        if !session.dirty.is_empty() {
-            return Ok(Err(SubmitRefusal::Dirty(session.dirty)));
-        }
-        let Some(tip) = self.seams.branch.read(&req.branch)? else {
-            return Ok(Err(SubmitRefusal::NoBranch));
+        let group = GroupRequest {
+            branch: req.branch.clone(),
+            worktrees: vec![req.worktree.clone()],
+            after: req.after.clone(),
+            priority: req.priority,
         };
-        if self.rules_at(&req.branch, &tip)?.is_none() {
-            return Ok(Err(SubmitRefusal::NotManaged));
+        Ok(match self.submit_group(&group)? {
+            Ok(mut accepted) => Ok(accepted.remove(0)),
+            Err(mut refused) => Err(refused.remove(0).1),
+        })
+    }
+
+    /// 125, 47, 1, 2, 3, 67: admit several places' heads to a branch's
+    /// queue as one act, in the order given, or none of them. Every place
+    /// is read before anything is written, and every refusal is answered
+    /// with the place it refuses; then the submissions are written in one
+    /// write of the branch's records, so no reader sees some of them and
+    /// not the rest (62; rule core.14). Each lands after the one before by
+    /// its order of submission (6), never as another's `after`.
+    pub fn submit_group(
+        &self,
+        req: &GroupRequest,
+    ) -> Result<Result<Vec<Accepted>, Vec<(String, SubmitRefusal)>>> {
+        if req.worktrees.is_empty() {
+            bail!("a group submit to {} names no worktree", req.branch);
         }
-        let line = self.read_line(&req.branch)?;
-        let unknown: Vec<u64> = req
-            .after
-            .iter()
-            .copied()
-            .filter(|a| !line.has(*a))
-            .collect();
-        if !unknown.is_empty() {
-            return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
+        let mut refused = Vec::new();
+        let mut sessions: Vec<Session> = Vec::new();
+        for (k, worktree) in req.worktrees.iter().enumerate() {
+            let session = self.seams.driver.session(worktree)?;
+            let before = req.worktrees[..k]
+                .iter()
+                .zip(&sessions)
+                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _)) = before {
+                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+            } else if session.detached {
+                refused.push((worktree.clone(), SubmitRefusal::Detached));
+            } else if !session.dirty.is_empty() {
+                refused.push((
+                    worktree.clone(),
+                    SubmitRefusal::Dirty(session.dirty.clone()),
+                ));
+            }
+            sessions.push(session);
         }
-        let warnings = match self.check_kept_out(&session, &req.branch, &tip)? {
-            Ok(w) => w,
-            Err(r) => return Ok(Err(r)),
+        // What the branch refuses, it refuses for every place.
+        let mut whole = |r: SubmitRefusal| {
+            for w in &req.worktrees {
+                refused.push((w.clone(), r.clone()));
+            }
         };
-        // 82: the head is fetchable by every host before it is submitted.
-        self.seams.state.publish_head(&req.branch, &session.head)?;
-        let id = self.seams.state.allocate_id()?;
+        let tip = self.seams.branch.read(&req.branch)?;
+        match &tip {
+            None => whole(SubmitRefusal::NoBranch),
+            Some(tip) if self.rules_at(&req.branch, tip)?.is_none() => {
+                whole(SubmitRefusal::NotManaged)
+            }
+            Some(_) => {
+                let line = self.read_line(&req.branch)?;
+                let unknown: Vec<u64> = req
+                    .after
+                    .iter()
+                    .copied()
+                    .filter(|a| !line.has(*a))
+                    .collect();
+                if !unknown.is_empty() {
+                    whole(SubmitRefusal::UnknownAfter(unknown));
+                }
+            }
+        }
+        let (Some(tip), true) = (tip, refused.is_empty()) else {
+            return Ok(Err(refused));
+        };
+        // ADR 0048: each place's runner is asked which of the gate's
+        // required checks it keeps out of CI; a place that keeps one out is
+        // refused, and the act with it.
+        let mut warnings = Vec::new();
+        for (worktree, session) in req.worktrees.iter().zip(&sessions) {
+            match self.check_kept_out(session, &req.branch, &tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(refused));
+        }
+        // 82: every head is fetchable by every host before any is
+        // submitted.
+        for session in &sessions {
+            self.seams.state.publish_head(&req.branch, &session.head)?;
+        }
+        let mut ids = Vec::new();
+        for _ in &sessions {
+            ids.push(self.seams.state.allocate_id()?);
+        }
         let now = self.now();
         let _lock = self.seams.state.wait_lock(&req.branch)?;
         let accepted = self.update(&req.branch, |l| {
-            let mine: Vec<u64> = l
-                .subs
-                .values()
-                .filter(|s| s.from.worktree == session.from.worktree)
-                .map(|s| s.id)
-                .collect();
-            let attempt = l.from_worktree(&session.from.worktree) as u32 + 1;
-            let mut withdrew = Vec::new();
-            for &old in &mine {
-                let s = l.sub_mut(old);
-                if !s.state.is_final() && s.state != State::Landing {
-                    s.state = State::Withdrawn;
-                    s.withdrawn = Some(Withdrawal {
-                        by: "resubmission".into(),
-                        at: now.clone(),
-                    });
-                    withdrew.push(old);
-                }
+            let mut accepted = Vec::new();
+            for (&id, session) in ids.iter().zip(&sessions) {
+                accepted.push(admit(l, req, id, session, &now));
             }
-            for &old in &withdrew {
-                l.log(
-                    &now,
-                    Event::Withdrawn {
-                        id: old,
-                        by: "resubmission".into(),
-                    },
-                );
-            }
-            let ahead: Vec<u64> = l
-                .subs
-                .values()
-                .filter(|s| !s.state.is_out())
-                .map(|s| s.id)
-                .collect();
-            l.subs.insert(
-                id,
-                Submission {
-                    schema: SUBMISSION_SCHEMA.into(),
-                    id,
-                    branch: req.branch.clone(),
-                    head: session.head.clone(),
-                    from: session.from.clone(),
-                    submitted: now.clone(),
-                    after: req.after.clone(),
-                    priority: req.priority,
-                    attempt,
-                    state: State::Queued,
-                    tested: None,
-                    result: None,
-                    failed: Vec::new(),
-                    conflict: None,
-                    withdrawn: None,
-                    told: None,
-                    landed_as: None,
-                    was: None,
-                    held: None,
-                },
-            );
-            l.log(
-                &now,
-                Event::Submitted {
-                    id,
-                    head: session.head.clone(),
-                },
-            );
-            Ok(Accepted {
-                id,
-                ahead,
-                withdrew,
-                warnings: Vec::new(),
-            })
+            Ok(accepted)
         })?;
-        let accepted = Accepted {
-            warnings,
-            ..accepted
-        };
+        let accepted = accepted
+            .into_iter()
+            .zip(warnings)
+            .map(|(a, warnings)| Accepted { warnings, ..a })
+            .collect();
         // 111: work on a branch whose records are on its remote may be
         // taken by no instance now running: the first pool is asked to
-        // advance the branch. A wake that is lost delays it and loses
-        // nothing (59).
+        // advance the branch, once for the act. A wake that is lost delays
+        // it and loses nothing (59).
         if let Some(policy) = self.policy_at(&tip)? {
             let rules = policy.rules_for(&req.branch)?.cloned();
             if let (Some(rules), Some(pool)) = (rules, policy.pools.first()) {
@@ -849,9 +864,538 @@ pub fn kept_out_warning(branch: &str, task: &str) -> String {
     )
 }
 
+/// 47, 67: withdraw the earlier submissions from `session`'s place and
+/// queue its head as submission `id`, in `l`.
+fn admit(l: &mut Line, req: &GroupRequest, id: u64, session: &Session, now: &str) -> Accepted {
+    let mine: Vec<u64> = l
+        .subs
+        .values()
+        .filter(|s| s.from.worktree == session.from.worktree)
+        .map(|s| s.id)
+        .collect();
+    let attempt = l.from_worktree(&session.from.worktree) as u32 + 1;
+    let mut withdrew = Vec::new();
+    for &old in &mine {
+        let s = l.sub_mut(old);
+        if !s.state.is_final() && s.state != State::Landing {
+            s.state = State::Withdrawn;
+            s.withdrawn = Some(Withdrawal {
+                by: "resubmission".into(),
+                at: now.into(),
+            });
+            withdrew.push(old);
+        }
+    }
+    for &old in &withdrew {
+        l.log(
+            now,
+            Event::Withdrawn {
+                id: old,
+                by: "resubmission".into(),
+            },
+        );
+    }
+    let ahead: Vec<u64> = l
+        .subs
+        .values()
+        .filter(|s| !s.state.is_out())
+        .map(|s| s.id)
+        .collect();
+    l.subs.insert(
+        id,
+        Submission {
+            schema: SUBMISSION_SCHEMA.into(),
+            id,
+            branch: req.branch.clone(),
+            head: session.head.clone(),
+            from: session.from.clone(),
+            submitted: now.into(),
+            after: req.after.clone(),
+            priority: req.priority,
+            attempt,
+            state: State::Queued,
+            tested: None,
+            result: None,
+            failed: Vec::new(),
+            conflict: None,
+            withdrawn: None,
+            told: None,
+            landed_as: None,
+            was: None,
+            held: None,
+        },
+    );
+    l.log(
+        now,
+        Event::Submitted {
+            id,
+            head: session.head.clone(),
+        },
+    );
+    Accepted {
+        id,
+        ahead,
+        withdrew,
+        warnings: Vec::new(),
+    }
+}
+
 /// In a candidate under test or judged on the branch's revision (6).
 fn under_test(line: &Line, id: u64) -> bool {
     line.doc.candidates.iter().any(|c| {
         Some(&c.on) == line.doc.base.as_ref() && c.state.pins() && c.submissions.contains(&id)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::BTreeMap;
+
+    use chrono::{DateTime, TimeZone, Utc};
+    use sluice_seams::{
+        Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Guard, HostRun, LandingCommit,
+        LastResult, Moved, Notification, Place, Platform, PreviewPlace, Progress, ReleasePolicy,
+        Released, RunHandle, RunReport, RunRequest, Running, SessionPlace, Settings, Snapshot,
+        State as Records, Submitter, TaskLog, TaskProgress, Tests, Written, FINISHED,
+    };
+
+    use super::*;
+    use crate::policy::POLICY_PATH;
+    use crate::{Clock, Seams};
+
+    const BRANCH: &str = "main";
+
+    /// A host with one branch under a policy, its places, and its
+    /// records, holding what a submit reads and writes and nothing more.
+    #[derive(Default)]
+    struct Host {
+        places: RefCell<BTreeMap<String, Session>>,
+        records: RefCell<Snapshot>,
+        writes: Cell<usize>,
+        next_id: Cell<u64>,
+    }
+
+    impl Host {
+        fn new() -> Host {
+            let h = Host::default();
+            h.next_id.set(1);
+            h
+        }
+
+        /// A clean place `worktree` holding a head of its own.
+        fn place(&self, worktree: &str) {
+            self.places.borrow_mut().insert(
+                worktree.into(),
+                Session {
+                    head: Rev::new(format!("head-of-{worktree}")),
+                    from: Submitter {
+                        agent: format!("agent-{worktree}"),
+                        worktree: worktree.into(),
+                        path: None,
+                        head: None,
+                    },
+                    dirty: Vec::new(),
+                    detached: false,
+                },
+            );
+        }
+
+        fn dirty(&self, worktree: &str, path: &str) {
+            let mut places = self.places.borrow_mut();
+            places.get_mut(worktree).unwrap().dirty = vec![path.into()];
+        }
+
+        fn sluice(&self) -> Sluice<'_> {
+            let seams = Seams {
+                checkout: self,
+                tests: self,
+                branch: self,
+                driver: self,
+                state: self,
+            };
+            Sluice::new(seams, &Noon)
+        }
+
+        fn group(&self, worktrees: &[&str], after: &[u64]) -> GroupRequest {
+            GroupRequest {
+                branch: BRANCH.into(),
+                worktrees: worktrees.iter().map(|w| w.to_string()).collect(),
+                after: after.to_vec(),
+                priority: 0,
+            }
+        }
+    }
+
+    struct Noon;
+
+    impl Clock for Noon {
+        fn now(&self) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap()
+        }
+    }
+
+    struct Held;
+
+    impl Guard for Held {}
+
+    impl Driver for Host {
+        fn session(&self, worktree: &str) -> Result<Session> {
+            self.places
+                .borrow()
+                .get(worktree)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no place {worktree}"))
+        }
+
+        fn notify(&self, _: &Notification) -> Result<()> {
+            unreachable!("a submit tells no one")
+        }
+    }
+
+    impl Branch for Host {
+        fn read(&self, branch: &str) -> Result<Option<Rev>> {
+            Ok((branch == BRANCH).then(|| Rev::new("tip")))
+        }
+
+        fn read_file(&self, _: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
+            Ok((path == POLICY_PATH).then(|| b"[branches.main]\n".to_vec()))
+        }
+
+        fn form(&self, _: &Rev, _: &Rev) -> Result<Formed> {
+            unreachable!("a submit forms nothing")
+        }
+
+        fn commit(&self, _: &LandingCommit) -> Result<Rev> {
+            unreachable!("a submit commits nothing")
+        }
+
+        fn contains(&self, _: &Rev, _: &Rev) -> Result<bool> {
+            unreachable!("a submit reads no history")
+        }
+
+        fn move_to(&self, _: &str, _: &Rev, _: &Rev) -> Result<Moved> {
+            unreachable!("a submit moves no branch")
+        }
+
+        fn make(&self, _: &str, _: &Rev) -> Result<Moved> {
+            unreachable!("a submit makes no branch")
+        }
+
+        fn remove(&self, _: &str, _: &Rev) -> Result<Moved> {
+            unreachable!("a submit removes no branch")
+        }
+    }
+
+    impl Records for Host {
+        fn lock<'a>(&'a self, _: &str) -> Result<Option<Box<dyn Guard + 'a>>> {
+            Ok(Some(Box::new(Held)))
+        }
+
+        fn wait_lock<'a>(&'a self, _: &str) -> Result<Box<dyn Guard + 'a>> {
+            Ok(Box::new(Held))
+        }
+
+        fn read(&self, _: &str) -> Result<Snapshot> {
+            let records = self.records.borrow();
+            Ok(Snapshot {
+                version: records.version,
+                files: records
+                    .files
+                    .iter()
+                    .filter(|(path, _)| !path.starts_with(FINISHED))
+                    .map(|(path, bytes)| (path.clone(), bytes.clone()))
+                    .collect(),
+            })
+        }
+
+        fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
+            Ok(self.read_all_finished(branch)?.remove(name))
+        }
+
+        fn read_all_finished(&self, _: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+            let prefix = format!("{FINISHED}/");
+            Ok(self
+                .records
+                .borrow()
+                .files
+                .iter()
+                .filter_map(|(path, bytes)| {
+                    Some((path.strip_prefix(&prefix)?.to_string(), bytes.clone()))
+                })
+                .collect())
+        }
+
+        fn write(&self, _: &str, read_at: u64, changes: Changes) -> Result<Written> {
+            let mut records = self.records.borrow_mut();
+            if records.version != read_at {
+                return Ok(Written::Refused);
+            }
+            records.files.extend(changes.put);
+            for (path, bytes) in changes.append {
+                records.files.entry(path).or_default().extend(bytes);
+            }
+            records
+                .files
+                .retain(|path, _| !changes.remove.contains(path));
+            records.version += 1;
+            self.writes.set(self.writes.get() + 1);
+            Ok(Written::Written(records.version))
+        }
+
+        fn branches(&self) -> Result<Vec<String>> {
+            Ok(vec![BRANCH.into()])
+        }
+
+        fn allocate_id(&self) -> Result<u64> {
+            let id = self.next_id.get();
+            self.next_id.set(id + 1);
+            Ok(id)
+        }
+
+        fn results(&self) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn record_results(&self, _: &[u8]) -> Result<()> {
+            unreachable!("a submit records no result")
+        }
+
+        fn set_asides(&self) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn set_aside(&self, _: &[u8]) -> Result<()> {
+            unreachable!("a submit sets nothing aside")
+        }
+
+        fn keep_logs(&self, _: &str, _: &str, _: &[TaskLog]) -> Result<Vec<TaskLog>> {
+            unreachable!("a submit keeps no log")
+        }
+
+        fn progress(&self, _: &str) -> Result<BTreeMap<String, Vec<TaskProgress>>> {
+            Ok(BTreeMap::new())
+        }
+
+        fn put_progress(&self, _: &str, _: &str, _: Option<&[TaskProgress]>) -> Result<()> {
+            unreachable!("a submit keeps no progress")
+        }
+    }
+
+    impl Checkout for Host {
+        fn materialize(&self, _: &str, _: &Rev, _: &Settings) -> Result<Place> {
+            unreachable!("a submit makes no place")
+        }
+
+        fn release(&self, _: &str, _: bool) -> Result<()> {
+            unreachable!("a submit releases no place")
+        }
+
+        fn made(&self) -> Result<Vec<String>> {
+            unreachable!("a submit reads no place")
+        }
+
+        fn adopt(&self, _: &str, _: &str, _: &Settings, _: &str) -> Result<Place> {
+            unreachable!("a submit adopts no place")
+        }
+
+        fn save_caches(&self, _: &str, _: &Rev, _: &Settings) -> Result<()> {
+            unreachable!("a submit saves no cache")
+        }
+
+        fn adopted(&self, _: &str) -> Result<Option<Adopted>> {
+            unreachable!("a submit reads no place")
+        }
+
+        fn release_session(&self, _: &str, _: Option<&ReleasePolicy>) -> Result<Released> {
+            unreachable!("a submit releases no place")
+        }
+
+        fn session_places(&self) -> Result<Vec<SessionPlace>> {
+            unreachable!("a submit reads no place")
+        }
+
+        fn ran(&self, _: &str, _: &LastResult) -> Result<()> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn checked_out(&self) -> Result<Vec<CheckedOut>> {
+            unreachable!("a submit reads no worktree")
+        }
+
+        fn preview(
+            &self,
+            _: &str,
+            _: &Rev,
+            _: &str,
+            _: &Settings,
+            _: &BTreeMap<String, String>,
+            _: &str,
+        ) -> Result<(Place, PreviewPlace)> {
+            unreachable!("a submit previews nothing")
+        }
+
+        fn preview_run(&self, _: &str, _: &RunHandle) -> Result<()> {
+            unreachable!("a submit previews nothing")
+        }
+
+        fn previews(&self) -> Result<Vec<PreviewPlace>> {
+            unreachable!("a submit previews nothing")
+        }
+
+        fn release_preview(&self, _: &str, _: Option<&str>) -> Result<bool> {
+            unreachable!("a submit previews nothing")
+        }
+    }
+
+    impl Tests for Host {
+        fn start(&self, _: &RunRequest) -> Result<RunHandle> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn progress(&self, _: &RunHandle) -> Result<Progress> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn bound(&self) -> Result<usize> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn platform(&self) -> Result<Platform> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn running(&self) -> Result<Running> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn proven(&self, _: &RunHandle, _: &RunReport) -> Result<Vec<String>> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn session_runs(&self) -> Result<Vec<HostRun>> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn logs(&self, _: &RunHandle, _: &[String]) -> Result<Vec<TaskLog>> {
+            unreachable!("a submit runs nothing")
+        }
+
+        fn tasks(&self, _: &RunHandle) -> Result<Vec<TaskProgress>> {
+            unreachable!("a submit runs nothing")
+        }
+    }
+
+    fn line(h: &Host) -> Line {
+        Line::load(BRANCH, Records::read(h, BRANCH).unwrap()).unwrap()
+    }
+
+    /// 125: a dirty second place refuses the act whole: nothing is
+    /// written, no number is taken, and the refusal names that place.
+    #[test]
+    fn a_dirty_place_writes_nothing_and_is_named() {
+        let h = Host::new();
+        for w in ["b1", "b2", "b3"] {
+            h.place(w);
+        }
+        h.dirty("b2", "notes.txt");
+        let got = h.sluice().submit_group(&h.group(&["b1", "b2", "b3"], &[]));
+        assert_eq!(
+            got.unwrap(),
+            Err(vec![(
+                "b2".to_string(),
+                SubmitRefusal::Dirty(vec!["notes.txt".into()])
+            )])
+        );
+        assert_eq!(h.writes.get(), 0);
+        assert_eq!(h.next_id.get(), 1, "no number taken");
+        assert!(line(&h).subs.is_empty());
+    }
+
+    /// 125: a place named twice, by its name or another resolving to it,
+    /// is refused, naming the place it repeats; so is every place when the
+    /// branch refuses the act.
+    #[test]
+    fn every_refusal_is_given_with_its_place() {
+        let h = Host::new();
+        h.place("b1");
+        h.place("b2");
+        let got = h
+            .sluice()
+            .submit_group(&h.group(&["b1", "b2", "b1"], &[]))
+            .unwrap();
+        assert_eq!(
+            got,
+            Err(vec![("b1".into(), SubmitRefusal::NamedTwice("b1".into()))])
+        );
+        let got = h
+            .sluice()
+            .submit_group(&h.group(&["b1", "b2"], &[40]))
+            .unwrap();
+        assert_eq!(
+            got,
+            Err(vec![
+                ("b1".into(), SubmitRefusal::UnknownAfter(vec![40])),
+                ("b2".into(), SubmitRefusal::UnknownAfter(vec![40])),
+            ])
+        );
+        assert_eq!(h.writes.get(), 0);
+    }
+
+    /// 125, 6: three places make one version of the records holding three
+    /// submissions in the order given, numbered in it, none naming another
+    /// of the act as one it lands after; `after` and `priority` are on
+    /// every one alike.
+    #[test]
+    fn three_places_are_one_write_in_order() {
+        let h = Host::new();
+        h.place("earlier");
+        let earlier = h
+            .sluice()
+            .submit_group(&h.group(&["earlier"], &[]))
+            .unwrap()
+            .unwrap()[0]
+            .id;
+        let before = h.records.borrow().version;
+        for w in ["b1", "b2", "b3"] {
+            h.place(w);
+        }
+        let mut req = h.group(&["b1", "b2", "b3"], &[earlier]);
+        req.priority = 3;
+        let accepted = h.sluice().submit_group(&req).unwrap().unwrap();
+        assert_eq!(h.records.borrow().version, before + 1, "one write");
+        let ids: Vec<u64> = accepted.iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec![2, 3, 4]);
+        assert_eq!(accepted[2].ahead, vec![1, 2, 3]);
+        let l = line(&h);
+        for (id, w) in ids.iter().zip(["b1", "b2", "b3"]) {
+            let s = &l.subs[id];
+            assert_eq!(s.from.worktree, w);
+            assert_eq!(s.state, State::Queued);
+            assert_eq!(s.after, vec![earlier], "none names another of the act");
+            assert_eq!(s.priority, 3);
+        }
+    }
+
+    /// 67: each place's earlier submission is withdrawn in the same write.
+    #[test]
+    fn each_places_earlier_submission_is_withdrawn() {
+        let h = Host::new();
+        h.place("b1");
+        h.place("b2");
+        h.sluice()
+            .submit_group(&h.group(&["b1"], &[]))
+            .unwrap()
+            .unwrap();
+        let accepted = h
+            .sluice()
+            .submit_group(&h.group(&["b1", "b2"], &[]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted[0].withdrew, vec![1]);
+        assert!(accepted[1].withdrew.is_empty());
+        let s = h.sluice();
+        assert_eq!(s.state(1).unwrap().unwrap().state, State::Withdrawn);
+        assert_eq!(s.state(2).unwrap().unwrap().attempt, 2);
+    }
 }

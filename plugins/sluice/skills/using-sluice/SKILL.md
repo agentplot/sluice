@@ -64,6 +64,13 @@ and a loop waiting for it there never ends. `sluice status 12 --json` reads
 the record once without waiting, and `sluice submit main --status` this
 worktree's last submission or its pull request.
 
+Several worktrees whose heads must go in together, such as a set of
+approved bolts, are submitted as one act: `sluice submit main --worktree
+../a --worktree ../b`. sluice queues all of them, in that order, or none,
+and forms no combination on any of them until every one is queued. Once
+queued, each is its own submission: blamed, withdrawn and waited on
+(`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
+
 Nothing moves while nobody waits and no `sluice run` is going, so a
 `--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
 wait` moves it, as do `sluice step main` (one round) and `sluice run

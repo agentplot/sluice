@@ -11,8 +11,8 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--status` | Where this worktree's last submission, or its pull request, stands. |
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
-| `--worktree <path>` | Submit from another worktree than the current directory. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request. |
+| `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request; `{branch,submissions}` for several worktrees. |
 
 ## Refused: a required task kept out of CI
 
@@ -50,6 +50,32 @@ has run, and the combination's time against its limit. `sluice status
 `N tasks to run, M replayed`: with moon, only affected tasks run, and a task
 whose inputs did not change may replay its earlier result, when the branch
 trusts `"cache"`.
+
+## Several worktrees as one act
+
+Submit a set as one act when its heads must be queued together, such as
+approved bolts landing on `main`. Submitted one by one, a round between
+the submits can test the first alone, and land it before the rest are
+queued.
+
+```sh
+sluice submit main --worktree ../bolt-a --worktree ../bolt-b --worktree ../bolt-c
+sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait --json
+# {"branch":"main","submissions":[{"id":41,"worktree":"../bolt-a","ahead":[]},{"id":42,"worktree":"../bolt-b","ahead":[41]}]}
+```
+
+- All or none: a refused worktree (uncommitted changes, named twice) is
+  named with why, nothing is queued, exit `2`.
+- In order: each is queued after the one before; `--after` and
+  `--priority` apply to every one alike.
+- Then each is its own submission. One that fails or conflicts is sent
+  back alone and the others land; wait on each with `sluice wait <id>
+  --timeout 9m --json`, as on any submission.
+- A waiting act reports each one's outcome in order and exits `0` when
+  all landed, otherwise with the exit of the first that did not. Under
+  `--json`, one document: `{branch,submissions}`, each item that
+  submission's record plus its `worktree`.
+- `--check` and `--status` take one worktree (exit `64` with more).
 
 ## Who moves the queue
 
