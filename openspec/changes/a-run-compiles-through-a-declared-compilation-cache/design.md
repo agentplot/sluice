@@ -4,8 +4,9 @@
 
 Sources: clause 35 and the sandbox row of C.2 in
 `agentplot/blueprints:design/sluice/requirements.md` (blueprints
-49c03f0), and `docs/adr/0049-…` with its amendment (sluice d55c691),
-both proposed to the user on 2026-10-24. Rules: core.1, core.2, core.10,
+5c7d73a, and 5f281cb for how an unconfined run finds the host's
+server), and `docs/adr/0049-…` with its amendment (sluice 38acbc1),
+accepted by the user on 2026-10-24. Rules: core.1, core.2, core.10,
 core.21, core.24.
 
 What is there now:
@@ -66,29 +67,54 @@ What is there now:
 
 ## Decisions
 
-### D1. The policy says `[checkout] compile_cache = "sccache"`
+### D1. The policy says `[checkout] compile_cache = "sccache"` and names the client's variables
 
-A plain key in `[checkout]`, not a sub-table: the core passes
+```toml
+[checkout]
+compile_cache = "sccache"
+compile_cache_variables = ["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT", "SCCACHE_DIR"]
+```
+
+Plain keys in `[checkout]`, not a sub-table: the core passes
 `[checkout]` to the place profile as `Settings`, which holds strings,
-lists and arrays of tables only (`policy.rs`, `settings`), so a key
-needs no change to the core. It sits beside `ports` and
+lists and arrays of tables only (`policy.rs`, `settings`), so the keys
+need no change to the core. They sit beside `ports` and
 `[[checkout.cache]]`, where 35 puts the caches a place may hold. The
-value names the tool because what the cache serves and how a run
+first names the tool because what the cache serves and how a run
 reaches it is the tool's. Only `"sccache"` is served; any other value
 refuses the checkout, as an unknown `method` does.
 
+`compile_cache_variables` is the declaration's names for "the client's
+own variables" (35): the ones the host sets for its keeper's server and
+its shells, which an unconfined run takes from sluice's environment
+(D5). It is a list of strings, and may be left out, in which case an
+open run takes none and its client reaches the tool's default address,
+as a shell with none set does. A name SHALL be the client's own, so it
+starts with `SCCACHE_`, and SHALL NOT be one the step sets
+(`RUSTC_WRAPPER`, `SCCACHE_NO_DAEMON`, `SCCACHE_CLIENT_SIDE`,
+`SCCACHE_START_SERVER`, `SCCACHE_IDLE_TIMEOUT`); either refuses the
+checkout naming the variable. `compile_cache_variables` without
+`compile_cache` is refused too. The check keeps 35's "nothing that names
+another place or tool" in a run's environment: only the cache's own
+client's variables pass.
+
 Alternatives: `[[checkout.cache]] kind = "compile"`, which overloads a
 table whose `key` and `paths` mean nothing here; a key in `[tests]`,
-which 35 does not place with the caches.
+which 35 does not place with the caches; a fixed list of sccache's
+address variables in the profile, which leaves the host's own
+variables, its `SCCACHE_DIR` among them, out of the policy's hands
+where 35 puts them.
 
 ### D2. The place carries the declaration to the run
 
-`sluice_seams::Place` gains `compile_cache: Option<String>`. The place
-profile sets it in `materialize` and `adopt` from `[checkout]`, keeps
-it in the place's record (`Made`), and sets it on every `Place` built
-from a record (a session's, for its release). Preview places carry
-`None` (D7). The check profile reads `request.place.compile_cache`; it
-never reads `[checkout]` (core.2).
+`sluice_seams::Place` gains `compile_cache: Option<CompileCache>`, where
+`CompileCache` holds the tool's name and the variables the policy names
+(`tool: String`, `variables: Vec<String>`). The place profile sets it
+in `materialize` and `adopt` from `[checkout]`, keeps it in the place's
+record (`Made`), and sets it on every `Place` built from a record (a
+session's, for its release). Preview places carry `None` (D7). The
+check profile reads `request.place.compile_cache`; it never reads
+`[checkout]` (core.2).
 
 Alternatives: an environment variable in `Place.env`, which would be
 read back as a setting and reach the command; adding `[checkout]` to
@@ -184,19 +210,28 @@ compile cold, as the amendment says.
 
 With `--host`:
 
-1. The address is `SCCACHE_SERVER_UDS`, else `127.0.0.1` at
-   `SCCACHE_SERVER_PORT`, else at 4226, sccache's default. `Tests::start`
-   passes those two variables through from sluice's own environment
-   into the run's when set, as it passes `DOCKER_HOST` (C.2 open; the
-   amendment's "as a run reaches the host's container engine").
-2. Connect to it once. If nothing answers, fall back. The log says the
-   host's compile server did not answer.
-3. `exec` the command addressed to it. There is no lock to hold.
+1. `Tests::start` copies into the run's environment each variable the
+   place's `compile_cache.variables` names that sluice's own environment
+   sets, as it copies `DOCKER_HOST` for a run that may reach the engine
+   (35: "found as the engine is found"). A variable the policy does not
+   name is not copied, so a run and a shell on the host reach the same
+   server only through what the host sets and the policy names. Under
+   the sandbox nothing is copied (D4).
+2. The step reads the address from what reached it, as sccache's client
+   does: `SCCACHE_SERVER_UDS`, else `127.0.0.1` at `SCCACHE_SERVER_PORT`,
+   else at 4226, sccache's default. It connects once. If nothing
+   answers, it falls back, and the log says the host's compile server
+   did not answer at that address.
+3. `exec` the command with `RUSTC_WRAPPER` and the step's settings (D3)
+   added to what was copied; the step sets no address of its own here.
+   There is no lock to hold.
 
 `SCCACHE_NO_DAEMON=1` matters here as well. If the host's server stops
 mid-run, the client starts one of its own in the run's process group,
-which ends with the run instead of detaching (core.10). The run never
-stops or restarts the host's server.
+which ends with the run instead of detaching (core.10). That server
+binds the host's server's address, so while it lives it is the one
+server there, and the keeper's cannot start on it until the run ends
+(*Risks*). The run never stops or restarts the host's server.
 
 ### D6. Compiles run in the client
 
@@ -221,7 +256,12 @@ never wrapped.
 
 ### D8. sluice's own runs use the cache
 
-`.config/sluice.toml` gains `[checkout] compile_cache = "sccache"`.
+`.config/sluice.toml` gains `[checkout] compile_cache = "sccache"` and
+`compile_cache_variables = ["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT",
+"SCCACHE_DIR"]`, the names the hosts' keepers set for their servers and
+shells. sluice's own runs are sandboxed and take none of them; the
+names are there for an open run of sluice's branch, such as one on a
+host with no sandbox, and as the example the docs show.
 `devenv.nix` adds `pkgs.sccache`, the version `devenv.lock` pins
 (core.24), to `packages`, so the run finds it on `PATH`. The shell's
 own `RUSTC_WRAPPER` stays as it is: unset in a run, which the step then
@@ -235,6 +275,18 @@ shell's comment says that a run's compiles are the step's.
   match. The connection then fails and the run compiles, or fails, as
   sccache's client does. Reported by the run's log. The keeper's
   service can pin the version the hosts' repositories use.
+- [The host's server stops while an open run compiles] → The run's
+  client starts a server of its own on the same address, over the
+  `SCCACHE_DIR` the policy named, in the run's process group. It is
+  the only server on that address, so it is the only one over that
+  directory while it lives, and it ends with the run. A keeper that
+  restarts its server meanwhile finds the address taken and must retry
+  rather than start on another; that is the keeper's to do, and the
+  docs say so.
+- [The host sets `SCCACHE_DIR` to sluice's own compile-cache directory]
+  → An open run's server and a sandboxed run's would share it. The
+  docs say the host's directory must not be
+  `~/.local/state/sluice/compile-cache/`.
 - [A sandboxed session run left running holds the directory] → Other
   confined runs compile cold until it ends, which the amendment
   accepts ("confined runs on one host share the cache one at a time").

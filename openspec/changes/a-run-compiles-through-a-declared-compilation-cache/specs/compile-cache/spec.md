@@ -16,7 +16,11 @@ A branch's policy SHALL turn the compile cache on with `compile_cache =
 policy that sets no `compile_cache` SHALL compile as before, with no
 compile-cache step in the run. Any other value SHALL refuse the
 checkout with a message that names the setting and the one value sluice
-serves.
+serves. The policy MAY name, in `compile_cache_variables`, the tool's
+client's own variables the host finds its compile server by; a name
+that is not the client's own (for sccache, one not starting `SCCACHE_`)
+or that sluice sets for the run's compiles itself SHALL refuse the
+checkout, naming the variable.
 
 #### Scenario: Declared
 
@@ -40,23 +44,56 @@ serves.
   `"sccache"` (`another_compile_cache_is_refused` in
   `crates/sluice/tests/profiles/places.rs`)
 
+#### Scenario: A variable that is not the client's
+
+- **WHEN** a checkout is made from `compile_cache = "sccache"` and
+  `compile_cache_variables = ["AWS_PROFILE"]`, or
+  `["RUSTC_WRAPPER"]`
+- **THEN** it is refused with a message naming that variable
+  (`a_compile_cache_variable_not_the_clients_is_refused` in
+  `crates/sluice/tests/profiles/places.rs`)
+
 ### Requirement: An open run compiles through the host's one server
 
 Under the open executor, a run whose policy declares the compile cache
-SHALL send its compiles to the host's one compile server, at the
-address sluice's own environment gives it, else at the tool's default.
-The run SHALL start, stop or restart nothing of that server. When the
-server does not answer as the run starts, the run SHALL compile without
-the cache, and its log SHALL say so.
+SHALL send its compiles to the host's one compile server, found through
+the variables the policy names in `compile_cache_variables`: each one
+sluice's own environment sets SHALL reach the run with its value, and
+no other of the tool's variables from sluice's environment SHALL. With
+none of them set, the run SHALL address the tool's default. The run
+SHALL start, stop or restart nothing of that server. When the server
+does not answer as the run starts, the run SHALL compile without the
+cache, and its log SHALL say so and name the address.
 
 #### Scenario: The host's server answers
 
-- **WHEN** an open run with the cache declared starts while the host's
-  compile server answers at its address
+- **WHEN** an open run with the cache declared and
+  `compile_cache_variables = ["SCCACHE_SERVER_UDS"]` starts while
+  sluice's environment sets `SCCACHE_SERVER_UDS` to a socket where a
+  compile server answers
 - **THEN** the command's compiles go through the tool, addressed to
   that server, and once the run ends that server is still up
   (`an_open_run_compiles_through_the_hosts_server` in
   `crates/sluice/tests/checks.rs`)
+
+#### Scenario: Only the named variables reach the run
+
+- **WHEN** an open run's policy names `SCCACHE_SERVER_UDS` alone, and
+  sluice's environment sets `SCCACHE_SERVER_UDS` and `SCCACHE_DIR`
+- **THEN** the command's environment holds `SCCACHE_SERVER_UDS` with
+  sluice's value and no `SCCACHE_DIR`
+  (`an_open_run_takes_only_the_named_compile_cache_variables` in
+  `crates/sluice/src/profiles/checks.rs`)
+
+#### Scenario: A sandboxed run takes none of them
+
+- **WHEN** a sandboxed run's policy names `SCCACHE_SERVER_UDS` and
+  sluice's environment sets it
+- **THEN** the environment sluice gives the run holds no
+  `SCCACHE_SERVER_UDS`, and the only address its command compiles
+  through is its own server's
+  (`a_sandbox_run_takes_no_compile_cache_variables` in
+  `crates/sluice/src/profiles/checks.rs`)
 
 #### Scenario: No server answers
 
