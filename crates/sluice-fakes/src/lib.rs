@@ -17,10 +17,10 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
-    Guard, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome,
-    Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
-    RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
-    Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
+    Guard, HostCopy, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification,
+    Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev,
+    RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source,
+    State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -100,6 +100,18 @@ struct Inner {
     /// The repository's HEAD: the first branch made, as `git init` names it.
     head: Option<String>,
     moves: Vec<MoveRecord>,
+    /// Each branch kept on a remote, and the value every host's copy of it
+    /// starts at (124). A branch absent here is kept in the host's own
+    /// refs, which are the branch.
+    remote: BTreeMap<String, Option<Rev>>,
+    /// Each host's copy of a branch kept on a remote, by host and branch,
+    /// once it differs from where it started: its value, `None` when the
+    /// host has none.
+    copies: BTreeMap<(String, String), Option<Rev>>,
+    /// The next levellings fail with this error, as many as the count.
+    level_fails: Option<(usize, String)>,
+    /// How many levellings set a copy.
+    levels: usize,
     /// How many merges were formed.
     forms: usize,
     crash: Option<Crash>,
@@ -469,6 +481,47 @@ impl World {
     /// `branch` at `at`, as a bolt's is kept, with no place of it.
     pub fn set_branch(&self, branch: &str, at: &Rev) {
         self.0.borrow_mut().refs.insert(branch.into(), at.clone());
+    }
+
+    /// `branch` is kept on a remote, `refs` holding the remote's revision;
+    /// every host's copy of it starts at that revision (124).
+    pub fn on_remote(&self, branch: &str) {
+        let mut inner = self.0.borrow_mut();
+        let at = inner.refs.get(branch).cloned();
+        inner.remote.insert(branch.into(), at);
+    }
+
+    /// This host's copy of `branch`, set by hand.
+    pub fn set_copy(&self, branch: &str, at: Option<&Rev>) {
+        let mut inner = self.0.borrow_mut();
+        assert!(
+            inner.remote.contains_key(branch),
+            "{branch} is on no remote"
+        );
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, at.cloned());
+    }
+
+    /// This host's copy of `branch`, `None` when it has none.
+    pub fn copy_of(&self, branch: &str) -> Option<Rev> {
+        World::copy_here(&self.0.borrow(), branch).flatten()
+    }
+
+    /// This host's copy of `branch`: `None` for a branch on no remote.
+    fn copy_here(inner: &Inner, branch: &str) -> Option<Option<Rev>> {
+        let start = inner.remote.get(branch)?;
+        let key = (inner.host.clone(), branch.to_string());
+        Some(inner.copies.get(&key).unwrap_or(start).clone())
+    }
+
+    /// The next `n` levellings of any copy fail with `why`, as on git's lock.
+    pub fn fail_levels(&self, n: usize, why: &str) {
+        self.0.borrow_mut().level_fails = Some((n, why.into()));
+    }
+
+    /// How many levellings set a copy.
+    pub fn levels(&self) -> usize {
+        self.0.borrow().levels
     }
 
     pub fn crash(&self, crash: Crash) {
@@ -1202,6 +1255,35 @@ pub struct FakeClock(World);
 impl Branch for FakeBranch {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         Ok(self.0 .0.borrow().refs.get(branch).cloned())
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        Ok(match World::copy_here(&self.0 .0.borrow(), branch) {
+            Some(at) => HostCopy::At(at),
+            None => HostCopy::Itself,
+        })
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        let mut inner = self.0 .0.borrow_mut();
+        let Some(found) = World::copy_here(&inner, branch) else {
+            bail!("{branch} is kept in this host's own refs, which have no copy of it to level");
+        };
+        if let Some((n, why)) = inner.level_fails.take() {
+            if n > 1 {
+                inner.level_fails = Some((n - 1, why.clone()));
+            }
+            if n > 0 {
+                bail!("{why}");
+            }
+        }
+        if found.as_ref() != expected {
+            return Ok(Moved::Elsewhere(found));
+        }
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, Some(to.clone()));
+        inner.levels += 1;
+        Ok(Moved::Moved)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
@@ -2309,6 +2391,51 @@ mod tests {
         f.world.other_runs(0);
         f.tests.start(&second).unwrap();
         assert_eq!(f.tests.running().unwrap().queue, 2);
+    }
+
+    /// 124: a branch on a remote has a host copy, levelled only from the
+    /// value it holds, and failing as many times as it is told; any other
+    /// branch is its own copy and is never levelled.
+    #[test]
+    fn a_branch_on_a_remote_has_a_copy_levelled_from_its_value() {
+        let f = Fakes::new();
+        let base = f.world.init("main", &[("a", "1")]);
+        let bolt = f.world.init("bolt/x", &[("b", "1")]);
+        f.world.on_remote("bolt/x");
+        assert_eq!(f.branch.copy("main").unwrap(), HostCopy::Itself);
+        assert!(f.branch.level("main", Some(&base), &base).is_err());
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(bolt.clone()))
+        );
+        let landed = f.world.hand_commit("bolt/x", &[("b", Some("2"))]);
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&base), &landed).unwrap(),
+            Moved::Elsewhere(Some(bolt.clone()))
+        );
+        f.world
+            .fail_levels(2, "git holds the lock on refs/heads/bolt/x");
+        for _ in 0..2 {
+            let err = f.branch.level("bolt/x", Some(&bolt), &landed).unwrap_err();
+            assert_eq!(err.to_string(), "git holds the lock on refs/heads/bolt/x");
+        }
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(f.world.levels(), 0);
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&bolt), &landed).unwrap(),
+            Moved::Moved
+        );
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(landed.clone()))
+        );
+        assert_eq!(f.world.levels(), 1);
+        f.world.set_copy("bolt/x", None);
+        assert_eq!(
+            f.branch.level("bolt/x", None, &landed).unwrap(),
+            Moved::Moved
+        );
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {

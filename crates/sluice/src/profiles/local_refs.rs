@@ -12,7 +12,7 @@ use gix::refs::file::transaction::prepare::ReferenceOutOfDate;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::Target;
 use gix::ObjectId;
-use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 /// Who sluice's commits are by: fixed, never read from git config.
 const NAME: &str = "sluice";
@@ -56,24 +56,48 @@ impl LocalRefs {
         Ok(Some(Rev::new(id.to_string())))
     }
 
-    /// Set `branch` to `to`, whatever it held: the local copy of a branch
-    /// whose shared copy a remote has just accepted (C.4 pushed refs).
-    pub fn set(&self, branch: &str, to: &Rev) -> Result<()> {
-        match self.edit(branch, PreviousValue::Any, to)? {
-            Moved::Moved => Ok(()),
-            Moved::Elsewhere(_) => bail!("{branch} could not be set to {to}"),
+    /// Set `branch`, the host's copy of a branch kept on a remote, to `to`
+    /// from exactly `expected`, or from its absence when `expected` is
+    /// `None` (124); a copy found elsewhere is reported, never forced (rule
+    /// core.5).
+    pub fn level_copy(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        let previous = match expected {
+            Some(rev) => PreviousValue::MustExistAndMatch(Target::Object(self.id(rev)?)),
+            None => PreviousValue::MustNotExist,
+        };
+        let message = format!("sluice: level {branch} to its landing");
+        match self.edit_as(branch, previous, to, &message) {
+            Ok(Moved::Moved) => Ok(Moved::Moved),
+            // A copy found elsewhere is reported with what it holds, however
+            // the refusal came; one still at `expected` failed for a reason
+            // of its own, git's lock among them.
+            other => match self.read(branch)? {
+                found if found.as_ref() != expected => Ok(Moved::Elsewhere(found)),
+                _ => other,
+            },
         }
     }
 
     /// Move `branch` to `to` from `expected`; a branch found elsewhere is
     /// reported, never retried blind (24, rule core.5).
     fn edit(&self, branch: &str, expected: PreviousValue, to: &Rev) -> Result<Moved> {
+        self.edit_as(branch, expected, to, &format!("sluice: land on {branch}"))
+    }
+
+    /// As [`LocalRefs::edit`], with `message` in the reflog.
+    fn edit_as(
+        &self,
+        branch: &str,
+        expected: PreviousValue,
+        to: &Rev,
+        message: &str,
+    ) -> Result<Moved> {
         let new = self.id(to)?;
         let change = Change::Update {
             log: LogChange {
                 mode: RefLog::AndReference,
                 force_create_reflog: false,
-                message: format!("sluice: land on {branch}").into(),
+                message: message.into(),
             },
             expected,
             new: Target::Object(new),
@@ -131,6 +155,11 @@ impl LocalRefs {
                     Ok(Moved::Elsewhere(actual))
                 } else if e.classify().is_not_found() {
                     Ok(Moved::Elsewhere(None))
+                } else if e
+                    .downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
+                {
+                    Err(anyhow!("git holds the lock on {name}: {e}"))
                 } else {
                     Err(anyhow!("moving {branch}: {e}"))
                 }
@@ -215,6 +244,15 @@ fn is_object_id(field: &[u8]) -> bool {
 impl Branch for LocalRefs {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.read_ref(&full_name(branch))
+    }
+
+    /// The host's ref is the branch here: it has no copy apart from it.
+    fn copy(&self, _branch: &str) -> Result<HostCopy> {
+        Ok(HostCopy::Itself)
+    }
+
+    fn level(&self, branch: &str, _expected: Option<&Rev>, _to: &Rev) -> Result<Moved> {
+        bail!("{branch} is kept in this host's own refs, which have no copy of it to level")
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {

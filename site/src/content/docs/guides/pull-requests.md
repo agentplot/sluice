@@ -105,6 +105,28 @@ branch's commit messages. Its description names the agent, which makes
 it the agent's pull request. Submitting again from the same worktree
 updates the same pull request and marks it ready for review.
 
+### A bolt's landing worktree submits
+
+A worktree that has checked out a branch sluice lands on, such as a
+bolt kept on GitHub, submits that branch as GitHub holds it. Nothing is
+pushed: sluice lands on the bolt, and only sluice writes it. The pull
+request is from the bolt into `main`, at GitHub's revision of it, which
+is also the head submitted:
+
+```console
+$ wt submit main
+opened #52: Land bolt/review-cards
+this host's bolt/review-cards is at 10e4791, behind origin's 8079db3; submitted 8079db3
+waiting: needs 1 review
+```
+
+The second line appears only when the worktree's head, this host's own
+`bolt/review-cards`, differs from GitHub's: behind it, ahead of it, or
+apart from it. It refuses nothing; a round of the bolt sets this host's
+branch to its landing. Submitting again after another landing on the
+bolt updates the same pull request and marks it ready at the new
+revision.
+
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
 people review, so an agent that shouldn't wait submits with

@@ -672,8 +672,11 @@ fn s57_a_remote_older_than_the_local_landings_holds_until_the_landing_is_pushed(
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:c.txt")]);
 }
 
-/// S57, 121, C.5: the operator accepts origin's older revision instead;
-/// the third submission is formed on it and lands there.
+/// S57, 121, C.5, 124: the operator accepts origin's older revision
+/// instead; the third submission is formed on it and lands. The round
+/// after the acceptance levels this host's `bolt/x` to that revision,
+/// whose policy names no remote: from then on `bolt/x` is a branch in this
+/// host's own refs, and the landing is made there (C.7).
 #[test]
 fn s57_a_remote_older_than_the_local_landings_holds_until_its_revision_is_accepted() {
     let (s, older, second) = landed_locally_then_remote_older("remote-s57-accepted");
@@ -687,7 +690,95 @@ fn s57_a_remote_older_than_the_local_landings_holds_until_its_revision_is_accept
     );
     step_bolt_until_out(&s);
     assert_eq!(bolt_states(&s), ["landed"; 3]);
-    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    let bolt = s.repo.rev("bolt/x");
     assert_eq!(s.repo.rev(&format!("{bolt}^1")), older);
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:c.txt")]);
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), older);
+}
+
+/// 124, S58, 1, rule core.20: from a worktree that has checked out
+/// `bolt/x`, whose copy here is behind origin's, `sluice submit main`
+/// submits origin's revision, writes no ref of `bolt/x` here or on
+/// origin, and says the copy is behind; `sluice step bolt/x` then levels
+/// the copy and leaves the worktree's files and index as they were.
+#[test]
+fn a_worktree_on_a_bolt_behind_submits_origins_revision_and_a_round_levels_it() {
+    let s = Setup::new("remote-bolt-copy", "origin");
+    s.repo.git(&["branch", "bolt/x", "main"]);
+    s.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    let made = s.repo.rev("bolt/x");
+    for n in ["a", "b"] {
+        let out = s.submit_to(n, "bolt/x", "bolt/x");
+        assert!(out.status.success(), "{}", text(&out));
+        step_bolt_until_out(&s);
+    }
+    let remote = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(
+        s.repo.rev("bolt/x"),
+        remote,
+        "each landing's round levels it"
+    );
+    // This host's bolt/x stands where it was before both landings, as an
+    // older sluice left it, past the protection, and a worktree has it
+    // checked out.
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/bolt/x",
+        &made,
+    ]);
+    let w = s.sessions.path().join("landing");
+    s.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/x"]);
+    let bolt_refs = |s: &Setup| -> Vec<String> {
+        s.remote_refs()
+            .into_iter()
+            .filter(|r| r.starts_with("refs/heads/bolt/"))
+            .collect()
+    };
+    let before = bolt_refs(&s);
+
+    let out = s
+        .command(&w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "this host's bolt/x is at {}, behind origin's {}; submitted {}\n",
+            &made[..7],
+            &remote[..7],
+            &remote[..7]
+        )),
+        "{}",
+        text(&out)
+    );
+    let subs = s.status()["submissions"].clone();
+    assert_eq!(subs[0]["head"], remote.as_str(), "{subs}");
+    assert_eq!(bolt_refs(&s), before, "nothing of bolt/x on origin written");
+    assert_eq!(s.repo.rev("bolt/x"), made, "nor here");
+
+    let in_worktree = |args: &[&str]| {
+        let mut a = vec!["-C", w.to_str().unwrap()];
+        a.extend(args);
+        s.repo.git(&a)
+    };
+    let index = in_worktree(&["ls-files", "--stage"]);
+    let files: Vec<String> = std::fs::read_dir(&w)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let out = s.sluice(&["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.repo.rev("bolt/x"), remote);
+    assert_eq!(in_worktree(&["ls-files", "--stage"]), index);
+    let after: Vec<String> = std::fs::read_dir(&w)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(after, files);
+    assert!(!w.join("a.txt").exists() && !w.join("b.txt").exists());
 }

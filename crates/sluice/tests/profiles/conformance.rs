@@ -31,8 +31,8 @@ use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
-    Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
-    RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
+    Branch, Checkout, Driver, Formed, HostCopy, LandingCommit, Moved, Notification, Place,
+    Progress, Rev, RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -218,6 +218,14 @@ struct RecordedRefs {
 impl Branch for RecordedRefs {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.inner.read(branch)
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        self.inner.copy(branch)
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        self.inner.level(branch, expected, to)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {

@@ -2961,6 +2961,7 @@ impl sluice::PullRequests for Pull7 {
         Ok(Ok(sluice::Opened {
             number: 7,
             said: "opened #7".into(),
+            copy: None,
         }))
     }
 
@@ -4296,4 +4297,212 @@ fn a_waiting_group_stopped_says_where_each_stands() {
     );
     assert_eq!(code, sluice::STOPPED, "{out}");
     assert!(out.contains("still waiting: sluice wait 3"), "{out}");
+}
+
+/// 124, S64: `sluice status <branch>` shows this host's copy left behind
+/// its landing above the queue, and under `copy` in JSON, until a round
+/// levels it; then nothing of it.
+#[test]
+fn status_shows_this_hosts_copy_behind_while_it_lasts() {
+    let f = setup();
+    f.world.on_remote(BRANCH);
+    let made = f.world.tip(BRANCH);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    let lock = format!("git holds the lock on refs/heads/{BRANCH}");
+    f.world.set_copy(BRANCH, Some(&made));
+    f.world.fail_levels(1, &lock);
+    sluice(&f, &["step", BRANCH]);
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[..2],
+        [
+            format!(
+                "{BRANCH} at {} · 0 in the queue · testing 0 at once (up to 4)",
+                &landing.0[..7]
+            ),
+            format!(
+                "this host's {BRANCH} is at {}, behind the landing {}: {lock}",
+                &made.0[..7],
+                &landing.0[..7]
+            ),
+        ],
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(
+        (&v["copy"]["at"], &v["copy"]["lacks"], &v["copy"]["why"]),
+        (
+            &serde_json::json!(made),
+            &serde_json::json!(landing),
+            &serde_json::json!(lock)
+        ),
+        "{v}"
+    );
+    assert!(v["copy"]["since"].is_string(), "{v}");
+
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(f.world.copy_of(BRANCH), Some(landing));
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("this host's"), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert!(v["copy"].is_null(), "{v}");
+}
+
+/// 124, S58: a submit from a worktree that has checked out a bolt kept on
+/// a remote submits the remote's revision and says how this host's copy
+/// stands to it, in text and under `copy` in JSON; level, it says
+/// nothing of it.
+#[test]
+fn submit_from_a_bolt_says_how_its_copy_stands() {
+    let f = Fakes::new();
+    let on_origin = POLICY.replace("parallel = 4\n", "parallel = 4\nremote = \"origin\"\n");
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", on_origin.as_str()),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.on_remote(BRANCH);
+    f.world.init(
+        "main",
+        &[(
+            ".config/sluice.toml",
+            "[branches.main]\nrequired = [\"#gate\"]\nremote = \"origin\"\n",
+        )],
+    );
+    let made = f.world.tip(BRANCH);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    f.world.set_copy(BRANCH, Some(&made));
+    f.world.session(BRANCH, "ops", &made);
+
+    let (code, out) = sluice(&f, &["submit", "main", "--worktree", BRANCH, "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    let (m, l) = (&made.0[..7], &landing.0[..7]);
+    assert_eq!(
+        out,
+        format!(
+            "submission 2 to main · nothing queued ahead\n\
+             this host's {BRANCH} is at {m}, behind origin's {l}; submitted {l}\n"
+        )
+    );
+    let (_, out) = sluice(
+        &f,
+        &[
+            "submit",
+            "main",
+            "--worktree",
+            BRANCH,
+            "--no-wait",
+            "--json",
+        ],
+    );
+    let v = json(&out);
+    assert_eq!(
+        v["copy"],
+        serde_json::json!({
+            "branch": BRANCH, "copy": made, "remote": "origin", "at": landing, "how": "behind",
+        }),
+        "{v}"
+    );
+    assert_eq!(f.world.copy_of(BRANCH), Some(made));
+
+    f.world.session(BRANCH, "ops", &landing);
+    let (_, out) = sluice(&f, &["submit", "main", "--worktree", BRANCH, "--no-wait"]);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let (_, out) = sluice(
+        &f,
+        &[
+            "submit",
+            "main",
+            "--worktree",
+            BRANCH,
+            "--no-wait",
+            "--json",
+        ],
+    );
+    assert!(json(&out).get("copy").is_none(), "{out}");
+}
+
+/// 124: a waiting submit under `--json` ends with the submission's record,
+/// which carries how this host's copy differed from what it submitted;
+/// level, the record alone.
+#[test]
+fn a_waiting_submit_from_a_bolt_carries_its_copy_under_json() {
+    let f = Fakes::new();
+    let on_origin = POLICY.replace("parallel = 4\n", "parallel = 4\nremote = \"origin\"\n");
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", on_origin.as_str()),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.on_remote(BRANCH);
+    f.world.init(
+        "main",
+        &[(
+            ".config/sluice.toml",
+            "[branches.main]\nrequired = [\"#gate\"]\nremote = \"origin\"\n",
+        )],
+    );
+    let made = f.world.tip(BRANCH);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    f.world.set_copy(BRANCH, Some(&made));
+    f.world.session(BRANCH, "ops", &made);
+
+    let (_, out) = sluice(&f, &["submit", "main", "--worktree", BRANCH, "--json"]);
+    let v = json(&out);
+    assert_eq!(
+        (v["id"].as_u64(), &v["head"]),
+        (Some(2), &serde_json::json!(landing)),
+        "{v}"
+    );
+    assert_eq!(
+        v["copy"],
+        serde_json::json!({
+            "branch": BRANCH, "copy": made, "remote": "origin", "at": landing, "how": "behind",
+        }),
+        "{v}"
+    );
+    // A group's document carries it on the record of the place it is of.
+    let own = f.world.work(&f.world.tip("main"), &[("m/a", Some("a"))]);
+    f.world.session("unit/m", "agent-m", &own);
+    let args = [
+        "submit",
+        "main",
+        "--worktree",
+        BRANCH,
+        "--worktree",
+        "unit/m",
+    ];
+    let (_, out) = sluice(&f, &[&args[..], &["--json"]].concat());
+    let v = json(&out);
+    let subs = v["submissions"].as_array().expect("a group's records");
+    assert_eq!(subs[0]["copy"]["how"], "behind", "{v}");
+    assert!(subs[1].get("copy").is_none(), "{v}");
+
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    let level = f.world.tip(BRANCH);
+    f.world.session(BRANCH, "ops", &level);
+    let (_, out) = sluice(&f, &["submit", "main", "--worktree", BRANCH, "--json"]);
+    let v = json(&out);
+    assert_eq!(v["head"], serde_json::json!(level), "{v}");
+    assert!(v.get("copy").is_none(), "{v}");
 }

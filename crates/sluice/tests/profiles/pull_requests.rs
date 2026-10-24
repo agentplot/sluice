@@ -58,16 +58,43 @@ impl OnGitHub {
         OnGitHub::with(name, conditions, "1m", "batch = true\n")
     }
 
+    /// `main` on GitHub, and `bolt/x` beside it, a branch on GitHub sluice
+    /// lands on, made from `main` and taking no pull requests.
+    fn with_bolt(name: &str) -> OnGitHub {
+        let g = OnGitHub::with_policy(
+            name,
+            "",
+            "1m",
+            "",
+            "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n",
+        );
+        g.repo.git(&["branch", "bolt/x", "main"]);
+        g.repo
+            .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+        g
+    }
+
     /// `main` with the time limit `timeout`, and `lines` in its table
     /// beside its remote and time limit.
     fn with(name: &str, conditions: &str, timeout: &str, lines: &str) -> OnGitHub {
+        OnGitHub::with_policy(name, conditions, timeout, lines, "")
+    }
+
+    /// [`OnGitHub::with`], with `extra` after its tables in the policy.
+    fn with_policy(
+        name: &str,
+        conditions: &str,
+        timeout: &str,
+        lines: &str,
+        extra: &str,
+    ) -> OnGitHub {
         let repo = Repo::new(name);
         repo.write(
             ".config/sluice.toml",
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
                  [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{lines}\n\
-                 [branches.main.pull_requests]\n{conditions}\n"
+                 [branches.main.pull_requests]\n{conditions}\n{extra}"
             ),
         );
         repo.write("check.sh", CHECK);
@@ -340,6 +367,44 @@ impl OnGitHub {
             &format!("{branch}:refs/heads/{branch}"),
         ]);
         head
+    }
+
+    /// GitHub's `bolt/x`.
+    fn bolt_on_github(&self) -> String {
+        github::rev(self.bare.path(), "refs/heads/bolt/x").unwrap()
+    }
+
+    /// One submission of `changes`, from a worktree of its own off
+    /// `bolt/x`, landed on `bolt/x` by its rounds; returns GitHub's
+    /// `bolt/x` after it.
+    fn land_on_bolt(&self, name: &str, changes: &[(&str, &str)]) -> String {
+        let dir = self.repo.dir().with_extension(format!("b-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let before = self.bolt_on_github();
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("unit/{name}"),
+            dir.to_str().unwrap(),
+            &before,
+        ]);
+        self.commit_in(&dir, changes);
+        let out = self
+            .command(env!("CARGO_BIN_EXE_sluice"), &dir)
+            .args(["submit", "bolt/x", "--no-wait"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let until = Instant::now() + Duration::from_secs(60);
+        while self.bolt_on_github() == before {
+            assert!(Instant::now() < until, "never landed on bolt/x");
+            let out = self.sluice(&["step", "bolt/x"]);
+            assert!(out.status.success(), "{}", text(&out));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        self.bolt_on_github()
     }
 
     /// The submissions from pull request `n`, after `steps` more rounds.
@@ -2050,4 +2115,111 @@ fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
     }
     let again = g.of(ns[1]);
     assert_eq!(again.len(), 2, "submitted again alone: {again:?}");
+}
+
+/// S58, 124, 1: a worktree that has checked out `bolt/x`, this host's copy
+/// two landings behind GitHub's, submits to `main`: nothing is pushed, the
+/// pull request is from `bolt/x` as GitHub holds it and ready at GitHub's
+/// revision, and the output names both revisions. A hand's reset of the
+/// copy is refused and the bolt's round levels it. Submitted again after
+/// another landing on the bolt, the same pull request is ready at it.
+#[test]
+fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
+    let g = OnGitHub::with_bolt("pr-bolt");
+    let made = g.bolt_on_github();
+    g.land_on_bolt("one", &[("one.txt", "1\n")]);
+    let remote = g.land_on_bolt("two", &[("two.txt", "2\n")]);
+    // This host's bolt/x stands where it was before both landings, as an
+    // older sluice left it, past the protection, and a worktree has it
+    // checked out.
+    g.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/bolt/x",
+        &made,
+    ]);
+    let w = g.repo.dir().with_extension("landing");
+    let _ = std::fs::remove_dir_all(&w);
+    g.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/x"]);
+
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = text(&out);
+    assert_eq!(
+        g.bolt_on_github(),
+        remote,
+        "nothing pushed to GitHub's bolt/x"
+    );
+    assert_eq!(g.repo.rev("bolt/x"), made, "this host's bolt/x unmoved");
+    let pull = g.pull_from("bolt/x");
+    assert!(pull.open && !pull.draft && pull.base == "main", "{pull:?}");
+    assert_eq!(pull.head, remote);
+    assert!(!said.contains("pushed"), "{said}");
+    assert!(
+        said.contains(&format!(
+            "this host's bolt/x is at {}, behind origin's {}; submitted {}",
+            &made[..7],
+            &remote[..7],
+            &remote[..7]
+        )),
+        "{said}"
+    );
+    // Under --json, the pull request's document carries the same.
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["pull_request"], pull.number, "{v}");
+    assert_eq!(
+        v["copy"],
+        serde_json::json!({
+            "branch": "bolt/x", "copy": made, "remote": "origin", "at": remote, "how": "behind",
+        }),
+        "{v}"
+    );
+    assert_eq!(g.bolt_on_github(), remote);
+
+    // A tool's reset of this host's bolt/x to GitHub's revision is
+    // refused, naming the command and both revisions; the bolt's next round
+    // levels it there.
+    let out = g
+        .repo
+        .git_raw(&["-C", w.to_str().unwrap(), "reset", "-q", "--hard", &remote]);
+    assert_eq!(out.status.code(), Some(128), "{}", text(&out));
+    let refused = text(&out);
+    assert!(
+        refused.contains(&format!(
+            "reset -q --hard {remote}` would move it from {} to {}",
+            &made[..7],
+            &remote[..7]
+        )),
+        "{refused}"
+    );
+    assert_eq!(g.repo.rev("bolt/x"), made);
+    let out = g.sluice(&["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(g.repo.rev("bolt/x"), remote);
+
+    // Another submission lands on the bolt; the worktree is brought level
+    // with this host's bolt/x, which the rounds set, and submits again.
+    let again = g.land_on_bolt("three", &[("three.txt", "3\n")]);
+    assert_eq!(g.repo.rev("bolt/x"), again);
+    g.repo
+        .git(&["-C", w.to_str().unwrap(), "reset", "-q", "--hard"]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = text(&out);
+    assert!(
+        said.contains(&format!("updated #{}", pull.number)),
+        "{said}"
+    );
+    assert!(
+        !said.contains("pushed") && !said.contains("this host's"),
+        "{said}"
+    );
+    let held = g.gh.forge.held().unwrap();
+    assert_eq!(held.pulls.len(), 1);
+    assert_eq!(held.pulls[0].head, again);
+    assert!(held.pulls[0].open && !held.pulls[0].draft);
 }

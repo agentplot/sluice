@@ -456,3 +456,97 @@ fn s57_a_branch_read_from_an_older_copy_is_held_until_restored_or_accepted() {
         assert_eq!(h.doc().held, None);
     }
 }
+
+/// satisfies: S64, 124, 122
+#[test]
+fn s64_a_levelling_git_holds_the_lock_on_is_tried_again_by_the_next_round() {
+    let h = Harness::bolt();
+    h.w().on_remote(BRANCH);
+    let made = h.tip();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    // git holds the lock on this host's bolt/x while the landing is pushed,
+    // and lets it go before the next round.
+    let lock = "git holds the lock on refs/heads/bolt/x";
+    h.w().fail_levels(1, lock);
+    for _ in 0..8 {
+        if h.sub(one).state == State::Landed {
+            break;
+        }
+        h.step();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    let landing = h.tip();
+    assert_eq!(h.w().copy_of(BRANCH), Some(made.clone()));
+    let behind = h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .copy
+        .expect("the copy behind");
+    assert_eq!(
+        (behind.at, behind.lacks, behind.why.as_str()),
+        (Some(made), landing.clone(), lock)
+    );
+
+    h.step();
+    assert_eq!(h.w().copy_of(BRANCH), Some(landing));
+    assert_eq!(h.sluice().status(BRANCH).unwrap().copy, None);
+}
+
+/// satisfies: S58, 124, 1
+#[test]
+fn s58_a_bolts_landing_worktree_submits_the_bolt_as_its_remote_holds_it() {
+    let h = Harness::new(&policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"open\", \"sandbox\", \"container\"]\nremote = \"origin\"\n",
+    ));
+    h.w().on_remote(BRANCH);
+    let made = h.tip();
+    for (unit, file) in [("unit/1", "a/one"), ("unit/2", "b/two")] {
+        h.work(unit, unit, &[(file, Some("x"))]);
+        let id = h.submit(unit);
+        h.settle();
+        assert_eq!(h.sub(id).state, State::Landed);
+    }
+    let remote = h.tip();
+    // This host's bolt/x stands two landings behind, and a worktree has it
+    // checked out.
+    h.w().set_copy(BRANCH, Some(&made));
+    h.w().session(BRANCH, "crew-landing", &made);
+    h.w().init(
+        "main",
+        &[(
+            ".config/sluice.toml",
+            "[branches.main]\nrequired = [\"#gate\"]\n",
+        )],
+    );
+    let moves = h.moves();
+    let accepted = h
+        .sluice()
+        .submit(&sluice_core::SubmitRequest {
+            worktree: BRANCH.into(),
+            branch: "main".into(),
+            after: Vec::new(),
+            priority: 0,
+        })
+        .unwrap()
+        .expect("accepted");
+    let sub = h.sluice().state(accepted.id).unwrap().unwrap();
+    assert_eq!(sub.head, remote);
+    assert_eq!(
+        (h.tip(), h.moves()),
+        (remote.clone(), moves),
+        "nothing of the bolt written"
+    );
+    assert_eq!(h.w().copy_of(BRANCH), Some(made.clone()));
+    let copy = accepted.copy.expect("the copy said");
+    assert_eq!(
+        (copy.copy, copy.at, copy.how),
+        (made, remote.clone(), sluice_core::CopyHow::Behind)
+    );
+
+    // The bolt's next round levels this host's copy.
+    h.step();
+    assert_eq!(h.w().copy_of(BRANCH), Some(remote));
+}

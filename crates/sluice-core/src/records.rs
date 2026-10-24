@@ -14,6 +14,8 @@
 //! walkthrough's shape, with no schema of their own: `branch.json` names
 //! the log's (`log`). See `docs/plans/phase-1-questions.md`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     Contested, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog, Told,
@@ -587,6 +589,11 @@ pub struct BranchDoc {
     /// nothing is formed or landed on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<BranchHold>,
+    /// 124: each host whose copy of the branch a round could not level to
+    /// `landed`, by the instance's name; a host whose copy holds it has no
+    /// entry, and each host writes only its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub copies: BTreeMap<String, CopyBehind>,
 }
 
 /// 121: a branch read at a revision that lacks the landing its records
@@ -595,6 +602,17 @@ pub struct BranchDoc {
 pub struct BranchHold {
     pub read: Rev,
     pub lacks: Rev,
+    pub since: String,
+}
+
+/// 124, S64: a host's copy of the branch left behind its landing: the
+/// value it holds, `None` when the host has none, the landing it lacks,
+/// why the levelling failed, and since when it has been behind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopyBehind {
+    pub at: Option<Rev>,
+    pub lacks: Rev,
+    pub why: String,
     pub since: String,
 }
 
@@ -618,6 +636,7 @@ impl BranchDoc {
             lead: None,
             landed: None,
             held: None,
+            copies: BTreeMap::new(),
         }
     }
 }
@@ -784,6 +803,24 @@ pub enum Event {
     Accepted {
         revision: Rev,
         lacked: Rev,
+    },
+    /// 124, S64: a host's copy could not be levelled to the landing; one
+    /// line for each distinct value, landing and why.
+    /// The copy's value is `copy` on the line, whose `at` is its time.
+    #[serde(rename = "copy-behind")]
+    CopyBehind {
+        host: String,
+        #[serde(rename = "copy")]
+        at: Option<Rev>,
+        lacks: Rev,
+        why: String,
+    },
+    /// 124: a host's copy that was behind holds the landing again.
+    #[serde(rename = "copy-levelled")]
+    CopyLevelled {
+        host: String,
+        #[serde(rename = "copy")]
+        at: Rev,
     },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
@@ -1018,7 +1055,74 @@ mod tests {
         let doc: BranchDoc = serde_json::from_str(old).unwrap();
         assert_eq!(doc.landed, None);
         assert_eq!(doc.held, None);
+        assert!(doc.copies.is_empty());
         assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+    }
+
+    /// 124: each host's copy left behind round-trips under `copies`, by
+    /// the host's name.
+    #[test]
+    fn a_branch_document_with_a_copy_behind_round_trips() {
+        let mut doc = BranchDoc::new("bolt/x");
+        doc.landed = Some(Rev::new("c43609b"));
+        doc.copies.insert(
+            "deneb".into(),
+            CopyBehind {
+                at: Some(Rev::new("10e4791")),
+                lacks: Rev::new("c43609b"),
+                why: "git holds the lock on refs/heads/bolt/x".into(),
+                since: "2026-10-23T12:00:00Z".into(),
+            },
+        );
+        let bytes = to_document(&doc);
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            v["copies"],
+            serde_json::json!({
+                "deneb": {
+                    "at": "10e4791", "lacks": "c43609b",
+                    "why": "git holds the lock on refs/heads/bolt/x",
+                    "since": "2026-10-23T12:00:00Z",
+                },
+            })
+        );
+        assert_eq!(serde_json::from_slice::<BranchDoc>(&bytes).unwrap(), doc);
+    }
+
+    #[test]
+    fn a_copy_behind_and_levelled_are_log_lines() {
+        let lines = [
+            Event::CopyBehind {
+                host: "deneb".into(),
+                at: Some(Rev::new("10e4791")),
+                lacks: Rev::new("c43609b"),
+                why: "git holds the lock on refs/heads/bolt/x".into(),
+            },
+            Event::CopyLevelled {
+                host: "deneb".into(),
+                at: Rev::new("c43609b"),
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|event| {
+                let line = LogLine {
+                    schema: LOG_SCHEMA.into(),
+                    at: "2026-10-23T12:00:00Z".into(),
+                    event: event.clone(),
+                };
+                String::from_utf8(to_line(&line)).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"copy-behind\",\"host\":\"deneb\",\"copy\":\"10e4791\",\"lacks\":\"c43609b\",\"why\":\"git holds the lock on refs/heads/bolt/x\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"copy-levelled\",\"host\":\"deneb\",\"copy\":\"c43609b\"}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back.into_iter().map(|l| l.event).collect::<Vec<_>>(), lines);
     }
 
     #[test]

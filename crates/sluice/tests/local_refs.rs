@@ -7,7 +7,7 @@
 mod support;
 
 use sluice::profiles::local_refs::LocalRefs;
-use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 use support::Repo;
 
 fn rev(s: String) -> Rev {
@@ -43,6 +43,19 @@ fn read_existing_missing_and_packed() {
     repo.git(&["pack-refs", "--all"]);
     assert!(!repo.dir().join(".git/refs/heads/bolt/x").exists());
     assert_eq!(refs(&repo).read("bolt/x").unwrap(), Some(rev(head)));
+}
+
+/// 124: a branch in this host's refs is its own copy, and a levelling of
+/// it is refused, moving nothing.
+#[test]
+fn a_branch_in_this_hosts_refs_has_no_copy_apart() {
+    let repo = Repo::new("itself");
+    let head = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let base = rev(repo.rev("main"));
+    let r = refs(&repo);
+    assert_eq!(r.copy("bolt/x").unwrap(), HostCopy::Itself);
+    assert!(r.level("bolt/x", Some(&head), &base).is_err());
+    assert_eq!(repo.rev("bolt/x"), head.as_str());
 }
 
 /// 2, 43: a clean candidate is git's merge, a commit of the two.
