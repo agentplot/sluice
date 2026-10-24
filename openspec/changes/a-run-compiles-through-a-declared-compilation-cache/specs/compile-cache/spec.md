@@ -16,11 +16,7 @@ A branch's policy SHALL turn the compile cache on with `compile_cache =
 policy that sets no `compile_cache` SHALL compile as before, with no
 compile-cache step in the run. Any other value SHALL refuse the
 checkout with a message that names the setting and the one value sluice
-serves. The policy MAY name, in `compile_cache_variables`, the tool's
-client's own variables the host finds its compile server by; a name
-that is not the client's own (for sccache, one not starting `SCCACHE_`)
-or that sluice sets for the run's compiles itself SHALL refuse the
-checkout, naming the variable.
+serves.
 
 #### Scenario: Declared
 
@@ -44,6 +40,15 @@ checkout, naming the variable.
   `"sccache"` (`another_compile_cache_is_refused` in
   `crates/sluice/tests/profiles/places.rs`)
 
+### Requirement: A policy names the variables the host's server is found by
+
+A policy that declares the compile cache MAY name, in
+`compile_cache_variables`, the tool's client's own variables the host
+finds its compile server by. A name that is not the client's own, for
+sccache one not starting `SCCACHE_`, SHALL refuse the checkout, naming
+the variable, and so SHALL a name sluice sets for the run's compiles
+itself.
+
 #### Scenario: A variable that is not the client's
 
 - **WHEN** a checkout is made from `compile_cache = "sccache"` and
@@ -56,14 +61,10 @@ checkout, naming the variable.
 ### Requirement: An open run compiles through the host's one server
 
 Under the open executor, a run whose policy declares the compile cache
-SHALL send its compiles to the host's one compile server, found through
-the variables the policy names in `compile_cache_variables`: each one
-sluice's own environment sets SHALL reach the run with its value, and
-no other of the tool's variables from sluice's environment SHALL. With
-none of them set, the run SHALL address the tool's default. The run
-SHALL start, stop or restart nothing of that server. When the server
-does not answer as the run starts, the run SHALL compile without the
-cache, and its log SHALL say so and name the address.
+SHALL send its compiles to the host's one compile server, and SHALL
+start, stop or restart nothing of that server. When the server does not
+answer as the run starts, the run SHALL compile without the cache, and
+its log SHALL say so and name the address.
 
 #### Scenario: The host's server answers
 
@@ -75,6 +76,25 @@ cache, and its log SHALL say so and name the address.
   that server, and once the run ends that server is still up
   (`an_open_run_compiles_through_the_hosts_server` in
   `crates/sluice/tests/checks.rs`)
+
+#### Scenario: No server answers
+
+- **WHEN** an open run with the cache declared starts while nothing
+  answers at the host's compile server's address
+- **THEN** the command runs with no `RUSTC_WRAPPER` from sluice, its
+  log says the host's compile server did not answer, and no server is
+  left running after the run
+  (`an_open_run_with_no_host_server_compiles_without_the_cache` in
+  `crates/sluice/tests/checks.rs`)
+
+### Requirement: An open run takes only the variables its policy names
+
+An open run whose policy declares the compile cache SHALL find the
+host's server through the variables `compile_cache_variables` names:
+each one sluice's own environment sets SHALL reach the run with its
+value, and no other of the tool's variables from sluice's environment
+SHALL. With none of them set, the run SHALL address the tool's default.
+A sandboxed run SHALL take none of them.
 
 #### Scenario: Only the named variables reach the run
 
@@ -94,16 +114,6 @@ cache, and its log SHALL say so and name the address.
   through is its own server's
   (`a_sandbox_run_takes_no_compile_cache_variables` in
   `crates/sluice/src/profiles/checks.rs`)
-
-#### Scenario: No server answers
-
-- **WHEN** an open run with the cache declared starts while nothing
-  answers at the host's compile server's address
-- **THEN** the command runs with no `RUSTC_WRAPPER` from sluice, its
-  log says the host's compile server did not answer, and no server is
-  left running after the run
-  (`an_open_run_with_no_host_server_compiles_without_the_cache` in
-  `crates/sluice/tests/checks.rs`)
 
 ### Requirement: A sandboxed run holds the cache's directory for its life
 
