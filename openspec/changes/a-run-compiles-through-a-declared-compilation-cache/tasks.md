@@ -31,4 +31,4 @@
 
 ## 6. The gate
 
-- [ ] 6.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes; run `moon run cli:sandbox` outside any sandbox and verify it passes.
+- [x] 6.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes; run `moon run cli:sandbox` outside any sandbox and verify it passes.
