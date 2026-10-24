@@ -108,11 +108,14 @@ pub fn read(
                 .flatten()
                 .map(|r| FlakyKey {
                     here: t.outcome,
+                    at: None,
+                    host: None,
                     other: Recorded {
                         outcome: r.outcome,
                         at: r.at.clone(),
                         branch: r.branch.clone(),
                         combination: r.combination.clone(),
+                        host: None,
                         worktree: r.worktree.clone(),
                         log: None,
                     },

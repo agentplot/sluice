@@ -156,6 +156,14 @@ pub struct FailedTask {
 pub struct FlakyKey {
     /// A pass when the failure is only the key's earlier fail.
     pub here: Outcome,
+    /// When this run's result was recorded (19); `None` for a result
+    /// with no line, and in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// The host that ran this run's check; `None` for a replay, and in
+    /// records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub other: Recorded,
 }
 
@@ -166,6 +174,10 @@ pub struct Recorded {
     pub at: String,
     pub branch: String,
     pub combination: Rev,
+    /// The host that ran it, as its line says; `None` for a line with
+    /// none, and in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Session-runs-1 clause 92: the worktree of a session run; `None`
     /// for a combination's run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -904,4 +916,20 @@ pub fn to_document<T: Serialize>(value: &T) -> Vec<u8> {
     let mut v = serde_json::to_vec_pretty(value).expect("a record serializes");
     v.push(b'\n');
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flaky failure recorded before its times and hosts reads with
+    /// them left out, and is written back without them.
+    #[test]
+    fn a_flaky_failure_written_before_its_hosts_reads_as_it_was() {
+        let old = r#"{"task":"a:test","hash":"h","flaky":{"here":"pass","other":{"outcome":"fail","at":"t","branch":"main","combination":"c"}}}"#;
+        let f: FailedTask = serde_json::from_str(old).unwrap();
+        let k = f.flaky.as_ref().expect("flaky");
+        assert_eq!((&k.at, &k.host, &k.other.host), (&None, &None, &None));
+        assert_eq!(serde_json::to_string(&f).unwrap(), old);
+    }
 }
