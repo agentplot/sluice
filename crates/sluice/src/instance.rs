@@ -6,15 +6,22 @@
 //! `[runs] max` is the host's bound, shared by every repository on it and
 //! every instance of sluice serving them: a run of any of them starts only
 //! while the host's count of running checks, kept in its state
-//! (`crate::host_count`), is under it. Each run is given the cores divided
-//! by the bound, so the bound's runs together use what sluice may use and
-//! no more.
+//! (`crate::host_count`), is under it. Each run is given the cores sluice
+//! may use divided by the bound, so the bound's runs together use what
+//! sluice may use and no more.
+//!
+//! What sluice may use is what the host gives it, its affinity or its
+//! cgroup quota on Linux; where the host gives no such limit, as a Mac
+//! never does, `[runs] cores` states it, and stated nowhere it is all the
+//! host's cores (71). With no `max`, the bound is a quarter of what sluice
+//! may use, never fewer than one.
 //!
 //! `$XDG_CONFIG_HOME/sluice/config.toml` (default `~/.config`):
 //!
 //! ```toml
 //! [runs]
 //! max = 2
+//! cores = 12
 //! reserved = 1
 //!
 //! [forge]
@@ -51,8 +58,9 @@ pub struct Instance {
     /// The runs of the bound kept for submissions, which session runs never
     /// take (91).
     pub reserved: usize,
-    /// The cores sluice may use: the process's affinity and its
-    /// cgroup's quota where the host has them.
+    /// The cores sluice may use: the host's limit, its affinity or its
+    /// cgroup quota, where it gives one; else `[runs] cores` where the
+    /// host's settings state it; else all the host's cores (71).
     pub processors: usize,
     /// The app sluice pushes as, where the host names one.
     pub forge: Option<Forge>,
