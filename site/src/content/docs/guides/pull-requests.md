@@ -243,6 +243,12 @@ sequenceDiagram
   push new commits, or mark it a draft and then ready, to bring it back.
   Its `sluice` check names who withdrew it.
 - **Back to draft, or closed.** It leaves the queue.
+- **sluice can't read it.** sluice may fail to fetch a pull request's
+  head from GitHub, or to read its reviews or checks. Each round then
+  prints a warning naming the pull request and what failed, and goes on
+  with the branch's other pull requests. sluice reads it again each round
+  until it can, or until the pull request is closed. A draft's `sluice`
+  check reads `waiting: a draft` either way.
 - **Merged with GitHub's button.** Don't, on a branch sluice keeps: with
   the ruleset from the previous guide only the bypass can, and sluice
   treats it as `main` moving under its queue, retesting everything

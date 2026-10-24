@@ -21,7 +21,7 @@ group.
 
 ## 3. Docs
 
-- [ ] 3.1 In `site/src/content/docs/guides/pull-requests.md`, under "When things change", add a bullet: when sluice cannot fetch a pull request's head, or read its reviews or checks, each round prints a warning naming it and what failed and goes on with the others; it is read again each round until it can be, or it is closed; a draft shows `waiting: a draft` either way. Verify with `site:prose`, every warning cleared.
+- [x] 3.1 In `site/src/content/docs/guides/pull-requests.md`, under "When things change", add a bullet: when sluice cannot fetch a pull request's head, or read its reviews or checks, each round prints a warning naming it and what failed and goes on with the others; it is read again each round until it can be, or it is closed; a draft shows `waiting: a draft` either way. Verify with `site:prose`, every warning cleared.
 
 ## 4. Integration
 
