@@ -20,6 +20,12 @@ everything queued ahead of it and lands it only if that combination passes.
 - Submit from your own worktree, on your own branch. A detached HEAD is
   refused.
 - Submitting again from the same worktree replaces your earlier submission.
+- A branch whose policy requires a task the task runner keeps out of CI
+  (moon's `runInCI: false`) can never pass, so every submission to it is
+  refused (exit 2), naming the task and the policy's line. Let the task run
+  in CI in your worktree, or drop it from the branch's policy in the same
+  submission, and submit again; if neither is your change to make, tell the
+  user.
 
 Which branches sluice manages: `sluice overview` lists the branches with a
 queue; the policy's `[branches."<pattern>"]` tables are the whole list.

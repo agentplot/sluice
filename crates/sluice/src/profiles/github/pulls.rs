@@ -861,6 +861,13 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
         SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
+        SubmitRefusal::KeptOut(kept) => format!(
+            "its branch requires {}, which the task runner keeps out of CI",
+            kept.iter()
+                .map(|k| k.task.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1352,6 +1359,18 @@ impl crate::PullRequests for Pulls {
         let (Some(t), true) = (target, refused.is_empty()) else {
             return Ok(Err(refused));
         };
+        // ADR 0050: refused before anything is pushed or opened, each place
+        // its runner keeps a required check out of CI in.
+        let mut warnings = Vec::new();
+        for (worktree, session) in worktrees.iter().zip(&sessions) {
+            match s.check_kept_out(session, branch, &t.tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(refused));
+        }
         let forge = self.forge(branch)?;
         let pushed = self.pushed(&t.remote)?;
         let open = forge.pulls(&t.repo, branch)?;
@@ -1397,10 +1416,11 @@ impl crate::PullRequests for Pulls {
                     (p.number, p.title, "opened")
                 }
             };
-            opened.push(Opened {
-                number,
-                said: format!("pushed {head_ref} · {word} #{number}: {title}"),
-            });
+            let mut said = format!("pushed {head_ref} · {word} #{number}: {title}");
+            for w in &warnings[k] {
+                said.push_str(&format!("\nwarning: {w}"));
+            }
+            opened.push(Opened { number, said });
         }
         Ok(Ok(opened))
     }

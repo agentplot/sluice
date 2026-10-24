@@ -1361,6 +1361,7 @@ fn refusal(
         SubmitRefusal::NamedTwice(earlier) => {
             format!("refused: {worktree} is {earlier}'s worktree, named twice")
         }
+        SubmitRefusal::KeptOut(kept) => words::kept_out_refusal(branch, kept),
     })
 }
 
@@ -1377,6 +1378,7 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
         SubmitRefusal::NoHead(_) => vec!["sluice overview".into()],
         SubmitRefusal::NamedTwice(_) => vec![],
+        SubmitRefusal::KeptOut(_) => vec![format!("sluice status {branch}")],
     }
 }
 
@@ -1469,16 +1471,21 @@ fn submit(
     };
     let id = accepted.id;
     if json && no_wait {
-        writeln!(
-            out,
-            "{}",
-            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead })
-        )?;
+        let mut doc =
+            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        // ADR 0050: only a submission taken unchecked has any.
+        if !accepted.warnings.is_empty() {
+            doc["warnings"] = serde_json::json!(accepted.warnings);
+        }
+        writeln!(out, "{doc}")?;
         return Ok(0);
     }
     if !json {
         let ahead = queued_ahead(&accepted.ahead);
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
+        for w in &accepted.warnings {
+            writeln!(out, "warning: {w}")?;
+        }
     }
     if no_wait {
         return Ok(0);
@@ -1529,7 +1536,14 @@ fn submit_group(
     if json && no_wait {
         let submissions: Vec<serde_json::Value> = items
             .iter()
-            .map(|(w, a)| serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead }))
+            .map(|(w, a)| {
+                let mut doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
+                // ADR 0050: only a submission taken unchecked has any.
+                if !a.warnings.is_empty() {
+                    doc["warnings"] = serde_json::json!(a.warnings);
+                }
+                doc
+            })
             .collect();
         writeln!(
             out,
@@ -1542,6 +1556,9 @@ fn submit_group(
         for (w, a) in &items {
             let ahead = queued_ahead(&a.ahead);
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
+            for warning in &a.warnings {
+                writeln!(out, "warning: {warning}")?;
+            }
         }
     }
     if no_wait {
