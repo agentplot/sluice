@@ -918,6 +918,42 @@ fn reviews_that_cannot_be_read_hold_no_other() {
     assert_eq!(subs[0]["head"], one_head.as_str());
 }
 
+/// A failure that is no one pull request's: GitHub answers an error for the
+/// list of `main`'s pull requests. Each round warns that taking in `main`'s
+/// pull requests failed, nothing is submitted or withdrawn, and the
+/// submission already queued is tested and lands.
+#[test]
+fn a_failed_list_ends_intake_and_the_queue_still_lands() {
+    let g = OnGitHub::new("pr-no-list", "");
+    let (n, head) = g.by_hand("unit/listed", &[("slow", Some("x\n"))], false);
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    g.gh.fail_pulls(true);
+    let until = Instant::now() + Duration::from_secs(60);
+    loop {
+        let said = g.round();
+        assert!(
+            said.contains("sluice: warning: taking in main's pull requests: GET ")
+                && said.contains("500 Server Error")
+                && !said.contains(&format!("pull/{n}: ")),
+            "{said}"
+        );
+        let subs = g.of(n);
+        assert_eq!(subs.len(), 1, "{subs:?}");
+        assert_ne!(subs[0]["state"], "withdrawn", "{subs:?}");
+        if subs[0]["state"] == "landed" {
+            break;
+        }
+        assert!(Instant::now() < until, "never landed: {subs:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let landed = g.main_on_github();
+    assert_eq!(
+        github::rev(g.bare.path(), &format!("{landed}^2")).unwrap(),
+        head
+    );
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-status
 // ---------------------------------------------------------------------------
