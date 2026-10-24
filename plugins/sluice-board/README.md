@@ -27,6 +27,10 @@ sluice's queue inside a Claude Code session.
   path). A branch with nothing queued is left out once a quarter hour has
   passed since its last event. Branches come in the order the policy names
   them.
+- **A combination's tasks** fold under its row, which keeps their count and
+  a bar of the same. Press the row to list them: `✓ sluice:test 1m48s` for
+  one that ended, `… sluice:e2e running 1m12s` for one still running. Press
+  it again to fold them.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
@@ -34,7 +38,10 @@ sluice's queue inside a Claude Code session.
   `fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, and for a quarter
   hour after, what it is worth: `14 passed · reused when submitted` when
   the gate takes its passes for that commit, `not kept: uncommitted
-  changes` when the checkout held more. Under them,
+  changes` when the checkout held more. Press a check's row to list its
+  tasks as a combination's, from the run going or the one that ended, and
+  again to fold them. A check that runs a command has none, and says so:
+  `runs make e2e · no tasks`. Under them,
   `host: 4 of 6 runs · 3 queue · 1 agent`.
 - **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
   same `· 1 slot to an agent's checks` when checks hold the queue back; or

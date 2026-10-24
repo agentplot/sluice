@@ -151,11 +151,13 @@ moves to another session or another agent's pane.
 
 With the moon runner, a combination under test also shows how many of
 its tasks have ended and a bar of the same, as in
-`testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. The pane lists each task
-below it: `✓` passed, `✗` failed, `…` running and `·` waiting, with how
-long each ended task took. Each round updates it, every few seconds
-while a submission waits, and it counts tasks, not the tests inside one.
-It shows only for combinations tested on this host.
+`testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. Press its row in the pane
+to list each task below it: `✓` passed, `✗` failed, `…` running and `·`
+waiting. An ended task shows how long it took, and a running one how long
+it has run so far, as in `… sluice:e2e running 1m12s`. Press the row again
+to fold the list. Each round updates it, every few seconds while a submission
+waits, and it counts tasks, not the tests inside one. It shows only for
+combinations tested on this host.
 
 Your agents' own runs of `sluice exec` are checks, not submissions, and
 the board shows them as load on the host, never in a branch's queue. A
@@ -169,8 +171,11 @@ runs. A check that ended stays a quarter hour. `14 passed · reused when
 submitted` means the gate takes those passes when that commit is
 submitted, so its combination doesn't run them again; `not kept:
 uncommitted changes` means the checkout held more than its commit and
-nothing was kept. Under the rows, `host: 4 of 6 runs · 3 queue · 1 agent`
-says where the host's runs go.
+nothing was kept. Press a check's row to list its tasks as a combination's
+list shows them, from the run going or the one that ended, and press it
+again to fold them. A check that runs a command has no tasks, and says so:
+`runs make e2e · no tasks`. Under the rows, `host: 4 of 6 runs · 3 queue ·
+1 agent` says where the host's runs go.
 
 When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests
