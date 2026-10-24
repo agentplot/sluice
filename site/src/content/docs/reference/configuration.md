@@ -576,6 +576,6 @@ sets either is refused.
 | `SLUICE_NAME_<NAME>` | sluice, for a preview | The preview's name for each port: one DNS label, unique among the repository's previews, for a proxy to route to the port. |
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
-| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`, the bound every repository on the host shares. |
+| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the cores sluice may use, `[runs] cores` where it is set and otherwise what the host gives it, divided by `[runs] max`, and never less than one. `[runs] max` is the bound every repository on the host shares. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |
