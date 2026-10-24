@@ -29,7 +29,7 @@ use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
+    Branch, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
 };
 
 use super::app::Repo;
@@ -1582,6 +1582,14 @@ impl Branch for ReadOnce<'_> {
         let r = self.branch.read(branch)?;
         self.read.borrow_mut().insert(branch.into(), r.clone());
         Ok(r)
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        self.branch.copy(branch)
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        self.branch.level(branch, expected, to)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {

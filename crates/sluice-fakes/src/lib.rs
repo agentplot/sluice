@@ -17,10 +17,10 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
-    Guard, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome,
-    Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
-    RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
-    Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
+    Guard, HostCopy, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification,
+    Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev,
+    RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source,
+    State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -100,6 +100,14 @@ struct Inner {
     /// The repository's HEAD: the first branch made, as `git init` names it.
     head: Option<String>,
     moves: Vec<MoveRecord>,
+    /// The host's copy of each branch kept on a remote, by branch: its
+    /// value, `None` when the host has none (124). A branch absent here is
+    /// kept in the host's own refs, which are the branch.
+    copies: BTreeMap<String, Option<Rev>>,
+    /// The next levellings fail with this error, as many as the count.
+    level_fails: Option<(usize, String)>,
+    /// How many levellings set a copy.
+    levels: usize,
     /// How many merges were formed.
     forms: usize,
     crash: Option<Crash>,
@@ -469,6 +477,39 @@ impl World {
     /// `branch` at `at`, as a bolt's is kept, with no place of it.
     pub fn set_branch(&self, branch: &str, at: &Rev) {
         self.0.borrow_mut().refs.insert(branch.into(), at.clone());
+    }
+
+    /// `branch` is kept on a remote, `refs` holding the remote's revision;
+    /// the host's copy of it starts at that revision (124).
+    pub fn on_remote(&self, branch: &str) {
+        let mut inner = self.0.borrow_mut();
+        let at = inner.refs.get(branch).cloned();
+        inner.copies.insert(branch.into(), at);
+    }
+
+    /// The host's copy of `branch`, set by hand.
+    pub fn set_copy(&self, branch: &str, at: Option<&Rev>) {
+        let mut inner = self.0.borrow_mut();
+        assert!(
+            inner.copies.contains_key(branch),
+            "{branch} is on no remote"
+        );
+        inner.copies.insert(branch.into(), at.cloned());
+    }
+
+    /// The host's copy of `branch`, `None` when it has none.
+    pub fn copy_of(&self, branch: &str) -> Option<Rev> {
+        self.0.borrow().copies.get(branch).cloned().flatten()
+    }
+
+    /// The next `n` levellings of any copy fail with `why`, as on git's lock.
+    pub fn fail_levels(&self, n: usize, why: &str) {
+        self.0.borrow_mut().level_fails = Some((n, why.into()));
+    }
+
+    /// How many levellings set a copy.
+    pub fn levels(&self) -> usize {
+        self.0.borrow().levels
     }
 
     pub fn crash(&self, crash: Crash) {
@@ -1202,6 +1243,34 @@ pub struct FakeClock(World);
 impl Branch for FakeBranch {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         Ok(self.0 .0.borrow().refs.get(branch).cloned())
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        Ok(match self.0 .0.borrow().copies.get(branch) {
+            Some(at) => HostCopy::At(at.clone()),
+            None => HostCopy::Itself,
+        })
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        let mut inner = self.0 .0.borrow_mut();
+        let Some(found) = inner.copies.get(branch).cloned() else {
+            bail!("{branch} is kept in this host's own refs, which have no copy of it to level");
+        };
+        if let Some((n, why)) = inner.level_fails.take() {
+            if n > 1 {
+                inner.level_fails = Some((n - 1, why.clone()));
+            }
+            if n > 0 {
+                bail!("{why}");
+            }
+        }
+        if found.as_ref() != expected {
+            return Ok(Moved::Elsewhere(found));
+        }
+        inner.copies.insert(branch.into(), Some(to.clone()));
+        inner.levels += 1;
+        Ok(Moved::Moved)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {

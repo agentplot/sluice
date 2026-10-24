@@ -16,7 +16,7 @@ use std::process::{Command, Output, Stdio};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
 use crate::identity::{Identity, PASSWORD_VAR, USERNAME_VAR};
@@ -290,6 +290,17 @@ impl Branch for PushedRefs {
     /// 42: the remote's revision of the branch, fetched on every read.
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.fetch(branch)
+    }
+
+    /// 124: the host's `refs/heads/<branch>`, sluice's copy of the remote's
+    /// branch, read with no fetch.
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        Ok(HostCopy::At(self.local.read(branch)?))
+    }
+
+    /// 124: set the copy with gix, from exactly the value expected.
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        self.local.level_copy(branch, expected, to)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {

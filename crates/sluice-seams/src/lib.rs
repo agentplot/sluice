@@ -863,9 +863,29 @@ pub enum Moved {
     Elsewhere(Option<Rev>),
 }
 
+/// What this host holds of a branch apart from the branch itself (124).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostCopy {
+    /// The host's ref is the branch: there is no copy apart from it.
+    Itself,
+    /// The branch is kept elsewhere; this is the host's ref of it, sluice's
+    /// copy, and its value, `None` when the host has none.
+    At(Option<Rev>),
+}
+
 pub trait Branch {
     /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
+
+    /// 124: what this host holds of the branch apart from it, read on the
+    /// host alone, with no fetch.
+    fn copy(&self, branch: &str) -> Result<HostCopy>;
+
+    /// 124: set the host's copy of the branch to `to`, only while it holds
+    /// `expected`, or is absent when `expected` is `None`; a copy found
+    /// elsewhere is reported, never forced (rule core.5). Called only for a
+    /// branch whose copy is [`HostCopy::At`].
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved>;
 
     /// 56: a file of a revision's tree, for the policy read from the
     /// branch's revision.
