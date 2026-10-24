@@ -58,6 +58,12 @@ pub struct BranchView {
     pub window: usize,
     /// The window's upper bound, as the policy states it.
     pub parallel: Option<usize>,
+    /// The git remote the policy lands the branch on (C.4, C.7), by its
+    /// name, never its URL, which can carry credentials: a reader resolves
+    /// it and decides what it links to, so the core names no forge (rule
+    /// core.1). `None` for a branch kept in this host's repository.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     /// Submissions still in a chain: queued, waiting, testing, passed or
     /// landing.
     pub depth: usize,
@@ -68,6 +74,10 @@ pub struct BranchView {
     /// The latest `landed`, `blamed` and `conflict` lines of the branch's
     /// log, oldest first, exactly as written.
     pub recent: Vec<serde_json::Value>,
+    /// The worktree each submission the recent lines name was submitted
+    /// from, as its `from.worktree` says (26, 49, 61): live, or moved to
+    /// the finished index, which keeps it (finished-records-1 clause 104).
+    pub recent_from: BTreeMap<u64, String>,
 }
 
 /// One candidate: a combination under test or judged.
@@ -142,17 +152,52 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         })
         .collect();
     let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();
+    let recent = recent(&log, RECENT)?;
+    // An id in neither the live records nor the finished index, which only
+    // a hand-edited record gives, is left out.
+    let recent_from = recent
+        .iter()
+        .flat_map(named)
+        .filter_map(|id| {
+            let worktree = match line.subs.get(&id) {
+                Some(s) => s.from.worktree.clone(),
+                None => line.finished.get(&id)?.worktree.clone(),
+            };
+            Some((id, worktree))
+        })
+        .collect();
     Ok(BranchView {
         branch,
         at: line.doc.base.clone(),
         version: line.version,
         window: line.doc.window,
         parallel: rules.as_ref().map(|r| r.parallel),
+        remote: rules.as_ref().and_then(|r| r.remote.clone()),
         depth: submissions.len(),
         candidates,
         submissions,
-        recent: recent(&log, RECENT)?,
+        recent,
+        recent_from,
     })
+}
+
+/// The submissions a recent line names: a landing's `ids`, a blame's
+/// `id`, and a conflict's `id` and the submissions it is `with`.
+fn named(line: &serde_json::Value) -> Vec<u64> {
+    let ids = |key: &str| -> Vec<u64> {
+        line[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_u64)
+            .collect()
+    };
+    match line["event"].as_str() {
+        Some("landed") => ids("ids"),
+        Some("blamed") => line["id"].as_u64().into_iter().collect(),
+        Some("conflict") => line["id"].as_u64().into_iter().chain(ids("with")).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The last `n` lines of a log whose event is one a reader is shown as
@@ -529,11 +574,100 @@ mod tests {
             version: 0,
             window: 0,
             parallel: None,
+            remote: None,
             depth: 0,
             candidates: Vec::new(),
             submissions: Vec::new(),
             recent,
+            recent_from: BTreeMap::new(),
         }
+    }
+
+    /// A branch's view from its record files, under `policy`'s gate for
+    /// it.
+    fn read(policy: &str, files: &[(&str, String)]) -> BranchView {
+        let rules = Policy::parse(policy)
+            .unwrap()
+            .rules_for("main")
+            .unwrap()
+            .cloned();
+        branch_view(BranchRead {
+            branch: "main".into(),
+            snapshot: Snapshot {
+                version: 1,
+                files: files
+                    .iter()
+                    .map(|(p, b)| (p.to_string(), b.clone().into_bytes()))
+                    .collect(),
+            },
+            rules,
+            executor: None,
+            progress: BTreeMap::new(),
+        })
+        .unwrap()
+    }
+
+    /// C.4, C.7: a branch names the remote its policy lands it on, and
+    /// a branch kept in this host's repository names none.
+    #[test]
+    fn a_branch_names_its_remote_by_the_policys_name() {
+        let on = read("[branches.main]\nrequired = []\nremote = \"origin\"\n", &[]);
+        assert_eq!(on.remote.as_deref(), Some("origin"));
+        assert_eq!(serde_json::to_value(&on).unwrap()["remote"], "origin");
+        let local = read("[branches.main]\nrequired = []\n", &[]);
+        assert_eq!(local.remote, None);
+        let json = serde_json::to_value(&local).unwrap();
+        assert!(json.get("remote").is_none(), "{json}");
+    }
+
+    fn submission(id: u64, worktree: &str, state: &str) -> (String, String) {
+        (
+            format!("submissions/{id}.json"),
+            format!(
+                "{{\"schema\":\"sluice/submission@1\",\"id\":{id},\"branch\":\"main\",\
+                 \"head\":\"h{id}\",\"from\":{{\"agent\":\"a\",\"worktree\":\"{worktree}\"}},\
+                 \"submitted\":\"t\",\"after\":[],\"priority\":0,\"attempt\":1,\
+                 \"state\":\"{state}\"}}"
+            ),
+        )
+    }
+
+    /// 26, 49, 61: each submission a recent line names, by the worktree
+    /// it came from, whether still live or moved to the finished index;
+    /// the recent lines themselves as written.
+    #[test]
+    fn a_branch_names_where_its_recent_submissions_came_from() {
+        const GATE: &str = "[branches.main]\nrequired = []\n";
+        let mut log = String::new();
+        log += &line("landed", ",\"ids\":[1],\"to\":\"b\"");
+        log += &line("blamed", ",\"id\":2,\"combination\":\"c\"");
+        log += &line("conflict", ",\"id\":3,\"paths\":[\"p\"],\"with\":[1]");
+        log += &line("conflict", ",\"id\":9,\"paths\":[\"p\"],\"with\":[]");
+        let (two, two_doc) = submission(2, "unit/b", "failed");
+        let (three, three_doc) = submission(3, "pull/41", "conflict");
+        let files = [
+            (LOG_FILE, log.clone()),
+            (
+                crate::records::FINISHED_INDEX,
+                "{\"id\":1,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n".to_string(),
+            ),
+            (two.as_str(), two_doc),
+            (three.as_str(), three_doc),
+        ];
+        let v = read(GATE, &files);
+        assert_eq!(
+            serde_json::to_value(&v).unwrap()["recent_from"],
+            serde_json::json!({"1": "unit/a", "2": "unit/b", "3": "pull/41"}),
+            "an id in no record is left out"
+        );
+        assert_eq!(v.recent, recent(log.as_bytes(), RECENT).unwrap());
+
+        let (one, one_doc) = submission(1, "unit/a", "queued");
+        let queued = read(GATE, &[(one.as_str(), one_doc)]);
+        assert_eq!(
+            serde_json::to_value(&queued).unwrap()["recent_from"],
+            serde_json::json!({})
+        );
     }
 
     #[test]

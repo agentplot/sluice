@@ -207,7 +207,8 @@ fn a_failure_names_its_system() {
 /// where both runs' logs are kept; and that the same head lands once the
 /// operator sets the fail aside, or a real fix changes what the test
 /// reads, never by a change to its inputs only to have it tested again.
-/// `--json` carries the same.
+/// `--json` carries the same, with when and on which host each run was,
+/// and so does the overview's combination while it is listed.
 #[test]
 fn a_flaky_failure_says_so() {
     let f = setup();
@@ -239,6 +240,21 @@ fn a_flaky_failure_says_so() {
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let flaky = &v["failed"][0]["flaky"];
     assert_eq!(flaky["here"], "pass", "{json}");
+    // When and where each run was, from the lines recorded before the
+    // verdict: this run's `ran` line, and the run it contradicts.
+    let last_ran = |f: &Fakes| {
+        let log = String::from_utf8(f.world.files(BRANCH)["log.jsonl"].clone()).unwrap();
+        log.lines()
+            .rev()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|l| l["event"] == "ran" && l["task"] == "tests:t-batch-cards")
+            .unwrap()
+    };
+    let ran = last_ran(&f);
+    assert_eq!(ran["outcome"], "pass", "{ran}");
+    assert_eq!(flaky["at"], ran["at"], "{json}");
+    assert_eq!(flaky["host"], "fake-host", "{json}");
+    assert_eq!(flaky["other"]["host"], "fake-host", "{json}");
     assert_eq!(flaky["other"]["outcome"], "fail", "{json}");
     assert_eq!(flaky["other"]["log"], failed_log.as_str(), "{json}");
     assert!(
@@ -291,6 +307,59 @@ fn a_flaky_failure_says_so() {
         ],
         "{out}"
     );
+
+    // A combination whose failure waits on one ahead of it to be blamed
+    // (18) is listed in the overview, with when and where each run was:
+    // on a branch whose window has room for both.
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{out}");
+    f.world.hold_runs(true);
+    work(
+        &f,
+        "unit/ahead",
+        "crw-1-unit-1",
+        &[("plugin/ahead", Some("a"))],
+    );
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/ahead", "--no-wait"],
+    );
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/batch-review",
+            "--no-wait",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    f.world.complete(&tested(&f, 3));
+    sluice(&f, &["step", BRANCH]);
+    let (_, ov) = sluice(&f, &["overview", "--json"]);
+    let ov: serde_json::Value = serde_json::from_str(&ov).unwrap();
+    let c = ov["branches"][0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["submissions"] == serde_json::json!([2, 3]))
+        .unwrap_or_else(|| panic!("{ov:#}"));
+    let listed = &c["failed"][0]["flaky"];
+    assert_eq!(c["state"], "failed", "{c:#}");
+    assert_eq!(listed["here"], "pass", "{c:#}");
+    assert_eq!(listed["at"], last_ran(&f)["at"], "{c:#}");
+    assert_eq!(listed["host"], "fake-host", "{c:#}");
+    assert_eq!(listed["other"]["host"], "fake-host", "{c:#}");
 }
 
 /// Time-limit-1 66: a submission whose run its time limit ended names the
@@ -1092,6 +1161,8 @@ fn overview_shows_every_branch_at_a_glance() {
     assert_eq!(b["branch"], BRANCH);
     assert_eq!(b["at"], f.world.tip(BRANCH).0);
     assert_eq!(b["parallel"], 4);
+    // C.4, C.7: a branch whose policy names no remote names none.
+    assert!(b.get("remote").is_none(), "{json}");
     assert_eq!(b["depth"], 1);
     assert!(b["version"].as_u64().unwrap() > 0);
     // Only the submission still in play, as `status <id> --json` has it.
@@ -1134,6 +1205,38 @@ fn overview_shows_every_branch_at_a_glance() {
         )
     );
     assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
+}
+
+/// 26, 49, 61: the overview names the worktree each submission its recent
+/// lines name came from, the landed #1 read from the finished records.
+#[test]
+fn overview_names_where_recent_submissions_came_from() {
+    let f = setup();
+    three_submissions(&f);
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let b = &v["branches"][0];
+    let mut named: Vec<u64> = b["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| {
+            r["ids"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![r["id"].clone()])
+        })
+        .map(|id| id.as_u64().unwrap())
+        .collect();
+    named.sort_unstable();
+    assert_eq!(named, [1, 2], "{json}");
+    assert_eq!(
+        b["recent_from"],
+        serde_json::json!({"1": "unit/touches", "2": "unit/batch-review"}),
+        "{json}"
+    );
 }
 
 /// ADR 0028: a combination under test carries its run's tasks, as a
