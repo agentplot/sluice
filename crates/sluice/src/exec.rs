@@ -13,14 +13,17 @@ use sluice_core::overview::OrderFrom;
 use sluice_core::release::{ReleaseOutcome, Releasing};
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Forecast, Sluice};
-use sluice_seams::{Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress};
+use sluice_seams::{
+    AtBound, Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress,
+};
 
 use crate::sessions::SessionRun;
 use crate::told::{self, Kind};
 use crate::{Pause, Pushers, CONFLICT, FAILED, LANDED, STOPPED};
 
 /// What `sluice exec` needs of the host beyond the seams: the reserve,
-/// the host's session runs and their lock, and a run's directory.
+/// the host's records of its session runs and their lock, and a run's
+/// directory. The count a run starts under is the check seam's (71).
 pub trait Host {
     /// The part of the bound session runs never use (91).
     fn reserved(&self) -> usize;
@@ -31,7 +34,7 @@ pub trait Host {
     }
     /// `dir` as the worktree's canonical path, the key of its session runs.
     fn worktree(&self, dir: &str) -> Result<String>;
-    /// The host's lock over its session runs, held until dropped.
+    /// The host's lock over its session runs' records, held until dropped.
     fn lock_sessions(&self) -> Result<Box<dyn Any>>;
     /// Record `run` as running, under the lock `held`.
     fn begin_session(&self, held: &dyn Any, run: &SessionRun) -> Result<()>;
@@ -288,34 +291,40 @@ impl Exec<'_> {
             Some(c) => say(out, json, &format!("running {c}"))?,
         }
 
-        // 89, 91: counted from the start to the end, never in the part the
-        // reserve keeps for submissions' runs.
+        // 89, 91, 71: counted from the start to the end, against every
+        // repository's runs on the host, never in the part the reserve
+        // keeps for submissions' runs. The check seam admits the run; a
+        // start it refuses at the bound, another repository's run having
+        // taken the last one since the count was read, waits as one the
+        // count refused.
         let mut told_waiting = false;
         let (place, run) = loop {
             let guard = seams.state.lock(&self.branch)?;
-            if guard.is_some() {
-                let held = self.host.lock_sessions()?;
-                if s.session_capacity(self.host.reserved())? > 0 {
-                    let started =
-                        s.start_session(&plan, &worktree, &session.head, command.as_deref())?;
-                    let (place, run) = (started.place, started.run);
-                    self.host.begin_session(
-                        held.as_ref(),
-                        &SessionRun {
-                            worktree: worktree.clone(),
-                            place: place.name.clone(),
-                            branch: self.branch.clone(),
-                            pid: std::process::id(),
-                            started: self
-                                .clock
-                                .now()
-                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                            run_dir: self.host.run_dir(&run).unwrap_or_default(),
-                            command: command.clone(),
-                            tasks: Vec::new(),
-                        },
-                    )?;
-                    break (place, run);
+            if guard.is_some() && s.session_capacity(self.host.reserved())? > 0 {
+                match s.start_session(&plan, &worktree, &session.head, command.as_deref()) {
+                    Ok(started) => {
+                        let (place, run) = (started.place, started.run);
+                        let held = self.host.lock_sessions()?;
+                        self.host.begin_session(
+                            held.as_ref(),
+                            &SessionRun {
+                                worktree: worktree.clone(),
+                                place: place.name.clone(),
+                                branch: self.branch.clone(),
+                                pid: std::process::id(),
+                                started: self
+                                    .clock
+                                    .now()
+                                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                                run_dir: self.host.run_dir(&run).unwrap_or_default(),
+                                command: command.clone(),
+                                tasks: Vec::new(),
+                            },
+                        )?;
+                        break (place, run);
+                    }
+                    Err(e) if e.downcast_ref::<AtBound>().is_some() => {}
+                    Err(e) => return Err(e),
                 }
             }
             drop(guard);

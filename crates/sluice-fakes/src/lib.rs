@@ -16,11 +16,11 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease, Guard,
-    HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place,
-    PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport,
-    RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog,
-    TaskProgress, TaskResult, Tests, Unanswered, Written,
+    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
+    Guard, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome,
+    Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle,
+    RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source, State,
+    Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -63,6 +63,8 @@ struct TaskDef {
 #[derive(Clone, Debug)]
 struct RunState {
     request: RunRequest,
+    /// The host that started it, whose count it is in (71).
+    host: String,
     complete: bool,
     lost: bool,
     killed: bool,
@@ -72,6 +74,14 @@ struct RunState {
 impl RunState {
     fn live(&self) -> bool {
         !self.killed && !self.lost && self.report.is_none()
+    }
+
+    /// A submission's run, as the host counts it: neither a session's nor
+    /// a preview's, whose runs `sluice exec` and `sluice preview` record
+    /// beside the session runs.
+    fn queue(&self) -> bool {
+        let place = &self.request.place.name;
+        !place.starts_with("session/") && !place.starts_with("preview/")
     }
 }
 
@@ -116,7 +126,11 @@ struct Inner {
     /// How many starts from now the forge a pool starts runs on answers
     /// 5xx.
     unanswered_starts: usize,
+    /// The next start finds the host at its bound (71).
+    refuse_start: bool,
     host_limit: Option<usize>,
+    /// Other repositories' runs going on each host, by host (71).
+    other_runs: BTreeMap<String, usize>,
     /// The system the host's executor is, as `(os, arch)` (87).
     platform: (String, String),
     /// Tasks whose reported keys the candidate's tree does not bear out
@@ -548,6 +562,12 @@ impl World {
         self.0.borrow_mut().unanswered_starts = n;
     }
 
+    /// The next start is refused at the host's bound, as when another
+    /// repository's run took the last one after the round counted (71).
+    pub fn refuse_next_start(&self) {
+        self.0.borrow_mut().refuse_start = true;
+    }
+
     /// Runs started from now stay running until completed.
     pub fn hold_runs(&self, hold: bool) {
         self.0.borrow_mut().hold = hold;
@@ -599,6 +619,14 @@ impl World {
 
     pub fn host_limit(&self, limit: usize) {
         self.0.borrow_mut().host_limit = Some(limit);
+    }
+
+    /// From now, `n` runs of other repositories go on this world's host,
+    /// counted with its own against its bound (71).
+    pub fn other_runs(&self, n: usize) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        inner.other_runs.insert(host, n);
     }
 
     /// From now, the host's results are recorded signed by `signer`, as
@@ -1268,6 +1296,22 @@ impl Branch for FakeBranch {
     }
 }
 
+impl FakeTests {
+    /// The host's count: the submissions' runs it started that still go,
+    /// other repositories' runs on it, and the session runs.
+    fn count(inner: &Inner) -> Running {
+        let own = inner
+            .runs
+            .iter()
+            .filter(|r| r.live() && r.queue() && r.host == inner.host)
+            .count();
+        Running {
+            queue: own + inner.other_runs.get(&inner.host).copied().unwrap_or(0),
+            sessions: inner.sessions.values().filter(|(r, _)| *r).count(),
+        }
+    }
+}
+
 impl Tests for FakeTests {
     fn start(&self, request: &RunRequest) -> Result<RunHandle> {
         let mut inner = self.0 .0.borrow_mut();
@@ -1297,6 +1341,14 @@ impl Tests for FakeTests {
         ) {
             bail!("the open executor cannot keep a run off the network");
         }
+        // 71: admitted against the host's count, other repositories' runs
+        // among it, before anything of the run runs.
+        let running = FakeTests::count(&inner);
+        if running.total() >= inner.host_limit.unwrap_or(usize::MAX)
+            || std::mem::take(&mut inner.refuse_start)
+        {
+            return Err(AtBound.into());
+        }
         if inner.not_ready && request.tests.contains_key("ready") {
             bail!("the host is not ready: [tests] ready failed");
         }
@@ -1312,8 +1364,10 @@ impl Tests for FakeTests {
             .into());
         }
         let complete = !inner.hold;
+        let host = inner.host.clone();
         inner.runs.push(RunState {
             request: request.clone(),
+            host,
             complete,
             lost: false,
             killed: false,
@@ -1384,15 +1438,8 @@ impl Tests for FakeTests {
         })
     }
 
-    fn sessions(&self) -> Result<usize> {
-        Ok(self
-            .0
-             .0
-            .borrow()
-            .sessions
-            .values()
-            .filter(|(r, _)| *r)
-            .count())
+    fn running(&self) -> Result<Running> {
+        Ok(FakeTests::count(&self.0 .0.borrow()))
     }
 
     fn session_runs(&self) -> Result<Vec<HostRun>> {
@@ -2189,13 +2236,60 @@ mod tests {
     #[test]
     fn session_runs_are_counted_while_they_run() {
         let f = Fakes::new();
-        assert_eq!(f.tests.sessions().unwrap(), 0);
+        let sessions = || f.tests.running().unwrap().sessions;
+        assert_eq!(sessions(), 0);
         f.world.session_run("/w/a", true);
         f.world.session_run("/w/b", true);
         f.world.session_run("/w/gone", false);
-        assert_eq!(f.tests.sessions().unwrap(), 2);
+        assert_eq!(sessions(), 2);
         f.world.kill_session("/w/a");
-        assert_eq!(f.tests.sessions().unwrap(), 1);
+        assert_eq!(sessions(), 1);
+        assert_eq!(f.tests.running().unwrap().queue, 0);
+    }
+
+    /// 71: the host's count holds other repositories' runs beside its own,
+    /// and a start at the bound is refused with nothing of it run.
+    #[test]
+    fn the_host_count_holds_other_repositories_runs() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("x", "1")]);
+        f.world.host_limit(2);
+        f.world.hold_runs(true);
+        f.world.other_runs(1);
+        assert_eq!(
+            f.tests.running().unwrap(),
+            Running {
+                queue: 1,
+                sessions: 0
+            }
+        );
+        let request = |name: &str| RunRequest {
+            place: f
+                .checkout
+                .materialize(name, &rev, &Settings::new())
+                .unwrap(),
+            revision: rev.clone(),
+            required: Vec::new(),
+            since: None,
+            limit: None,
+            limits: Default::default(),
+            tests: Settings::new(),
+            replay: true,
+            system: None,
+        };
+        f.tests.start(&request("sluice/try/main/1")).unwrap();
+        assert_eq!(f.tests.running().unwrap().queue, 2);
+        let second = request("sluice/try/main/2");
+        let err = f.tests.start(&second).unwrap_err();
+        assert!(err.downcast_ref::<AtBound>().is_some(), "{err:#}");
+        assert_eq!(f.world.requests().len(), 1, "nothing of it ran");
+        // Another host's count is its own.
+        f.world.be_host("other");
+        assert_eq!(f.tests.running().unwrap().queue, 0);
+        f.world.be_host("fake-host");
+        f.world.other_runs(0);
+        f.tests.start(&second).unwrap();
+        assert_eq!(f.tests.running().unwrap().queue, 2);
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {
