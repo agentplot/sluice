@@ -95,6 +95,7 @@ fn request(repo: &Repo, name: &str, required: &[&str], since: Option<&str>) -> R
             path: repo.dir().to_path_buf(),
             tmp,
             env: Default::default(),
+            compile_cache: None,
         },
         revision: Rev::new(repo.rev("HEAD")),
         required: required.iter().map(|s| s.to_string()).collect(),

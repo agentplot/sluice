@@ -13,6 +13,16 @@
 //! candidate passed saves them as it is released (35; section 5,
 //! *Caches*).
 //!
+//! A place carries the compile cache `[checkout] compile_cache` declares
+//! to its check runs, and the names `compile_cache_variables` gives the
+//! tool's client's variables the host finds its compile server by (35;
+//! ADR 0049). Only `"sccache"` is served; another tool, a variable that
+//! is not the client's own or one the run's compile-cache step sets, and
+//! variables with no cache declared are each refused before anything is
+//! made. The declaration is kept on the place's record, a session's
+//! read again at each run. A preview's place carries none: its command
+//! may stay up for hours, and never takes the cache.
+//!
 //! A place holds a block of ports when `[checkout] ports` names any (31;
 //! ADR 0016): block `n` runs from `ports_from + n × names`, one port per
 //! name in the order written, `ports_from` 20000 by default, above
@@ -61,8 +71,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Adopted, CheckedOut, Checkout, LastResult, Limits, Place, PreviewPlace, ReleasePolicy,
-    Released, Rev, RunHandle, SessionPlace, Setting, Settings,
+    Adopted, CheckedOut, Checkout, CompileCache, LastResult, Limits, Place, PreviewPlace,
+    ReleasePolicy, Released, Rev, RunHandle, SessionPlace, Setting, Settings,
 };
 
 use crate::runs::{dir_name, flat_name, ReleaseWith, Request, Runs, SESSION};
@@ -131,9 +141,21 @@ struct Made {
     /// 97).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_result: Option<LastResult>,
+    /// The compile cache its policy declares (35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compile_cache: Option<CompileCache>,
 }
 
 impl Made {
+    /// The compile cache the place's check runs take: none for a preview,
+    /// whose command never takes it (35; design D7).
+    fn run_cache(&self) -> Option<CompileCache> {
+        match self.kind {
+            Kind::Preview => None,
+            Kind::Made | Kind::Session => self.compile_cache.clone(),
+        }
+    }
+
     fn new(kind: Kind, method: &str) -> Made {
         Made {
             kind,
@@ -150,8 +172,44 @@ impl Made {
             run: None,
             failed: None,
             last_result: None,
+            compile_cache: None,
         }
     }
+}
+
+/// 35: the compile cache `[checkout] compile_cache` declares, with the
+/// client's variables `compile_cache_variables` names, or a refusal
+/// naming what this sluice cannot serve.
+fn compile_cache(checkout: &Settings) -> Result<Option<CompileCache>> {
+    use crate::compile_cache::{PREFIX, SET, TOOL};
+    let variables = match checkout.get("compile_cache_variables") {
+        None => Vec::new(),
+        Some(Setting::List(xs)) => xs.clone(),
+        Some(_) => bail!("[checkout] compile_cache_variables must be a list of names"),
+    };
+    match checkout.get("compile_cache") {
+        None if variables.is_empty() => return Ok(None),
+        None => bail!(
+            "[checkout] compile_cache_variables names a compile cache's variables, and compile_cache declares none"
+        ),
+        Some(Setting::Text(t)) if t == TOOL => {}
+        Some(Setting::Text(t)) => {
+            bail!("[checkout] compile_cache = {t:?}: the one compile cache sluice serves is {TOOL:?}")
+        }
+        Some(_) => bail!("[checkout] compile_cache must be a string: {TOOL:?}"),
+    }
+    for v in &variables {
+        if SET.contains(&v.as_str()) {
+            bail!("[checkout] compile_cache_variables names {v}, which sluice sets for a run's compiles itself");
+        }
+        if !v.starts_with(PREFIX) || v.len() == PREFIX.len() {
+            bail!("[checkout] compile_cache_variables names {v}, which is not {TOOL}'s client's own: each starts {PREFIX}");
+        }
+    }
+    Ok(Some(CompileCache {
+        tool: TOOL.into(),
+        variables,
+    }))
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -441,6 +499,7 @@ impl Places {
                 .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
             tmp: self.tmp(name),
             env,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -490,6 +549,7 @@ impl Places {
                 .unwrap_or_else(|| self.worktree_path(name)),
             tmp: self.tmp(name),
             env,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1006,6 +1066,7 @@ fn clone(src: &Path, dst: &Path) -> Result<()> {
 impl Checkout for Places {
     fn materialize(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<Place> {
         one_method(checkout)?;
+        let compile_cache = compile_cache(checkout)?;
         let caches = self.caches(rev, checkout)?;
         let ports = Ports::read(checkout)?;
         // A place of this name left by a step that stopped part way.
@@ -1015,6 +1076,7 @@ impl Checkout for Places {
         let record = self.record(name);
         let mut made = Made {
             caches,
+            compile_cache,
             ..Made::new(Kind::Made, METHOD)
         };
         self.write_record(name, &made)?;
@@ -1045,6 +1107,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1265,6 +1328,7 @@ impl Checkout for Places {
 
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         let (path, name) = Places::session_name(worktree)?;
+        let compile_cache = compile_cache(checkout)?;
         let record = self.record(&name);
         let mut made = match self.read_record(&name)? {
             Some(made) if made.kind == Kind::Session => made,
@@ -1296,6 +1360,8 @@ impl Checkout for Places {
         // 97: a run under way, or one whose starter was killed, has no
         // result; the one before is not this run's.
         made.last_result = None;
+        // As the policy declares it now, for this run and its release.
+        made.compile_cache = compile_cache;
         self.write_record(&name, &made)?;
         let tmp = self.tmp(&name);
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
@@ -1309,6 +1375,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1539,6 +1606,28 @@ mod tests {
         });
         assert!(!record.exists(), "a released place's record written again");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 35, design D7: a preview's command never takes the compile cache,
+    /// whatever its record says; a candidate's and a session's runs take
+    /// what theirs keeps.
+    #[test]
+    fn a_previews_place_carries_no_compile_cache() {
+        let declared = sluice_seams::CompileCache {
+            tool: "sccache".into(),
+            variables: vec!["SCCACHE_SERVER_UDS".into()],
+        };
+        for (kind, takes) in [
+            (Kind::Preview, None),
+            (Kind::Made, Some(declared.clone())),
+            (Kind::Session, Some(declared.clone())),
+        ] {
+            let made = Made {
+                compile_cache: Some(declared.clone()),
+                ..Made::new(kind, "git-worktree")
+            };
+            assert_eq!(made.run_cache(), takes, "{kind:?}");
+        }
     }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.

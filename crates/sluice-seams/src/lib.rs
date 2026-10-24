@@ -72,6 +72,21 @@ pub struct Place {
     /// name, `SLUICE_PLACE`, and a `SLUICE_PORT_<NAME>` for each port the
     /// policy names, held by no other place alive on the host.
     pub env: BTreeMap<String, String>,
+    /// 35: the compile cache its branch's policy declares, which its
+    /// check runs compile through; `None` when the policy declares none,
+    /// and for a preview's place, whose command never takes it.
+    pub compile_cache: Option<CompileCache>,
+}
+
+/// A compile cache a branch's policy declares in `[checkout]` (35; ADR
+/// 0049): the tool, and the names of the tool's client's own variables
+/// by which an unconfined run finds the host's compile server, taken from
+/// sluice's environment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompileCache {
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<String>,
 }
 
 /// A session's place sluice equips, as the place seam finds it by its

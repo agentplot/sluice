@@ -1,5 +1,6 @@
 //! `sluice preview`, `sluice previews` and `sluice release <preview>` over
-//! the fakes (previews-1 clauses 98 to 103).
+//! the fakes (previews-1 clauses 98 to 103); and, through the binary on a
+//! scratch repository, a preview's command and the compile cache (35).
 
 mod support;
 
@@ -286,4 +287,90 @@ fn a_preview_is_released_only_when_asked() {
     );
     assert_eq!(doc["released"], true);
     assert!(f.world.live_previews().is_empty());
+}
+
+/// 35, design D7: a preview's command compiles without the compile cache
+/// its revision's policy declares, though a check run would compile
+/// through it here: sluice's environment has sccache on its path and the
+/// host's server answering where the policy says to look.
+#[test]
+fn a_preview_takes_no_compile_cache() {
+    let repo = support::Repo::new("preview-compile-cache");
+    repo.write(
+        ".config/sluice.toml",
+        "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+         [checkout]\ncompile_cache = \"sccache\"\n\
+         compile_cache_variables = [\"SCCACHE_SERVER_PORT\"]\n\n\
+         [branches.\"bolt/*\"]\ntimeout = \"1m\"\n\n\
+         [preview]\ncommand = \"echo \\\"${RUSTC_WRAPPER:-unset}\\\" > \\\"$SLUICE_CHECKOUT/wrapper\\\"\"\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "a preview"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let (config, state) = (
+        support::Scratch::new("preview-compile-cache-config"),
+        support::Scratch::new("preview-compile-cache-state"),
+    );
+    let bin = support::Scratch::new("preview-compile-cache-bin");
+    std::fs::write(bin.path().join("sccache"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        bin.path().join("sccache"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let sluice = |args: &[&str]| {
+        support::isolated(&mut std::process::Command::new(env!(
+            "CARGO_BIN_EXE_sluice"
+        )))
+        .args(args)
+        .current_dir(repo.dir())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env(
+            "SCCACHE_SERVER_PORT",
+            server.local_addr().unwrap().port().to_string(),
+        )
+        .env_remove("SLUICE_AGENT")
+        .env_remove("SLUICE_OTEL")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+    };
+    let rev = repo.rev("bolt/x");
+    let out = sluice(&["preview", "bolt/x", &rev, "--wait", "--json"]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{said}"));
+    assert_eq!(doc["state"], "up", "{doc}");
+    let checkout = std::path::PathBuf::from(doc["checkout"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("wrapper")).unwrap(),
+        "unset\n"
+    );
+    let name = doc["name"].as_str().unwrap();
+    let run = repo
+        .dir()
+        .join(".git/sluice/.runs")
+        .join(name.replace('/', "%2F"))
+        .join("out.log");
+    let printed = std::fs::read_to_string(&run).unwrap_or_default();
+    assert!(!printed.contains("compile-cache"), "{printed}");
+    let out = sluice(&["release", name]);
+    assert!(out.status.success());
+    drop(server);
 }

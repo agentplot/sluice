@@ -460,6 +460,7 @@ fn telemetry_is_off_unless_asked() {
             path: repo.dir().to_path_buf(),
             tmp: tmp.clone(),
             env: Default::default(),
+            compile_cache: None,
         },
         revision: Rev::new(repo.rev("HEAD")),
         required: vec![],

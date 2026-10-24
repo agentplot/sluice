@@ -41,6 +41,18 @@
 //! --export`): sluice keeps what it prints and sources it before every
 //! command the runner runs, opaque to it. Whatever needs the network or
 //! the user's home to set up happens there, outside the executor.
+//!
+//! A place whose policy declares a compile cache (35; ADR 0049) has its
+//! run's command, and only that, go through the compile-cache step
+//! ([`crate::compile_cache`]) between the toolchain and the command:
+//! `--host` under the open executor, whose run takes each variable the
+//! policy names in `compile_cache_variables` from sluice's environment,
+//! as it takes `DOCKER_HOST`; `--own <dir>` under the sandbox, whose run
+//! may write that directory too, `state_dir()/compile-cache`, one per
+//! host, and takes none of them. A sandboxed run that may open no socket
+//! (`network = false`), a preview's command, `ready` and the release
+//! command compile without it, and the release command keeps a profile
+//! that does not name the directory.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -54,6 +66,7 @@ use sluice_seams::{
 };
 
 use super::moon::Moon;
+use crate::compile_cache::Server;
 use crate::host_count::{self, HostCount};
 use crate::instance::Instance;
 use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
@@ -71,6 +84,9 @@ pub struct Context<'a> {
     pub toolchain: Option<&'a Path>,
     /// The cores the run is given.
     pub jobs: usize,
+    /// The compile-cache step the run's command goes through, up to its
+    /// `--` (35).
+    pub step: Option<Vec<String>>,
 }
 
 impl Context<'_> {
@@ -92,6 +108,20 @@ impl Context<'_> {
             .into_iter()
             .chain(argv)
             .collect(),
+        }
+    }
+
+    /// The run's command: `argv` as [`Context::argv`] runs it, through the
+    /// compile-cache step when the run has one. Nothing else a runner runs
+    /// goes through it.
+    pub fn command(&self, argv: &[&str]) -> Vec<String> {
+        match &self.step {
+            None => self.argv(argv),
+            Some(step) => {
+                let mut whole: Vec<&str> = step.iter().map(String::as_str).collect();
+                whole.extend(argv);
+                self.argv(&whole)
+            }
         }
     }
 }
@@ -162,6 +192,8 @@ pub struct Checks {
     /// The repository's common git directory.
     common: PathBuf,
     runs: Runs,
+    /// The `sluice` executable a run's compile-cache step is.
+    program: PathBuf,
     instance: Instance,
     /// The pool this host can start runs on, where the binding gave one.
     pool: Option<Box<dyn Launcher>>,
@@ -169,6 +201,10 @@ pub struct Checks {
     sessions: Option<Sessions>,
     /// The host's running checks, when not the host's own directory.
     running: Option<HostCount>,
+    /// The host's compile-cache directory, when not the host's own.
+    compile_cache: Option<PathBuf>,
+    /// sluice's environment, when not its own process's.
+    environment: Option<BTreeMap<String, String>>,
 }
 
 impl Checks {
@@ -176,11 +212,14 @@ impl Checks {
     pub fn new(common: &Path, program: PathBuf, instance: Instance) -> Self {
         Checks {
             common: common.to_path_buf(),
-            runs: Runs::new(common, program),
+            runs: Runs::new(common, program.clone()),
+            program,
             instance,
             sessions: None,
             running: None,
             pool: None,
+            compile_cache: None,
+            environment: None,
         }
     }
 
@@ -200,6 +239,55 @@ impl Checks {
     pub fn with_running(mut self, dir: PathBuf) -> Self {
         self.running = Some(HostCount::new(dir));
         self
+    }
+
+    /// The same profile, holding the compile cache's directory at `dir`
+    /// rather than the host's.
+    pub fn with_compile_cache(mut self, dir: PathBuf) -> Self {
+        self.compile_cache = Some(dir);
+        self
+    }
+
+    /// The same profile, taking sluice's environment as `env` rather than
+    /// its own process's.
+    pub fn with_environment(mut self, env: BTreeMap<String, String>) -> Self {
+        self.environment = Some(env);
+        self
+    }
+
+    /// sluice's environment, which a run's is built from.
+    fn host_env(&self) -> BTreeMap<String, String> {
+        match &self.environment {
+            Some(e) => e.clone(),
+            None => std::env::vars().collect(),
+        }
+    }
+
+    /// 35: the compile-cache step a run of `request` under `kind` goes
+    /// through, if any: none when its place declares no cache or is a
+    /// preview's, or when a sandboxed run may open no socket; the host's
+    /// server under the open executor; under the sandbox a server of the
+    /// run's own over the host's directory, made here and named by its
+    /// canonical path, which the run's profile lets it write.
+    fn compile_cache_step(&self, request: &RunRequest, kind: Kind) -> Result<Option<Server>> {
+        if request.place.compile_cache.is_none()
+            || request.place.name.starts_with(super::places::PREVIEW)
+        {
+            return Ok(None);
+        }
+        Ok(match kind {
+            Kind::Open => Some(Server::Host),
+            Kind::Sandbox if request.limits.network == Some(Network::Denied) => None,
+            Kind::Sandbox => {
+                let dir = match &self.compile_cache {
+                    Some(d) => d.clone(),
+                    None => crate::instance::state_dir()?.join("compile-cache"),
+                };
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                Some(Server::Own(std::fs::canonicalize(&dir)?))
+            }
+        })
     }
 
     /// The host's session runs, with what each `sluice exec` keeps of its
@@ -411,14 +499,31 @@ fn regex_quote(s: &str) -> String {
 }
 
 /// The user's own temporary directory on macOS, resolved, which some
-/// tools use whatever `TMPDIR` says.
+/// tools use whatever `TMPDIR` says: what `getconf DARWIN_USER_TEMP_DIR`
+/// prints, read without starting it.
+#[cfg(target_os = "macos")]
 fn user_tmp() -> Option<PathBuf> {
-    let out = std::process::Command::new("/usr/bin/getconf")
-        .arg("DARWIN_USER_TEMP_DIR")
-        .output()
-        .ok()?;
-    let dir = String::from_utf8(out.stdout).ok()?;
+    use nix::libc;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: confstr writes at most `buf.len()` bytes, nul included.
+    let n = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+        )
+    };
+    if n == 0 || n > buf.len() {
+        return None;
+    }
+    buf.truncate(n - 1);
+    let dir = String::from_utf8(buf).ok()?;
     std::fs::canonicalize(dir.trim()).ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn user_tmp() -> Option<PathBuf> {
+    None
 }
 
 fn regex_escape(s: &str) -> String {
@@ -472,11 +577,18 @@ fn toolchain(
     Ok(())
 }
 
-/// The command's environment: what a check may need of sluice's own
-/// (paths, the user, the locale, the terminal, and the tool homes `PATH`
-/// points into), the place's paths, and nothing that names another place
-/// or tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
-fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
+/// The command's environment: what a check may need of sluice's own,
+/// `host` (paths, the user, the locale, the terminal, and the tool homes
+/// `PATH` points into), the place's paths, and nothing that names another
+/// place or tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or
+/// `DIRENV_*`. Under the open executor, the compile cache's client's
+/// variables the place's policy names, as `host` sets them.
+fn environment(
+    request: &RunRequest,
+    jobs: usize,
+    kind: Kind,
+    host: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     const KEEP: [&str; 10] = [
         "PATH",
         "HOME",
@@ -490,8 +602,10 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
         "PROTO_HOME",
         "MOON_HOME",
     ];
-    let mut env: BTreeMap<String, String> = std::env::vars()
+    let mut env: BTreeMap<String, String> = host
+        .iter()
         .filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_"))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     env.insert(
         "SLUICE_CHECKOUT".into(),
@@ -507,8 +621,18 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
     // The container engine's client finds the engine as the user's does.
     if request.limits.docker {
         for k in ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"] {
-            if let Ok(v) = std::env::var(k) {
-                env.insert(k.into(), v);
+            if let Some(v) = host.get(k) {
+                env.insert(k.into(), v.clone());
+            }
+        }
+    }
+    // 35: an unconfined run finds the host's compile server as the host's
+    // shells do, through what the policy names and no more; a confined
+    // run's server is its own.
+    if let (Kind::Open, Some(cache)) = (kind, &request.place.compile_cache) {
+        for k in &cache.variables {
+            if let Some(v) = host.get(k) {
+                env.insert(k.clone(), v.clone());
             }
         }
     }
@@ -610,7 +734,7 @@ pub fn release_request(
         replay: false,
         system: None,
     };
-    let mut env = environment(&request, jobs);
+    let mut env = environment(&request, jobs, kind, &std::env::vars().collect());
     if kind == Kind::Sandbox {
         env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
     }
@@ -624,6 +748,7 @@ pub fn release_request(
         env: &env,
         toolchain: tool_argv.is_some().then_some(script.as_path()),
         jobs,
+        step: None,
     };
     let r: Vec<&str> = release.iter().map(String::as_str).collect();
     let mut argv = cx.argv(&r);
@@ -670,8 +795,12 @@ pub fn hostname() -> String {
         .unwrap_or_else(|_| "localhost".into())
 }
 
-impl Tests for Checks {
-    fn start(&self, request: &RunRequest) -> Result<RunHandle> {
+impl Checks {
+    /// Everything a start does before the run's supervisor: the run
+    /// admitted against the host's bound, its directory made, what its
+    /// executor holds it to written there, and the request its supervisor
+    /// is to run.
+    fn prepare(&self, request: &RunRequest) -> Result<(String, Request, host_count::Admission)> {
         let runner = text(&request.tests, "runner")?
             .ok_or_else(|| anyhow!("[tests] names no runner: \"moon\" or \"command\""))?
             .to_string();
@@ -683,7 +812,7 @@ impl Tests for Checks {
         // 84: refuse before anything runs.
         let kind = choose(&request.limits)?;
         let jobs = self.instance.jobs();
-        let mut env = environment(request, jobs);
+        let mut env = environment(request, jobs, kind, &self.host_env());
         // ADR 0014: what the checks export is found beside the round.
         env.extend(crate::telemetry::run_env(&[
             ("sluice.place", &request.place.name),
@@ -717,11 +846,22 @@ impl Tests for Checks {
         if let Some(argv) = &tool_argv {
             toolchain(argv, &request.place.path, &env, &script)?;
         }
+        let cache = self.compile_cache_step(request, kind)?;
+        let step = cache.as_ref().map(|server| {
+            let mut step = vec![
+                self.program.to_string_lossy().into_owned(),
+                "compile-cache".to_string(),
+            ];
+            step.extend(server.args());
+            step.push("--".into());
+            step
+        });
         let cx = Context {
             request,
             env: &env,
             toolchain: tool_argv.is_some().then_some(script.as_path()),
             jobs,
+            step,
         };
         let not_run = not_run_exits(&request.tests)?;
         // 84, could-not-run-1 114: a host that is not ready is refused the
@@ -780,7 +920,7 @@ impl Tests for Checks {
                 let command = text(&request.tests, "command")?
                     .ok_or_else(|| anyhow!("[tests] runner = \"command\" needs a command"))?;
                 Plan {
-                    argv: Some(cx.argv(&["/bin/sh", "-c", command])),
+                    argv: Some(cx.command(&["/bin/sh", "-c", command])),
                     targets: vec![command.to_string()],
                     holds_processors: false,
                     kept_out: Vec::new(),
@@ -815,25 +955,44 @@ impl Tests for Checks {
             Kind::Sandbox => {
                 let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                 let network = request.limits.network;
-                let profile = dir.join("sandbox.sb");
-                std::fs::write(
-                    &profile,
-                    seatbelt(
-                        &[canon(&request.place.path), canon(&request.place.tmp)],
-                        &plan.stamps,
-                        network,
-                        &if docker { docker_sockets() } else { Vec::new() },
-                        user_tmp().as_deref(),
-                    ),
-                )?;
-                let sandbox = [
-                    "/usr/bin/sandbox-exec".to_string(),
-                    "-f".into(),
-                    profile.to_string_lossy().into_owned(),
-                ];
+                let place = [canon(&request.place.path), canon(&request.place.tmp)];
+                let sockets = if docker { docker_sockets() } else { Vec::new() };
+                let user_tmp = user_tmp();
+                let write = |file: &str, writable: &[PathBuf]| -> Result<[String; 3]> {
+                    let profile = dir.join(file);
+                    std::fs::write(
+                        &profile,
+                        seatbelt(
+                            writable,
+                            &plan.stamps,
+                            network,
+                            &sockets,
+                            user_tmp.as_deref(),
+                        ),
+                    )?;
+                    Ok([
+                        "/usr/bin/sandbox-exec".to_string(),
+                        "-f".into(),
+                        profile.to_string_lossy().into_owned(),
+                    ])
+                };
+                // 35: the command may write the compile cache's directory
+                // it holds; the release command is held as before.
+                let sandbox = match &cache {
+                    Some(Server::Own(cache_dir)) => {
+                        let mut writable = place.to_vec();
+                        writable.push(cache_dir.clone());
+                        write("sandbox.sb", &writable)?
+                    }
+                    _ => write("sandbox.sb", &place)?,
+                };
                 argv.splice(0..0, sandbox.clone());
                 if let Some(r) = &mut release {
-                    r.splice(0..0, sandbox);
+                    let held = match &cache {
+                        Some(Server::Own(_)) => write("release.sb", &place)?,
+                        _ => sandbox,
+                    };
+                    r.splice(0..0, held);
                 }
                 // A session on this host can still write the place; and a
                 // run that reaches the container engine is held by nothing.
@@ -859,9 +1018,9 @@ impl Tests for Checks {
             not_run,
             kept_out: plan.kept_out,
         };
-        self.runs.start(
-            name,
-            &Request {
+        Ok((
+            name.clone(),
+            Request {
                 // Nothing affected: nothing of the repository's is run.
                 argv,
                 cwd: request.place.path.clone(),
@@ -871,10 +1030,18 @@ impl Tests for Checks {
                 meta: serde_json::to_value(&meta)?,
                 release,
             },
-        )?;
+            admission,
+        ))
+    }
+}
+
+impl Tests for Checks {
+    fn start(&self, request: &RunRequest) -> Result<RunHandle> {
+        let (name, run, admission) = self.prepare(request)?;
+        self.runs.start(&name, &run)?;
         // Its supervisor holds the run directory, which keeps it counted.
         admission.started();
-        Ok(RunHandle(name.clone()))
+        Ok(RunHandle(name))
     }
 
     fn progress(&self, run: &RunHandle) -> Result<Progress> {
@@ -1153,4 +1320,260 @@ fn took_ms(started: &str, ended: &str) -> Option<u64> {
     let a = chrono::DateTime::parse_from_rfc3339(started).ok()?;
     let b = chrono::DateTime::parse_from_rfc3339(ended).ok()?;
     u64::try_from((b - a).num_milliseconds()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Checks;
+    use crate::instance::Instance;
+    use sluice_seams::{CompileCache, Limits, Network, Place, Rev, RunRequest, Setting};
+
+    // No test here starts a process: one started while another test lets
+    // a lock go holds the lock until it has started (host_count's tests).
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    /// The `sluice` a run's step is named by.
+    const SLUICE: &str = "/opt/sluice/bin/sluice";
+
+    /// A fresh directory of the test's own.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sluice-checks-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The check profile over `root`, with `host` as sluice's environment.
+    fn checks(root: &Path, host: &[(&str, &str)]) -> Checks {
+        let env: BTreeMap<String, String> = [("PATH", "/usr/bin:/bin"), ("HOME", "/home/u")]
+            .iter()
+            .chain(host)
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Checks::new(
+            &root.join("common"),
+            PathBuf::from(SLUICE),
+            Instance {
+                bound: 4,
+                reserved: 0,
+                processors: 4,
+                forge: None,
+                signing: None,
+                peers: Default::default(),
+                systems: None,
+            },
+        )
+        .with_running(root.join("running"))
+        .with_compile_cache(root.join("compile-cache"))
+        .with_environment(env)
+    }
+
+    /// A run of `true`, released by `true`, in a place under `root` whose
+    /// policy declares the compile cache naming `variables`, or none,
+    /// under `executor`.
+    fn request(
+        root: &Path,
+        name: &str,
+        variables: Option<&[&str]>,
+        executor: &str,
+        network: Option<Network>,
+    ) -> RunRequest {
+        let (path, tmp) = (root.join("place"), root.join("tmp").join(name));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
+        RunRequest {
+            place: Place {
+                name: name.into(),
+                path,
+                tmp,
+                env: Default::default(),
+                compile_cache: variables.map(|v| CompileCache {
+                    tool: "sccache".into(),
+                    variables: v.iter().map(|s| s.to_string()).collect(),
+                }),
+            },
+            revision: Rev::new("0".repeat(40)),
+            required: vec![],
+            since: None,
+            limit: None,
+            limits: Limits {
+                executor: Some(executor.into()),
+                network,
+                memory: None,
+                docker: false,
+            },
+            tests: [
+                ("runner", Setting::Text("command".into())),
+                ("command", Setting::Text("true".into())),
+                ("release", Setting::Text("true".into())),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            replay: false,
+            system: None,
+        }
+    }
+
+    /// What a run of `request` is given, read before any supervisor would
+    /// run it: its command, its environment and its release command.
+    fn given(c: &Checks, request: &RunRequest) -> crate::runs::Request {
+        c.prepare(request).unwrap().1
+    }
+
+    /// 35, design D5: an open run takes each variable its policy names
+    /// that sluice's environment sets, and no other of the tool's, and its
+    /// command goes through the step to the host's server.
+    #[test]
+    fn an_open_run_takes_only_the_named_compile_cache_variables() {
+        let root = scratch("open-variables");
+        let c = checks(
+            &root,
+            &[
+                ("SCCACHE_SERVER_UDS", "/run/sccache.sock"),
+                ("SCCACHE_DIR", "/var/cache/sccache"),
+                ("RUSTC_WRAPPER", "/bin/sccache"),
+            ],
+        );
+        let named = ["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT"];
+        let run = given(&c, &request(&root, "p1", Some(&named), "open", None));
+        assert_eq!(
+            run.env.get("SCCACHE_SERVER_UDS").map(String::as_str),
+            Some("/run/sccache.sock")
+        );
+        for k in ["SCCACHE_DIR", "SCCACHE_SERVER_PORT", "RUSTC_WRAPPER"] {
+            assert!(!run.env.contains_key(k), "{k}: {:?}", run.env);
+        }
+        assert_eq!(
+            run.argv,
+            [
+                SLUICE,
+                "compile-cache",
+                "--host",
+                "--",
+                "/bin/sh",
+                "-c",
+                "true"
+            ]
+        );
+        // The release command never goes through it.
+        assert_eq!(
+            run.release,
+            Some(vec!["/bin/sh".into(), "-c".into(), "true".into()])
+        );
+
+        // A policy that declares no cache: as before.
+        let run = given(&c, &request(&root, "p2", None, "open", None));
+        assert!(!run.env.contains_key("SCCACHE_SERVER_UDS"), "{:?}", run.env);
+        assert_eq!(run.argv, ["/bin/sh", "-c", "true"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 35, design D7: a preview's command never takes the cache, even
+    /// from a place that says it does.
+    #[test]
+    fn a_previews_run_takes_no_compile_cache() {
+        let root = scratch("preview");
+        let c = checks(&root, &[("SCCACHE_SERVER_UDS", "/run/sccache.sock")]);
+        let preview = request(
+            &root,
+            "preview/abc123",
+            Some(&["SCCACHE_SERVER_UDS"]),
+            "open",
+            None,
+        );
+        assert_eq!(given(&c, &preview).argv, ["/bin/sh", "-c", "true"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The sandbox profile `file` of run `name`.
+    #[cfg(target_os = "macos")]
+    fn profile(c: &Checks, name: &str, file: &str) -> String {
+        std::fs::read_to_string(c.runs.dir(name).join(file)).unwrap()
+    }
+
+    /// 35, design D4: a sandboxed run's server is its own: the variables
+    /// its policy names do not reach it, and its command goes through the
+    /// step to a server over the host's directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sandbox_run_takes_no_compile_cache_variables() {
+        let root = scratch("sandbox-variables");
+        let c = checks(&root, &[("SCCACHE_SERVER_UDS", "/run/sccache.sock")]);
+        let named = ["SCCACHE_SERVER_UDS"];
+        let run = given(&c, &request(&root, "p1", Some(&named), "sandbox", None));
+        assert!(!run.env.contains_key("SCCACHE_SERVER_UDS"), "{:?}", run.env);
+        let dir = std::fs::canonicalize(root.join("compile-cache")).unwrap();
+        let at = run.argv.iter().position(|a| a == SLUICE).expect("the step");
+        assert_eq!(
+            run.argv[at..],
+            [
+                SLUICE,
+                "compile-cache",
+                "--own",
+                dir.to_str().unwrap(),
+                "--",
+                "/bin/sh",
+                "-c",
+                "true"
+            ]
+        );
+        assert_eq!(run.argv[0], "/usr/bin/sandbox-exec");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 35, design D4: the command's profile lets it write the compile
+    /// cache's directory; the release command's does not name it. (`ready`
+    /// is held by the profile it had, which is given no directory; its
+    /// writes are tried in `a_sandbox_run_with_a_compile_cache_writes_nowhere_else`,
+    /// since checking it here would start a sandbox.)
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_run_profile_adds_the_compile_cache_directory() {
+        let root = scratch("profile");
+        let c = checks(&root, &[]);
+        let released = given(&c, &request(&root, "p1", Some(&[]), "sandbox", None))
+            .release
+            .unwrap();
+        let dir = std::fs::canonicalize(root.join("compile-cache")).unwrap();
+        let dir = format!("(subpath \"{}\")", dir.display());
+        let run = profile(&c, "p1", "sandbox.sb");
+        assert!(run.contains(&dir), "{run}");
+        let place = std::fs::canonicalize(root.join("place")).unwrap();
+        let place = format!("(subpath \"{}\")", place.display());
+        assert!(run.contains(&place), "{run}");
+        // The release command's is the command's less the directory.
+        let release = profile(&c, "p1", "release.sb");
+        assert!(released[2].ends_with("release.sb"), "{released:?}");
+        let less = run.replace(&format!("  {dir}\n"), "").replace(
+            &format!(
+                "(allow network-bind network-inbound network-outbound (local unix-socket {dir}))\n\
+                 (allow network-outbound (remote unix-socket {dir}))\n"
+            ),
+            "",
+        );
+        assert_eq!(release, less);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 35, design D4: a sandboxed run that may open no socket takes no
+    /// step, and its profile does not name the directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_run_profile_under_no_network_has_no_compile_cache() {
+        let root = scratch("no-network");
+        let c = checks(&root, &[]);
+        let denied = request(&root, "p1", Some(&[]), "sandbox", Some(Network::Denied));
+        let run = given(&c, &denied);
+        assert!(
+            !run.argv.iter().any(|a| a == "compile-cache"),
+            "{:?}",
+            run.argv
+        );
+        let profile = profile(&c, "p1", "sandbox.sb");
+        assert!(!profile.contains("compile-cache"), "{profile}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

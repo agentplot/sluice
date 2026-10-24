@@ -59,6 +59,7 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
             path: place,
             tmp: scratch.path().join("tmp"),
             env: Default::default(),
+            compile_cache: None,
         },
         revision: Rev::new("0".repeat(40)),
         required: vec!["#check-fast".into()],
@@ -78,6 +79,7 @@ fn moon_runs_with_otel_while_telemetry_is_on() {
         env: &env,
         toolchain: None,
         jobs: 2,
+        step: None,
     };
     let argv = Moon.plan(&cx).unwrap().argv.expect("a run");
     assert_eq!(argv[..4], ["moon", "--otel", "exec", "a:test"], "{argv:?}");

@@ -10,6 +10,20 @@ toolchain = ["devenv", "print-dev-env"]
 # its fails unjudged rather than recorded (could-not-run-1 114; ADR 0031).
 ready = ["docker", "info"]
 
+# A run's compiles go through the host's compile cache, sccache, which
+# the development shell puts on its PATH (35; ADR 0049). Sandboxed, as
+# sluice's runs are, a run keeps a server of its own over the host's
+# compile-cache directory while it holds it; an open run, such as one on a
+# host with no sandbox, finds the host's server through the variables the
+# hosts' keepers set for it and its shells, named here.
+[checkout]
+compile_cache = "sccache"
+compile_cache_variables = [
+  "SCCACHE_SERVER_UDS",
+  "SCCACHE_SERVER_PORT",
+  "SCCACHE_DIR",
+]
+
 # A place starts from the build of the last candidate that passed with the
 # same lock file and compiler (35; section 5, Caches).
 [[checkout.cache]]

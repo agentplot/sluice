@@ -69,6 +69,9 @@ every repository on the host and never pushed:
                        started it and when
   running/<run>.hold   held by the process that started the run until the
                        run is under way
+  compile-cache/       the compile cache's directory, [checkout] compile_cache's
+                       under the sandbox: what the runs compiled, the lock a
+                       run holds while it uses it, and its server's socket
   sessions/.lock       held while an agent's run's file is written
   sessions/<worktree>.json
                        each run an agent has going in its worktree: the

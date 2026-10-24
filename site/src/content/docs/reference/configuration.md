@@ -108,6 +108,8 @@ with the reason ([ADR 0013](/sluice/decisions/0013/)).
 |---|---|---|
 | `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. A preview gets a name for each as well, `SLUICE_NAME_WEB`. |
 | `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
+| `compile_cache` | `"sccache"` | The tests compile through sccache, sharing compiled crates with the host's other checkouts and with the agents' shells. See [the compile cache](#the-compile-cache). Any other value is refused. |
+| `compile_cache_variables` | e.g. `["SCCACHE_SERVER_UDS", "SCCACHE_SERVER_PORT", "SCCACHE_DIR"]` | The variables by which sccache finds the host's compile server, passed from sluice's environment to a run under `open`. Each must be sccache's own, starting `SCCACHE_`, and none that sluice sets itself; anything else is refused. Needs `compile_cache`. |
 
 ### `[[checkout.cache]]`
 
@@ -125,12 +127,46 @@ under its key. sluice's own repository caches `target` keyed by
 minutes cold takes under a second warm. A cache only spares work: it
 never decides a result.
 
+### The compile cache
+
+With `compile_cache = "sccache"`, a test's compiles go through sccache,
+so a checkout reuses what the host's other checkouts and the agents'
+shells compiled. sccache must be on the tests' `PATH`, from the
+toolchain. Each run's output says on its first line how it compiles,
+and why when it compiles without the cache.
+
+Under `open`, a run uses the host's one compile server and starts or
+stops nothing of it. It finds the server through the variables
+`compile_cache_variables` names, taken from sluice's environment as
+`DOCKER_HOST` is for `docker = true`; with none set it looks where
+sccache does by default. Whoever runs the host's server sets those
+variables for it and for the agents' shells, and keeps its `SCCACHE_DIR`
+anywhere but `~/.local/state/sluice/compile-cache/`. A run whose server
+stopped starts one of its own on the same address, which ends with the
+run; a server that finds its address taken should try again there, not
+move to another. When nothing answers as the run starts, it compiles
+without the cache.
+
+Under `sandbox`, a run uses a server of its own over the host's
+`~/.local/state/sluice/compile-cache/`, which the sandbox lets it write.
+One run holds that directory at a time, every repository's on the host
+together; a run that finds it held compiles without the cache rather
+than wait. The server ends with the run, at its time limit too. A
+sandboxed run with `network = false` compiles without it, since it may
+open no socket.
+
+A preview, `ready` and `release` never use the cache, and neither does
+a compile sccache does not serve, such as an incremental one
+(`CARGO_INCREMENTAL=1`). The cache changes how fast a test runs, never
+what it reports: a run's result is its command's, whether it compiled
+through the cache or not.
+
 ## `[executor]`: what the tests may touch
 
 | key | values | meaning |
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
-| | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
+| | `"sandbox"` | The tests may write only their checkout and scratch directory, and with `[checkout] compile_cache` the host's `~/.local/state/sluice/compile-cache/` (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
@@ -577,5 +613,7 @@ sets either is refused.
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the cores sluice may use, `[runs] cores` where it is set and otherwise what the host gives it, divided by `[runs] max`, and never less than one. `[runs] max` is the bound every repository on the host shares. |
+| `SCCACHE_SERVER_UDS`, `SCCACHE_SERVER_PORT`, `SCCACHE_DIR` | the host | Where the host's compile server answers and the directory it keeps. A run under `open` gets those `[checkout] compile_cache_variables` names. |
+| `RUSTC_WRAPPER` | sluice, for a run | sccache, when the run compiles through `[checkout] compile_cache`, with `SCCACHE_NO_DAEMON` and `SCCACHE_CLIENT_SIDE`, so the compiles run in the run's own processes and nothing outlives it. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

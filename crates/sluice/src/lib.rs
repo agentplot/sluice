@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod branch;
+pub mod compile_cache;
 pub mod exec;
 pub mod home;
 pub mod host_count;
@@ -403,6 +404,21 @@ pub enum Command {
     /// Run one check run's command to its end; started by a step.
     #[command(hide = true)]
     Supervise { dir: std::path::PathBuf },
+    /// Run a check run's command through the compile cache its policy
+    /// declares, or without it, saying why (35); started inside the run.
+    #[command(hide = true, name = "compile-cache")]
+    CompileCache {
+        /// Compile through the host's one compile server.
+        #[arg(long, conflicts_with = "own", required_unless_present = "own")]
+        host: bool,
+        /// Compile through a server of the run's own over this directory,
+        /// while the run holds its lock.
+        #[arg(long)]
+        own: Option<std::path::PathBuf>,
+        /// The command.
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
     /// Install the hook that refuses updates to protected branches by
     /// anything but sluice; `submit`, `step` and `run` install it too.
     #[command(after_help = "Examples:\n  $ sluice protect\n  $ sluice protect --remove")]
@@ -1232,6 +1248,13 @@ pub fn run(
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
             Ok(0)
+        }
+        Command::CompileCache { own, command, .. } => {
+            let server = match own {
+                Some(dir) => compile_cache::Server::Own(dir),
+                None => compile_cache::Server::Host,
+            };
+            Ok(compile_cache::step(&server, &command))
         }
         Command::Protect { remove, json } => {
             let dir = std::env::current_dir()?;

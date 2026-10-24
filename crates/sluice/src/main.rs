@@ -23,6 +23,15 @@ fn main() {
         }
         return;
     }
+    // The compile-cache step runs inside a check run, which needs no
+    // repository of sluice's: its command's exit is the step's.
+    if let Some(Command::CompileCache { own, command, .. }) = &cli.command {
+        let server = match own {
+            Some(dir) => sluice::compile_cache::Server::Own(dir.clone()),
+            None => sluice::compile_cache::Server::Host,
+        };
+        std::process::exit(sluice::compile_cache::step(&server, command));
+    }
     // git's credential helper needs no repository: what it gives is in
     // its environment.
     if let Some(Command::Credential { operation }) = &cli.command {

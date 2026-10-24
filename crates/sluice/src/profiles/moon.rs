@@ -129,7 +129,7 @@ impl Moon {
             argv.push("--force");
         }
         Ok(Plan {
-            argv: Some(cx.argv(&argv)),
+            argv: Some(cx.command(&argv)),
             targets,
             holds_processors: true,
             // proto stamps each toolchain it runs as used.

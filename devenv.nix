@@ -279,6 +279,10 @@ in
     # The plugins' screenshots, optimized losslessly as they are taken
     # (plugins/screenshots-capture.sh).
     pkgs.oxipng
+    # The compile cache sluice's own policy declares (35, ADR 0049): its
+    # compile-cache step finds it on a run's PATH, the version devenv.lock
+    # pins (core.24).
+    pkgs.sccache
   ];
 
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
@@ -319,9 +323,10 @@ in
     # cache are the user's, under their home, so the agents' worktrees on
     # one host reuse each other's compiled crates ($RUSTC_WRAPPER
     # --show-stats). A run sluice starts, told by the SLUICE_CHECKOUT it
-    # sets, runs rustc unwrapped, and so does CI, told by the CI its
-    # runner sets: its cache starts empty, and its gate builds as
-    # `sluice exec`'s does (core.24).
+    # sets, leaves it unset here: its compiles are sluice's compile-cache
+    # step's, which sets it as the run's executor allows (35). So does CI,
+    # told by the CI its runner sets: its cache starts empty, and its gate
+    # builds as `sluice exec`'s does (core.24).
     if [ -z "''${SLUICE_CHECKOUT:-}" ] && [ -z "''${CI:-}" ]; then
       RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
       export RUSTC_WRAPPER

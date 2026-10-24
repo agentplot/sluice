@@ -2,7 +2,9 @@
 
 **Choose `sandbox`** on macOS when the gate should hold tests to their
 checkout: they may write only the checkout and their scratch directory, and
-reach only the network the policy allows (Seatbelt). **Choose `open`** on
+with `[checkout] compile_cache` the host's compile-cache directory,
+`~/.local/state/sluice/compile-cache/`, and reach only the network the
+policy allows (Seatbelt). **Choose `open`** on
 Linux today, or when tests need what a sandbox refuses. `container` is
 designed and not built.
 
@@ -31,8 +33,11 @@ trust = ["confined", "sandbox"]   # which results satisfy the branch
 
 ## Traps
 
-- Tests that write outside the checkout (`~/.cache`, `/tmp`) fail in the
-  sandbox. Point caches at `SLUICE_TMP` or the checkout.
+- Tests that write outside the checkout and scratch directory (`~/.cache`,
+  `/tmp`) fail in the sandbox. The sandbox allows one more directory, the
+  host's compile cache, and only to a run whose policy sets `[checkout]
+  compile_cache`: compile through that rather than a cache of your own.
+  Point any other cache at `SLUICE_TMP` or the checkout.
 - Tests that call out to the internet need `network = true`; prefer fakes.
 
 ## Verify
