@@ -39,42 +39,19 @@ changes or blanks its line.
 - **THEN** the segment prints the focused repository's line, the same as
   without that document
 
-### Requirement: Setup shows, never edits
+## ADDED Requirements
 
-The `setup` action SHALL show the snippets to add to herdr's config for the
-key, the sidebar rows and the tab-bar segment, and SHALL change no file
-outside the plugin's own directories. The segment's command SHALL name
-the copy in the plugin's state directory with `$HOME` in place of the
-home directory, so the same line serves every host whose herdr keeps its
-state at the same place below the home directory, and SHALL name the
-absolute path only when the state directory is not under `$HOME`. The
-segment's entry SHALL run it every 5 seconds with a limit of 30 seconds,
-so a loaded host's slow run leaves the last line in place rather than
-clearing it.
+### Requirement: The segment keeps its last line under load
 
-#### Scenario: Setup
-
-- **WHEN** the user runs `setup`
-- **THEN** a popup shows a `[[keys.command]]` binding `prefix+s` to
-  `agentplot.sluice.status`, the sidebar rows, and the segment, and herdr's
-  config is unchanged
-
-#### Scenario: One line for every host
-
-- **WHEN** setup runs with the state directory at
-  `$HOME/.local/state/herdr/plugins/agentplot.sluice`
-- **THEN** the segment's command is `sh
-  "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"`,
-  and run through `/bin/sh -lc` under two different home directories,
-  each holding the copy, it prints that home's queue
+The segment's entry that `setup` shows SHALL run it every 5 seconds with
+a limit of 30 seconds, so a loaded host's slow run leaves the last line
+in place rather than clearing it.
 
 #### Scenario: The segment's time limit
 
 - **WHEN** the user runs `setup`
 - **THEN** the segment's entry reads `interval_seconds = 5,
   timeout_seconds = 30`
-
-## ADDED Requirements
 
 ### Requirement: The segment is the server's
 

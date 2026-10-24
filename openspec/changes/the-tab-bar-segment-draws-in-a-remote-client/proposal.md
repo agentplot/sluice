@@ -62,10 +62,10 @@ None.
 
 ### Modified Capabilities
 
-- `herdr-status`: setup's entry gives the segment 30 seconds, so a
-  loaded host's slow run leaves the line in place; the segment reads
-  only its repository's documents; a new requirement that the segment is
-  the server's, whatever host the client is on.
+- `herdr-status`: the segment reads only its repository's documents; a
+  new requirement that setup's entry gives the segment 30 seconds, so a
+  loaded host's slow run leaves the line in place; a new requirement
+  that the segment is the server's, whatever host the client is on.
 
 ## Impact
 
