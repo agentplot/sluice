@@ -902,6 +902,16 @@ out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
 pass
 
+fresh "status: another repository's document leaves the segment alone"
+printf '%s\n' "$board" | jq -c --arg r "$common" '.repository = $r' | sh "$plugin/bin/document.sh" local "$work"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+# Another repository's document that is not JSON, beside the focused one's.
+echo '{"schema": "sluice/overview@1", "host": "host-a", "repo' >"$S/docs/host-a--other-1.json"
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+[ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] ||
+  fail "beside another repository's broken document the segment printed: $out"
+pass
+
 # The board with agents' checks: e2e-run running a command, fix-cards its
 # checks with 3 of 8 tasks ended, plugin-board's ended 2 minutes ago with
 # 14 passed and reused, stale's 45 minutes ago, and a worktree that only
