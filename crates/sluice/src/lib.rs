@@ -1422,11 +1422,13 @@ fn submit(
     };
     let id = accepted.id;
     if json && no_wait {
-        writeln!(
-            out,
-            "{}",
-            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead })
-        )?;
+        let mut doc =
+            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        // ADR 0047: only a submission taken unchecked has any.
+        if !accepted.warnings.is_empty() {
+            doc["warnings"] = serde_json::json!(accepted.warnings);
+        }
+        writeln!(out, "{doc}")?;
         return Ok(0);
     }
     if !json {
@@ -1435,6 +1437,9 @@ fn submit(
             n => format!("{n} queued ahead ({})", hashes(&accepted.ahead)),
         };
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
+        for w in &accepted.warnings {
+            writeln!(out, "warning: {w}")?;
+        }
     }
     if no_wait {
         return Ok(0);

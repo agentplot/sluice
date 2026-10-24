@@ -58,7 +58,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 4. What the submit says
 
-- [ ] 4.1 `crates/sluice/src/lib.rs` (and `words.rs` if the words live
+- [x] 4.1 `crates/sluice/src/lib.rs` (and `words.rs` if the words live
   there): the refusal's text, naming each task, the tag it is required
   through, the policy file and line, and the way on; `refusal_next`
   gives `sluice status <branch>`; `--json` gives the usual refusal
