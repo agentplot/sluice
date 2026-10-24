@@ -120,7 +120,7 @@ rows = [
 
 [ui]
 tab_bar_right = [
-  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = 'sh "$HOME/.local/state/herdr/plugins/agentplot.sluice/segment/bin/segment.sh"', interval_seconds = 5, timeout_seconds = 30 },
 ]
 
 [ui.toast]
@@ -130,10 +130,17 @@ delivery = "herdr"
 The sidebar rows above are herdr's own plus one; if you have rows of your
 own, add only the `$sluice` row. Toasts need `[ui.toast]` delivery on. The
 tab-bar command runs a copy the plugin keeps in its state directory, so it
-survives a reinstall. herdr runs the command through `/bin/sh -lc`, which
-fills in each host's `$HOME`, so one `config.toml` serves a Mac and a
-Linux box alike wherever herdr keeps its state below the home directory,
-as it does by default. `setup` prints the command for the host it runs on.
+survives a reinstall. herdr runs the command on the server the panes run
+on, so a client on another host (`herdr --remote`, a saved machine, a
+session bridging to the server) shows the server's queue. The entry is
+the client's, though: its `config.toml` holds it, which is why the command
+names `$HOME`. herdr runs it through `/bin/sh -lc`, which fills in the
+server's `$HOME`, so one `config.toml` serves a Mac and a Linux box alike
+wherever herdr keeps its state below the home directory, as it does by
+default. `setup` prints the command for the host it runs on. herdr keeps
+the line until a run ends and clears it when a run outlasts
+`timeout_seconds`, so a limit of a few seconds blanks the line whenever
+the server is loaded; at 30 a slow run is late, never blank.
 
 ## Naming a pane's branch
 
