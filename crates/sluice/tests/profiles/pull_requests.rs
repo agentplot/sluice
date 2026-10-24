@@ -1964,8 +1964,8 @@ fn is_draft(g: &OnGitHub, n: u64) -> bool {
 /// Three pull requests, every condition holding: the act leaves each ready
 /// for review at its head, marked 1, 2 and 3 of 3 of one group, and queues
 /// a submission from each, from its checkout `pull/<n>` at that head, in
-/// the order given and in one write; they are tested as one combination
-/// and land.
+/// the order given and in one write, each said after its pull request;
+/// they are tested as one combination and land.
 #[test]
 fn a_group_submit_queues_three_pull_requests_in_order() {
     let g = OnGitHub::batched("pr-group-three", "");
@@ -1999,6 +1999,33 @@ fn a_group_submit_queues_three_pull_requests_in_order() {
         ids.windows(2).all(|w| w[0] < w[1]),
         "in the order given: {ids:?}"
     );
+    let lines: Vec<&str> = said.lines().collect();
+    for (k, name) in names.iter().enumerate() {
+        let opened = format!(
+            "pushed unit/{name} · opened #{}: Change {name}.txt · marked ready for review",
+            ns[k]
+        );
+        let at = lines
+            .iter()
+            .position(|l| *l == opened)
+            .unwrap_or_else(|| panic!("{opened:?} in {said}"));
+        let ahead = match k {
+            0 => "nothing queued ahead".to_string(),
+            _ => format!(
+                "{k} queued ahead ({})",
+                ns[..k]
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        assert_eq!(
+            lines.get(at + 1).copied(),
+            Some(format!("submission {} to main from #{} · {ahead}", ids[k], ns[k]).as_str()),
+            "{said}"
+        );
+    }
     g.step_until("landed", |g| {
         ns.iter()
             .all(|n| g.of(*n).first().is_some_and(|s| s["state"] == "landed"))
@@ -2009,6 +2036,32 @@ fn a_group_submit_queues_three_pull_requests_in_order() {
             serde_json::json!(ids),
             "one combination of all three"
         );
+    }
+}
+
+/// Under `--json` with `--no-wait`, the act answers with each submission
+/// beside its worktree and pull request, and what is queued ahead of it.
+#[test]
+fn a_group_submit_answers_with_each_submission_in_json() {
+    let g = OnGitHub::new("pr-group-json", "");
+    let names = ["j1", "j2"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
+    assert_eq!(doc["branch"], "main", "{doc}");
+    let items = doc["submissions"].as_array().expect("submissions");
+    assert_eq!(items.len(), 2, "{doc}");
+    let mut ahead = Vec::new();
+    for ((item, w), name) in items.iter().zip(&ws).zip(names) {
+        let n = g.pull_of(name).number;
+        let id = g.of(n)[0]["id"].as_u64().unwrap();
+        assert_eq!(item["id"], id, "{doc}");
+        assert_eq!(item["worktree"], w.to_str().unwrap(), "{doc}");
+        assert_eq!(item["pull_request"], n, "{doc}");
+        assert_eq!(item["ahead"], serde_json::json!(ahead), "{doc}");
+        ahead.push(id);
     }
 }
 
@@ -2056,6 +2109,26 @@ fn a_group_submit_one_short_of_a_review_is_refused() {
     for n in [ns[0], ns[2]] {
         assert!(!said.contains(&format!("refused: #{n}")), "{said}");
     }
+    assert!(
+        said.contains(&format!(
+            "nothing submitted: #{}, #{}, #{} are drafts at their heads",
+            ns[0], ns[1], ns[2]
+        )),
+        "{said}"
+    );
+    let again = format!(
+        "sluice submit main {}",
+        ws.iter()
+            .map(|w| format!("--worktree {}", w.display()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    assert!(
+        said.contains(&format!(
+            "once each meets its conditions, the same submit takes them all: {again}"
+        )),
+        "{said}"
+    );
     let mut token = None;
     for (k, name) in names.iter().enumerate() {
         let pull = g.pull_of(name);
@@ -2072,6 +2145,23 @@ fn a_group_submit_one_short_of_a_review_is_refused() {
     for n in &ns {
         assert!(g.of(*n).is_empty(), "{:?}", g.subs());
         assert!(is_draft(&g, *n));
+    }
+
+    let out = g.submit_group(&ws, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
+    assert_eq!(
+        doc,
+        serde_json::json!({ "error": {
+            "kind": "refused",
+            "message": format!("#{} from {} needs 1 review", ns[1], ws[1].display()),
+            "next": [again],
+            "worktrees": [ws[1].to_str().unwrap()],
+        } })
+    );
+    for n in &ns {
+        assert!(is_draft(&g, *n) && g.of(*n).is_empty(), "{:?}", g.subs());
     }
 }
 

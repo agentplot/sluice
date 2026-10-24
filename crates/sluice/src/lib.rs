@@ -2702,10 +2702,12 @@ fn submit_pull(
 /// 125: `sluice submit` of several worktrees to a branch with pull
 /// requests: every worktree's branch pushed and its pull request opened or
 /// updated, each marked one of the group, or none when any worktree is
-/// refused. It says where each stands; then, unless `no_wait`, it follows
-/// each, taking pull requests in and running rounds as a waiting
-/// pull-request submit does, until every one is decided, and reports each
-/// one's outcome in the order given.
+/// refused; then every pull request marked ready and queued, each
+/// submission said after its pull request, or none when any falls short
+/// of its conditions, each such named. It says where each stands; then,
+/// unless `no_wait`, it follows each, taking pull requests in and running
+/// rounds as a waiting pull-request submit does, until every one is
+/// decided, and reports each one's outcome in the order given.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull_group(
     s: &Sluice<'_>,
@@ -2729,8 +2731,34 @@ fn submit_pull_group(
         }
     };
     if !json {
+        // What is queued ahead is named as on a pull request: the act's
+        // own by their pull requests, the rest as intake last read them.
+        let ours: BTreeMap<u64, u64> = opened
+            .iter()
+            .filter_map(|o| Some((o.submission.as_ref()?.id, o.number)))
+            .collect();
+        let others = opened
+            .iter()
+            .filter_map(|o| o.submission.as_ref())
+            .any(|a| a.ahead.iter().any(|i| !ours.contains_key(i)));
+        let names = match others.then(|| pulls.follow(seams, clock, branch, opened[0].number)) {
+            Some(Ok(Followed::Open { names, .. } | Followed::Done(_, names))) => names,
+            _ => BTreeMap::new(),
+        };
+        let name = |i: u64| match ours.get(&i) {
+            Some(n) => format!("#{n}"),
+            None => names.get(&i).cloned().unwrap_or_else(|| format!("#{i}")),
+        };
         for o in &opened {
             writeln!(out, "{}", o.said)?;
+            if let Some(a) = &o.submission {
+                let ahead = queued_ahead(&a.ahead, name);
+                writeln!(
+                    out,
+                    "submission {} to {branch} from #{} · {ahead}",
+                    a.id, o.number
+                )?;
+            }
         }
     }
     let mut decided: Vec<Option<Followed>> = opened.iter().map(|_| None).collect();
@@ -2848,6 +2876,10 @@ fn submit_pull_group(
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
+            if let (true, Some(a)) = (no_wait, &o.submission) {
+                item["id"] = serde_json::json!(a.id);
+                item["ahead"] = serde_json::json!(a.ahead);
+            }
             items.push(with_copy(item, o.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": items });
