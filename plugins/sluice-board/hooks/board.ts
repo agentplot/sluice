@@ -338,6 +338,8 @@ export type CheckRow = {
   key: string;
   state: "running" | "passed" | "failed" | "ended";
   text: string;
+  /** The checkout it came from, whose run the row opens to. */
+  session: OverviewSession;
 };
 
 function checkRow(s: OverviewSession, now: number): CheckRow | null {
@@ -350,6 +352,7 @@ function checkRow(s: OverviewSession, now: number): CheckRow | null {
       key: s.worktree,
       state: "running",
       text: [who, ...(what ? [what] : []), ...clock].join(" "),
+      session: s,
     };
   }
   const r = s.last_result;
@@ -360,7 +363,24 @@ function checkRow(s: OverviewSession, now: number): CheckRow | null {
     key: s.worktree,
     state: r.outcome === "pass" ? "passed" : r.outcome === "fail" ? "failed" : "ended",
     text: `${who} ${words}`,
+    session: s,
   };
+}
+
+/**
+ * What a CHECKING row opens to: the tasks of the run going, else of the run
+ * that ended; a command's run has none, and says what it runs while it goes,
+ * since a finished run keeps no command.
+ */
+export function checkLines(
+  s: OverviewSession,
+  now: number,
+): { state?: OverviewTask["state"]; text: string }[] {
+  const run = s.run ?? s.last_result;
+  if (s.run?.command) return [{ text: `runs ${s.run.command} · no tasks` }];
+  if (!s.run && s.last_result?.kind === "command") return [{ text: "ran a command · no tasks" }];
+  if (!run?.tasks || run.tasks.length === 0) return [{ text: "no tasks reported" }];
+  return taskLines(run, now);
 }
 
 /** CHECKING: agents' checks, as load on the host and never as submissions. */

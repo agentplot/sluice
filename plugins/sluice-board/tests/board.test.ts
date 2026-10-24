@@ -3,6 +3,7 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   bandLines,
   bar,
+  checkLines,
   checkRows,
   clearText,
   conflictText,
@@ -202,6 +203,32 @@ describe("agents' checks", () => {
     ]);
     expect(rows.map((r) => r.state)).toEqual(["running", "running", "passed", "passed", "failed"]);
     expect(rows.some((r) => /testing/.test(r.text))).toBe(false);
+  });
+
+  test("what a CHECKING row opens to: its run's tasks, or why it has none", () => {
+    const d = withChecks();
+    const of = (name: string) =>
+      checkLines(d.sessions.find((s) => s.worktree.endsWith(`/${name}`))!, NOW).map((l) => l.text);
+    expect(of("fix-cards")).toHaveLength(8);
+    expect(of("fix-cards")[3]).toMatch(/^… t:3\s+running$/);
+    expect(of("e2e-stack")).toEqual(["runs make e2e · no tasks"]);
+    expect(of("done-ok")).toHaveLength(14);
+    const ended = {
+      at: "2026-10-16T19:44:00Z",
+      head: "e20a6f9b48",
+      outcome: "pass" as const,
+      recorded: false,
+    };
+    const w = { worktree: "/w/x", branch: "main" };
+    expect(checkLines({ ...w, last_result: { ...ended, kind: "command" } }, NOW)).toEqual([
+      { text: "ran a command · no tasks" },
+    ]);
+    expect(checkLines({ ...w, last_result: { ...ended, kind: "checks" } }, NOW)).toEqual([
+      { text: "no tasks reported" },
+    ]);
+    expect(checkLines({ ...w, run: { started: "2026-10-16T19:45:00Z" } }, NOW)).toEqual([
+      { text: "no tasks reported" },
+    ]);
   });
 
   test("a check whose runner gives no tasks shows its time alone", () => {

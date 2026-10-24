@@ -349,6 +349,50 @@ test("agents' checks: the clause in the band, CHECKING and the host line in the 
   await pane.unmount();
 });
 
+test("a CHECKING row opens to its run's tasks, and folds", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [withChecks()], { prompts: [], toasts: [], status: [] });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const tasks = async () =>
+    (await pane.findAll({ type: "Text", text: /^\s+[✓✗…·] t:\d+\s/ })).map((t) => t.text.trim());
+  const press = async (name: string) => {
+    await pane.press({ key: `checks-/work/sluice/${name}` });
+    await pane.redraw();
+  };
+  expect(await tasks()).toEqual([]);
+
+  // A check under way: its eight tasks, marked and ordered as a combination's.
+  await press("fix-cards");
+  const going = await tasks();
+  expect(going).toHaveLength(8);
+  expect(going.slice(0, 4).map((t) => t.split(" ")[0])).toEqual(["✓", "✓", "✓", "…"]);
+  expect(going.slice(4).every((t) => t.startsWith("· "))).toBe(true);
+  await press("fix-cards");
+  expect(await tasks()).toEqual([]);
+
+  // A command check has none.
+  await press("e2e-stack");
+  expect(await pane.find({ type: "Text", text: "runs make e2e · no tasks" })).toBeDefined();
+  await press("e2e-stack");
+  expect(await pane.find({ type: "Text", text: /no tasks/ })).toBeUndefined();
+
+  // A check that ended: the run it ended with.
+  await press("done-ok");
+  expect(await tasks()).toHaveLength(14);
+  await press("done-ok");
+  expect(await tasks()).toEqual([]);
+  await pane.unmount();
+});
+
 test("the pane keeps the overview's order of branches, and counts the idle ones", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);

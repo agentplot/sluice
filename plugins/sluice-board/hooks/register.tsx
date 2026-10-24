@@ -20,6 +20,7 @@ import type {
 import type { CheckRow } from "./board";
 import {
   bandLines,
+  checkLines,
   checkRows,
   clearText,
   combination,
@@ -692,12 +693,20 @@ export const register: Register = (on, options) => {
         {(checks.length > 0 || room) && (
           <Box flexDirection="column" marginTop={1}>
             {checks.length > 0 && <Text bold>CHECKING</Text>}
-            {checks.map((c) => (
-              <Text key={`check-${c.key}`} color={CHECK_COLOR[c.state]}>
-                {"  "}
-                {c.text}
-              </Text>
-            ))}
+            {checks.map((c) => {
+              const k = `checks-${c.key}`;
+              return (
+                <Box key={`check-${c.key}`} flexDirection="column">
+                  <Button key={k} plain onPress={() => flip($, k)}>
+                    <Text color={CHECK_COLOR[c.state]}>
+                      {"  "}
+                      {c.text}
+                    </Text>
+                  </Button>
+                  {open_.includes(k) && tasksView(k, checkLines(c.session, at))}
+                </Box>
+              );
+            })}
             {room && <Text dimColor>{room}</Text>}
           </Box>
         )}
