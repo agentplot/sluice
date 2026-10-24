@@ -71,10 +71,16 @@ does, with three differences:
 
 Things moon's CI mode does that sluice keeps:
 
-- **`runInCI: false`.** A task marked `runInCI: false` is not run, as in
-  moon's own CI. A required task marked so never runs, so it reads
-  missing and the branch can't pass while it is required.
-  `sluice status` warns of such a task.
+- **`runInCI: false`.** A task marked `runInCI: false` or `runInCI:
+  skip` is not run, as in moon's own CI. A required task marked so never
+  runs, so it reads missing and the branch can't pass while it is
+  required. `sluice submit` refuses a submission to such a branch before
+  queuing it, naming the task, the tag it's required through, and the
+  line of `.config/sluice.toml` that requires it. Whether a task runs in
+  CI is read from the submitting worktree, so the repair lands as any
+  submission does: one that lets the task run in CI is taken.
+  `sluice status` warns of such a task when a submission ahead changed
+  `moon.yml` after this one was taken.
 - **The cache, by the branch's rules.** moon's cache counts only as the
   branch's `trust` allows, and a replay is never counted as a run.
 
