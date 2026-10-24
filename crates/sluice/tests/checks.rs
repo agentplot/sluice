@@ -5,14 +5,16 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
+use sluice::runs::{Ended, RunState};
 use sluice_seams::{
-    AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
-    Source, Tests,
+    AtBound, CompileCache, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest,
+    Setting, Settings, Source, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -568,4 +570,196 @@ fn a_host_that_stops_being_ready_records_no_fail() {
         &request(&repo, "p2", with(command("rm ready"), "ready", ready)),
     );
     assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+}
+
+/// `req` with its policy declaring the compile cache and naming
+/// `variables` (35).
+fn declared(mut req: RunRequest, variables: &[&str]) -> RunRequest {
+    req.place.compile_cache = Some(CompileCache {
+        tool: "sccache".into(),
+        variables: variables.iter().map(|v| v.to_string()).collect(),
+    });
+    req
+}
+
+/// sluice's own environment with `extra` set.
+fn host_env(extra: &[(&str, &str)]) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = std::env::vars().collect();
+    env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env
+}
+
+/// How run `name` ended, as its supervisor recorded it.
+fn ended(c: &Checks, name: &str) -> Ended {
+    match c.runs().state(name).unwrap() {
+        RunState::Finished(e) => e,
+        other => panic!("run {name} has not ended: {other:?}"),
+    }
+}
+
+/// What run `name` printed.
+fn printed(c: &Checks, name: &str) -> String {
+    std::fs::read_to_string(c.runs().dir(name).join("out.log")).unwrap_or_default()
+}
+
+/// A stand-in `sccache` in a directory of its own under `scratch`, which
+/// does nothing: what the step finds on `PATH`.
+fn fake_sccache(scratch: &Scratch) -> PathBuf {
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("sccache"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        bin.join("sccache"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    bin
+}
+
+/// 35: a run whose policy declares no compile cache runs as before: no
+/// step, no `RUSTC_WRAPPER` from sluice, even where sluice's own
+/// environment has one, and nothing made in the compile cache's
+/// directory.
+#[test]
+fn a_run_with_no_compile_cache_is_as_before() {
+    let repo = Repo::new("checks-no-cache");
+    let cache = repo.dir().with_extension("compile-cache");
+    let c = checks(&repo)
+        .with_compile_cache(cache.clone())
+        .with_environment(host_env(&[("RUSTC_WRAPPER", "/elsewhere/sccache")]));
+    for executor in ["open", "sandbox"] {
+        if executor == "sandbox" && !cfg!(target_os = "macos") {
+            continue;
+        }
+        let name = format!("p-{executor}");
+        let mut req = request(
+            &repo,
+            &name,
+            command("echo \"${RUSTC_WRAPPER:-unset}\" > \"$SLUICE_TMP/wrapper\""),
+        );
+        req.limits.executor = Some(executor.into());
+        if executor == "sandbox" {
+            // Inside another sandbox, as the gate's checks run, macOS
+            // refuses this one: only what the run was given is read.
+            if let Ok(run) = c.start(&req) {
+                while matches!(c.progress(&run).unwrap(), Progress::Running) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            let given = c.runs().request(&name).unwrap();
+            assert!(
+                !given.argv.iter().any(|a| a == "compile-cache"),
+                "{:?}",
+                given.argv
+            );
+            continue;
+        }
+        let r = finish(&c, &req);
+        assert_eq!(r.tasks[0].outcome, Outcome::Pass);
+        assert_eq!(
+            std::fs::read_to_string(req.place.tmp.join("wrapper")).unwrap(),
+            "unset\n"
+        );
+        assert!(
+            !printed(&c, &name).contains("compile-cache"),
+            "{}",
+            printed(&c, &name)
+        );
+    }
+    assert!(!cache.exists(), "the compile cache's directory was made");
+}
+
+/// 35, design D3: the step never changes what the command reports: a
+/// command that exits 3 ends its run with 3, and one a signal kills ends
+/// it with that signal, as with no cache declared.
+#[test]
+fn a_compile_cache_step_passes_the_commands_exit_through() {
+    let repo = Repo::new("checks-cache-exit");
+    let scratch = Scratch::new("checks-cache-exit-bin");
+    let bin = fake_sccache(&scratch);
+    // The host's server, as far as the step can tell.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port().to_string();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let c = checks(&repo)
+        .with_environment(host_env(&[("PATH", &path), ("SCCACHE_SERVER_PORT", &port)]));
+    let run = |name: &str, cmd: &str, cache: bool| {
+        let req = request(&repo, name, command(cmd));
+        let req = if cache {
+            declared(req, &["SCCACHE_SERVER_PORT"])
+        } else {
+            req
+        };
+        finish(&c, &req);
+        ended(&c, name)
+    };
+    for cache in [true, false] {
+        let exit = run(&format!("exit-{cache}"), "exit 3", cache);
+        assert_eq!((exit.exit, exit.signal), (Some(3), None), "{exit:?}");
+        let killed = run(&format!("kill-{cache}"), "kill -KILL $$", cache);
+        assert_eq!((killed.exit, killed.signal), (None, Some(9)), "{killed:?}");
+    }
+    // Through the step to the server it found, not around it.
+    let said = printed(&c, "exit-true");
+    assert!(
+        said.contains(&format!(
+            "sluice compile-cache: compiling through the host's compile server at 127.0.0.1:{port}"
+        )),
+        "{said}"
+    );
+    drop(server);
+}
+
+/// 35, design D4: a sandboxed run with the cache declared may write the
+/// compile cache's directory and nothing else beyond its checkout and
+/// scratch directory; its `ready` and release commands may not write the
+/// directory either.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_sandbox_run_with_a_compile_cache_writes_nowhere_else() {
+    let repo = Repo::new("checks-sandbox-cache-writes");
+    let cache = Scratch::new("cc-writes");
+    let outside = repo.dir().with_extension("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let c = checks(&repo).with_compile_cache(cache.path().to_path_buf());
+    let sandboxed = |name: &str, tests: Settings| {
+        let mut req = declared(request(&repo, name, tests), &[]);
+        req.limits.executor = Some("sandbox".into());
+        req
+    };
+    let dir = std::fs::canonicalize(cache.path()).unwrap();
+    let wrote = |name: &str, path: &Path| {
+        let req = sandboxed(name, command(&format!("touch {}", path.display())));
+        finish(&c, &req).tasks[0].outcome
+    };
+    assert_eq!(wrote("p1", &dir.join("written")), Outcome::Pass);
+    assert!(dir.join("written").exists());
+    assert_eq!(wrote("p2", &outside.join("escaped")), Outcome::Fail);
+    assert!(!outside.join("escaped").exists());
+
+    let released = dir.join("released");
+    let tests = with(
+        command("true"),
+        "release",
+        Setting::Text(format!("touch {}", released.display())),
+    );
+    finish(&c, &sandboxed("p3", tests));
+    let refused = c.runs().remove("p3").unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("Operation not permitted"),
+        "{refused:#}"
+    );
+    assert!(
+        !released.exists(),
+        "the release command wrote the directory"
+    );
+
+    let ready = dir.join("ready");
+    let tests = with(
+        command("true"),
+        "ready",
+        Setting::Text(format!("touch {}", ready.display())),
+    );
+    assert!(c.start(&sandboxed("p4", tests)).is_err());
+    assert!(!ready.exists(), "ready wrote the directory");
 }

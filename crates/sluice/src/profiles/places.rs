@@ -147,6 +147,15 @@ struct Made {
 }
 
 impl Made {
+    /// The compile cache the place's check runs take: none for a preview,
+    /// whose command never takes it (35; design D7).
+    fn run_cache(&self) -> Option<CompileCache> {
+        match self.kind {
+            Kind::Preview => None,
+            Kind::Made | Kind::Session => self.compile_cache.clone(),
+        }
+    }
+
     fn new(kind: Kind, method: &str) -> Made {
         Made {
             kind,
@@ -490,7 +499,7 @@ impl Places {
                 .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
             tmp: self.tmp(name),
             env,
-            compile_cache: made.compile_cache.clone(),
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -540,8 +549,7 @@ impl Places {
                 .unwrap_or_else(|| self.worktree_path(name)),
             tmp: self.tmp(name),
             env,
-            // A preview's command never takes the compile cache (35).
-            compile_cache: None,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1099,7 +1107,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
-            compile_cache: made.compile_cache,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1367,7 +1375,7 @@ impl Checkout for Places {
             path,
             tmp,
             env,
-            compile_cache: made.compile_cache,
+            compile_cache: made.run_cache(),
         })
     }
 
@@ -1601,36 +1609,25 @@ mod tests {
     }
 
     /// 35, design D7: a preview's command never takes the compile cache,
-    /// whatever its record says.
+    /// whatever its record says; a candidate's and a session's runs take
+    /// what theirs keeps.
     #[test]
     fn a_previews_place_carries_no_compile_cache() {
-        let root = std::env::temp_dir().join(format!("sluice-preview-cc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let places = Places::new(&root, Runs::new(&root, "sluice".into()));
         let declared = sluice_seams::CompileCache {
             tool: "sccache".into(),
             variables: vec!["SCCACHE_SERVER_UDS".into()],
         };
-        let name = "preview/abc123";
-        let preview = Made {
-            path: Some(root.join("preview")),
-            revision: Some(Rev("abc123".into())),
-            compile_cache: Some(declared.clone()),
-            ..Made::new(Kind::Preview, "git-worktree")
-        };
-        let place = places.preview_run_place(name, &preview).unwrap();
-        assert_eq!(place.compile_cache, None);
-        // A session's place, by contrast, carries what its record keeps.
-        let session = format!("session/{}", root.join("wt").display());
-        let made = Made {
-            path: Some(root.join("wt")),
-            compile_cache: Some(declared.clone()),
-            ..Made::new(Kind::Session, "session")
-        };
-        let place = places.session_place(&session, &made).unwrap();
-        assert_eq!(place.compile_cache, Some(declared));
-        std::fs::remove_dir_all(&root).unwrap();
+        for (kind, takes) in [
+            (Kind::Preview, None),
+            (Kind::Made, Some(declared.clone())),
+            (Kind::Session, Some(declared.clone())),
+        ] {
+            let made = Made {
+                compile_cache: Some(declared.clone()),
+                ..Made::new(kind, "git-worktree")
+            };
+            assert_eq!(made.run_cache(), takes, "{kind:?}");
+        }
     }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.

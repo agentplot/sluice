@@ -442,10 +442,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    /// Held by every test here that makes a socket or starts a process:
-    /// on macOS a socket is made close-on-exec only after it is made, so a
-    /// child started on another thread between the two keeps it open, and
-    /// a socket closed here still answers while that child lives.
+    // No test here starts a process: one started while another test lets
+    // a lock go holds the lock until it has started (host_count's tests).
+    // A server that never answers is tried in `tests/compile_cache.rs`.
+
+    /// Held by every test here that makes a socket: on macOS a socket is
+    /// made close-on-exec only after it is made, so a child another test
+    /// starts between the two keeps it open, and a socket closed here
+    /// still answers while that child lives.
     static SOCKETS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn sockets_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -609,41 +613,6 @@ mod tests {
         assert!(!ran.exists(), "a server was started");
         drop(held);
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// Design D4: a server that never answers is ended, the run compiles
-    /// without the cache, and the directory is free again.
-    #[test]
-    fn a_server_that_never_listens_is_ended_and_falls_back() {
-        let _sockets = sockets_lock();
-        let dir = scratch("silent");
-        let pid = dir.join("pid");
-        let bin = fake(&dir, &format!("echo $$ > {}\nexec sleep 60", pid.display()));
-        let cache = sockets("silent-cache");
-        let e = through(
-            &Server::Own(cache.clone()),
-            &env(&[
-                ("PATH", &bin.to_string_lossy()),
-                ("SLUICE_TMP", &dir.to_string_lossy()),
-            ]),
-            Duration::from_millis(500),
-        )
-        .unwrap_err();
-        assert!(e.contains("did not answer within"), "{e}");
-        let pid: i32 = std::fs::read_to_string(&pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(
-            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
-            Err(nix::errno::Errno::ESRCH),
-            "the server was left running"
-        );
-        let lock = std::fs::File::open(cache.join("lock")).unwrap();
-        lock.try_lock().expect("the directory is free again");
-        std::fs::remove_dir_all(&dir).unwrap();
-        std::fs::remove_dir_all(&cache).unwrap();
     }
 
     /// Design D5: the host's server is tried once where the run was told,
