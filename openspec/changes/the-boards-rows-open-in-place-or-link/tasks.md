@@ -45,7 +45,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 
 ## 6. A press only reads
 
-- [ ] 6.1 Add the test "a press only reads" (design D9): one pane with a combination's tasks, `withChecks()`'s checks, a RECENT conflict, the forecast conflict, a flaky blame and a `log of` row, each pressed open and folded; verify `ran`, cleared after the session starts, holds only `sluice status <id> --json` and `tail -n 20 -- <log>` lines, in the board's checks
+- [x] 6.1 Add the test "a press only reads" (design D9): one pane with a combination's tasks, `withChecks()`'s checks, a RECENT conflict, the forecast conflict, a flaky blame and a `log of` row, each pressed open and folded; verify `ran`, cleared after the session starts, holds only `sluice status <id> --json` and `tail -n 20 -- <log>` lines, in the board's checks
 
 ## 7. Screenshots and the gate
 

@@ -1409,6 +1409,76 @@ function nothingSeen() {
   return { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] };
 }
 
+test("a press only reads", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  // One pane with every kind of row that opens: main testing c41 with its
+  // tasks, the agents' checks, a RECENT conflict and #9's flaky blame with
+  // its `log of` row; and this session's work forecast to conflict.
+  const d = withConflict([217]);
+  const main = d.branches[0]!;
+  main.candidates[0]!.tasks = withTasks().branches[0]!.candidates[0]!.tasks;
+  main.submissions = main.submissions.filter((s) => s.id !== 13);
+  main.candidates.push(blamedWithLog(LOG, flaky(OTHER)).branches[0]!.candidates.at(-1)!);
+  const checks = withChecks();
+  d.sessions = checks.sessions;
+  d.room = checks.room;
+  const status = { id: 9, failed: [{ task: "cli:test", log: LOG, flaky: flaky(OTHER) }] };
+  host(
+    on,
+    [d],
+    nothingSeen(),
+    {},
+    {
+      "sluice status 9 --json": JSON.stringify(status),
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+      "git rev-parse HEAD": "h1\n",
+      "git rev-list --count 9ecc34a1b2..HEAD": "4\n",
+      "sluice submit main --check --json": JSON.stringify(WITH_217),
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(
+    await pane.find({ type: "Text", text: "  ⚠ your work would conflict · docs/builds.md" }),
+  ).toBeDefined();
+  const rows = [
+    "tasks-main-c41",
+    "checks-/work/sluice/fix-cards",
+    "checks-/work/sluice/e2e-stack",
+    "checks-/work/sluice/done-ok",
+    "conflict-main-218-2026-10-16T19:44:00Z",
+    "forecast-main",
+    "blamed-main-9-2026-10-16T19:42:00Z",
+    "log-main-cli:test",
+  ];
+  for (const key of rows) {
+    // Open, then fold.
+    for (let n = 0; n < 2; n++) {
+      await pane.press({ key });
+      await pane.redraw();
+    }
+  }
+  // Only sluice's record of the blamed submission and the logs' last lines
+  // were read, by the blame and the `log of` row; the rest ran nothing.
+  expect(ran).toEqual([
+    "sluice status 9 --json",
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+  ]);
+  await pane.unmount();
+});
+
 test("main landing a change to the same lines starts one turn, once, a reload included", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
