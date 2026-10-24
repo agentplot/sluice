@@ -42,4 +42,4 @@ Option 2 puts a person's review inside the core's chain, which lands in order: a
 - The app needs Checks, Pull requests, Contents and Workflows read and write on the repository; `sluice forge check` checks only Contents and Workflows.
 - A list longer than a hundred is read page by page.
 - The live test, `SLUICE_GITHUB_TEST_REPO` with a scratch app on a scratch repository, is the operator's to run once by hand; it has not been run, since the app does not exist yet.
-- Narrowed by ADR 0049: a pull request sent back is submitted again on a new head, or after a draft and a ready mark, only when a person opened it by hand. One a submit opened is a draft until its submitter acts, by a submit or a ready mark.
+- Narrowed by ADR 0052: a pull request sent back is submitted again on a new head, or after a draft and a ready mark, only when a person opened it by hand. One a submit opened is a draft until its submitter acts, by a submit or a ready mark.

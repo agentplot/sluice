@@ -1,5 +1,5 @@
 ---
-number: 49
+number: 52
 title: A pull request a submit opened is a draft until its submitter acts
 status: accepted
 date: 2026-10-23
