@@ -100,10 +100,14 @@ struct Inner {
     /// The repository's HEAD: the first branch made, as `git init` names it.
     head: Option<String>,
     moves: Vec<MoveRecord>,
-    /// The host's copy of each branch kept on a remote, by branch: its
-    /// value, `None` when the host has none (124). A branch absent here is
-    /// kept in the host's own refs, which are the branch.
-    copies: BTreeMap<String, Option<Rev>>,
+    /// Each branch kept on a remote, and the value every host's copy of it
+    /// starts at (124). A branch absent here is kept in the host's own
+    /// refs, which are the branch.
+    remote: BTreeMap<String, Option<Rev>>,
+    /// Each host's copy of a branch kept on a remote, by host and branch,
+    /// once it differs from where it started: its value, `None` when the
+    /// host has none.
+    copies: BTreeMap<(String, String), Option<Rev>>,
     /// The next levellings fail with this error, as many as the count.
     level_fails: Option<(usize, String)>,
     /// How many levellings set a copy.
@@ -480,26 +484,34 @@ impl World {
     }
 
     /// `branch` is kept on a remote, `refs` holding the remote's revision;
-    /// the host's copy of it starts at that revision (124).
+    /// every host's copy of it starts at that revision (124).
     pub fn on_remote(&self, branch: &str) {
         let mut inner = self.0.borrow_mut();
         let at = inner.refs.get(branch).cloned();
-        inner.copies.insert(branch.into(), at);
+        inner.remote.insert(branch.into(), at);
     }
 
-    /// The host's copy of `branch`, set by hand.
+    /// This host's copy of `branch`, set by hand.
     pub fn set_copy(&self, branch: &str, at: Option<&Rev>) {
         let mut inner = self.0.borrow_mut();
         assert!(
-            inner.copies.contains_key(branch),
+            inner.remote.contains_key(branch),
             "{branch} is on no remote"
         );
-        inner.copies.insert(branch.into(), at.cloned());
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, at.cloned());
     }
 
-    /// The host's copy of `branch`, `None` when it has none.
+    /// This host's copy of `branch`, `None` when it has none.
     pub fn copy_of(&self, branch: &str) -> Option<Rev> {
-        self.0.borrow().copies.get(branch).cloned().flatten()
+        World::copy_here(&self.0.borrow(), branch).flatten()
+    }
+
+    /// This host's copy of `branch`: `None` for a branch on no remote.
+    fn copy_here(inner: &Inner, branch: &str) -> Option<Option<Rev>> {
+        let start = inner.remote.get(branch)?;
+        let key = (inner.host.clone(), branch.to_string());
+        Some(inner.copies.get(&key).unwrap_or(start).clone())
     }
 
     /// The next `n` levellings of any copy fail with `why`, as on git's lock.
@@ -1246,15 +1258,15 @@ impl Branch for FakeBranch {
     }
 
     fn copy(&self, branch: &str) -> Result<HostCopy> {
-        Ok(match self.0 .0.borrow().copies.get(branch) {
-            Some(at) => HostCopy::At(at.clone()),
+        Ok(match World::copy_here(&self.0 .0.borrow(), branch) {
+            Some(at) => HostCopy::At(at),
             None => HostCopy::Itself,
         })
     }
 
     fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
         let mut inner = self.0 .0.borrow_mut();
-        let Some(found) = inner.copies.get(branch).cloned() else {
+        let Some(found) = World::copy_here(&inner, branch) else {
             bail!("{branch} is kept in this host's own refs, which have no copy of it to level");
         };
         if let Some((n, why)) = inner.level_fails.take() {
@@ -1268,7 +1280,8 @@ impl Branch for FakeBranch {
         if found.as_ref() != expected {
             return Ok(Moved::Elsewhere(found));
         }
-        inner.copies.insert(branch.into(), Some(to.clone()));
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, Some(to.clone()));
         inner.levels += 1;
         Ok(Moved::Moved)
     }

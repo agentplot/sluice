@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    AtBound, Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle,
-    RunRequest, Source, TaskLog, Written,
+    AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification, Progress, Rev,
+    RunHandle, RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span};
 
@@ -34,7 +34,7 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    BranchHold, Candidate, CandidateState, ConflictRecord, Event, FailedTask, Held,
+    BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, Event, FailedTask, Held,
     LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State,
     SystemRun, Tested, ToldRecord,
 };
@@ -80,6 +80,16 @@ pub enum Step {
     /// contain; nothing was formed, started or landed.
     Held,
     Stepped,
+}
+
+/// What a levelling found of this host's copy of a branch (124).
+enum Levelled {
+    /// The branch has no copy apart from it on this host.
+    Itself,
+    /// The copy holds the landing.
+    Holds,
+    /// The copy is left at `at`, for `why`.
+    Behind { at: Option<Rev>, why: String },
 }
 
 /// What a round's decide step did.
@@ -397,6 +407,17 @@ impl Sluice<'_> {
                     Ok(true)
                 })?;
                 span.record("sluice.outcome", "landed");
+                // 124: the copy follows the landing; one left behind is
+                // recorded beside it and never fails it (122).
+                if confirmed {
+                    match self.level_copy(branch, &intent.to) {
+                        Ok(levelled) => self.record_copy(branch, &intent.to, &levelled)?,
+                        Err(e) => tracing::warn!(
+                            sluice.branch = branch,
+                            "reading this host's copy after a landing failed: {e:#}"
+                        ),
+                    }
+                }
                 if confirmed {
                     for id in &intent.ids {
                         let waited = line
@@ -675,6 +696,12 @@ impl Sluice<'_> {
             }
         }
         line.doc.held = None;
+        // 124: the copy follows the landing this read holds, recorded in
+        // this round's write when it is left behind.
+        if let Some(landed) = line.doc.landed.clone() {
+            let levelled = self.level_copy(branch, &landed)?;
+            self.note_copy(&mut line, &landed, &levelled, &now);
+        }
         if line.doc.base.as_ref() != Some(&tip) {
             // Moved by something other than this branch's landing (S8), or
             // never read: every candidate is formed again on it (10, 24).
@@ -2094,6 +2121,15 @@ impl Sluice<'_> {
         });
         self.seams.state.beat(&me, beat.to_string().as_bytes())?;
 
+        // 124: this host's copy follows the landings its rounds read, the
+        // lead's among them, unless the read lacks the last (121).
+        if let Some(landed) = line.doc.landed.clone() {
+            if tip == landed || self.seams.branch.contains(&tip, &landed)? {
+                let levelled = self.level_copy(branch, &landed)?;
+                self.record_copy(branch, &landed, &levelled)?;
+            }
+        }
+
         // 81: a place made here that no claim of this host's holds.
         let held: BTreeSet<String> = line
             .doc
@@ -2265,6 +2301,94 @@ impl Sluice<'_> {
             room -= 1;
         }
         self.perform_starts(branch, releases)
+    }
+
+    /// 124: level this host's copy of `branch` to `landed`, the landing
+    /// its records hold, from exactly the value the copy holds (rule
+    /// core.5). A levelling that fails, or finds the copy moved meanwhile,
+    /// leaves it behind for the next round to try again; it never fails
+    /// the round (122).
+    fn level_copy(&self, branch: &str, landed: &Rev) -> Result<Levelled> {
+        let HostCopy::At(copy) = self.seams.branch.copy(branch)? else {
+            return Ok(Levelled::Itself);
+        };
+        if copy.as_ref() == Some(landed) {
+            return Ok(Levelled::Holds);
+        }
+        Ok(
+            match self.seams.branch.level(branch, copy.as_ref(), landed) {
+                Ok(Moved::Moved) => Levelled::Holds,
+                Ok(Moved::Elsewhere(at)) => Levelled::Behind {
+                    at,
+                    why: "it moved while sluice levelled it".into(),
+                },
+                Err(e) => Levelled::Behind {
+                    at: copy,
+                    why: format!("{e:#}"),
+                },
+            },
+        )
+    }
+
+    /// 124, S64: what `levelled` says of this host's copy, in `line`: a
+    /// copy left behind is this host's entry in `copies`, logged once for
+    /// each value, landing and why; one that holds the landing takes the
+    /// entry out, logged when there was one. Whether `line` changed.
+    fn note_copy(&self, line: &mut Line, landed: &Rev, levelled: &Levelled, now: &str) -> bool {
+        let host = self.peer.name.clone();
+        match levelled {
+            Levelled::Itself => false,
+            Levelled::Holds => {
+                if line.doc.copies.remove(&host).is_none() {
+                    return false;
+                }
+                line.log(
+                    now,
+                    Event::CopyLevelled {
+                        host,
+                        at: landed.clone(),
+                    },
+                );
+                true
+            }
+            Levelled::Behind { at, why } => {
+                let since = match line.doc.copies.get(&host) {
+                    Some(e) if e.at == *at && e.lacks == *landed && e.why == *why => return false,
+                    Some(e) => e.since.clone(),
+                    None => now.to_string(),
+                };
+                line.log(
+                    now,
+                    Event::CopyBehind {
+                        host: host.clone(),
+                        at: at.clone(),
+                        lacks: landed.clone(),
+                        why: why.clone(),
+                    },
+                );
+                line.doc.copies.insert(
+                    host,
+                    CopyBehind {
+                        at: at.clone(),
+                        lacks: landed.clone(),
+                        why: why.clone(),
+                        since,
+                    },
+                );
+                true
+            }
+        }
+    }
+
+    /// [`Sluice::note_copy`] in a write of its own, made only when it
+    /// changes the records.
+    fn record_copy(&self, branch: &str, landed: &Rev, levelled: &Levelled) -> Result<()> {
+        let now = self.now();
+        if !self.note_copy(&mut self.read_line(branch)?, landed, levelled, &now) {
+            return Ok(());
+        }
+        self.update(branch, |l| Ok(self.note_copy(l, landed, levelled, &now)))?;
+        Ok(())
     }
 
     /// The name of the next place on the branch.
