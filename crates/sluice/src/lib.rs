@@ -6,6 +6,7 @@
 //! [`profiles`] binds.
 
 pub mod branch;
+pub mod compile_cache;
 pub mod exec;
 pub mod home;
 pub mod host_count;

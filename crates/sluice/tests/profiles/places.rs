@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use sluice::profiles::places::Places;
 use sluice::runs::{Request, Runs};
-use sluice_seams::{Checkout, Place, Rev, Setting, Settings};
+use sluice_seams::{Checkout, CompileCache, Place, Rev, Setting, Settings};
 use support::Repo;
 
 const NAME: &str = "sluice/try/bolt/x/1";
@@ -231,6 +231,138 @@ fn a_policy_need_not_name_the_method() {
         p.release(NAME, false).unwrap();
         assert!(!place.path.exists());
     }
+}
+
+/// `[checkout] compile_cache = <tool>`, with `compile_cache_variables`
+/// when any are given.
+fn compiled(tool: &str, variables: &[&str]) -> Settings {
+    let mut s = Settings::from([("compile_cache".into(), Setting::Text(tool.into()))]);
+    if !variables.is_empty() {
+        s.insert(
+            "compile_cache_variables".into(),
+            Setting::List(variables.iter().map(|v| v.to_string()).collect()),
+        );
+    }
+    s
+}
+
+/// 35, design D1, D2, D7: the compile cache the policy declares reaches a
+/// candidate's place and a session's, with the client's variables it
+/// names, as the policy says it at each run; a policy that declares none
+/// gives none, and a preview's place carries none.
+#[test]
+fn a_declared_compile_cache_reaches_the_place() {
+    let (repo, rev) = scratch("places-compile-cache");
+    let p = places(&repo);
+    let declared = CompileCache {
+        tool: "sccache".into(),
+        variables: vec!["SCCACHE_SERVER_UDS".into(), "SCCACHE_DIR".into()],
+    };
+    let settings = compiled("sccache", &["SCCACHE_SERVER_UDS", "SCCACHE_DIR"]);
+
+    let place = p.materialize(NAME, &rev, &settings).unwrap();
+    assert_eq!(place.compile_cache, Some(declared.clone()));
+    p.release(NAME, false).unwrap();
+    let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
+    assert_eq!(place.compile_cache, None);
+    p.release(NAME, false).unwrap();
+    let bare = p
+        .materialize(NAME, &rev, &compiled("sccache", &[]))
+        .unwrap();
+    assert_eq!(
+        bare.compile_cache,
+        Some(CompileCache {
+            tool: "sccache".into(),
+            variables: Vec::new(),
+        })
+    );
+    p.release(NAME, false).unwrap();
+
+    let session = repo.dir().with_extension("session");
+    let worktree = session.to_str().unwrap();
+    let a = p
+        .adopt(worktree, "bolt/x", &settings, "2026-10-24T09:00:00Z")
+        .unwrap();
+    assert_eq!(a.compile_cache, Some(declared));
+    let again = p
+        .adopt(worktree, "bolt/x", &Settings::new(), "2026-10-24T09:01:00Z")
+        .unwrap();
+    assert_eq!(again.compile_cache, None, "the policy as it is now");
+    p.release(&a.name, false).unwrap();
+
+    let name = format!("preview/{}", &rev.as_str()[..12]);
+    let (preview, _) = p
+        .preview(
+            &name,
+            &rev,
+            "bolt/x",
+            &settings,
+            &BTreeMap::new(),
+            "2026-10-24T09:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(preview.compile_cache, None);
+    assert!(p.release_preview(&name, None).unwrap());
+}
+
+/// 35, design D1: a compile cache other than sccache is refused, naming
+/// the setting and the one value served, before anything is made.
+#[test]
+fn another_compile_cache_is_refused() {
+    let (repo, rev) = scratch("places-compile-cache-other");
+    let p = places(&repo);
+    let e = p
+        .materialize(NAME, &rev, &compiled("ccache", &[]))
+        .unwrap_err();
+    let e = format!("{e:#}");
+    assert!(
+        e.contains("compile_cache") && e.contains("\"sccache\""),
+        "{e}"
+    );
+    assert!(!repo.dir().join(".git/sluice/.places").exists());
+    let session = repo.dir().with_extension("session");
+    let e = p
+        .adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &compiled("ccache", &[]),
+            "2026-10-24T09:00:00Z",
+        )
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("\"sccache\""), "{e:#}");
+    assert!(p.session_places().unwrap().is_empty(), "a session adopted");
+}
+
+/// 35, design D1: a variable that is not the client's own, or that sluice
+/// sets for the run's compiles itself, is refused naming it; and so are
+/// variables with no compile cache declared.
+#[test]
+fn a_compile_cache_variable_not_the_clients_is_refused() {
+    let (repo, rev) = scratch("places-compile-cache-variables");
+    let p = places(&repo);
+    for v in [
+        "AWS_PROFILE",
+        "RUSTC_WRAPPER",
+        "SCCACHE_NO_DAEMON",
+        "SCCACHE_CLIENT_SIDE",
+        "SCCACHE_START_SERVER",
+        "SCCACHE_IDLE_TIMEOUT",
+    ] {
+        let e = p
+            .materialize(NAME, &rev, &compiled("sccache", &["SCCACHE_DIR", v]))
+            .unwrap_err();
+        assert!(format!("{e:#}").contains(v), "{v}: {e:#}");
+    }
+    let alone = Settings::from([(
+        "compile_cache_variables".into(),
+        Setting::List(vec!["SCCACHE_SERVER_UDS".into()]),
+    )]);
+    let e = p.materialize(NAME, &rev, &alone).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("compile_cache_variables"),
+        "{e:#}"
+    );
+    assert!(!repo.dir().join(".git/sluice/.places").exists());
 }
 
 fn cached() -> Settings {
