@@ -10,6 +10,7 @@ import {
   emptyLines,
   errorLine,
   finishedWords,
+  flipped,
   forecastBranch,
   forecastKey,
   forecasts,
@@ -115,6 +116,18 @@ describe("the band", () => {
     expect(duration(45)).toBe("45s");
     expect(duration(130)).toBe("2m10s");
     expect(duration(3780)).toBe("1h03m");
+  });
+});
+
+describe("rows opened in place", () => {
+  test("a press opens a row and a second folds it, the newest 200 kept", () => {
+    let list: string[] = [];
+    for (let i = 0; i < 201; i++) list = flipped(list, `k${i}`);
+    expect(list).toHaveLength(200);
+    expect(list[0]).toBe("k1");
+    expect(list[199]).toBe("k200");
+    expect(flipped(list, "k7")).not.toContain("k7");
+    expect(flipped(flipped(list, "k7"), "k7").at(-1)).toBe("k7");
   });
 });
 

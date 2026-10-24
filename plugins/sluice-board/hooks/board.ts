@@ -158,6 +158,14 @@ export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"];
   }));
 }
 
+/** How many opened rows the pane keeps, the oldest let go first. */
+const OPENED = 200;
+
+/** The rows opened in place, with `key` opened, or folded when it was open. */
+export function flipped(list: readonly string[], key: string): string[] {
+  return list.includes(key) ? list.filter((k) => k !== key) : [...list, key].slice(-OPENED);
+}
+
 /** Whether a branch has anything queued or under test; the rest are left out of the band. */
 export function busy(b: OverviewBranch): boolean {
   return b.depth > 0 || testing(b).length > 0;

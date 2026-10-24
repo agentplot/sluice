@@ -28,6 +28,7 @@ import {
   emptyLines,
   errorLine,
   failedName,
+  flipped,
   forecastBranch,
   forecastKey,
   forecasts,
@@ -115,12 +116,17 @@ async function open($: $, failed: { task: string; log?: string }[]): Promise<Det
 /** Open a failure in place, or fold it: it never leaves this pane. */
 async function toggle($: $, key: string, failed: () => Promise<{ task: string; log?: string }[]>) {
   if ((await read($, opened)).includes(key)) {
-    await update($, opened, (list) => list.filter((k) => k !== key));
+    await update($, opened, (list) => flipped(list, key));
     return;
   }
   const shown = await open($, await failed());
   await update($, details, (all) => ({ ...all, [key]: shown }));
-  await update($, opened, (list) => [...list, key]);
+  await update($, opened, (list) => (list.includes(key) ? list : flipped(list, key)));
+}
+
+/** Open a row drawn from the document, or fold it: what it shows is drawn live. */
+async function flip($: $, key: string) {
+  await update($, opened, (list) => flipped(list, key));
 }
 
 /** The failed tests of a blamed submission, from sluice. */

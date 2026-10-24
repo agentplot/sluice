@@ -13,7 +13,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 ## 1. Types and the open rule
 
 - [x] 1.1 In `types/index.d.ts`, add `remote?: string` and `recent_from?: Record<string, string>` to `OverviewBranch`; `with?: number[]` to `Recent`; `flaky?: Flaky` to `OverviewFailed`, `Flaky` being `{here: "pass" | "fail"; at?: string; host?: string; other: {outcome: "pass" | "fail"; at: string; branch: string; combination: string; worktree?: string; log?: string; host?: string}}`; type `Overview.previews` as `{name, branch, revision, state, addresses?: Record<string, string>}[]`; add `branch` and `conflict` to `Forecasting` (design D4); replace the `repo` state with `remotes: Record<string, string | null>` (design D6); verify the board's checks pass with the fixture unchanged but for the new types
-- [ ] 1.2 In `hooks/register.tsx`, add `flip($, key)` beside `toggle`, and trim `opened` to its last 200 keys in both (design D1); verify a `board.test.ts` or `register.test.tsx` test that 201 flips keep the newest 200, in the board's checks
+- [x] 1.2 In `hooks/register.tsx`, add `flip($, key)` beside `toggle`, and trim `opened` to its last 200 keys in both (design D1); verify a `board.test.ts` or `register.test.tsx` test that 201 flips keep the newest 200, in the board's checks
 
 ## 2. A combination's tasks and CHECKING open
 
