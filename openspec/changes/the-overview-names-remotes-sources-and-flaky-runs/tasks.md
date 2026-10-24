@@ -7,7 +7,7 @@
 
 ## 2. A branch names where its recent submissions came from
 
-- [ ] 2.1 Add `recent_from: BTreeMap<u64, String>` to `BranchView`, filled in `branch_view` for every id the `recent` lines name (`landed` `ids`, `blamed` `id`, `conflict` `id` and `with`) from `line.subs[id].from.worktree`, else `line.finished[id].worktree`, leaving out an id in neither; `recent` unchanged; cite 26, 49 and 61 and the finished index; verify unit tests in `overview.rs` over a snapshot with a live blamed submission, a finished landed one and a conflict whose `with` names the landed one, and over a branch with no recent lines (`{}`): `sluice exec main -- cargo test -p sluice-core overview`
+- [x] 2.1 Add `recent_from: BTreeMap<u64, String>` to `BranchView`, filled in `branch_view` for every id the `recent` lines name (`landed` `ids`, `blamed` `id`, `conflict` `id` and `with`) from `line.subs[id].from.worktree`, else `line.finished[id].worktree`, leaving out an id in neither; `recent` unchanged; cite 26, 49 and 61 and the finished index; verify unit tests in `overview.rs` over a snapshot with a live blamed submission, a finished landed one and a conflict whose `with` names the landed one, and over a branch with no recent lines (`{}`): `sluice exec main -- cargo test -p sluice-core overview`
 - [ ] 2.2 In `crates/sluice/tests/cli.rs`, beside the overview tests, assert `recent_from` maps each id of the branch's `recent` lines to its submission's `from.worktree`, including one that has moved to the finished records; verify `sluice exec main -- cargo test -p sluice --test cli overview`
 
 ## 3. A flaky failure says when and where each run was
