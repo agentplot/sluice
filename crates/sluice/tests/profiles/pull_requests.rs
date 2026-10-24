@@ -889,6 +889,35 @@ fn s63_a_request_sluice_cannot_fetch_holds_no_other() {
     assert!(g.of(third).is_empty(), "{:?}", g.subs());
 }
 
+/// 128: GitHub answers an error for one pull request's reviews. The round
+/// names it and its reviews, and submits the other, whose review holds;
+/// once its reviews can be read, the next round submits it.
+#[test]
+fn reviews_that_cannot_be_read_hold_no_other() {
+    let g = OnGitHub::new("pr-no-reviews", "reviews = 1");
+    let (one, one_head) = g.by_hand("unit/one", &[("one.txt", Some("1\n"))], false);
+    let (two, two_head) = g.by_hand("unit/two", &[("two.txt", Some("2\n"))], false);
+    g.gh.forge
+        .review(one, "reviewer", "APPROVED", &one_head)
+        .unwrap();
+    g.gh.forge
+        .review(two, "reviewer", "APPROVED", &two_head)
+        .unwrap();
+    g.gh.fail_reviews(one, true);
+    let said = g.round();
+    assert!(
+        said.contains(&format!("pull/{one}: reading pull/{one}'s reviews")),
+        "{said}"
+    );
+    assert!(g.of(one).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(two).len(), 1, "{:?}", g.subs());
+    g.gh.fail_reviews(one, false);
+    g.step();
+    let subs = g.of(one);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["head"], one_head.as_str());
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-status
 // ---------------------------------------------------------------------------
