@@ -32,17 +32,19 @@ already reads the same, text included.
 Each round SHALL forecast every waiting pull request against the branch
 and everything queued, running no check, and include the result in its
 `sluice` check: that it would merge without conflict behind the queued
-submissions, or which pull requests and files it conflicts with. A
-waiting pull request whose head sluice cannot fetch SHALL get no
+submissions, or which pull requests and files it conflicts with.
+
+#### Scenario: A conflict seen early
+- **WHEN** a waiting pull request changes a file that a queued pull request changes in a way git cannot merge
+- **THEN** its `sluice` check names the queued pull request and the file, and no check of the branch's gate runs for it
+
+### Requirement: A pull request sluice cannot read gets no forecast
+A waiting pull request whose head sluice cannot fetch SHALL get no
 forecast: a draft's check SHALL read `waiting: a draft`, and an
 out-of-draft one's SHALL name what it is missing, each with no forecast
 in its details. A pull request missing nothing whose head sluice cannot
 fetch, or one whose conditions sluice cannot read, SHALL have nothing
 new posted that round.
-
-#### Scenario: A conflict seen early
-- **WHEN** a waiting pull request changes a file that a queued pull request changes in a way git cannot merge
-- **THEN** its `sluice` check names the queued pull request and the file, and no check of the branch's gate runs for it
 
 #### Scenario: A draft with no head is only a draft
 - **WHEN** a draft's head cannot be fetched
