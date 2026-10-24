@@ -171,9 +171,17 @@ branch against:
   "2026-10-23T09:16:40Z"}`. Nothing is formed or landed on the branch
   meanwhile. It goes on the first round that reads a revision holding
   `landed`, or with `sluice branch accept`.
+- `copies`: for a branch kept on a remote, each host whose own branch
+  of that name a round could not set to `landed`, by the host's name:
+  `{"deneb": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
+  holds the lock on refs/heads/bolt/x", "since":
+  "2026-10-23T09:16:40Z"}}`. `at` is the revision that host's branch
+  holds, `null` when it has none. Each host writes only its own entry,
+  and takes it out on the round that sets its branch to `landed`.
 
-Both are left out when there is nothing to say, so `sluice/branch@1`
-is unchanged, and an older sluice reading them passes over them.
+All three are left out when there is nothing to say, so
+`sluice/branch@1` is unchanged, and an older sluice reading them passes
+over them.
 
 ## A submission
 
@@ -264,6 +272,17 @@ revision with `sluice branch accept`:
 ```json
 {"schema":"sluice/log@1","event":"held","read":"10e4791a2b","lacks":"c43609b8e1"}
 {"schema":"sluice/log@1","event":"accepted","revision":"10e4791a2b","lacked":"c43609b8e1"}
+```
+
+`copy-behind` is logged when a round can't set this host's own branch
+of a branch kept on a remote to its landing. It's logged once for each
+revision that branch holds, landing and reason. `copy-levelled` is
+logged when a round sets one that was behind. `copy` is the revision
+this host's branch holds:
+
+```json
+{"schema":"sluice/log@1","event":"copy-behind","host":"deneb","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
+{"schema":"sluice/log@1","event":"copy-levelled","host":"deneb","copy":"c43609b8e1"}
 ```
 
 `released` is logged when a combination's checkout is released. One

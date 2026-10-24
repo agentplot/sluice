@@ -26,7 +26,7 @@ Read first: this change's proposal, specs and design; clauses 1, 2, 121,
 ## 4. Saying the copy behind
 
 - [x] 4.1 `Status` gains `copy`, this host's `copies` entry; `sluice status <branch>` prints `this host's <branch> is at <at>, behind the landing <lacks>: <why>` above the queue and carries `copy` under `--json`, nothing when there is no entry; verify `tests/cli.rs` cases over the fakes with and without an entry, `status_lists_the_queue` unchanged.
-- [ ] 4.2 `reference/state.md` gains `copies` in `branch.json` and the `copy-behind` and `copy-levelled` log lines; `reference/commands.md`'s `sluice status` says what it shows of the copy; verify `site:prose`.
+- [x] 4.2 `reference/state.md` gains `copies` in `branch.json` and the `copy-behind` and `copy-levelled` log lines; `reference/commands.md`'s `sluice status` says what it shows of the copy; verify `site:prose`.
 
 ## 5. Submitting from a worktree on a branch sluice lands on
 
