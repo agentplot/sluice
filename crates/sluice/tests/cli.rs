@@ -2886,3 +2886,410 @@ fn wait_says_progress_when_it_moves() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// group-submit (125)
+// ---------------------------------------------------------------------------
+
+/// The setup's branch, testing only the deepest combination (14).
+fn setup_batched() -> Fakes {
+    let f = setup();
+    let policy = POLICY.replace("parallel = 4\n", "parallel = 4\nbatch = true\n");
+    let tip = f.world.tip(BRANCH);
+    let at = f
+        .world
+        .work(&tip, &[(".config/sluice.toml", Some(&policy))]);
+    f.world.set_branch(BRANCH, &at);
+    f
+}
+
+/// `sluice submit <BRANCH> --worktree <w>...` for `worktrees`, then `rest`.
+fn submit_group(f: &Fakes, worktrees: &[&str], rest: &[&str]) -> (i32, String) {
+    let mut args = vec!["submit", BRANCH];
+    for w in worktrees {
+        args.extend(["--worktree", w]);
+    }
+    args.extend(rest);
+    sluice(f, &args)
+}
+
+/// The combinations runs were started on, as lists of submissions.
+fn tested_combinations(f: &Fakes) -> Vec<Vec<u64>> {
+    let snapshot = sluice_seams::State::read(&f.state, BRANCH).unwrap();
+    sluice_core::line::Line::read_log(&snapshot)
+        .unwrap()
+        .into_iter()
+        .filter_map(|l| match l.event {
+            sluice_core::records::Event::Testing { submissions, .. } => Some(submissions),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The submissions in the branch's records, as `status --json` lists them.
+fn queued(f: &Fakes) -> Vec<serde_json::Value> {
+    let (_, out) = sluice(f, &["status", BRANCH, "--json", "--all"]);
+    json(&out)["submissions"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Three worktrees: three submissions numbered in the order given, each
+/// named with its worktree, and nothing run; one worktree answers as a
+/// submit always has; under `--json`, one document of them all.
+#[test]
+fn a_group_is_numbered_in_the_order_given() {
+    let f = setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    work(&f, "unit/b3", "agent-3", &[("tests/three", Some("3"))]);
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2", "unit/b3"], &["--no-wait"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "submission 1 to {BRANCH} from unit/b1 · nothing queued ahead\n\
+             submission 2 to {BRANCH} from unit/b2 · 1 queued ahead (#1)\n\
+             submission 3 to {BRANCH} from unit/b3 · 2 queued ahead (#1, #2)\n"
+        )
+    );
+    assert!(f.world.started().is_empty(), "submitting runs nothing");
+    for (s, after) in queued(&f).iter().zip([[0u64; 0]; 3]) {
+        assert_eq!(s["after"], serde_json::json!(after), "{s}");
+    }
+
+    work(&f, "unit/b4", "agent-4", &[("plugin/four", Some("4"))]);
+    let (code, out) = submit_group(&f, &["unit/b4"], &["--no-wait"]);
+    assert_eq!(code, LANDED);
+    assert_eq!(
+        out,
+        format!("submission 4 to {BRANCH} · 3 queued ahead (#1, #2, #3)\n")
+    );
+
+    work(&f, "unit/b5", "agent-5", &[("plugin/five", Some("5"))]);
+    work(&f, "unit/b6", "agent-6", &[("plugin/six", Some("6"))]);
+    let (code, out) = submit_group(&f, &["unit/b5", "unit/b6"], &["--no-wait", "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(
+        json(&out),
+        serde_json::json!({
+            "branch": BRANCH,
+            "submissions": [
+                { "id": 5, "worktree": "unit/b5", "ahead": [1, 2, 3, 4] },
+                { "id": 6, "worktree": "unit/b6", "ahead": [1, 2, 3, 4, 5] },
+            ],
+        })
+    );
+}
+
+/// All or none: one worktree holding more than its commits, or one named
+/// twice, refuses the act, naming it, and queues nothing for any; under
+/// `--json`, the refused document naming each refused worktree.
+#[test]
+fn a_group_is_queued_whole_or_not_at_all() {
+    let f = setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    f.world.dirty("unit/b2", &["plugin/scratch.py"]);
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2"], &[]);
+    assert_eq!(code, CONFLICT, "{out}");
+    assert_eq!(
+        out,
+        "refused: unit/b2 holds changes beyond its commits:\n  plugin/scratch.py\n\
+         commit or remove them and submit again\n\
+         nothing submitted: the 2 worktrees are submitted together or not at all\n"
+    );
+    assert!(queued(&f).is_empty());
+
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2"], &["--json"]);
+    assert_eq!(code, CONFLICT, "{out}");
+    let v = json(&out);
+    assert_eq!(v["error"]["kind"], "refused");
+    assert_eq!(v["error"]["worktrees"], serde_json::json!(["unit/b2"]));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("unit/b2 holds changes beyond its commits"));
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!(
+            "sluice submit {BRANCH} --worktree unit/b1 --worktree unit/b2"
+        )])
+    );
+
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b1"], &[]);
+    assert_eq!(code, CONFLICT, "{out}");
+    assert!(
+        out.starts_with("refused: unit/b1 is named twice\n"),
+        "{out}"
+    );
+    assert!(queued(&f).is_empty());
+}
+
+/// Several worktrees take neither `--check` nor `--status`: a command line
+/// sluice cannot read, which writes nothing.
+#[test]
+fn several_worktrees_take_neither_check_nor_status() {
+    let f = setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    for flag in ["--check", "--status"] {
+        let (code, out) = submit_group(&f, &["unit/b1", "unit/b2"], &[flag]);
+        assert_eq!(code, sluice::USAGE, "{out}");
+        assert!(out.contains(&format!("{flag} takes one worktree")), "{out}");
+    }
+    assert!(queued(&f).is_empty());
+}
+
+/// S59: on a branch that batches, a waiting act of three is tested once as
+/// one combination of all three and lands in one move, in the order given;
+/// it reports each one's outcome in that order and exits 0. Under
+/// `--json`, one document of their records.
+#[test]
+fn a_waiting_group_lands_together_and_reports_each_in_order() {
+    let f = setup_batched();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    work(&f, "unit/b3", "agent-3", &[("tests/three", Some("3"))]);
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2", "unit/b3"], &[]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(tested_combinations(&f), vec![vec![1, 2, 3]]);
+    assert_eq!(f.world.moves().len(), 1, "one move");
+    let lines = outcome(&out);
+    let at = |header: &str| {
+        lines
+            .iter()
+            .position(|l| *l == header)
+            .unwrap_or_else(|| panic!("{header:?} in {out}"))
+    };
+    let heads = [
+        at("submission 1 from unit/b1:"),
+        at("submission 2 from unit/b2:"),
+        at("submission 3 from unit/b3:"),
+    ];
+    assert!(heads.windows(2).all(|w| w[0] < w[1]), "{out}");
+    let history = f.world.first_parents(BRANCH);
+    for (k, h) in heads.iter().enumerate() {
+        let end = heads.get(k + 1).copied().unwrap_or(lines.len());
+        let landed = format!("passed · landed as {}", &history[2 - k].0[..7]);
+        assert!(lines[*h..end].contains(&landed.as_str()), "{landed}: {out}");
+    }
+
+    work(&f, "unit/b4", "agent-4", &[("plugin/four", Some("4"))]);
+    work(&f, "unit/b5", "agent-5", &[("plugin/five", Some("5"))]);
+    let (code, out) = submit_group(&f, &["unit/b4", "unit/b5"], &["--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    let v = json(&out);
+    assert_eq!(v["branch"], BRANCH);
+    let subs = v["submissions"].as_array().unwrap();
+    assert_eq!(subs.len(), 2);
+    for (s, (id, w)) in subs.iter().zip([(4, "unit/b4"), (5, "unit/b5")]) {
+        assert_eq!(
+            (s["id"].as_u64(), s["worktree"].as_str()),
+            (Some(id), Some(w))
+        );
+        assert_eq!(s["state"], "landed");
+    }
+}
+
+/// S59: the middle one conflicting with the first is set aside alone,
+/// reported with its file and the submission it is contested with; the
+/// others land, and the act exits 2, the middle one's exit. The middle
+/// one blamed alone exits 1.
+#[test]
+fn a_waiting_group_exits_with_the_first_that_did_not_land() {
+    let f = setup();
+    work(
+        &f,
+        "unit/b1",
+        "agent-1",
+        &[("plugin/lib/plan.py", Some("one"))],
+    );
+    work(
+        &f,
+        "unit/b2",
+        "agent-2",
+        &[("plugin/lib/plan.py", Some("two"))],
+    );
+    work(&f, "unit/b3", "agent-3", &[("tests/three", Some("3"))]);
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2", "unit/b3"], &[]);
+    assert_eq!(code, CONFLICT, "{out}");
+    let lines = outcome(&out);
+    let two = lines
+        .iter()
+        .position(|l| *l == "submission 2 from unit/b2:")
+        .unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(
+        lines[two..two + 5],
+        [
+            "submission 2 from unit/b2:",
+            "conflict: plugin/lib/plan.py",
+            "  conflicts with #1 (agent-1, unit/b1)",
+            &format!("merge or rebase onto {BRANCH} in your worktree and submit again"),
+            "submission 3 from unit/b3:",
+        ],
+        "{out}"
+    );
+    assert!(
+        lines[..two]
+            .iter()
+            .any(|l| l.starts_with("passed · landed as ")),
+        "{out}"
+    );
+    assert!(
+        lines[two..]
+            .iter()
+            .any(|l| l.starts_with("passed · landed as ")),
+        "{out}"
+    );
+    assert!(tested_combinations(&f).iter().all(|c| !c.contains(&2)));
+
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(&f, "unit/b4", "agent-4", &[("plugin/four", Some("4"))]);
+    work(
+        &f,
+        "unit/b5",
+        "agent-5",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    work(&f, "unit/b6", "agent-6", &[("plugin/six", Some("6"))]);
+    let (code, out) = submit_group(&f, &["unit/b4", "unit/b5", "unit/b6"], &["--json"]);
+    assert_eq!(code, FAILED, "{out}");
+    let states: Vec<String> = json(&out)["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["state"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(states, ["landed", "failed", "landed"]);
+}
+
+/// Each is its own submission once queued: one withdrawn leaves alone,
+/// the other lands without it, and `sluice wait` on either reports that
+/// one alone.
+#[test]
+fn each_of_a_group_is_withdrawn_and_waited_on_alone() {
+    let f = setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    submit_group(&f, &["unit/b1", "unit/b2"], &["--no-wait"]);
+    assert_eq!(sluice(&f, &["withdraw", "1", "--as", "agent-1"]).0, 0);
+    let (code, out) = sluice(&f, &["wait", "2"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!out.contains("#1"), "{out}");
+    assert!(tested_combinations(&f).iter().all(|c| !c.contains(&1)));
+    let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+    assert_eq!(code, sluice::WITHDRAWN, "{out}");
+    assert_eq!(json(&out)["id"], 1);
+}
+
+/// 6: a group's `--after` is every one's, so both wait for it and come in
+/// the order given; a later submission of higher priority may come ahead
+/// of a group, whose submissions keep their order.
+#[test]
+fn a_group_keeps_its_order_behind_after_and_priority() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/x", "agent-x", &[("plugin/x", Some("x"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/x", "--no-wait"]);
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    submit_group(&f, &["unit/b1", "unit/b2"], &["--no-wait", "--after", "1"]);
+    for s in &queued(&f)[1..] {
+        assert_eq!(s["after"], serde_json::json!([1]), "{s}");
+    }
+    work(&f, "unit/c", "agent-c", &[("tests/c", Some("c"))]);
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/c",
+            "--no-wait",
+            "--priority",
+            "5",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(
+        tested_combinations(&f),
+        vec![vec![4], vec![4, 1], vec![4, 1, 2], vec![4, 1, 2, 3]]
+    );
+}
+
+/// 125: rounds run beside the act, between its numbering and its write,
+/// form nothing of it; the first combination formed holds all three, in
+/// the order given.
+#[test]
+fn a_round_beside_a_group_forms_none_of_it_alone() {
+    let f = setup_batched();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    work(&f, "unit/b3", "agent-3", &[("tests/three", Some("3"))]);
+    f.world.after_allocating(|world, _| {
+        let beside = Fakes::of(world.clone());
+        assert_eq!(sluice(&beside, &["step", BRANCH]).0, 0);
+    });
+    let (code, out) = submit_group(&f, &["unit/b1", "unit/b2", "unit/b3"], &["--no-wait"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(tested_combinations(&f).is_empty());
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(tested_combinations(&f), vec![vec![1, 2, 3]]);
+}
+
+/// Stopped with Ctrl-C, a waiting act exits 130 with its document as it
+/// stands: every submission still queued.
+#[test]
+fn a_waiting_group_stopped_says_where_each_stands() {
+    struct Stop;
+    impl Pause for Stop {
+        fn pause(&self) -> bool {
+            false
+        }
+    }
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    let args = [
+        "submit",
+        BRANCH,
+        "--worktree",
+        "unit/b1",
+        "--worktree",
+        "unit/b2",
+        "--json",
+    ];
+    let (code, out) = sluice_with(&f, &Stop, &args);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let v = json(&out);
+    let ids: Vec<u64> = v["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, [1, 2]);
+    assert!(v["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["state"] != "landed"));
+    let (code, out) = sluice_with(
+        &f,
+        &Stop,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/b1",
+            "--worktree",
+            "unit/b2",
+        ],
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert!(out.contains("still waiting: sluice wait 3"), "{out}");
+}

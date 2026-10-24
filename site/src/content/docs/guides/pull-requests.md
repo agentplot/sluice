@@ -111,6 +111,48 @@ people review, so an agent that shouldn't wait submits with
 follows the pull request as a waiting submit does, and with `--timeout`
 returns after that long, exiting `5` while it is still open.
 
+## Several pull requests as one act
+
+`sluice submit main` given several worktrees pushes each branch and
+opens or updates each pull request, in the order given, as one act:
+
+```console
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
+pushed bolt/a · opened #51: Runner credentials
+pushed bolt/b · opened #52: Runner cache
+#51 waiting: needs 1 review
+#52 waiting: needs 1 review
+```
+
+When sluice refuses one of the worktrees, one holding changes beyond its
+commits, it refuses the act, and pushes nothing for any of them.
+
+Each pull request's description gets a mark beside the one naming its
+agent. The mark says it is one of the group, with its place in the
+group, the group's size, and the commit it was opened at:
+
+```text
+<!-- sluice: group=20261023T120000Z-4f0c2a1 1/2 head=4f0c2a1… -->
+```
+
+sluice takes a group's pull requests only all together, in one pass and
+in the group's order. It takes them once every one is open, out of
+draft, and meeting its conditions on the commit it was marked at. Until
+then each waits for the rest. One that is ready says which of its group
+it waits for, `waiting for its group: #52`, and one that is not says
+what it lacks itself. So no round tests the first alone before the rest
+are in.
+
+Once taken, each is a pull request of its own in the queue, blamed, sent
+back and landed alone. New commits on one take that one out of the
+queue, and it waits for its own conditions again: the mark binds only
+the commit it was made at.
+
+A group waits as long as any of it does. To free the rest when one is
+closed or will not be ready, submit them again, as a new group without
+that one or one by one. A submit of one worktree writes its pull
+request's description without the group's mark.
+
 ## A person opens one by hand
 
 Open a pull request into `main` from any branch of the repository, as
@@ -226,6 +268,8 @@ sequenceDiagram
   again. To retry the same commits, mark it a draft and then ready
   again.
 - **Back to draft, or closed.** It leaves the queue.
+- **One of a group closed before the group is taken.** The rest wait,
+  and say they wait for it, until a submit names them again.
 - **Merged with GitHub's button.** Don't, on a branch sluice keeps: with
   the ruleset from the previous guide only the bypass can, and sluice
   treats it as `main` moving under its queue, retesting everything
