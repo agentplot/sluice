@@ -41,7 +41,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 - [x] 5.2 Draw a landing's short commit as a `Link` to `<base>/commit/<to>` when `commitBase` is known, and ` · PR <n>` links on landed, blamed and conflict rows, a button's links beside it in a row `Box` (design D6); verify `register.test.tsx` tests of "On GitHub", "No remote, or off GitHub", "A landing of two submissions", "A blamed pull request" (the button still opens the tests) and "A sluice older than where submissions came from", in the board's checks
 - [x] 5.3 Add PREVIEWS (design D7); verify `register.test.tsx` tests: a preview that is up with its address linked, one with no addresses, no section when `previews` is empty, in the board's checks
 - [x] 5.4 Pin how a remote surface draws a non-`https:` link (design D8); verify a test mounting the pane on `desktop` with a preview at `http://localhost:4001` finds `web: http://localhost:4001` as plain text and, on `terminal`, as a link, in the board's checks
-- [ ] 5.5 Say in the README and the guide what links where: a landing's commit when the branch's remote is on GitHub, each pull request on QUEUED and RECENT rows, each preview's addresses, and that on desktop a link that is not `https:` shows as text; verify `sluice exec main -- moon run site:prose` clears every Vale warning
+- [x] 5.5 Say in the README and the guide what links where: a landing's commit when the branch's remote is on GitHub, each pull request on QUEUED and RECENT rows, each preview's addresses, and that on desktop a link that is not `https:` shows as text; verify `sluice exec main -- moon run site:prose` clears every Vale warning
 
 ## 6. A press only reads
 

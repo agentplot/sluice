@@ -158,6 +158,16 @@ with the branch and combination it ran for, and its log and last lines,
 or `its log was not kept`. A record from an older sluice leaves out the
 times and hosts it lacks.
 
+The pane links what it knows the address of, and nothing else. A
+landing's commit links to it on GitHub when the branch's remote is there,
+and is plain text for a branch with no remote or one elsewhere. Each pull
+request on a QUEUED or RECENT row links to it, as in `· PR 41`, at the
+branch's remote, or at origin when the policy names none. Under PREVIEWS,
+each preview shows its name, the branch and commit it was made from, as in
+`main@4f1c2aa`, its state, and each address its stack answers on, linked.
+On desktop, a link that is not `https:`, such as a preview at
+`http://localhost:4001`, shows as plain text.
+
 Press a conflict to open it the same way. It shows the files in conflict,
 then what is in the way: each submission it conflicted with and the
 worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what

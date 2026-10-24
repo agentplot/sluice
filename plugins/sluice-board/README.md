@@ -40,6 +40,14 @@ sluice's queue inside a Claude Code session.
   `this run: passed 19:42 on devbox` with its log and last lines, then
   `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa` with
   its log and last lines, or `its log was not kept`.
+- **Links**, only where the address is known. A landing's commit links
+  when the branch's remote is on GitHub. Each pull request on QUEUED and
+  RECENT rows links, as `· PR 41`, at the branch's remote, or at origin
+  when the policy names none. Each preview's addresses link too. A branch
+  with no remote, or one elsewhere, shows its commit as plain text. On desktop, a link that is not
+  `https:`, such as `http://localhost:4001`, shows as plain text.
+- **PREVIEWS** lists each preview: its name, `main@4f1c2aa`, its state, and
+  each address as `web: https://…`.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
