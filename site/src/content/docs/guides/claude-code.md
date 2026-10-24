@@ -149,6 +149,15 @@ each failed test, its log path (press it to copy the path) and the log's
 last lines. Press it again to close it. The pane only shows: it never
 moves to another session or another agent's pane.
 
+A test blamed for being flaky passed on one run and failed on another for
+the same inputs. Opened, it shows both runs, each with when and on which
+host it ran. First comes this run, as in `this run: passed 19:42 on
+devbox`, with its log and last lines. Then comes the run it contradicts,
+as in `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa`,
+with the branch and combination it ran for, and its log and last lines,
+or `its log was not kept`. A record from an older sluice leaves out the
+times and hosts it lacks.
+
 Press a conflict to open it the same way. It shows the files in conflict,
 then what is in the way: each submission it conflicted with and the
 worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what

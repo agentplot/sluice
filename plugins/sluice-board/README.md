@@ -36,6 +36,10 @@ sluice's queue inside a Claude Code session.
   then `next: take main into the worktree, resolve and commit, then sluice
   submit main`. Press it again to fold it. A RECENT conflict opens this
   way, and so does this session's own forecast conflict.
+- **A flaky failure**, in an opened blame or `log of` row, shows both runs:
+  `this run: passed 19:42 on devbox` with its log and last lines, then
+  `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa` with
+  its log and last lines, or `its log was not kept`.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
