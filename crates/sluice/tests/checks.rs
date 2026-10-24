@@ -763,3 +763,183 @@ fn a_sandbox_run_with_a_compile_cache_writes_nowhere_else() {
     assert!(c.start(&sandboxed("p4", tests)).is_err());
     assert!(!ready.exists(), "ready wrote the directory");
 }
+
+/// Whether nothing of run `name`'s process group is left.
+#[cfg(feature = "tools")]
+fn group_gone(c: &Checks, name: &str) -> bool {
+    let pgid: i32 = std::fs::read_to_string(c.runs().dir(name).join("pgid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None)
+        == Err(nix::errno::Errno::ESRCH)
+}
+
+/// The crate the real-tool tests compile, at `dir/src/lib.rs`.
+#[cfg(feature = "tools")]
+fn small_crate(dir: &Path) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "pub fn f() -> u32 {\n    42\n}\n").unwrap();
+}
+
+/// A command compiling the small crate in its directory through
+/// `$RUSTC_WRAPPER` into `$SLUICE_CHECKOUT/out`, as cargo invokes rustc.
+#[cfg(feature = "tools")]
+const COMPILE: &str = "mkdir -p \"$SLUICE_CHECKOUT/out\" && \"$RUSTC_WRAPPER\" rustc \
+    --crate-name f --edition=2021 src/lib.rs --crate-type lib \
+    --emit=dep-info,metadata,link -C embed-bitcode=no --out-dir \"$SLUICE_CHECKOUT/out\"";
+
+/// sccache's stats from the server at `socket`, named from `dir`, as
+/// `(hits, misses)` of Rust compiles.
+#[cfg(feature = "tools")]
+fn stats_at(dir: &Path, socket: &str) -> (u64, u64) {
+    let out = std::process::Command::new("sccache")
+        .current_dir(dir)
+        .env("SCCACHE_SERVER_UDS", socket)
+        .env("SCCACHE_NO_DAEMON", "1")
+        .args(["--show-stats", "--stats-format=json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    rust_counts(&out.stdout)
+}
+
+/// The Rust hits and misses `sccache --show-stats --stats-format=json`
+/// printed.
+#[cfg(feature = "tools")]
+fn rust_counts(json: &[u8]) -> (u64, u64) {
+    let v: serde_json::Value = serde_json::from_slice(json).unwrap();
+    let count = |k: &str| v["stats"][k]["counts"]["Rust"].as_u64().unwrap_or(0);
+    (count("cache_hits"), count("cache_misses"))
+}
+
+/// 35, design D5: an open run's compiles go to the host's one server,
+/// found through the variable its policy names as sluice's environment
+/// sets it; the run starts and ends nothing of that server.
+#[cfg(feature = "tools")]
+#[test]
+fn an_open_run_compiles_through_the_hosts_server() {
+    let repo = Repo::new("checks-host-server");
+    small_crate(repo.dir());
+    let cache = Scratch::new("checks-host-server-cache");
+    // The host's server, as its keeper runs it: in the foreground, over a
+    // directory of its own. A socket's path is at most 104 bytes on
+    // macOS, and a sandboxed gate's scratch directory is longer, so the
+    // server and the run both name it from the checkout, where both run.
+    let mut server = std::process::Command::new("sccache")
+        .current_dir(repo.dir())
+        .env("SCCACHE_START_SERVER", "1")
+        .env("SCCACHE_NO_DAEMON", "1")
+        .env("SCCACHE_IDLE_TIMEOUT", "0")
+        .env("SCCACHE_DIR", cache.path())
+        .env("SCCACHE_SERVER_UDS", "cc.sock")
+        .env_remove("SCCACHE_SERVER_PORT")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    // Until it answers: a client that finds no server starts one.
+    let until = Instant::now() + Duration::from_secs(10);
+    while !std::process::Command::new("perl")
+        .current_dir(repo.dir())
+        .args([
+            "-MIO::Socket::UNIX",
+            "-e",
+            "IO::Socket::UNIX->new(Peer => shift) or exit 1",
+            "cc.sock",
+        ])
+        .status()
+        .unwrap()
+        .success()
+    {
+        assert!(Instant::now() < until, "the host's server never answered");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let c = checks(&repo).with_environment(host_env(&[("SCCACHE_SERVER_UDS", "cc.sock")]));
+    let cmd = format!("{COMPILE} && echo \"$RUSTC_WRAPPER\" > \"$SLUICE_TMP/wrapper\"");
+    let req = declared(request(&repo, "p1", command(&cmd)), &["SCCACHE_SERVER_UDS"]);
+    let r = finish(&c, &req);
+    let said = printed(&c, "p1");
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass, "{said}");
+    assert!(
+        said.contains("compiling through the host's compile server at cc.sock"),
+        "{said}"
+    );
+    let wrapper = std::fs::read_to_string(req.place.tmp.join("wrapper")).unwrap();
+    assert!(wrapper.trim_end().ends_with("/sccache"), "{wrapper}");
+    assert!(repo.dir().join("out/libf.rlib").exists());
+    // The compile went through that server, which is still up.
+    assert_eq!(stats_at(repo.dir(), "cc.sock"), (0, 1));
+    assert!(
+        server.try_wait().unwrap().is_none(),
+        "the host's server ended"
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+/// 35, design D5: when nothing answers where the host's server should be,
+/// an open run compiles without the cache, says so naming the address,
+/// and leaves no server behind.
+#[cfg(feature = "tools")]
+#[test]
+fn an_open_run_with_no_host_server_compiles_without_the_cache() {
+    let repo = Repo::new("checks-no-host-server");
+    let c = checks(&repo).with_environment(host_env(&[("SCCACHE_SERVER_UDS", "none.sock")]));
+    let cmd = "echo \"${RUSTC_WRAPPER:-unset}\" > \"$SLUICE_TMP/wrapper\"";
+    let req = declared(request(&repo, "p1", command(cmd)), &["SCCACHE_SERVER_UDS"]);
+    let r = finish(&c, &req);
+    let said = printed(&c, "p1");
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(req.place.tmp.join("wrapper")).unwrap(),
+        "unset\n"
+    );
+    assert!(
+        said.contains(
+            "the host's compile server did not answer at none.sock; compiling without the cache"
+        ),
+        "{said}"
+    );
+    assert!(group_gone(&c, "p1"), "a server was left running");
+    assert!(
+        !repo.dir().join("none.sock").exists(),
+        "a server was started"
+    );
+}
+
+/// 35: a compile sccache refuses rather than serves, an incremental one,
+/// runs without the cache, and the run's log says why.
+#[cfg(feature = "tools")]
+#[test]
+fn an_incremental_run_compiles_without_the_cache() {
+    let repo = Repo::new("checks-incremental");
+    let tools = repo.dir().join("tools");
+    std::fs::write(&tools, "#!/bin/sh\necho 'export CARGO_INCREMENTAL=1'\n").unwrap();
+    std::fs::set_permissions(&tools, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let c = checks(&repo);
+    let tests = with(
+        command("echo \"${RUSTC_WRAPPER:-unset}\" > \"$SLUICE_TMP/wrapper\""),
+        "toolchain",
+        Setting::List(vec![tools.to_string_lossy().into()]),
+    );
+    let req = declared(request(&repo, "p1", tests), &[]);
+    let r = finish(&c, &req);
+    let said = printed(&c, "p1");
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(req.place.tmp.join("wrapper")).unwrap(),
+        "unset\n"
+    );
+    assert!(
+        said.contains("incremental compiles are not cached (CARGO_INCREMENTAL=1)"),
+        "{said}"
+    );
+}
