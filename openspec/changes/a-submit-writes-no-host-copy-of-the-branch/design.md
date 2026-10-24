@@ -116,6 +116,14 @@ landing's `to`. Nothing else levels: not the submit, not `sluice
 status`, not the hook. A waiting submit or `sluice wait` levels only
 through the rounds it runs, as any process may run a round (core.4).
 
+124 has the levelling tried "each round and on each read of the branch".
+The reads of the branch that level are the rounds' reads, `sluice step`,
+`sluice run` and the rounds a waiting submit or `sluice wait` runs, so
+every read that can level is a round's. The submit's own read of the
+branch, for the head it submits (D4), never levels, since nothing a
+submit does writes the copy (124); nor does `sluice status`, which reads
+the records (core.14), nor the hook, which judges a write and makes none.
+
 Levelling targets `landed`, the landing the records say the branch
 holds, not the revision read: a hand's commit on top of the landing,
 which the remote's protection allowed (121, S8), is no landing, and the

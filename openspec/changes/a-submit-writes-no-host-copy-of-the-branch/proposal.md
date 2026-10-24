@@ -74,8 +74,9 @@ reason of its own.
   longer sets the copy itself, so a failure to set it never reads as a
   failed landing (122); the round that confirms the landing levels the
   copy like any other.
-- **A levelling that fails is tried again** on every later round until
-  the copy holds the landing. Until then the branch's records say this
+- **A levelling that fails is tried again** on every later round, each
+  of which reads the branch, until the copy holds the landing; the
+  submit's own read of the branch never levels it. Until then the branch's records say this
   host's copy is behind, at which revision, the landing it lacks and
   why, and `sluice status <branch>` shows it, in text and under
   `--json` (124, S64).
