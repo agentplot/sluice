@@ -51,10 +51,10 @@ fn a_read_sees_what_another_clone_pushed() {
     assert_eq!(p.read("none").unwrap(), None);
 }
 
-/// 45, 46: a push the lease allows lands on the remote, and the local
-/// branch is set to it.
+/// 45, 46, 124: a push the lease allows lands on the remote, and leaves
+/// the host's copy where it was, for a round to level.
 #[test]
-fn a_push_lands_and_the_local_branch_follows() {
+fn a_push_lands_and_leaves_the_copy() {
     let repo = Repo::new("push");
     let bare = repo.bare_origin();
     let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
@@ -64,7 +64,26 @@ fn a_push_lands_and_the_local_branch_follows() {
     assert_eq!(p.move_to("main", &base, &to).unwrap(), Moved::Moved);
     let remote = Repo::clone_of(bare.path(), "check");
     assert_eq!(remote.rev("origin/main"), to.as_str());
-    assert_eq!(repo.rev("main"), to.as_str());
+    assert_eq!(repo.rev("main"), base.as_str());
+}
+
+/// 122, 124: a push accepted while git holds the copy's lock is a
+/// landing all the same; the copy is left where it was.
+#[test]
+fn a_push_accepted_under_the_copys_lock_is_moved() {
+    let repo = Repo::new("push-locked");
+    let bare = repo.bare_origin();
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let base = p.read("main").unwrap().unwrap();
+    let to = landing(&p, &base, &head);
+    let lock = repo.dir().join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert_eq!(p.move_to("main", &base, &to).unwrap(), Moved::Moved);
+    std::fs::remove_file(&lock).unwrap();
+    let remote = Repo::clone_of(bare.path(), "check");
+    assert_eq!(remote.rev("origin/main"), to.as_str());
+    assert_eq!(repo.rev("main"), base.as_str());
 }
 
 /// 24, rule core.5: a push after another clone moved the branch is

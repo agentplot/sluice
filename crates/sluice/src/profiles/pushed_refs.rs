@@ -6,8 +6,9 @@
 //!
 //! Reading writes only the remote-tracking ref, never the local branch,
 //! so the submit operation, which reads the branch, moves no branch
-//! (rule core.4). The local branch is set to the landing commit once the
-//! remote accepts it. The git command fetches and pushes, carrying the
+//! (rule core.4). The local branch is sluice's copy of the remote's: a
+//! landing's push leaves it, and only a round levels it (124). The git
+//! command fetches and pushes, carrying the
 //! host's credential helpers and SSH setup, or, where sluice has an
 //! [`Identity`] on the remote's forge, that identity's credentials alone.
 
@@ -322,25 +323,18 @@ impl Branch for PushedRefs {
     /// 45, 46: push `to`, accepted only while the remote's branch is
     /// `expected`. A refusal is reported with what the remote holds, never
     /// retried blind (rule core.5); any other failure is an error, which
-    /// leaves the landing for the next step to settle.
+    /// leaves the landing for the next step to settle. An accepted push is
+    /// the move, whatever the host's copy does next (122).
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let refspec = format!("{to}:refs/heads/{branch}");
-        let moved = self.leased(branch, expected.as_str(), &refspec)?;
-        if moved == Moved::Moved {
-            self.local.set(branch, to)?;
-        }
-        Ok(moved)
+        self.leased(branch, expected.as_str(), &refspec)
     }
 
     /// branches-1 104: push `at` as the branch, leased on its being absent
     /// (`--force-with-lease=<ref>:` with nothing after the colon).
     fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
         let refspec = format!("{at}:refs/heads/{branch}");
-        let moved = self.leased(branch, "", &refspec)?;
-        if moved == Moved::Moved {
-            self.local.set(branch, at)?;
-        }
-        Ok(moved)
+        self.leased(branch, "", &refspec)
     }
 
     /// branches-1 105: delete the remote's branch, leased on `expected`;

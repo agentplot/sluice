@@ -56,15 +56,6 @@ impl LocalRefs {
         Ok(Some(Rev::new(id.to_string())))
     }
 
-    /// Set `branch` to `to`, whatever it held: the local copy of a branch
-    /// whose shared copy a remote has just accepted (C.4 pushed refs).
-    pub fn set(&self, branch: &str, to: &Rev) -> Result<()> {
-        match self.edit(branch, PreviousValue::Any, to)? {
-            Moved::Moved => Ok(()),
-            Moved::Elsewhere(_) => bail!("{branch} could not be set to {to}"),
-        }
-    }
-
     /// Set `branch`, the host's copy of a branch kept on a remote, to `to`
     /// from exactly `expected`, or from its absence when `expected` is
     /// `None` (124); a copy found elsewhere is reported, never forced (rule
