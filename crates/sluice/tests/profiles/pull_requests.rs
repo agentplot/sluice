@@ -2166,6 +2166,19 @@ fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
         )),
         "{said}"
     );
+    // Under --json, the pull request's document carries the same.
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["pull_request"], pull.number, "{v}");
+    assert_eq!(
+        v["copy"],
+        serde_json::json!({
+            "branch": "bolt/x", "copy": made, "remote": "origin", "at": remote, "how": "behind",
+        }),
+        "{v}"
+    );
+    assert_eq!(g.bolt_on_github(), remote);
 
     // A tool's reset of this host's bolt/x to GitHub's revision is
     // refused, naming the command and both revisions; the bolt's next round

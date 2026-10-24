@@ -1839,7 +1839,11 @@ impl crate::PullRequests for Pulls {
                 said.push('\n');
                 said.push_str(&crate::copy_differs_line(copy));
             }
-            opened.push(Opened { number, said });
+            opened.push(Opened {
+                number,
+                said,
+                copy: submitted.copy.clone(),
+            });
         }
         Ok(Ok(opened))
     }

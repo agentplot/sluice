@@ -483,6 +483,9 @@ pub struct Opened {
     /// What it did: the branch pushed, if it pushed one, and the pull
     /// request.
     pub said: String,
+    /// 124: the worktree's head, this host's copy of a branch sluice
+    /// lands on, where it differs from the remote's revision submitted.
+    pub copy: Option<CopyDiffers>,
 }
 
 /// Where a pull request stands, for a submit that follows it.
@@ -874,6 +877,7 @@ pub fn run(
                 deadline,
                 json,
                 pause,
+                copy: None,
             };
             await_submission(&s, &waiting, sub, None, out)
         }
@@ -1569,19 +1573,16 @@ fn submit(
         }
     };
     let id = accepted.id;
+    let copy = accepted.copy.as_ref();
     if json && no_wait {
-        let mut doc =
-            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
-        if let Some(copy) = &accepted.copy {
-            doc["copy"] = serde_json::to_value(copy)?;
-        }
-        writeln!(out, "{doc}")?;
+        let doc = serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        writeln!(out, "{}", with_copy(doc, copy)?)?;
         return Ok(0);
     }
     if !json {
         let ahead = queued_ahead(&accepted.ahead);
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
-        if let Some(copy) = &accepted.copy {
+        if let Some(copy) = copy {
             writeln!(out, "{}", copy_differs_line(copy))?;
         }
     }
@@ -1596,6 +1597,7 @@ fn submit(
         deadline: None,
         json,
         pause,
+        copy,
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
@@ -1635,11 +1637,8 @@ fn submit_group(
         let submissions: Vec<serde_json::Value> = items
             .iter()
             .map(|(w, a)| {
-                let mut doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
-                if let Some(copy) = &a.copy {
-                    doc["copy"] = serde_json::to_value(copy)?;
-                }
-                Ok(doc)
+                let doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
+                with_copy(doc, a.copy.as_ref())
             })
             .collect::<Result<_>>()?;
         writeln!(
@@ -1661,12 +1660,14 @@ fn submit_group(
     if no_wait {
         return Ok(0);
     }
+    // Each record carries its own copy, below.
     let waiting = Waiting {
         clock,
         pulls: None,
         deadline: None,
         json,
         pause,
+        copy: None,
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
@@ -1699,10 +1700,10 @@ fn submit_group(
     }
     if json {
         let mut submissions = Vec::new();
-        for ((w, _), sub) in items.iter().zip(&subs) {
+        for ((w, a), sub) in items.iter().zip(&subs) {
             let mut record = serde_json::to_value(sub)?;
             record["worktree"] = serde_json::json!(w);
-            submissions.push(record);
+            submissions.push(with_copy(record, a.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": submissions });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
@@ -1710,7 +1711,7 @@ fn submit_group(
         for ((w, _), sub) in items.iter().zip(&subs) {
             writeln!(out, "submission {} from {w}:", sub.id)?;
             if sub.state.is_out() {
-                report(s, sub, branch, &BTreeMap::new(), false, out)?;
+                report(s, sub, branch, &BTreeMap::new(), None, false, out)?;
             } else {
                 writeln!(out, "still waiting: sluice wait {}", sub.id)?;
             }
@@ -1788,6 +1789,24 @@ fn refused_group(
     Ok(CONFLICT)
 }
 
+/// 124: a submit's `--json` document, carrying `copy` where the host's
+/// copy differs from the remote's revision it submitted.
+fn with_copy(mut doc: serde_json::Value, copy: Option<&CopyDiffers>) -> Result<serde_json::Value> {
+    if let Some(copy) = copy {
+        doc["copy"] = serde_json::to_value(copy)?;
+    }
+    Ok(doc)
+}
+
+/// A submission's record as a `--json` document, with `copy` as
+/// [`with_copy`] adds it.
+fn record_json(sub: &Submission, copy: Option<&CopyDiffers>) -> Result<String> {
+    Ok(match copy {
+        Some(_) => serde_json::to_string_pretty(&with_copy(serde_json::to_value(sub)?, copy)?)?,
+        None => serde_json::to_string_pretty(sub)?,
+    })
+}
+
 /// How a command waits on a submission.
 struct Waiting<'a> {
     clock: &'a dyn Clock,
@@ -1798,12 +1817,15 @@ struct Waiting<'a> {
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
     pause: &'a dyn Pause,
+    /// 124: how the host's copy differed from what the submit waited on
+    /// submitted, carried by its `--json` document.
+    copy: Option<&'a CopyDiffers>,
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
 /// say it: the loop under a waiting submit and `sluice wait`. `told` is
 /// the state its caller has said already. Under `--json`, one document
-/// however it ends: the submission's record.
+/// however it ends: the submission's record, with the copy's `copy`.
 fn await_submission(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
@@ -1814,7 +1836,8 @@ fn await_submission(
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            let code = report(s, &sub, &branch, &BTreeMap::new(), waiting.json, out)?;
+            let names = BTreeMap::new();
+            let code = report(s, &sub, &branch, &names, waiting.copy, waiting.json, out)?;
             if let Some(e) = after {
                 after_landing(&e);
             }
@@ -1827,7 +1850,7 @@ fn await_submission(
         Waited::Undecided(sub, code) => (sub, code),
     };
     if waiting.json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        writeln!(out, "{}", record_json(&sub, waiting.copy)?)?;
     } else {
         writeln!(out, "still waiting: sluice wait {}", sub.id)?;
     }
@@ -2022,6 +2045,7 @@ fn report(
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
+    copy: Option<&CopyDiffers>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -2035,7 +2059,7 @@ fn report(
         s
     };
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        writeln!(out, "{}", record_json(sub, copy)?)?;
         return Ok(exit_for(sub));
     }
     let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
@@ -2351,6 +2375,8 @@ fn submit_pull(
     let no_wait = matches!(mode, PullMode::Open { no_wait: true });
     let opens = matches!(mode, PullMode::Open { .. });
     let again = format!("sluice wait {branch}");
+    // 124: how the host's copy differed from what the submit opened.
+    let mut copy = None;
     let number = if !opens {
         let mut unread = Unread::default();
         let found = loop {
@@ -2385,6 +2411,7 @@ fn submit_pull(
                 if !json {
                     writeln!(out, "{}", o.said)?;
                 }
+                copy = o.copy;
                 o.number
             }
             Err(r) => {
@@ -2429,17 +2456,14 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
-                return report(s, &sub, branch, &names, json, out);
+                return report(s, &sub, branch, &names, copy.as_ref(), json, out);
             }
             Some(Followed::Closed) => {
                 if json {
-                    writeln!(
-                        out,
-                        "{}",
-                        serde_json::json!({
-                            "pull_request": number, "branch": branch, "state": "closed",
-                        })
-                    )?;
+                    let doc = serde_json::json!({
+                        "pull_request": number, "branch": branch, "state": "closed",
+                    });
+                    writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                 } else {
                     writeln!(out, "#{number} was closed without landing")?;
                 }
@@ -2449,13 +2473,10 @@ fn submit_pull(
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
-                        writeln!(
-                            out,
-                            "{}",
-                            serde_json::json!({
-                                "pull_request": number, "branch": branch, "state": now.0,
-                            })
-                        )?;
+                        let doc = serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": now.0,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if !json {
                         writeln!(out, "{}", now.0)?;
                         for l in &now.1 {
@@ -2475,13 +2496,10 @@ fn submit_pull(
         let still = |out: &mut dyn Write, code: i32| -> Result<i32> {
             if json {
                 let state = last.as_ref().map_or("waiting", |l| l.0.as_str());
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({
-                        "pull_request": number, "branch": branch, "state": state,
-                    })
-                )?;
+                let doc = serde_json::json!({
+                    "pull_request": number, "branch": branch, "state": state,
+                });
+                writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
             } else {
                 writeln!(out, "still open: #{number}; sluice wait {branch}")?;
             }
@@ -2508,19 +2526,20 @@ fn submit_pull(
                     return still(out, STOPPED);
                 }
                 // 122: as `wait_on`, for the submission the pull request
-                // was taken in as, on the head its worktree pushed.
+                // was taken in as, on the head its worktree submitted (124).
                 let landed = seams
                     .driver
                     .session(worktree)
                     .ok()
-                    .and_then(|w| taken_in(s, branch, &w.head))
+                    .and_then(|w| s.submitted_head(&w).ok())
+                    .and_then(|h| taken_in(s, branch, &h.head))
                     .and_then(|id| landed(s, id));
                 if let Some(sub) = landed {
                     let names = match pulls.follow(seams, clock, branch, number) {
                         Ok(Followed::Done(_, names)) => names,
                         _ => BTreeMap::new(),
                     };
-                    let code = report(s, &sub, branch, &names, json, out)?;
+                    let code = report(s, &sub, branch, &names, copy.as_ref(), json, out)?;
                     after_landing(&e);
                     return Ok(code);
                 }
@@ -2630,8 +2649,8 @@ fn submit_pull_group(
                     break Some(STOPPED);
                 }
                 // 122: as `submit_pull`, each the round landed is decided,
-                // on the head its worktree pushed, and what failed is said
-                // after the outcomes.
+                // on the head its worktree submitted (124), and what failed
+                // is said after the outcomes.
                 let mut landed_now = false;
                 for (i, (w, o)) in req.worktrees.iter().zip(&opened).enumerate() {
                     if decided[i].is_some() {
@@ -2641,7 +2660,8 @@ fn submit_pull_group(
                         .driver
                         .session(w)
                         .ok()
-                        .and_then(|w| taken_in(s, branch, &w.head))
+                        .and_then(|w| s.submitted_head(&w).ok())
+                        .and_then(|h| taken_in(s, branch, &h.head))
                         .and_then(|id| landed(s, id));
                     if let Some(sub) = sub {
                         let names = match pulls.follow(seams, clock, branch, o.number) {
@@ -2678,7 +2698,7 @@ fn submit_pull_group(
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
-            items.push(item);
+            items.push(with_copy(item, o.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": items });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
@@ -2696,7 +2716,7 @@ fn submit_pull_group(
         }
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
-            Some(Followed::Done(sub, names)) => report(s, sub, branch, names, false, out)?,
+            Some(Followed::Done(sub, names)) => report(s, sub, branch, names, None, false, out)?,
             Some(Followed::Closed) => {
                 if !json {
                     writeln!(out, "#{n} was closed without landing")?;
