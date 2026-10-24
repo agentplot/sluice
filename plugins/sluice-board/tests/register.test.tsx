@@ -460,6 +460,60 @@ test("the wake can be turned off", { options: { wake: false } }, async ($, on) =
   expect(seen.toasts).toContain("sluice: #13 was blamed");
 });
 
+const GONE = {
+  error: { kind: "internal", message: "reading the records of main: it is gone", next: [] },
+};
+
+test("an overview's error is one line in the band, from --watch or a poll, until a document comes", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  // The watch prints a document, then fails; the poll answers `once`.
+  let once = { exitCode: 0, stdout: JSON.stringify(overview()) };
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e) => {
+    const argv = e.argv.join(" ");
+    if (argv === "sluice overview --json") return { value: { ...once, stderr: "", ...WHOLE } };
+    if (argv === "git rev-parse --show-toplevel")
+      return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: "", ...WHOLE } };
+    return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+  });
+  on("process.spawn", async function* () {
+    yield { stream: "stdout" as const, text: `${JSON.stringify(overview())}\n` };
+    yield { stream: "stdout" as const, text: `${JSON.stringify(GONE)}\n` };
+    return { value: { code: 3, signal: null } };
+  });
+  on("ui.status", () => ({ value: undefined }));
+  const band = async () => {
+    const b = await $.ui.mount({
+      plugin: "sluice-board",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: BAND,
+    });
+    const texts = (await b.findAll({ type: "Text" })).map((t) => t.text);
+    await b.unmount();
+    return texts;
+  };
+  const QUEUE = /^sluice main · 3 submissions/;
+
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
+
+  await clock.advance(3000);
+  expect((await band()).some((t) => QUEUE.test(t))).toBe(true);
+
+  once = { exitCode: 3, stdout: JSON.stringify(GONE) };
+  await clock.advance(3000);
+  expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
+
+  // A poll that prints nothing it can read leaves the band as it was.
+  once = { exitCode: 3, stdout: "" };
+  await clock.advance(3000);
+  expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
+});
+
 test("/sluice opens the pane to close on Escape, and closes it when open", async ($, on) => {
   const seen = {
     prompts: [] as string[],

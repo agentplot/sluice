@@ -193,6 +193,8 @@ declare module "claude-code" {
       named: string | null;
       /** The session's worktree's last forecast. */
       forecasting: Forecasting;
+      /** The band's line for the overview's last error, until a document comes. */
+      error: string | null;
     };
   }
 }

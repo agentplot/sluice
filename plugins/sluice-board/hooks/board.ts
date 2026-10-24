@@ -18,6 +18,23 @@ import type {
   Room,
 } from "../types";
 
+/** Whether `v` is an overview document: one with branches. */
+export function isOverview(v: unknown): v is Overview {
+  return typeof v === "object" && v !== null && Array.isArray((v as Overview).branches);
+}
+
+/**
+ * `sluice: <message>`, one line, for the error document a failing overview
+ * prints (`{"error":{"kind","message","next"}}`); null for anything else.
+ */
+export function errorLine(v: unknown): string | null {
+  const e = typeof v === "object" && v !== null ? (v as { error?: unknown }).error : undefined;
+  const message =
+    typeof e === "object" && e !== null ? (e as { message?: unknown }).message : undefined;
+  if (typeof message !== "string") return null;
+  return `sluice: ${message.trim().replace(/\s*\n\s*/g, " ")}`;
+}
+
 /** The hosts serving a remote: how many, their room, and any lapsed. */
 export function hostsLine(hosts: readonly OverviewHost[]): string {
   const room = hosts.reduce((n, h) => n + h.room, 0);
@@ -218,7 +235,8 @@ export function bandLines(
   now: number,
   named: string | null = null,
 ): string[] {
-  if (!doc) return [];
+  // A document an earlier load took without branches shows nothing.
+  if (!isOverview(doc)) return [];
   return namedFirst(doc.branches, named)
     .map((b) => branchLine(b, now, doc.room))
     .filter((l): l is string => l !== null);

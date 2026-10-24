@@ -7,6 +7,7 @@ import {
   clearText,
   conflictText,
   duration,
+  errorLine,
   finishedWords,
   forecastBranch,
   forecastKey,
@@ -17,6 +18,7 @@ import {
   hostLine,
   hostsLine,
   isMine,
+  isOverview,
   latest,
   learn,
   moving,
@@ -51,6 +53,25 @@ describe("the band", () => {
     quiet.branches[0]!.candidates = [];
     expect(bandLines(quiet, NOW)).toEqual([]);
     expect(bandLines(null, NOW)).toEqual([]);
+  });
+
+  test("an overview's error document: its message on one line, and no branch", () => {
+    const failed = {
+      error: {
+        kind: "internal",
+        message: "opening the repository at /work/x:\n  it is gone",
+        next: [],
+      },
+    };
+    expect(errorLine(failed)).toBe("sluice: opening the repository at /work/x: it is gone");
+    expect(isOverview(failed)).toBe(false);
+    expect(bandLines(failed as never, NOW)).toEqual([]);
+    expect(isOverview(overview())).toBe(true);
+    expect(errorLine(overview())).toBeNull();
+    for (const v of [null, "error", 3, {}, { error: "gone" }, { error: { kind: "internal" } }]) {
+      expect(isOverview(v)).toBe(false);
+      expect(errorLine(v)).toBeNull();
+    }
   });
 
   test("a branch shown in the pane: busy, or an event under a quarter hour old", () => {

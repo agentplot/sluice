@@ -8,15 +8,7 @@
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
 
-import type {
-  Forecast,
-  Forecasting,
-  Mine,
-  OpenedTest,
-  Outcome,
-  Overview,
-  OverviewTask,
-} from "../types";
+import type { Forecast, Forecasting, Mine, OpenedTest, Outcome, OverviewTask } from "../types";
 import type { CheckRow } from "./board";
 import {
   bandLines,
@@ -25,6 +17,7 @@ import {
   combination,
   conflictText,
   duration,
+  errorLine,
   failedName,
   forecastBranch,
   forecastKey,
@@ -34,6 +27,7 @@ import {
   hostLine,
   hostsLine,
   isMine,
+  isOverview,
   latest,
   learn,
   limit,
@@ -85,6 +79,7 @@ const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
 // The branch the session works for, when what started it named one.
 const named = atom({ plugin: "sluice-board", key: "named" } as const, null);
 const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const, NOT_YET);
+const error = atom({ plugin: "sluice-board", key: "error" } as const, null);
 
 type Detail = OpenedTest;
 
@@ -133,8 +128,17 @@ type $ = EngineInterface;
 /** Whether the board starts turns, and forecasts the session's worktree. */
 type How = { wake: boolean; forecast: boolean };
 
-/** A new document: learn this session's submissions, tell new outcomes. */
-async function take($: $, next: Overview, cwd: string, how: How) {
+/**
+ * A new document: learn this session's submissions, tell new outcomes. An
+ * error document is the band's one line, and the last document stays.
+ */
+async function take($: $, next: unknown, cwd: string, how: How) {
+  if (!isOverview(next)) {
+    const said = errorLine(next);
+    if (said !== null) await update($, error, () => said);
+    return;
+  }
+  await update($, error, () => null);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
@@ -149,6 +153,15 @@ async function take($: $, next: Overview, cwd: string, how: How) {
   for (const o of outcomes(next, known, await read($, told))) {
     await update($, told, (list) => [...list, o.key].slice(-500));
     await tell($, o, cwd, how.wake);
+  }
+}
+
+/** What a command printed as JSON, or null when it is none. */
+function parsed(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
   }
 }
 
@@ -265,7 +278,7 @@ async function feed($: $, cwd: string, how: How) {
       while (nl >= 0) {
         const line = rest.slice(0, nl).trim();
         rest = rest.slice(nl + 1);
-        if (line) await take($, JSON.parse(line) as Overview, cwd, how);
+        if (line) await take($, JSON.parse(line), cwd, how);
         nl = rest.indexOf("\n");
       }
     }
@@ -274,7 +287,8 @@ async function feed($: $, cwd: string, how: How) {
   }
   $.clock.every(3000, async () => {
     const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    if (got && got.exitCode === 0) await take($, JSON.parse(got.stdout) as Overview, cwd, how);
+    // A failing overview prints its error document on stdout too.
+    if (got) await take($, parsed(got.stdout), cwd, how);
   });
 }
 
@@ -287,7 +301,8 @@ export const register: Register = (on, options) => {
     const cwd = e.cwd;
     // Only in a repository with sluice's records.
     const probe = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    if (!probe || probe.exitCode !== 0) return started;
+    const opening = probe && probe.exitCode === 0 ? parsed(probe.stdout) : null;
+    if (!isOverview(opening)) return started;
     const top = await $.process
       .run(["git", "rev-parse", "--show-toplevel"], { cwd })
       .catch(() => null);
@@ -305,7 +320,7 @@ export const register: Register = (on, options) => {
     // A session whose orchestrator forecasts for it turns this off.
     const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
     const how = { wake, forecast: options.forecast !== false && env !== "0" };
-    await take($, JSON.parse(probe.stdout) as Overview, cwd, how);
+    await take($, opening, cwd, how);
     void feed($, cwd, how);
     // Elapsed times move while something is under test or an agent's check
     // goes, and a finished check leaves the pane a quarter hour on.
@@ -351,7 +366,8 @@ export const register: Register = (on, options) => {
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     const d = await read($, doc);
     await read($, now);
-    const lines = bandLines(d, await $.clock.now(), await read($, named));
+    const said = await read($, error);
+    const lines = said !== null ? [said] : bandLines(d, await $.clock.now(), await read($, named));
     if (lines.length === 0 || (await read($, isHidden)) || e.props.hasSurvey) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
     return (
