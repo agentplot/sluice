@@ -150,18 +150,42 @@ while there is no outcome yet; run it again.
 ## Several pull requests as one act
 
 `sluice submit main` given several worktrees pushes each branch and
-opens or updates each pull request, in the order given, as one act:
+opens or updates each pull request, in the order given, as one act. It
+then reads each pull request's reviews and checks on the commit it
+pushed, and takes every pull request or none of them.
+
+When any falls short, sluice queues none of them and leaves every one a
+draft at its commit, so no round takes one of them alone. It names each
+one short of its conditions with what it lacks, and exits `2`:
 
 ```console
 $ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
 pushed bolt/a · opened #51: Runner credentials
 pushed bolt/b · opened #52: Runner cache
-#51 waiting: needs 1 review
-#52 waiting: needs 1 review
+refused: #51 from ../bolt-a needs 1 review
+refused: #52 from ../bolt-b needs 1 review
+nothing submitted: #51, #52 are drafts at their heads
+once each meets its conditions, the same submit takes them all: sluice submit main --worktree ../bolt-a --worktree ../bolt-b
 ```
 
-When sluice refuses one of the worktrees, one holding changes beyond its
-commits, it refuses the act, and pushes nothing for any of them.
+Reviewers review the drafts. Once each meets its conditions, run the
+same submit again. sluice marks every pull request ready for review and
+queues all of them at once, in the order given, each with its
+submission:
+
+```console
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
+pushed bolt/a · updated #51: Runner credentials · marked ready for review
+submission 61 to main from #51 · nothing queued ahead
+pushed bolt/b · updated #52: Runner cache · marked ready for review
+submission 62 to main from #52 · 1 queued ahead (#51)
+```
+
+Under `--json` each item of `submissions` holds its `id`, `worktree`,
+`ahead` and `pull_request`. When sluice refuses one of the worktrees,
+one holding changes beyond its commits, it refuses the act before
+anything is pushed. A pull request from a fork is never one of the act:
+sluice opens or updates only the repository's own.
 
 Each pull request's description gets a mark beside the one naming its
 agent. The mark says it is one of the group, with its place in the
@@ -171,18 +195,21 @@ group, the group's size, and the commit it was opened at:
 <!-- sluice: group=20261023T120000Z-4f0c2a1 1/2 head=4f0c2a1… -->
 ```
 
-sluice takes a group's pull requests only all together, in one pass and
-in the group's order. It takes them once every one is open, out of
-draft, and meeting its conditions on the commit it was marked at. Until
-then each waits for the rest. One that is ready says which of its group
-it waits for, `waiting for its group: #52`, and one that is not says
-what it lacks itself. So no round tests the first alone before the rest
-are in.
+Once queued, each is a pull request of its own in the queue, blamed, sent
+back and landed alone. New commits that no submit pushed, on one of
+them, take that one out of the queue, and sluice marks it a draft. The
+others stay queued and land without it. It waits for its worktree to
+submit again, or for a person to mark it ready for review: the mark
+binds only the commit it was made at.
 
-Once taken, each is a pull request of its own in the queue, blamed, sent
-back and landed alone. New commits on one take that one out of the
-queue, and it waits for its own conditions again: the mark binds only
-the commit it was made at.
+A person can also mark the drafts of a refused act ready for review by
+hand. sluice then takes the group's pull requests only all together, in
+one pass and in the group's order. It takes them once every one is open,
+out of draft, and meeting its conditions on the commit it was marked at.
+Until then each waits for the rest. One that is ready says which of its
+group it waits for, `waiting for its group: #52`, and one that is not
+says what it lacks itself. So no round tests the first alone before the
+rest are in.
 
 A group waits as long as any of it does. To free the rest when one is
 closed or will not be ready, submit them again, as a new group without

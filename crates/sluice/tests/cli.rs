@@ -3061,6 +3061,7 @@ impl sluice::PullRequests for Pull7 {
             number: 7,
             said: "opened #7".into(),
             copy: None,
+            submission: None,
         }))
     }
 

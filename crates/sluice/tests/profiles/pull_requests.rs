@@ -1959,9 +1959,10 @@ fn group_mark(body: &str) -> Option<(String, String)> {
     })
 }
 
-/// Three worktrees submitted as one act: each branch is on GitHub, each
-/// has an open pull request into `main` marked 1, 2 and 3 of 3 of one
-/// group at its head, and the answer names each with what it waits for.
+/// Three worktrees submitted as one act, none of their pull requests
+/// reviewed: each branch is on GitHub, each has an open pull request into
+/// `main`, a draft marked 1, 2 and 3 of 3 of one group at its head, and
+/// the refusal names each with the review it needs; nothing is queued.
 /// One of them submitted alone afterwards is marked one of no group.
 #[test]
 fn a_group_submit_opens_every_pull_request_marked() {
@@ -1970,11 +1971,11 @@ fn a_group_submit_opens_every_pull_request_marked() {
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &["--no-wait"]);
     let said = text(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert_eq!(out.status.code(), Some(2), "{said}");
     let mut token = None;
-    for (k, name) in names.iter().enumerate() {
+    for (k, (name, w)) in names.iter().zip(&ws).enumerate() {
         let pull = g.pull_of(name);
-        assert!(pull.open && !pull.draft && pull.base == "main");
+        assert!(pull.open && pull.draft && pull.base == "main", "{pull:?}");
         let head = github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")).unwrap();
         assert_eq!(pull.head, head);
         assert!(pull
@@ -1991,7 +1992,10 @@ fn a_group_submit_opens_every_pull_request_marked() {
             "{said}"
         );
         assert!(
-            said.contains(&format!("#{n} waiting: needs 1 review")),
+            said.contains(&format!(
+                "refused: #{n} from {} needs 1 review",
+                w.display()
+            )),
             "{said}"
         );
         assert!(g.of(n).is_empty());
@@ -2002,6 +2006,327 @@ fn a_group_submit_opens_every_pull_request_marked() {
     let pull = g.pull_of("g1");
     assert_eq!(group_mark(&pull.body), None, "{}", pull.body);
     assert!(pull.body.contains("<!-- sluice: agent=unit/g1 -->"));
+}
+
+/// Whether pull request `n` is a draft, as GitHub holds it now.
+fn is_draft(g: &OnGitHub, n: u64) -> bool {
+    g.gh.forge.pull(&github::repo(), n).unwrap().unwrap().draft
+}
+
+/// Three pull requests, every condition holding: the act leaves each ready
+/// for review at its head, marked 1, 2 and 3 of 3 of one group, and queues
+/// a submission from each, from its checkout `pull/<n>` at that head, in
+/// the order given and in one write, each said after its pull request;
+/// they are tested as one combination and land.
+#[test]
+fn a_group_submit_queues_three_pull_requests_in_order() {
+    let g = OnGitHub::batched("pr-group-three", "");
+    let names = ["q1", "q2", "q3"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    let mut token = None;
+    let mut ns = Vec::new();
+    let mut ids = Vec::new();
+    for (k, name) in names.iter().enumerate() {
+        let pull = g.pull_of(name);
+        assert!(pull.open && !pull.draft && pull.base == "main", "{pull:?}");
+        let head = github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")).unwrap();
+        assert_eq!(pull.head, head);
+        let (t, rest) = group_mark(&pull.body).unwrap_or_else(|| panic!("{}", pull.body));
+        assert_eq!(rest, format!("{}/3 head={head} -->", k + 1));
+        assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
+        let subs = g.of(pull.number);
+        assert_eq!(subs.len(), 1, "{:?}", g.subs());
+        assert_eq!(subs[0]["head"], head.as_str());
+        assert_eq!(
+            subs[0]["submitted"],
+            g.of(g.pull_of(names[0]).number)[0]["submitted"]
+        );
+        ns.push(pull.number);
+        ids.push(subs[0]["id"].as_u64().unwrap());
+    }
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "in the order given: {ids:?}"
+    );
+    let lines: Vec<&str> = said.lines().collect();
+    for (k, name) in names.iter().enumerate() {
+        let opened = format!(
+            "pushed unit/{name} · opened #{}: Change {name}.txt · marked ready for review",
+            ns[k]
+        );
+        let at = lines
+            .iter()
+            .position(|l| *l == opened)
+            .unwrap_or_else(|| panic!("{opened:?} in {said}"));
+        let ahead = match k {
+            0 => "nothing queued ahead".to_string(),
+            _ => format!(
+                "{k} queued ahead ({})",
+                ns[..k]
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        assert_eq!(
+            lines.get(at + 1).copied(),
+            Some(format!("submission {} to main from #{} · {ahead}", ids[k], ns[k]).as_str()),
+            "{said}"
+        );
+    }
+    g.step_until("landed", |g| {
+        ns.iter()
+            .all(|n| g.of(*n).first().is_some_and(|s| s["state"] == "landed"))
+    });
+    for n in &ns {
+        assert_eq!(
+            g.of(*n)[0]["tested"]["submissions"],
+            serde_json::json!(ids),
+            "one combination of all three"
+        );
+    }
+}
+
+/// Under `--json` with `--no-wait`, the act answers with each submission
+/// beside its worktree and pull request, and what is queued ahead of it.
+#[test]
+fn a_group_submit_answers_with_each_submission_in_json() {
+    let g = OnGitHub::new("pr-group-json", "");
+    let names = ["j1", "j2"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
+    assert_eq!(doc["branch"], "main", "{doc}");
+    let items = doc["submissions"].as_array().expect("submissions");
+    assert_eq!(items.len(), 2, "{doc}");
+    let mut ahead = Vec::new();
+    for ((item, w), name) in items.iter().zip(&ws).zip(names) {
+        let n = g.pull_of(name).number;
+        let id = g.of(n)[0]["id"].as_u64().unwrap();
+        assert_eq!(item["id"], id, "{doc}");
+        assert_eq!(item["worktree"], w.to_str().unwrap(), "{doc}");
+        assert_eq!(item["pull_request"], n, "{doc}");
+        assert_eq!(item["ahead"], serde_json::json!(ahead), "{doc}");
+        ahead.push(id);
+    }
+}
+
+/// One short of a review: the pull requests of `s1` and `s3` are open at
+/// the heads their worktrees hold, ready and approved there, and `s2`'s is
+/// not open. The act queues nothing and exits 2, naming `s2`'s pull
+/// request and that it needs 1 review, and saying all three are drafts;
+/// each is a draft at its head, marked one of the group, and no round
+/// takes any of them.
+#[test]
+fn a_group_submit_one_short_of_a_review_is_refused() {
+    let g = OnGitHub::new("pr-group-short", "reviews = 1");
+    let names = ["s1", "s2", "s3"];
+    let ws = g.sessions(&names);
+    let mut by_hand = Vec::new();
+    for name in [names[0], names[2]] {
+        let branch = format!("unit/{name}");
+        g.repo.git(&[
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/heads/{branch}"),
+        ]);
+        let head = g.repo.rev(&branch);
+        let n =
+            g.gh.forge
+                .open_by("person", "main", &branch, &head, false, None)
+                .unwrap();
+        g.gh.forge.review(n, "reviewer", "APPROVED", &head).unwrap();
+        by_hand.push(n);
+    }
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
+    assert_eq!([ns[0], ns[2]], [by_hand[0], by_hand[1]]);
+    assert!(
+        said.contains(&format!(
+            "refused: #{} from {} needs 1 review",
+            ns[1],
+            ws[1].display()
+        )),
+        "{said}"
+    );
+    for n in [ns[0], ns[2]] {
+        assert!(!said.contains(&format!("refused: #{n}")), "{said}");
+    }
+    assert!(
+        said.contains(&format!(
+            "nothing submitted: #{}, #{}, #{} are drafts at their heads",
+            ns[0], ns[1], ns[2]
+        )),
+        "{said}"
+    );
+    let again = format!(
+        "sluice submit main {}",
+        ws.iter()
+            .map(|w| format!("--worktree {}", w.display()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    assert!(
+        said.contains(&format!(
+            "once each meets its conditions, the same submit takes them all: {again}"
+        )),
+        "{said}"
+    );
+    let mut token = None;
+    for (k, name) in names.iter().enumerate() {
+        let pull = g.pull_of(name);
+        assert!(pull.open && pull.draft, "{pull:?}");
+        let head = github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")).unwrap();
+        assert_eq!(pull.head, head);
+        let (t, rest) = group_mark(&pull.body).unwrap_or_else(|| panic!("{}", pull.body));
+        assert_eq!(rest, format!("{}/3 head={head} -->", k + 1));
+        assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
+        assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
+    }
+    g.step();
+    g.step();
+    for n in &ns {
+        assert!(g.of(*n).is_empty(), "{:?}", g.subs());
+        assert!(is_draft(&g, *n));
+    }
+
+    let out = g.submit_group(&ws, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(&out)));
+    assert_eq!(
+        doc,
+        serde_json::json!({ "error": {
+            "kind": "refused",
+            "message": format!("#{} from {} needs 1 review", ns[1], ws[1].display()),
+            "next": [again],
+            "worktrees": [ws[1].to_str().unwrap()],
+        } })
+    );
+    for n in &ns {
+        assert!(is_draft(&g, *n) && g.of(*n).is_empty(), "{:?}", g.subs());
+    }
+}
+
+/// Refused, reviewed, submitted again: an act over two worktrees refused
+/// for want of reviews leaves two drafts; once a reviewer approves each at
+/// its head, the same act leaves both ready and queues both, in the order
+/// given and in one write.
+#[test]
+fn a_group_submit_refused_then_reviewed_is_taken() {
+    let g = OnGitHub::new("pr-group-again", "reviews = 1");
+    let names = ["r1", "r2"];
+    let ws = g.sessions(&names);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
+    for n in &ns {
+        assert!(is_draft(&g, *n));
+        assert!(g.of(*n).is_empty(), "{:?}", g.subs());
+        approve(&g, *n);
+    }
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let subs: Vec<Value> = ns
+        .iter()
+        .map(|n| {
+            assert!(!is_draft(&g, *n));
+            let mut of = g.of(*n);
+            assert_eq!(of.len(), 1, "{:?}", g.subs());
+            of.remove(0)
+        })
+        .collect();
+    assert!(subs[0]["id"].as_u64() < subs[1]["id"].as_u64(), "{subs:?}");
+    assert_eq!(subs[0]["submitted"], subs[1]["submitted"], "one write");
+}
+
+/// A pull request sluice held as a draft: one of an earlier act is blamed
+/// and sluice marks it a draft. Fixed, its worktree is named again in a
+/// new act whose conditions hold: it is ready for review at the head
+/// pushed, and queued with the rest of the new act.
+#[test]
+fn a_group_submit_takes_a_pull_request_held_as_a_draft() {
+    let g = OnGitHub::new("pr-group-held", "");
+    let w1 = g.session("k1", &[("k1.txt", "x\n"), ("broken", "x\n")]);
+    let w2 = g.session("k2", &[("k2.txt", "x\n")]);
+    let out = g.submit_group(&[w1.clone(), w2], &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n1 = g.pull_of("k1").number;
+    g.step_until("blamed and held", |g| {
+        g.of(n1).first().is_some_and(|s| s["state"] == "failed") && is_draft(g, n1)
+    });
+    std::fs::remove_file(w1.join("broken")).unwrap();
+    let fixed = g.commit_in(&w1, &[("k1.txt", "fixed\n")]);
+    let w3 = g.session("k3", &[("k3.txt", "x\n")]);
+    let out = g.submit_group(&[w1, w3], &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let p1 = g.pull_of("k1");
+    assert!(!p1.draft && p1.head == fixed, "{p1:?}");
+    let again: Vec<Value> = g
+        .of(n1)
+        .into_iter()
+        .filter(|s| s["head"] == fixed.as_str())
+        .collect();
+    assert_eq!(again.len(), 1, "{:?}", g.subs());
+    assert!(!again[0]["state"].as_str().is_some_and(|s| s == "withdrawn"));
+    let n3 = g.pull_of("k3").number;
+    let with = g.of(n3);
+    assert_eq!(with.len(), 1, "{:?}", g.subs());
+    assert_eq!(with[0]["submitted"], again[0]["submitted"], "one write");
+    assert!(again[0]["id"].as_u64() < with[0]["id"].as_u64());
+}
+
+/// A fork's pull request on a branch of the same name: a fork has a pull
+/// request into `main` from its own `unit/f1`, and the act names the
+/// worktree on the repository's `unit/f1`. The fork's is not edited,
+/// marked or queued; the act's pull request is the repository's own.
+#[test]
+fn a_group_submit_leaves_a_forks_pull_request_alone() {
+    let g = OnGitHub::new("pr-group-fork", "");
+    let ws = g.sessions(&["f1", "f2"]);
+    let fork_head = g
+        .repo
+        .branch("fork-f1", "main", &[("fork.txt", Some("f\n"))]);
+    g.repo.git(&["switch", "-q", "--detach", "main"]);
+    let fork =
+        g.gh.forge
+            .open_by(
+                "forker",
+                "main",
+                "unit/f1",
+                &fork_head,
+                false,
+                Some("forker/r"),
+            )
+            .unwrap();
+    let before = g.gh.forge.pull(&github::repo(), fork).unwrap().unwrap();
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        g.gh.forge.pull(&github::repo(), fork).unwrap().unwrap(),
+        before
+    );
+    assert!(g
+        .gh
+        .forge
+        .readied(&github::repo(), fork)
+        .unwrap()
+        .is_empty());
+    assert!(g.of(fork).is_empty(), "{:?}", g.subs());
+    let ours = g.pull_of("f1");
+    assert_ne!(ours.number, fork);
+    assert_eq!(ours.head_repo, "o/r");
+    assert!(!ours.draft, "{ours:?}");
+    assert_eq!(g.of(ours.number).len(), 1, "{:?}", g.subs());
 }
 
 /// A group whose second worktree holds more than its commits is refused
@@ -2089,19 +2414,25 @@ fn shows(g: &OnGitHub, n: u64) -> String {
     g.posted(&head).map(|p| p.1).unwrap_or_default()
 }
 
-/// Two of a group of three ready: none is submitted, and each of the two
-/// says it waits for the third; once the third is reviewed, one round
-/// submits all three in the group's order, and the first combination
-/// formed holds all three.
+/// Two of three are ready: a group submit of three refused for want of
+/// reviews leaves three drafts marked as one group; a reviewer approves
+/// the first two, and a person marks all three ready for review. None is
+/// submitted, and each of the two says it waits for the third; once the
+/// third is approved, one round submits all three in the group's order,
+/// and the first combination formed holds all three.
 #[test]
 fn two_of_a_group_ready_submits_none() {
     let g = OnGitHub::batched("pr-group-two", "reviews = 1");
     let names = ["t1", "t2", "t3"];
     let out = g.submit_group(&g.sessions(&names), &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
     approve(&g, ns[0]);
     approve(&g, ns[1]);
+    for n in &ns {
+        assert!(is_draft(&g, *n));
+        g.gh.forge.set_draft(*n, false).unwrap();
+    }
     g.step();
     g.step();
     for n in &ns {
@@ -2187,7 +2518,9 @@ fn a_round_between_a_groups_opens_submits_none() {
     }
 }
 
-/// One of a group closed before it is taken: the others are not
+/// One of a group closed before it is taken: a group submit refused for
+/// want of reviews leaves three drafts; the second is closed, and the
+/// others approved and marked ready for review by a person. They are not
 /// submitted and say they wait for it, until a submit names one of them
 /// again, alone.
 #[test]
@@ -2196,11 +2529,13 @@ fn one_of_a_group_closed_holds_the_rest() {
     let names = ["c1", "c2", "c3"];
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
     g.gh.forge.close(ns[1]).unwrap();
-    approve(&g, ns[0]);
-    approve(&g, ns[2]);
+    for n in [ns[0], ns[2]] {
+        approve(&g, n);
+        g.gh.forge.set_draft(n, false).unwrap();
+    }
     g.step();
     g.step();
     for n in [ns[0], ns[2]] {
@@ -2218,10 +2553,12 @@ fn one_of_a_group_closed_holds_the_rest() {
     assert!(g.of(ns[2]).is_empty(), "{:?}", g.subs());
 }
 
-/// Each its own once taken: a commit pushed to the second of a group
-/// already submitted withdraws only the second's submission; the first
-/// and third are tested without it and land, and the second is submitted
-/// again alone on its new head.
+/// Each its own once taken: a commit no submit made, pushed to the second
+/// of a group already submitted, withdraws only the second's submission,
+/// and sluice marks the second a draft; the first and third are tested
+/// without it and land, and no round submits the second again. Its
+/// worktree's `sluice submit main` marks it ready at its new head, one of
+/// no group, and it is submitted again alone and lands (120, 125).
 #[test]
 fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
     let g = OnGitHub::new("pr-group-new-head", "");
@@ -2238,16 +2575,18 @@ fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
         .iter()
         .map(|n| g.of(*n)[0]["id"].as_u64().expect("submitted together"))
         .collect();
-    g.commit_in(&ws[1], &[("h2-more.txt", "more\n")]);
+    let moved = g.commit_in(&ws[1], &[("h2-more.txt", "more\n")]);
     g.repo
         .git(&["push", "-q", "origin", "unit/h2:refs/heads/unit/h2"]);
     g.step();
     assert_eq!(g.of(ns[1])[0]["state"], "withdrawn", "{:?}", g.subs());
+    assert!(is_draft(&g, ns[1]));
     for n in [ns[0], ns[2]] {
         assert_ne!(g.of(n)[0]["state"], "withdrawn", "{:?}", g.subs());
     }
-    g.step_until("landed", |g| {
-        ns.iter()
+    g.step_until("the first and third landed", |g| {
+        [ns[0], ns[2]]
+            .iter()
             .all(|n| g.of(*n).iter().any(|s| s["state"] == "landed"))
     });
     for n in [ns[0], ns[2]] {
@@ -2259,8 +2598,35 @@ fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
         let tested = landed["tested"]["submissions"].as_array().unwrap().clone();
         assert!(!tested.contains(&serde_json::json!(first[1])), "{landed}");
     }
-    let again = g.of(ns[1]);
-    assert_eq!(again.len(), 2, "submitted again alone: {again:?}");
+    let held = g.of_after(ns[1], 2);
+    assert_eq!(held.len(), 1, "never submitted again by a round: {held:?}");
+    assert!(is_draft(&g, ns[1]));
+
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &ws[1])
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_of("h2");
+    assert!(!pull.draft && pull.head == moved, "{pull:?}");
+    assert_eq!(group_mark(&pull.body), None, "{}", pull.body);
+    g.step_until("the second submitted again and landed", |g| {
+        g.of(ns[1])
+            .iter()
+            .any(|s| s["head"] == moved.as_str() && s["state"] == "landed")
+    });
+    let again: Vec<Value> = g
+        .of(ns[1])
+        .into_iter()
+        .filter(|s| s["head"] == moved.as_str())
+        .collect();
+    assert_eq!(again.len(), 1, "{:?}", g.subs());
+    assert_eq!(
+        again[0]["tested"]["submissions"],
+        serde_json::json!([again[0]["id"]]),
+        "alone"
+    );
 }
 
 /// S58, 124, 1: a worktree that has checked out `bolt/x`, this host's copy

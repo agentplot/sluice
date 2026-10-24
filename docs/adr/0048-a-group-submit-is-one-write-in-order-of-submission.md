@@ -52,3 +52,4 @@ Clause 128 says what sluice reads of one request, or cannot, decides that reques
 - A push that fails midway through a pull-request group leaves requests marked as a group of `n` with fewer present, and intake takes none of them; the same act run again marks every request with a new token.
 - A group's request closed before the group is taken holds the rest, which say so, until a new submit names them, as a group or one by one.
 - A plain `sluice submit` of one worktree rewrites its request's body with no group mark, freeing it from any group it was in.
+- Narrowed by ADR 0054 under pull requests: the act marks each request ready and takes the group itself, or leaves every request a draft, since the forge now marks a request ready and a draft (ADR 0052); intake's group binding, option 5, stands for requests a person marks ready.
