@@ -28,4 +28,4 @@ exec main -- <command>`; before submitting, `sluice exec main`.
 
 ## 5. Gate
 
-- [ ] 5.1 Verify `openspec validate a-group-submit-meets-pull-requests --strict` (by hand: `root:specs` reads only `openspec/specs`) and `sluice exec main` with everything committed.
+- [x] 5.1 Verify `openspec validate a-group-submit-meets-pull-requests --strict` (by hand: `root:specs` reads only `openspec/specs`) and `sluice exec main` with everything committed.
