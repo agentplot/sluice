@@ -175,31 +175,37 @@ impl Ask<'_> {
                 let _lock = seams.state.wait_lock(&self.branch)?;
                 s.make_preview(&plan)?
             };
-            // 102: counted from its start to its end, never in the reserve.
+            // 102, 71: counted from its start to its end, against every
+            // repository's runs on the host, never in the reserve; a start
+            // the check seam refuses at the bound waits as one the count
+            // refused.
             let mut told_waiting = false;
             loop {
                 let guard = seams.state.lock(&self.branch)?;
-                if guard.is_some() {
-                    let held = self.host.lock_sessions()?;
-                    if s.session_capacity(self.host.reserved())? > 0 {
-                        let run = s.start_preview(&plan, place.clone())?;
-                        self.host.begin_session(
-                            held.as_ref(),
-                            &SessionRun {
-                                worktree: preview.path.to_string_lossy().into_owned(),
-                                place: preview.name.clone(),
-                                branch: self.branch.clone(),
-                                pid: std::process::id(),
-                                started: self
-                                    .clock
-                                    .now()
-                                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                                run_dir: self.host.run_dir(&run).unwrap_or_default(),
-                                command: None,
-                                tasks: Vec::new(),
-                            },
-                        )?;
-                        break;
+                if guard.is_some() && s.session_capacity(self.host.reserved())? > 0 {
+                    match s.start_preview(&plan, place.clone()) {
+                        Ok(run) => {
+                            let held = self.host.lock_sessions()?;
+                            self.host.begin_session(
+                                held.as_ref(),
+                                &SessionRun {
+                                    worktree: preview.path.to_string_lossy().into_owned(),
+                                    place: preview.name.clone(),
+                                    branch: self.branch.clone(),
+                                    pid: std::process::id(),
+                                    started: self
+                                        .clock
+                                        .now()
+                                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                                    run_dir: self.host.run_dir(&run).unwrap_or_default(),
+                                    command: None,
+                                    tasks: Vec::new(),
+                                },
+                            )?;
+                            break;
+                        }
+                        Err(e) if e.downcast_ref::<sluice_seams::AtBound>().is_some() => {}
+                        Err(e) => return Err(e),
                     }
                 }
                 drop(guard);
