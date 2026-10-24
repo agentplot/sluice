@@ -26,6 +26,7 @@ import {
   checkRows,
   clearText,
   combination,
+  commitBase,
   conflictLines,
   conflictText,
   duration,
@@ -56,6 +57,7 @@ import {
   progress,
   pullBase,
   pullOf,
+  pullsOf,
   recentInWay,
   recentKeys,
   recentWords,
@@ -733,36 +735,69 @@ export const register: Register = (on, options) => {
                 const mark = r.event === "landed" ? "✓" : r.event === "blamed" ? "✗" : "⚠";
                 const color =
                   r.event === "landed" ? "green" : r.event === "blamed" ? "red" : "yellow";
-                if (r.event === "blamed" && r.id !== undefined) {
+                // ` · PR 41` for each of the line's own submissions from a pull request.
+                const base = pullBase(b, bases);
+                const pulls = base
+                  ? pullsOf(b, r).flatMap((n) => [
+                      " · ",
+                      <Link key={`pr-${b.branch}-${i}-${n}`} href={`${base}/pull/${n}`}>
+                        PR {n}
+                      </Link>,
+                    ])
+                  : [];
+                if ((r.event === "blamed" || r.event === "conflict") && r.id !== undefined) {
                   const id = r.id;
-                  const k = `blamed-${b.branch}-${id}-${r.at}`;
-                  return (
-                    <Box key={`recent-${b.branch}-${i}`} flexDirection="column">
-                      <Button key={k} plain onPress={() => toggle($, k, () => blamedTests($, id))}>
-                        <Text color={color}>
-                          {"  "}
-                          {mark} {r.at.slice(11, 16)} {recentWords(r)}
-                        </Text>
-                      </Button>
-                      {open_.includes(k) && view(k, shownOf[k] ?? [])}
-                    </Box>
-                  );
-                }
-                if (r.event === "conflict" && r.id !== undefined) {
-                  const k = `conflict-${b.branch}-${r.id}-${r.at}`;
+                  const k = `${r.event}-${b.branch}-${id}-${r.at}`;
+                  // The row opens on its button; its links sit beside it, never inside.
                   return (
                     <Box key={`recent-${b.branch}-${i}`} flexDirection="column">
                       <Box key={`${k}-row`} flexDirection="row">
-                        <Button key={k} plain onPress={() => flip($, k)}>
+                        <Button
+                          key={k}
+                          plain
+                          onPress={() =>
+                            r.event === "blamed"
+                              ? toggle($, k, () => blamedTests($, id))
+                              : flip($, k)
+                          }
+                        >
                           <Text color={color}>
                             {"  "}
                             {mark} {r.at.slice(11, 16)} {recentWords(r)}
                           </Text>
                         </Button>
+                        {pulls.length > 0 && (
+                          <Text key={`${k}-pulls`} color={color}>
+                            {pulls}
+                          </Text>
+                        )}
                       </Box>
                       {open_.includes(k) &&
-                        linesView(k, conflictLines(b.branch, r.paths ?? [], recentInWay(b, r)))}
+                        (r.event === "blamed"
+                          ? view(k, shownOf[k] ?? [])
+                          : linesView(
+                              k,
+                              conflictLines(b.branch, r.paths ?? [], recentInWay(b, r)),
+                            ))}
                     </Box>
+                  );
+                }
+                if (r.event === "landed") {
+                  // The landing's commit, linked where the branch's remote is on GitHub.
+                  const at = commitBase(b, bases);
+                  const to = typeof r.to === "string" ? r.to : "";
+                  return (
+                    <Text key={`recent-${b.branch}-${i}`} color={color}>
+                      {"  "}
+                      {mark} {r.at.slice(11, 16)} {(r.ids ?? []).map((n) => `#${n}`).join(" ")}{" "}
+                      landed as{" "}
+                      {at && to ? (
+                        <Link href={`${at}/commit/${to}`}>{to.slice(0, 7)}</Link>
+                      ) : (
+                        to.slice(0, 7)
+                      )}
+                      {pulls}
+                    </Text>
                   );
                 }
                 return (

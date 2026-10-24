@@ -3,7 +3,15 @@ import type { Engine, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Flaky, Overview } from "../types";
-import { NOW, overview, withChecks, withConflict, withRelease, withTasks } from "./fixture";
+import {
+  NOW,
+  overview,
+  withChecks,
+  withConflict,
+  withLinks,
+  withRelease,
+  withTasks,
+} from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
@@ -237,6 +245,89 @@ test("a branch that lands on another remote links its pull requests there", asyn
   });
   const link = await pane.find({ type: "Link", text: "PR 41" });
   expect(link?.props.href).toBe("https://github.com/agentplot/sluice/pull/41");
+  await pane.unmount();
+});
+
+/** The pane of a host whose overview is `d`, its remotes answering as `more` says. */
+async function paneOf($: Engine, on: On, d: Overview, more: Record<string, string> = {}) {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [d], nothingSeen(), {}, more);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  return $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+}
+
+const SLUICE = "https://github.com/agentplot/sluice";
+
+/** A link's own words: the kit's `text` of a Link leads with its address. */
+function words(l: { children: unknown[] }): string {
+  return l.children.map(String).join("");
+}
+
+test("a landing on GitHub links its commit, and each pull request it landed", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin"));
+  const links = (await pane.findAll({ type: "Link" })).map((l) => [words(l), l.props.href]);
+  expect(links).toEqual([
+    // QUEUED: #14.
+    ["PR 41", `${SLUICE}/pull/41`],
+    // RECENT, newest first: #9's blame, then #11 and #12's landing, #12 from no pull request.
+    ["PR 40", `${SLUICE}/pull/40`],
+    ["9ecc34a", `${SLUICE}/commit/9ecc34a1b2`],
+    ["PR 41", `${SLUICE}/pull/41`],
+  ]);
+  // Both in the landing's own row.
+  const row = JSON.stringify(
+    (await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as / }))?.children,
+  );
+  expect(row).toContain(`${SLUICE}/commit/9ecc34a1b2`);
+  expect(row).toContain(`${SLUICE}/pull/41`);
+  await pane.unmount();
+});
+
+test("a landing with no remote, or one off GitHub, names its commit as plain text", async ($, on) => {
+  const pane = await paneOf($, on, withLinks());
+  expect(
+    await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as 9ecc34a/ }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Link", text: "9ecc34a" })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a branch whose remote is off GitHub links nothing", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("mirror"), {
+    "git remote get-url mirror": "https://git.example.test/sluice.git\n",
+  });
+  expect(
+    await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as 9ecc34a$/ }),
+  ).toBeDefined();
+  expect(await pane.findAll({ type: "Link" })).toEqual([]);
+  await pane.unmount();
+});
+
+test("a blamed pull request is linked beside its row, which still opens its tests", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin"));
+  const pr = await pane.find({ type: "Link", text: "PR 40" });
+  expect(pr?.props.href).toBe(`${SLUICE}/pull/40`);
+  // Beside the button, never inside it.
+  const button = await pane.find({ type: "Button", key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  expect(JSON.stringify(button?.children)).not.toContain("PR");
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "last line" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a sluice older than where submissions came from names no pull request on RECENT", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin", false));
+  const links = (await pane.findAll({ type: "Link" })).map(words);
+  expect(links).toEqual(["PR 41", "9ecc34a"]);
   await pane.unmount();
 });
 

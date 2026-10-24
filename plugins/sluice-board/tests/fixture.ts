@@ -126,6 +126,20 @@ export function withConflict(with_: number[] = [217]): Overview {
   return doc;
 }
 
+/**
+ * The fixture with main on `remote`, #11 and #12 landed together, #11 from
+ * `pull/41` and #12 from `unit/a`, and #9, from `pull/40`, blamed; with no
+ * `recent_from` when `from` is false, as a sluice older than it gives.
+ */
+export function withLinks(remote?: string, from = true): Overview {
+  const doc = overview();
+  const main = doc.branches[0]!;
+  if (remote) main.remote = remote;
+  main.recent[0]!.ids = [11, 12];
+  if (from) main.recent_from = { "9": "pull/40", "11": "pull/41", "12": "unit/a" };
+  return doc;
+}
+
 /** `n` finished tasks of a check, the first `failed` of them failed. */
 function finished(n: number, failed = 0): OverviewTask[] {
   return Array.from({ length: n }, (_, i) => ({
