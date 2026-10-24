@@ -17,7 +17,7 @@ group.
 - [x] 2.3 Add `a_draft_whose_head_cannot_be_fetched_is_only_a_draft`, citing 128: a draft with no head on GitHub and a ready pull request. One step: its output names the draft, the ready one is submitted, and the draft's `sluice` check reads `waiting: a draft` with no `Forecast:` in its summary. Verify with `cli:tools`.
 - [x] 2.4 Add `reviews_that_cannot_be_read_hold_no_other`, citing 128: `reviews = 1`, two pull requests each with an approving review on its head, the fake failing the first's reviews. One step: its output names the first and its reviews, the first is not submitted, the second is. Turn the failure off: the next step submits the first. Verify with `cli:tools`.
 - [x] 2.5 Add `a_failed_list_ends_intake_and_the_queue_still_lands`: a pull request submitted and queued, then the fake failing the list of pull requests. One step: its output warns that taking in `main`'s pull requests failed, and the queued submission is tested and lands. Verify with `cli:tools`.
-- [ ] 2.6 Keep every existing test in `tests/profiles/pull_requests.rs` passing; its `step` still asserts no warning, so a pull request that reads cleanly prints none. Verify with `cli:tools`.
+- [x] 2.6 Keep every existing test in `tests/profiles/pull_requests.rs` passing; its `step` still asserts no warning, so a pull request that reads cleanly prints none. Verify with `cli:tools`.
 
 ## 3. Docs
 
