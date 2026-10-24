@@ -64,6 +64,13 @@ and a loop waiting for it there never ends. `sluice status 12 --json` reads
 the record once without waiting, and `sluice submit main --status` this
 worktree's last submission or its pull request.
 
+Several worktrees whose heads must go in together, such as a set of
+approved bolts, are submitted as one act: `sluice submit main --worktree
+../a --worktree ../b`. sluice queues all of them, in that order, or none,
+and forms no combination on any of them until every one is queued. Once
+queued, each is its own submission: blamed, withdrawn and waited on
+(`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
+
 Nothing moves while nobody waits and no `sluice run` is going, so a
 `--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
 wait` moves it, as do `sluice step main` (one round) and `sluice run
@@ -76,8 +83,10 @@ A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one
 on a branch with `batch = true`, which tests one run at a time. It also drops
 after failures, halving for each blamed submission and climbing back one per
-pass. The host's `[runs] max` caps every branch and every `sluice exec`
-together. Submitting again fixes none of these. If unrelated
+pass. The host's `[runs] max` caps every branch, every `sluice exec` and
+every preview together, every repository's on the host: another
+repository's queue can hold yours back. Submitting again fixes none of
+these. If unrelated
 submissions keep failing the same check, read its log for a cause in the
 tests or the host, such as two runs writing the same directory, and tell the
 user.
@@ -150,7 +159,7 @@ Pick the form by what you want from the run:
 
    It covers uncommitted edits, uses moon's cache, records nothing, and is
    the fast loop. Going through `sluice exec` rather than straight to moon
-   shares the host's bound with the queue's runs and gives your worktree
+   shares the host's bound with every repository's queue and gives your worktree
    ports no other worktree holds. Run suites this way, so the sessions on
    one host take turns rather than all running at once; a quick, narrow
    call, such as a type check or one unit test, can run directly.

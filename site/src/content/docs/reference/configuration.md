@@ -458,7 +458,7 @@ host's own settings, not the repository's:
 
 ```toml
 [runs]
-max = 2        # default: a quarter of the cores
+max = 2        # default: a quarter of the cores; every repository shares it
 reserved = 1   # default: 0; runs of the bound agents' own runs never use
 
 [forge]
@@ -476,16 +476,22 @@ alive = "2m"   # how often this host shows it is alive
 
 ### `[runs]`
 
-`max` is the host's bound: how many runs share the host's cores at once.
-It counts the runs of submissions and the runs agents start in their own
-worktrees with `sluice exec` together, from the state of every branch
-the instance serves ([ADR 0012](/sluice/decisions/0012/)). A run waits
-while the bound is full.
+`max` is the host's bound: how many runs share the host's cores at once,
+whatever repository or branch each is for. It counts submissions' runs,
+the runs agents start in their own worktrees with `sluice exec` and
+previews' commands together, across every repository on the host. Every
+sluice on the host reads that one count from the host's state
+([ADR 0047](/sluice/decisions/0047/)), and a run waits while the bound is
+full. sluice reads nothing of how busy the host is: what runs beside it,
+the agents' sessions among it, is yours to leave room for when you set
+`max`.
 
 The cores are the logical CPUs the host gives sluice. With no `max`,
-the bound is a quarter of them, and never less than one. Each run gets
-the cores divided by `max`, and never less than one: sluice hands that
-number to the run as `SLUICE_JOBS`, and to moon as `--concurrency`.
+the bound is a quarter of them, and never less than one, and every
+repository on the host shares it. Each run gets the cores divided by
+`max`, and never less than one: sluice hands that number to the run as
+`SLUICE_JOBS`, and to moon as `--concurrency`. With the bound shared,
+the runs going at once use the host's cores and no more.
 
 `max` is the one setting for memory as well. Nothing but moon keeps to
 the share of cores, and an executor's `memory` limit holds the run's own
@@ -562,6 +568,6 @@ sets either is refused.
 | `SLUICE_NAME_<NAME>` | sluice, for a preview | The preview's name for each port: one DNS label, unique among the repository's previews, for a proxy to route to the port. |
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
-| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`. |
+| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`, the bound every repository on the host shares. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

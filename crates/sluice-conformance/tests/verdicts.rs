@@ -330,13 +330,12 @@ fn live_runs_serving(serves: sluice_core::Serves) -> usize {
 
 /// satisfies: 71
 #[test]
-fn an_instance_holds_the_branches_it_serves_to_its_bound() {
+fn every_instance_on_the_host_shares_its_bound() {
     // One instance serving every branch: two runs across both.
     assert_eq!(live_runs_serving(sluice_core::Serves::Every), 2);
-    // Instances that each serve the branch they step: each holds its own
-    // branch to the bound, and the windows are the only limit between
-    // them.
-    assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 4);
+    // Instances that each serve the branch they step share the host's
+    // bound all the same: two runs across both.
+    assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 2);
 }
 
 /// satisfies: 71; session-runs-1 89
@@ -503,7 +502,7 @@ fn a_required_check_kept_out_of_ci_is_missing_and_named() {
     );
 }
 
-/// satisfies: 2, 27, 56 (ADR 0047)
+/// satisfies: 2, 27, 56 (ADR 0050)
 #[test]
 fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused() {
     let h = Harness::bolt();
@@ -529,7 +528,7 @@ fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused() {
     assert!(h.sluice().status(BRANCH).unwrap().submissions.is_empty());
 }
 
-/// satisfies: 2, 27, 56 (ADR 0047)
+/// satisfies: 2, 27, 56 (ADR 0050)
 #[test]
 fn a_submission_that_lets_the_check_run_is_taken() {
     let h = Harness::bolt();
@@ -549,7 +548,7 @@ fn a_submission_that_lets_the_check_run_is_taken() {
     assert!(results(&h).iter().any(|r| r.task == "b:test"));
 }
 
-/// satisfies: 27 (ADR 0047)
+/// satisfies: 27 (ADR 0050)
 #[test]
 fn a_runner_that_cannot_be_asked_takes_the_submission_with_a_warning() {
     let h = Harness::bolt();

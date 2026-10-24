@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
-    Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings, Source,
-    Tests,
+    AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
+    Source, Tests,
 };
-use support::Repo;
+use support::{Repo, Scratch};
 
+/// The check profile of `repo`, counting its runs in a registry of the
+/// repository's own, never the host's.
 fn checks(repo: &Repo) -> Checks {
     Checks::new(
         &repo.dir().join(".git"),
@@ -30,6 +32,7 @@ fn checks(repo: &Repo) -> Checks {
             systems: None,
         },
     )
+    .with_running(repo.dir().join(".git/host-running"))
 }
 
 fn command(cmd: &str) -> Settings {
@@ -271,6 +274,54 @@ fn the_open_executor_refuses_what_it_cannot_hold() {
 fn the_bound_is_the_instances() {
     let repo = Repo::new("checks-bound");
     assert_eq!(checks(&repo).bound().unwrap(), 2);
+}
+
+/// 71, S60: the bound is the host's, shared by every repository on it. A
+/// start from a second repository's checkout while the host's one run goes
+/// is refused before anything of it runs, and starts once that run ends.
+#[test]
+fn a_second_repositorys_start_waits_for_the_hosts_bound() {
+    let host = Scratch::new("checks-host-running");
+    let (a, b) = (Repo::new("checks-host-a"), Repo::new("checks-host-b"));
+    let at = |repo: &Repo| {
+        Checks::new(
+            &repo.dir().join(".git"),
+            PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
+            Instance {
+                bound: 1,
+                reserved: 0,
+                processors: 8,
+                forge: None,
+                signing: None,
+                peers: Default::default(),
+                systems: None,
+            },
+        )
+        .with_running(host.path().to_path_buf())
+    };
+    let (first, second) = (at(&a), at(&b));
+    let go = a.dir().join(".git/go");
+    let holds = format!("while [ ! -e '{}' ]; do sleep 0.05; done", go.display());
+    let going = first
+        .start(&request(&a, "sluice/try/main/1", command(&holds)))
+        .unwrap();
+
+    let req = request(&b, "sluice/try/main/1", command("touch ran"));
+    let err = second.start(&req).unwrap_err();
+    assert!(err.downcast_ref::<AtBound>().is_some(), "{err:#}");
+    let dir = second.runs().dir("sluice/try/main/1");
+    assert!(!dir.join("request.json").exists(), "nothing of it ran");
+    assert!(!b.dir().join("ran").exists());
+    assert_eq!(second.running().unwrap().queue, 1, "the other's run counts");
+
+    std::fs::write(&go, "").unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    while matches!(first.progress(&going).unwrap(), Progress::Running) {
+        assert!(Instant::now() < until, "the first run never ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(finish(&second, &req).tasks[0].outcome, Outcome::Pass);
+    assert!(b.dir().join("ran").exists());
 }
 
 /// A policy that names no runner, or one sluice lacks, refuses the run.

@@ -161,8 +161,8 @@ impl Tests for RecordedChecks {
         self.inner.platform()
     }
 
-    fn sessions(&self) -> Result<usize> {
-        self.inner.sessions()
+    fn running(&self) -> Result<sluice_seams::Running> {
+        self.inner.running()
     }
 
     fn proven(&self, run: &RunHandle, report: &sluice_seams::RunReport) -> Result<Vec<String>> {
@@ -259,6 +259,7 @@ struct Real {
     /// The host's session runs, the rig's own, so another agent's runs on
     /// this host never shrink the bound it tests under (71).
     _host: Scratch,
+    _running: Scratch,
     rules: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
@@ -387,6 +388,7 @@ impl Real {
         } = bound;
         let blocks = Scratch::new(&format!("{name}-blocks"));
         let host = Scratch::new(&format!("{name}-host-sessions"));
+        let running = Scratch::new(&format!("{name}-host-running"));
         Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
@@ -396,7 +398,9 @@ impl Real {
                 log: RefCell::default(),
             },
             tests: RecordedChecks {
-                inner: tests.with_sessions(host.path().to_path_buf()),
+                inner: tests
+                    .with_sessions(host.path().to_path_buf())
+                    .with_running(running.path().to_path_buf()),
                 requests: RefCell::default(),
                 started: RefCell::default(),
             },
@@ -412,6 +416,7 @@ impl Real {
             state,
             _blocks: blocks,
             _host: host,
+            _running: running,
             origin,
         }
     }

@@ -118,7 +118,7 @@ pub enum Flaky {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
     pub required: Vec<String>,
-    /// ADR 0047: the line of `.config/sluice.toml` each of `required` is
+    /// ADR 0050: the line of `.config/sluice.toml` each of `required` is
     /// written on, in the same order, so a refusal can name it.
     pub required_lines: Vec<usize>,
     /// The window's upper bound; its lower bound is one (13).
@@ -303,7 +303,7 @@ struct ExecutorForm {
 #[serde(deny_unknown_fields)]
 struct RulesForm {
     /// Each entry with where it is written, so a refusal can name its
-    /// line (ADR 0047).
+    /// line (ADR 0050).
     #[serde(default)]
     required: Vec<toml::Spanned<String>>,
     parallel: Option<i64>,
@@ -924,7 +924,7 @@ hold = "5m"
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
     }
 
-    /// ADR 0047: each required entry keeps the line it is written on.
+    /// ADR 0050: each required entry keeps the line it is written on.
     #[test]
     fn keeps_the_line_of_a_required_entry_on_one_line() {
         let p = Policy::parse(POLICY).unwrap();
@@ -934,7 +934,7 @@ hold = "5m"
         assert_eq!(main.required_lines, [17, 17]);
     }
 
-    /// ADR 0047: a `required` array written across lines keeps each
+    /// ADR 0050: a `required` array written across lines keeps each
     /// entry's own line, as switchboard-kit writes it.
     #[test]
     fn keeps_the_line_of_each_entry_of_a_required_array_across_lines() {
