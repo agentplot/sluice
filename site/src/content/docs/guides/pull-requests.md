@@ -100,10 +100,29 @@ waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 ```
 
-The agent's branch is pushed, and the pull request is opened with the
-branch's commit messages. Its description names the agent, which makes
-it the agent's pull request. Submitting again from the same worktree
-updates the same pull request and marks it ready for review.
+The agent's branch is pushed, and the pull request is opened. Its
+description holds the branch's commit messages, each whole and oldest
+first, and names the agent, which makes it the agent's pull request.
+Submitting again from the same worktree updates the same pull request
+and marks it ready for review.
+
+GitHub holds 65,536 characters in a description. When a branch's
+messages pass that, as a long bolt's can, the description holds as many
+of them whole as fit. A count of the rest follows, with a link to
+GitHub's comparison of the branch, then the subject of each of the rest:
+
+```text
+38 more commits, each by its subject; all of them in full: https://github.com/org/cards/compare/main...bolt/review-cards
+
+- Show the review card's footer
+- Count the cards left to review
+…
+```
+
+No message is cut part way. Each submit writes the description again
+for the commits it pushes, so it follows the pull request's commits. It
+replaces any text a person added there; a person's notes belong in a
+comment.
 
 ### A bolt's landing worktree submits
 
