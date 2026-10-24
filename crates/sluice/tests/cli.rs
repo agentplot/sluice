@@ -1092,6 +1092,8 @@ fn overview_shows_every_branch_at_a_glance() {
     assert_eq!(b["branch"], BRANCH);
     assert_eq!(b["at"], f.world.tip(BRANCH).0);
     assert_eq!(b["parallel"], 4);
+    // C.4, C.7: a branch whose policy names no remote names none.
+    assert!(b.get("remote").is_none(), "{json}");
     assert_eq!(b["depth"], 1);
     assert!(b["version"].as_u64().unwrap() > 0);
     // Only the submission still in play, as `status <id> --json` has it.
