@@ -1749,20 +1749,32 @@ impl crate::PullRequests for Pulls {
         };
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
-        let pushed = self.pushed(&t.remote)?;
+        // 124, 1: a branch sluice lands on is asked for as its remote holds
+        // it, and nothing is pushed; only a branch it lands on nowhere is.
+        let submitted = sessions
+            .iter()
+            .map(|session| s.submitted_head(session))
+            .collect::<Result<Vec<_>>>()?;
         let open = forge.pulls(&t.repo, branch)?;
         let n = sessions.len();
-        let token = group_token(clock.now(), &sessions[0].head);
+        let token = group_token(clock.now(), &submitted[0].head);
         let mut opened = Vec::new();
-        for (k, session) in sessions.iter().enumerate() {
+        for (k, (session, submitted)) in sessions.iter().zip(&submitted).enumerate() {
             let head_ref = session.from.worktree.clone();
+            let head = &submitted.head;
             let agent = &session.from.agent;
             let group = (n > 1).then(|| Group {
                 token: token.clone(),
                 k: k + 1,
                 n,
-                head: session.head.0.clone(),
+                head: head.0.clone(),
             });
+            let push = || -> Result<()> {
+                if !submitted.from_remote {
+                    self.pushed(&t.remote)?.push_branch(head, &head_ref)?;
+                }
+                Ok(())
+            };
             let existing = open
                 .iter()
                 .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
@@ -1777,12 +1789,12 @@ impl crate::PullRequests for Pulls {
                             &with_marks(&p.body, agent, group.as_ref()),
                         )?;
                     }
-                    pushed.push_branch(&session.head, &head_ref)?;
+                    push()?;
                     (p.number, p.title.clone(), p.draft, "updated")
                 }
                 None => {
-                    pushed.push_branch(&session.head, &head_ref)?;
-                    let messages = self.messages(&t.tip, &session.head)?;
+                    push()?;
+                    let messages = self.messages(&t.tip, head)?;
                     let title = messages
                         .first()
                         .and_then(|m| m.lines().next())
@@ -1793,16 +1805,20 @@ impl crate::PullRequests for Pulls {
                     (p.number, p.title, p.draft, "opened")
                 }
             };
-            let mut said = format!("pushed {head_ref} · {word} #{number}: {title}");
+            let mut said = format!("{word} #{number}: {title}");
+            if !submitted.from_remote {
+                said = format!("pushed {head_ref} · {said}");
+            }
             // The submit is its submitter's act (120). The submission on an
             // older head leaves the queue, withdrawn by the submit itself
             // (67), and a ready mark follows the latest leaving, so intake
             // reads the act as given.
             let here = place(number);
             let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
-            if let Some(e) = latest.get(&here).filter(|e| {
-                !e.state.is_out() && e.state != State::Landing && e.head != session.head
-            }) {
+            if let Some(e) = latest
+                .get(&here)
+                .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != *head)
+            {
                 // Landing since it was read: it lands, and the new head waits.
                 if let Ok(Withdrew::Now) =
                     s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
@@ -1818,6 +1834,10 @@ impl crate::PullRequests for Pulls {
             if draft || left.is_some() {
                 mark_ready(forge, &t.repo, number, draft, left)?;
                 said.push_str(" · marked ready for review");
+            }
+            if let Some(copy) = &submitted.copy {
+                said.push('\n');
+                said.push_str(&crate::copy_differs_line(copy));
             }
             opened.push(Opened { number, said });
         }
@@ -1845,11 +1865,12 @@ impl crate::PullRequests for Pulls {
         {
             return Ok(Some(p.number));
         }
-        // Landed and closed: its entry has this worktree's head.
+        // Landed and closed: its entry has the head this worktree submits.
+        let head = s.submitted_head(&session)?.head;
         Ok(s.history(branch)?
             .iter()
             .rev()
-            .filter(|x| x.head == session.head)
+            .filter(|x| x.head == head)
             .find_map(|x| number(&x.from.worktree)))
     }
 

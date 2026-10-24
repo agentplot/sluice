@@ -51,6 +51,9 @@ pub struct Accepted {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubmittedHead {
     pub head: Rev,
+    /// The head is the remote's revision of a branch sluice lands on: the
+    /// submit pushes nothing to it (1).
+    pub from_remote: bool,
     pub copy: Option<CopyDiffers>,
 }
 
@@ -239,6 +242,7 @@ impl Sluice<'_> {
     pub fn submitted_head(&self, session: &Session) -> Result<SubmittedHead> {
         let own = SubmittedHead {
             head: session.head.clone(),
+            from_remote: false,
             copy: None,
         };
         let branch = &session.from.worktree;
@@ -271,7 +275,11 @@ impl Sluice<'_> {
                 })
             })
             .transpose()?;
-        Ok(SubmittedHead { head: at, copy })
+        Ok(SubmittedHead {
+            head: at,
+            from_remote: true,
+            copy,
+        })
     }
 
     /// 47, 1, 2, 3, 67: admit a head to a branch's queue, and nothing

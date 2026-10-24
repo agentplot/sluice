@@ -58,16 +58,43 @@ impl OnGitHub {
         OnGitHub::with(name, conditions, "1m", "batch = true\n")
     }
 
+    /// `main` on GitHub, and `bolt/x` beside it, a branch on GitHub sluice
+    /// lands on, made from `main` and taking no pull requests.
+    fn with_bolt(name: &str) -> OnGitHub {
+        let g = OnGitHub::with_policy(
+            name,
+            "",
+            "1m",
+            "",
+            "\n[branches.\"bolt/*\"]\nremote = \"origin\"\ntimeout = \"1m\"\n",
+        );
+        g.repo.git(&["branch", "bolt/x", "main"]);
+        g.repo
+            .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+        g
+    }
+
     /// `main` with the time limit `timeout`, and `lines` in its table
     /// beside its remote and time limit.
     fn with(name: &str, conditions: &str, timeout: &str, lines: &str) -> OnGitHub {
+        OnGitHub::with_policy(name, conditions, timeout, lines, "")
+    }
+
+    /// [`OnGitHub::with`], with `extra` after its tables in the policy.
+    fn with_policy(
+        name: &str,
+        conditions: &str,
+        timeout: &str,
+        lines: &str,
+        extra: &str,
+    ) -> OnGitHub {
         let repo = Repo::new(name);
         repo.write(
             ".config/sluice.toml",
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
                  [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{lines}\n\
-                 [branches.main.pull_requests]\n{conditions}\n"
+                 [branches.main.pull_requests]\n{conditions}\n{extra}"
             ),
         );
         repo.write("check.sh", CHECK);
@@ -340,6 +367,44 @@ impl OnGitHub {
             &format!("{branch}:refs/heads/{branch}"),
         ]);
         head
+    }
+
+    /// GitHub's `bolt/x`.
+    fn bolt_on_github(&self) -> String {
+        github::rev(self.bare.path(), "refs/heads/bolt/x").unwrap()
+    }
+
+    /// One submission of `changes`, from a worktree of its own off
+    /// `bolt/x`, landed on `bolt/x` by its rounds; returns GitHub's
+    /// `bolt/x` after it.
+    fn land_on_bolt(&self, name: &str, changes: &[(&str, &str)]) -> String {
+        let dir = self.repo.dir().with_extension(format!("b-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let before = self.bolt_on_github();
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("unit/{name}"),
+            dir.to_str().unwrap(),
+            &before,
+        ]);
+        self.commit_in(&dir, changes);
+        let out = self
+            .command(env!("CARGO_BIN_EXE_sluice"), &dir)
+            .args(["submit", "bolt/x", "--no-wait"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let until = Instant::now() + Duration::from_secs(60);
+        while self.bolt_on_github() == before {
+            assert!(Instant::now() < until, "never landed on bolt/x");
+            let out = self.sluice(&["step", "bolt/x"]);
+            assert!(out.status.success(), "{}", text(&out));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        self.bolt_on_github()
     }
 
     /// The submissions from pull request `n`, after `steps` more rounds.

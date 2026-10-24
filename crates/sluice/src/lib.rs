@@ -480,7 +480,8 @@ impl Pushers for () {
 /// What `sluice submit` to a branch with pull requests opened or updated.
 pub struct Opened {
     pub number: u64,
-    /// What it did: the branch pushed, and the pull request.
+    /// What it did: the branch pushed, if it pushed one, and the pull
+    /// request.
     pub said: String,
 }
 
