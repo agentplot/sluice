@@ -8,7 +8,7 @@ use sluice_core::records::{
     SUBMISSION_SCHEMA,
 };
 use sluice_core::session::Recorded;
-use sluice_core::{Forecast, Sluice, SubmitRefusal};
+use sluice_core::{Forecast, Requester, Sluice, SubmitRefusal};
 use sluice_seams::{
     LastResult, Outcome, ReleasePolicy, Released, Rev, RunKind, RunOutcome, SessionPlace, Told,
 };
@@ -236,6 +236,111 @@ pub fn s12_a_submission_cannot_loosen_the_gate_it_is_judged_by(h: &impl Rig) {
     // Judged by the policy on the branch, so it fails and does not land.
     assert_eq!(h.sub(id).state, State::Failed);
     assert_eq!(h.requests()[0].required, vec!["#gate".to_string()]);
+}
+
+/// S59, 125: three heads submitted as one act on a branch that batches
+/// are formed and tested once, as one combination, and land in one move
+/// in the order given; thereafter each is its own submission: the middle
+/// one conflicting with the first is set aside alone, naming it (12, 65),
+/// the middle one failing is blamed alone (17, 18), one withdrawn leaves
+/// alone (5), and each session is told its own outcome (50). The rig's
+/// policy batches.
+pub fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(h: &impl Rig) {
+    let base = h.tip();
+    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
+    h.work("unit/2", "agent-2", &[("b/two", Some("2"))]);
+    h.work("unit/3", "agent-3", &[("c/three", Some("3"))]);
+    let ids = h.submit_group(&["unit/1", "unit/2", "unit/3"]);
+    // Numbered in the order given, none after another of the act (6).
+    assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
+    for id in &ids {
+        assert!(h.sub(*id).after.is_empty());
+    }
+    assert!(h.started().is_empty(), "submitting runs nothing (1)");
+
+    h.step();
+    // One combination of all three is formed, and none of fewer.
+    assert_eq!(h.tested(), vec![ids.clone()]);
+    h.settle();
+    assert_eq!(h.tested(), vec![ids.clone()], "tested once");
+    assert_eq!(h.moves(), 1, "landed in one move");
+    let history = h.first_parents();
+    assert_eq!(history[3], base);
+    for (k, id) in ids.iter().enumerate() {
+        let s = h.sub(*id);
+        assert_eq!(s.state, State::Landed);
+        // In the order given: the first's landing is nearest the base.
+        assert_eq!(s.landed_as.as_ref(), Some(&history[2 - k]));
+        let told = h.told_to(&format!("agent-{}", k + 1));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0].submission, *id);
+        assert_eq!(told[0].told.word(), "landed");
+    }
+
+    // The middle one conflicts with the first as the combinations form.
+    let tested = h.tested().len();
+    h.work("unit/4", "agent-4", &[("a/lib", Some("four"))]);
+    h.work("unit/5", "agent-5", &[("a/lib", Some("five"))]);
+    h.work("unit/6", "agent-6", &[("c/lib", Some("six"))]);
+    let ids = h.submit_group(&["unit/4", "unit/5", "unit/6"]);
+    h.settle();
+    let middle = h.sub(ids[1]);
+    assert_eq!(middle.state, State::Conflict);
+    let conflict = middle.conflict.unwrap();
+    assert_eq!(conflict.paths, vec!["a/lib".to_string()]);
+    let with: Vec<(u64, String)> = conflict
+        .with
+        .iter()
+        .map(|c| (c.id, c.from.worktree.clone()))
+        .collect();
+    assert_eq!(with, vec![(ids[0], h.place("unit/4"))]);
+    match &h.told_to("agent-5")[..] {
+        [n] => assert!(matches!(&n.told, Told::Conflict { with, .. } if with[0].id == ids[0])),
+        other => panic!("told {other:?}"),
+    }
+    assert!(h.tested()[tested..].iter().all(|c| !c.contains(&ids[1])));
+    for id in [ids[0], ids[2]] {
+        assert_eq!(h.sub(id).state, State::Landed);
+    }
+
+    // The middle one fails, and it alone is blamed.
+    h.fails_with("b:test", "b/bad", "yes");
+    let tested = h.tested().len();
+    h.work("unit/7", "agent-7", &[("a/seven", Some("7"))]);
+    h.work("unit/8", "agent-8", &[("b/bad", Some("yes"))]);
+    h.work("unit/9", "agent-9", &[("c/nine", Some("9"))]);
+    let ids = h.submit_group(&["unit/7", "unit/8", "unit/9"]);
+    h.settle();
+    let blamed: Vec<u64> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Blamed { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blamed, vec![ids[1]]);
+    assert_eq!(h.sub(ids[1]).state, State::Failed);
+    assert_eq!(h.told_to("agent-8")[0].told.word(), "failed");
+    // The third is tested again without it, and both others land.
+    assert!(h.tested()[tested..]
+        .iter()
+        .any(|c| c.contains(&ids[2]) && !c.contains(&ids[1])));
+    for (id, agent) in [(ids[0], "agent-7"), (ids[2], "agent-9")] {
+        assert_eq!(h.sub(id).state, State::Landed);
+        assert!(h.told_to(agent).iter().all(|n| n.told.word() == "landed"));
+    }
+
+    // The first withdrawn leaves alone; the other lands without it.
+    let tested = h.tested().len();
+    h.work("unit/10", "agent-10", &[("a/ten", Some("10"))]);
+    h.work("unit/11", "agent-11", &[("b/eleven", Some("11"))]);
+    let ids = h.submit_group(&["unit/10", "unit/11"]);
+    h.withdraw(ids[0], Requester::Session("agent-10".into()));
+    h.settle();
+    assert_eq!(h.sub(ids[0]).state, State::Withdrawn);
+    assert_eq!(h.sub(ids[1]).state, State::Landed);
+    assert!(h.tested()[tested..].iter().all(|c| !c.contains(&ids[0])));
 }
 
 /// 64, 65, 47a: a branch no place holds, a bolt's, is forecast against

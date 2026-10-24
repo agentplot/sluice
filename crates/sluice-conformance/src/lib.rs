@@ -15,7 +15,7 @@ use anyhow::Result;
 use sluice_core::line::Line;
 use sluice_core::records::{parse_lines, BranchDoc, Event, LogLine, ResultLine, Submission};
 use sluice_core::session::Recorded;
-use sluice_core::{Accepted, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
+use sluice_core::{Accepted, GroupRequest, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
 use sluice_seams::{Driver, Notification, Progress, Rev, RunReport, RunRequest};
 
@@ -182,6 +182,28 @@ pub trait Rig {
 
     fn submit(&self, worktree: &str) -> u64 {
         self.try_submit(worktree, &[], 0).expect("accepted").id
+    }
+
+    /// 125: the places' heads submitted as one act, in the order given.
+    fn try_submit_group(
+        &self,
+        worktrees: &[&str],
+        after: &[u64],
+        priority: i64,
+    ) -> Result<Vec<Accepted>, Vec<(String, SubmitRefusal)>> {
+        self.sluice()
+            .submit_group(&GroupRequest {
+                branch: BRANCH.into(),
+                worktrees: worktrees.iter().map(|w| self.place(w)).collect(),
+                after: after.to_vec(),
+                priority,
+            })
+            .expect("submit runs")
+    }
+
+    fn submit_group(&self, worktrees: &[&str]) -> Vec<u64> {
+        let accepted = self.try_submit_group(worktrees, &[], 0).expect("accepted");
+        accepted.iter().map(|a| a.id).collect()
     }
 
     fn step(&self) -> Step {

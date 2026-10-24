@@ -8,7 +8,7 @@ sidebar:
 | Command | |
 |---|---|
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
-| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. |
+| `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. `--worktree <path>` given more than once submits each worktree's head as one act, in that order ([below](#submitting-several-worktrees-as-one-act)). |
 | `sluice wait <id>` | Wait for a submission's outcome, running sluice's rounds meanwhile, as a waiting submit does; `sluice wait <branch>` for this worktree's last submission to it. `--timeout 9m` returns after that long with the submission as it stands, and exits `5`; `--json` prints its record. |
 | `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
@@ -52,6 +52,66 @@ so it costs one merge behind them.
 ```json
 {"conflict":{"paths":["docs/architecture/builds.md"],"with":[{"id":217,"from":{"agent":"wldn-design","worktree":"design/runner-credential"}}]},"head":"4f0c2a1…","onto":"9b7e3d0…","ahead":[217]}
 ```
+
+## Submitting several worktrees as one act
+
+`--worktree` given more than once submits each worktree's head to the
+branch as one act, in the order given:
+
+```console
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --worktree ../bolt-c
+submission 41 to main from ../bolt-a · nothing queued ahead
+submission 42 to main from ../bolt-b · 1 queued ahead (#41)
+submission 43 to main from ../bolt-c · 2 queued ahead (#41, #42)
+```
+
+sluice queues all of them or none. When a worktree holds changes beyond
+its commits, is named twice, or the branch refuses the act, the answer
+names each refused worktree and why, queues nothing, and exits `2`.
+sluice writes the submissions to the branch's state in one write. No
+round, waiting submit or `sluice wait` ever reads some of them queued and
+not the rest, so no combination holds one of them before every one is
+queued. Each is queued after the one before it. `--after` and
+`--priority` apply to every one alike, and a later submission of higher
+priority may still come between them, as it may between any two.
+
+Once queued, each is a submission of its own. It is blamed alone, set
+aside for a conflict alone, withdrawn alone and told its own outcome, and
+`sluice wait <id>` waits on it alone. One that fails or conflicts holds
+back none of the others.
+
+A waiting act runs sluice's rounds until every one is decided. It then
+reports each one's outcome in the order given, each under `submission
+<id> from <worktree>:`, a conflict with its files and the submission it
+is contested with:
+
+```console
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b
+submission 44 to main from ../bolt-a · nothing queued ahead
+submission 45 to main from ../bolt-b · 1 queued ahead (#44)
+#44 queued
+testing main + #44 + #45 · 12s of 45m
+submission 44 from ../bolt-a:
+testing main + #44 · 12 tasks to run, 0 replayed
+passed · landed as b7d2e94
+submission 45 from ../bolt-b:
+conflict: docs/architecture/builds.md
+  conflicts with #44 (ops, bolt/runner)
+merge or rebase onto main in your worktree and submit again
+```
+
+It exits `0` when every one landed, and otherwise with the exit of the
+first, in the order given, that did not land: `2` above. Stopped with
+Ctrl-C, it exits `130` and the submissions stay queued. `--no-wait`
+exits `0` once all are queued.
+
+Under `--json` it prints one document however it ends,
+`{"branch","submissions"}`, one item per worktree in the order given,
+each with its `worktree`. With `--no-wait` an item holds `id` and
+`ahead`; waiting, it is the submission's record, as `sluice status <id>
+--json` prints it. A refusal's error document lists the refused
+worktrees under `worktrees`. `--check` and `--status` take one worktree,
+and exit `64` given more.
 
 ## `sluice exec`
 

@@ -26,7 +26,7 @@ use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
-    Clock, Forecast, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
+    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
     Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
@@ -66,19 +66,86 @@ fn marked_agent(body: &str) -> Option<String> {
     })
 }
 
-/// `body` naming `agent`, in place of any agent it named.
-fn with_marker(body: &str, agent: &str) -> String {
+/// `body` naming `agent` and, with `group`, marked one of that group, in
+/// place of any agent and group it named.
+fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
     let kept: Vec<&str> = body
         .lines()
-        .filter(|l| !l.trim().starts_with("<!-- sluice: agent="))
+        .filter(|l| {
+            let l = l.trim();
+            !l.starts_with("<!-- sluice: agent=") && !l.starts_with(GROUP_MARK)
+        })
         .collect();
     let kept = kept.join("\n");
     let kept = kept.trim_end();
-    if kept.is_empty() {
-        marker(agent)
-    } else {
-        format!("{kept}\n\n{}", marker(agent))
+    let mut marks = marker(agent);
+    if let Some(g) = group {
+        marks.push('\n');
+        marks.push_str(&g.marker());
     }
+    if kept.is_empty() {
+        marks
+    } else {
+        format!("{kept}\n\n{marks}")
+    }
+}
+
+const GROUP_MARK: &str = "<!-- sluice: group=";
+
+/// 125: a pull request opened by a group submit, as its body marks it:
+/// the act's token, its place `k` of `n`, and the head it was opened at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Group {
+    token: String,
+    k: usize,
+    n: usize,
+    head: String,
+}
+
+impl Group {
+    /// `<!-- sluice: group=<token> <k>/<n> head=<oid> -->`
+    fn marker(&self) -> String {
+        format!(
+            "{GROUP_MARK}{} {}/{} head={} -->",
+            self.token, self.k, self.n, self.head
+        )
+    }
+
+    /// The group a pull request's body marks it one of, if any.
+    fn of(body: &str) -> Option<Group> {
+        body.lines().find_map(|l| {
+            let rest = l.trim().strip_prefix(GROUP_MARK)?.strip_suffix("-->")?;
+            let mut words = rest.split_whitespace();
+            let token = words.next()?.to_string();
+            let (k, n) = words.next()?.split_once('/')?;
+            let head = words.next()?.strip_prefix("head=")?.to_string();
+            let (k, n) = (k.parse().ok()?, n.parse().ok()?);
+            (words.next().is_none() && (1..=n).contains(&k)).then_some(Group { token, k, n, head })
+        })
+    }
+}
+
+/// A group submit's token: when it was made and its first head, short.
+fn group_token(at: DateTime<Utc>, first: &Rev) -> String {
+    format!("{}-{}", at.format("%Y%m%dT%H%M%SZ"), first.short())
+}
+
+/// 125: a pull request bound to a group intake has not taken: the group's
+/// size, what of the group it waits for, and what it lacks itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Bound {
+    n: usize,
+    on: Vec<String>,
+    missing: Vec<String>,
+}
+
+/// 125: what intake's pass over a branch's groups did: whether it took
+/// any, what each bound request of a group not taken waits for, and what
+/// failed for each it could not read (128).
+struct Groups {
+    taken: bool,
+    bound: BTreeMap<u64, Bound>,
+    unread: BTreeMap<u64, anyhow::Error>,
 }
 
 /// The line written into a comment, naming the notification it tells, so
@@ -347,7 +414,7 @@ impl Pulls {
         let pulls = forge.pulls(&t.repo, branch)?;
         let mut status = s.status(branch)?;
         self.register(&t.repo, &status.submissions);
-        let names = names(&status.submissions);
+        let mut names = names(&status.submissions);
 
         // A submitted pull request closed, back in draft or on another
         // head leaves the queue.
@@ -381,16 +448,31 @@ impl Pulls {
             .filter(|p| p.from_repo(&t.repo))
             .map(|p| place(p.number))
             .collect();
-        let latest = s.latest_of(branch, &open)?;
+        let mut latest = s.latest_of(branch, &open)?;
         let pushed = self.pushed(&t.remote)?;
-        for p in pulls.iter().filter(|p| p.from_repo(&t.repo)) {
+        let ours: Vec<&Pull> = pulls.iter().filter(|p| p.from_repo(&t.repo)).collect();
+        for p in &ours {
             self.known.borrow_mut().insert(
                 place(p.number),
                 Known {
                     remote: t.remote.clone(),
-                    pull: p.clone(),
+                    pull: (*p).clone(),
                 },
             );
+        }
+        // 125: a group is taken whole, before any of it is considered alone.
+        let Groups {
+            taken,
+            bound,
+            mut unread,
+        } = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest, &log)?;
+        if taken {
+            status = s.status(branch)?;
+            self.register(&t.repo, &status.submissions);
+            names = self::names(&status.submissions);
+            latest = s.latest_of(branch, &open)?;
+        }
+        for p in ours {
             self.log_lines
                 .borrow_mut()
                 .insert(branch.to_string(), t.conditions.log_lines);
@@ -406,6 +488,7 @@ impl Pulls {
                     branch,
                     p,
                     latest.get(&place(p.number)),
+                    bound.get(&p.number),
                     &status.submissions,
                     &log,
                     &names,
@@ -428,7 +511,13 @@ impl Pulls {
                 }
                 Ok(c.failed)
             };
-            match step() {
+            // One of a group that could not be read is not considered
+            // alone; the rest of its group waits for it.
+            let stepped = match unread.remove(&p.number) {
+                Some(e) => Ok(Some(e)),
+                None => step(),
+            };
+            match stepped {
                 Ok(None) => {}
                 Ok(Some(e)) | Err(e) => crate::telemetry::warn(&format!(
                     "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
@@ -541,6 +630,7 @@ impl Pulls {
         branch: &str,
         p: &Pull,
         latest: Option<&Submission>,
+        group: Option<&Bound>,
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
@@ -551,11 +641,7 @@ impl Pulls {
         // ready mark, at or after the second it left: whatever its head,
         // no round submits it in its agent's name before then (120, S56).
         let from = submits(p);
-        let held = match latest.filter(|e| from.is_some() && left_unlanded(e)) {
-            Some(e) => !readied_since(forge, &t.repo, p.number, acts_from(log, e))
-                .with_context(|| format!("reading {here}'s timeline"))?,
-            None => false,
-        };
+        let held = is_held(forge, &t.repo, p, latest, log)?;
         // Its draft shows the hold, and is not the hold: one GitHub
         // refuses holds it all the same, and the next pass tries again.
         if held && !p.draft {
@@ -607,48 +693,30 @@ impl Pulls {
                 _ => return Ok(queue_shown(branch, e, subs, names).into()),
             }
         }
-        // Waiting: what is missing, and where it would land now.
-        let mut missing = Vec::new();
-        if held {
-            missing.push(NEXT_SUBMIT.to_string());
+        // Waiting: what is missing, and where it would land now. One of a
+        // group waits for its group whole, and is taken only with it.
+        let missing = if held {
+            vec![NEXT_SUBMIT.to_string()]
         } else if let Some(by) = rests {
-            missing.push(format!("{WITHDRAWN_BY}{}", withdrawer(by)));
-        } else if p.draft {
-            missing.push("a draft".to_string());
+            vec![format!("{WITHDRAWN_BY}{}", withdrawer(by))]
+        } else if let Some(g) = group {
+            g.missing.clone()
         } else {
-            let reviews = forge
-                .reviews(&t.repo, p.number)
-                .with_context(|| format!("reading {here}'s reviews"))?;
-            let have = approvals(&reviews, &p.head);
-            if have < t.conditions.reviews {
-                let need = t.conditions.reviews - have;
-                missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
-            }
-            if !t.conditions.checks.is_empty() {
-                let checks = forge
-                    .checks(&t.repo, &p.head)
-                    .with_context(|| format!("reading {here}'s checks"))?;
-                for name in &t.conditions.checks {
-                    if !checks
-                        .iter()
-                        .any(|c| &c.name == name && c.standing == Standing::Passed)
-                    {
-                        missing.push(name.clone());
-                    }
-                }
-            }
-        }
+            self.missing(forge, t, p)?
+        };
         // 128: a waiting pull request needs its head only for its
         // forecast, and is shown waiting without one; one missing nothing
         // is not submitted, and nothing new is posted on it.
         if let Err(e) = self.fetch_head(pushed, p) {
             return Ok(Considered {
-                shown: (p.draft || !missing.is_empty())
-                    .then(|| waiting(branch, from, &missing, None)),
+                shown: (p.draft || !missing.is_empty() || group.is_some()).then(|| match group {
+                    Some(g) => waiting_in_group(branch, from, &missing, g, None),
+                    None => waiting(branch, from, &missing, None),
+                }),
                 failed: Some(e),
             });
         }
-        if missing.is_empty() {
+        if missing.is_empty() && group.is_none() {
             let accepted = s.submit(&SubmitRequest {
                 worktree: place(p.number),
                 branch: branch.into(),
@@ -706,7 +774,191 @@ impl Pulls {
             }
             Err(r) => format!("forecast: none, {}", refusal_word(&r)),
         };
-        Ok(waiting(branch, from, &missing, Some(forecast)).into())
+        Ok(match group {
+            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
+            None => waiting(branch, from, &missing, Some(forecast)),
+        }
+        .into())
+    }
+
+    /// What pull request `p` lacks before sluice takes it: out of draft,
+    /// and its reviews and checks on its head (C.7).
+    fn missing(&self, forge: &dyn Forge, t: &Target, p: &Pull) -> Result<Vec<String>> {
+        let here = place(p.number);
+        let mut missing = Vec::new();
+        if p.draft {
+            missing.push("a draft".to_string());
+            return Ok(missing);
+        }
+        let reviews = forge
+            .reviews(&t.repo, p.number)
+            .with_context(|| format!("reading {here}'s reviews"))?;
+        let have = approvals(&reviews, &p.head);
+        if have < t.conditions.reviews {
+            let need = t.conditions.reviews - have;
+            missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
+        }
+        if !t.conditions.checks.is_empty() {
+            let checks = forge
+                .checks(&t.repo, &p.head)
+                .with_context(|| format!("reading {here}'s checks"))?;
+            for name in &t.conditions.checks {
+                if !checks
+                    .iter()
+                    .any(|c| &c.name == name && c.standing == Standing::Passed)
+                {
+                    missing.push(name.clone());
+                }
+            }
+        }
+        Ok(missing)
+    }
+
+    /// 125: each group of bound pull requests submitted whole, through one
+    /// group submit in its order, once every one of it is open, out of
+    /// draft, at its marked head and meeting its conditions; whether any
+    /// was, what each request of a group not taken waits for, and what
+    /// failed for each sluice could not read, which its group waits on
+    /// (128). A request is bound to the group its body marks it one of
+    /// while its head is the marked head and it has had no submission at
+    /// that head.
+    #[allow(clippy::too_many_arguments)]
+    fn take_groups(
+        &self,
+        s: &Sluice<'_>,
+        forge: &dyn Forge,
+        t: &Target,
+        pushed: &PushedRefs,
+        branch: &str,
+        pulls: &[&Pull],
+        latest: &BTreeMap<String, Submission>,
+        log: &[sluice_core::records::LogLine],
+    ) -> Result<Groups> {
+        let mut groups: BTreeMap<String, Vec<(Group, &Pull)>> = BTreeMap::new();
+        for p in pulls {
+            let Some(g) = Group::of(&p.body) else {
+                continue;
+            };
+            let submitted = latest
+                .get(&place(p.number))
+                .is_some_and(|e| e.head.0 == p.head);
+            if g.head == p.head && !submitted {
+                groups.entry(g.token.clone()).or_default().push((g, *p));
+            }
+        }
+        let mut taken = false;
+        let mut bound = BTreeMap::new();
+        let mut unread = BTreeMap::new();
+        for members in groups.values() {
+            let n = members[0].0.n;
+            let mut by_k: BTreeMap<usize, &Pull> = BTreeMap::new();
+            let mut agree = true;
+            for (g, p) in members {
+                agree &= g.n == n && by_k.insert(g.k, p).is_none();
+            }
+            // What each lacks: its submitter's act while it is held (120),
+            // else its conditions.
+            let mut missing = BTreeMap::new();
+            for p in by_k.values() {
+                let lacks = match is_held(forge, &t.repo, p, latest.get(&place(p.number)), log) {
+                    Ok(true) => Ok(vec![NEXT_SUBMIT.to_string()]),
+                    Ok(false) => self.missing(forge, t, p),
+                    Err(e) => Err(e),
+                };
+                match lacks {
+                    Ok(m) => {
+                        missing.insert(p.number, m);
+                    }
+                    Err(e) => {
+                        unread.insert(p.number, e);
+                    }
+                }
+            }
+            let absent: Vec<usize> = (1..=n).filter(|k| !by_k.contains_key(k)).collect();
+            let ready = missing.len() == by_k.len() && missing.values().all(Vec::is_empty);
+            let mut refused = None;
+            if agree
+                && absent.is_empty()
+                && ready
+                && by_k.values().all(|p| match self.fetch_head(pushed, p) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        unread.insert(p.number, e);
+                        false
+                    }
+                })
+            {
+                let req = GroupRequest {
+                    branch: branch.into(),
+                    worktrees: by_k.values().map(|p| place(p.number)).collect(),
+                    after: Vec::new(),
+                    priority: 0,
+                };
+                match s.submit_group(&req)? {
+                    Ok(accepted) => {
+                        for (a, p) in accepted.iter().zip(by_k.values()) {
+                            self.entries.borrow_mut().insert(
+                                a.id,
+                                Entry {
+                                    repo: t.repo.clone(),
+                                    number: p.number,
+                                    head: p.head.clone(),
+                                },
+                            );
+                        }
+                        taken = true;
+                        continue;
+                    }
+                    Err(r) => refused = r.first().map(|(_, r)| refusal_word(r)),
+                }
+            }
+            // Each of the group that waits, on what it lacks or on being
+            // read again.
+            let waits: BTreeMap<u64, bool> = by_k
+                .values()
+                .map(|p| {
+                    let lacks = missing.get(&p.number).is_some_and(|m| !m.is_empty());
+                    (p.number, lacks || unread.contains_key(&p.number))
+                })
+                .collect();
+            for p in by_k.values() {
+                let Some(lacks) = missing
+                    .get(&p.number)
+                    .filter(|_| !unread.contains_key(&p.number))
+                else {
+                    continue;
+                };
+                let mut on: Vec<String> = waits
+                    .iter()
+                    .filter(|(number, w)| **number != p.number && **w)
+                    .map(|(number, _)| format!("#{number}"))
+                    .collect();
+                on.extend(
+                    absent
+                        .iter()
+                        .map(|k| format!("the request marked {k}/{n}, not open")),
+                );
+                if !agree {
+                    on.push("its group's marks, which disagree".into());
+                }
+                if let Some(r) = &refused {
+                    on.push(format!("the group, refused: {r}"));
+                }
+                bound.insert(
+                    p.number,
+                    Bound {
+                        n,
+                        on,
+                        missing: lacks.clone(),
+                    },
+                );
+            }
+        }
+        Ok(Groups {
+            taken,
+            bound,
+            unread,
+        })
     }
 
     /// The pull request's head on this host, fetched unless it is here.
@@ -776,6 +1028,7 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::NotManaged => "no [branches] table names its branch".into(),
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
+        SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
     }
 }
 
@@ -830,6 +1083,23 @@ fn withdrawer(by: &str) -> String {
 /// Out of the queue without landing: withdrawn, blamed or conflicting.
 fn left_unlanded(e: &Submission) -> bool {
     matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
+}
+
+/// Whether a submit's pull request `p` waits for its submitter's act: its
+/// latest submission, `latest`, left the queue without landing, and no
+/// ready mark has followed since (120, S56).
+fn is_held(
+    forge: &dyn Forge,
+    repo: &Repo,
+    p: &Pull,
+    latest: Option<&Submission>,
+    log: &[sluice_core::records::LogLine],
+) -> Result<bool> {
+    match latest.filter(|e| submits(p).is_some() && left_unlanded(e)) {
+        Some(e) => Ok(!readied_since(forge, repo, p.number, acts_from(log, e))
+            .with_context(|| format!("reading {}'s timeline", place(p.number)))?),
+        None => Ok(false),
+    }
 }
 
 /// The second from which a ready mark is its submitter's act after `e`
@@ -1001,6 +1271,47 @@ fn waiting(
         },
         lines,
     }
+}
+
+/// 125: one of a group intake has not taken, which waits for what it
+/// lacks itself, or else for the rest of its group: `from` is the branch
+/// it is submitted from.
+fn waiting_in_group(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    g: &Bound,
+    forecast: Option<String>,
+) -> Shown {
+    let together = format!(
+        "One of a group of {} submitted together, which sluice takes only all together, once \
+         each is ready.",
+        g.n
+    );
+    let mut shown = if missing.is_empty() {
+        let on = g.on.join(", ");
+        Shown {
+            posting: Posting {
+                text: None,
+                status: Status::Queued,
+                title: format!("waiting for its group: {on}"),
+                summary: format!("{together} It waits for {on}."),
+            },
+            lines: Vec::new(),
+        }
+    } else {
+        let mut w = waiting(branch, from, missing, None);
+        w.posting.summary = format!("{}\n\n{together}", w.posting.summary);
+        w
+    };
+    if let Some(f) = forecast {
+        shown
+            .posting
+            .summary
+            .push_str(&format!("\n\n{}", f.replacen("forecast:", "Forecast:", 1)));
+        shown.lines.push(f);
+    }
+    shown
 }
 
 fn queued(branch: &str, ahead: &[String]) -> Shown {
@@ -1378,82 +1689,131 @@ impl crate::PullRequests for Pulls {
         worktree: &str,
         branch: &str,
     ) -> Result<Result<Opened, SubmitRefusal>> {
-        let session = seams.driver.session(worktree)?;
-        if session.detached {
-            return Ok(Err(SubmitRefusal::Detached));
-        }
-        if !session.dirty.is_empty() {
-            return Ok(Err(SubmitRefusal::Dirty(session.dirty)));
+        Ok(
+            match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
+                Ok(mut opened) => Ok(opened.remove(0)),
+                Err(mut refused) => Err(refused.remove(0).1),
+            },
+        )
+    }
+
+    /// 125: every worktree read before anything is pushed, and a refusal
+    /// for each refused; then, in order, each request marked one of the
+    /// group before its head reaches it: an open request's body edited
+    /// before its branch is pushed, a new one opened with the mark once
+    /// its branch is. One worktree is marked one of no group.
+    fn open_group(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        worktrees: &[String],
+        branch: &str,
+    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+        let mut refused = Vec::new();
+        let mut sessions: Vec<Session> = Vec::new();
+        for (k, worktree) in worktrees.iter().enumerate() {
+            let session = seams.driver.session(worktree)?;
+            let before = worktrees[..k]
+                .iter()
+                .zip(&sessions)
+                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _)) = before {
+                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+            } else if session.detached {
+                refused.push((worktree.clone(), SubmitRefusal::Detached));
+            } else if !session.dirty.is_empty() {
+                refused.push((
+                    worktree.clone(),
+                    SubmitRefusal::Dirty(session.dirty.clone()),
+                ));
+            }
+            sessions.push(session);
         }
         let s = Sluice::new(seams, clock);
-        let Some(t) = self.target(&s, branch)? else {
-            return Ok(Err(SubmitRefusal::NotManaged));
+        let target = self.target(&s, branch)?;
+        if target.is_none() {
+            for w in worktrees {
+                refused.push((w.clone(), SubmitRefusal::NotManaged));
+            }
+        }
+        let (Some(t), true) = (target, refused.is_empty()) else {
+            return Ok(Err(refused));
         };
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
-        let head_ref = session.from.worktree.clone();
-        self.pushed(&t.remote)?
-            .push_branch(&session.head, &head_ref)?;
-        let open = forge
-            .pulls(&t.repo, branch)?
-            .into_iter()
-            .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
-        let agent = &session.from.agent;
-        let (pull, word) = match open {
-            Some(p) => {
-                if marked_agent(&p.body).as_deref() != Some(agent.as_str()) {
-                    forge.edit(&t.repo, p.number, &with_marker(&p.body, agent))?;
+        let pushed = self.pushed(&t.remote)?;
+        let open = forge.pulls(&t.repo, branch)?;
+        let n = sessions.len();
+        let token = group_token(clock.now(), &sessions[0].head);
+        let mut opened = Vec::new();
+        for (k, session) in sessions.iter().enumerate() {
+            let head_ref = session.from.worktree.clone();
+            let agent = &session.from.agent;
+            let group = (n > 1).then(|| Group {
+                token: token.clone(),
+                k: k + 1,
+                n,
+                head: session.head.0.clone(),
+            });
+            let existing = open
+                .iter()
+                .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
+            let (number, title, draft, word) = match existing {
+                Some(p) => {
+                    if marked_agent(&p.body).as_deref() != Some(agent.as_str())
+                        || Group::of(&p.body) != group
+                    {
+                        forge.edit(
+                            &t.repo,
+                            p.number,
+                            &with_marks(&p.body, agent, group.as_ref()),
+                        )?;
+                    }
+                    pushed.push_branch(&session.head, &head_ref)?;
+                    (p.number, p.title.clone(), p.draft, "updated")
                 }
-                (p, "updated")
+                None => {
+                    pushed.push_branch(&session.head, &head_ref)?;
+                    let messages = self.messages(&t.tip, &session.head)?;
+                    let title = messages
+                        .first()
+                        .and_then(|m| m.lines().next())
+                        .unwrap_or(&head_ref)
+                        .to_string();
+                    let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
+                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body)?;
+                    (p.number, p.title, p.draft, "opened")
+                }
+            };
+            let mut said = format!("pushed {head_ref} · {word} #{number}: {title}");
+            // The submit is its submitter's act (120). The submission on an
+            // older head leaves the queue, withdrawn by the submit itself
+            // (67), and a ready mark follows the latest leaving, so intake
+            // reads the act as given.
+            let here = place(number);
+            let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
+            if let Some(e) = latest.get(&here).filter(|e| {
+                !e.state.is_out() && e.state != State::Landing && e.head != session.head
+            }) {
+                // Landing since it was read: it lands, and the new head waits.
+                if let Ok(Withdrew::Now) =
+                    s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+                {
+                    said.push_str(&format!(" · withdrew its submission {}", e.id));
+                }
             }
-            None => {
-                let messages = self.messages(&t.tip, &session.head)?;
-                let title = messages
-                    .first()
-                    .and_then(|m| m.lines().next())
-                    .unwrap_or(&head_ref)
-                    .to_string();
-                let body = with_marker(&messages.join("\n\n"), agent);
-                (
-                    forge.open(&t.repo, branch, &head_ref, &title, &body)?,
-                    "opened",
-                )
+            let latest = s
+                .latest_of(branch, std::slice::from_ref(&here))?
+                .remove(&here);
+            let log = Line::read_log(&s.seams().state.read(branch)?)?;
+            let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
+            if draft || left.is_some() {
+                mark_ready(forge, &t.repo, number, draft, left)?;
+                said.push_str(" · marked ready for review");
             }
-        };
-        let mut said = format!(
-            "pushed {head_ref} · {word} #{}: {}",
-            pull.number, pull.title
-        );
-        // The submit is its submitter's act (120). The submission on an
-        // older head leaves the queue, withdrawn by the submit itself (67),
-        // and a ready mark follows the latest leaving, so intake reads the
-        // act as given.
-        let here = place(pull.number);
-        let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
-        if let Some(e) = latest
-            .get(&here)
-            .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != session.head)
-        {
-            // Landing since it was read: it lands, and the new head waits.
-            if let Ok(Withdrew::Now) =
-                s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
-            {
-                said.push_str(&format!(" · withdrew its submission {}", e.id));
-            }
+            opened.push(Opened { number, said });
         }
-        let latest = s
-            .latest_of(branch, std::slice::from_ref(&here))?
-            .remove(&here);
-        let log = Line::read_log(&s.seams().state.read(branch)?)?;
-        let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
-        if pull.draft || left.is_some() {
-            mark_ready(forge, &t.repo, pull.number, pull.draft, left)?;
-            said.push_str(" · marked ready for review");
-        }
-        Ok(Ok(Opened {
-            number: pull.number,
-            said,
-        }))
+        Ok(Ok(opened))
     }
 
     fn find(
@@ -1750,13 +2110,43 @@ mod tests {
         assert_eq!(number("pull/7"), Some(7));
         assert_eq!(number("unit/x"), None);
         assert_eq!(number("pull/x"), None);
-        let body = with_marker("Adds review cards.", "crw-1");
+        let body = with_marks("Adds review cards.", "crw-1", None);
         assert_eq!(marked_agent(&body).as_deref(), Some("crw-1"));
-        let again = with_marker(&body, "crw-2");
+        let again = with_marks(&body, "crw-2", None);
         assert_eq!(marked_agent(&again).as_deref(), Some("crw-2"));
         assert_eq!(again.matches("sluice: agent=").count(), 1);
         assert!(again.starts_with("Adds review cards."));
         assert_eq!(marked_agent("by hand"), None);
+    }
+
+    /// 125: a group mark sits beside the agent mark, reads back as
+    /// written, and a body written with no group drops it.
+    #[test]
+    fn a_group_mark_reads_back_and_is_dropped() {
+        let g = Group {
+            token: group_token(
+                DateTime::parse_from_rfc3339("2026-10-23T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+                &Rev::new("0123456789abcdef"),
+            ),
+            k: 2,
+            n: 3,
+            head: "0123456789abcdef".into(),
+        };
+        assert_eq!(
+            g.marker(),
+            "<!-- sluice: group=20261023T120000Z-0123456 2/3 head=0123456789abcdef -->"
+        );
+        let body = with_marks("Adds review cards.", "crw-1", Some(&g));
+        assert_eq!(Group::of(&body), Some(g.clone()));
+        assert_eq!(marked_agent(&body).as_deref(), Some("crw-1"));
+        let again = with_marks(&body, "crw-1", Some(&g));
+        assert_eq!(again.matches("sluice: group=").count(), 1);
+        let single = with_marks(&body, "crw-1", None);
+        assert_eq!(Group::of(&single), None);
+        assert!(single.starts_with("Adds review cards."));
+        assert_eq!(Group::of("<!-- sluice: group=t 4/3 head=x -->"), None);
     }
 
     #[test]
