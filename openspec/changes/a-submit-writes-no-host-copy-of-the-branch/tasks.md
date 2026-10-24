@@ -8,7 +8,7 @@ Read first: this change's proposal, specs and design; clauses 1, 2, 121,
 
 ## 1. Decisions
 
-- [ ] 1.1 Write the ADR (the next free number in `docs/adr/`, with its entry in the root's `adrs.toml`) for design D1 to D5, its Sources naming 1, 121, 122, 124, S58, S64 and ADRs 0017, 0024, 0048; add to rule core.4's Details in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md` "a submit pushing, or writing the host's copy of, a branch sluice lands on (124)" under Rules out and "a pull request's submit pushing the session's own branch, which sluice lands on nowhere (124)" under Not ruled out, and to core.20's "a round levelling the host's copy under such a worktree (124)" under Not ruled out; verify `site:prose` and `openspec validate a-submit-writes-no-host-copy-of-the-branch --strict` (by hand: no gate task runs openspec).
+- [x] 1.1 Write the ADR (the next free number in `docs/adr/`, with its entry in the root's `adrs.toml`) for design D1 to D5, its Sources naming 1, 121, 122, 124, S58, S64 and ADRs 0017, 0024, 0048; add to rule core.4's Details in `docs/architecture/core.md` and `site/src/content/docs/architecture/rules.md` "a submit pushing, or writing the host's copy of, a branch sluice lands on (124)" under Rules out and "a pull request's submit pushing the session's own branch, which sluice lands on nowhere (124)" under Not ruled out, and to core.20's "a round levelling the host's copy under such a worktree (124)" under Not ruled out; verify `site:prose` and `openspec validate a-submit-writes-no-host-copy-of-the-branch --strict` (by hand: no gate task runs openspec).
 
 ## 2. The seam
 
