@@ -192,6 +192,8 @@ pub struct Checks {
     /// The repository's common git directory.
     common: PathBuf,
     runs: Runs,
+    /// The `sluice` executable a run's compile-cache step is.
+    program: PathBuf,
     instance: Instance,
     /// The pool this host can start runs on, where the binding gave one.
     pool: Option<Box<dyn Launcher>>,
@@ -210,7 +212,8 @@ impl Checks {
     pub fn new(common: &Path, program: PathBuf, instance: Instance) -> Self {
         Checks {
             common: common.to_path_buf(),
-            runs: Runs::new(common, program),
+            runs: Runs::new(common, program.clone()),
+            program,
             instance,
             sessions: None,
             running: None,
@@ -846,7 +849,7 @@ impl Checks {
         let cache = self.compile_cache_step(request, kind)?;
         let step = cache.as_ref().map(|server| {
             let mut step = vec![
-                self.runs.program().to_string_lossy().into_owned(),
+                self.program.to_string_lossy().into_owned(),
                 "compile-cache".to_string(),
             ];
             step.extend(server.args());

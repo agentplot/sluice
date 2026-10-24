@@ -131,11 +131,6 @@ impl Runs {
 
     /// The run directory of the place `name`, or of the session run
     /// `name` names.
-    /// The `sluice` executable that supervises.
-    pub fn program(&self) -> &Path {
-        &self.program
-    }
-
     pub fn dir(&self, name: &str) -> PathBuf {
         match session_run(name) {
             Some((place, n)) => self.root.join(flat_name(place)).join(n.to_string()),
