@@ -502,7 +502,7 @@ fn a_required_check_kept_out_of_ci_is_missing_and_named() {
     );
 }
 
-/// satisfies: 2, 27, 56 (ADR 0048)
+/// satisfies: 2, 27, 56 (ADR 0050)
 #[test]
 fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused() {
     let h = Harness::bolt();
@@ -528,7 +528,7 @@ fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused() {
     assert!(h.sluice().status(BRANCH).unwrap().submissions.is_empty());
 }
 
-/// satisfies: 2, 27, 56 (ADR 0048)
+/// satisfies: 2, 27, 56 (ADR 0050)
 #[test]
 fn a_submission_that_lets_the_check_run_is_taken() {
     let h = Harness::bolt();
@@ -548,7 +548,7 @@ fn a_submission_that_lets_the_check_run_is_taken() {
     assert!(results(&h).iter().any(|r| r.task == "b:test"));
 }
 
-/// satisfies: 27 (ADR 0048)
+/// satisfies: 27 (ADR 0050)
 #[test]
 fn a_runner_that_cannot_be_asked_takes_the_submission_with_a_warning() {
     let h = Harness::bolt();

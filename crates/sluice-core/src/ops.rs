@@ -43,7 +43,7 @@ pub struct Accepted {
     pub withdrew: Vec<u64>,
     /// What the submitter should know of a submission taken: that the
     /// runner could not be asked which required checks it keeps out of
-    /// CI, and why (ADR 0048).
+    /// CI, and why (ADR 0050).
     pub warnings: Vec<String>,
 }
 
@@ -62,12 +62,12 @@ pub enum SubmitRefusal {
     NoHead(String),
     /// 125: a group names this place already, as the place given.
     NamedTwice(String),
-    /// ADR 0048: the branch's gate requires checks the runner, in the
+    /// ADR 0050: the branch's gate requires checks the runner, in the
     /// submitting worktree, keeps out of CI, so the branch cannot pass.
     KeptOut(Vec<KeptOut>),
 }
 
-/// ADR 0048: a check the branch's gate requires that the runner keeps out
+/// ADR 0050: a check the branch's gate requires that the runner keeps out
 /// of CI in the submitting worktree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeptOut {
@@ -269,7 +269,7 @@ impl Sluice<'_> {
         let (Some(tip), true) = (tip, refused.is_empty()) else {
             return Ok(Err(refused));
         };
-        // ADR 0048: each place's runner is asked which of the gate's
+        // ADR 0050: each place's runner is asked which of the gate's
         // required checks it keeps out of CI; a place that keeps one out is
         // refused, and the act with it.
         let mut warnings = Vec::new();
@@ -330,7 +330,7 @@ impl Sluice<'_> {
         Ok(Ok(accepted))
     }
 
-    /// ADR 0048: refuse `session`'s submission to `branch`, whose revision
+    /// ADR 0050: refuse `session`'s submission to `branch`, whose revision
     /// is `tip`, when its gate requires checks the runner keeps out of CI
     /// in the session's worktree; otherwise the warnings to take it with.
     /// A session with no worktree on this host has nothing to ask. Writes
@@ -351,7 +351,7 @@ impl Sluice<'_> {
         })
     }
 
-    /// ADR 0048: the checks `branch`'s gate at `tip` requires that the
+    /// ADR 0050: the checks `branch`'s gate at `tip` requires that the
     /// runner keeps out of CI in the worktree at `worktree`, which holds
     /// the head to submit (2). The gate and its lines are the branch's
     /// (56); only the runner's own setting is the worktree's. `Err` says

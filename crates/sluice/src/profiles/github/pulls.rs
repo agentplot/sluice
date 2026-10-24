@@ -1359,7 +1359,7 @@ impl crate::PullRequests for Pulls {
         let (Some(t), true) = (target, refused.is_empty()) else {
             return Ok(Err(refused));
         };
-        // ADR 0048: refused before anything is pushed or opened, each place
+        // ADR 0050: refused before anything is pushed or opened, each place
         // its runner keeps a required check out of CI in.
         let mut warnings = Vec::new();
         for (worktree, session) in worktrees.iter().zip(&sessions) {

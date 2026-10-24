@@ -498,7 +498,7 @@ fn a_dirty_place_is_refused_with_exit_two() {
     );
 }
 
-/// ADR 0048: a branch requiring a check the task runner in the worktree
+/// ADR 0050: a branch requiring a check the task runner in the worktree
 /// keeps out of CI refuses the submission with exit 2, naming the check,
 /// the tag that requires it and its line of the policy, and the way on;
 /// nothing is queued or published.
@@ -549,7 +549,7 @@ fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused_with_exit_
     );
 }
 
-/// ADR 0048: when the task runner cannot be asked, the submission is
+/// ADR 0050: when the task runner cannot be asked, the submission is
 /// taken, with a warning saying why it was not checked; under `--json
 /// --no-wait`, the warning is the document's.
 #[test]

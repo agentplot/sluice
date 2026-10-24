@@ -1,6 +1,6 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
 //! a pull request (ADR 0044), and a required check that can never pass
-//! (ADR 0048).
+//! (ADR 0050).
 
 use sluice_core::records::{FlakyKey, Recorded};
 use sluice_core::KeptOut;
@@ -91,7 +91,7 @@ pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
 }
 
-/// ADR 0048: a submission refused because `branch` requires checks the
+/// ADR 0050: a submission refused because `branch` requires checks the
 /// task runner in the submitting worktree keeps out of CI: each, through
 /// the tag that names it, with its line of the policy, and the way on.
 pub fn kept_out_refusal(branch: &str, kept: &[KeptOut]) -> String {

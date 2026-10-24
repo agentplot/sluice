@@ -559,7 +559,7 @@ pub struct RunReport {
     pub kept_out: Vec<String>,
 }
 
-/// ADR 0048: a task a branch's gate requires that the runner keeps out
+/// ADR 0050: a task a branch's gate requires that the runner keeps out
 /// of its CI mode, so never runs, as the submitting worktree has it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeptOutTask {
@@ -693,7 +693,7 @@ pub trait Tests {
     /// ends. Never a result (37, 38).
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
 
-    /// ADR 0048: which of `required`, the branch's required checks as its
+    /// ADR 0050: which of `required`, the branch's required checks as its
     /// policy names them, the runner keeps out of its CI mode in
     /// `worktree`, by the runner's settings in `tests`: each such task
     /// with the required entry that names it. A query, run in the

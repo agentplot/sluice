@@ -140,7 +140,7 @@ impl Moon {
         })
     }
 
-    /// ADR 0048: which of the required checks moon keeps out of its CI
+    /// ADR 0050: which of the required checks moon keeps out of its CI
     /// mode in the place, read as `plan` reads them, before any run: moon
     /// installed and checked, then `moon query tasks`. Runs no task.
     pub fn kept_out(&self, cx: &Context) -> Result<Vec<KeptOutTask>> {
@@ -384,7 +384,7 @@ impl Moon {
     }
 }
 
-/// ADR 0044, 0048: the tasks `required` names, by name or through a tag
+/// ADR 0044, 0050: the tasks `required` names, by name or through a tag
 /// they carry, that moon keeps out of its CI mode, each with the entry
 /// that names it: its own name before the first tag. `plan` and
 /// `Moon::kept_out` both read them so, so the two cannot differ.
@@ -790,7 +790,7 @@ pub fn blob_in(place: &Path, key: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// ADR 0048: a task kept out of CI is named with the entry that names
+    /// ADR 0050: a task kept out of CI is named with the entry that names
     /// it, its own name before a tag; one in CI, or not required, is not.
     #[test]
     fn a_required_task_kept_out_of_ci_is_named_with_its_entry() {

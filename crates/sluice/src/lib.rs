@@ -1473,7 +1473,7 @@ fn submit(
     if json && no_wait {
         let mut doc =
             serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
-        // ADR 0048: only a submission taken unchecked has any.
+        // ADR 0050: only a submission taken unchecked has any.
         if !accepted.warnings.is_empty() {
             doc["warnings"] = serde_json::json!(accepted.warnings);
         }
@@ -1538,7 +1538,7 @@ fn submit_group(
             .iter()
             .map(|(w, a)| {
                 let mut doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
-                // ADR 0048: only a submission taken unchecked has any.
+                // ADR 0050: only a submission taken unchecked has any.
                 if !a.warnings.is_empty() {
                     doc["warnings"] = serde_json::json!(a.warnings);
                 }
