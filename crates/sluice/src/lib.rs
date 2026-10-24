@@ -1504,6 +1504,7 @@ fn refusal(
         SubmitRefusal::NamedTwice(earlier) => {
             format!("refused: {worktree} is {earlier}'s worktree, named twice")
         }
+        SubmitRefusal::KeptOut(kept) => words::kept_out_refusal(branch, kept),
     })
 }
 
@@ -1520,6 +1521,7 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
         SubmitRefusal::UnknownAfter(_) => vec![format!("sluice status {branch}")],
         SubmitRefusal::NoHead(_) => vec!["sluice overview".into()],
         SubmitRefusal::NamedTwice(_) => vec![],
+        SubmitRefusal::KeptOut(_) => vec![format!("sluice status {branch}")],
     }
 }
 
@@ -1613,7 +1615,12 @@ fn submit(
     let id = accepted.id;
     let copy = accepted.copy.as_ref();
     if json && no_wait {
-        let doc = serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        let mut doc =
+            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        // ADR 0050: only a submission taken unchecked has any.
+        if !accepted.warnings.is_empty() {
+            doc["warnings"] = serde_json::json!(accepted.warnings);
+        }
         writeln!(out, "{}", with_copy(doc, copy)?)?;
         return Ok(0);
     }
@@ -1622,6 +1629,9 @@ fn submit(
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
         if let Some(copy) = copy {
             writeln!(out, "{}", copy_differs_line(copy))?;
+        }
+        for w in &accepted.warnings {
+            writeln!(out, "warning: {w}")?;
         }
     }
     if no_wait {
@@ -1679,7 +1689,11 @@ fn submit_group(
         let submissions: Vec<serde_json::Value> = items
             .iter()
             .map(|(w, a)| {
-                let doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
+                let mut doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
+                // ADR 0050: only a submission taken unchecked has any.
+                if !a.warnings.is_empty() {
+                    doc["warnings"] = serde_json::json!(a.warnings);
+                }
                 with_copy(doc, a.copy.as_ref())
             })
             .collect::<Result<_>>()?;
@@ -1696,6 +1710,9 @@ fn submit_group(
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
             if let Some(copy) = &a.copy {
                 writeln!(out, "{}", copy_differs_line(copy))?;
+            }
+            for warning in &a.warnings {
+                writeln!(out, "warning: {warning}")?;
             }
         }
     }

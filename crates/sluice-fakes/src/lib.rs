@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
@@ -17,10 +18,10 @@ use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
-    Guard, HostCopy, HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification,
-    Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev,
-    RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot, Source,
-    State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
+    Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network, NotRun,
+    Notification, Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released,
+    Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot,
+    Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -122,6 +123,13 @@ struct Inner {
     hang: BTreeSet<String>,
     skip: BTreeSet<String>,
     kept_out: BTreeSet<String>,
+    /// Asking the runner which required checks it keeps out of CI fails,
+    /// with why (ADR 0050).
+    kept_out_fails: Option<String>,
+    /// Every worktree the runner was asked in, in order (ADR 0050).
+    asked_kept_out: Vec<PathBuf>,
+    /// Every head published for its submission, in order (82).
+    published: Vec<Rev>,
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
@@ -584,9 +592,33 @@ impl World {
     }
 
     /// The runner keeps `task` out of its CI mode: never run, missing, and
-    /// named kept out (ADR 0044).
+    /// named kept out (ADR 0044); and a submission whose gate requires it
+    /// is refused (ADR 0050).
     pub fn keeps_out(&self, task: &str) {
         self.0.borrow_mut().kept_out.insert(task.into());
+    }
+
+    /// The runner lets `task` run in its CI mode again, as a submission
+    /// that changes its setting does.
+    pub fn lets_run(&self, task: &str) {
+        self.0.borrow_mut().kept_out.remove(task);
+    }
+
+    /// Asking the runner which required checks it keeps out of CI fails
+    /// from now, for `why`; `None` lets it answer again (ADR 0050).
+    pub fn kept_out_fails(&self, why: Option<&str>) {
+        self.0.borrow_mut().kept_out_fails = why.map(String::from);
+    }
+
+    /// Every worktree the runner was asked in which required checks it
+    /// keeps out of CI, in order.
+    pub fn asked_kept_out(&self) -> Vec<PathBuf> {
+        self.0.borrow().asked_kept_out.clone()
+    }
+
+    /// Every head published for its submission, in order (82).
+    pub fn published(&self) -> Vec<Rev> {
+        self.0.borrow().published.clone()
     }
 
     /// The runner says `task` took `ms` in `attempts` tries, and the run
@@ -1582,6 +1614,36 @@ impl Tests for FakeTests {
             .ok_or_else(|| anyhow!("no run {}", run.0))?;
         Ok(inner.run_tasks.get(&n).cloned().unwrap_or_default())
     }
+
+    fn kept_out(
+        &self,
+        worktree: &Path,
+        _tests: &Settings,
+        required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.asked_kept_out.push(worktree.to_path_buf());
+        if let Some(why) = &inner.kept_out_fails {
+            bail!("{why}");
+        }
+        // The entry naming the task itself, else the first tag it carries.
+        Ok(inner
+            .tasks
+            .iter()
+            .filter(|t| inner.kept_out.contains(&t.name))
+            .filter_map(|t| {
+                let entry = required.iter().find(|q| **q == t.name).or_else(|| {
+                    required
+                        .iter()
+                        .find(|q| q.strip_prefix('#').is_some_and(|tag| t.tags.contains(tag)))
+                })?;
+                Some(KeptOutTask {
+                    task: t.name.clone(),
+                    entry: entry.clone(),
+                })
+            })
+            .collect())
+    }
 }
 
 impl FakeCheckout {
@@ -2228,6 +2290,11 @@ impl State for FakeState {
             .filter(|(_, l)| l.version > 0)
             .map(|(b, _)| b.clone())
             .collect())
+    }
+
+    fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
+        self.0 .0.borrow_mut().published.push(head.clone());
+        Ok(())
     }
 
     fn allocate_id(&self) -> Result<u64> {

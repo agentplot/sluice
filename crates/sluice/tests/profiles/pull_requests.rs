@@ -44,24 +44,24 @@ struct OnGitHub {
 
 impl OnGitHub {
     fn new(name: &str, conditions: &str) -> OnGitHub {
-        OnGitHub::with(name, conditions, "1m", "")
+        OnGitHub::checked(name, conditions, "1m", "")
     }
 
     /// `main` on GitHub whose runs the time limit `timeout` ends: one
     /// shorter than five seconds ends the run of a head with `slow`.
     fn with_timeout(name: &str, conditions: &str, timeout: &str) -> OnGitHub {
-        OnGitHub::with(name, conditions, timeout, "")
+        OnGitHub::checked(name, conditions, timeout, "")
     }
 
     /// `main` testing only its longest combination (C.7 `batch`).
     fn batched(name: &str, conditions: &str) -> OnGitHub {
-        OnGitHub::with(name, conditions, "1m", "batch = true\n")
+        OnGitHub::checked(name, conditions, "1m", "batch = true\n")
     }
 
     /// `main` on GitHub, and `bolt/x` beside it, a branch on GitHub sluice
     /// lands on, made from `main` and taking no pull requests.
     fn with_bolt(name: &str) -> OnGitHub {
-        let g = OnGitHub::with_policy(
+        let g = OnGitHub::checked_policy(
             name,
             "",
             "1m",
@@ -74,30 +74,38 @@ impl OnGitHub {
         g
     }
 
-    /// `main` with the time limit `timeout`, and `lines` in its table
-    /// beside its remote and time limit.
-    fn with(name: &str, conditions: &str, timeout: &str, lines: &str) -> OnGitHub {
-        OnGitHub::with_policy(name, conditions, timeout, lines, "")
+    /// `main` checked by `check.sh` with the time limit `timeout`, and
+    /// `lines` in its table beside its remote and time limit.
+    fn checked(name: &str, conditions: &str, timeout: &str, lines: &str) -> OnGitHub {
+        OnGitHub::checked_policy(name, conditions, timeout, lines, "")
     }
 
-    /// [`OnGitHub::with`], with `extra` after its tables in the policy.
-    fn with_policy(
+    /// [`OnGitHub::checked`], with `extra` after its tables in the policy.
+    fn checked_policy(
         name: &str,
         conditions: &str,
         timeout: &str,
         lines: &str,
         extra: &str,
     ) -> OnGitHub {
-        let repo = Repo::new(name);
-        repo.write(
-            ".config/sluice.toml",
+        OnGitHub::with(
+            name,
             &format!(
                 "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
                  [branches.main]\nremote = \"origin\"\ntimeout = \"{timeout}\"\n{lines}\n\
                  [branches.main.pull_requests]\n{conditions}\n{extra}"
             ),
-        );
-        repo.write("check.sh", CHECK);
+            &[("check.sh", CHECK)],
+        )
+    }
+
+    /// `main` on GitHub under `policy`, its tree holding `files` beside it.
+    fn with(name: &str, policy: &str, files: &[(&str, &str)]) -> OnGitHub {
+        let repo = Repo::new(name);
+        repo.write(".config/sluice.toml", policy);
+        for (path, content) in files {
+            repo.write(path, content);
+        }
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-q", "-m", "sluice's policy"]);
         let bare = repo.bare_origin();
@@ -1251,6 +1259,46 @@ fn submit_refuses_a_dirty_worktree() {
     assert!(text(&out).contains("d.txt"), "{}", text(&out));
     assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/dirty"), None);
     assert!(g.gh.forge.held().unwrap().pulls.is_empty());
+}
+
+/// ADR 0050: a branch requiring a task moon keeps out of CI in the
+/// worktree refuses the submission, naming the task and its line of the
+/// policy, before anything is pushed: no branch on GitHub, and no pull
+/// request opened or marked ready.
+#[test]
+fn submit_refuses_a_gate_requiring_a_task_kept_out_of_ci() {
+    let g = OnGitHub::with(
+        "pr-kept-out",
+        "[tests]\nrunner = \"moon\"\n\n\
+         [branches.main]\nremote = \"origin\"\nrequired = [\"app:integration\"]\n\n\
+         [branches.main.pull_requests]\n",
+        &[
+            (
+                ".moon/workspace.yml",
+                "projects:\n  app: 'app'\nvcs:\n  client: 'git'\n  defaultBranch: 'main'\n\
+                 telemetry: false\n",
+            ),
+            (
+                "app/moon.yml",
+                "tasks:\n  integration:\n    command: 'true'\n    options:\n      runInCI: false\n",
+            ),
+            (".gitignore", ".moon/cache/\n"),
+        ],
+    );
+    let w = g.session("kept", &[("k.txt", "k\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(
+        text(&out).contains(
+            "refused: main requires app:integration (.config/sluice.toml line 6), which the \
+             task runner in this worktree keeps out of CI"
+        ),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/kept"), None);
+    let held = g.gh.forge.held().unwrap();
+    assert!(held.pulls.is_empty(), "{:?}", held.pulls);
 }
 
 /// A waiting submit follows its pull request through review: it prints

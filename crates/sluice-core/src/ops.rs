@@ -3,6 +3,7 @@
 //! keeps, runs a check or moves a branch (1; rule core.4).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -41,6 +42,10 @@ pub struct Accepted {
     pub ahead: Vec<u64>,
     /// The earlier submission from the same place it withdrew (67).
     pub withdrew: Vec<u64>,
+    /// What the submitter should know of a submission taken: that the
+    /// runner could not be asked which required checks it keeps out of
+    /// CI, and why (ADR 0050).
+    pub warnings: Vec<String>,
     /// 124: the worktree's head, this host's copy of a branch sluice lands
     /// on, where it differs from the remote's revision submitted.
     pub copy: Option<CopyDiffers>,
@@ -110,6 +115,22 @@ pub enum SubmitRefusal {
     NoHead(String),
     /// 125: a group names this place already, as the place given.
     NamedTwice(String),
+    /// ADR 0050: the branch's gate requires checks the runner, in the
+    /// submitting worktree, keeps out of CI, so the branch cannot pass.
+    KeptOut(Vec<KeptOut>),
+}
+
+/// ADR 0050: a check the branch's gate requires that the runner keeps out
+/// of CI in the submitting worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptOut {
+    /// The task, as the runner names it.
+    pub task: String,
+    /// The required entry that names it: the task, or a tag it carries.
+    pub entry: String,
+    /// The line of `.config/sluice.toml`, at the branch's revision, the
+    /// entry is written on.
+    pub line: usize,
 }
 
 /// Who asks to change a submission (48, 47b; actors table).
@@ -359,6 +380,19 @@ impl Sluice<'_> {
         let (Some(tip), true) = (tip, refused.is_empty()) else {
             return Ok(Err(refused));
         };
+        // ADR 0050: each place's runner is asked which of the gate's
+        // required checks it keeps out of CI; a place that keeps one out is
+        // refused, and the act with it.
+        let mut warnings = Vec::new();
+        for (worktree, session) in req.worktrees.iter().zip(&sessions) {
+            match self.check_kept_out(session, &req.branch, &tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(refused));
+        }
         // 124: from a worktree on a branch sluice lands on, the remote's
         // revision of it.
         let submitted = sessions
@@ -383,6 +417,11 @@ impl Sluice<'_> {
             }
             Ok(accepted)
         })?;
+        let accepted = accepted
+            .into_iter()
+            .zip(warnings)
+            .map(|(a, warnings)| Accepted { warnings, ..a })
+            .collect();
         // 111: work on a branch whose records are on its remote may be
         // taken by no instance now running: the first pool is asked to
         // advance the branch, once for the act. A wake that is lost delays
@@ -406,6 +445,79 @@ impl Sluice<'_> {
             }
         }
         Ok(Ok(accepted))
+    }
+
+    /// ADR 0050: refuse `session`'s submission to `branch`, whose revision
+    /// is `tip`, when its gate requires checks the runner keeps out of CI
+    /// in the session's worktree; otherwise the warnings to take it with.
+    /// A session with no worktree on this host has nothing to ask. Writes
+    /// nothing.
+    pub fn check_kept_out(
+        &self,
+        session: &Session,
+        branch: &str,
+        tip: &Rev,
+    ) -> Result<std::result::Result<Vec<String>, SubmitRefusal>> {
+        let Some(path) = &session.from.path else {
+            return Ok(Ok(Vec::new()));
+        };
+        Ok(match self.kept_out_in(branch, tip, Path::new(path))? {
+            Ok(kept) if !kept.is_empty() => Err(SubmitRefusal::KeptOut(kept)),
+            Ok(_) => Ok(Vec::new()),
+            Err(why) => Ok(vec![why]),
+        })
+    }
+
+    /// ADR 0050: the checks `branch`'s gate at `tip` requires that the
+    /// runner keeps out of CI in the worktree at `worktree`, which holds
+    /// the head to submit (2). The gate and its lines are the branch's
+    /// (56); only the runner's own setting is the worktree's. `Err` says
+    /// why the runner could not be asked, for a warning: the submission
+    /// is taken unchecked. Writes nothing.
+    pub fn kept_out_in(
+        &self,
+        branch: &str,
+        tip: &Rev,
+        worktree: &Path,
+    ) -> Result<std::result::Result<Vec<KeptOut>, String>> {
+        let Some(policy) = self.policy_at(tip)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        let Some(rules) = policy.rules_for(branch)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        if rules.required.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        let kept = match self
+            .seams
+            .tests
+            .kept_out(worktree, &policy.tests, &rules.required)
+        {
+            Ok(k) => k,
+            Err(e) => {
+                return Ok(Err(format!(
+                    "could not check which of {branch}'s required checks the task runner in \
+                     this worktree keeps out of CI, so the submission was taken unchecked: {e:#}"
+                )))
+            }
+        };
+        Ok(Ok(kept
+            .into_iter()
+            .map(|k| {
+                let line = rules
+                    .required
+                    .iter()
+                    .position(|r| *r == k.entry)
+                    .and_then(|i| rules.required_lines.get(i).copied())
+                    .unwrap_or(0);
+                KeptOut {
+                    task: k.task,
+                    entry: k.entry,
+                    line,
+                }
+            })
+            .collect()))
     }
 
     /// 64, 65, 47a: the conflicts a place's head would meet if submitted
@@ -984,6 +1096,7 @@ fn admit(
         id,
         ahead,
         withdrew,
+        warnings: Vec::new(),
         copy: submitted.copy.clone(),
     }
 }

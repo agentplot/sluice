@@ -118,6 +118,9 @@ pub enum Flaky {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
     pub required: Vec<String>,
+    /// ADR 0050: the line of `.config/sluice.toml` each of `required` is
+    /// written on, in the same order, so a refusal can name it.
+    pub required_lines: Vec<usize>,
     /// The window's upper bound; its lower bound is one (13).
     pub parallel: usize,
     /// Deepest first, or every candidate (14).
@@ -226,6 +229,7 @@ impl Default for Rules {
     fn default() -> Self {
         Rules {
             required: Vec::new(),
+            required_lines: Vec::new(),
             parallel: 4,
             batch: false,
             flaky: Flaky::Fail,
@@ -302,8 +306,10 @@ struct ExecutorForm {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RulesForm {
+    /// Each entry with where it is written, so a refusal can name its
+    /// line (ADR 0050).
     #[serde(default)]
-    required: Vec<String>,
+    required: Vec<toml::Spanned<String>>,
     parallel: Option<i64>,
     batch: Option<bool>,
     flaky: Option<String>,
@@ -569,10 +575,16 @@ impl Policy {
             } else {
                 BTreeMap::new()
             };
+            let required_lines = r
+                .required
+                .iter()
+                .map(|e| line_at(text, e.span().start))
+                .collect();
             branches.push((
                 pattern,
                 Rules {
-                    required: r.required,
+                    required: r.required.into_iter().map(|e| e.into_inner()).collect(),
+                    required_lines,
                     parallel,
                     batch: r.batch.unwrap_or(d.batch),
                     flaky,
@@ -798,6 +810,11 @@ fn listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
     }
 }
 
+/// The line, counted from one, that byte `at` of `text` is on.
+fn line_at(text: &str, at: usize) -> usize {
+    text[..at.min(text.len())].matches('\n').count() + 1
+}
+
 /// `"512M"`, `"8G"`: bytes, in powers of 1024.
 pub fn parse_size(text: &str) -> Result<u64> {
     let t = text.trim();
@@ -917,6 +934,34 @@ hold = "5m"
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
+    }
+
+    /// ADR 0050: each required entry keeps the line it is written on.
+    #[test]
+    fn keeps_the_line_of_a_required_entry_on_one_line() {
+        let p = Policy::parse(POLICY).unwrap();
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert_eq!(bolt.required_lines, [10]);
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.required_lines, [17, 17]);
+    }
+
+    /// ADR 0050: a `required` array written across lines keeps each
+    /// entry's own line, as switchboard-kit writes it.
+    #[test]
+    fn keeps_the_line_of_each_entry_of_a_required_array_across_lines() {
+        let p = Policy::parse(
+            "[tests]\nrunner = \"moon\"\n\n\
+             [branches.main]\n\
+             required = [\n\
+             \x20 \"#check-fast\",\n\
+             \x20 \"root:integration\",\n\
+             ]\n",
+        )
+        .unwrap();
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.required, ["#check-fast", "root:integration"]);
+        assert_eq!(main.required_lines, [6, 7]);
     }
 
     /// The Claude Code plugin's example policies read, and gate the

@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -637,6 +637,17 @@ pub struct RunReport {
     pub kept_out: Vec<String>,
 }
 
+/// ADR 0050: a task a branch's gate requires that the runner keeps out
+/// of its CI mode, so never runs, as the submitting worktree has it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptOutTask {
+    /// The task, as the runner names it.
+    pub task: String,
+    /// The gate's required entry that names it, as the policy writes it:
+    /// the task itself, or a tag it carries.
+    pub entry: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
     Running,
@@ -759,6 +770,21 @@ pub trait Tests {
     /// person to read; empty when the runner says nothing until the run
     /// ends. Never a result (37, 38).
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
+
+    /// ADR 0050: which of `required`, the branch's required checks as its
+    /// policy names them, the runner keeps out of its CI mode in
+    /// `worktree`, by the runner's settings in `tests`: each such task
+    /// with the required entry that names it. A query, run in the
+    /// worktree outside any executor; it runs no check. A runner with no
+    /// CI mode keeps nothing out.
+    fn kept_out(
+        &self,
+        _worktree: &Path,
+        _tests: &Settings,
+        _required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        Ok(Vec::new())
+    }
 }
 
 /// The checks running on the host, every repository's (71).

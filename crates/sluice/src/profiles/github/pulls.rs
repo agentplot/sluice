@@ -1166,6 +1166,13 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
         SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
+        SubmitRefusal::KeptOut(kept) => format!(
+            "its branch requires {}, which the task runner keeps out of CI",
+            kept.iter()
+                .map(|k| k.task.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1889,6 +1896,18 @@ impl crate::PullRequests for Pulls {
         let (Some(t), true) = (target, refused.is_empty()) else {
             return Ok(Err(GroupRefused::Worktrees(refused)));
         };
+        // ADR 0050: refused before anything is pushed or opened, each place
+        // its runner keeps a required check out of CI in.
+        let mut warnings = Vec::new();
+        for (worktree, session) in worktrees.iter().zip(&sessions) {
+            match s.check_kept_out(session, branch, &t.tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(GroupRefused::Worktrees(refused)));
+        }
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
         // 124, 1: a branch sluice lands on is asked for as its remote holds
@@ -1999,20 +2018,24 @@ impl crate::PullRequests for Pulls {
         } else {
             Ok(opened)
         };
-        // 124: how the host's copy differs, beneath what the act did.
-        let with_copies = |mut opened: Vec<Opened>| {
-            for o in &mut opened {
+        // 124: how the host's copy differs, and ADR 0050: why the runner
+        // could not be asked, beneath what the act did.
+        let beneath = |mut opened: Vec<Opened>| {
+            for (o, warnings) in opened.iter_mut().zip(&warnings) {
                 if let Some(copy) = &o.copy {
                     o.said.push('\n');
                     o.said.push_str(&crate::copy_differs_line(copy));
+                }
+                for w in warnings {
+                    o.said.push_str(&format!("\nwarning: {w}"));
                 }
             }
             opened
         };
         Ok(match taken {
-            Ok(opened) => Ok(with_copies(opened)),
+            Ok(opened) => Ok(beneath(opened)),
             Err(GroupRefused::Short { opened, short }) => Err(GroupRefused::Short {
-                opened: with_copies(opened),
+                opened: beneath(opened),
                 short,
             }),
             Err(refused) => Err(refused),
