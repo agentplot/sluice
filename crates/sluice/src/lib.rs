@@ -31,12 +31,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
-use sluice_core::records::{Event, FailedTask, State, Submission};
+use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, Forecast, Forecasted, GroupRequest, Requester, Seams, Serves,
-    Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Requester,
+    Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
-use sluice_seams::{Outcome, SessionPlace};
+use sluice_seams::{Outcome, Rev, SessionPlace};
 use told::Kind;
 
 /// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
@@ -44,10 +44,17 @@ use told::Kind;
 pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
+/// sluice itself failed, or a wait could not read: the cause is on
+/// stderr, and it is no outcome.
+pub const INTERNAL: i32 = 3;
 /// The submission was withdrawn while it was waited on.
 pub const WITHDRAWN: i32 = 4;
 /// `sluice wait --timeout` ran out with the submission undecided.
 pub const WAITING: i32 = 5;
+/// How long a waiting submit or `sluice wait` reads again, a pause apart,
+/// through a forge's 5xx answers before it says it could not read
+/// ([`INTERNAL`]); what it could not read decides nothing.
+pub const UNANSWERED_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 /// A command line sluice cannot read: an unknown command, flag or value.
 /// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
 /// conflict.
@@ -92,10 +99,11 @@ Examples:
   $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
-  3    sluice itself failed; the cause is on stderr
+  3    sluice itself failed, or it could not read the forge for 5m and
+       whether it landed is not known; the cause is on stderr
   4    withdrawn while it waited
   64   a command line sluice cannot read
   130  stopped with Ctrl-C; the submission stays queued
@@ -111,10 +119,11 @@ Examples:
   $ sluice wait main                     this worktree's last submission to main
 
 Exit codes:
-  0    landed
+  0    landed, whatever failed after the landing (said on stderr)
   1    failed: it was blamed, or its pull request closed; or no such submission
   2    a conflict
-  3    sluice itself failed; the cause is on stderr
+  3    sluice itself failed, or it could not read the forge for 5m and
+       whether it landed is not known; the cause is on stderr
   4    withdrawn
   5    still waiting: --timeout ran out, and the submission stays queued
   64   a command line sluice cannot read
@@ -388,14 +397,23 @@ pub enum Command {
     },
     /// Release this worktree: run the policy's release command, end what
     /// its runs left running, free its ports. The worktree stays. Given a
-    /// preview, release the preview.
-    #[command(after_help = "Examples:\n  $ sluice release\n  $ sluice release 2eb676c")]
+    /// preview, or a checkout held because its release failed, release
+    /// that.
+    #[command(
+        after_help = "Examples:\n  $ sluice release\n  $ sluice release 2eb676c\n  $ sluice release sluice/try/main/48 --accept-failure"
+    )]
     Release {
-        /// A preview, by its name or its revision.
-        preview: Option<String>,
+        /// A preview, by its name or its revision, or a held checkout, by
+        /// its name.
+        name: Option<String>,
         /// The worktree to release.
         #[arg(long, default_value = ".")]
         worktree: String,
+        /// Free what sluice holds for it without running the release
+        /// command: its runs ended, the checkout sluice made removed, its
+        /// ports let go.
+        #[arg(long)]
+        accept_failure: bool,
         /// One JSON document on stdout; the rest on stderr.
         #[arg(long)]
         json: bool,
@@ -417,11 +435,11 @@ pub enum Command {
     /// Run by git's hook: `reference-transaction <state>`, updates on stdin.
     #[command(hide = true)]
     Hook { name: String, state: String },
-    // branches-1 104, 105.
+    // branches-1 104, 105; 121.
     /// Make or remove a branch sluice lands on, on its remote when its
-    /// policy names one.
+    /// policy names one, or accept the revision a held branch is read at.
     #[command(
-        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main"
+        after_help = "Examples:\n  $ sluice branch create feature/x --from main\n  $ sluice branch delete feature/x --into main\n  $ sluice branch accept feature/x 10e4791"
     )]
     Branch {
         #[command(subcommand)]
@@ -462,14 +480,54 @@ impl Pushers for () {
 /// What `sluice submit` to a branch with pull requests opened or updated.
 pub struct Opened {
     pub number: u64,
-    /// What it did: the branch pushed, and the pull request.
+    /// What it did: the branch pushed, if it pushed one, and the pull
+    /// request.
     pub said: String,
+    /// 124: the worktree's head, this host's copy of a branch sluice
+    /// lands on, where it differs from the remote's revision submitted.
+    pub copy: Option<CopyDiffers>,
+    /// 125: the submission a group submit queued for it, having taken its
+    /// group whole; `None` for one submit's, which intake takes.
+    pub submission: Option<Accepted>,
+}
+
+/// 125: a pull request of a group submit short of its conditions.
+pub struct Short {
+    /// Its worktree, as the act named it.
+    pub worktree: String,
+    pub number: u64,
+    /// The reviews and checks it lacks on its head, as a waiting pull
+    /// request names them.
+    pub lacks: Vec<String>,
+}
+
+/// 125: why a group submit to a branch with pull requests queued nothing.
+pub enum GroupRefused {
+    /// Worktrees refused before anything was pushed, each with why.
+    Worktrees(Vec<(String, SubmitRefusal)>),
+    /// Every branch pushed and its pull request opened or updated, as
+    /// `opened` says, and each left a draft at its head: `short` fall
+    /// short of their conditions.
+    Short {
+        opened: Vec<Opened>,
+        short: Vec<Short>,
+    },
 }
 
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
-    Open { title: String, lines: Vec<String> },
+    Open {
+        title: String,
+        lines: Vec<String>,
+        /// The submission intake took for it on its current head,
+        /// undecided; `None` while it waits to be taken in (C.5 pull
+        /// request, 120).
+        submission: Option<Submission>,
+        /// What each submission is called on a pull request, as
+        /// [`Followed::Done`] names them.
+        names: BTreeMap<u64, String>,
+    },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
@@ -503,14 +561,16 @@ pub trait PullRequests {
 
     /// 125: push each of `worktrees`' branches and open or update its
     /// pull request into `branch`, in order, each marked one of the group,
-    /// or none of them when any is refused.
+    /// or none of them when any worktree is refused; then, for more than
+    /// one, mark each ready and queue them all in one write, or, when any
+    /// falls short of its conditions, leave each a draft and queue none.
     fn open_group(
         &self,
         _seams: Seams<'_>,
         _clock: &dyn Clock,
         _worktrees: &[String],
         branch: &str,
-    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         anyhow::bail!("{branch} takes no pull requests")
     }
 
@@ -600,6 +660,19 @@ pub enum BranchCommand {
         /// The branch its work landed into.
         #[arg(long, default_value = "main")]
         into: String,
+        /// One JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept the revision a held branch is read at, which lacks its last
+    /// landing, as the one it stands on: the next round forms the queue on
+    /// it. The operator's to do, never a session's.
+    #[command(after_help = "Example:\n  $ sluice branch accept feature/x 10e4791")]
+    Accept {
+        /// The held branch.
+        branch: String,
+        /// The revision it is held at, as `sluice status <branch>` names it.
+        revision: String,
         /// One JSON document on stdout.
         #[arg(long)]
         json: bool,
@@ -697,7 +770,10 @@ impl Cli {
                     command: ForgeCommand::Check { json, .. },
                 }
                 | Command::Branch {
-                    command: BranchCommand::Create { json, .. } | BranchCommand::Delete { json, .. },
+                    command:
+                        BranchCommand::Create { json, .. }
+                        | BranchCommand::Delete { json, .. }
+                        | BranchCommand::Accept { json, .. },
                 },
             ) => *json,
             Some(_) => false,
@@ -839,6 +915,7 @@ pub fn run(
                 deadline,
                 json,
                 pause,
+                copy: None,
             };
             await_submission(&s, &waiting, sub, None, out)
         }
@@ -847,23 +924,30 @@ pub fn run(
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, json, &round.released)?;
             preview::tell_dropped(out, json, &round.previews)?;
+            exec::tell_releases(out, json, &round.releases)?;
             if json {
                 let outcome = match round.step {
                     Step::Stepped => "stepped",
                     Step::Busy => "busy",
                     Step::Led => "led",
                     Step::Contended => "contended",
+                    Step::Held => "held",
                 };
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({
-                        "branch": branch,
-                        "outcome": outcome,
-                        "released": exec::abandoned_json(&round.released),
-                        "previews_released": preview::dropped_json(&round.previews),
-                    })
-                )?;
+                let mut doc = serde_json::json!({
+                    "branch": branch,
+                    "outcome": outcome,
+                    "released": exec::abandoned_json(&round.released),
+                    "previews_released": preview::dropped_json(&round.previews),
+                    "releases": exec::releases_json(&round.releases),
+                });
+                if let Some(hold) = &round.held {
+                    doc["held"] = held_json(hold);
+                }
+                writeln!(out, "{doc}")?;
+                return Ok(0);
+            }
+            if let Some(hold) = &round.held {
+                writeln!(out, "{}", held_line(&branch, hold))?;
                 return Ok(0);
             }
             let word = match round.step {
@@ -871,6 +955,7 @@ pub fn run(
                 Step::Busy => "busy: another round holds the lock",
                 Step::Led => "led: another host keeps the branch, and its lease has not passed",
                 Step::Contended => "contended: the records moved; nothing done",
+                Step::Held => "held",
             };
             writeln!(out, "{branch}: {word}")?;
             Ok(0)
@@ -879,6 +964,8 @@ pub fn run(
             let s = s.serving(Serves::Every);
             s.check_host_systems()?;
             let mut n = 0;
+            // 121: each branch's hold as last said, so it is said once.
+            let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
@@ -898,6 +985,11 @@ pub fn run(
                         let round = s.round(&branch)?;
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
+                        exec::tell_releases(out, false, &round.releases)?;
+                        if matches!(round.step, Step::Stepped | Step::Held) {
+                            let said = said.entry(branch.clone()).or_default();
+                            tell_hold(out, &branch, round.held.as_ref(), said)?;
+                        }
                     }
                 }
                 n += 1;
@@ -1210,24 +1302,42 @@ pub fn run(
         .run(&s, out),
         Command::Previews { json } => preview::list(&s, host, json, out),
         Command::Release {
-            preview: Some(name),
+            name: Some(name),
+            accept_failure,
             json,
             ..
-        } => preview::release(&s, host, &name, json, out),
+        } if name.starts_with(CHECKOUT) => release_checkout(&s, &name, accept_failure, json, out),
         Command::Release {
-            preview: None,
+            name: Some(name),
+            accept_failure,
+            json,
+            ..
+        } => preview::release(&s, host, &name, accept_failure, json, out),
+        Command::Release {
+            name: None,
             worktree,
+            accept_failure,
             json,
         } => {
-            let released = exec::release(&s, host, &worktree, json, out)?;
+            let released = exec::release(&s, host, &worktree, accept_failure, json, out)?;
             if json {
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({ "worktree": released.worktree, "released": released.released })
-                )?;
+                let mut doc = serde_json::json!({
+                    "worktree": released.worktree,
+                    "released": released.released,
+                });
+                if accept_failure {
+                    doc["accepted"] = released.accepted.into();
+                }
+                if let Some(f) = &released.failed {
+                    doc["failed"] = f.clone().into();
+                }
+                writeln!(out, "{doc}")?;
             }
-            Ok(LANDED)
+            Ok(if released.failed.is_some() {
+                FAILED
+            } else {
+                LANDED
+            })
         }
         Command::Supervise { dir } => {
             runs::supervise(&dir)?;
@@ -1292,10 +1402,43 @@ pub fn run(
             Ok(0)
         }
         Command::Hook { name, state } => match name.as_str() {
-            "reference-transaction" => protect::hook(&s, &state, &mut std::io::stdin()),
+            "reference-transaction" => protect::hook(&s, host, &state, &mut std::io::stdin()),
             other => anyhow::bail!("sluice runs no {other} hook"),
         },
     }
+}
+
+/// 121: a branch held because the revision it is read at lacks its last
+/// landing, with both revisions and the two ways out.
+pub(crate) fn held_line(branch: &str, hold: &BranchHold) -> String {
+    let (read, lacks) = (hold.read.short(), hold.lacks.short());
+    format!(
+        "held: {branch} reads {read}, which lacks the landing {lacks}; \
+         put the landing back on {branch}, or run sluice branch accept {branch} {read}"
+    )
+}
+
+/// 121: say `branch`'s hold once: when it begins, and again for another
+/// revision read lacking the landing. `said` is what was said last.
+fn tell_hold(
+    out: &mut dyn Write,
+    branch: &str,
+    hold: Option<&BranchHold>,
+    said: &mut Option<(Rev, Rev)>,
+) -> Result<()> {
+    let now = hold.map(|h| (h.read.clone(), h.lacks.clone()));
+    if now != *said {
+        if let Some(h) = hold {
+            writeln!(out, "{}", held_line(branch, h))?;
+        }
+        *said = now;
+    }
+    Ok(())
+}
+
+/// 121: the hold as `--json` carries it.
+pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
+    serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
 }
 
 pub(crate) fn hashes(ids: &[u64]) -> String {
@@ -1470,6 +1613,7 @@ fn submit(
         }
     };
     let id = accepted.id;
+    let copy = accepted.copy.as_ref();
     if json && no_wait {
         let mut doc =
             serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
@@ -1477,12 +1621,15 @@ fn submit(
         if !accepted.warnings.is_empty() {
             doc["warnings"] = serde_json::json!(accepted.warnings);
         }
-        writeln!(out, "{doc}")?;
+        writeln!(out, "{}", with_copy(doc, copy)?)?;
         return Ok(0);
     }
     if !json {
-        let ahead = queued_ahead(&accepted.ahead);
+        let ahead = queued_ahead(&accepted.ahead, |i| format!("#{i}"));
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
+        if let Some(copy) = copy {
+            writeln!(out, "{}", copy_differs_line(copy))?;
+        }
         for w in &accepted.warnings {
             writeln!(out, "warning: {w}")?;
         }
@@ -1498,15 +1645,20 @@ fn submit(
         deadline: None,
         json,
         pause,
+        copy,
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
 
-/// What a submission was queued behind, as a submit says it.
-fn queued_ahead(ahead: &[u64]) -> String {
+/// What a submission was queued behind, as a submit says it, each named
+/// by `name`.
+fn queued_ahead(ahead: &[u64], name: impl Fn(u64) -> String) -> String {
     match ahead.len() {
         0 => "nothing queued ahead".to_string(),
-        n => format!("{n} queued ahead ({})", hashes(ahead)),
+        n => {
+            let named: Vec<String> = ahead.iter().map(|i| name(*i)).collect();
+            format!("{n} queued ahead ({})", named.join(", "))
+        }
     }
 }
 
@@ -1542,9 +1694,9 @@ fn submit_group(
                 if !a.warnings.is_empty() {
                     doc["warnings"] = serde_json::json!(a.warnings);
                 }
-                doc
+                with_copy(doc, a.copy.as_ref())
             })
-            .collect();
+            .collect::<Result<_>>()?;
         writeln!(
             out,
             "{}",
@@ -1554,8 +1706,11 @@ fn submit_group(
     }
     if !json {
         for (w, a) in &items {
-            let ahead = queued_ahead(&a.ahead);
+            let ahead = queued_ahead(&a.ahead, |i| format!("#{i}"));
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
+            if let Some(copy) = &a.copy {
+                writeln!(out, "{}", copy_differs_line(copy))?;
+            }
             for warning in &a.warnings {
                 writeln!(out, "warning: {warning}")?;
             }
@@ -1564,16 +1719,20 @@ fn submit_group(
     if no_wait {
         return Ok(0);
     }
+    // Each record carries its own copy, below.
     let waiting = Waiting {
         clock,
         pulls: None,
         deadline: None,
         json,
         pause,
+        copy: None,
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
     let mut stopped = None;
+    // 122: what failed after a landing, said once the outcomes are.
+    let mut after = Vec::new();
     for (_, a) in &items {
         let sub = s.state(a.id)?.expect("a submission just made");
         if stopped.is_some() {
@@ -1581,8 +1740,18 @@ fn submit_group(
             continue;
         }
         match wait_on(s, &waiting, sub, Some(State::Queued), out)? {
-            Waited::Decided(sub) => subs.push(sub),
+            Waited::Decided(sub, e) => {
+                after.extend(e);
+                subs.push(sub);
+            }
             Waited::Undecided(sub, code) => {
+                stopped = Some(code);
+                subs.push(sub);
+            }
+            Waited::Unread(sub, unread) => {
+                // Said on stderr; the act's answer holds it as it stands.
+                let (what, again) = (format!("#{}", sub.id), format!("sluice wait {}", sub.id));
+                let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
                 stopped = Some(code);
                 subs.push(sub);
             }
@@ -1590,10 +1759,10 @@ fn submit_group(
     }
     if json {
         let mut submissions = Vec::new();
-        for ((w, _), sub) in items.iter().zip(&subs) {
+        for ((w, a), sub) in items.iter().zip(&subs) {
             let mut record = serde_json::to_value(sub)?;
             record["worktree"] = serde_json::json!(w);
-            submissions.push(record);
+            submissions.push(with_copy(record, a.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": submissions });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
@@ -1601,11 +1770,14 @@ fn submit_group(
         for ((w, _), sub) in items.iter().zip(&subs) {
             writeln!(out, "submission {} from {w}:", sub.id)?;
             if sub.state.is_out() {
-                report(s, sub, branch, &BTreeMap::new(), Reached::Now, false, out)?;
+                report(s, sub, branch, &BTreeMap::new(), None, false, out)?;
             } else {
                 writeln!(out, "still waiting: sluice wait {}", sub.id)?;
             }
         }
+    }
+    for e in &after {
+        after_landing(e);
     }
     if let Some(code) = stopped {
         return Ok(code);
@@ -1627,14 +1799,7 @@ fn refused_group(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let branch = &req.branch;
-    let again = format!(
-        "sluice submit {branch} {}",
-        req.worktrees
-            .iter()
-            .map(|w| format!("--worktree {w}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    let again = group_again(req);
     let (mut texts, mut next, mut worktrees) = (Vec::new(), Vec::new(), Vec::new());
     for (w, r) in refused {
         let text = refusal(r, w, branch, pushers)?;
@@ -1676,6 +1841,86 @@ fn refused_group(
     Ok(CONFLICT)
 }
 
+/// The act submitted again: `sluice submit <branch> --worktree …`.
+fn group_again(req: &GroupRequest) -> String {
+    format!(
+        "sluice submit {} {}",
+        req.branch,
+        req.worktrees
+            .iter()
+            .map(|w| format!("--worktree {w}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+/// 125: an act under pull requests refused for its pull requests'
+/// conditions: what it pushed and opened, each pull request short of its
+/// conditions with what it lacks, and that every one of the act is a
+/// draft at its head, which the same act takes once each meets them.
+fn short_group(
+    req: &GroupRequest,
+    opened: &[Opened],
+    short: &[Short],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let again = group_again(req);
+    let needs: Vec<String> = short
+        .iter()
+        .map(|x| {
+            format!(
+                "#{} from {} needs {}",
+                x.number,
+                x.worktree,
+                x.lacks.join(", ")
+            )
+        })
+        .collect();
+    if json {
+        let mut doc = told::document(Kind::Refused, &needs.join("\n"), &[again]);
+        let worktrees: Vec<&str> = short.iter().map(|x| x.worktree.as_str()).collect();
+        doc["error"]["worktrees"] = serde_json::json!(worktrees);
+        writeln!(out, "{doc}")?;
+    } else {
+        for o in opened {
+            writeln!(out, "{}", o.said)?;
+        }
+        for n in &needs {
+            writeln!(out, "refused: {n}")?;
+        }
+        let numbers: Vec<u64> = opened.iter().map(|o| o.number).collect();
+        writeln!(
+            out,
+            "nothing submitted: {} are drafts at their heads",
+            hashes(&numbers)
+        )?;
+        writeln!(
+            out,
+            "once each meets its conditions, the same submit takes them all: {again}"
+        )?;
+    }
+    Ok(CONFLICT)
+}
+
+/// 124: a submit's `--json` document, carrying `copy` where the host's
+/// copy differs from the remote's revision it submitted.
+fn with_copy(mut doc: serde_json::Value, copy: Option<&CopyDiffers>) -> Result<serde_json::Value> {
+    if let Some(copy) = copy {
+        doc["copy"] = serde_json::to_value(copy)?;
+    }
+    Ok(doc)
+}
+
+/// A submission's record as a `--json` document, with `copy` as
+/// [`with_copy`] adds it.
+fn record_json(sub: &Submission, copy: Option<&CopyDiffers>) -> Result<String> {
+    Ok(match copy {
+        Some(_) => serde_json::to_string_pretty(&with_copy(serde_json::to_value(sub)?, copy)?)?,
+        None => serde_json::to_string_pretty(sub)?,
+    })
+}
+
 /// How a command waits on a submission.
 struct Waiting<'a> {
     clock: &'a dyn Clock,
@@ -1686,12 +1931,15 @@ struct Waiting<'a> {
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
     pause: &'a dyn Pause,
+    /// 124: how the host's copy differed from what the submit waited on
+    /// submitted, carried by its `--json` document.
+    copy: Option<&'a CopyDiffers>,
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
 /// say it: the loop under a waiting submit and `sluice wait`. `told` is
 /// the state its caller has said already. Under `--json`, one document
-/// however it ends: the submission's record.
+/// however it ends: the submission's record, with the copy's `copy`.
 fn await_submission(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
@@ -1700,22 +1948,23 @@ fn await_submission(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
-        Waited::Decided(sub) => {
+        Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
-            return report(
-                s,
-                &sub,
-                &branch,
-                &BTreeMap::new(),
-                Reached::Now,
-                waiting.json,
-                out,
-            );
+            let names = BTreeMap::new();
+            let code = report(s, &sub, &branch, &names, waiting.copy, waiting.json, out)?;
+            if let Some(e) = after {
+                after_landing(&e);
+            }
+            return Ok(code);
+        }
+        Waited::Unread(sub, unread) => {
+            let again = format!("sluice wait {}", sub.id);
+            return could_not_read(&unread, &format!("#{}", sub.id), &again, waiting.json, out);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
     if waiting.json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        writeln!(out, "{}", record_json(&sub, waiting.copy)?)?;
     } else {
         writeln!(out, "still waiting: sluice wait {}", sub.id)?;
     }
@@ -1724,17 +1973,80 @@ fn await_submission(
 
 /// How a wait ended.
 enum Waited {
-    /// Landed, failed, conflict or withdrawn.
-    Decided(Submission),
+    /// Landed, failed, conflict or withdrawn; when it landed in a round
+    /// that then failed, what failed after the landing (122).
+    Decided(Submission, Option<anyhow::Error>),
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
+    /// As last read, when the forge answered 5xx for [`UNANSWERED_FOR`].
+    Unread(Submission, Unread),
+}
+
+/// A forge's 5xx answers to a wait's reads, in a row: when the first came,
+/// and the last with when it came. The wait reads again through them for
+/// [`UNANSWERED_FOR`], and a read answered ends the run.
+#[derive(Default)]
+struct Unread {
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    last: Option<(chrono::DateTime<chrono::Utc>, anyhow::Error)>,
+}
+
+impl Unread {
+    /// After a read failed with `e`: `Ok(true)` to read again after the
+    /// next pause, `e` being a forge's 5xx answer within [`UNANSWERED_FOR`]
+    /// of the first in a row; `Ok(false)` once that has passed, the wait
+    /// ending as it could not read; `e` itself for any other failure.
+    fn again(&mut self, clock: &dyn Clock, e: anyhow::Error) -> Result<bool> {
+        if !sluice_seams::unanswered(&e) {
+            return Err(e);
+        }
+        let now = clock.now();
+        let since = *self.since.get_or_insert(now);
+        self.last = Some((now, e));
+        Ok(now - since < UNANSWERED_FOR)
+    }
+
+    /// A read answered: the run of 5xx answers, if any, is over.
+    fn answered(&mut self) {
+        *self = Unread::default();
+    }
+}
+
+/// A wait that could not read `what` (`unread`, the forge's 5xx answers):
+/// said on stderr, on its own line beginning `sluice: could not read`, and
+/// apart from any outcome, which only the records give; exit
+/// [`INTERNAL`], with `again` to wait once more. Under `--json`, the error
+/// document in place of the record.
+fn could_not_read(
+    unread: &Unread,
+    what: &str,
+    again: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let (lasted, cause) = match (&unread.last, unread.since) {
+        (Some((at, e)), Some(since)) => ((*at - since).num_seconds(), format!(": {e:#}")),
+        _ => (0, String::new()),
+    };
+    let text = format!(
+        "could not read {what} for {}, so whether it landed is not known{cause}",
+        progress::duration(lasted)
+    );
+    telemetry::error(&format!("sluice: {text}"));
+    if json {
+        told::tell(out, true, Kind::Internal, &text, &[again.to_string()])?;
+    } else {
+        writeln!(out, "could not read {what}: {again}")?;
+    }
+    Ok(INTERNAL)
 }
 
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. Without `--json`, it says the
+/// already decided runs nothing. A round the forge answered 5xx is run
+/// again, as [`Unread`] bounds it. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
 /// moves (ADR 0042).
 fn wait_on(
@@ -1747,10 +2059,13 @@ fn wait_on(
     let (id, branch) = (sub.id, sub.branch.clone());
     type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
     let mut said: Option<Moved> = told.map(|t| (t, None));
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
     let mut first = true;
+    let mut unread = Unread::default();
     loop {
         if sub.state.is_out() {
-            return Ok(Waited::Decided(sub));
+            return Ok(Waited::Decided(sub, None));
         }
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
@@ -1771,6 +2086,9 @@ fn wait_on(
                 }
                 said = Some(now);
             }
+            if let Some(v) = &view {
+                tell_hold(out, &branch, v.held.as_ref(), &mut said_hold)?;
+            }
         }
         if waiting.deadline.is_some_and(|d| waiting.clock.now() >= d) {
             return Ok(Waited::Undecided(sub, WAITING));
@@ -1783,13 +2101,23 @@ fn wait_on(
             intake(pulls, s.seams(), waiting.clock, &branch);
         }
         match s.round(&branch) {
-            Ok(round) => exec::tell_abandoned(out, waiting.json, &round.released)?,
+            Ok(round) => {
+                unread.answered();
+                exec::tell_abandoned(out, waiting.json, &round.released)?;
+                exec::tell_releases(out, waiting.json, &round.releases)?;
+            }
             Err(e) => {
                 // Ctrl-C reaches the tools a round runs in the foreground.
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Ok(Waited::Undecided(sub, STOPPED));
                 }
-                return Err(e);
+                if let Some(sub) = landed(s, id) {
+                    return Ok(Waited::Decided(sub, Some(e)));
+                }
+                if unread.again(waiting.clock, e)? {
+                    continue;
+                }
+                return Ok(Waited::Unread(sub, unread));
             }
         }
         sub = s
@@ -1798,16 +2126,31 @@ fn wait_on(
     }
 }
 
-/// Whose outcome a waiting submit ends with.
-#[derive(Clone, Copy)]
-enum Reached {
-    /// The submission it waited on: queued, tested, decided.
-    Now,
-    /// Pull request `n`'s submission on the same head, sent back before
-    /// this submit, which queued and ran nothing: a pull request sent
-    /// back is submitted again only on a new head, or once marked a draft
-    /// and then ready for review (pull-request-intake).
-    Before(u64),
+/// 122: submission `id` as landed, when its work is on its branch: its
+/// record, or the record the next round writes when the round that moved
+/// the branch stopped before writing it (24). `None` when it is not, or
+/// when the records cannot be read, which leaves the round's own error
+/// the outcome.
+fn landed(s: &Sluice<'_>, id: u64) -> Option<Submission> {
+    let to = s.landed_as(id).ok()??;
+    let mut sub = s.state(id).ok()??;
+    sub.state = State::Landed;
+    sub.landed_as = Some(to);
+    Some(sub)
+}
+
+/// The latest submission to `branch` on `head`, as a pull request's is
+/// taken in on the head its worktree pushed; `None` when there is none or
+/// the records cannot be read.
+fn taken_in(s: &Sluice<'_>, branch: &str, head: &sluice_seams::Rev) -> Option<u64> {
+    let all = s.history(branch).ok()?;
+    all.iter().rev().find(|x| x.head == *head).map(|x| x.id)
+}
+
+/// 122: what failed after a landing, said apart from its outcome, on
+/// stderr and to telemetry as sluice failing itself is.
+fn after_landing(e: &anyhow::Error) {
+    telemetry::error(&format!("sluice: after the landing: {e:#}"));
 }
 
 /// A submission's outcome, as a waiting submit ends with it.
@@ -1816,7 +2159,7 @@ fn report(
     sub: &Submission,
     branch: &str,
     names: &BTreeMap<u64, String>,
-    reached: Reached,
+    copy: Option<&CopyDiffers>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -1830,64 +2173,32 @@ fn report(
         s
     };
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        writeln!(out, "{}", record_json(sub, copy)?)?;
         return Ok(exit_for(sub));
     }
     let log = sluice_core::line::Line::read_log(&sluice_seams::State::read(s_state(s), branch)?)?;
-    match reached {
-        Reached::Now => {
-            if let Some(t) = &sub.tested {
-                // Only its last test: the same head on the same revision is
-                // the same combination, tested again on a resubmission.
-                let last = log.iter().rposition(|l| {
-                    matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
-                });
-                let (mut ran, mut replayed) = (0, 0);
-                for l in &log[last.unwrap_or(0)..] {
-                    match &l.event {
-                        Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
-                        Event::Replayed { combination, .. } if *combination == t.combination => {
-                            replayed += 1
-                        }
-                        _ => {}
-                    }
+    if let Some(t) = &sub.tested {
+        // Only its last test: the same head on the same revision is
+        // the same combination, tested again on a resubmission.
+        let last = log.iter().rposition(|l| {
+            matches!(&l.event, Event::Testing { combination, .. } if *combination == t.combination)
+        });
+        let (mut ran, mut replayed) = (0, 0);
+        for l in &log[last.unwrap_or(0)..] {
+            match &l.event {
+                Event::Ran { combination, .. } if *combination == t.combination => ran += 1,
+                Event::Replayed { combination, .. } if *combination == t.combination => {
+                    replayed += 1
                 }
-                writeln!(
-                    out,
-                    "testing {} · {ran} tasks to run, {replayed} replayed",
-                    combination(&t.submissions)
-                )?;
+                _ => {}
             }
         }
-        Reached::Before(n) => {
-            // When it was sent back: its last blame or conflict (17, 12).
-            let at = log
-                .iter()
-                .rev()
-                .find(|l| match &l.event {
-                    Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
-                    _ => false,
-                })
-                .map_or_else(|| "an earlier round".to_string(), |l| l.at.clone());
-            let what = if sub.state == State::Conflict {
-                "found conflicting"
-            } else {
-                "tested and blamed"
-            };
-            writeln!(
-                out,
-                "#{n}'s head {} was {what} at {at}: nothing was queued or run again",
-                sub.head.short()
-            )?;
-        }
+        writeln!(
+            out,
+            "testing {} · {ran} tasks to run, {replayed} replayed",
+            combination(&t.submissions)
+        )?;
     }
-    // How a pull request sent back on its head is tested again.
-    let same_commits = match reached {
-        Reached::Now => String::new(),
-        Reached::Before(n) => format!(
-            ", or mark #{n} a draft and then ready for review to test the same commits again"
-        ),
-    };
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -2011,22 +2322,20 @@ fn report(
             if !could_not.is_empty() {
                 writeln!(
                     out,
-                    "the host could not run {}: once it can, submit again{same_commits}",
-                    could_not
-                        .iter()
-                        .map(|f| f.task.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "{}",
+                    words::could_not_run_way_on(
+                        &could_not
+                            .iter()
+                            .map(|f| f.task.as_str())
+                            .collect::<Vec<_>>()
+                    )
                 )?;
             }
             if timed_out {
-                writeln!(out, "{}", words::timed_out_way_on(&cut, &same_commits))?;
+                writeln!(out, "{}", words::timed_out_way_on(&cut))?;
             }
             if not_run.len() > could_not.len() || ran.len() > flaky.len() {
-                writeln!(
-                    out,
-                    "fix it in your worktree and submit again{same_commits}"
-                )?;
+                writeln!(out, "{}", words::fix_way_on())?;
             }
             if !flaky.is_empty() {
                 let other_failed = ran
@@ -2048,11 +2357,7 @@ fn report(
                     w.from.worktree
                 )?;
             }
-            writeln!(
-                out,
-                "merge or rebase onto {} in your worktree and submit again{same_commits}",
-                branch
-            )?;
+            writeln!(out, "{}", words::conflict_way_on(branch))?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
     }
@@ -2165,7 +2470,8 @@ enum PullMode {
 /// push the worktree's branch and open or update its pull request, which
 /// waits for its conditions; then follow it, reporting each state it
 /// reaches, to its outcome. [`PullMode::Status`] only says where it
-/// stands; [`PullMode::Wait`] follows the one open.
+/// stands; [`PullMode::Wait`] follows the one open. While it waits, a
+/// read the forge answered 5xx is made again, as [`Unread`] bounds it.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -2182,8 +2488,29 @@ fn submit_pull(
     let status = matches!(mode, PullMode::Status);
     let no_wait = matches!(mode, PullMode::Open { no_wait: true });
     let opens = matches!(mode, PullMode::Open { .. });
+    let again = format!("sluice wait {branch}");
+    // 124: how the host's copy differed from what the submit opened.
+    let mut copy = None;
     let number = if !opens {
-        match pulls.find(seams, clock, branch, worktree)? {
+        let mut unread = Unread::default();
+        let found = loop {
+            let e = match pulls.find(seams, clock, branch, worktree) {
+                Ok(found) => break found,
+                Err(e) => e,
+            };
+            let PullMode::Wait { deadline } = mode else {
+                return Err(e);
+            };
+            let what = format!("the pull request from {worktree} into {branch}");
+            if !unread.again(clock, e)? || deadline.is_some_and(|d| clock.now() >= d) {
+                return could_not_read(&unread, &what, &again, json, out);
+            }
+            if !pause.pause() {
+                could_not_read(&unread, &what, &again, json, out)?;
+                return Ok(STOPPED);
+            }
+        };
+        match found {
             Some(n) => n,
             None => {
                 let text = format!("no pull request from {worktree} into {branch}");
@@ -2198,6 +2525,7 @@ fn submit_pull(
                 if !json {
                     writeln!(out, "{}", o.said)?;
                 }
+                copy = o.copy;
                 o.number
             }
             Err(r) => {
@@ -2206,27 +2534,28 @@ fn submit_pull(
             }
         }
     };
-    // A pull request already sent back on the head just pushed: intake
-    // submits it again only once it is marked a draft and then ready for
-    // review, so a decision on that submission is no run of this submit's.
-    let sent_back = if !opens {
-        None
-    } else {
-        let head = seams.driver.session(worktree)?.head;
-        match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub, _)
-                if sub.head == head && matches!(sub.state, State::Failed | State::Conflict) =>
-            {
-                Some(sub.id)
-            }
-            _ => None,
-        }
-    };
     let mut last: Option<(String, Vec<String>)> = None;
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
+    let what = format!("#{number}");
+    let mut unread = Unread::default();
+    // The submission the pull request was last read taken in as.
+    let mut taken: Option<u64> = None;
     loop {
         intake(pulls, seams, clock, branch);
-        match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub, names) => {
+        let followed = match pulls.follow(seams, clock, branch, number) {
+            Ok(f) => Some(f),
+            Err(e) if no_wait || status => return Err(e),
+            Err(e) => {
+                if !unread.again(clock, e)? {
+                    return could_not_read(&unread, &what, &again, json, out);
+                }
+                None
+            }
+        };
+        let read = followed.is_some();
+        match followed {
+            Some(Followed::Done(sub, names)) => {
                 if status && json {
                     writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
                     return Ok(0);
@@ -2243,38 +2572,61 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
-                let reached = if sent_back == Some(sub.id) {
-                    Reached::Before(number)
-                } else {
-                    Reached::Now
-                };
-                return report(s, &sub, branch, &names, reached, json, out);
+                return report(s, &sub, branch, &names, copy.as_ref(), json, out);
             }
-            Followed::Closed => {
+            Some(Followed::Closed) => {
                 if json {
-                    writeln!(
-                        out,
-                        "{}",
-                        serde_json::json!({
-                            "pull_request": number, "branch": branch, "state": "closed",
-                        })
-                    )?;
+                    let doc = serde_json::json!({
+                        "pull_request": number, "branch": branch, "state": "closed",
+                    });
+                    writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                 } else {
                     writeln!(out, "#{number} was closed without landing")?;
                 }
                 return Ok(FAILED);
             }
-            Followed::Open { title, lines } => {
+            Some(Followed::Open {
+                title,
+                lines,
+                submission,
+                names,
+            }) => {
+                // Taken in on the head just pushed: the submission is the
+                // answer, as a no-wait submit's on any branch, with the
+                // pull request beside it.
+                if let (true, Some(sub)) = (no_wait, &submission) {
+                    let ahead: Vec<u64> = s
+                        .status(branch)?
+                        .submissions
+                        .iter()
+                        .filter(|x| x.id < sub.id && !x.state.is_out())
+                        .map(|x| x.id)
+                        .collect();
+                    if json {
+                        let doc = serde_json::json!({
+                            "id": sub.id, "branch": branch, "ahead": ahead,
+                            "pull_request": number,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else {
+                        let name =
+                            |i: u64| names.get(&i).cloned().unwrap_or_else(|| format!("#{i}"));
+                        let ahead = queued_ahead(&ahead, name);
+                        writeln!(
+                            out,
+                            "submission {} to {branch} from #{number} · {ahead}",
+                            sub.id
+                        )?;
+                    }
+                    return Ok(0);
+                }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
-                        writeln!(
-                            out,
-                            "{}",
-                            serde_json::json!({
-                                "pull_request": number, "branch": branch, "state": now.0,
-                            })
-                        )?;
+                        let doc = serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": now.0,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
                     } else if !json {
                         writeln!(out, "{}", now.0)?;
                         for l in &now.1 {
@@ -2283,23 +2635,33 @@ fn submit_pull(
                     }
                     last = Some(now);
                 }
+                taken = submission.map(|x| x.id);
             }
+            None => {}
         }
         if no_wait || status {
             return Ok(0);
         }
-        // Undecided: as it stands, the document `--status` prints, or
-        // where to read it again.
+        // Undecided: taken in, its submission's record as it stands now, as
+        // `sluice wait <id>` ends; otherwise the document `--status`
+        // prints, or where to read it again.
         let still = |out: &mut dyn Write, code: i32| -> Result<i32> {
-            if json {
+            let sub = match taken {
+                Some(id) => s.state(id)?,
+                None => None,
+            };
+            if let Some(sub) = sub {
+                if json {
+                    writeln!(out, "{}", record_json(&sub, copy.as_ref())?)?;
+                } else {
+                    writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+                }
+            } else if json {
                 let state = last.as_ref().map_or("waiting", |l| l.0.as_str());
-                writeln!(
-                    out,
-                    "{}",
-                    serde_json::json!({
-                        "pull_request": number, "branch": branch, "state": state,
-                    })
-                )?;
+                let doc = serde_json::json!({
+                    "pull_request": number, "branch": branch, "state": state,
+                });
+                writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
             } else {
                 writeln!(out, "still open: #{number}; sluice wait {branch}")?;
             }
@@ -2311,12 +2673,41 @@ fn submit_pull(
             }
         }
         match s.round(branch) {
-            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Ok(round) => {
+                if read {
+                    unread.answered();
+                }
+                exec::tell_abandoned(out, json, &round.released)?;
+                exec::tell_releases(out, json, &round.releases)?;
+                if !json && matches!(round.step, Step::Stepped | Step::Held) {
+                    tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
+                }
+            }
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
                 }
-                return Err(e);
+                // 122: as `wait_on`, for the submission the pull request
+                // was taken in as, on the head its worktree submitted (124).
+                let landed = seams
+                    .driver
+                    .session(worktree)
+                    .ok()
+                    .and_then(|w| s.submitted_head(&w).ok())
+                    .and_then(|h| taken_in(s, branch, &h.head))
+                    .and_then(|id| landed(s, id));
+                if let Some(sub) = landed {
+                    let names = match pulls.follow(seams, clock, branch, number) {
+                        Ok(Followed::Done(_, names)) => names,
+                        _ => BTreeMap::new(),
+                    };
+                    let code = report(s, &sub, branch, &names, copy.as_ref(), json, out)?;
+                    after_landing(&e);
+                    return Ok(code);
+                }
+                if !unread.again(clock, e)? {
+                    return could_not_read(&unread, &what, &again, json, out);
+                }
             }
         }
         if !pause.pause() {
@@ -2328,10 +2719,12 @@ fn submit_pull(
 /// 125: `sluice submit` of several worktrees to a branch with pull
 /// requests: every worktree's branch pushed and its pull request opened or
 /// updated, each marked one of the group, or none when any worktree is
-/// refused. It says where each stands; then, unless `no_wait`, it follows
-/// each, taking pull requests in and running rounds as a waiting
-/// pull-request submit does, until every one is decided, and reports each
-/// one's outcome in the order given.
+/// refused; then every pull request marked ready and queued, each
+/// submission said after its pull request, or none when any falls short
+/// of its conditions, each such named. It says where each stands; then,
+/// unless `no_wait`, it follows each, taking pull requests in and running
+/// rounds as a waiting pull-request submit does, until every one is
+/// decided, and reports each one's outcome in the order given.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull_group(
     s: &Sluice<'_>,
@@ -2347,34 +2740,77 @@ fn submit_pull_group(
     let branch = &req.branch;
     let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
         Ok(o) => o,
-        Err(refused) => return refused_group(&req, &refused, &(), json, out),
+        Err(GroupRefused::Worktrees(refused)) => {
+            return refused_group(&req, &refused, &(), json, out)
+        }
+        Err(GroupRefused::Short { opened, short }) => {
+            return short_group(&req, &opened, &short, json, out)
+        }
     };
     if !json {
+        // What is queued ahead is named as on a pull request: the act's
+        // own by their pull requests, the rest as intake last read them.
+        let ours: BTreeMap<u64, u64> = opened
+            .iter()
+            .filter_map(|o| Some((o.submission.as_ref()?.id, o.number)))
+            .collect();
+        let others = opened
+            .iter()
+            .filter_map(|o| o.submission.as_ref())
+            .any(|a| a.ahead.iter().any(|i| !ours.contains_key(i)));
+        let names = match others.then(|| pulls.follow(seams, clock, branch, opened[0].number)) {
+            Some(Ok(Followed::Open { names, .. } | Followed::Done(_, names))) => names,
+            _ => BTreeMap::new(),
+        };
+        let name = |i: u64| match ours.get(&i) {
+            Some(n) => format!("#{n}"),
+            None => names.get(&i).cloned().unwrap_or_else(|| format!("#{i}")),
+        };
         for o in &opened {
             writeln!(out, "{}", o.said)?;
-        }
-    }
-    // A pull request already sent back on the head just pushed, as for
-    // one worktree: a decision on it is no run of this submit's.
-    let mut sent_back = BTreeMap::new();
-    for (w, o) in req.worktrees.iter().zip(&opened) {
-        let head = seams.driver.session(w)?.head;
-        if let Followed::Done(sub, _) = pulls.follow(seams, clock, branch, o.number)? {
-            if sub.head == head && matches!(sub.state, State::Failed | State::Conflict) {
-                sent_back.insert(o.number, sub.id);
+            if let Some(a) = &o.submission {
+                let ahead = queued_ahead(&a.ahead, name);
+                writeln!(
+                    out,
+                    "submission {} to {branch} from #{} · {ahead}",
+                    a.id, o.number
+                )?;
             }
         }
     }
     let mut decided: Vec<Option<Followed>> = opened.iter().map(|_| None).collect();
     let mut last: Vec<Option<(String, Vec<String>)>> = vec![None; opened.len()];
-    let stopped = loop {
+    // 121: the branch's hold as last said, so each is said once.
+    let mut said_hold = None;
+    // As `submit_pull`: a read the forge answered 5xx is made again, as
+    // [`Unread`] bounds it, and said on stderr when it ends the wait.
+    let what = hashes(&opened.iter().map(|o| o.number).collect::<Vec<_>>());
+    let again = format!("sluice wait {branch}");
+    let mut unread = Unread::default();
+    // 122: what failed after a landing, said once the outcomes are.
+    let mut after = Vec::new();
+    let stopped = 'wait: loop {
         intake(pulls, seams, clock, branch);
+        let mut read = true;
         for (i, o) in opened.iter().enumerate() {
             if decided[i].is_some() {
                 continue;
             }
-            match pulls.follow(seams, clock, branch, o.number)? {
-                Followed::Open { title, lines } => {
+            let followed = match pulls.follow(seams, clock, branch, o.number) {
+                Ok(f) => f,
+                Err(e) if no_wait => return Err(e),
+                Err(e) => {
+                    if !unread.again(clock, e)? {
+                        let code =
+                            could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                        break 'wait Some(code);
+                    }
+                    read = false;
+                    continue;
+                }
+            };
+            match followed {
+                Followed::Open { title, lines, .. } => {
                     let now = (title, lines);
                     if last[i].as_ref() != Some(&now) {
                         if !json {
@@ -2393,12 +2829,53 @@ fn submit_pull_group(
             break None;
         }
         match s.round(branch) {
-            Ok(round) => exec::tell_abandoned(out, json, &round.released)?,
+            Ok(round) => {
+                if read {
+                    unread.answered();
+                }
+                exec::tell_abandoned(out, json, &round.released)?;
+                exec::tell_releases(out, json, &round.releases)?;
+                if !json && matches!(round.step, Step::Stepped | Step::Held) {
+                    tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
+                }
+            }
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     break Some(STOPPED);
                 }
-                return Err(e);
+                // 122: as `submit_pull`, each the round landed is decided,
+                // on the head its worktree submitted (124), and what failed
+                // is said after the outcomes.
+                let mut landed_now = false;
+                for (i, (w, o)) in req.worktrees.iter().zip(&opened).enumerate() {
+                    if decided[i].is_some() {
+                        continue;
+                    }
+                    let sub = seams
+                        .driver
+                        .session(w)
+                        .ok()
+                        .and_then(|w| s.submitted_head(&w).ok())
+                        .and_then(|h| taken_in(s, branch, &h.head))
+                        .and_then(|id| landed(s, id));
+                    if let Some(sub) = sub {
+                        let names = match pulls.follow(seams, clock, branch, o.number) {
+                            Ok(Followed::Done(_, names)) => names,
+                            _ => BTreeMap::new(),
+                        };
+                        decided[i] = Some(Followed::Done(sub, names));
+                        landed_now = true;
+                    }
+                }
+                if landed_now {
+                    after.push(e);
+                    if decided.iter().all(Option::is_some) {
+                        break None;
+                    }
+                } else if !unread.again(clock, e)? {
+                    let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                    break Some(code);
+                }
             }
         }
         if !pause.pause() {
@@ -2416,7 +2893,11 @@ fn submit_pull_group(
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
-            items.push(item);
+            if let (true, Some(a)) = (no_wait, &o.submission) {
+                item["id"] = serde_json::json!(a.id);
+                item["ahead"] = serde_json::json!(a.ahead);
+            }
+            items.push(with_copy(item, o.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": items });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
@@ -2434,13 +2915,7 @@ fn submit_pull_group(
         }
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
-            Some(Followed::Done(sub, names)) => {
-                let reached = match sent_back.get(&n) {
-                    Some(id) if *id == sub.id => Reached::Before(n),
-                    _ => Reached::Now,
-                };
-                report(s, sub, branch, names, reached, false, out)?
-            }
+            Some(Followed::Done(sub, names)) => report(s, sub, branch, names, None, false, out)?,
             Some(Followed::Closed) => {
                 if !json {
                     writeln!(out, "#{n} was closed without landing")?;
@@ -2457,6 +2932,9 @@ fn submit_pull_group(
         if code == LANDED {
             code = this;
         }
+    }
+    for e in &after {
+        after_landing(e);
     }
     Ok(stopped.unwrap_or(code))
 }
@@ -2586,6 +3064,13 @@ fn write_status(
             "{remote} could not be reached: this is the state last fetched from it"
         )?;
     }
+    if let Some(hold) = &status.held {
+        writeln!(out, "{}", held_line(&status.branch, hold))?;
+    }
+    write_failed_releases(&status.failed_releases, out)?;
+    if let Some(copy) = &status.copy {
+        writeln!(out, "{}", copy_behind_line(&status.branch, copy))?;
+    }
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -2614,7 +3099,62 @@ fn write_status(
     Ok(())
 }
 
+/// 123: the branch's checkouts whose release failed, each with how many
+/// tries and what failed, and how to release one or give up on it.
+fn write_failed_releases(
+    failed: &[sluice_core::records::FailedRelease],
+    out: &mut dyn Write,
+) -> Result<()> {
+    if failed.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "held checkouts, whose release failed:")?;
+    let w = failed.iter().map(|f| f.place.len()).max().unwrap_or(0);
+    for f in failed {
+        let tries = match f.tries {
+            1 => "1 try".to_string(),
+            n => format!("{n} tries"),
+        };
+        let now = match f.stopped {
+            true => "held",
+            false => "tried again by the next round",
+        };
+        let host = f
+            .host
+            .as_ref()
+            .map_or(String::new(), |h| format!(", on {h}"));
+        writeln!(
+            out,
+            "  {:<w$}  {tries}, {now}{host}, last at {}",
+            f.place, f.at
+        )?;
+        for line in f.failed.trim_end().lines() {
+            writeln!(out, "    | {line}")?;
+        }
+    }
+    writeln!(
+        out,
+        "release one with: sluice release <checkout>, or without its release command: \
+         sluice release <checkout> --accept-failure"
+    )?;
+    Ok(())
+}
+
 fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value {
+    let held_checkouts: Vec<serde_json::Value> = status
+        .failed_releases
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "place": f.place,
+                "failed": f.failed,
+                "tries": f.tries,
+                "at": f.at,
+                "stopped": f.stopped,
+                "host": f.host,
+            })
+        })
+        .collect();
     serde_json::json!({
         "branch": status.branch,
         "at": status.at,
@@ -2625,7 +3165,104 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "submissions": submissions,
         "warnings": status.warnings,
         "stale": status.stale,
+        "held": status.held.as_ref().map(held_json),
+        "held_checkouts": held_checkouts,
+        "copy": status.copy,
     })
+}
+
+/// The names of a combination's checkout begin so: `sluice/try/<branch>/<n>`.
+const CHECKOUT: &str = "sluice/try/";
+
+/// 123: `sluice release sluice/try/<branch>/<n>`: the held checkout of
+/// that name on this host, its release run once more under its branch's
+/// lock, or with `accept` freed with nothing run. Exits 1, saying what
+/// failed, when its release fails again.
+fn release_checkout(
+    s: &Sluice<'_>,
+    name: &str,
+    accept: bool,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    use sluice_core::release::Releasing;
+    let branch = name
+        .strip_prefix(CHECKOUT)
+        .and_then(|rest| rest.rsplit_once('/'))
+        .filter(|(b, n)| !b.is_empty() && !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        .map(|(b, _)| b);
+    let outcome = match branch {
+        Some(b) => {
+            let _lock = s.seams().state.wait_lock(b)?;
+            s.release_held(b, name, accept)?
+        }
+        None => None,
+    };
+    let how = outcome.map(|o| o.how);
+    let failed = match &how {
+        Some(Releasing::Failed { failed, .. } | Releasing::Held { failed, .. }) => {
+            Some(failed.clone())
+        }
+        _ => None,
+    };
+    let text = match &how {
+        None => "nothing to release".to_string(),
+        Some(Releasing::Released) => {
+            format!("released {name}: the release command run, its checkout removed, its ports free")
+        }
+        Some(Releasing::Gone { ran, failed }) => format!(
+            "freed {name}: it no longer exists; {}; its runs ended, its ports free",
+            exec::gone_release(*ran, failed.as_deref())
+        ),
+        Some(Releasing::Accepted(_)) => format!(
+            "freed {name} without its release command: its runs ended, its checkout removed, its ports free"
+        ),
+        Some(Releasing::Failed { failed, .. } | Releasing::Held { failed, .. }) => format!(
+            "could not release {name}: {failed}\n\
+             `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+        ),
+    };
+    if json {
+        writeln!(std::io::stderr(), "{text}")?;
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "place": name,
+                "released": how.as_ref().is_some_and(Releasing::freed),
+                "accepted": matches!(how, Some(Releasing::Accepted(_))),
+                "failed": failed,
+            })
+        )?;
+    } else {
+        writeln!(out, "{text}")?;
+    }
+    Ok(if failed.is_some() { FAILED } else { LANDED })
+}
+
+/// 124, S58: the worktree's head, this host's copy of a branch sluice
+/// lands on, where it differs from the remote's revision submitted.
+pub(crate) fn copy_differs_line(copy: &CopyDiffers) -> String {
+    format!(
+        "this host's {} is at {}, {} {}'s {}; submitted {}",
+        copy.branch,
+        copy.copy.short(),
+        copy.how.words(),
+        copy.remote,
+        copy.at.short(),
+        copy.at.short()
+    )
+}
+
+/// 124, S64: this host's copy of `branch` left behind its landing, and
+/// why.
+fn copy_behind_line(branch: &str, copy: &CopyBehind) -> String {
+    let at = copy.at.as_ref().map_or("nothing", |r| r.short());
+    format!(
+        "this host's {branch} is at {at}, behind the landing {}: {}",
+        copy.lacks.short(),
+        copy.why
+    )
 }
 
 /// Session-runs-1 clause 97: every worktree sluice holds ports or runs
@@ -2658,11 +3295,26 @@ fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
         );
         if p.gone {
             line = format!(
-                "{}  (removed: released by the next run or round)",
+                "{}  (removed: the next run or round runs its stored release once and frees it)",
                 line.trim_end()
             );
         }
         writeln!(out, "{}", line.trim_end())?;
+        // 123: held until its release runs again, or its failure is
+        // accepted.
+        if let Some(f) = &p.release_failed {
+            writeln!(
+                out,
+                "    its release failed ({}): sluice release runs it again, sluice release --accept-failure frees it without",
+                match f.tries {
+                    1 => "1 try".to_string(),
+                    n => format!("{n} tries"),
+                }
+            )?;
+            for l in f.failed.trim_end().lines() {
+                writeln!(out, "    | {l}")?;
+            }
+        }
     }
     writeln!(
         out,
@@ -2746,6 +3398,9 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
     });
     if let Some(r) = &p.last_result {
         v["last_result"] = serde_json::json!(r);
+    }
+    if let Some(f) = &p.release_failed {
+        v["release_failed"] = serde_json::json!(f);
     }
     v
 }

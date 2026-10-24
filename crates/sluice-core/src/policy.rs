@@ -131,6 +131,9 @@ pub struct Rules {
     /// How long a passed candidate may wait to land while a deeper one
     /// holding it is under test (117). `None` holds nothing.
     pub hold: Option<Duration>,
+    /// How many more times a checkout's release that failed is tried, one
+    /// a round, before it is held (123).
+    pub release_retries: u32,
     /// Which results satisfy the gate (27 to 29): on a branch whose
     /// records are on its remote, signer names (78); otherwise
     /// `confined` and executor kinds.
@@ -232,6 +235,7 @@ impl Default for Rules {
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
             hold: None,
+            release_retries: crate::step::RELEASE_RETRIES,
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
             signed: false,
             confined: false,
@@ -311,6 +315,7 @@ struct RulesForm {
     flaky: Option<String>,
     timeout: Option<String>,
     hold: Option<String>,
+    release_retries: Option<i64>,
     trust: Option<Vec<String>>,
     remote: Option<String>,
     pull_requests: Option<PullRequestsForm>,
@@ -484,6 +489,11 @@ impl Policy {
                 Some(t) => Some(parse_duration(t).with_context(|| format!("{at} hold"))?)
                     .filter(|h| !h.is_zero()),
             };
+            let release_retries = match r.release_retries {
+                None => d.release_retries,
+                Some(n) if (0..=u32::MAX as i64).contains(&n) => n as u32,
+                Some(n) => bail!("{at} release_retries must be at least 0, not {n}"),
+            };
             let mut trust = match r.trust {
                 Some(t) => t,
                 None if signed => Vec::new(),
@@ -580,6 +590,7 @@ impl Policy {
                     flaky,
                     timeout,
                     hold,
+                    release_retries,
                     trust,
                     signed,
                     confined,
@@ -919,6 +930,7 @@ hold = "5m"
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert_eq!(main.hold, Some(Duration::from_secs(300)));
         assert_eq!(bolt.hold, None);
+        assert_eq!(bolt.release_retries, 3);
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
@@ -1183,6 +1195,23 @@ hold = "5m"
         assert!(Policy::parse("[branches.main]\nparallel = 0\n").is_err());
         assert!(Policy::parse("[branches.main]\nflaky = \"retry\"\n").is_err());
         assert!(Policy::parse("[branches.main]\ntimeout = \"soon\"\n").is_err());
+    }
+
+    /// 123: how many more times a failed release is tried, 3 where the
+    /// table names none; a negative number is refused, naming the table.
+    #[test]
+    fn reads_and_refuses_release_retries() {
+        let rules = |text: &str| Policy::parse(text).map(|p| p.rules_for("main").unwrap().cloned());
+        let retries = |text: &str| rules(text).unwrap().unwrap().release_retries;
+        assert_eq!(retries("[branches.main]\n"), 3);
+        assert_eq!(retries("[branches.main]\nrelease_retries = 1\n"), 1);
+        assert_eq!(retries("[branches.main]\nrelease_retries = 0\n"), 0);
+        let e = rules("[branches.main]\nrelease_retries = -1\n").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "[branches.\"main\"] release_retries must be at least 0, not -1"
+        );
+        assert!(Policy::parse("[branches.main]\nrelease_retries = \"3\"\n").is_err());
     }
 
     /// 83: the limits a run is held to, and the settings passed on.

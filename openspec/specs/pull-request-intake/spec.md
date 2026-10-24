@@ -57,33 +57,122 @@ submitted, whatever its conditions.
 ### Requirement: A changed pull request leaves the queue
 A submitted pull request SHALL be withdrawn when its head changes, when
 it is moved back to draft, or when it is closed, merged by hand
-included. After a new head it SHALL wait for its conditions on that
-head.
+included. After a new head, a pull request opened by hand SHALL wait
+for its conditions on that head; one a submit opened SHALL be marked a
+draft and wait for its submitter's act.
 
 #### Scenario: A new commit while queued
-- **WHEN** a commit is pushed to a submitted pull request
+- **WHEN** a commit is pushed to a submitted pull request a person opened by hand
 - **THEN** its submission is withdrawn, the submissions behind it are tested without it, and it is submitted again only once its conditions hold on the new head
+
+#### Scenario: A new commit on a pull request a submit opened
+- **WHEN** a commit that no submit pushed reaches a submitted pull request that `wt submit` opened, such as a fix another submission landed on its branch
+- **THEN** its submission is withdrawn, sluice marks the pull request a draft, and no later round submits it, whatever its conditions
 
 #### Scenario: Closed while queued
 - **WHEN** a submitted pull request is closed
 - **THEN** its submission is withdrawn
 
 ### Requirement: A pull request sent back is not resubmitted unchanged
-A pull request whose submission was blamed for a failure or removed for
-a conflict SHALL be submitted again only on a new head, or after it is
-moved to draft and back to ready for review on the same head.
+A pull request opened by hand whose submission was blamed for a failure,
+removed for a conflict, or withdrawn by the operator or a planner SHALL
+be submitted again only on a new head, or after it is moved to draft and
+back to ready for review on the same head.
 
 #### Scenario: Blamed, then retried
-- **WHEN** a pull request's submission is blamed, and its author marks it draft and then ready again without new commits
+- **WHEN** a hand-opened pull request's submission is blamed, and its author marks it draft and then ready again without new commits
 - **THEN** the next round submits the same head again
 
 #### Scenario: Blamed and left alone
-- **WHEN** a pull request's submission is blamed and nothing changes on it
+- **WHEN** a hand-opened pull request's submission is blamed and nothing changes on it
 - **THEN** no later round submits it again
+
+#### Scenario: Withdrawn by the operator, opened by hand
+- **WHEN** the operator runs `sluice withdraw` on the submission of a pull request a person opened by hand, and nothing changes on it
+- **THEN** no later round submits it again, however long its conditions hold
+
+#### Scenario: Withdrawn by the operator, then retried by its author
+- **WHEN** the operator withdrew a hand-opened pull request's submission, and its author marks it draft and then ready again without new commits
+- **THEN** the next round submits the same head again once its conditions hold
+
+#### Scenario: Withdrawn by the operator, then a new commit
+- **WHEN** the operator withdrew a hand-opened pull request's submission, and its author pushes a new commit
+- **THEN** the next round submits the new head once its conditions hold
+
+### Requirement: A pull request a submit opened comes back only on its submitter's act
+A pull request a submit opened or updated is one whose description
+names its agent. When its submission is withdrawn, blamed, timed out or
+removed for a conflict, sluice SHALL mark it a draft. No round SHALL
+submit it again until a submit marks it ready for review, or a person
+does on GitHub, after the submission left. That holds on any head,
+the one sent back included.
+
+#### Scenario: Refused, then its branch moves
+- **WHEN** a pull request `wt submit` opened is removed for a conflict, and another submission lands a fix on its branch so its head moves
+- **THEN** it is a draft, no round submits it, and nothing lands in its agent's name
+
+#### Scenario: Blamed, then submitted again on the same head
+- **WHEN** a pull request `wt submit` opened is blamed, and its agent runs `wt submit` again with no new commits
+- **THEN** the next round submits the same head and its checks run again
+
+#### Scenario: Timed out, then submitted again on the same head
+- **WHEN** a pull request `wt submit` opened is blamed because the branch's time limit ended its run, and its agent runs `wt submit` again with no new commits
+- **THEN** the next round submits the same head and its checks run again
+
+#### Scenario: Marked ready by a person
+- **WHEN** a pull request `wt submit` opened was sent back and marked a draft, and a person marks it ready for review on GitHub
+- **THEN** the next round submits it once its conditions hold
+
+#### Scenario: Withdrawn by the operator
+- **WHEN** the operator runs `sluice withdraw` on the submission of a pull request `wt submit` opened
+- **THEN** sluice marks the pull request a draft and no later round submits it until a submit or a person marks it ready
+
+#### Scenario: Held when it cannot be marked a draft
+- **WHEN** a pull request `wt submit` opened is sent back and GitHub refuses to mark it a draft
+- **THEN** no round submits it, its `sluice` check says it waits for the next submit, and each later round tries the draft again
+
+### Requirement: A pull request sluice cannot read holds no other
+When a round cannot fetch an open pull request's head, or cannot read
+its reviews, checks or timeline, draft or ready, it SHALL print a
+warning naming the pull request (`pull/<n>`) and what failed, SHALL NOT
+submit it that round, and SHALL go on to the branch's other pull
+requests, submitting, forecasting and posting each as it would have
+been. It SHALL read that pull request again each round until it can be
+read or it is closed.
+
+#### Scenario: GitHub serves no head for one of two pull requests
+- **WHEN** two pull requests are open into `main`, out of draft, every condition holding, and GitHub serves no head for the first, whose branch is gone
+- **THEN** the round's warning names the first and the failed fetch, and the second is submitted, its combination formed and its state posted
+
+#### Scenario: Read again until GitHub serves its head
+- **WHEN** a pull request's head could not be fetched, and later its branch is pushed again so GitHub serves its head
+- **THEN** each round until then names it in a warning, and the first round after submits it
+
+#### Scenario: Closed, it is no longer read
+- **WHEN** a pull request whose head could not be fetched is closed
+- **THEN** no later round names it
+
+#### Scenario: A draft whose head cannot be fetched
+- **WHEN** a draft's head cannot be fetched and another pull request is ready with every condition holding
+- **THEN** the round's warning names the draft, and the other pull request is submitted
+
+#### Scenario: Reviews that cannot be read
+- **WHEN** the policy names `reviews = 1`, GitHub answers an error for one pull request's reviews, and another pull request has its review
+- **THEN** the round's warning names the first and the failed read, the first is not submitted, and the second is submitted
+
+### Requirement: A failure that is no one pull request's still ends intake
+A failure that is no single pull request's, such as listing the
+branch's pull requests or reading its records, SHALL end that branch's
+intake for the round with a warning, and the round SHALL still land
+what is queued.
+
+#### Scenario: GitHub's list of pull requests fails
+- **WHEN** GitHub answers an error for the list of `main`'s open pull requests
+- **THEN** the round's warning says intake of `main` failed, no pull request is submitted or withdrawn, and a submission already queued is still tested and landed
 
 ### Requirement: A group's pull requests are taken together
 
-Intake SHALL take the pull requests a group submit opened only all
+Intake SHALL take the pull requests a group's marks bind only all
 together, in one pass and one write, in the group's order, once every
 one of them is open, out of draft and meets its conditions on the head
 it was marked at. Until then each SHALL wait, its state naming the pull
@@ -92,20 +181,28 @@ only until it is first submitted at that head.
 
 #### Scenario: Two of three are ready
 
-- **WHEN** a group of three pull requests is open, two meet their conditions and the third waits for a review
-- **THEN** none is submitted, and each of the first two says it waits for the third; once the review is given, the next round submits all three in the group's order and the first combination formed holds all three
+- **WHEN** a group submit of three was refused for want of reviews, leaving three drafts marked as one group, a reviewer approves the first two, and a person marks all three ready for review
+- **THEN** none is submitted, and each of the first two says it waits for the third; once the third is approved, the next round submits all three in the group's order and the first combination formed holds all three
 
 #### Scenario: A round between the opens
 
-- **WHEN** `sluice run` is running for `main` while a group submit opens three pull requests whose conditions all hold
+- **WHEN** `sluice run` is running for `main` while three pull requests marked as one group are opened by hand, their conditions all holding
 - **THEN** no round submits the first before the third is open, and the first combination formed holds all three
 
 #### Scenario: One of the group is closed
 
-- **WHEN** one pull request of a group is closed before the group is submitted
+- **WHEN** one pull request of a group is closed before the group is submitted, and a person has marked the others ready for review
 - **THEN** the others are not submitted and say they wait for it, until a new submit names them again
+
+### Requirement: A new head on one of a submitted group withdraws that one alone
+
+Once a group's pull requests are submitted, by intake or by the act
+itself, a new head on one SHALL withdraw that submission alone; one a
+submit opened SHALL be marked a draft and wait for its submitter's act,
+as any pull request a submit opened does, and the others SHALL stay
+queued (120, 125).
 
 #### Scenario: Each its own after it is taken
 
-- **WHEN** a group's three pull requests were submitted together and a commit is pushed to the second
-- **THEN** only the second's submission is withdrawn, the first and third are tested without it, and the second is submitted again alone once its conditions hold on the new head
+- **WHEN** a group's three pull requests were submitted together and a commit no submit made is pushed to the second
+- **THEN** only the second's submission is withdrawn and the second is marked a draft; the first and third are tested without it and land, and no round submits the second until its submitter submits it again or a person marks it ready for review

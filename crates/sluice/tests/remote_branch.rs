@@ -117,6 +117,11 @@ impl Setup {
     /// A session on `unit/<name>` cut from `base`, with one commit of its
     /// own file, submitted to `branch` without waiting.
     fn submit_to(&self, name: &str, base: &str, branch: &str) -> Output {
+        self.submit_files(name, base, branch, &[])
+    }
+
+    /// As [`Setup::submit_to`], the commit also writing `files`.
+    fn submit_files(&self, name: &str, base: &str, branch: &str, files: &[(&str, &str)]) -> Output {
         let dir: PathBuf = self.sessions.path().join(name);
         self.repo.git(&[
             "worktree",
@@ -128,6 +133,9 @@ impl Setup {
             base,
         ]);
         std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
+        for (path, content) in files {
+            std::fs::write(dir.join(path), content).unwrap();
+        }
         let git = |args: &[&str]| {
             let mut a = vec!["-C", dir.to_str().unwrap()];
             a.extend(args);
@@ -548,4 +556,229 @@ fn remote_rev(s: &Setup, name: &str) -> String {
         .unwrap();
     assert!(out.status.success(), "{}", text(&out));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// S57's start: `bolt/x` in local refs lands `a`, then `b`, which brings
+/// the policy naming origin as its remote, while origin's `bolt/x` is the
+/// older revision `bolt/x` was made at; `c` is then queued on it. Returns
+/// the setup, origin's revision and the second landing.
+fn landed_locally_then_remote_older(name: &str) -> (Setup, String, String) {
+    let s = Setup::local(name);
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let older = s.repo.rev("bolt/x");
+    // A refused landing left origin's copy at the revision it was made at.
+    set_remote(&s, "refs/heads/bolt/x", "refs/heads/bolt/x");
+    let out = s.submit_to("a", "bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    step_bolt_until_out(&s);
+    let remote = policy("origin");
+    let out = s.submit_files("b", "bolt/x", "bolt/x", &[(".config/sluice.toml", &remote)]);
+    assert!(out.status.success(), "{}", text(&out));
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed", "landed"]);
+    let second = s.repo.rev("bolt/x");
+    s.repo.git(&["cat-file", "-e", &format!("{second}:b.txt")]);
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), older);
+
+    let out = s.submit_to("c", "bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    (s, older, second)
+}
+
+/// Set origin's `to` to this repository's `from`, as another host's push
+/// would, writing nothing here.
+fn set_remote(s: &Setup, from: &str, to: &str) {
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(s.origin.path())
+        .args(["fetch", "-q", "--force"])
+        .arg(s.repo.dir())
+        .arg(format!("{from}:{to}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+fn bolt_states(s: &Setup) -> Vec<String> {
+    let out = s.sluice(&["status", "bolt/x", "--json", "--all"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["state"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Step `bolt/x` until every submission on it is out of the queue.
+fn step_bolt_until_out(s: &Setup) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+        if bolt_states(s)
+            .iter()
+            .all(|s| ["landed", "failed", "withdrawn"].contains(&s.as_str()))
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{:?}", bolt_states(s));
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The held round: it forms and lands nothing, names both revisions, and
+/// moves neither origin's `bolt/x` nor this host's.
+fn step_holds(s: &Setup, older: &str, second: &str) {
+    let runs = s.runs();
+    let out = s.sluice(&["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "held: bolt/x reads {}, which lacks the landing {}; put the landing back on \
+             bolt/x, or run sluice branch accept bolt/x {}\n",
+            &older[..7],
+            &second[..7],
+            &older[..7]
+        )
+    );
+    assert_eq!(bolt_states(s), ["landed", "landed", "queued"]);
+    assert_eq!(s.runs(), runs, "nothing tested");
+    assert_eq!(remote_rev(s, "refs/heads/bolt/x"), older);
+    assert_eq!(s.repo.rev("bolt/x"), second);
+    let out = s.sluice(&["status", "bolt/x", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (v["held"]["read"].as_str(), v["held"]["lacks"].as_str()),
+        (Some(older), Some(second))
+    );
+}
+
+/// S57, 121: the round that first reads `bolt/x` from origin, older than
+/// what landed here, holds it; once the operator pushes the second
+/// landing to origin, the third submission is formed on it and lands.
+#[test]
+fn s57_a_remote_older_than_the_local_landings_holds_until_the_landing_is_pushed() {
+    let (s, older, second) = landed_locally_then_remote_older("remote-s57-pushed");
+    step_holds(&s, &older, &second);
+    set_remote(&s, "refs/heads/bolt/x", "refs/heads/bolt/x");
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed"; 3]);
+    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(s.repo.rev(&format!("{bolt}^1")), second);
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:c.txt")]);
+}
+
+/// S57, 121, C.5, 124: the operator accepts origin's older revision
+/// instead; the third submission is formed on it and lands. The round
+/// after the acceptance levels this host's `bolt/x` to that revision,
+/// whose policy names no remote: from then on `bolt/x` is a branch in this
+/// host's own refs, and the landing is made there (C.7).
+#[test]
+fn s57_a_remote_older_than_the_local_landings_holds_until_its_revision_is_accepted() {
+    let (s, older, second) = landed_locally_then_remote_older("remote-s57-accepted");
+    step_holds(&s, &older, &second);
+    let out = s.sluice(&["branch", "accept", "bolt/x", &older[..7], "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (v["accepted"].as_str(), v["lacked"].as_str()),
+        (Some(older.as_str()), Some(second.as_str()))
+    );
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed"; 3]);
+    let bolt = s.repo.rev("bolt/x");
+    assert_eq!(s.repo.rev(&format!("{bolt}^1")), older);
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:c.txt")]);
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), older);
+}
+
+/// 124, S58, 1, rule core.20: from a worktree that has checked out
+/// `bolt/x`, whose copy here is behind origin's, `sluice submit main`
+/// submits origin's revision, writes no ref of `bolt/x` here or on
+/// origin, and says the copy is behind; `sluice step bolt/x` then levels
+/// the copy and leaves the worktree's files and index as they were.
+#[test]
+fn a_worktree_on_a_bolt_behind_submits_origins_revision_and_a_round_levels_it() {
+    let s = Setup::new("remote-bolt-copy", "origin");
+    s.repo.git(&["branch", "bolt/x", "main"]);
+    s.repo
+        .git(&["push", "-q", "origin", "bolt/x:refs/heads/bolt/x"]);
+    let made = s.repo.rev("bolt/x");
+    for n in ["a", "b"] {
+        let out = s.submit_to(n, "bolt/x", "bolt/x");
+        assert!(out.status.success(), "{}", text(&out));
+        step_bolt_until_out(&s);
+    }
+    let remote = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(
+        s.repo.rev("bolt/x"),
+        remote,
+        "each landing's round levels it"
+    );
+    // This host's bolt/x stands where it was before both landings, as an
+    // older sluice left it, past the protection, and a worktree has it
+    // checked out.
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/bolt/x",
+        &made,
+    ]);
+    let w = s.sessions.path().join("landing");
+    s.repo
+        .git(&["worktree", "add", "-q", w.to_str().unwrap(), "bolt/x"]);
+    let bolt_refs = |s: &Setup| -> Vec<String> {
+        s.remote_refs()
+            .into_iter()
+            .filter(|r| r.starts_with("refs/heads/bolt/"))
+            .collect()
+    };
+    let before = bolt_refs(&s);
+
+    let out = s
+        .command(&w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "this host's bolt/x is at {}, behind origin's {}; submitted {}\n",
+            &made[..7],
+            &remote[..7],
+            &remote[..7]
+        )),
+        "{}",
+        text(&out)
+    );
+    let subs = s.status()["submissions"].clone();
+    assert_eq!(subs[0]["head"], remote.as_str(), "{subs}");
+    assert_eq!(bolt_refs(&s), before, "nothing of bolt/x on origin written");
+    assert_eq!(s.repo.rev("bolt/x"), made, "nor here");
+
+    let in_worktree = |args: &[&str]| {
+        let mut a = vec!["-C", w.to_str().unwrap()];
+        a.extend(args);
+        s.repo.git(&a)
+    };
+    let index = in_worktree(&["ls-files", "--stage"]);
+    let files: Vec<String> = std::fs::read_dir(&w)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let out = s.sluice(&["step", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.repo.rev("bolt/x"), remote);
+    assert_eq!(in_worktree(&["ls-files", "--stage"]), index);
+    let after: Vec<String> = std::fs::read_dir(&w)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(after, files);
+    assert!(!w.join("a.txt").exists() && !w.join("b.txt").exists());
 }

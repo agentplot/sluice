@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use sluice_core::overview::OrderFrom;
+use sluice_core::release::{ReleaseOutcome, Releasing};
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Forecast, Sluice};
 use sluice_seams::{
@@ -89,34 +90,38 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Say what a round or a run released because its worktree no longer
-/// exists (session-runs-1 clause 97).
+/// 123: how the release of a place whose working copy was gone went, as
+/// a line says it.
+pub fn gone_release(ran: bool, failed: Option<&str>) -> String {
+    match (ran, failed) {
+        (_, Some(f)) => format!("its release failed once from its scratch directory: {f}"),
+        (true, None) => "its release ran once from its scratch directory".into(),
+        (false, None) => "it had no release to run".into(),
+    }
+}
+
+/// Say what a round or a run freed because its worktree no longer exists,
+/// and how its stored release went (session-runs-1 clause 97; 123).
 pub fn tell_abandoned(out: &mut dyn Write, json: bool, released: &[Abandoned]) -> Result<()> {
     for a in released {
-        let text = match (&a.released, &a.why) {
-            (None, why) => format!(
-                "could not release {}, whose worktree no longer exists: {}",
-                a.worktree,
-                why.as_deref().unwrap_or("no reason given")
+        let text = match &a.error {
+            Some(e) => format!(
+                "could not free {}, whose worktree no longer exists: {e}",
+                a.worktree
             ),
-            (Some(_), why) => {
-                let mut t = format!(
-                    "released {}: the worktree no longer exists; its runs ended, the release command run, its ports free",
-                    a.worktree
-                );
-                if let Some(why) = why {
-                    t.push_str(&format!(" ({why})"));
-                }
-                t
-            }
+            None => format!(
+                "freed {}: it no longer exists; {}; its runs ended, its ports free",
+                a.worktree,
+                gone_release(a.ran, a.failed.as_deref())
+            ),
         };
         say(out, json, &text)?;
     }
     Ok(())
 }
 
-/// What a round or a run released because its worktree no longer exists,
-/// as a JSON document lists it.
+/// What a round or a run freed because its worktree no longer exists, as
+/// a JSON document lists it.
 pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
     released
         .iter()
@@ -124,18 +129,76 @@ pub fn abandoned_json(released: &[Abandoned]) -> Vec<serde_json::Value> {
             serde_json::json!({
                 "worktree": a.worktree,
                 "branch": a.branch,
-                "released": a.released.is_some(),
-                "why": a.why,
+                "freed": a.freed,
+                "ran": a.ran,
+                "failed": a.failed,
+                "error": a.error,
             })
         })
         .collect()
 }
 
-/// What `sluice release` did: the worktree, and whether it held anything
-/// to release.
+/// 123: say what a round did with each combination's checkout whose
+/// release failed, was held, or whose working copy was gone. A held
+/// checkout is said once, on the round that held it; the rounds after try
+/// it no more and say nothing of it.
+pub fn tell_releases(out: &mut dyn Write, json: bool, releases: &[ReleaseOutcome]) -> Result<()> {
+    for r in releases {
+        let name = &r.place;
+        let text = match &r.how {
+            Releasing::Released | Releasing::Accepted(_) => continue,
+            Releasing::Gone { ran, failed } => format!(
+                "freed {name}: it no longer exists; {}; its runs ended, its ports free",
+                gone_release(*ran, failed.as_deref())
+            ),
+            Releasing::Failed { failed, tries, of } => {
+                format!("could not release {name} (try {tries} of {of}): {failed}")
+            }
+            Releasing::Held { failed, tries } => format!(
+                "{name} is held: its release failed {tries} times: {failed}. \
+                 `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+            ),
+        };
+        say(out, json, &text)?;
+    }
+    Ok(())
+}
+
+/// What a round did with the checkouts whose release failed, was held or
+/// found gone, as a JSON document lists it.
+pub fn releases_json(releases: &[ReleaseOutcome]) -> Vec<serde_json::Value> {
+    releases
+        .iter()
+        .filter_map(|r| {
+            let (how, failed, tries) = match &r.how {
+                Releasing::Released | Releasing::Accepted(_) => return None,
+                Releasing::Gone { failed, .. } => ("gone", failed.as_ref(), None),
+                Releasing::Failed { failed, tries, .. } => ("failed", Some(failed), Some(tries)),
+                Releasing::Held { failed, tries } => ("held", Some(failed), Some(tries)),
+            };
+            let mut doc = serde_json::json!({
+                "place": r.place,
+                "branch": r.branch,
+                "release": how,
+                "failed": failed,
+                "tries": tries,
+            });
+            if let Releasing::Gone { ran, .. } = &r.how {
+                doc["ran"] = (*ran).into();
+            }
+            Some(doc)
+        })
+        .collect()
+}
+
+/// What `sluice release` did: the worktree, whether it held anything to
+/// release, whether its failure was accepted, and what failed when its
+/// release did.
 pub struct Release {
     pub worktree: String,
     pub released: bool,
+    pub accepted: bool,
+    pub failed: Option<String>,
 }
 
 /// `argv` as one `sh -c` command line, each word quoted where it needs it.
@@ -159,7 +222,7 @@ impl Exec<'_> {
     pub fn run(&self, s: &Sluice<'_>, out: &mut dyn Write) -> Result<i32> {
         let code = self.exec(s, out)?;
         if self.release && code != CONFLICT {
-            release(s, self.host, &self.worktree, self.json, out)?;
+            release(s, self.host, &self.worktree, false, self.json, out)?;
         }
         Ok(code)
     }
@@ -520,11 +583,14 @@ impl Exec<'_> {
 /// at its session's or driver's asking (session-runs-1 clause 95; rule
 /// core.16). The release command is the policy's, read from the branch's
 /// current revision (56); only when the branch cannot be read is it the
-/// one the last run carried, and the output says so.
+/// one the last run carried, and the output says so. A release that
+/// fails leaves the place held with what failed (123); with `accept`, the
+/// place is freed with nothing run and the worktree left.
 pub fn release(
     s: &Sluice<'_>,
     host: &dyn Host,
     dir: &str,
+    accept: bool,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<Release> {
@@ -538,8 +604,29 @@ pub fn release(
         return Ok(Release {
             worktree: dir.to_string(),
             released: false,
+            accepted: false,
+            failed: None,
         });
     };
+    if accept {
+        let freed = s.accept_session(&worktree)?;
+        host.end_session(&worktree)?;
+        if freed {
+            say(
+                out,
+                json,
+                &format!(
+                    "freed {worktree} without its release command: its runs ended, its ports free; the worktree stays"
+                ),
+            )?;
+        }
+        return Ok(Release {
+            worktree,
+            released: freed,
+            accepted: freed,
+            failed: None,
+        });
+    }
     let branch = &adopted.branch;
     let policy = match s.release_policy(branch) {
         Ok(p) => Some(p),
@@ -554,9 +641,29 @@ pub fn release(
             None
         }
     };
-    let released = seams
+    let released = match seams
         .checkout
-        .release_session(&adopted.name, policy.as_ref())?;
+        .release_session(&adopted.name, policy.as_ref())
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let failed = format!("{e:#}");
+            say(
+                out,
+                json,
+                &format!(
+                    "could not release {worktree}: {failed}\n\
+                     it keeps its ports until `sluice release` runs again, or `sluice release --accept-failure` frees it without"
+                ),
+            )?;
+            return Ok(Release {
+                worktree,
+                released: false,
+                accepted: false,
+                failed: Some(failed),
+            });
+        }
+    };
     host.end_session(&worktree)?;
     let released = !matches!(released, Released::Nothing);
     if released {
@@ -573,6 +680,8 @@ pub fn release(
     Ok(Release {
         worktree: worktree.to_string(),
         released,
+        accepted: false,
+        failed: None,
     })
 }
 

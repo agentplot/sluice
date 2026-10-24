@@ -1,9 +1,11 @@
 //! [`Forge`] over GitHub's REST API, as the app with its installation
 //! token: pull requests, their reviews, the checks on their heads and
 //! their timelines read; sluice's check run and comments posted. A list
-//! is read a hundred at a time until a page comes back short.
+//! is read a hundred at a time until a page comes back short. A pull
+//! request is marked a draft or ready for review through GraphQL, the one
+//! API that can.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
@@ -53,6 +55,7 @@ fn pull(v: &Value) -> Result<Pull> {
         number: v["number"]
             .as_u64()
             .ok_or_else(|| anyhow!("a pull request with no number"))?,
+        node_id: text(&v["node_id"]),
         title: text(&v["title"]),
         body: text(&v["body"]),
         author: text(&v["user"]["login"]),
@@ -110,6 +113,44 @@ fn posting_json(name: &str, posting: &Posting) -> Value {
         v["conclusion"] = json!(c);
     }
     v
+}
+
+/// The body of the REST request that opens a pull request, a draft or
+/// ready for review.
+fn open_request(base: &str, head_ref: &str, title: &str, body: &str, draft: bool) -> Value {
+    json!({ "title": title, "head": head_ref, "base": base, "body": body, "draft": draft })
+}
+
+/// The GraphQL request that marks the pull request `node_id` a draft, or
+/// ready for review.
+fn draft_request(node_id: &str, draft: bool) -> Value {
+    let mutation = if draft {
+        "convertPullRequestToDraft"
+    } else {
+        "markPullRequestReadyForReview"
+    };
+    json!({
+        "query": format!(
+            "mutation($id: ID!) {{ {mutation}(input: {{pullRequestId: $id}}) \
+             {{ pullRequest {{ isDraft }} }} }}"
+        ),
+        "variables": { "id": node_id },
+    })
+}
+
+/// A GraphQL reply, an error when it carries any: GraphQL answers 200 to
+/// a request it refuses.
+fn graphql_reply(v: &Value) -> Result<()> {
+    match v["errors"].as_array() {
+        Some(errors) if !errors.is_empty() => {
+            let why: Vec<&str> = errors
+                .iter()
+                .map(|e| e["message"].as_str().unwrap_or("an error with no message"))
+                .collect();
+            bail!("POST /graphql: {}", why.join("; "))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn posted(v: &Value) -> Option<Posted> {
@@ -295,13 +336,13 @@ impl Forge for App {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull> {
         let token = self.token(repo)?;
         let v = self.post_api(
             &Self::repo_path(repo, "/pulls"),
             &token,
-            &json!({ "title": title, "head": head_ref, "base": base, "body": body, "draft": false })
-                .to_string(),
+            &open_request(base, head_ref, title, body, draft).to_string(),
         )?;
         pull(&v)
     }
@@ -314,6 +355,22 @@ impl Forge for App {
             &json!({ "body": body }).to_string(),
         )?;
         Ok(())
+    }
+
+    fn set_draft(&self, repo: &Repo, number: u64, draft: bool) -> Result<()> {
+        let pull = self
+            .pull(repo, number)?
+            .ok_or_else(|| anyhow!("{repo} has no pull request {number}"))?;
+        if pull.node_id.is_empty() {
+            bail!("GitHub gave {repo}'s pull request {number} no node id");
+        }
+        let token = self.token(repo)?;
+        let v = self.post_api(
+            "/graphql",
+            &token,
+            &draft_request(&pull.node_id, draft).to_string(),
+        )?;
+        graphql_reply(&v)
     }
 }
 
@@ -341,6 +398,67 @@ mod tests {
             v["id"] = json!(3);
             assert_eq!(posted(&v).unwrap().posting, p);
         }
+    }
+
+    /// A draft and a ready mark are one GraphQL mutation each, keyed by
+    /// the pull request's node id; an `errors` array is an error, though
+    /// GraphQL answers it with 200.
+    #[test]
+    fn marking_a_draft_or_ready() {
+        let draft = draft_request("PR_kw1", true);
+        let q = draft["query"].as_str().unwrap();
+        assert!(
+            q.contains("convertPullRequestToDraft(input: {pullRequestId: $id})"),
+            "{q}"
+        );
+        assert!(q.starts_with("mutation($id: ID!)"), "{q}");
+        assert_eq!(draft["variables"]["id"], "PR_kw1");
+        let ready = draft_request("PR_kw1", false);
+        let q = ready["query"].as_str().unwrap();
+        assert!(
+            q.contains("markPullRequestReadyForReview(input: {pullRequestId: $id})"),
+            "{q}"
+        );
+        assert!(!q.contains("convertPullRequestToDraft"), "{q}");
+
+        let ok = json!({ "data": { "markPullRequestReadyForReview": { "pullRequest": { "isDraft": false } } } });
+        assert!(graphql_reply(&ok).is_ok());
+        let refused = json!({ "data": null, "errors": [
+            { "message": "Resource not accessible by integration" },
+            { "type": "FORBIDDEN" },
+        ] });
+        let e = graphql_reply(&refused).unwrap_err().to_string();
+        assert!(
+            e.contains("Resource not accessible by integration")
+                && e.contains("an error with no message"),
+            "{e}"
+        );
+        assert!(graphql_reply(&json!({ "errors": [] })).is_ok());
+    }
+
+    /// A pull request is opened a draft only when asked.
+    #[test]
+    fn opening_a_draft_or_ready() {
+        let draft = open_request("main", "unit/a", "A", "body", true);
+        assert_eq!(draft["draft"], true);
+        assert_eq!(
+            (
+                &draft["base"],
+                &draft["head"],
+                &draft["title"],
+                &draft["body"]
+            ),
+            (
+                &json!("main"),
+                &json!("unit/a"),
+                &json!("A"),
+                &json!("body")
+            )
+        );
+        assert_eq!(
+            open_request("main", "unit/a", "A", "", false)["draft"],
+            false
+        );
     }
 
     #[test]

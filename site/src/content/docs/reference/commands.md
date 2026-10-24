@@ -10,20 +10,21 @@ sidebar:
 | `sluice` | Where this worktree stands: its submission, each branch's queue, its place, and what to run next. `--json` for a status line. |
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. `--worktree <path>` given more than once submits each worktree's head as one act, in that order ([below](#submitting-several-worktrees-as-one-act)). |
 | `sluice wait <id>` | Wait for a submission's outcome, running sluice's rounds meanwhile, as a waiting submit does; `sluice wait <branch>` for this worktree's last submission to it. `--timeout 9m` returns after that long with the submission as it stands, and exits `5`; `--json` prints its record. |
-| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. A branch with no records and no such branch exits 1. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
+| `sluice status <branch>` | The queue: each submission still in it, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. For a branch on a remote, a round sets this host's own branch of that name to each landing. When it couldn't, status says above the queue which revision this host's branch holds, the landing it lacks and why, until a round sets it. `--json` carries the same under `copy`. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
 | `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. |
 | `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
-| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch. `--json` for scripts. |
+| `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch, and `held` when the revision it reads lacks the branch's last landing ([below](#sluice-branch)). `--json` for scripts. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
 | `sluice withdraw <id>` | Take a submission out of the queue. One already withdrawn is said so, and exits `0`; one landed is refused. `--json` for scripts. |
 | `sluice protect` | Install the branch-protection hook; `--remove` takes it out. Warns of a worktree that has checked out a protected branch. `--json` for scripts. |
 | `sluice exec <branch>` | Run the tests this worktree's head affects against the branch, in the worktree, under the host's bound, with the worktree's ports and the branch's limits. `-- <command>` runs a command instead. `--json` for scripts. |
-| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. `--json` for scripts. |
+| `sluice release` | Release this worktree: run the policy's release command, end what its runs left running, and free its ports. The worktree stays. `--accept-failure` frees its ports and ends its runs without running the release command. `--json` for scripts. |
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
-| `sluice release <preview>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. `--json` for scripts. |
+| `sluice release <name>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. Given a checkout held because its release failed, `sluice/try/<branch>/<n>`, run its release once more. `--accept-failure` frees either without running the release command. `--json` for scripts. |
 | `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
 | `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
+| `sluice branch accept <branch> <revision>` | Accept the revision a held branch is read at, which lacks its last landing, as the one it stands on: the next round forms the queue on it. The operator's to do, never an agent's. `--json` for scripts. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. `--json` for scripts. |
 
 ## Forecasting a conflict
@@ -137,6 +138,19 @@ each with its `worktree`. With `--no-wait` an item holds `id` and
 --json` prints it. A refusal's error document lists the refused
 worktrees under `worktrees`. `--check` and `--status` take one worktree,
 and exit `64` given more.
+
+To a branch that takes pull requests, the act pushes each branch and
+opens or updates its pull request, then takes every pull request or none.
+When each meets its reviews and checks, sluice marks every one ready for
+review and queues all of them at once, each said with its submission,
+`submission 61 to main from #51 · nothing queued ahead`, and each item
+under `--json` holding its `pull_request` too. When any falls short, it
+queues none, leaves every one a draft, names each short with what it
+lacks, and exits `2`; run it again once they're reviewed. Once queued, new
+commits that no submit pushed make that one a draft until its worktree
+submits again, and the rest land. The [pull requests
+guide](/sluice/guides/pull-requests/#several-pull-requests-as-one-act)
+says more.
 
 ## `sluice exec`
 
@@ -258,20 +272,83 @@ warning: /home/me/repo/main has main checked out: sluice moves main under it and
 ```
 
 A worktree removed without a release is no agent's. The next `sluice
-exec` on the host, or the next round, releases it as `sluice release`
-would. The policy's release command runs in the worktree's scratch
-directory with its ports, its runs end, and its ports are free. That
-command says so first, and the release is logged in the branch's
-state beside the releases of combinations' checkouts:
+exec` on the host, or the next round, releases it from what sluice
+holds for it. The release command its last run stored runs once, in its
+scratch directory, with its ports and the environment its runs had.
+Neither the toolchain nor the policy is read again, since the directory
+they would run in is gone ([ADR 0055](/sluice/decisions/0055/)).
+Whatever that command does, the worktree's runs end, its ports are free,
+and it is never tried again. A release that tears a stack down by name
+or port still does. One that reads files from the worktree finds none
+and fails, and what it would have removed is left for a person to find.
+That command says so first. The branch's state logs it `gone`, with how
+its release went, once:
 
 ```console
 $ sluice exec bolt/concurrent-units
-released /home/me/wt/unit-c: the worktree no longer exists; its runs ended, the release command run, its ports free
+freed /home/me/wt/unit-c: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free
 running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
 …
 ```
 
+When its release fails, sluice says `its release failed once from its
+scratch directory:` and what it printed; when its runs stored none, `it
+had no release to run`.
+
 Until then, `sluice status` lists it as removed.
+
+A worktree's `sluice release` whose release command fails exits `1`
+with what the command printed. The worktree keeps its ports, and
+`sluice status` lists it with what failed until a `sluice release`
+succeeds. No round releases it: `sluice release --accept-failure` frees
+its ports and ends its runs without the release command, and leaves the
+worktree. In `--json` its entry carries `release_failed`: `failed`,
+`tries`, `at` and `stopped`.
+
+## Checkouts held because their release failed
+
+When a combination's checkout can't be released, its release command
+failing, the checkout stays, held. The branch's state names it with what
+failed and how many times it was tried. The next rounds try it again, one
+try a round, as many times as the branch's
+[`release_retries`](/sluice/reference/configuration/#release_retries)
+allows, then stop and say it is held. A held checkout never holds its
+branch: the same rounds land what passed, tell outcomes and test the
+next combinations in other checkouts. A waiting submit, `sluice step` and
+`sluice run` say each try that failed, and the hold once:
+
+```console
+could not release sluice/try/main/48 (try 2 of 4): the release command of /home/me/repo/.git/sluice/.places/sluice+2Ftry+2Fmain+2F48 ended exit status: 2: usage: scripts/preview up
+sluice/try/main/48 is held: its release failed 4 times: … `sluice release sluice/try/main/48` runs it again; `sluice release sluice/try/main/48 --accept-failure` frees it without
+```
+
+`sluice status <branch>` lists the branch's held checkouts, and
+`--json` as `held_checkouts`, each with `place`, `failed`, `tries`, `at`,
+`stopped` (tried no more) and, on a branch whose state is on its
+remote, the `host` that made it:
+
+```console
+$ sluice status main
+main at b7d2e94 · 0 in the queue · testing 0 at once (up to 2)
+held checkouts, whose release failed:
+  sluice/try/main/48  4 tries, held, last at 2026-10-23T09:14:02Z
+    | the release command of /home/me/repo/.git/sluice/.places/sluice+2Ftry+2Fmain+2F48 ended exit status: 2: usage: scripts/preview up
+release one with: sluice release <checkout>, or without its release command: sluice release <checkout> --accept-failure
+```
+
+Once you have fixed what the release needed, `sluice release
+sluice/try/main/48` runs it once more, whatever its tries; it exits `1`
+and stays held if it fails again. `sluice release sluice/try/main/48
+--accept-failure` gives up on it: its runs end, the checkout sluice made
+is removed and its ports are free, and the release command is not run, so
+whatever it would have removed is left. A checkout is released on the
+host that made it. A held checkout doesn't keep its host from claiming:
+the host claims runs of its branch as any other does, in other
+checkouts. The held one keeps its ports and disk until it is released.
+
+A checkout whose directory someone deleted, held or not, has the release
+its run stored run once from its scratch directory by the next round, is
+freed whatever that did, and is logged `gone`.
 
 ## `sluice overview`
 
@@ -301,6 +378,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
+| `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
@@ -420,11 +498,16 @@ command printed. Nothing of a preview is recorded as a test result, and
 no submission waits on it.
 
 `sluice previews` lists the host's previews the same way, as a list
-with `--json`. It first releases any preview whose command failed or
-whose checkout someone removed by hand. `sluice release <preview>` releases
-one: its command's run ends, the release command runs in the checkout,
-the checkout is removed and its ports and names are free. No round, step
-or landing ever releases a preview that is up.
+with `--json`. It first releases any preview whose command failed, and
+any whose checkout someone removed by hand. For the latter, the release
+its command's run stored runs once in its scratch directory, with its
+ports and names; the preview is freed whatever that did, and never
+tried again. `sluice release <preview>` releases one: its command's run
+ends, the release command runs in the checkout, the checkout is removed
+and its ports and names are free. No round, step or landing ever
+releases a preview that is up. A preview whose release command fails is
+tried again as a combination's checkout is, then held; `sluice previews`
+shows what failed, and `--json` carries it as `release_failed`.
 
 ## `wt submit`
 
@@ -476,26 +559,48 @@ passed · landed as b7d2e94
 
 A waiting submit prints each state the pull request reaches, runs
 sluice's rounds while it waits, and exits as any submit does. On a pull
-request, `#41` is the pull request's number. `--no-wait` returns once
-the pull request is open, and `wt submit main --status` reports its
-state later. `wt submit` removes the worktree only when the pull request
-lands; sent back, the worktree stays for the fix.
+request, `#41` is the pull request's number. `wt submit` removes the
+worktree only when the pull request lands; sent back, the worktree
+stays for the fix.
 
-A pull request sent back runs nothing more when submitted again with no
-new commits. sluice tests the same commits again only once the pull
-request is marked a draft and then ready for review. The submit says
-so, with the failure it was sent back for:
+`--no-wait` returns once the pull request is open and sluice has read
+it once, and exits `0`. When its conditions held then, sluice queued it
+at the commits pushed. The submit answers with that submission, as a
+submit that doesn't wait does on any branch, with the pull request
+beside it:
+
+```console
+$ wt submit main --no-wait
+pushed unit/batch-review · opened #41: Batch review cards
+submission 12 to main from #41 · nothing queued ahead
+$ wt submit main --no-wait --json
+{"id":12,"branch":"main","ahead":[],"pull_request":41}
+```
+
+Otherwise it answers with the pull request and what it waits for, as
+`wt submit main --status` reports it later: under `--json`,
+`{"pull_request":41,"branch":"main","state":"waiting: needs 1 review"}`,
+with no `id`.
+
+A pull request a submit opened is the agent's. When its submission
+leaves the queue without landing, blamed, in conflict, withdrawn, or on
+commits no submit pushed, sluice marks it a draft, and no round takes it
+again in the agent's name. The next submit marks it ready for review at
+the commits it pushes, the same ones included, and sluice takes them
+like any others. After a run the time limit ended, with no new commits:
 
 ```console
 $ wt submit main
-pushed unit/batch-review · updated #41: Batch review cards
-#41's head 8d41b6c was tested and blamed at 2026-10-11T09:21:50Z: nothing was queued or run again
-failed: tests:t-batch-cards
-  on main + #38 + #41 (e20a6f9)
-  #38 passed on its own, so the failure is from this submission
-  log of tests:t-batch-cards: .git/sluice/.logs/main/c7/tests:t-batch-cards.log
-fix it in your worktree and submit again, or mark #41 a draft and then ready for review to test the same commits again
+pushed unit/batch-review · updated #41: Batch review cards · marked ready for review
+queued behind #38
+testing main + #38 + #41
+testing main + #38 + #41 · 2 tasks to run, 0 replayed
+passed · landed as c41f0a2
 ```
+
+A submit of new commits while the pull request is still in the queue
+withdraws its submission there, and the new commits wait for their
+conditions; the submit says `withdrew its submission 12`.
 
 ## `sluice branch`
 
@@ -527,8 +632,42 @@ $ sluice branch delete bolt/payments
 refused: #12 still queued on bolt/payments; wait for them to land, or withdraw them
 ```
 
-Both exit `0` when done, `1` when a branch they name doesn't exist, and
-`2` on a refusal.
+A branch is held when the revision a round reads it at lacks the last
+landing sluice recorded there. A hand that moved it back does that, and
+so does a branch that landed in this host's own refs gaining a `remote`
+whose copy is older. While it is held, no combination is formed and
+nothing lands; tests already running go on, and their results are read
+once the hold ends. `sluice step`, `sluice run`, `sluice status
+<branch>`, `sluice overview` and a waiting submit or `sluice wait` say
+so, naming both revisions:
+
+```console
+$ sluice step bolt/payments
+held: bolt/payments reads 10e4791, which lacks the landing c43609b; put the landing back on bolt/payments, or run sluice branch accept bolt/payments 10e4791
+```
+
+The hold ends by itself on the first round that reads the branch at a
+revision holding the landing again, as when the landing is pushed back
+to the remote. A commit on top of the landing never holds the branch:
+the queue is formed on it as it stands.
+
+`sluice branch accept <branch> <revision>` is the other way out: the
+operator accepts the revision read as the one the branch stands on,
+naming it as `held` names it, whole or by seven characters or more. It
+is logged, every later read must contain it, and the next round forms
+the queue on it. It moves no branch, and is refused unless the branch
+is held at that revision and still read there. A branch sluice makes
+stands on the revision it was made at, so a branch deleted and made
+again owes nothing to the landings of the one deleted.
+
+```console
+$ sluice branch accept bolt/payments 10e4791
+accepted bolt/payments at 10e4791a2b5c6d7e8f90a1b2c3d4e5f6a7b8c9d0, which lacks the landing c43609b8e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6; the next round forms the queue on it
+```
+
+All three exit `0` when done, `1` when a branch they name doesn't exist,
+and `2` on a refusal. A round that holds a branch is no failure:
+`sluice step` exits `0`, saying `held`.
 
 ## `sluice forge check`
 
@@ -633,28 +772,64 @@ passed · landed as b7d2e94
 ```
 
 To a branch with pull requests, `sluice wait <branch>` follows the
-worktree's pull request as a waiting `sluice submit` does. While the
-pull request is open, its document under `--json` is the one `sluice
-submit --status --json` prints, `{"pull_request","branch","state"}`;
-once its submission is decided, the submission's record.
+worktree's pull request as a waiting `sluice submit` does. Once sluice
+has queued the pull request at its latest commits, it follows that
+submission as `sluice wait <id>` does: out of time or stopped, it
+prints the submission's record under `--json`, and `still waiting:
+sluice wait 12` without. Until then, its document under `--json` is
+the one `sluice submit --status --json` prints,
+`{"pull_request","branch","state"}`, the state saying what the pull
+request waits for. Once its submission is decided, it prints the
+submission's record.
 
 ## Exit codes
 
 | exit | meaning |
 |---|---|
-| `0` | landed |
+| `0` | landed, whatever failed after the landing: what failed is on stderr, after `sluice: after the landing:` |
 | `1` | failed: this submission was blamed |
 | `2` | a conflict, or a refusal |
 | `4` | withdrawn while it was waited on |
 | `5` | `sluice wait --timeout` ran out; the submission stays queued |
 | `130` | stopped with Ctrl-C; the submission stays queued |
 
+A submission has landed once its branch holds its work, and nothing that
+fails after that changes it. A waiting submit or `sluice wait` whose
+round moves the branch and then fails, releasing the combination's
+checkout or telling the outcome, prints the landing and exits `0`. What
+failed is on stderr, on its own line:
+
+```console
+passed · landed as b7d2e94
+sluice: after the landing: the release command of … ended exit status: 1: usage: scripts/preview up
+```
+
+Under `--json`, stdout holds the submission's record alone, its `state`
+`landed`. When the round stopped before recording the landing, the
+record is the one the next round writes.
+
 Every command, not only submit, exits `3` when sluice itself fails (a
 repository it cannot open, a record it cannot read), with the cause on
-stderr, and `64` when it cannot read its command line: an unknown
-command, flag or value, or a missing argument. `64` is kept apart from
+stderr. A waiting submit or `sluice wait` does so only while the
+submission has not landed. A command exits `64` when it cannot read its
+command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
+
+A waiting submit or `sluice wait` whose read the forge answers with a 5xx,
+GitHub unable to answer at the time, reads again, a pause apart, for five
+minutes. Past them it exits `3` as well, saying it could not read, apart
+from any outcome:
+
+```console
+could not read #77: sluice wait main
+sluice: could not read #77 for 5m03s, so whether it landed is not known: GET /repos/o/r/pulls/77: 503 Service Unavailable
+```
+
+Under `--json`, stdout holds the error document, with that command in its
+`next`. Whether the submission landed is not known then: only its record
+says, and the command in `next` reads it again. An outcome only ever comes
+from the submission's record.
 
 With `--json`, a command that cannot do what it was asked still prints
 JSON on stdout, one document in place of the one it would have printed:
@@ -672,11 +847,12 @@ else they say goes to stderr:
 
 | Command | Document |
 |---|---|
-| `sluice step` | `{"branch","outcome","released","previews_released"}`: `outcome` is `stepped`, `busy` or `contended`; the two lists name the worktrees and previews the round released because they were gone or their command failed |
+| `sluice step` | `{"branch","outcome","released","previews_released","releases"}`: `outcome` is `stepped`, `busy`, `led`, `contended` or `held`; `released` and `previews_released` name the worktrees and previews the round freed because they were gone or released because their command failed, and `releases` each combination's checkout whose release failed, was held or found gone, with `release` (`failed`, `held` or `gone`), `failed` and `tries`. A worktree or checkout found gone carries `ran`, whether its stored release ran, and `failed`, what it printed when it failed; a preview found gone carries them under `gone`. A held round adds `held`, with `read`, `lacks` and `since` |
+| `sluice branch` | `{"branch","created","from"}`, `{"branch","deleted","into"}` or `{"branch","accepted","lacked"}` |
 | `sluice amend` | `{"id","after","priority"}`, as the submission now stands |
 | `sluice withdraw` | `{"id","state":"withdrawn"}`, with `"already":true` when it was withdrawn before |
 | `sluice set-aside` | `{"schema","at","task","hash","run_at","branch","combination","reason","by"}`, the record kept |
-| `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release |
+| `sluice release` | `{"worktree","released"}`, or `{"preview","released"}` for a preview; `released` is `false` when there was nothing to release. With `--accept-failure` it adds `accepted`, and a release that failed adds `failed`. For a held checkout, `{"place","released","accepted","failed"}` |
 | `sluice protect` | `{"protection":"installed","changed","held"}`: `changed` is `false` when the hook was in place already, and `held` lists each worktree that has checked out a protected branch; with `--remove`, `{"protection":"removed","changed"}` |
 | `sluice forge check` | `{"branch","ok","checks"}`, each check with its `ok` and `message` |
 
@@ -687,6 +863,9 @@ request is closed without landing.
 `--wait` once the preview is up; `1` with `--wait` when its command
 failed; `2` when the revision or the branch is refused; `130` when
 stopped while it waits.
+
+`sluice release` exits `1` when the release it ran failed, saying what
+failed, and `0` otherwise, nothing to release included.
 
 `sluice exec` exits `0` when every test passed, `1` when one failed, was
 not run, could not run or timed out, `2` on a refusal, and `130` when stopped with
