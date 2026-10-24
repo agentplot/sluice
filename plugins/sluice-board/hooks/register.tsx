@@ -54,6 +54,7 @@ import {
   openedText,
   outcomes,
   plural,
+  previewRows,
   progress,
   pullBase,
   pullOf,
@@ -546,6 +547,7 @@ export const register: Register = (on, options) => {
     // sluice has records of no branch: how a submission gets here.
     const empty = emptyLines(d, first);
     const checks = checkRows(d, at);
+    const previews = previewRows(d);
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
     const open_ = await read($, opened);
@@ -850,6 +852,24 @@ export const register: Register = (on, options) => {
               );
             })}
             {room && <Text dimColor>{room}</Text>}
+          </Box>
+        )}
+        {/* Each address is a link; the surface decides what a click opens. */}
+        {previews.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold>PREVIEWS</Text>
+            {previews.map((p) => (
+              <Text key={`preview-${p.name}`}>
+                {"  "}
+                {p.words}
+                {p.addresses.flatMap(([label, address]) => [
+                  `  ${label}: `,
+                  <Link key={`preview-${p.name}-${label}`} href={address}>
+                    {address}
+                  </Link>,
+                ])}
+              </Text>
+            ))}
           </Box>
         )}
         <Box marginTop={1}>

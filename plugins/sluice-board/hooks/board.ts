@@ -408,6 +408,18 @@ export function checkRows(doc: Overview, now: number): CheckRow[] {
   return doc.sessions.map((s) => checkRow(s, now)).filter((r): r is CheckRow => r !== null);
 }
 
+/** One row of PREVIEWS: its words, then each address the stack answers on, by label. */
+export type PreviewRow = { name: string; words: string; addresses: [string, string][] };
+
+/** PREVIEWS: `preview/4f1c2aa0e1b2  main@4f1c2aa  up`, and its addresses in the overview's order. */
+export function previewRows(doc: Overview): PreviewRow[] {
+  return doc.previews.map((p) => ({
+    name: p.name,
+    words: `${p.name}  ${p.branch}@${p.revision.slice(0, 7)}  ${p.state}`,
+    addresses: Object.entries(p.addresses ?? {}),
+  }));
+}
+
 /** `host: 4 of 6 runs · 3 queue · 1 agent`, or null while nothing counts against the bound. */
 export function hostLine(room: Room | undefined): string | null {
   if (!room || room.queue + room.sessions === 0) return null;

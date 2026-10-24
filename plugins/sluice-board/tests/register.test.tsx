@@ -9,6 +9,7 @@ import {
   withChecks,
   withConflict,
   withLinks,
+  withPreviews,
   withRelease,
   withTasks,
 } from "./fixture";
@@ -328,6 +329,38 @@ test("a sluice older than where submissions came from names no pull request on R
   const pane = await paneOf($, on, withLinks("origin", false));
   const links = (await pane.findAll({ type: "Link" })).map(words);
   expect(links).toEqual(["PR 41", "9ecc34a"]);
+  await pane.unmount();
+});
+
+test("PREVIEWS: each preview's name, branch@rev7 and state, and its addresses linked", async ($, on) => {
+  const pane = await paneOf($, on, withPreviews());
+  const heads = await pane.findAll({ type: "Text", text: /^(CHECKING|PREVIEWS|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["RECENT", "PREVIEWS"]);
+  const up = await pane.find({
+    type: "Text",
+    text: /^ {2}preview\/4f1c2aa0e1b2 {2}main@4f1c2aa {2}up {2}web: /,
+  });
+  expect(up).toBeDefined();
+  const link = await pane.find({ type: "Link", text: "web-4f1c2aa.example.test" });
+  expect(link?.props.href).toBe("https://web-4f1c2aa.example.test");
+  expect(words(link!)).toBe("https://web-4f1c2aa.example.test");
+  expect(JSON.stringify(up?.children)).toContain("https://web-4f1c2aa.example.test");
+  // One whose policy names no addresses: its row, and no link.
+  expect(
+    await pane.find({ type: "Text", text: "  preview/9ecc34a1b2c3  main@9ecc34a  starting" }),
+  ).toBeDefined();
+  expect(
+    (await pane.findAll({ type: "Link" })).filter((l) =>
+      /example\.test/.test(String(l.props.href)),
+    ),
+  ).toHaveLength(1);
+  expect(await pane.find({ type: "Text", text: /0 worktrees held · 2 previews/ })).toBeDefined();
+  await pane.unmount();
+});
+
+test("no PREVIEWS while there are none", async ($, on) => {
+  const pane = await paneOf($, on, overview());
+  expect(await pane.find({ type: "Text", text: "PREVIEWS" })).toBeUndefined();
   await pane.unmount();
 });
 

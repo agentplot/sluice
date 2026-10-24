@@ -140,6 +140,30 @@ export function withLinks(remote?: string, from = true): Overview {
   return doc;
 }
 
+/**
+ * The fixture with previews of main at 4f1c2aa: one up with `web` at
+ * `web`, and one whose policy names no addresses.
+ */
+export function withPreviews(web = "https://web-4f1c2aa.example.test"): Overview {
+  const doc = overview();
+  doc.previews = [
+    {
+      name: "preview/4f1c2aa0e1b2",
+      branch: "main",
+      revision: "4f1c2aa0e1b2c3d4",
+      state: "up",
+      addresses: { web },
+    },
+    {
+      name: "preview/9ecc34a1b2c3",
+      branch: "main",
+      revision: "9ecc34a1b2c3d4e5",
+      state: "starting",
+    },
+  ];
+  return doc;
+}
+
 /** `n` finished tasks of a check, the first `failed` of them failed. */
 function finished(n: number, failed = 0): OverviewTask[] {
   return Array.from({ length: n }, (_, i) => ({
