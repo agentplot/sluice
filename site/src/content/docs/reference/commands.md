@@ -52,6 +52,31 @@ so it costs one merge behind them.
 {"conflict":{"paths":["docs/architecture/builds.md"],"with":[{"id":217,"from":{"agent":"wldn-design","worktree":"design/runner-credential"}}]},"head":"4f0c2a1…","onto":"9b7e3d0…","ahead":[217]}
 ```
 
+## Refused at submit
+
+`sluice submit` refuses a submission before queuing anything, and exits
+`2`, when the worktree holds changes beyond its commits, is on no
+branch, or names with `--after` a submission the branch doesn't hold.
+It also refuses one when the branch requires a task that the task
+runner, in the worktree, keeps out of CI, such as a moon task marked
+`runInCI: false`. That task never runs, so the branch can't pass while
+it's required.
+
+```console
+$ sluice submit main
+refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
+let it run in CI in this worktree, or drop it from main's policy in the same submission that lets it run, and submit again
+```
+
+A task required through a tag names the tag: `main requires app:serve
+through #check-fast`. The branch's required tasks are read from the
+branch, and whether a task runs in CI from the worktree, so the
+submission that lets the task run is taken. To a branch with pull
+requests, nothing is pushed and no pull request is opened. When the task
+runner can't be asked, its toolchain failing for one, the submission is
+taken with a warning saying why, and `--json --no-wait` carries it as
+`warnings`.
+
 ## `sluice exec`
 
 An agent runs its tests while it works with `sluice exec`, in its own

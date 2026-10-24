@@ -82,7 +82,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
   out", the runner's CI setting read from the submitting worktree at
   submit, which no gate counts (ADR 0047). Verify `sluice exec main --
   moon run root:format`.
-- [ ] 5.2 `site/src/content/docs/reference/configuration.md`: the
+- [x] 5.2 `site/src/content/docs/reference/configuration.md`: the
   `runInCI: false` bullet says a submission to a branch requiring such a
   task is refused, naming it and the policy line, and how the repair
   lands. `reference/commands.md`: the refusal among `sluice submit`'s.
