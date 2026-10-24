@@ -4297,3 +4297,58 @@ fn a_waiting_group_stopped_says_where_each_stands() {
     assert_eq!(code, sluice::STOPPED, "{out}");
     assert!(out.contains("still waiting: sluice wait 3"), "{out}");
 }
+
+/// 124, S64: `sluice status <branch>` shows this host's copy left behind
+/// its landing above the queue, and under `copy` in JSON, until a round
+/// levels it; then nothing of it.
+#[test]
+fn status_shows_this_hosts_copy_behind_while_it_lasts() {
+    let f = setup();
+    f.world.on_remote(BRANCH);
+    let made = f.world.tip(BRANCH);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    let lock = format!("git holds the lock on refs/heads/{BRANCH}");
+    f.world.set_copy(BRANCH, Some(&made));
+    f.world.fail_levels(1, &lock);
+    sluice(&f, &["step", BRANCH]);
+
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[..2],
+        [
+            format!(
+                "{BRANCH} at {} · 0 in the queue · testing 0 at once (up to 4)",
+                &landing.0[..7]
+            ),
+            format!(
+                "this host's {BRANCH} is at {}, behind the landing {}: {lock}",
+                &made.0[..7],
+                &landing.0[..7]
+            ),
+        ],
+        "{out}"
+    );
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert_eq!(
+        (&v["copy"]["at"], &v["copy"]["lacks"], &v["copy"]["why"]),
+        (
+            &serde_json::json!(made),
+            &serde_json::json!(landing),
+            &serde_json::json!(lock)
+        ),
+        "{v}"
+    );
+    assert!(v["copy"]["since"].is_string(), "{v}");
+
+    sluice(&f, &["step", BRANCH]);
+    assert_eq!(f.world.copy_of(BRANCH), Some(landing));
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("this host's"), "{out}");
+    let v = json(&sluice(&f, &["status", BRANCH, "--json"]).1);
+    assert!(v["copy"].is_null(), "{v}");
+}

@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
-use sluice_core::records::{BranchHold, Event, FailedTask, State, Submission};
+use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, Forecast, Forecasted, GroupRequest, Requester, Seams, Serves,
     Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
@@ -2835,6 +2835,9 @@ fn write_status(
         writeln!(out, "{}", held_line(&status.branch, hold))?;
     }
     write_failed_releases(&status.failed_releases, out)?;
+    if let Some(copy) = &status.copy {
+        writeln!(out, "{}", copy_behind_line(&status.branch, copy))?;
+    }
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -2931,6 +2934,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "stale": status.stale,
         "held": status.held.as_ref().map(held_json),
         "held_checkouts": held_checkouts,
+        "copy": status.copy,
     })
 }
 
@@ -3001,6 +3005,17 @@ fn release_checkout(
         writeln!(out, "{text}")?;
     }
     Ok(if failed.is_some() { FAILED } else { LANDED })
+}
+
+/// 124, S64: this host's copy of `branch` left behind its landing, and
+/// why.
+fn copy_behind_line(branch: &str, copy: &CopyBehind) -> String {
+    let at = copy.at.as_ref().map_or("nothing", |r| r.short());
+    format!(
+        "this host's {branch} is at {at}, behind the landing {}: {}",
+        copy.lacks.short(),
+        copy.why
+    )
 }
 
 /// Session-runs-1 clause 97: every worktree sluice holds ports or runs

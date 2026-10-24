@@ -161,6 +161,9 @@ pub struct Status {
     /// 121: the branch was last read at a revision lacking its last
     /// landing, and nothing is formed or landed on it.
     pub held: Option<crate::records::BranchHold>,
+    /// 124, S64: this host's copy of the branch, while a round could not
+    /// level it to the landing.
+    pub copy: Option<crate::records::CopyBehind>,
 }
 
 impl Status {
@@ -756,6 +759,7 @@ impl Sluice<'_> {
             window: line.doc.window,
             parallel,
             held: line.doc.held.clone(),
+            copy: line.doc.copies.get(&self.peer.name).cloned(),
             finished: line.finished.len(),
             failed_releases: line.doc.failed_releases.clone(),
             submissions: line.subs.into_values().collect(),
