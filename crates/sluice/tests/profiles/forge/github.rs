@@ -370,6 +370,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
                     body["head"].as_str().unwrap(),
                     body["title"].as_str().unwrap_or_default(),
                     body["body"].as_str().unwrap_or_default(),
+                    body["draft"].as_bool().unwrap_or(false),
                 )
                 .unwrap();
             if let Some(b) = bare {

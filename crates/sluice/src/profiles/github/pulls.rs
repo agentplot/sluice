@@ -37,7 +37,7 @@ use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHE
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
-use crate::{Followed, Opened};
+use crate::{Followed, GroupRefused, Opened, Short};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -961,6 +961,143 @@ impl Pulls {
         })
     }
 
+    /// 125: the act's pull requests, `acted`, each at the head the act
+    /// pushed and with when its last submission left the queue. When every
+    /// one meets its conditions there, the reviews and checks the branch
+    /// names, each is marked ready as one submit marks it and all are
+    /// queued in one write in the act's order, while the act holds intake's
+    /// lock, so no pass takes one of them alone (rules core.6, core.14).
+    /// Out of draft is the act's to give, so each is read as out of draft.
+    /// Otherwise none is marked ready, each ready one is marked a draft,
+    /// and none is queued: the refusal names each short of its conditions
+    /// (120).
+    #[allow(clippy::too_many_arguments)]
+    fn take_act(
+        &self,
+        s: &Sluice<'_>,
+        forge: &dyn Forge,
+        t: &Target,
+        branch: &str,
+        worktrees: &[String],
+        acted: &[(Pull, Option<DateTime<Utc>>)],
+        mut opened: Vec<Opened>,
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
+        let mut short = Vec::new();
+        for (w, (p, _)) in worktrees.iter().zip(acted) {
+            let ready = Pull {
+                draft: false,
+                ..p.clone()
+            };
+            let lacks = self.missing(forge, t, &ready)?;
+            if !lacks.is_empty() {
+                short.push(Short {
+                    worktree: w.clone(),
+                    number: p.number,
+                    lacks,
+                });
+            }
+        }
+        if !short.is_empty() {
+            self.leave_drafts(forge, t, acted, &mut opened)?;
+            return Ok(Err(GroupRefused::Short { opened, short }));
+        }
+        // Every head is here before any is marked ready, so one GitHub
+        // serves none of leaves every request as it was.
+        let pushed = self.pushed(&t.remote)?;
+        for (p, _) in acted {
+            self.fetch_head(&pushed, p)
+                .with_context(|| format!("fetching #{}'s head", p.number))?;
+        }
+        for ((p, left), o) in acted.iter().zip(&mut opened) {
+            if p.draft || left.is_some() {
+                mark_ready(forge, &t.repo, p.number, p.draft, *left)?;
+                o.said.push_str(" · marked ready for review");
+            }
+            // The driver's session of `pull/<n>` answers from what is known.
+            self.known.borrow_mut().insert(
+                place(p.number),
+                Known {
+                    remote: t.remote.clone(),
+                    pull: Pull {
+                        draft: false,
+                        ..p.clone()
+                    },
+                },
+            );
+        }
+        let req = GroupRequest {
+            branch: branch.into(),
+            worktrees: acted.iter().map(|(p, _)| place(p.number)).collect(),
+            after: Vec::new(),
+            priority: 0,
+        };
+        let accepted = match s.submit_group(&req)? {
+            Ok(accepted) => accepted,
+            Err(refused) => {
+                // Refused by the branch since it was read: left drafts, as
+                // any refused act leaves them, each refusal its worktree's.
+                let drafted: Vec<(Pull, Option<DateTime<Utc>>)> = acted
+                    .iter()
+                    .map(|(p, left)| {
+                        (
+                            Pull {
+                                draft: false,
+                                ..p.clone()
+                            },
+                            *left,
+                        )
+                    })
+                    .collect();
+                self.leave_drafts(forge, t, &drafted, &mut opened)?;
+                let refused = refused
+                    .into_iter()
+                    .map(|(at, r)| {
+                        let w = req
+                            .worktrees
+                            .iter()
+                            .position(|x| *x == at)
+                            .map_or(at, |i| worktrees[i].clone());
+                        (w, r)
+                    })
+                    .collect();
+                return Ok(Err(GroupRefused::Worktrees(refused)));
+            }
+        };
+        for ((a, (p, _)), o) in accepted.into_iter().zip(acted).zip(&mut opened) {
+            self.entries.borrow_mut().insert(
+                a.id,
+                Entry {
+                    repo: t.repo.clone(),
+                    number: p.number,
+                    head: p.head.clone(),
+                },
+            );
+            o.submission = Some(a);
+        }
+        Ok(Ok(opened))
+    }
+
+    /// 125: each of a refused act's pull requests left a draft at its
+    /// head, so no round takes one of it alone, by its conditions or by its
+    /// group's marks, in its submitter's name (120).
+    fn leave_drafts(
+        &self,
+        forge: &dyn Forge,
+        t: &Target,
+        acted: &[(Pull, Option<DateTime<Utc>>)],
+        opened: &mut [Opened],
+    ) -> Result<()> {
+        for ((p, _), o) in acted.iter().zip(opened) {
+            if !p.draft {
+                forge
+                    .set_draft(&t.repo, p.number, true)
+                    .with_context(|| format!("marking #{} a draft", p.number))?;
+                o.said.push_str(" · marked a draft");
+            }
+        }
+        Ok(())
+    }
+
     /// The pull request's head on this host, fetched unless it is here.
     fn fetch_head(&self, pushed: &PushedRefs, p: &Pull) -> Result<Rev> {
         let local = self.head_ref(pushed.remote(), p.number);
@@ -1700,7 +1837,10 @@ impl crate::PullRequests for Pulls {
         Ok(
             match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
                 Ok(mut opened) => Ok(opened.remove(0)),
-                Err(mut refused) => Err(refused.remove(0).1),
+                Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
+                Err(GroupRefused::Short { .. }) => {
+                    bail!("a submit of one worktree read its pull request's conditions")
+                }
             },
         )
     }
@@ -1708,15 +1848,17 @@ impl crate::PullRequests for Pulls {
     /// 125: every worktree read before anything is pushed, and a refusal
     /// for each refused; then, in order, each request marked one of the
     /// group before its head reaches it: an open request's body edited
-    /// before its branch is pushed, a new one opened with the mark once
-    /// its branch is. One worktree is marked one of no group.
+    /// before its branch is pushed, a new one opened a draft with the mark
+    /// once its branch is. Then the group is taken whole or left drafts
+    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
+    /// marked ready, for intake to take on its conditions.
     fn open_group(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
-    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
         for (k, worktree) in worktrees.iter().enumerate() {
@@ -1745,7 +1887,7 @@ impl crate::PullRequests for Pulls {
             }
         }
         let (Some(t), true) = (target, refused.is_empty()) else {
-            return Ok(Err(refused));
+            return Ok(Err(GroupRefused::Worktrees(refused)));
         };
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
@@ -1759,6 +1901,9 @@ impl crate::PullRequests for Pulls {
         let n = sessions.len();
         let token = group_token(clock.now(), &submitted[0].head);
         let mut opened = Vec::new();
+        // Each request as the act leaves it, and when its last submission
+        // left the queue, for the group's taking.
+        let mut acted = Vec::new();
         for (k, (session, submitted)) in sessions.iter().zip(&submitted).enumerate() {
             let head_ref = session.from.worktree.clone();
             let head = &submitted.head;
@@ -1778,19 +1923,16 @@ impl crate::PullRequests for Pulls {
             let existing = open
                 .iter()
                 .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
-            let (number, title, draft, word) = match existing {
+            let (pull, word) = match existing {
                 Some(p) => {
+                    let body = with_marks(&p.body, agent, group.as_ref());
                     if marked_agent(&p.body).as_deref() != Some(agent.as_str())
                         || Group::of(&p.body) != group
                     {
-                        forge.edit(
-                            &t.repo,
-                            p.number,
-                            &with_marks(&p.body, agent, group.as_ref()),
-                        )?;
+                        forge.edit(&t.repo, p.number, &body)?;
                     }
                     push()?;
-                    (p.number, p.title.clone(), p.draft, "updated")
+                    (Pull { body, ..p.clone() }, "updated")
                 }
                 None => {
                     push()?;
@@ -1801,11 +1943,14 @@ impl crate::PullRequests for Pulls {
                         .unwrap_or(&head_ref)
                         .to_string();
                     let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
-                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body)?;
-                    (p.number, p.title, p.draft, "opened")
+                    // A group's request is opened a draft, which the act
+                    // marks ready only once it takes the group (125).
+                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
+                    (p, "opened")
                 }
             };
-            let mut said = format!("{word} #{number}: {title}");
+            let number = pull.number;
+            let mut said = format!("{word} #{number}: {}", pull.title);
             if !submitted.from_remote {
                 said = format!("pushed {head_ref} · {said}");
             }
@@ -1831,21 +1976,47 @@ impl crate::PullRequests for Pulls {
                 .remove(&here);
             let log = Line::read_log(&s.seams().state.read(branch)?)?;
             let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
-            if draft || left.is_some() {
-                mark_ready(forge, &t.repo, number, draft, left)?;
+            if n == 1 && (pull.draft || left.is_some()) {
+                mark_ready(forge, &t.repo, number, pull.draft, left)?;
                 said.push_str(" · marked ready for review");
-            }
-            if let Some(copy) = &submitted.copy {
-                said.push('\n');
-                said.push_str(&crate::copy_differs_line(copy));
             }
             opened.push(Opened {
                 number,
                 said,
                 copy: submitted.copy.clone(),
+                submission: None,
             });
+            acted.push((
+                Pull {
+                    head: head.0.clone(),
+                    ..pull
+                },
+                left,
+            ));
         }
-        Ok(Ok(opened))
+        let taken = if n > 1 {
+            self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
+        } else {
+            Ok(opened)
+        };
+        // 124: how the host's copy differs, beneath what the act did.
+        let with_copies = |mut opened: Vec<Opened>| {
+            for o in &mut opened {
+                if let Some(copy) = &o.copy {
+                    o.said.push('\n');
+                    o.said.push_str(&crate::copy_differs_line(copy));
+                }
+            }
+            opened
+        };
+        Ok(match taken {
+            Ok(opened) => Ok(with_copies(opened)),
+            Err(GroupRefused::Short { opened, short }) => Err(GroupRefused::Short {
+                opened: with_copies(opened),
+                short,
+            }),
+            Err(refused) => Err(refused),
+        })
     }
 
     fn find(

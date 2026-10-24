@@ -486,6 +486,32 @@ pub struct Opened {
     /// 124: the worktree's head, this host's copy of a branch sluice
     /// lands on, where it differs from the remote's revision submitted.
     pub copy: Option<CopyDiffers>,
+    /// 125: the submission a group submit queued for it, having taken its
+    /// group whole; `None` for one submit's, which intake takes.
+    pub submission: Option<Accepted>,
+}
+
+/// 125: a pull request of a group submit short of its conditions.
+pub struct Short {
+    /// Its worktree, as the act named it.
+    pub worktree: String,
+    pub number: u64,
+    /// The reviews and checks it lacks on its head, as a waiting pull
+    /// request names them.
+    pub lacks: Vec<String>,
+}
+
+/// 125: why a group submit to a branch with pull requests queued nothing.
+pub enum GroupRefused {
+    /// Worktrees refused before anything was pushed, each with why.
+    Worktrees(Vec<(String, SubmitRefusal)>),
+    /// Every branch pushed and its pull request opened or updated, as
+    /// `opened` says, and each left a draft at its head: `short` fall
+    /// short of their conditions.
+    Short {
+        opened: Vec<Opened>,
+        short: Vec<Short>,
+    },
 }
 
 /// Where a pull request stands, for a submit that follows it.
@@ -535,14 +561,16 @@ pub trait PullRequests {
 
     /// 125: push each of `worktrees`' branches and open or update its
     /// pull request into `branch`, in order, each marked one of the group,
-    /// or none of them when any is refused.
+    /// or none of them when any worktree is refused; then, for more than
+    /// one, mark each ready and queue them all in one write, or, when any
+    /// falls short of its conditions, leave each a draft and queue none.
     fn open_group(
         &self,
         _seams: Seams<'_>,
         _clock: &dyn Clock,
         _worktrees: &[String],
         branch: &str,
-    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         anyhow::bail!("{branch} takes no pull requests")
     }
 
@@ -1754,14 +1782,7 @@ fn refused_group(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let branch = &req.branch;
-    let again = format!(
-        "sluice submit {branch} {}",
-        req.worktrees
-            .iter()
-            .map(|w| format!("--worktree {w}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    let again = group_again(req);
     let (mut texts, mut next, mut worktrees) = (Vec::new(), Vec::new(), Vec::new());
     for (w, r) in refused {
         let text = refusal(r, w, branch, pushers)?;
@@ -1798,6 +1819,68 @@ fn refused_group(
             out,
             "nothing submitted: the {} worktrees are submitted together or not at all",
             req.worktrees.len()
+        )?;
+    }
+    Ok(CONFLICT)
+}
+
+/// The act submitted again: `sluice submit <branch> --worktree …`.
+fn group_again(req: &GroupRequest) -> String {
+    format!(
+        "sluice submit {} {}",
+        req.branch,
+        req.worktrees
+            .iter()
+            .map(|w| format!("--worktree {w}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+/// 125: an act under pull requests refused for its pull requests'
+/// conditions: what it pushed and opened, each pull request short of its
+/// conditions with what it lacks, and that every one of the act is a
+/// draft at its head, which the same act takes once each meets them.
+fn short_group(
+    req: &GroupRequest,
+    opened: &[Opened],
+    short: &[Short],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let again = group_again(req);
+    let needs: Vec<String> = short
+        .iter()
+        .map(|x| {
+            format!(
+                "#{} from {} needs {}",
+                x.number,
+                x.worktree,
+                x.lacks.join(", ")
+            )
+        })
+        .collect();
+    if json {
+        let mut doc = told::document(Kind::Refused, &needs.join("\n"), &[again]);
+        let worktrees: Vec<&str> = short.iter().map(|x| x.worktree.as_str()).collect();
+        doc["error"]["worktrees"] = serde_json::json!(worktrees);
+        writeln!(out, "{doc}")?;
+    } else {
+        for o in opened {
+            writeln!(out, "{}", o.said)?;
+        }
+        for n in &needs {
+            writeln!(out, "refused: {n}")?;
+        }
+        let numbers: Vec<u64> = opened.iter().map(|o| o.number).collect();
+        writeln!(
+            out,
+            "nothing submitted: {} are drafts at their heads",
+            hashes(&numbers)
+        )?;
+        writeln!(
+            out,
+            "once each meets its conditions, the same submit takes them all: {again}"
         )?;
     }
     Ok(CONFLICT)
@@ -2619,10 +2702,12 @@ fn submit_pull(
 /// 125: `sluice submit` of several worktrees to a branch with pull
 /// requests: every worktree's branch pushed and its pull request opened or
 /// updated, each marked one of the group, or none when any worktree is
-/// refused. It says where each stands; then, unless `no_wait`, it follows
-/// each, taking pull requests in and running rounds as a waiting
-/// pull-request submit does, until every one is decided, and reports each
-/// one's outcome in the order given.
+/// refused; then every pull request marked ready and queued, each
+/// submission said after its pull request, or none when any falls short
+/// of its conditions, each such named. It says where each stands; then,
+/// unless `no_wait`, it follows each, taking pull requests in and running
+/// rounds as a waiting pull-request submit does, until every one is
+/// decided, and reports each one's outcome in the order given.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull_group(
     s: &Sluice<'_>,
@@ -2638,11 +2723,42 @@ fn submit_pull_group(
     let branch = &req.branch;
     let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
         Ok(o) => o,
-        Err(refused) => return refused_group(&req, &refused, &(), json, out),
+        Err(GroupRefused::Worktrees(refused)) => {
+            return refused_group(&req, &refused, &(), json, out)
+        }
+        Err(GroupRefused::Short { opened, short }) => {
+            return short_group(&req, &opened, &short, json, out)
+        }
     };
     if !json {
+        // What is queued ahead is named as on a pull request: the act's
+        // own by their pull requests, the rest as intake last read them.
+        let ours: BTreeMap<u64, u64> = opened
+            .iter()
+            .filter_map(|o| Some((o.submission.as_ref()?.id, o.number)))
+            .collect();
+        let others = opened
+            .iter()
+            .filter_map(|o| o.submission.as_ref())
+            .any(|a| a.ahead.iter().any(|i| !ours.contains_key(i)));
+        let names = match others.then(|| pulls.follow(seams, clock, branch, opened[0].number)) {
+            Some(Ok(Followed::Open { names, .. } | Followed::Done(_, names))) => names,
+            _ => BTreeMap::new(),
+        };
+        let name = |i: u64| match ours.get(&i) {
+            Some(n) => format!("#{n}"),
+            None => names.get(&i).cloned().unwrap_or_else(|| format!("#{i}")),
+        };
         for o in &opened {
             writeln!(out, "{}", o.said)?;
+            if let Some(a) = &o.submission {
+                let ahead = queued_ahead(&a.ahead, name);
+                writeln!(
+                    out,
+                    "submission {} to {branch} from #{} · {ahead}",
+                    a.id, o.number
+                )?;
+            }
         }
     }
     let mut decided: Vec<Option<Followed>> = opened.iter().map(|_| None).collect();
@@ -2760,6 +2876,10 @@ fn submit_pull_group(
             };
             item["worktree"] = serde_json::json!(w);
             item["pull_request"] = serde_json::json!(o.number);
+            if let (true, Some(a)) = (no_wait, &o.submission) {
+                item["id"] = serde_json::json!(a.id);
+                item["ahead"] = serde_json::json!(a.ahead);
+            }
             items.push(with_copy(item, o.copy.as_ref())?);
         }
         let doc = serde_json::json!({ "branch": branch, "submissions": items });
