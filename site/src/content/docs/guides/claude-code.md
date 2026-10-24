@@ -149,6 +149,14 @@ each failed test, its log path (press it to copy the path) and the log's
 last lines. Press it again to close it. The pane only shows: it never
 moves to another session or another agent's pane.
 
+Press a conflict to open it the same way. It shows the files in conflict,
+then what is in the way: each submission it conflicted with and the
+worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what
+main has landed` when it conflicted with no submission. Last comes what to
+do next: `next: take main into the worktree, resolve and commit, then
+sluice submit main`. The board builds it from the conflict's own line and
+runs no command.
+
 With the moon runner, a combination under test also shows how many of
 its tasks have ended and a bar of the same, as in
 `testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. Press its row in the pane
@@ -190,7 +198,10 @@ then gets a turn naming the files and telling it to merge the branch in
 now, while the conflict is small. A conflict it was told of can also go
 away without its commit moving, when a submission ahead fails or is
 withdrawn. The session is told that too, and that a submission removed for
-the conflict can go again. The `forecast` option in `/config` turns this
+the conflict can go again. While a forecast finds a conflict, the pane
+shows it under its branch as `⚠ your work would conflict ·
+docs/builds.md`, until a later forecast finds none. Press it to open the
+files, what is in the way and the next step, as for a conflict in RECENT. The `forecast` option in `/config` turns this
 off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 

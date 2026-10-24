@@ -31,6 +31,11 @@ sluice's queue inside a Claude Code session.
   a bar of the same. Press the row to list them: `✓ sluice:test 1m48s` for
   one that ended, `… sluice:e2e running 1m12s` for one still running. Press
   it again to fold them.
+- **A conflict** opens on a press to its files, what is in the way and what
+  to do next: `in the way: #217 (bolt/runner)`, or `what main has landed`,
+  then `next: take main into the worktree, resolve and commit, then sluice
+  submit main`. Press it again to fold it. A RECENT conflict opens this
+  way, and so does this session's own forecast conflict.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
@@ -58,7 +63,9 @@ sluice's queue inside a Claude Code session.
   the session to merge the branch in now; when a conflict it told of
   clears with the head unchanged, because a submission ahead failed or
   left, a turn saying so. A conflict already there when the session starts
-  is a toast alone. Turn it off with the `forecast` option in `/config`,
+  is a toast alone. While the forecast finds a conflict, the pane shows it
+  under its branch as `⚠ your work would conflict · docs/builds.md`, which
+  opens as a RECENT conflict does. Turn it off with the `forecast` option in `/config`,
   or start the session with `SLUICE_FORECAST=0` where something else
   forecasts for it.
 
