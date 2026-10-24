@@ -8,7 +8,7 @@ exec main -- <command>`; before submitting, `sluice exec main`.
 
 ## 1. A group's new requests open as drafts
 
-- [ ] 1.1 Give `Forge::open` (`crates/sluice/src/profiles/github/forge.rs`) a `draft: bool`, sent as `"draft"` in `rest.rs`'s create call and kept by the fake (`fake.rs`) and the test server (`crates/sluice/tests/profiles/forge/github.rs`); every caller passes `false` but `open_group` for more than one worktree. Verify `rest.rs`'s and `fake.rs`'s unit tests (`sluice exec main -- cargo test -p sluice --lib profiles::github`) and `sluice exec main -- cargo test -p sluice --features tools --test forge`.
+- [x] 1.1 Give `Forge::open` (`crates/sluice/src/profiles/github/forge.rs`) a `draft: bool`, sent as `"draft"` in `rest.rs`'s create call and kept by the fake (`fake.rs`) and the test server (`crates/sluice/tests/profiles/forge/github.rs`); every caller passes `false` but `open_group` for more than one worktree. Verify `rest.rs`'s and `fake.rs`'s unit tests (`sluice exec main -- cargo test -p sluice --lib profiles::github`) and `sluice exec main -- cargo test -p sluice --features tools --test forge`.
 
 ## 2. The act takes all or is refused
 

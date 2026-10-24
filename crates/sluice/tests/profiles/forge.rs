@@ -551,8 +551,10 @@ fn the_apps_pull_request_calls() {
     );
     app.edit_comment(&r, c.id, "edited").unwrap();
     assert_eq!(app.comments(&r, a).unwrap(), ["edited"]);
-    let opened = app.open(&r, "main", "unit/e", "E", "body").unwrap();
+    let opened = app.open(&r, "main", "unit/e", "E", "body", false).unwrap();
     assert!(opened.open && !opened.draft && opened.title == "E");
+    let drafted = app.open(&r, "main", "unit/f", "F", "", true).unwrap();
+    assert!(drafted.open && drafted.draft);
     app.edit(&r, opened.number, "new body").unwrap();
     assert_eq!(
         app.pull(&r, opened.number).unwrap().unwrap().body,
@@ -600,6 +602,7 @@ fn live_pull_request_calls() {
                 &head,
                 "sluice live test",
                 "opened by sluice's live test",
+                false,
             )
             .unwrap(),
     };

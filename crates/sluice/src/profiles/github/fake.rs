@@ -281,10 +281,11 @@ impl Forge for FileForge {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull> {
         // GitHub reads the head from the branch as pushed; the test's push
         // is to a bare remote this fake cannot see, so it is named after.
-        let number = self.open_by("sluice", base, head_ref, "", false, None)?;
+        let number = self.open_by("sluice", base, head_ref, "", draft, None)?;
         self.with_pull(number, |p| {
             p.title = title.into();
             p.body = body.into();
@@ -448,9 +449,13 @@ mod tests {
         let c = f.comment_list(&repo, n).unwrap().remove(0);
         f.edit_comment(&repo, c.id, "edited").unwrap();
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
-        let opened = f.open(&repo, "main", "unit/b", "B", "body").unwrap();
+        let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
+        assert!(!opened.draft);
         f.edit(&repo, opened.number, "new body").unwrap();
         assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");
+        let drafted = f.open(&repo, "main", "unit/c", "C", "", true).unwrap();
+        assert!(drafted.draft && f.by_ref("unit/c").unwrap().unwrap().draft);
+        assert!(f.readied(&repo, drafted.number).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

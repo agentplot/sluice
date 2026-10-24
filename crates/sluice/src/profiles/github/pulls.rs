@@ -1801,7 +1801,9 @@ impl crate::PullRequests for Pulls {
                         .unwrap_or(&head_ref)
                         .to_string();
                     let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
-                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body)?;
+                    // A group's request is opened a draft, which the act
+                    // marks ready only once it takes the group (125).
+                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
                     (p.number, p.title, p.draft, "opened")
                 }
             };

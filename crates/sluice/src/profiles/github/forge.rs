@@ -205,7 +205,7 @@ pub trait Forge {
     fn edit_comment(&self, repo: &Repo, id: u64, body: &str) -> Result<()>;
 
     /// Open a pull request from the branch `head_ref` of `repo` into
-    /// `base`, ready for review.
+    /// `base`, a draft or ready for review.
     fn open(
         &self,
         repo: &Repo,
@@ -213,6 +213,7 @@ pub trait Forge {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull>;
 
     /// Replace pull request `number`'s body.
