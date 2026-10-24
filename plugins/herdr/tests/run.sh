@@ -1049,6 +1049,24 @@ done
 [ "$(printf '%s' "$lines" | sort -u | wc -l)" -eq 1 ] || fail "the hosts' lines differ: $lines"
 pass
 
+fresh "status: the segment is the server's"
+home=$t/server
+st=$home/.local/state/herdr/plugins/agentplot.sluice
+sock=$t/herdr.sock
+mkdir -p "$st"
+printf '%s\n' "$board" | jq -c --arg r "$common" '.repository = $r' |
+  HERDR_SOCKET_PATH=$sock HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/document.sh" local "$work"
+HOME=$home HERDR_SOCKET_PATH=$sock HERDR_PLUGIN_STATE_DIR=$st SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+cmd=$(HOME=$home HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/setup.sh" </dev/null | sed -n "s/.*command = '\(.*\)', interval_seconds.*/\1/p")
+# As herdr runs it on the server, whatever host the client is on: the
+# server's home, socket and PATH, nothing else, so the clock is the host's
+# own and the time under test is however long ago the board's run started.
+out=$(cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$sock" PATH="$PATH" /bin/sh -lc "$cmd")
+case $out in 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 waiting · last #9 blamed on 4f1c2aa') ;;
+*) fail "with only the server's environment it printed: $out" ;;
+esac
+pass
+
 fresh 'status: fields it does not know change nothing'
 status_of 87 "$work" withdrawn '["tests:t-cards"]'
 extra='.later = {"anything": 1} | .branches[0].candidates |= map(.tasks = [{"name": "x", "state": "running"}])'

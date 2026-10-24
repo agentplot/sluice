@@ -7,7 +7,7 @@
 
 ## 2. The segment needs only the server's environment
 
-- [ ] 2.1 Add a case to `plugins/herdr/tests/run.sh`, `status: the segment is the server's`: with a document fed and the watcher run one tick under a home whose state is at `$HOME/.local/state/herdr/plugins/agentplot.sluice`, run setup's command as herdr does, `cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$HERDR_SOCKET_PATH" PATH="$PATH" /bin/sh -lc "$cmd"`, and assert it prints the board's line. Change `segment.sh` or `lib/common.sh` only if the case shows it needs more of the environment. Verify: `moon run plugin-herdr:test-sh plugin-herdr:test-dash` through `sluice exec main --`.
+- [x] 2.1 Add a case to `plugins/herdr/tests/run.sh`, `status: the segment is the server's`: with a document fed and the watcher run one tick under a home whose state is at `$HOME/.local/state/herdr/plugins/agentplot.sluice`, run setup's command as herdr does, `cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$HERDR_SOCKET_PATH" PATH="$PATH" /bin/sh -lc "$cmd"`, and assert it prints the board's line. Change `segment.sh` or `lib/common.sh` only if the case shows it needs more of the environment. Verify: `moon run plugin-herdr:test-sh plugin-herdr:test-dash` through `sluice exec main --`.
 
 ## 3. Setup and the README give the line 30 seconds
 
