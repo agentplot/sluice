@@ -491,7 +491,17 @@ pub struct Opened {
 /// Where a pull request stands, for a submit that follows it.
 pub enum Followed {
     /// Not decided yet: its state, and lines beneath it.
-    Open { title: String, lines: Vec<String> },
+    Open {
+        title: String,
+        lines: Vec<String>,
+        /// The submission intake took for it on its current head,
+        /// undecided; `None` while it waits to be taken in (C.5 pull
+        /// request, 120).
+        submission: Option<Submission>,
+        /// What each submission is called on a pull request, as
+        /// [`Followed::Done`] names them.
+        names: BTreeMap<u64, String>,
+    },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
@@ -1580,7 +1590,7 @@ fn submit(
         return Ok(0);
     }
     if !json {
-        let ahead = queued_ahead(&accepted.ahead);
+        let ahead = queued_ahead(&accepted.ahead, |i| format!("#{i}"));
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
         if let Some(copy) = copy {
             writeln!(out, "{}", copy_differs_line(copy))?;
@@ -1602,11 +1612,15 @@ fn submit(
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
 
-/// What a submission was queued behind, as a submit says it.
-fn queued_ahead(ahead: &[u64]) -> String {
+/// What a submission was queued behind, as a submit says it, each named
+/// by `name`.
+fn queued_ahead(ahead: &[u64], name: impl Fn(u64) -> String) -> String {
     match ahead.len() {
         0 => "nothing queued ahead".to_string(),
-        n => format!("{n} queued ahead ({})", hashes(ahead)),
+        n => {
+            let named: Vec<String> = ahead.iter().map(|i| name(*i)).collect();
+            format!("{n} queued ahead ({})", named.join(", "))
+        }
     }
 }
 
@@ -1650,7 +1664,7 @@ fn submit_group(
     }
     if !json {
         for (w, a) in &items {
-            let ahead = queued_ahead(&a.ahead);
+            let ahead = queued_ahead(&a.ahead, |i| format!("#{i}"));
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
             if let Some(copy) = &a.copy {
                 writeln!(out, "{}", copy_differs_line(copy))?;
@@ -2425,6 +2439,8 @@ fn submit_pull(
     let mut said_hold = None;
     let what = format!("#{number}");
     let mut unread = Unread::default();
+    // The submission the pull request was last read taken in as.
+    let mut taken: Option<u64> = None;
     loop {
         intake(pulls, seams, clock, branch);
         let followed = match pulls.follow(seams, clock, branch, number) {
@@ -2469,7 +2485,41 @@ fn submit_pull(
                 }
                 return Ok(FAILED);
             }
-            Some(Followed::Open { title, lines }) => {
+            Some(Followed::Open {
+                title,
+                lines,
+                submission,
+                names,
+            }) => {
+                // Taken in on the head just pushed: the submission is the
+                // answer, as a no-wait submit's on any branch, with the
+                // pull request beside it.
+                if let (true, Some(sub)) = (no_wait, &submission) {
+                    let ahead: Vec<u64> = s
+                        .status(branch)?
+                        .submissions
+                        .iter()
+                        .filter(|x| x.id < sub.id && !x.state.is_out())
+                        .map(|x| x.id)
+                        .collect();
+                    if json {
+                        let doc = serde_json::json!({
+                            "id": sub.id, "branch": branch, "ahead": ahead,
+                            "pull_request": number,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else {
+                        let name =
+                            |i: u64| names.get(&i).cloned().unwrap_or_else(|| format!("#{i}"));
+                        let ahead = queued_ahead(&ahead, name);
+                        writeln!(
+                            out,
+                            "submission {} to {branch} from #{number} · {ahead}",
+                            sub.id
+                        )?;
+                    }
+                    return Ok(0);
+                }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
@@ -2485,16 +2535,28 @@ fn submit_pull(
                     }
                     last = Some(now);
                 }
+                taken = submission.map(|x| x.id);
             }
             None => {}
         }
         if no_wait || status {
             return Ok(0);
         }
-        // Undecided: as it stands, the document `--status` prints, or
-        // where to read it again.
+        // Undecided: taken in, its submission's record as it stands now, as
+        // `sluice wait <id>` ends; otherwise the document `--status`
+        // prints, or where to read it again.
         let still = |out: &mut dyn Write, code: i32| -> Result<i32> {
-            if json {
+            let sub = match taken {
+                Some(id) => s.state(id)?,
+                None => None,
+            };
+            if let Some(sub) = sub {
+                if json {
+                    writeln!(out, "{}", record_json(&sub, copy.as_ref())?)?;
+                } else {
+                    writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+                }
+            } else if json {
                 let state = last.as_ref().map_or("waiting", |l| l.0.as_str());
                 let doc = serde_json::json!({
                     "pull_request": number, "branch": branch, "state": state,
@@ -2615,7 +2677,7 @@ fn submit_pull_group(
                 }
             };
             match followed {
-                Followed::Open { title, lines } => {
+                Followed::Open { title, lines, .. } => {
                     let now = (title, lines);
                     if last[i].as_ref() != Some(&now) {
                         if !json {

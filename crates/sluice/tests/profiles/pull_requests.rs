@@ -1349,6 +1349,78 @@ fn no_wait_then_status() {
     assert!(w.exists());
 }
 
+/// No wait, its conditions hold: the submit answers with the submission
+/// sluice took the pull request in as, from its checkout `pull/<n>` at the
+/// head pushed, with the pull request beside it; `sluice wait <id>`
+/// follows that submission to its landing.
+#[test]
+fn no_wait_answers_with_its_submission() {
+    let g = OnGitHub::new("pr-no-wait-id", "");
+    let w = g.session("ready", &[("ready.txt", "ready\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let n = g.pull_from("unit/ready").number;
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["branch"], "main", "{doc}");
+    assert_eq!(doc["ahead"], serde_json::json!([]), "{doc}");
+    let id = doc["id"].as_u64().expect(&doc.to_string()).to_string();
+    let out = g.sluice(&["status", &id, "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let record: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(record["from"]["worktree"], format!("pull/{n}").as_str());
+    let pushed = github::rev(g.bare.path(), "refs/heads/unit/ready").unwrap();
+    assert_eq!(record["head"], pushed.as_str());
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", &id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["state"], "landed");
+}
+
+/// No wait, waiting for a review: the submit answers with the pull request
+/// and what it waits for, and nothing of it is queued.
+#[test]
+fn no_wait_waiting_for_a_review_answers_with_the_pull_request() {
+    let g = OnGitHub::new("pr-no-wait-review", "reviews = 1");
+    let w = g.session("unreviewed", &[("u.txt", "u\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let n = g.pull_from("unit/unreviewed").number;
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "pull_request": n, "branch": "main", "state": "waiting: needs 1 review",
+        })
+    );
+    assert!(g.of(n).is_empty(), "{:?}", g.subs());
+}
+
+/// No wait, in words: after the line naming the pull request opened, the
+/// submission it was taken in as and what is queued ahead of it.
+#[test]
+fn no_wait_says_its_submission() {
+    let g = OnGitHub::new("pr-no-wait-words", "");
+    let w = g.session("worded", &[("worded.txt", "w\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/worded").number;
+    let id = g.of(n)[0]["id"].as_u64().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let opened = format!("pushed unit/worded · opened #{n}: Change worded.txt");
+    let at = lines.iter().position(|l| *l == opened).expect(&stdout);
+    assert_eq!(
+        lines.get(at + 1).copied(),
+        Some(format!("submission {id} to main from #{n} · nothing queued ahead").as_str()),
+        "{stdout}"
+    );
+}
+
 /// A pull request sent back keeps the agent's worktree: the waiting
 /// submit exits 1 with the failure.
 /// ADR 0041: `sluice wait <branch>` follows this worktree's pull request,
@@ -1387,6 +1459,32 @@ fn wait_follows_a_pull_request() {
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
     assert_eq!(doc["state"], "landed");
+}
+
+/// A pull request taken in, out of time: `sluice wait <branch>` follows its
+/// submission, and ends with that submission's record, as `sluice wait
+/// <id>` does.
+#[test]
+fn wait_follows_a_pull_requests_submission() {
+    let g = OnGitHub::new("pr-wait-taken", "");
+    let w = g.session("taken", &[("slow", "x\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let record: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(record["id"], id, "{record}");
+    assert!(
+        record["state"] == "queued" || record["state"] == "testing",
+        "{record}"
+    );
+    assert!(record.get("pull_request").is_none(), "{record}");
 }
 
 #[test]

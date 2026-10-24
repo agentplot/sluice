@@ -12,7 +12,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request; `{branch,submissions}` for several worktrees. |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions; `{branch,submissions}` for several worktrees. |
 
 ## What a waiting submit prints
 

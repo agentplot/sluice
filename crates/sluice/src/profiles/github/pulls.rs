@@ -1916,15 +1916,20 @@ impl crate::PullRequests for Pulls {
         if !pull.as_ref().is_some_and(|p| p.open) {
             return Ok(Followed::Closed);
         }
-        Ok(match self.shown.borrow().get(&n) {
-            Some(shown) => Followed::Open {
-                title: shown.posting.title.clone(),
-                lines: shown.lines.clone(),
-            },
-            None => Followed::Open {
-                title: "waiting".into(),
-                lines: Vec::new(),
-            },
+        // Taken in on the head it has now, and undecided: the submission
+        // a submit that does not wait answers with, and a wait follows.
+        let submission = latest
+            .filter(|e| !e.state.is_out() && pull.as_ref().is_some_and(|p| p.head == e.head.0));
+        let names = names(&status.submissions);
+        let (title, lines) = match self.shown.borrow().get(&n) {
+            Some(shown) => (shown.posting.title.clone(), shown.lines.clone()),
+            None => ("waiting".into(), Vec::new()),
+        };
+        Ok(Followed::Open {
+            title,
+            lines,
+            submission,
+            names,
         })
     }
 }

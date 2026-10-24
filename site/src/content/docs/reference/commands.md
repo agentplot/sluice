@@ -520,10 +520,28 @@ passed · landed as b7d2e94
 
 A waiting submit prints each state the pull request reaches, runs
 sluice's rounds while it waits, and exits as any submit does. On a pull
-request, `#41` is the pull request's number. `--no-wait` returns once
-the pull request is open, and `wt submit main --status` reports its
-state later. `wt submit` removes the worktree only when the pull request
-lands; sent back, the worktree stays for the fix.
+request, `#41` is the pull request's number. `wt submit` removes the
+worktree only when the pull request lands; sent back, the worktree
+stays for the fix.
+
+`--no-wait` returns once the pull request is open and sluice has read
+it once, and exits `0`. When its conditions held then, sluice queued it
+at the commits pushed. The submit answers with that submission, as a
+submit that doesn't wait does on any branch, with the pull request
+beside it:
+
+```console
+$ wt submit main --no-wait
+pushed unit/batch-review · opened #41: Batch review cards
+submission 12 to main from #41 · nothing queued ahead
+$ wt submit main --no-wait --json
+{"id":12,"branch":"main","ahead":[],"pull_request":41}
+```
+
+Otherwise it answers with the pull request and what it waits for, as
+`wt submit main --status` reports it later: under `--json`,
+`{"pull_request":41,"branch":"main","state":"waiting: needs 1 review"}`,
+with no `id`.
 
 A pull request a submit opened is the agent's. When its submission
 leaves the queue without landing, blamed, in conflict, withdrawn, or on
@@ -715,10 +733,15 @@ passed · landed as b7d2e94
 ```
 
 To a branch with pull requests, `sluice wait <branch>` follows the
-worktree's pull request as a waiting `sluice submit` does. While the
-pull request is open, its document under `--json` is the one `sluice
-submit --status --json` prints, `{"pull_request","branch","state"}`;
-once its submission is decided, the submission's record.
+worktree's pull request as a waiting `sluice submit` does. Once sluice
+has queued the pull request at its latest commits, it follows that
+submission as `sluice wait <id>` does: out of time or stopped, it
+prints the submission's record under `--json`, and `still waiting:
+sluice wait 12` without. Until then, its document under `--json` is
+the one `sluice submit --status --json` prints,
+`{"pull_request","branch","state"}`, the state saying what the pull
+request waits for. Once its submission is decided, it prints the
+submission's record.
 
 ## Exit codes
 

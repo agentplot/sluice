@@ -78,9 +78,13 @@ Nothing moves while nobody waits and no `sluice run` is going, so a
 `--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
 wait` moves it, as do `sluice step main` (one round) and `sluice run
 --rounds N`. Do not submit again to move it: a second submit from the same
-worktree replaces the first. On a pull-request branch, `sluice wait main`
-follows the pull request already open; while it is open, its `--json`
-document is `{"pull_request","branch","state"}`.
+worktree replaces the first. On a pull-request branch, `--no-wait --json`
+answers `{"id","branch","ahead","pull_request"}` when sluice queued the
+pull request at once, its conditions holding: hand `id` to `sluice wait`.
+Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
+pull request waits for: run `sluice wait main` in the worktree, which
+follows the pull request and, once sluice queues it, its submission, whose
+record it prints under `--json` from then on.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one
