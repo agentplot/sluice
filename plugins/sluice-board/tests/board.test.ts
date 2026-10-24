@@ -6,6 +6,7 @@ import {
   checkLines,
   checkRows,
   clearText,
+  conflictLines,
   conflictText,
   duration,
   emptyLines,
@@ -31,6 +32,7 @@ import {
   outcomes,
   progress,
   pullOf,
+  recentInWay,
   recentKeys,
   shown,
   signature,
@@ -569,6 +571,34 @@ describe("forecasts", () => {
       conflict: { ...queued.conflict, paths: ["docs/identity.md", "docs/builds.md"] },
     };
     expect(signature("main", swapped)).toBe(signature("main", queued));
+  });
+
+  test("an opened conflict: its files, what is in the way, and the next step", () => {
+    const next = "next: take main into the worktree, resolve and commit, then sluice submit main";
+    const b = { ...free().branches[0]!, recent_from: { "217": "bolt/runner" } };
+    const line = (w: number[]) => ({
+      at: "2026-10-16T19:45:00Z",
+      event: "conflict",
+      id: 218,
+      with: w,
+    });
+    expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([217])))).toEqual([
+      "files: docs/builds.md",
+      "in the way: #217 (bolt/runner)",
+      next,
+    ]);
+    // An id the sluice gave no worktree for is named alone.
+    expect(conflictLines("main", ["a", "b"], recentInWay(b, line([217, 219])))).toEqual([
+      "files: a, b",
+      "in the way: #217 (bolt/runner), #219",
+      next,
+    ]);
+    expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([])))[1]).toBe(
+      "in the way: what main has landed",
+    );
+    expect(conflictLines("release", ["x"], [])[2]).toBe(
+      "next: take release into the worktree, resolve and commit, then sluice submit release",
+    );
   });
 
   test("the turns name the files, what they are contested with, and what to do", () => {

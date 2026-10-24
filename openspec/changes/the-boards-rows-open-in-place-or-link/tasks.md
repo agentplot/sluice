@@ -24,7 +24,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 
 ## 3. Conflicts open in place
 
-- [ ] 3.1 Add `conflictLines` to `board.ts` (design D3); verify `board.test.ts`: with `#217 (bolt/runner)`, with an id `recent_from` lacks (`#219` alone), and with nothing in the way (`what main has landed`), each with the `next:` line naming the branch, in the board's checks
+- [x] 3.1 Add `conflictLines` to `board.ts` (design D3); verify `board.test.ts`: with `#217 (bolt/runner)`, with an id `recent_from` lacks (`#219` alone), and with nothing in the way (`what main has landed`), each with the `next:` line naming the branch, in the board's checks
 - [ ] 3.2 Make a RECENT conflict a `Button` keyed `conflict-<branch>-<id>-<at>` opening `conflictLines` from its line and `recent_from`; verify a `register.test.tsx` test of the scenarios "A conflict with a queued submission" and "A conflict with what the branch landed": closed, opened, folded, and `ran` empty across the presses, in the board's checks
 - [ ] 3.3 Keep the forecast's branch and conflict in `forecasting` (design D4) and draw `⚠ your work would conflict · <path>` (`+N`) under that branch as a `Button` keyed `forecast-<branch>` opening `conflictLines`; verify, beside "a conflict with a queued submission names it, and its failing clears it once": the row shows after the forecast finds `#217`, opens to `in the way: #217 (bolt/runner)`, survives a reload of the mod, and is gone once the forecast finds none; and the toast and turn tests unchanged; in the board's checks
 - [ ] 3.4 Say in the README and the guide that a conflict, RECENT or forecast, opens to its files, what is in the way and what to do next; verify `sluice exec main -- moon run site:prose` clears every Vale warning

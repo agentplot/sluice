@@ -583,11 +583,43 @@ export function signature(branch: string, f: Forecast): string | null {
   return `${branch}|${paths}|${with_.join(",")}`;
 }
 
+/** A submission in a conflict's way, and the worktree it came from where it is known. */
+export type InWay = { id: number; worktree?: string };
+
 /** What a conflict is contested with: the submissions, or what the branch landed. */
-function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
-  return f.with.length === 0
+function inTheWay(branch: string, inWay: readonly InWay[]): string {
+  return inWay.length === 0
     ? `what ${branch} has landed`
-    : f.with.map((c) => `#${c.id} (${c.from.worktree})`).join(", ");
+    : inWay.map((c) => (c.worktree ? `#${c.id} (${c.worktree})` : `#${c.id}`)).join(", ");
+}
+
+function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
+  return inTheWay(
+    branch,
+    f.with.map((c) => ({ id: c.id, worktree: c.from.worktree })),
+  );
+}
+
+/** What an opened conflict shows: its files, what is in the way, and the next step. */
+export function conflictLines(
+  branch: string,
+  paths: readonly string[],
+  inWay: readonly InWay[],
+): string[] {
+  return [
+    `files: ${paths.join(", ")}`,
+    `in the way: ${inTheWay(branch, inWay)}`,
+    `next: take ${branch} into the worktree, resolve and commit, then sluice submit ${branch}`,
+  ];
+}
+
+/** What is in a RECENT conflict's way, each named with the worktree it came from. */
+export function recentInWay(b: OverviewBranch, r: Recent): InWay[] {
+  const from = b.recent_from ?? {};
+  return (r.with ?? []).map((id) => {
+    const worktree = from[String(id)];
+    return worktree ? { id, worktree } : { id };
+  });
 }
 
 /** The toast for a conflict a forecast found. */
