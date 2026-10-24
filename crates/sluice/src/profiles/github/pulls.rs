@@ -1097,7 +1097,7 @@ impl crate::PullRequests for Pulls {
         let Some(t) = self.target(&s, branch)? else {
             return Ok(Err(SubmitRefusal::NotManaged));
         };
-        // ADR 0047: refused before anything is pushed or opened.
+        // ADR 0048: refused before anything is pushed or opened.
         let warnings = match s.check_kept_out(&session, branch, &t.tip)? {
             Ok(w) => w,
             Err(r) => return Ok(Err(r)),

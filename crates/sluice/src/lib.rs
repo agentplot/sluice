@@ -1425,7 +1425,7 @@ fn submit(
     if json && no_wait {
         let mut doc =
             serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
-        // ADR 0047: only a submission taken unchecked has any.
+        // ADR 0048: only a submission taken unchecked has any.
         if !accepted.warnings.is_empty() {
             doc["warnings"] = serde_json::json!(accepted.warnings);
         }

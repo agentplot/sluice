@@ -760,7 +760,7 @@ fn submit_refuses_a_dirty_worktree() {
     assert!(g.gh.forge.held().unwrap().pulls.is_empty());
 }
 
-/// ADR 0047: a branch requiring a task moon keeps out of CI in the
+/// ADR 0048: a branch requiring a task moon keeps out of CI in the
 /// worktree refuses the submission, naming the task and its line of the
 /// policy, before anything is pushed: no branch on GitHub, and no pull
 /// request opened or marked ready.

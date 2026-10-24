@@ -1094,7 +1094,7 @@ impl Tests for Checks {
             .collect())
     }
 
-    /// ADR 0047: moon asked in the worktree as a run's place is set up,
+    /// ADR 0048: moon asked in the worktree as a run's place is set up,
     /// the run's environment and `[tests] toolchain` included, with the
     /// toolchain's script in a scratch directory of sluice's state, gone
     /// once moon has answered. Outside any executor, as `plan`'s own

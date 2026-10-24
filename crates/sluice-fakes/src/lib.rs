@@ -112,9 +112,9 @@ struct Inner {
     skip: BTreeSet<String>,
     kept_out: BTreeSet<String>,
     /// Asking the runner which required checks it keeps out of CI fails,
-    /// with why (ADR 0047).
+    /// with why (ADR 0048).
     kept_out_fails: Option<String>,
-    /// Every worktree the runner was asked in, in order (ADR 0047).
+    /// Every worktree the runner was asked in, in order (ADR 0048).
     asked_kept_out: Vec<PathBuf>,
     /// Every head published for its submission, in order (82).
     published: Vec<Rev>,
@@ -510,7 +510,7 @@ impl World {
 
     /// The runner keeps `task` out of its CI mode: never run, missing, and
     /// named kept out (ADR 0044); and a submission whose gate requires it
-    /// is refused (ADR 0047).
+    /// is refused (ADR 0048).
     pub fn keeps_out(&self, task: &str) {
         self.0.borrow_mut().kept_out.insert(task.into());
     }
@@ -522,7 +522,7 @@ impl World {
     }
 
     /// Asking the runner which required checks it keeps out of CI fails
-    /// from now, for `why`; `None` lets it answer again (ADR 0047).
+    /// from now, for `why`; `None` lets it answer again (ADR 0048).
     pub fn kept_out_fails(&self, why: Option<&str>) {
         self.0.borrow_mut().kept_out_fails = why.map(String::from);
     }

@@ -1,5 +1,5 @@
 ---
-number: 47
+number: 48
 title: A submission whose gate requires a check its runner never runs is refused
 status: accepted
 date: 2026-10-23
