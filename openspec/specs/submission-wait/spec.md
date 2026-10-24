@@ -95,21 +95,22 @@ renamed or removed and none added.
 to `<branch>`, found as `sluice submit <branch> --status` finds it,
 and SHALL say `nothing submitted from <worktree> to <branch>` and exit
 1 when there is none. On a branch that takes pull requests, it SHALL
-follow this worktree's pull request as a waiting submit does, and once
-sluice has taken the pull request in at its current head, it SHALL
-follow that submission as `sluice wait <id>` follows one: out of time
-or stopped with Ctrl-C, under `--json` it SHALL print the submission's
-record, and without `--json` it SHALL say `still waiting: sluice wait
-<id>`. Before the pull request is taken in, it SHALL answer with the
-pull request and what it waits for, `pull_request`, `branch` and
-`state` under `--json`. A waiting `sluice submit` that follows a pull
-request and is stopped with Ctrl-C SHALL end the same way.
+follow this worktree's pull request as a waiting submit does.
 
 #### Scenario: The worktree's own
 
 - **WHEN** a worktree submitted #2 and then #4 to `main`, and another
   worktree submitted #3
 - **THEN** `sluice wait main` in the first waits for #4
+
+### Requirement: A wait on a pull request follows the submission sluice took
+
+On a branch that takes pull requests, once sluice has taken this
+worktree's pull request in at its current head, `sluice wait <branch>`
+SHALL follow that submission as `sluice wait <id>` follows one: out of
+time or stopped with Ctrl-C, under `--json` it SHALL print the
+submission's record, and without `--json` it SHALL say `still waiting:
+sluice wait <id>`.
 
 #### Scenario: A pull request taken in, out of time
 
@@ -121,6 +122,15 @@ request and is stopped with Ctrl-C SHALL end the same way.
 - **THEN** it exits 5 and prints the record of submission `<id>`, with
   `state` `queued` or `testing`, as `sluice wait <id> --timeout 2s
   --json` would
+
+### Requirement: A wait on a pull request not yet taken answers with the pull request
+
+Before sluice has taken this worktree's pull request in, `sluice wait
+<branch>` SHALL answer with the pull request and what it waits for,
+`pull_request`, `branch` and `state` under `--json`. A waiting `sluice
+submit` that follows a pull request and is stopped with Ctrl-C SHALL
+end as `sluice wait <branch>` does, before sluice takes the pull
+request in and after.
 
 #### Scenario: A pull request waiting for a review, out of time
 
