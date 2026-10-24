@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle, RunRequest,
-    Source, TaskLog, Written,
+    AtBound, Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle,
+    RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span};
 
@@ -261,7 +261,7 @@ impl Sluice<'_> {
         self.perform_landing(branch)?;
         self.perform_releases(branch, releases)?;
         self.perform_outbox(branch)?;
-        self.perform_starts(branch)
+        self.perform_starts(branch, releases)
     }
 
     /// 25, 34: release the places of candidates whose verdict was read or
@@ -487,8 +487,13 @@ impl Sluice<'_> {
         Ok(())
     }
 
-    /// 33, 37: make each decided run's place and start its checks.
-    fn perform_starts(&self, branch: &str) -> Result<()> {
+    /// 33, 37: make each decided run's place and start its checks. 71: a
+    /// run the host has no room for, by its count before the place is made
+    /// or by the check seam's refusal after, goes back to open for a later
+    /// round, and no further run starts this step; a place made for it is
+    /// released as any candidate's is (123), into `releases` when its
+    /// release was not plain.
+    fn perform_starts(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let line = self.read_line(branch)?;
         let starting: Vec<(Candidate, usize)> = line
             .doc
@@ -522,6 +527,8 @@ impl Sluice<'_> {
                 rules.trust
             );
         }
+        let bound = self.seams.tests.bound()?;
+        let mut full = false;
         for (c, i) in starting {
             let r = &c.runs[i];
             let _span = info_span!(
@@ -534,12 +541,19 @@ impl Sluice<'_> {
             )
             .entered();
             let name = r.place.clone().expect("a starting run has a place");
+            // Another repository's run, or another instance's, took the
+            // host's last run since this one was decided.
+            full = full || self.seams.tests.running()?.total() >= bound;
+            if full {
+                self.reopen(branch, &c.id, i, &name, false)?;
+                continue;
+            }
             let place = self
                 .seams
                 .checkout
                 .materialize(&name, &c.revision, &policy.checkout)?;
             let since = (line.doc.verified && c.on == base).then(|| c.on.clone());
-            let run = self.seams.tests.start(&RunRequest {
+            let started = self.seams.tests.start(&RunRequest {
                 place,
                 revision: c.revision.clone(),
                 required: if r.checks.is_empty() {
@@ -555,7 +569,22 @@ impl Sluice<'_> {
                 // through a trusted pass recorded for its key.
                 replay: !r.no_replay,
                 system: r.system.clone(),
-            })?;
+            });
+            let run = match started {
+                Ok(run) => run,
+                // Refused before anything of it ran: no run, no outcome.
+                Err(e) if e.downcast_ref::<AtBound>().is_some() => {
+                    let outcome = self.release_made(branch, &name, false)?;
+                    let retry = matches!(outcome.how, Releasing::Failed { .. });
+                    self.reopen(branch, &c.id, i, &name, retry)?;
+                    if outcome.how != Releasing::Released {
+                        releases.push(outcome);
+                    }
+                    full = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             self.update(branch, |l| {
                 if let Some(x) = l.candidate_mut(&c.id) {
                     if let Some(xr) = x.runs.get_mut(i) {
@@ -569,6 +598,27 @@ impl Sluice<'_> {
             })?;
         }
         Ok(())
+    }
+
+    /// 71: run `i` of candidate `cand`, decided into `place` and not
+    /// started, is open again, its claim given up so any host with room
+    /// may take it; `retry` when its place was made and its release
+    /// failed, so the rounds after try it again (123).
+    fn reopen(&self, branch: &str, cand: &str, i: usize, place: &str, retry: bool) -> Result<()> {
+        self.update(branch, |l| {
+            if let Some(r) = l.candidate_mut(cand).and_then(|c| c.runs.get_mut(i)) {
+                if r.state == RunState::Starting && r.place.as_deref() == Some(place) {
+                    r.state = RunState::Open;
+                    r.place = None;
+                    r.run = None;
+                    r.host = None;
+                }
+            }
+            if retry && !l.doc.release.iter().any(|p| p == place) {
+                l.doc.release.push(place.to_string());
+            }
+            Ok(())
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -1575,17 +1625,18 @@ impl Sluice<'_> {
         }
     }
 
-    /// 71: how many more runs this instance starts now: its bound less the
-    /// runs holding a place in the records of the branches it serves,
-    /// `line` as this step has it, and less the host's session runs
-    /// (session-runs-1 clause 89).
+    /// 71: how many more runs this instance starts now: the host's bound
+    /// less the checks running on the host, every repository's of both
+    /// kinds (session-runs-1 clause 89), and less the runs this instance
+    /// has marked starting on the branches it serves, `line` as this step
+    /// has it, which the host's count holds only once they start. A run
+    /// whose checks ended counts no longer, its result read or not.
     fn capacity(&self, line: &Line) -> Result<usize> {
-        let sessions = self.seams.tests.sessions()?;
-        let mut under = sessions + self.held_here(line);
+        let mut under = self.seams.tests.running()?.total() + self.starting_here(line);
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
-                    under += self.held_here(&self.read_line(&b)?);
+                    under += self.starting_here(&self.read_line(&b)?);
                 }
             }
         }
@@ -1594,25 +1645,22 @@ impl Sluice<'_> {
 
     /// Session-runs-1 clauses 89 and 91: how many session runs may start
     /// now: the bound less `reserved`, the part kept for submissions'
-    /// runs, less the candidates under test on every branch and the
-    /// session runs. A session run belongs to the host, not to a branch an
-    /// instance serves, so every branch's runs count against it.
+    /// runs, less the checks running on the host. A session run belongs
+    /// to the host, not to a branch an instance serves, so every
+    /// repository's runs count against it (71).
     pub fn session_capacity(&self, reserved: usize) -> Result<usize> {
         Ok(self.room(reserved)?.for_sessions())
     }
 
     /// 71, session-runs-1 clauses 89 and 91: the host's bound and what
-    /// counts against it, as `session_capacity` decides on it, for a
-    /// person to read (ADR 0035).
+    /// counts against it, every repository's runs, as `session_capacity`
+    /// decides on it, for a person to read (ADR 0035).
     pub fn room(&self, reserved: usize) -> Result<Room> {
-        let mut queue = 0;
-        for b in self.seams.state.branches()? {
-            queue += self.held_here(&self.read_line(&b)?);
-        }
+        let running = self.seams.tests.running()?;
         Ok(Room {
             bound: self.seams.tests.bound()?,
-            queue,
-            sessions: self.seams.tests.sessions()?,
+            queue: running.queue,
+            sessions: running.sessions,
             reserve: reserved,
         })
     }
@@ -1770,13 +1818,14 @@ impl Sluice<'_> {
         run.host.as_deref().is_none_or(|h| h == self.peer.name)
     }
 
-    /// Runs holding a place on this host, in `line`.
-    fn held_here(&self, line: &Line) -> usize {
+    /// Runs this instance marked starting in `line` and has not started:
+    /// not yet in the host's count (71).
+    fn starting_here(&self, line: &Line) -> usize {
         line.doc
             .candidates
             .iter()
             .flat_map(|c| &c.runs)
-            .filter(|r| r.state.held() && self.mine(r))
+            .filter(|r| r.state == RunState::Starting && self.mine(r))
             .count()
     }
 
@@ -2033,11 +2082,13 @@ impl Sluice<'_> {
         let home = self.home_system(&tip)?;
         let me = self.peer.name.clone();
         let line = self.read_line(branch)?;
+        // 107, 71: the room a lead reads is the host's, every repository's
+        // runs counted.
         let beat = serde_json::json!({
             "host": me,
             "signer": self.peer.signer,
             "system": home,
-            "held": self.held_here(&line),
+            "held": self.seams.tests.running()?.total(),
             "bound": self.seams.tests.bound()?,
             "at": self.now(),
         });
@@ -2213,7 +2264,7 @@ impl Sluice<'_> {
             }
             room -= 1;
         }
-        self.perform_starts(branch)
+        self.perform_starts(branch, releases)
     }
 
     /// The name of the next place on the branch.

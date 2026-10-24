@@ -177,7 +177,7 @@ exec` on the host, or the next round, releases it from what sluice
 holds for it. The release command its last run stored runs once, in its
 scratch directory, with its ports and the environment its runs had.
 Neither the toolchain nor the policy is read again, since the directory
-they would run in is gone ([ADR 0047](/sluice/decisions/0047/)).
+they would run in is gone ([ADR 0050](/sluice/decisions/0050/)).
 Whatever that command does, the worktree's runs end, its ports are free,
 and it is never tried again. A release that tears a stack down by name
 or port still does. One that reads files from the worktree finds none

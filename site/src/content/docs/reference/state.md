@@ -62,7 +62,14 @@ every repository on the host and never pushed:
 ```
 ~/.local/state/sluice/
   ports/<n>            a block of ports, naming the checkout that holds it
-  sessions/.lock       held while a run is counted against the bound
+  running/.lock        held while a run is counted against the bound
+  running/<run>.json   each run going on the host, every repository's:
+                       a submission's or an agent's, its repository, its
+                       checkout, where its output is, the process that
+                       started it and when
+  running/<run>.hold   held by the process that started the run until the
+                       run is under way
+  sessions/.lock       held while an agent's run's file is written
   sessions/<worktree>.json
                        each run an agent has going in its worktree: the
                        worktree, its branch, its process, when it started,
@@ -80,14 +87,16 @@ so nothing needs the file name read back.
 
 A preview's record is kept apart from the other checkouts' so that a
 sluice older than previews never reads one. A preview's command counts
-in `sessions/` while it runs, as an agent's run does.
+in `running/` and is listed in `sessions/` while it runs, as an agent's
+run is.
 
 A block of ports is free again when the checkout named in it is gone.
-A file in `sessions/` counts against the bound for as long as its run
-is going. One whose run has ended holds nothing: the next run that
-starts removes it, and nothing counts it before then. Its `sluice exec`
-rewrites it as each task ends, for `sluice overview` to show; nothing
-that decides a result reads it.
+A file in `running/` counts against the bound while its `.hold` is held
+or its run is going. One whose run has ended, or whose starter stopped
+before the run began, holds nothing: the next run that starts removes
+it. A file in `sessions/` is there while its agent's run is going, and
+its `sluice exec` rewrites it as each task ends, for `sluice overview`
+to show; nothing that decides a result reads it.
 
 ## A branch whose state is on its remote
 

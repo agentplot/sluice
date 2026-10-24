@@ -234,13 +234,15 @@ fn a_session_run_is_begun_under_the_hosts_lock() {
     assert_eq!(waiter.join().unwrap(), 1);
 }
 
-/// 89: the check seam reports the host's running session runs, the count
-/// the core subtracts from the bound.
+/// 71, 89: the check seam reports the host's running checks by kind,
+/// every repository's, from the host's registry of them: the count the
+/// core subtracts from the bound.
 #[test]
-fn the_check_seam_counts_the_hosts_session_runs() {
+fn the_check_seam_counts_the_hosts_running_checks() {
+    use sluice::host_count::{Entry, Kind};
     use sluice::instance::Instance;
     use sluice::profiles::checks::Checks;
-    use sluice_seams::Tests;
+    use sluice_seams::{Running, Tests};
 
     let dir = Scratch::new("sessions-checks");
     let checks = Checks::new(
@@ -256,13 +258,32 @@ fn the_check_seam_counts_the_hosts_session_runs() {
             systems: None,
         },
     )
-    .with_sessions(dir.path().join("sessions"));
-    assert_eq!(checks.sessions().unwrap(), 0);
+    .with_sessions(dir.path().join("sessions"))
+    .with_running(dir.path().join("running"));
+    assert_eq!(checks.running().unwrap(), Running::default());
     let (run_dir, a) = supervisor(dir.path(), "run-a");
-    let s = checks.host_sessions().unwrap();
-    s.begin(&s.lock().unwrap(), &run("/work/a", &run_dir))
-        .unwrap();
-    assert_eq!(checks.sessions().unwrap(), 1);
+    let entry = Entry {
+        kind: Kind::Session,
+        repository: dir.path().join("another.git"),
+        place: "session//work/a".into(),
+        run_dir,
+        pid: std::process::id(),
+        admitted: "2026-10-23T09:00:00Z".into(),
+    };
+    checks
+        .host_count()
+        .unwrap()
+        .admit(&entry, 2)
+        .unwrap()
+        .expect("room under the bound")
+        .started();
+    assert_eq!(
+        checks.running().unwrap(),
+        Running {
+            queue: 0,
+            sessions: 1
+        }
+    );
     drop(a);
-    assert_eq!(checks.sessions().unwrap(), 0);
+    assert_eq!(checks.running().unwrap(), Running::default());
 }
