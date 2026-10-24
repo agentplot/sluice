@@ -799,12 +799,12 @@ fn listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
     }
 }
 
-/// `"512M"`, `"8G"`: bytes, in powers of 1024.
 /// The line, counted from one, that byte `at` of `text` is on.
 fn line_at(text: &str, at: usize) -> usize {
     text[..at.min(text.len())].matches('\n').count() + 1
 }
 
+/// `"512M"`, `"8G"`: bytes, in powers of 1024.
 pub fn parse_size(text: &str) -> Result<u64> {
     let t = text.trim();
     let (digits, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len()));

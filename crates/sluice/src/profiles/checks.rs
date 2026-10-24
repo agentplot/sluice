@@ -1028,8 +1028,6 @@ impl Tests for Checks {
             .collect())
     }
 
-    /// ADR 0028: the moon runner's tasks while the run goes; the command
-    /// runner's one task is the run itself, so it says nothing.
     /// ADR 0047: moon asked in the worktree as a run's place is set up,
     /// the run's environment and `[tests] toolchain` included, with the
     /// toolchain's script in a scratch directory of sluice's state, gone
@@ -1084,6 +1082,8 @@ impl Tests for Checks {
         Moon.kept_out(&cx)
     }
 
+    /// ADR 0028: the moon runner's tasks while the run goes; the command
+    /// runner's one task is the run itself, so it says nothing.
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>> {
         if !matches!(self.runs.state(&run.0)?, RunState::Running) {
             return Ok(Vec::new());
