@@ -1911,9 +1911,10 @@ fn group_mark(body: &str) -> Option<(String, String)> {
     })
 }
 
-/// Three worktrees submitted as one act: each branch is on GitHub, each
-/// has an open pull request into `main` marked 1, 2 and 3 of 3 of one
-/// group at its head, and the answer names each with what it waits for.
+/// Three worktrees submitted as one act, none of their pull requests
+/// reviewed: each branch is on GitHub, each has an open pull request into
+/// `main`, a draft marked 1, 2 and 3 of 3 of one group at its head, and
+/// the refusal names each with the review it needs; nothing is queued.
 /// One of them submitted alone afterwards is marked one of no group.
 #[test]
 fn a_group_submit_opens_every_pull_request_marked() {
@@ -1922,11 +1923,11 @@ fn a_group_submit_opens_every_pull_request_marked() {
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &["--no-wait"]);
     let said = text(&out);
-    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert_eq!(out.status.code(), Some(2), "{said}");
     let mut token = None;
-    for (k, name) in names.iter().enumerate() {
+    for (k, (name, w)) in names.iter().zip(&ws).enumerate() {
         let pull = g.pull_of(name);
-        assert!(pull.open && !pull.draft && pull.base == "main");
+        assert!(pull.open && pull.draft && pull.base == "main", "{pull:?}");
         let head = github::rev(g.bare.path(), &format!("refs/heads/unit/{name}")).unwrap();
         assert_eq!(pull.head, head);
         assert!(pull
@@ -1943,7 +1944,10 @@ fn a_group_submit_opens_every_pull_request_marked() {
             "{said}"
         );
         assert!(
-            said.contains(&format!("#{n} waiting: needs 1 review")),
+            said.contains(&format!(
+                "refused: #{n} from {} needs 1 review",
+                w.display()
+            )),
             "{said}"
         );
         assert!(g.of(n).is_empty());
@@ -2362,19 +2366,25 @@ fn shows(g: &OnGitHub, n: u64) -> String {
     g.posted(&head).map(|p| p.1).unwrap_or_default()
 }
 
-/// Two of a group of three ready: none is submitted, and each of the two
-/// says it waits for the third; once the third is reviewed, one round
-/// submits all three in the group's order, and the first combination
-/// formed holds all three.
+/// Two of three are ready: a group submit of three refused for want of
+/// reviews leaves three drafts marked as one group; a reviewer approves
+/// the first two, and a person marks all three ready for review. None is
+/// submitted, and each of the two says it waits for the third; once the
+/// third is approved, one round submits all three in the group's order,
+/// and the first combination formed holds all three.
 #[test]
 fn two_of_a_group_ready_submits_none() {
     let g = OnGitHub::batched("pr-group-two", "reviews = 1");
     let names = ["t1", "t2", "t3"];
     let out = g.submit_group(&g.sessions(&names), &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
     approve(&g, ns[0]);
     approve(&g, ns[1]);
+    for n in &ns {
+        assert!(is_draft(&g, *n));
+        g.gh.forge.set_draft(*n, false).unwrap();
+    }
     g.step();
     g.step();
     for n in &ns {
@@ -2460,7 +2470,9 @@ fn a_round_between_a_groups_opens_submits_none() {
     }
 }
 
-/// One of a group closed before it is taken: the others are not
+/// One of a group closed before it is taken: a group submit refused for
+/// want of reviews leaves three drafts; the second is closed, and the
+/// others approved and marked ready for review by a person. They are not
 /// submitted and say they wait for it, until a submit names one of them
 /// again, alone.
 #[test]
@@ -2469,11 +2481,13 @@ fn one_of_a_group_closed_holds_the_rest() {
     let names = ["c1", "c2", "c3"];
     let ws = g.sessions(&names);
     let out = g.submit_group(&ws, &["--no-wait"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let ns: Vec<u64> = names.iter().map(|n| g.pull_of(n).number).collect();
     g.gh.forge.close(ns[1]).unwrap();
-    approve(&g, ns[0]);
-    approve(&g, ns[2]);
+    for n in [ns[0], ns[2]] {
+        approve(&g, n);
+        g.gh.forge.set_draft(n, false).unwrap();
+    }
     g.step();
     g.step();
     for n in [ns[0], ns[2]] {
