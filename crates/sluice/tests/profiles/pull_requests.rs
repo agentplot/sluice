@@ -125,9 +125,16 @@ impl OnGitHub {
 
     /// One round of `main`, its pull requests taken in first.
     fn step(&self) {
+        let said = self.round();
+        assert!(!said.contains("warning"), "{said}");
+    }
+
+    /// One round of `main`, its pull requests taken in first: what it
+    /// said, warnings and all.
+    fn round(&self) -> String {
         let out = self.sluice(&["step", "main"]);
         assert!(out.status.success(), "{}", text(&out));
-        assert!(!text(&out).contains("warning"), "{}", text(&out));
+        text(&out)
     }
 
     /// `main`'s submissions.
@@ -180,6 +187,14 @@ impl OnGitHub {
             .open_by("person", "main", name, &head, draft, None)
             .unwrap();
         (n, head)
+    }
+
+    /// GitHub serves no head for pull request `n`: its branch is gone,
+    /// and `refs/pull/<n>/head` with it.
+    fn no_head(&self, n: u64) {
+        let pull = self.gh.forge.pull(&github::repo(), n).unwrap().unwrap();
+        github::delete_ref(self.bare.path(), &format!("refs/heads/{}", pull.head_ref));
+        github::delete_ref(self.bare.path(), &format!("refs/pull/{n}/head"));
     }
 
     /// What sluice's check on `head` reads.

@@ -4,14 +4,17 @@
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
 //! GitHub does. It marks a pull request a draft or ready for review
-//! through GraphQL, as GitHub alone does, unless told to refuse. Each
-//! test crate that includes it uses a part.
+//! through GraphQL, as GitHub alone does, unless told to refuse. It
+//! answers an error for a pull request's reviews, or for the list of pull
+//! requests, while told to fail them. Each test crate that includes it
+//! uses a part.
 
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use sluice::profiles::github::fake::FileForge;
@@ -34,6 +37,17 @@ pub struct GitHub {
     pub fake: Fake,
     /// While set, GraphQL refuses to mark a pull request a draft or ready.
     refuse: Arc<AtomicBool>,
+    /// The calls answered with an error.
+    failing: Arc<Mutex<Failing>>,
+}
+
+/// The calls the fake answers with an error while a test asks it to.
+#[derive(Default)]
+struct Failing {
+    /// The pull requests whose reviews it gives no list of.
+    reviews: BTreeSet<u64>,
+    /// Whether it gives no list of pull requests.
+    pulls: bool,
 }
 
 impl GitHub {
@@ -45,6 +59,8 @@ impl GitHub {
         let bare = bare.map(Path::to_path_buf);
         let refuse = Arc::new(AtomicBool::new(false));
         let refusing = refuse.clone();
+        let failing = Arc::new(Mutex::new(Failing::default()));
+        let fails = failing.clone();
         let fake = Fake::start(move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
@@ -52,12 +68,13 @@ impl GitHub {
             if r.method == "POST" && r.path == "/graphql" {
                 return graphql(&held, refusing.load(Ordering::SeqCst), r);
             }
-            answer(&held, bare.as_deref(), r)
+            answer(&held, bare.as_deref(), &fails.lock().unwrap(), r)
         });
         GitHub {
             forge,
             fake,
             refuse,
+            failing,
         }
     }
 
@@ -69,6 +86,21 @@ impl GitHub {
     /// ready for review.
     pub fn refuse_drafts(&self, refuse: bool) {
         self.refuse.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Answer an error for pull request `n`'s reviews, or give them again.
+    pub fn fail_reviews(&self, n: u64, fail: bool) {
+        let mut f = self.failing.lock().unwrap();
+        if fail {
+            f.reviews.insert(n);
+        } else {
+            f.reviews.remove(&n);
+        }
+    }
+
+    /// Answer an error for the list of pull requests, or give it again.
+    pub fn fail_pulls(&self, fail: bool) {
+        self.failing.lock().unwrap().pulls = fail;
     }
 }
 
@@ -156,6 +188,21 @@ pub fn rev(bare: &Path, name: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Remove the ref `name` from `bare`.
+pub fn delete_ref(bare: &Path, name: &str) {
+    let out = crate::support::git_command()
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["update-ref", "-d", name])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 pub fn set_ref(bare: &Path, name: &str, to: &str) {
     let out = crate::support::git_command()
         .arg("--git-dir")
@@ -233,7 +280,12 @@ fn not_found() -> Answer {
     json(404, json!({ "message": "Not Found" }))
 }
 
-fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
+/// GitHub failing a call of its own.
+fn server_error() -> Answer {
+    json(500, json!({ "message": "Server Error" }))
+}
+
+fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request) -> Answer {
     let (path, query) = r.path.split_once('?').unwrap_or((&r.path, ""));
     let param = |k: &str| {
         query
@@ -271,6 +323,12 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
     let rest: Vec<&str> = rest.split('/').skip(1).collect();
     let repo = repo();
     match (m, rest.as_slice()) {
+        ("GET", ["pulls"]) if failing.pulls => server_error(),
+        ("GET", ["pulls", n, "reviews"])
+            if n.parse().is_ok_and(|n| failing.reviews.contains(&n)) =>
+        {
+            server_error()
+        }
         ("GET", ["pulls"]) => {
             let base = param("base").unwrap_or_default();
             let ps = forge.pulls(&repo, &base).unwrap();
