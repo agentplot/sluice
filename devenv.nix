@@ -319,8 +319,10 @@ in
     # cache are the user's, under their home, so the agents' worktrees on
     # one host reuse each other's compiled crates ($RUSTC_WRAPPER
     # --show-stats). A run sluice starts, told by the SLUICE_CHECKOUT it
-    # sets, runs rustc unwrapped.
-    if [ -z "''${SLUICE_CHECKOUT:-}" ]; then
+    # sets, runs rustc unwrapped, and so does CI, told by the CI its
+    # runner sets: its cache starts empty, and its gate builds as
+    # `sluice exec`'s does (core.24).
+    if [ -z "''${SLUICE_CHECKOUT:-}" ] && [ -z "''${CI:-}" ]; then
       RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
       export RUSTC_WRAPPER
     fi
