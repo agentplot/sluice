@@ -580,7 +580,7 @@ export const register: Register = (on, options) => {
                     {c.targets.join(" ")}
                     {c.executor ? ` · ${c.executor}` : ""}
                   </Text>
-                  {taskLines(c).map((t) => (
+                  {taskLines(c, at).map((t) => (
                     <Text
                       key={`task-${b.branch}-${c.id}-${t.text}`}
                       color={TASK_COLOR[t.state]}

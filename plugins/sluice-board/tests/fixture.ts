@@ -73,7 +73,10 @@ export function overview(): Overview {
   };
 }
 
-/** The same, with main's combination 3 of its 5 tasks through, as moon says. */
+/**
+ * The same, with main's combination 3 of its 5 tasks through, as moon says,
+ * and `sluice:e2e` running for 72 s.
+ */
 export function withTasks(): Overview {
   const doc = overview();
   doc.branches[0]!.candidates[0]!.tasks = [
@@ -92,7 +95,7 @@ export function withTasks(): Overview {
       exit: 0,
     },
     { target: "core:test", state: "waiting" },
-    { target: "sluice:e2e", state: "running" },
+    { target: "sluice:e2e", state: "running", started: "2026-10-16T19:43:58Z" },
     { target: "site:prose", state: "replayed", ended: "2026-10-16T19:44:54Z" },
   ];
   return doc;

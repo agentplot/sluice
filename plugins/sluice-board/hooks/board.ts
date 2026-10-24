@@ -126,19 +126,26 @@ export function progress(c: { tasks?: OverviewTask[] }): string | null {
 
 const MARK = { passed: "✓", replayed: "✓", failed: "✗", running: "…", waiting: "·" } as const;
 
-/** What follows a task's name: how long it took once ended, else its state. */
-function taskDetail(t: OverviewTask): string {
+/** What follows a task's name: how long it took once ended, how long it has run, else its state. */
+function taskDetail(t: OverviewTask, now: number): string {
   if (t.state === "replayed") return "replayed";
-  if (t.state === "running" || t.state === "waiting") return t.state;
+  if (t.state === "running") {
+    const took = since(t.started, now);
+    return took === undefined ? "running" : `running ${duration(took)}`;
+  }
+  if (t.state === "waiting") return t.state;
   const took = t.started && t.ended ? (Date.parse(t.ended) - Date.parse(t.started)) / 1000 : NaN;
   return Number.isNaN(took) ? t.state : duration(took);
 }
 
 /**
  * The pane's task list: ended tasks in the order they ended, then running
- * ones, then waiting ones, names padded and times right-aligned.
+ * ones, then waiting ones, names padded and times right-aligned, at `now`.
  */
-export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"]; text: string }[] {
+export function taskLines(
+  c: { tasks?: OverviewTask[] },
+  now: number,
+): { state: OverviewTask["state"]; text: string }[] {
   const tasks = c.tasks ?? [];
   const rank = (t: OverviewTask) => (ended(t) ? 0 : t.state === "running" ? 1 : 2);
   const order = tasks
@@ -151,10 +158,10 @@ export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"];
     )
     .map((x) => x.t);
   const name = Math.max(0, ...order.map((t) => t.target.length));
-  const detail = Math.max(0, ...order.map((t) => taskDetail(t).length));
+  const detail = Math.max(0, ...order.map((t) => taskDetail(t, now).length));
   return order.map((t) => ({
     state: t.state,
-    text: `${MARK[t.state]} ${t.target.padEnd(name)}  ${taskDetail(t).padStart(detail)}`,
+    text: `${MARK[t.state]} ${t.target.padEnd(name)}  ${taskDetail(t, now).padStart(detail)}`,
   }));
 }
 

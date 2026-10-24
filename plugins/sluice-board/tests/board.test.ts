@@ -103,13 +103,23 @@ describe("the band", () => {
   });
 
   test("the task list: ended in the order they ended, then running, then waiting", () => {
-    expect(taskLines(withTasks().branches[0]!.candidates[0]!).map((t) => t.text)).toEqual([
-      "✓ sluice:test      1m48s",
-      "✓ site:prose    replayed",
-      "✓ sluice:tools     2m30s",
-      "… sluice:e2e     running",
-      "· core:test      waiting",
+    expect(taskLines(withTasks().branches[0]!.candidates[0]!, NOW).map((t) => t.text)).toEqual([
+      "✓ sluice:test           1m48s",
+      "✓ site:prose         replayed",
+      "✓ sluice:tools          2m30s",
+      "… sluice:e2e    running 1m12s",
+      "· core:test           waiting",
     ]);
+  });
+
+  test("a running task's time since it started, or running alone with none", () => {
+    const one = (started?: string) =>
+      taskLines(
+        { tasks: [{ target: "sluice:e2e", state: "running", ...(started ? { started } : {}) }] },
+        NOW,
+      ).map((t) => t.text);
+    expect(one("2026-10-16T19:43:58Z")).toEqual(["… sluice:e2e  running 1m12s"]);
+    expect(one()).toEqual(["… sluice:e2e  running"]);
   });
 
   test("durations", () => {
