@@ -961,15 +961,16 @@ impl Pulls {
         })
     }
 
-    /// 125: the act's pull requests, each at the head it pushed with when
-    /// its last submission left the queue, taken whole when every one meets
-    /// its conditions there, the reviews and checks the branch names: each
-    /// marked ready as one submit marks it, and all queued in one write in
-    /// the act's order while the act holds intake's lock, so no pass takes
-    /// one of them alone (rules core.6, core.14). Out of draft is the act's
-    /// to give, so a request is read as out of draft. Otherwise none is
-    /// marked ready, each ready one is marked a draft, and none is queued:
-    /// the refusal names each short of its conditions (120).
+    /// 125: the act's pull requests, `acted`, each at the head the act
+    /// pushed and with when its last submission left the queue. When every
+    /// one meets its conditions there, the reviews and checks the branch
+    /// names, each is marked ready as one submit marks it and all are
+    /// queued in one write in the act's order, while the act holds intake's
+    /// lock, so no pass takes one of them alone (rules core.6, core.14).
+    /// Out of draft is the act's to give, so each is read as out of draft.
+    /// Otherwise none is marked ready, each ready one is marked a draft,
+    /// and none is queued: the refusal names each short of its conditions
+    /// (120).
     #[allow(clippy::too_many_arguments)]
     fn take_act(
         &self,
