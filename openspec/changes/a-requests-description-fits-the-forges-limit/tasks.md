@@ -18,7 +18,7 @@ Run suites through `sluice exec main -- <command>`; before submitting,
 
 ## 3. Docs
 
-- [ ] 3.1 In `site/src/content/docs/guides/pull-requests.md`, "An agent submits": the description holds the commits' messages, each whole; a branch whose messages pass GitHub's 65,536 characters gets as many whole as fit, then a line counting the rest with a link to GitHub's comparison of the branch, and the rest's subjects; each submit writes it again for the commits it pushes, replacing text a person added to it. Verify `site:prose` (`sluice exec main -- moon run site:prose`).
+- [x] 3.1 In `site/src/content/docs/guides/pull-requests.md`, "An agent submits": the description holds the commits' messages, each whole; a branch whose messages pass GitHub's 65,536 characters gets as many whole as fit, then a line counting the rest with a link to GitHub's comparison of the branch, and the rest's subjects; each submit writes it again for the commits it pushes, replacing text a person added to it. Verify `site:prose` (`sluice exec main -- moon run site:prose`).
 
 ## 4. Gate
 
