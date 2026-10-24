@@ -1041,10 +1041,10 @@ impl Sluice<'_> {
         }
         // 19, 20: where the run a flaky task contradicts is kept, when the
         // records name it; a pointer, so one that cannot be read holds up
-        // no verdict. When and where this run's result was had are its
-        // line's, recorded before the verdict was read (rule core.7): the
-        // newest of the kind it reported for the task on this combination
-        // and system, the one written at `now` or the same result written
+        // no verdict. This run's time and host are those of its own line,
+        // recorded before the verdict was read (rule core.7): the newest of
+        // the kind it reported for the task on this combination and
+        // system, the one written at `now` or the same result written
         // before it; neither for a result with no line.
         for f in &mut v.failed {
             if let Some(k) = &mut f.flaky {
