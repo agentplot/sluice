@@ -1,7 +1,13 @@
 //! Branch protection on one host: a `reference-transaction` hook refuses
 //! any update to a branch the policy names that sluice did not make, and
-//! reports it in the branch's log (1; C.4 local refs; rule core.4;
+//! reports it in the branch's log (1, 124; C.4 local refs; rule core.4;
 //! `docs/plans/phase-1-integrations.md` section 2).
+//!
+//! It judges a write by the value the branch's ref holds on this host,
+//! never by a fetch of its remote: for a branch kept on a remote that ref
+//! is sluice's copy, which only sluice's rounds level (124). It judges the
+//! repository git names, wherever the command ran, and lets through, said
+//! once, a transaction it cannot read for a reason of its own.
 //!
 //! sluice moves branches through gix, which runs no hooks, so its own
 //! moves never reach the hook. Everything that runs git does. This guards
@@ -12,9 +18,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use sluice_core::Sluice;
-use sluice_seams::Rev;
+use sluice_seams::{HostCopy, Rev};
+
+use crate::exec::Host;
 
 /// The line that marks a hook as sluice's.
 const MARKER: &str =
@@ -150,12 +158,52 @@ pub fn remove(dir: &Path) -> Result<bool> {
     }
 }
 
-/// What a refused update is told, on stderr.
-fn refusal(branch: &str, why: &str) -> String {
-    format!(
-        "error: {branch} is protected by sluice; submit the change to sluice instead{why}\n\
-         the worktree may hold the attempted change: git merge --abort or git reset --hard"
-    )
+/// A write the hook refuses: the branch, the value it holds on this host,
+/// the one the write would set or none for a deletion, the submissions
+/// that still need it, and whether it is sluice's copy of a branch kept
+/// on a remote.
+struct Refused {
+    branch: String,
+    from: Rev,
+    to: Option<Rev>,
+    needing: Vec<u64>,
+    copy: bool,
+}
+
+/// What a refused update is told, on stderr, before git's own error.
+fn refusal(r: &Refused, by: &str) -> String {
+    let branch = &r.branch;
+    let mut said =
+        format!("error: {branch} is protected by sluice; submit the change to sluice instead\n");
+    match &r.to {
+        Some(to) => said.push_str(&format!(
+            "  `{by}` would move it from {} to {}\n",
+            r.from.short(),
+            to.short()
+        )),
+        None => {
+            let ids: Vec<String> = r.needing.iter().map(|i| format!("#{i}")).collect();
+            said.push_str(&format!(
+                "  `{by}` would delete it at {}; it still holds {}: withdraw or land them first\n",
+                r.from.short(),
+                ids.join(", ")
+            ));
+        }
+    }
+    if r.copy {
+        said.push_str(&format!(
+            "  sluice levels this host's {branch} to each landing itself\n"
+        ));
+    }
+    said.push_str(
+        "  the worktree may hold the attempted change: git merge --abort or git reset --hard",
+    );
+    said
+}
+
+/// 124: what the hook says when it lets a transaction through unread.
+pub fn unread(why: &anyhow::Error) -> String {
+    format!("warning: sluice's branch protection let this through unread: {why:#}")
 }
 
 /// The command that ran git: the hook is sluice's parent's child, and git
@@ -263,12 +311,9 @@ fn command_of(pid: i32) -> Option<String> {
 /// `pack-refs` writes the branch into `packed-refs` at the value it holds,
 /// then prunes the loose file in a transaction that leaves `packed-refs`
 /// alone. Every other deletion locks `packed-refs` before the hook runs,
-/// to take the branch out of it.
-fn pruned(branch: &str, cur: &Rev) -> Result<bool> {
-    let common = PathBuf::from(git(
-        &std::env::current_dir()?,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?);
+/// to take the branch out of it. `common` is the repository's common git
+/// directory.
+fn pruned(common: &Path, branch: &str, cur: &Rev) -> Result<bool> {
     if common.join("packed-refs.lock").exists() {
         return Ok(false);
     }
@@ -286,15 +331,67 @@ fn pruned(branch: &str, cur: &Rev) -> Result<bool> {
 
 /// `sluice hook reference-transaction <state>`: refuse, in `prepared`,
 /// any update to a protected branch that is not a creation or leaves its
-/// value as it was. Returns the exit: 0 allows, 1 refuses.
-pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
+/// value on this host as it was (1, 124). Returns the exit: 0 allows, 1
+/// refuses. A transaction it cannot read for a reason of its own passes,
+/// said once.
+pub fn hook(s: &Sluice<'_>, host: &dyn Host, state: &str, input: &mut dyn Read) -> Result<i32> {
     // Symbolic refs are resolved only in `prepared`: in `preparing` a
     // commit on a checked-out branch arrives as HEAD.
     if state != "prepared" {
         return Ok(0);
     }
+    let by = caller();
     let mut text = String::new();
-    input.read_to_string(&mut text)?;
+    let refused = match input
+        .read_to_string(&mut text)
+        .map_err(anyhow::Error::from)
+        .and_then(|_| judge(s, host, &text))
+    {
+        Ok(refused) => refused,
+        Err(e) => {
+            eprintln!("{}", unread(&e));
+            return Ok(0);
+        }
+    };
+    if refused.is_empty() {
+        return Ok(0);
+    }
+    for r in &refused {
+        crate::telemetry::warn(&refusal(r, &by));
+    }
+    let seams = s.seams();
+    for r in &refused {
+        // Reported when the branch's lock comes within a second; the
+        // refusal stands either way.
+        let until = Instant::now() + Duration::from_secs(1);
+        let guard = loop {
+            match seams.state.lock(&r.branch) {
+                Ok(Some(g)) => break Some(g),
+                Ok(None) if Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => break None,
+                Err(e) => {
+                    eprintln!("warning: locking {}'s records: {e:#}", r.branch);
+                    break None;
+                }
+            }
+        };
+        if guard.is_some() {
+            if let Err(e) = s.record_protected(&r.branch, &r.from, r.to.as_ref(), &by) {
+                eprintln!(
+                    "warning: reporting the refused update to {}: {e:#}",
+                    r.branch
+                );
+            }
+        }
+    }
+    Ok(1)
+}
+
+/// The writes of a transaction the hook refuses, each judged by the
+/// branch's own value on this host; none fetches.
+fn judge(s: &Sluice<'_>, host: &dyn Host, text: &str) -> Result<Vec<Refused>> {
     let seams = s.seams();
     let mut refused = Vec::new();
     for line in text.lines() {
@@ -307,7 +404,11 @@ pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
         };
         // The caller's expected value is often all zeros; the ref as it
         // stands is still the old one while the transaction is prepared.
-        let Some(cur) = seams.branch.read(branch)? else {
+        let (cur, copy) = match seams.branch.copy(branch)? {
+            HostCopy::At(at) => (at, true),
+            HostCopy::Itself => (seams.branch.read(branch)?, false),
+        };
+        let Some(cur) = cur else {
             continue; // a creation
         };
         let deleting = new.bytes().all(|b| b == b'0');
@@ -315,43 +416,22 @@ pub fn hook(s: &Sluice<'_>, state: &str, input: &mut dyn Read) -> Result<i32> {
         if new.as_ref() == Some(&cur) || !s.protects(branch, &cur)? {
             continue;
         }
-        let why = if deleting {
+        let needing = if deleting {
             let needing = s.needing(branch)?;
-            if needing.is_empty() || pruned(branch, &cur)? {
+            if needing.is_empty() || pruned(Path::new(&host.repository()?), branch, &cur)? {
                 continue;
             }
-            let ids: Vec<String> = needing.iter().map(|i| format!("#{i}")).collect();
-            format!(
-                "\n{branch} still holds {}: withdraw or land them before deleting it",
-                ids.join(", ")
-            )
+            needing
         } else {
-            String::new()
+            Vec::new()
         };
-        crate::telemetry::warn(&refusal(branch, &why));
-        refused.push((branch.to_string(), cur, new));
+        refused.push(Refused {
+            branch: branch.to_string(),
+            from: cur,
+            to: new,
+            needing,
+            copy,
+        });
     }
-    if refused.is_empty() {
-        return Ok(0);
-    }
-    let by = caller();
-    for (branch, from, to) in &refused {
-        // Reported when the branch's lock comes within a second; the
-        // refusal stands either way.
-        let until = Instant::now() + Duration::from_secs(1);
-        let guard = loop {
-            if let Some(g) = seams.state.lock(branch)? {
-                break Some(g);
-            }
-            if Instant::now() >= until {
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        if guard.is_some() {
-            s.record_protected(branch, from, to.as_ref(), &by)
-                .map_err(|e| anyhow!("reporting the refused update to {branch}: {e:#}"))?;
-        }
-    }
-    Ok(1)
+    Ok(refused)
 }

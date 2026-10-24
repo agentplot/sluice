@@ -1360,7 +1360,7 @@ pub fn run(
             Ok(0)
         }
         Command::Hook { name, state } => match name.as_str() {
-            "reference-transaction" => protect::hook(&s, &state, &mut std::io::stdin()),
+            "reference-transaction" => protect::hook(&s, host, &state, &mut std::io::stdin()),
             other => anyhow::bail!("sluice runs no {other} hook"),
         },
     }
