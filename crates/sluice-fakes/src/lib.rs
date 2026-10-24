@@ -20,7 +20,7 @@ use sluice_seams::{
     HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place,
     PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released, Rev, RunHandle, RunReport,
     RunRequest, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog,
-    TaskProgress, TaskResult, Tests, Written,
+    TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -113,6 +113,9 @@ struct Inner {
     tasks_fail: bool,
     hold: bool,
     crash_start: bool,
+    /// How many starts from now the forge a pool starts runs on answers
+    /// 5xx.
+    unanswered_starts: usize,
     host_limit: Option<usize>,
     /// The system the host's executor is, as `(os, arch)` (87).
     platform: (String, String),
@@ -537,6 +540,12 @@ impl World {
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
+    }
+
+    /// The next `n` starts fail as a forge's 5xx answer, as a pool's
+    /// would whose forge could not answer, before anything starts.
+    pub fn unanswer_starts(&self, n: usize) {
+        self.0.borrow_mut().unanswered_starts = n;
     }
 
     /// Runs started from now stay running until completed.
@@ -1293,6 +1302,14 @@ impl Tests for FakeTests {
         }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
+        }
+        if inner.unanswered_starts > 0 {
+            inner.unanswered_starts -= 1;
+            return Err(Unanswered(format!(
+                "starting a run in {}: 503 Service Unavailable",
+                request.place.name
+            ))
+            .into());
         }
         let complete = !inner.hold;
         inner.runs.push(RunState {

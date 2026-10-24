@@ -6,14 +6,15 @@
 //! GitHub does. It marks a pull request a draft or ready for review
 //! through GraphQL, as GitHub alone does, unless told to refuse. It
 //! answers an error for a pull request's reviews, or for the list of pull
-//! requests, while told to fail them. Each test crate that includes it
+//! requests, while told to fail them, and answers a read of a pull
+//! request 503 as often as told to. Each test crate that includes it
 //! uses a part.
 
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -39,6 +40,8 @@ pub struct GitHub {
     refuse: Arc<AtomicBool>,
     /// The calls answered with an error.
     failing: Arc<Mutex<Failing>>,
+    /// How many reads of a pull request from now are answered 503.
+    unavailable: Arc<AtomicUsize>,
 }
 
 /// The calls the fake answers with an error while a test asks it to.
@@ -61,9 +64,22 @@ impl GitHub {
         let refusing = refuse.clone();
         let failing = Arc::new(Mutex::new(Failing::default()));
         let fails = failing.clone();
+        let unavailable = Arc::new(AtomicUsize::new(0));
+        let left = unavailable.clone();
         let fake = Fake::start(move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
+            }
+            let a_pull = r.method == "GET"
+                && r.path
+                    .strip_prefix(&format!("{REPO}/pulls/"))
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            if a_pull
+                && left
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+            {
+                return json(503, json!({ "message": "Service Unavailable" }));
             }
             if r.method == "POST" && r.path == "/graphql" {
                 return graphql(&held, refusing.load(Ordering::SeqCst), r);
@@ -75,6 +91,7 @@ impl GitHub {
             fake,
             refuse,
             failing,
+            unavailable,
         }
     }
 
@@ -101,6 +118,17 @@ impl GitHub {
     /// Answer an error for the list of pull requests, or give it again.
     pub fn fail_pulls(&self, fail: bool) {
         self.failing.lock().unwrap().pulls = fail;
+    }
+
+    /// Answer the next `n` reads of a pull request 503, as GitHub does
+    /// while it cannot answer.
+    pub fn unavailable(&self, n: usize) {
+        self.unavailable.store(n, Ordering::SeqCst);
+    }
+
+    /// How many of those are still to be answered.
+    pub fn unavailable_left(&self) -> usize {
+        self.unavailable.load(Ordering::SeqCst)
     }
 }
 

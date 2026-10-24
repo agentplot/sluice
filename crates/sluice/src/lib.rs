@@ -43,10 +43,17 @@ use told::Kind;
 pub const LANDED: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const CONFLICT: i32 = 2;
+/// sluice itself failed, or a wait could not read: the cause is on
+/// stderr, and it is no outcome.
+pub const INTERNAL: i32 = 3;
 /// The submission was withdrawn while it was waited on.
 pub const WITHDRAWN: i32 = 4;
 /// `sluice wait --timeout` ran out with the submission undecided.
 pub const WAITING: i32 = 5;
+/// How long a waiting submit or `sluice wait` reads again, a pause apart,
+/// through a forge's 5xx answers before it says it could not read
+/// ([`INTERNAL`]); what it could not read decides nothing.
+pub const UNANSWERED_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 /// A command line sluice cannot read: an unknown command, flag or value.
 /// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
 /// conflict.
@@ -93,7 +100,8 @@ Exit codes:
   0    landed, whatever failed after the landing (said on stderr)
   1    failed: this submission was blamed, or its pull request closed
   2    a conflict, or a refusal
-  3    sluice itself failed; the cause is on stderr
+  3    sluice itself failed, or it could not read the forge for 5m and
+       whether it landed is not known; the cause is on stderr
   4    withdrawn while it waited
   64   a command line sluice cannot read
   130  stopped with Ctrl-C; the submission stays queued";
@@ -109,7 +117,8 @@ Exit codes:
   0    landed, whatever failed after the landing (said on stderr)
   1    failed: it was blamed, or its pull request closed; or no such submission
   2    a conflict
-  3    sluice itself failed; the cause is on stderr
+  3    sluice itself failed, or it could not read the forge for 5m and
+       whether it landed is not known; the cause is on stderr
   4    withdrawn
   5    still waiting: --timeout ran out, and the submission stays queued
   64   a command line sluice cannot read
@@ -1572,6 +1581,10 @@ fn await_submission(
             }
             return Ok(code);
         }
+        Waited::Unread(sub, unread) => {
+            let again = format!("sluice wait {}", sub.id);
+            return could_not_read(&unread, &format!("#{}", sub.id), &again, waiting.json, out);
+        }
         Waited::Undecided(sub, code) => (sub, code),
     };
     if waiting.json {
@@ -1590,12 +1603,74 @@ enum Waited {
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
+    /// As last read, when the forge answered 5xx for [`UNANSWERED_FOR`].
+    Unread(Submission, Unread),
+}
+
+/// A forge's 5xx answers to a wait's reads, in a row: when the first came,
+/// and the last with when it came. The wait reads again through them for
+/// [`UNANSWERED_FOR`], and a read answered ends the run.
+#[derive(Default)]
+struct Unread {
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    last: Option<(chrono::DateTime<chrono::Utc>, anyhow::Error)>,
+}
+
+impl Unread {
+    /// After a read failed with `e`: `Ok(true)` to read again after the
+    /// next pause, `e` being a forge's 5xx answer within [`UNANSWERED_FOR`]
+    /// of the first in a row; `Ok(false)` once that has passed, the wait
+    /// ending as it could not read; `e` itself for any other failure.
+    fn again(&mut self, clock: &dyn Clock, e: anyhow::Error) -> Result<bool> {
+        if !sluice_seams::unanswered(&e) {
+            return Err(e);
+        }
+        let now = clock.now();
+        let since = *self.since.get_or_insert(now);
+        self.last = Some((now, e));
+        Ok(now - since < UNANSWERED_FOR)
+    }
+
+    /// A read answered: the run of 5xx answers, if any, is over.
+    fn answered(&mut self) {
+        *self = Unread::default();
+    }
+}
+
+/// A wait that could not read `what` (`unread`, the forge's 5xx answers):
+/// said on stderr, on its own line beginning `sluice: could not read`, and
+/// apart from any outcome, which only the records give; exit
+/// [`INTERNAL`], with `again` to wait once more. Under `--json`, the error
+/// document in place of the record.
+fn could_not_read(
+    unread: &Unread,
+    what: &str,
+    again: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let (lasted, cause) = match (&unread.last, unread.since) {
+        (Some((at, e)), Some(since)) => ((*at - since).num_seconds(), format!(": {e:#}")),
+        _ => (0, String::new()),
+    };
+    let text = format!(
+        "could not read {what} for {}, so whether it landed is not known{cause}",
+        progress::duration(lasted)
+    );
+    telemetry::error(&format!("sluice: {text}"));
+    if json {
+        told::tell(out, true, Kind::Internal, &text, &[again.to_string()])?;
+    } else {
+        writeln!(out, "could not read {what}: {again}")?;
+    }
+    Ok(INTERNAL)
 }
 
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. Without `--json`, it says the
+/// already decided runs nothing. A round the forge answered 5xx is run
+/// again, as [`Unread`] bounds it. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
 /// moves (ADR 0042).
 fn wait_on(
@@ -1611,6 +1686,7 @@ fn wait_on(
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let mut first = true;
+    let mut unread = Unread::default();
     loop {
         if sub.state.is_out() {
             return Ok(Waited::Decided(sub, None));
@@ -1650,6 +1726,7 @@ fn wait_on(
         }
         match s.round(&branch) {
             Ok(round) => {
+                unread.answered();
                 exec::tell_abandoned(out, waiting.json, &round.released)?;
                 exec::tell_releases(out, waiting.json, &round.releases)?;
             }
@@ -1658,10 +1735,13 @@ fn wait_on(
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Ok(Waited::Undecided(sub, STOPPED));
                 }
-                return match landed(s, id) {
-                    Some(sub) => Ok(Waited::Decided(sub, Some(e))),
-                    None => Err(e),
-                };
+                if let Some(sub) = landed(s, id) {
+                    return Ok(Waited::Decided(sub, Some(e)));
+                }
+                if unread.again(waiting.clock, e)? {
+                    continue;
+                }
+                return Ok(Waited::Unread(sub, unread));
             }
         }
         sub = s
@@ -2013,7 +2093,8 @@ enum PullMode {
 /// push the worktree's branch and open or update its pull request, which
 /// waits for its conditions; then follow it, reporting each state it
 /// reaches, to its outcome. [`PullMode::Status`] only says where it
-/// stands; [`PullMode::Wait`] follows the one open.
+/// stands; [`PullMode::Wait`] follows the one open. While it waits, a
+/// read the forge answered 5xx is made again, as [`Unread`] bounds it.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -2030,8 +2111,27 @@ fn submit_pull(
     let status = matches!(mode, PullMode::Status);
     let no_wait = matches!(mode, PullMode::Open { no_wait: true });
     let opens = matches!(mode, PullMode::Open { .. });
+    let again = format!("sluice wait {branch}");
     let number = if !opens {
-        match pulls.find(seams, clock, branch, worktree)? {
+        let mut unread = Unread::default();
+        let found = loop {
+            let e = match pulls.find(seams, clock, branch, worktree) {
+                Ok(found) => break found,
+                Err(e) => e,
+            };
+            let PullMode::Wait { deadline } = mode else {
+                return Err(e);
+            };
+            let what = format!("the pull request from {worktree} into {branch}");
+            if !unread.again(clock, e)? || deadline.is_some_and(|d| clock.now() >= d) {
+                return could_not_read(&unread, &what, &again, json, out);
+            }
+            if !pause.pause() {
+                could_not_read(&unread, &what, &again, json, out)?;
+                return Ok(STOPPED);
+            }
+        };
+        match found {
             Some(n) => n,
             None => {
                 let text = format!("no pull request from {worktree} into {branch}");
@@ -2057,10 +2157,23 @@ fn submit_pull(
     let mut last: Option<(String, Vec<String>)> = None;
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
+    let what = format!("#{number}");
+    let mut unread = Unread::default();
     loop {
         intake(pulls, seams, clock, branch);
-        match pulls.follow(seams, clock, branch, number)? {
-            Followed::Done(sub, names) => {
+        let followed = match pulls.follow(seams, clock, branch, number) {
+            Ok(f) => Some(f),
+            Err(e) if no_wait || status => return Err(e),
+            Err(e) => {
+                if !unread.again(clock, e)? {
+                    return could_not_read(&unread, &what, &again, json, out);
+                }
+                None
+            }
+        };
+        let read = followed.is_some();
+        match followed {
+            Some(Followed::Done(sub, names)) => {
                 if status && json {
                     writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
                     return Ok(0);
@@ -2079,7 +2192,7 @@ fn submit_pull(
                 }
                 return report(s, &sub, branch, &names, json, out);
             }
-            Followed::Closed => {
+            Some(Followed::Closed) => {
                 if json {
                     writeln!(
                         out,
@@ -2093,7 +2206,7 @@ fn submit_pull(
                 }
                 return Ok(FAILED);
             }
-            Followed::Open { title, lines } => {
+            Some(Followed::Open { title, lines }) => {
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
@@ -2113,6 +2226,7 @@ fn submit_pull(
                     last = Some(now);
                 }
             }
+            None => {}
         }
         if no_wait || status {
             return Ok(0);
@@ -2141,6 +2255,9 @@ fn submit_pull(
         }
         match s.round(branch) {
             Ok(round) => {
+                if read {
+                    unread.answered();
+                }
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
@@ -2153,22 +2270,24 @@ fn submit_pull(
                 }
                 // 122: as `wait_on`, for the submission the pull request
                 // was taken in as, on the head its worktree pushed.
-                let Some(sub) = seams
+                let landed = seams
                     .driver
                     .session(worktree)
                     .ok()
                     .and_then(|w| taken_in(s, branch, &w.head))
-                    .and_then(|id| landed(s, id))
-                else {
-                    return Err(e);
-                };
-                let names = match pulls.follow(seams, clock, branch, number) {
-                    Ok(Followed::Done(_, names)) => names,
-                    _ => BTreeMap::new(),
-                };
-                let code = report(s, &sub, branch, &names, json, out)?;
-                after_landing(&e);
-                return Ok(code);
+                    .and_then(|id| landed(s, id));
+                if let Some(sub) = landed {
+                    let names = match pulls.follow(seams, clock, branch, number) {
+                        Ok(Followed::Done(_, names)) => names,
+                        _ => BTreeMap::new(),
+                    };
+                    let code = report(s, &sub, branch, &names, json, out)?;
+                    after_landing(&e);
+                    return Ok(code);
+                }
+                if !unread.again(clock, e)? {
+                    return could_not_read(&unread, &what, &again, json, out);
+                }
             }
         }
         if !pause.pause() {

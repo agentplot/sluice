@@ -2801,6 +2801,273 @@ fn wait_finds_what_it_waits_on() {
     assert_eq!(json(&out)["error"]["message"], "no submission 9999");
 }
 
+/// A pause that moves the fakes' clock on a minute at each wait, for a
+/// wait that runs past [`sluice::UNANSWERED_FOR`].
+struct Minutes<'a>(&'a Fakes, Cell<usize>);
+
+impl Pause for Minutes<'_> {
+    fn pause(&self) -> bool {
+        self.1.set(self.1.get() + 1);
+        assert!(self.1.get() < 50, "waited too long");
+        self.0.world.advance(chrono::Duration::minutes(1));
+        true
+    }
+}
+
+/// A round the forge answered 5xx is run again: `sluice wait` and a
+/// waiting submit wait through a few such answers to the outcome.
+#[test]
+fn a_wait_reads_again_through_a_forges_5xx() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.unanswer_starts(3);
+    let (code, out) = sluice(&f, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    f.world.unanswer_starts(3);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--json"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(json(&out)["state"], "landed");
+}
+
+/// Past five minutes of a forge's 5xx answers, `sluice wait` says it could
+/// not read, on stderr with the forge's words and on stdout with how to
+/// wait again, and exits 3: no outcome. Nothing was decided of the
+/// submission, which lands once the forge answers.
+#[test]
+fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
+    if let Some(err) = stderr_of("a_wait_past_five_minutes_of_5xx_says_it_could_not_read") {
+        let said: Vec<&str> = err
+            .lines()
+            .filter(|l| l.starts_with("sluice: could not read #1 for 5m"))
+            .collect();
+        assert_eq!(said.len(), 2, "{err}");
+        for line in said {
+            assert!(
+                line.contains(", so whether it landed is not known: starting a run in ")
+                    && line.ends_with(": 503 Service Unavailable"),
+                "{err}"
+            );
+        }
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.unanswer_starts(usize::MAX);
+    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1"]);
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert!(out.ends_with("could not read #1: sluice wait 1\n"), "{out}");
+    assert!(
+        !out.contains("landed as") && !out.contains("failed"),
+        "{out}"
+    );
+
+    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1", "--json"]);
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    let v = json(&out);
+    assert_eq!(v["error"]["kind"], "internal");
+    assert_eq!(v["error"]["next"], serde_json::json!(["sluice wait 1"]));
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("could not read #1 for 5m"), "{message}");
+    assert!(message.ends_with(": 503 Service Unavailable"), "{message}");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_ne!(json(&out)["state"], "failed");
+
+    f.world.unanswer_starts(0);
+    assert_eq!(sluice(&f, &["wait", "1"]).0, LANDED);
+}
+
+/// Pull request 7 into the branch, from any worktree, waiting; its forge
+/// answers 5xx to as many finds and follows as each count holds.
+struct Pull7 {
+    finds: Cell<usize>,
+    follows: Cell<usize>,
+}
+
+impl Pull7 {
+    fn new(finds: usize, follows: usize) -> Pull7 {
+        Pull7 {
+            finds: Cell::new(finds),
+            follows: Cell::new(follows),
+        }
+    }
+
+    /// A read of the pull request, answered 5xx while `left` holds any.
+    fn read(left: &Cell<usize>) -> anyhow::Result<()> {
+        if left.get() == 0 {
+            return Ok(());
+        }
+        left.set(left.get() - 1);
+        Err(
+            sluice_seams::Unanswered("GET /repos/o/r/pulls/7: 503 Service Unavailable".into())
+                .into(),
+        )
+    }
+}
+
+impl sluice::PullRequests for Pull7 {
+    fn branches(&self, _: sluice_core::Seams<'_>) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn intake(
+        &self,
+        _: sluice_core::Seams<'_>,
+        _: &dyn sluice_core::Clock,
+        _: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+
+    fn open(
+        &self,
+        _: sluice_core::Seams<'_>,
+        _: &dyn sluice_core::Clock,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
+        Ok(Ok(sluice::Opened {
+            number: 7,
+            said: "opened #7".into(),
+        }))
+    }
+
+    fn find(
+        &self,
+        _: sluice_core::Seams<'_>,
+        _: &dyn sluice_core::Clock,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<Option<u64>> {
+        Pull7::read(&self.finds)?;
+        Ok(Some(7))
+    }
+
+    fn follow(
+        &self,
+        _: sluice_core::Seams<'_>,
+        _: &dyn sluice_core::Clock,
+        _: &str,
+        _: u64,
+    ) -> anyhow::Result<sluice::Followed> {
+        Pull7::read(&self.follows)?;
+        Ok(sluice::Followed::Open {
+            title: "waiting".into(),
+            lines: Vec::new(),
+        })
+    }
+}
+
+/// The branch, taking pull requests.
+fn pulls_setup() -> Fakes {
+    let f = Fakes::new();
+    let policy = POLICY.replace(
+        "[branches.\"bolt/*\"]\n",
+        "[branches.\"bolt/*\"]\nremote = \"origin\"\n",
+    ) + "\n[branches.\"bolt/*\".pull_requests]\n";
+    f.world.init(
+        BRANCH,
+        &[(".config/sluice.toml", &policy), ("plugin/a", "a")],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f
+}
+
+/// `sluice <args>` over the fakes, its pull requests from `pulls`.
+fn sluice_pulls(
+    f: &Fakes,
+    pulls: &dyn sluice::PullRequests,
+    pause: &dyn Pause,
+    args: &[&str],
+) -> (i32, String) {
+    let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let code = run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out).unwrap();
+    (code, String::from_utf8(out).unwrap())
+}
+
+/// Following a pull request, a find or a follow the forge answered 5xx is
+/// made again; past five minutes of such answers, `sluice wait` and a
+/// waiting submit say they could not read it and exit 3, never that it
+/// closed or failed.
+#[test]
+fn following_a_pull_request_reads_again_through_a_forges_5xx() {
+    let f = pulls_setup();
+    let stop = Then(Cell::new(0), |n| n < 6);
+    let (code, out) = sluice_pulls(&f, &Pull7::new(2, 2), &stop, &["wait", BRANCH]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(
+        out,
+        format!("waiting\nstill open: #7; sluice wait {BRANCH}\n")
+    );
+
+    let pulls = Pull7::new(0, usize::MAX);
+    let (code, out) = sluice_pulls(&f, &pulls, &Minutes(&f, Cell::new(0)), &["wait", BRANCH]);
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert_eq!(out, format!("could not read #7: sluice wait {BRANCH}\n"));
+    let (code, out) = sluice_pulls(
+        &f,
+        &pulls,
+        &Minutes(&f, Cell::new(0)),
+        &["wait", BRANCH, "--json"],
+    );
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    let v = json(&out);
+    assert_eq!(v["error"]["kind"], "internal");
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice wait {BRANCH}")])
+    );
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("could not read #7 for 5m"), "{message}");
+    assert!(
+        message.ends_with(
+            ", so whether it landed is not known: GET /repos/o/r/pulls/7: 503 Service Unavailable"
+        ),
+        "{message}"
+    );
+
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("b"))]);
+    let (code, out) = sluice_pulls(
+        &f,
+        &pulls,
+        &Minutes(&f, Cell::new(0)),
+        &["submit", BRANCH, "--worktree", "unit/a"],
+    );
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert_eq!(
+        out,
+        format!("opened #7\ncould not read #7: sluice wait {BRANCH}\n")
+    );
+
+    let pulls = Pull7::new(usize::MAX, 0);
+    let (code, out) = sluice_pulls(
+        &f,
+        &pulls,
+        &Minutes(&f, Cell::new(0)),
+        &["wait", BRANCH, "--worktree", "unit/a"],
+    );
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "could not read the pull request from unit/a into {BRANCH}: sluice wait {BRANCH}\n"
+        )
+    );
+}
+
 /// ADR 0042: a waiting command says its combination's progress each time
 /// the count ended or the tasks running move, never at every round.
 #[test]
