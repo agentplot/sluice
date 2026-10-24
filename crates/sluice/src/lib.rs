@@ -33,8 +33,8 @@ use clap::{Parser, Subcommand};
 use sluice_core::overview::{in_queue, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, Forecast, Forecasted, GroupRequest, Requester, Seams, Serves,
-    Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Requester,
+    Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Outcome, Rev, SessionPlace};
 use told::Kind;
@@ -1569,16 +1569,20 @@ fn submit(
     };
     let id = accepted.id;
     if json && no_wait {
-        writeln!(
-            out,
-            "{}",
-            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead })
-        )?;
+        let mut doc =
+            serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
+        if let Some(copy) = &accepted.copy {
+            doc["copy"] = serde_json::to_value(copy)?;
+        }
+        writeln!(out, "{doc}")?;
         return Ok(0);
     }
     if !json {
         let ahead = queued_ahead(&accepted.ahead);
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
+        if let Some(copy) = &accepted.copy {
+            writeln!(out, "{}", copy_differs_line(copy))?;
+        }
     }
     if no_wait {
         return Ok(0);
@@ -1629,8 +1633,14 @@ fn submit_group(
     if json && no_wait {
         let submissions: Vec<serde_json::Value> = items
             .iter()
-            .map(|(w, a)| serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead }))
-            .collect();
+            .map(|(w, a)| {
+                let mut doc = serde_json::json!({ "id": a.id, "worktree": w, "ahead": a.ahead });
+                if let Some(copy) = &a.copy {
+                    doc["copy"] = serde_json::to_value(copy)?;
+                }
+                Ok(doc)
+            })
+            .collect::<Result<_>>()?;
         writeln!(
             out,
             "{}",
@@ -1642,6 +1652,9 @@ fn submit_group(
         for (w, a) in &items {
             let ahead = queued_ahead(&a.ahead);
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
+            if let Some(copy) = &a.copy {
+                writeln!(out, "{}", copy_differs_line(copy))?;
+            }
         }
     }
     if no_wait {
@@ -3005,6 +3018,20 @@ fn release_checkout(
         writeln!(out, "{text}")?;
     }
     Ok(if failed.is_some() { FAILED } else { LANDED })
+}
+
+/// 124, S58: the worktree's head, this host's copy of a branch sluice
+/// lands on, where it differs from the remote's revision submitted.
+pub(crate) fn copy_differs_line(copy: &CopyDiffers) -> String {
+    format!(
+        "this host's {} is at {}, {} {}'s {}; submitted {}",
+        copy.branch,
+        copy.copy.short(),
+        copy.how.words(),
+        copy.remote,
+        copy.at.short(),
+        copy.at.short()
+    )
 }
 
 /// 124, S64: this host's copy of `branch` left behind its landing, and

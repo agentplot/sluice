@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{CopyBehind, Event, State};
-use sluice_core::{Peer, Sluice, Step};
+use sluice_core::{CopyDiffers, CopyHow, GroupRequest, Peer, Sluice, Step, SubmitRequest};
 use sluice_seams::Rev;
 
 /// The name the harness's sluice records its own copy under.
@@ -15,11 +15,25 @@ const HOST: &str = "this-host";
 
 const LOCK: &str = "git holds the lock on refs/heads/bolt/x";
 
+/// The bolt policy, its branches kept on `origin`.
+fn on_origin() -> String {
+    policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"open\", \"sandbox\", \"container\"]\nremote = \"origin\"\n",
+    )
+}
+
+/// A bolt kept on `origin`.
+fn bolt_on_origin() -> Harness {
+    let h = Harness::new(&on_origin());
+    h.w().on_remote(BRANCH);
+    h
+}
+
 /// A bolt kept on a remote that has landed one submission: the harness,
 /// the revision it was made at, and the landing.
 fn landed_once() -> (Harness, Rev, Rev) {
-    let h = Harness::bolt();
-    h.w().on_remote(BRANCH);
+    let h = bolt_on_origin();
     let made = h.tip();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
@@ -141,8 +155,7 @@ fn a_branch_in_this_hosts_own_refs_is_never_levelled() {
 /// satisfies: 124, 122
 #[test]
 fn a_landing_whose_levelling_fails_reads_landed_and_the_next_round_levels_it() {
-    let h = Harness::bolt();
-    h.w().on_remote(BRANCH);
+    let h = bolt_on_origin();
     let made = h.tip();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     let one = h.submit("unit/a");
@@ -223,4 +236,153 @@ fn a_led_hosts_copy_follows_the_leads_landings() {
         host: "b".into(),
         at: landing,
     }));
+}
+
+/// `main`, the branch a bolt lands on, kept on `origin`.
+fn with_main(h: &Harness) {
+    h.w().init(
+        "main",
+        &[
+            (
+                ".config/sluice.toml",
+                &on_origin().replace("[branches.\"bolt/*\"]", "[branches.main]"),
+            ),
+            ("m/lib", "m1"),
+        ],
+    );
+    h.w().on_remote("main");
+}
+
+/// `worktree`'s submission to `main`.
+fn submit_to_main(h: &Harness, worktree: &str) -> sluice_core::Accepted {
+    h.sluice()
+        .submit(&SubmitRequest {
+            worktree: worktree.into(),
+            branch: "main".into(),
+            after: Vec::new(),
+            priority: 0,
+        })
+        .unwrap()
+        .expect("accepted")
+}
+
+/// The head `main`'s submission `id` holds.
+fn head_of(h: &Harness, id: u64) -> Rev {
+    h.sluice().state(id).unwrap().expect("a submission").head
+}
+
+/// satisfies: 124, 1, 2
+#[test]
+fn a_worktree_on_a_bolt_behind_submits_the_remotes_revision() {
+    let (h, made, _) = landed_once();
+    with_main(&h);
+    h.work_on("unit/a", &h.tip(), &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/a");
+    h.settle();
+    assert_eq!(h.sub(two).state, State::Landed);
+    let remote = h.tip();
+    // A worktree that has checked out the bolt, whose copy stands where
+    // it was before both landings.
+    h.w().set_copy(BRANCH, Some(&made));
+    h.w().session(BRANCH, "ops", &made);
+    let moves = h.moves();
+    let accepted = submit_to_main(&h, BRANCH);
+    assert_eq!(head_of(&h, accepted.id), remote);
+    assert_eq!(
+        accepted.copy,
+        Some(CopyDiffers {
+            branch: BRANCH.into(),
+            copy: made.clone(),
+            remote: "origin".into(),
+            at: remote.clone(),
+            how: CopyHow::Behind,
+        })
+    );
+    assert_eq!(h.tip(), remote, "the bolt is where it was");
+    assert_eq!(h.w().copy_of(BRANCH), Some(made), "so is this host's copy");
+    assert_eq!(h.moves(), moves);
+}
+
+/// satisfies: 124
+#[test]
+fn a_worktree_on_a_bolt_level_with_the_remote_says_nothing_of_it() {
+    let (h, _, landing) = landed_once();
+    with_main(&h);
+    h.w().session(BRANCH, "ops", &landing);
+    let accepted = submit_to_main(&h, BRANCH);
+    assert_eq!(head_of(&h, accepted.id), landing);
+    assert_eq!(accepted.copy, None);
+}
+
+/// satisfies: 124
+#[test]
+fn a_copy_ahead_or_apart_is_said_so_and_submits_the_remotes_revision() {
+    let (h, made, landing) = landed_once();
+    with_main(&h);
+    let ahead = h.w().work(&landing, &[("c/lib", Some("by hand"))]);
+    h.w().set_copy(BRANCH, Some(&ahead));
+    h.w().session(BRANCH, "ops", &ahead);
+    let accepted = submit_to_main(&h, BRANCH);
+    assert_eq!(head_of(&h, accepted.id), landing);
+    assert_eq!(
+        accepted.copy.map(|c| (c.copy, c.how)),
+        Some((ahead, CopyHow::Ahead))
+    );
+    let apart = h.w().work(&made, &[("c/lib", Some("beside"))]);
+    h.w().session(BRANCH, "ops", &apart);
+    let accepted = submit_to_main(&h, BRANCH);
+    assert_eq!(head_of(&h, accepted.id), landing);
+    assert_eq!(accepted.copy.map(|c| c.how), Some(CopyHow::Apart));
+}
+
+/// satisfies: 124, 125
+#[test]
+fn a_group_naming_a_bolts_worktree_submits_the_remotes_revision_for_it() {
+    let (h, made, landing) = landed_once();
+    with_main(&h);
+    h.w().set_copy(BRANCH, Some(&made));
+    h.w().session(BRANCH, "ops", &made);
+    let own = h.w().work(&h.w().tip("main"), &[("m/lib", Some("m2"))]);
+    h.w().session("unit/m", "agent-m", &own);
+    let accepted = h
+        .sluice()
+        .submit_group(&GroupRequest {
+            branch: "main".into(),
+            worktrees: vec![BRANCH.into(), "unit/m".into()],
+            after: Vec::new(),
+            priority: 0,
+        })
+        .unwrap()
+        .expect("accepted");
+    assert_eq!(head_of(&h, accepted[0].id), landing);
+    assert_eq!(
+        accepted[0].copy.as_ref().map(|c| (&c.copy, &c.at, c.how)),
+        Some((&made, &landing, CopyHow::Behind))
+    );
+    assert_eq!(head_of(&h, accepted[1].id), own);
+    assert_eq!(accepted[1].copy, None);
+    assert_eq!(
+        h.w().copy_of(BRANCH),
+        Some(made),
+        "this host's copy unmoved"
+    );
+}
+
+/// satisfies: 124, 47
+#[test]
+fn a_worktree_on_a_branch_of_its_own_submits_its_head() {
+    let h = bolt_on_origin();
+    let head = h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let id = h.submit("unit/a");
+    assert_eq!(h.sub(id).head, head);
+    // A bolt in this host's own refs is its own copy: its head is
+    // submitted, as before.
+    let h = Harness::bolt();
+    with_main(&h);
+    let tip = h.tip();
+    let ahead = h.w().work(&tip, &[("c/lib", Some("here"))]);
+    h.w().session(BRANCH, "ops", &ahead);
+    let accepted = submit_to_main(&h, BRANCH);
+    assert_eq!(head_of(&h, accepted.id), ahead);
+    assert_eq!(accepted.copy, None);
 }

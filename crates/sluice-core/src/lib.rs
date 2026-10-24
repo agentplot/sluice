@@ -30,8 +30,8 @@ use crate::policy::{Policy, Rules, POLICY_PATH};
 use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
 
 pub use ops::{
-    Accepted, AmendRefusal, Forecast, Forecasted, GroupRequest, Requester, Status, SubmitRefusal,
-    SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, Requester,
+    Status, SubmitRefusal, SubmitRequest, SubmittedHead, WithdrawRefusal, Withdrew,
 };
 pub use step::{Round, Step};
 
