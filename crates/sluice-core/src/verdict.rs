@@ -102,7 +102,9 @@ pub fn read(
         };
         if !passes {
             // 19: read as failed for holding both outcomes, so the
-            // submitter is shown the result that contradicts this run's.
+            // submitter is shown the result that contradicts this run's,
+            // with the host that ran it. This run's own time and host are
+            // its recorded line's, which the step reads.
             let flaky = (pass && fail)
                 .then(|| recorded.iter().rev().find(|r| r.outcome != t.outcome))
                 .flatten()
@@ -115,7 +117,7 @@ pub fn read(
                         at: r.at.clone(),
                         branch: r.branch.clone(),
                         combination: r.combination.clone(),
-                        host: None,
+                        host: r.host.clone(),
                         worktree: r.worktree.clone(),
                         log: None,
                     },
@@ -387,6 +389,7 @@ mod tests {
         let fail = |at: &str, on: &str| ResultLine {
             at: at.into(),
             combination: sluice_seams::Rev::new(on),
+            host: Some(format!("host-{on}")),
             ..recorded(
                 ResultKind::Ran,
                 Some(enforced("sandbox", false)),
@@ -402,6 +405,10 @@ mod tests {
             (Outcome::Fail, "t2")
         );
         assert_eq!(k.other.combination, sluice_seams::Rev::new("c2"));
+        // The host of the run it contradicts, not this run's `h`; this
+        // run's own are its recorded line's, which the step fills.
+        assert_eq!(k.other.host.as_deref(), Some("host-c2"));
+        assert_eq!((k.at, k.host), (None, None));
 
         let failing = RunReport {
             tasks: vec![TaskResult {
