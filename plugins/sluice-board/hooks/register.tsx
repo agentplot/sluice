@@ -76,14 +76,14 @@ const CHECK_COLOR: Record<CheckRow["state"], string | undefined> = {
   ended: undefined,
 };
 const NO_ONE: Mine = { root: null, ids: [], pulls: [] };
-const NOT_YET: Forecasting = { key: null, head: null, told: null };
+const NOT_YET: Forecasting = { key: null, head: null, told: null, branch: null, conflict: null };
 
 const doc = atom({ plugin: "sluice-board", key: "doc" } as const, null);
 const mine = atom({ plugin: "sluice-board", key: "mine" } as const, NO_ONE);
 const told = atom({ plugin: "sluice-board", key: "told" } as const, []);
 const isHidden = atom({ plugin: "sluice-board", key: "isHidden" } as const, false);
 const now = atom({ plugin: "sluice-board", key: "now" } as const, 0);
-const repo = atom({ plugin: "sluice-board", key: "repo" } as const, null);
+const remotes = atom({ plugin: "sluice-board", key: "remotes" } as const, {});
 // Failures opened in place: their keys, and what each showed when opened.
 const opened = atom({ plugin: "sluice-board", key: "opened" } as const, []);
 const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
@@ -240,12 +240,17 @@ async function forecastOnce($: $, wake: boolean, quiet: boolean) {
     }
     if (!f) {
       // It could not be formed: wait for the next move, and tell nothing.
-      await update($, forecasting, () => ({ key, head, told: sameHead ? last.told : null }));
+      await update($, forecasting, () => ({
+        ...last,
+        key,
+        head,
+        told: sameHead ? last.told : null,
+      }));
       return;
     }
   }
   const sig = f ? signature(b.branch, f) : null;
-  await update($, forecasting, () => ({ key, head, told: sig }));
+  await update($, forecasting, () => ({ ...last, key, head, told: sig }));
   if (f?.conflict && sig !== last.told) {
     $.ui.toast(forecastToast(b.branch, f.conflict));
     if (wake && !quiet) await $.prompt.submit({ text: conflictText(b.branch, f.conflict) });
@@ -340,7 +345,7 @@ async function follow($: $, cwd: string, first: Overview, chosen: How) {
     .run(["git", "remote", "get-url", "origin"], { cwd })
     .catch(() => null);
   const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
-  await update($, repo, () => base);
+  await update($, remotes, (all) => ({ ...all, origin: base }));
   // A session whose orchestrator forecasts for it turns this off.
   const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
   const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
@@ -457,7 +462,7 @@ export const register: Register = (on, options) => {
       ) : null;
     const d = await read($, doc);
     const m = await read($, mine);
-    const base = await read($, repo);
+    const base = (await read($, remotes)).origin ?? null;
     await read($, now);
     if (!d) {
       // No overview: why sluice could not be read, and what to do; or the
