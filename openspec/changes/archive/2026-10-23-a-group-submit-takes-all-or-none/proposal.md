@@ -101,5 +101,5 @@ crates/sluice/tests/support/**
 site/src/content/docs/reference/commands.md
 site/src/content/docs/guides/pull-requests.md
 plugins/sluice/skills/using-sluice/**
-docs/adr/0047-*.md
+docs/adr/0048-*.md
 ```

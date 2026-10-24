@@ -100,13 +100,21 @@ check, look for the cause in the tests or on the host. `sluice status
 ## The host's bound
 
 `parallel` is per branch. The host's `[runs] max`, in
-`~/.config/sluice/config.toml`, caps every branch together, along with
-the runs agents start in their own worktrees with `sluice exec`. With no
-`max`, the bound is a quarter of the host's logical CPUs, and never less
-than one. A branch with room under its own number still waits while the host's
-bound is full. `reserved` keeps some of the bound for submissions, so
-agents' own runs can't take all of it
+`~/.config/sluice/config.toml`, caps every branch of every repository on
+the host together, along with the runs agents start in their own
+worktrees with `sluice exec` and previews' commands. Every sluice on the
+host reads one count of the runs going there, so three repositories
+under `max = 3` run three at once, not nine. With no `max`, the bound is
+a quarter of the host's logical CPUs, and never less than one, and every
+repository on the host shares it. A branch with room under its own
+number still waits while the host's bound is full, whichever repository
+fills it. `reserved` keeps some of the bound for submissions, so agents'
+own runs can't take all of it
 ([configuration](/sluice/reference/configuration/#runs)).
+
+sluice reads nothing of how busy the host is. What runs beside it, the
+agents' sessions among it, is yours to leave room for when you set
+`max`.
 
 If each run starts containers, an emulator or a database, set `max` to
 how many of those the host holds in memory at once, whatever its count

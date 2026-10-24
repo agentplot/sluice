@@ -66,7 +66,7 @@ is let in ahead of an earlier one because only the earlier waits on an
 `--after`. A later submission with higher priority may still come
 between them (6), which tests and lands them in the same order.
 
-ADR 0047 records this reading and decision 4's.
+ADR 0048 records this reading and decision 4's.
 
 ### 3. The act's answer and exits
 
@@ -113,7 +113,7 @@ the body without a group mark.
 a group's request that intake cannot read holds the rest of its group,
 because the group was submitted to be taken all or none (125). That is
 the act's own condition, set by its submitter, and holds no request
-outside the group. ADR 0047 says so.
+outside the group. ADR 0048 says so.
 
 Alternatives: open every request as a draft and mark them ready
 together afterwards. Rejected: marking ready is a GraphQL mutation the

@@ -843,7 +843,7 @@ mod tests {
     use sluice_seams::{
         Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Guard, HostRun, LandingCommit,
         LastResult, Moved, Notification, Place, Platform, PreviewPlace, Progress, ReleasePolicy,
-        Released, RunHandle, RunReport, RunRequest, SessionPlace, Settings, Snapshot,
+        Released, RunHandle, RunReport, RunRequest, Running, SessionPlace, Settings, Snapshot,
         State as Records, Submitter, TaskLog, TaskProgress, Tests, Written, FINISHED,
     };
 
@@ -1152,7 +1152,7 @@ mod tests {
             unreachable!("a submit runs nothing")
         }
 
-        fn sessions(&self) -> Result<usize> {
+        fn running(&self) -> Result<Running> {
             unreachable!("a submit runs nothing")
         }
 

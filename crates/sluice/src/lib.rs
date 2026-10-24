@@ -8,6 +8,7 @@
 pub mod branch;
 pub mod exec;
 pub mod home;
+pub mod host_count;
 pub mod identity;
 pub mod instance;
 pub mod overview;

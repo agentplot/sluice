@@ -111,7 +111,11 @@ Then choose, and tell the user why:
   such as `main`, to how far apart submissions may arrive and still land in
   one move, e.g. `"5m"`. Leave it off bolt branches.
 - Set the host's `[runs] max` (step 5) to how many runs the host holds at
-  once. It caps every branch together, and agents' `sluice exec` runs too.
+  once. It caps every branch of every repository on the host together,
+  agents' `sluice exec` runs and previews too: every sluice on the host
+  reads one count. With no `max`, a quarter of the cores is shared by every
+  repository on the host. Leave room in it for what else the host runs,
+  agents' sessions included; sluice reads nothing of how busy the host is.
 - Every run gets its own checkout and its own ports. Check the tests write
   nothing outside the checkout (a fixed output directory, a lock file, a port
   they choose themselves): two overlapping runs collide there and fail
@@ -148,9 +152,13 @@ Host settings live in `~/.config/sluice/config.toml`, not the repository:
 
 ```toml
 [runs]
-max = 2         # runs at once on this host; default a quarter of the cores
+max = 2         # runs at once on this host, every repository's; default a quarter of the cores
 reserved = 1    # of those, kept for submissions; agents' `sluice exec` never takes them
 ```
+
+Each run is given the cores divided by `max` (`SLUICE_JOBS`, and moon's
+`--concurrency`), so the runs going at once, whatever their repositories,
+use the host's cores and no more.
 
 A repository whose tests bring up a stack of containers sets `max` to how
 many stacks fit in memory at once.
