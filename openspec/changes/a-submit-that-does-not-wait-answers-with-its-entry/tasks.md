@@ -21,8 +21,8 @@ submitting, `sluice exec main`.
 
 ## 4. Docs
 
-- [ ] 4.1 `site/src/content/docs/reference/commands.md`: in `sluice submit`'s pull-request section, what `--no-wait` answers, the submission when sluice took the request in and the request with what it waits for when not; in `sluice wait`'s, that `sluice wait <branch>` follows the request's submission once it has one, its record under `--json`. `site/src/content/docs/guides/pull-requests.md`'s waiting paragraph the same, with the agent's loop: hand `id` to `sluice wait`, or, with only `pull_request`, run `sluice wait <branch>` in the worktree. The using-sluice skill's no-wait lines and `references/submit.md`'s `--json` row the same. Verify `site:prose`, `crates/sluice/tests/plugin_docs.rs` and `plugins/sluice:validate`.
+- [x] 4.1 `site/src/content/docs/reference/commands.md`: in `sluice submit`'s pull-request section, what `--no-wait` answers, the submission when sluice took the request in and the request with what it waits for when not; in `sluice wait`'s, that `sluice wait <branch>` follows the request's submission once it has one, its record under `--json`. `site/src/content/docs/guides/pull-requests.md`'s waiting paragraph the same, with the agent's loop: hand `id` to `sluice wait`, or, with only `pull_request`, run `sluice wait <branch>` in the worktree. The using-sluice skill's no-wait lines and `references/submit.md`'s `--json` row the same. Verify `site:prose`, `crates/sluice/tests/plugin_docs.rs` and `plugins/sluice:validate`.
 
 ## 5. Gate
 
-- [ ] 5.1 Verify `openspec validate a-submit-that-does-not-wait-answers-with-its-entry --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
+- [x] 5.1 Verify `openspec validate a-submit-that-does-not-wait-answers-with-its-entry --strict` (by hand: no gate task runs openspec) and `sluice exec main` with everything committed.
