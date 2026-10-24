@@ -1025,6 +1025,30 @@ fn a_conflict_seen_early() {
     );
 }
 
+/// 128: a draft whose head GitHub serves none of is only a draft. The
+/// round names it, submits the pull request that is ready, and posts the
+/// draft's check as a draft's, with no forecast.
+#[test]
+fn a_draft_whose_head_cannot_be_fetched_is_only_a_draft() {
+    let g = OnGitHub::new("pr-draft-no-head", "");
+    let (draft, draft_head) = g.by_hand("unit/drafted", &[("d.txt", Some("d\n"))], true);
+    let (ready, _) = g.by_hand("unit/ready", &[("r.txt", Some("r\n"))], false);
+    g.no_head(draft);
+    let said = g.round();
+    assert!(
+        said.contains(&format!("pull/{draft}: pull/{draft} has no head")),
+        "{said}"
+    );
+    assert!(g.of(draft).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(ready).len(), 1, "{:?}", g.subs());
+    let (status, title, summary) = g.posted(&draft_head).unwrap();
+    assert_eq!(
+        (status, title.as_str()),
+        (Status::Queued, "waiting: a draft")
+    );
+    assert!(!summary.contains("Forecast:"), "{summary}");
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-submit
 // ---------------------------------------------------------------------------
