@@ -943,3 +943,184 @@ fn an_incremental_run_compiles_without_the_cache() {
         "{said}"
     );
 }
+
+/// A sandboxed run of `tests` in `repo`'s place `name` with the compile
+/// cache declared.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+fn sandboxed_with_cache(repo: &Repo, name: &str, tests: Settings) -> RunRequest {
+    let mut req = declared(request(repo, name, tests), &[]);
+    req.limits.executor = Some("sandbox".into());
+    req
+}
+
+/// Wait until run `name` has said `line`.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+fn wait_for(c: &Checks, name: &str, line: &str) {
+    let until = Instant::now() + Duration::from_secs(30);
+    while !printed(c, name).contains(line) {
+        assert!(
+            Instant::now() < until,
+            "{name} never said {line:?}: {}",
+            printed(c, name)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Whether some process holds the lock of the compile cache at `dir`.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+fn held(dir: &Path) -> bool {
+    let lock = std::fs::File::open(dir.join("lock")).unwrap();
+    matches!(lock.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+/// What a run of the cache's own server says.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+const OWN: &str = "compiling through a compile server of the run's own";
+
+/// 35, design D4: a sandboxed run holds the compile cache's directory
+/// until its command ends; a run started meanwhile does not get it and
+/// compiles without it; the first's exit is its command's.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+#[test]
+fn a_sandbox_run_holds_the_compile_cache_for_its_life() {
+    let repo = Repo::new("checks-sandbox-cc-life");
+    let cache = Scratch::new("cc-life");
+    let c = checks(&repo).with_compile_cache(cache.path().to_path_buf());
+    let first = sandboxed_with_cache(
+        &repo,
+        "p1",
+        command(
+            "echo \"$RUSTC_WRAPPER\" > \"$SLUICE_TMP/wrapper\"; \
+             while [ ! -e \"$SLUICE_TMP/go\" ]; do sleep 0.1; done; exit 3",
+        ),
+    );
+    let run = c.start(&first).unwrap();
+    wait_for(&c, "p1", OWN);
+    assert!(
+        held(cache.path()),
+        "the first run does not hold the directory"
+    );
+
+    let second = sandboxed_with_cache(
+        &repo,
+        "p2",
+        command("echo \"${RUSTC_WRAPPER:-unset}\" > \"$SLUICE_TMP/wrapper\""),
+    );
+    let r = finish(&c, &second);
+    let said = printed(&c, "p2");
+    assert_eq!(r.tasks[0].outcome, Outcome::Pass, "{said}");
+    assert!(
+        said.contains("another run holds the compile cache"),
+        "{said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second.place.tmp.join("wrapper")).unwrap(),
+        "unset\n"
+    );
+    assert!(held(cache.path()), "the first run let the directory go");
+
+    std::fs::write(first.place.tmp.join("go"), "").unwrap();
+    while matches!(c.progress(&run).unwrap(), Progress::Running) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let end = ended(&c, "p1");
+    assert_eq!((end.exit, end.signal), (Some(3), None), "{end:?}");
+    let wrapper = std::fs::read_to_string(first.place.tmp.join("wrapper")).unwrap();
+    assert!(wrapper.trim_end().ends_with("/sccache"), "{wrapper}");
+    assert!(!held(cache.path()), "the directory is held after the run");
+    assert!(group_gone(&c, "p1"), "the run's server was left running");
+}
+
+/// 35, design D4: a sandboxed run that finds the directory held compiles
+/// without the cache, says so, and passes or fails as it would.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+#[test]
+fn a_sandbox_run_finding_the_compile_cache_held_compiles_without_it() {
+    let repo = Repo::new("checks-sandbox-cc-held");
+    let cache = Scratch::new("cc-held");
+    let lock = std::fs::File::create(cache.path().join("lock")).unwrap();
+    lock.try_lock().unwrap();
+    let c = checks(&repo).with_compile_cache(cache.path().to_path_buf());
+    for (name, exit, outcome) in [("p1", 0, Outcome::Pass), ("p2", 1, Outcome::Fail)] {
+        let req = sandboxed_with_cache(
+            &repo,
+            name,
+            command(&format!(
+                "echo \"${{RUSTC_WRAPPER:-unset}}\" > \"$SLUICE_TMP/wrapper\"; exit {exit}"
+            )),
+        );
+        let r = finish(&c, &req);
+        let said = printed(&c, name);
+        assert_eq!(r.tasks[0].outcome, outcome, "{said}");
+        assert!(
+            said.contains("another run holds the compile cache at"),
+            "{said}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(req.place.tmp.join("wrapper")).unwrap(),
+            "unset\n"
+        );
+    }
+    drop(lock);
+}
+
+/// 34, 35, design D4: a sandboxed run ended at its time limit ends its
+/// server with it: nothing of its process group is left, and the
+/// directory is free for the next run.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+#[test]
+fn a_sandbox_runs_compile_server_ends_at_its_time_limit() {
+    let repo = Repo::new("checks-sandbox-cc-limit");
+    let cache = Scratch::new("cc-limit");
+    let c = checks(&repo).with_compile_cache(cache.path().to_path_buf());
+    let mut req = sandboxed_with_cache(&repo, "p1", command("sleep 300"));
+    req.limit = Some(Duration::from_secs(3));
+    let run = c.start(&req).unwrap();
+    wait_for(&c, "p1", OWN);
+    assert!(held(cache.path()));
+    while matches!(c.progress(&run).unwrap(), Progress::Running) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ended(&c, "p1").timed_out);
+    assert!(group_gone(&c, "p1"), "the run's server outlived it");
+    assert!(!held(cache.path()), "the directory is held after the run");
+}
+
+/// 35, design D4, D6: a sandboxed run compiles through a server of its
+/// own over the directory, and a later run in another checkout is served
+/// what the first compiled; no server of either is left.
+///
+/// The crate's source is one directory both compile from, each into its
+/// own checkout, as cargo compiles a dependency into each checkout's own
+/// build. sccache keys a Rust compile by the directory it runs in, so a
+/// crate whose source is in each checkout is compiled again in the other
+/// (design, *Risks*): that is left as sccache keys it.
+#[cfg(all(feature = "tools", target_os = "macos"))]
+#[test]
+fn a_sandbox_run_compiles_through_a_server_of_its_own() {
+    let source = Scratch::new("cc-own-source");
+    small_crate(source.path());
+    let cache = Scratch::new("cc-own");
+    let cmd = format!(
+        "cd {} && {COMPILE} && \"$RUSTC_WRAPPER\" --show-stats --stats-format=json > \"$SLUICE_TMP/stats.json\"",
+        source.path().display()
+    );
+    let mut seen = Vec::new();
+    for checkout in ["checks-sandbox-cc-own-a", "checks-sandbox-cc-own-b"] {
+        let repo = Repo::new(checkout);
+        let c = checks(&repo).with_compile_cache(cache.path().to_path_buf());
+        let req = sandboxed_with_cache(&repo, "p1", command(&cmd));
+        let r = finish(&c, &req);
+        let said = printed(&c, "p1");
+        assert_eq!(r.tasks[0].outcome, Outcome::Pass, "{said}");
+        assert!(said.contains(OWN), "{said}");
+        assert!(repo.dir().join("out/libf.rlib").exists());
+        seen.push(rust_counts(
+            &std::fs::read(req.place.tmp.join("stats.json")).unwrap(),
+        ));
+        assert!(group_gone(&c, "p1"), "the run's server was left running");
+        assert!(!held(cache.path()));
+    }
+    assert_eq!(seen, [(0, 1), (1, 0)], "(hits, misses) of each run");
+}
