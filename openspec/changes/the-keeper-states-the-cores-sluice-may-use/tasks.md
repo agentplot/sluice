@@ -9,7 +9,7 @@
 
 ## 2. The docs say when to set `cores`
 
-- [ ] 2.1 In `site/src/content/docs/reference/configuration.md`, add `cores` to the host's example and to `[runs]` (design D5): the cores sluice may use; each run's share and, with no `max`, the bound follow from it; a Mac never limits sluice, so its keeper sets `cores` to leave the rest for the sessions beside it; and the three refusals. In `site/src/content/docs/guides/parallel-and-batch.md`, *The host's bound*, say in a sentence that `cores` keeps the bound's runs to fewer cores than the host has. Verify `site:prose` passes with no warning.
+- [x] 2.1 In `site/src/content/docs/reference/configuration.md`, add `cores` to the host's example and to `[runs]` (design D5): the cores sluice may use; each run's share and, with no `max`, the bound follow from it; a Mac never limits sluice, so its keeper sets `cores` to leave the rest for the sessions beside it; and the three refusals. In `site/src/content/docs/guides/parallel-and-batch.md`, *The host's bound*, say in a sentence that `cores` keeps the bound's runs to fewer cores than the host has. Verify `site:prose` passes with no warning.
 - [ ] 2.2 Add `cores` to the host's example in `README.md`, and to the host example and the `[runs] max` bullet of `plugins/sluice/skills/setting-up-sluice/SKILL.md`, where "Each run is given the cores divided by `max`" becomes the cores sluice may use. Verify the plugin docs test passes (`crates/sluice/tests/plugin_docs.rs`, `cli:test`); the README is checked by review, since no gate task reads Markdown outside the site (core.21).
 
 ## 3. The gate
