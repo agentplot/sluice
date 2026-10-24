@@ -1,5 +1,5 @@
 ---
-number: 50
+number: 55
 title: A failing release holds its checkout, not its branch
 status: accepted
 date: 2026-10-23

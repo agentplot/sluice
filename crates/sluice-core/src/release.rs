@@ -1,4 +1,4 @@
-//! The release of a combination's checkout (123, 25, 34; ADR 0050): one
+//! The release of a combination's checkout (123, 25, 34; ADR 0055): one
 //! path for every place the core made for a candidate, whether a round
 //! releases it once its verdict is read, `recover` releases a place left
 //! from a run that never started, or a returning host releases what it
