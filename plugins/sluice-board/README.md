@@ -13,7 +13,9 @@ sluice's queue inside a Claude Code session.
 ```
 
 - **Band** above the prompt, while a branch has a queue:
-  `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`
+  `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`.
+  While the overview fails, the band is its error on one line,
+  `sluice: <message>`, until it reads again.
 - **`/sluice`** opens a pane, and Esc or `/sluice` again closes it: each
   branch's combinations under test, its submissions with this session's
   marked and each pull request linked to GitHub, and recent landings,
