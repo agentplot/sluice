@@ -16,6 +16,17 @@ What the code does today, on this branch:
   compares `packed-refs` with that same remote revision). That is the
   `from 8079db3 to 2111d21` in the bolt's log. It also means each ref
   transaction on the host fetches.
+- `main.rs` opens the repository for every command, the hook's among
+  them, with `Bound::open(current_dir)`, and `pruned` finds the common
+  directory by running git in `current_dir` with `GIT_DIR` removed. git
+  starts the `reference-transaction` hook in the folder the command was
+  run from, with `GIT_DIR` set to the repository it names: a `git
+  --git-dir=/srv/x.git fetch` run from `/tmp` starts it in `/tmp` with
+  `GIT_DIR=/srv/x.git`, and from inside the bare repository with
+  `GIT_DIR=.` (checked with git 2.54). So from outside, the hook cannot
+  open a repository, exits 3, and git aborts every ref update of the
+  fetch (swancloud's case); from inside another repository, it would
+  judge the fetch's refs by that repository's policy.
 - The hook prints `refusal(branch, why)` while it walks the updates and
   only reads the caller, `caller()`, afterwards for the log; the words
   to the user name neither the command nor the revisions.
@@ -47,7 +58,8 @@ the records), core.20 (no worktree sluice did not make is moved).
 
 **Goals:**
 
-- The hook judges by the host's own ref and never touches the network.
+- The hook judges by the host's own ref in the repository git names,
+  and never touches the network.
 - A submit from a worktree on a branch sluice lands on writes no ref of
   it, anywhere, and submits the remote's revision.
 - Every host's copy follows the landings its rounds read, a failed set
@@ -177,7 +189,7 @@ the submit takes `session.head` as today.
 *Alternative:* refuse a submit whose copy differs; 124 says a copy
 behind or ahead refuses no submission.
 
-### D5. The hook reads the host's ref, and says what it refused
+### D5. The hook reads the host's ref in the repository git names, and says what it refused
 
 `protect::hook` replaces `seams.branch.read(branch)` with the host's
 value: `copy(branch)`'s `At(v)`, or `read(branch)` for `Itself`, which
@@ -204,9 +216,28 @@ lines come first because the hook writes them before it exits 1. The
 `protected` log line is unchanged in shape, its `from` now the host's
 value.
 
-*Alternative:* have the hook compare the transaction's `<old-value>`
+The hook opens the repository git names. In `main.rs`, the hook's
+command opens `Bound` at `$GIT_DIR`, resolved against the working folder
+when relative, and at the working folder only when git set no
+`GIT_DIR`; `gix::open` takes a git directory, bare or a worktree's, as
+it takes a work tree. `pruned` reads the common directory from the
+branch seam's `common_dir()` of that repository rather than running git.
+The hook makes no git call of its own that discovers a repository from
+the working folder.
+
+A transaction the hook cannot read for a reason of its own passes,
+said once: opening the repository, reading a branch's value, its policy
+or what still needs it, failing with an error, the hook prints one line,
+`warning: sluice's branch protection let this through unread: <why>`,
+and exits 0, however many refs the transaction holds. A refusal is still
+exit 1. A ref outside `refs/heads/`, and a branch whose policy at its
+value does not name it protected, is never refused, as today.
+
+*Alternatives:* have the hook compare the transaction's `<old-value>`
 field; git passes zeros for an update with no expectation, which most
-commands make, so the ref's value must be read.
+commands make, so the ref's value must be read. Have the hook refuse a
+transaction it cannot read; 124 says it passes, said once, so that a
+fault of sluice's never aborts git's own write.
 
 ### D6. One ADR
 
@@ -214,7 +245,8 @@ The next free ADR number records D1 to D5: the host's copy as a seam
 answer; the round as its only writer, to the landing; the records'
 per-host lag; the remote's revision as the submission from a worktree
 on a branch sluice lands on, with no push; the hook judging by the
-host's value. Rule core.4's Details gain "a submit pushing, or writing
+host's value in the repository git names, passing what it cannot read.
+Rule core.4's Details gain "a submit pushing, or writing
 the host's copy of, a branch sluice lands on (124)" under Rules out and
 "a pull request's submit pushing the session's own branch, which sluice
 lands on nowhere (124)" under Not ruled out; core.20's Details gain "a
@@ -237,6 +269,10 @@ ruled out. Sources name 124, S58, S64.
   remote's revision, leaving the copy's commits out] → that is 124's
   ruling; the submit says the copy is ahead with both revisions, so the
   operator sees it.
+- [A transaction the hook cannot read passes, so a broken policy on a
+  protected branch leaves it unguarded on that host until it is fixed]
+  → 124 rules it so; the warning names why on every such write, and the
+  forge's rules still guard a branch on a remote.
 - [git's own `fatal:` line still follows sluice's words] → git prints it
   after a hook refuses; sluice cannot suppress it and says so first.
 - [Each host writes its copy's lag into shared records] → only on a

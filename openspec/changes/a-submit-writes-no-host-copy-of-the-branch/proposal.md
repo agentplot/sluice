@@ -30,13 +30,26 @@ Three things in sluice make that happen:
   lock, is never tried again. Every other host's ref, and this one's
   after a failure, stays wherever it was.
 
-Clause 124, as ruled at blueprints `f11ff05`, says the remote's revision
-is the branch and the host's ref is sluice's copy of it: levelled to
-each landing sluice reads and written at no other time; a submit from a
-worktree on a branch sluice lands on pushes nothing to it and submits
-the remote's revision, saying so where the copy differs; a write to the
-copy by any other hand is refused, judged by the ref's own value on the
-host before and after.
+The same hook fails a fourth way, seen on another host on 2026-10-24
+(swancloud's signal `2026-10-24-swancloud-ops-df4fb922/01`, as the
+planner relayed it): it opens the repository at the folder the command
+was run from, not the one git names. A `git --git-dir=<bare repo>
+fetch` run from outside the repository starts the hook in that outside
+folder, the hook cannot open a repository there, and its failure aborts
+every ref update of the fetch; the same fetch run from inside the
+repository succeeds. Run from inside another repository, the hook would
+judge the fetch's refs by that other repository's policy.
+
+Clause 124, as it stands at blueprints `4ec1f10`, says the remote's
+revision is the branch and the host's ref is sluice's copy of it:
+levelled to each landing sluice reads and written at no other time; a
+submit from a worktree on a branch sluice lands on pushes nothing to it
+and submits the remote's revision, saying so where the copy differs; a
+write to the copy by any other hand is refused, judged by the ref's own
+value on the host before and after; the protection judges the repository git names,
+wherever the command was run from, refuses nothing of a ref it does not
+guard, and lets through, said once, a transaction it cannot read for a
+reason of its own.
 
 ## What Changes
 
@@ -74,19 +87,27 @@ host before and after.
   revisions as today, and whoever ran it is told in sluice's own words,
   naming the branch, the command, and the revision it holds and the
   one the write would set, before git's own `fatal` line (1, 124).
+- **The protection judges the repository git names.** The hook opens
+  the repository git hands it, `GIT_DIR` when git sets it, wherever the
+  command was run from: a `git --git-dir=<bare repo> fetch` run from
+  another folder, or from inside another repository, is judged by the
+  named repository's branches and policy alone. A ref it does not guard
+  is never refused, and a transaction the hook cannot read for a reason
+  of its own, such as a policy it cannot parse, passes, with one warning
+  saying why, rather than aborting git's write (124).
 - S58 and S64 each have a conformance scenario over the fakes and an
   end-to-end test over real git with a remote.
 - An ADR for the decisions in the design; rule core.4's and core.20's
   Details name 124; the docs say what the host's copy is.
 
-No clause changes: this makes 124 and S58 as ruled at blueprints
-`f11ff05`, and S64 as written at `144ced3`, true.
+No clause changes: this makes 124 as it stands at blueprints `4ec1f10`,
+S58 as ruled at `f11ff05`, and S64 as written at `144ced3`, true.
 
 Out of scope:
 
 - C.4's pushed-refs row still ends "a submit from a worktree on that
   branch pushes the worktree's head to the remote's branch for its
-  request", which 124 at `f11ff05` no longer says. This change follows
+  request", which 124 since `f11ff05` no longer says. This change follows
   124; the row is the design's to restate.
 - A copy ahead of the remote with landings the remote lacks is a branch
   whose reading and records disagree (121, S57), which
@@ -104,8 +125,9 @@ Out of scope:
 
 ### New Capabilities
 - `branch-protection`: what the `reference-transaction` hook refuses and
-  lets through, judged by each ref's own value on the host, and what a
-  refusal tells whoever ran the command and the branch's records.
+  lets through, judged by each ref's own value on the host in the
+  repository git names, and what a refusal tells whoever ran the
+  command and the branch's records.
 
 ### Modified Capabilities
 - `remote-branch`: the host's ref of a branch on a remote is sluice's
@@ -128,8 +150,10 @@ Out of scope:
   `Sluice::submit` takes the remote's revision as the head from a
   worktree on a branch sluice lands on, and says when the copy differs;
   status carries the copy behind.
-- **The CLI:** `protect.rs` reads each ref's own value on the host and
-  says the command and both revisions in its refusal; the pull-request
+- **The CLI:** the hook opens the repository git names rather than the
+  working folder, and passes, said once, a transaction it cannot read;
+  `protect.rs` reads each ref's own value on the host and says the
+  command and both revisions in its refusal; the pull-request
   driver's `open` pushes only a branch sluice lands on nowhere; `sluice
   submit` and `sluice status` print the copy.
 - **Tests:** the conformance suite and the fakes (S58, S64), the
@@ -147,6 +171,7 @@ crates/sluice-core/src/**
 crates/sluice-conformance/**
 crates/sluice-fakes/src/**
 crates/sluice/src/lib.rs
+crates/sluice/src/main.rs
 crates/sluice/src/protect.rs
 crates/sluice/src/profiles/branches.rs
 crates/sluice/src/profiles/local_refs.rs

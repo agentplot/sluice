@@ -4,7 +4,8 @@
 
 What the branch protection `sluice protect` installs refuses and lets
 through on a host, judged by each branch's own value there, and what a
-refusal tells whoever ran the command and the branch's records (1, 124).
+refusal tells whoever ran the command and the branch's records, in the
+repository git names wherever the command runs (1, 124).
 
 ## ADDED Requirements
 
@@ -32,6 +33,30 @@ deletes it while anything still needs it, SHALL be refused (1, 124).
 #### Scenario: A branch with no remote is judged the same way
 - **WHEN** `bolt/x` has no `remote` and someone runs `git reset --hard` in a worktree on it, then `git reset --hard unit/a` there
 - **THEN** the first passes, the second is refused, and `bolt/x` is where it was
+
+### Requirement: The protection judges the repository git names
+The protection SHALL judge a transaction in the repository it is of, as
+git names it, wherever the command was run from: the repository
+`GIT_DIR` names when git sets it, and otherwise the one holding the
+folder the command ran in. It SHALL refuse nothing of a ref it does not
+guard. A transaction it cannot read for a reason of its own SHALL pass,
+with one warning saying why, rather than aborting git's write (124).
+
+#### Scenario: A fetch into a bare repository run from outside it
+- **WHEN** sluice's protection is installed in the bare repository `x.git`, whose `bolt/x` sluice lands on, and from a folder that is no repository someone runs `git --git-dir=<path to x.git> fetch origin` that updates a remote-tracking ref and a branch sluice does not guard
+- **THEN** the fetch succeeds, every ref it fetched is updated in `x.git`, sluice prints no warning, and `bolt/x`'s log has no `protected` line
+
+#### Scenario: A write to a protected branch through `--git-dir` from outside is refused
+- **WHEN** from that same outside folder someone runs `git --git-dir=<path to x.git> update-ref refs/heads/bolt/x <another revision>`
+- **THEN** git fails, `x.git`'s `bolt/x` is where it was, and `bolt/x`'s log in `x.git` has one `protected` line naming the command
+
+#### Scenario: Run from inside another repository, the named one is judged
+- **WHEN** a second repository `y`, whose policy protects `main`, holds the folder the command runs in, and from there someone runs `git --git-dir=<path to x.git> update-ref refs/heads/main <another revision>`, where `x.git`'s policy guards no `main`
+- **THEN** the update succeeds in `x.git`, `y`'s `main` is untouched, and neither repository's log has a `protected` line
+
+#### Scenario: A transaction the protection cannot read passes, said once
+- **WHEN** the policy at `bolt/x`'s revision and at `bolt/y`'s cannot be parsed, and someone runs `git update-ref --stdin` with one transaction moving both
+- **THEN** the update succeeds, git's error output holds exactly one warning from sluice saying its branch protection let the transaction through and why, and no log has a `protected` line
 
 ### Requirement: A refusal is recorded with the command and both revisions
 A refused write SHALL be recorded in the branch's log as `protected`,
