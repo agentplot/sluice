@@ -343,10 +343,16 @@ fn s27_a_sessions_place_stays_until_it_is_released() {
     shared::s27_a_sessions_place_stays_until_it_is_released(&Harness::bolt());
 }
 
-/// satisfies: 25; session-runs-1 95, 97
+/// satisfies: 25, 123; session-runs-1 95, 97
 #[test]
-fn a_removed_worktrees_place_is_released_by_the_next_round() {
-    shared::a_removed_worktrees_place_is_released_by_the_next_round(&Harness::bolt());
+fn a_removed_worktrees_place_is_freed_by_the_next_round() {
+    shared::a_removed_worktrees_place_is_freed_by_the_next_round(&Harness::bolt());
+}
+
+/// satisfies: 123
+#[test]
+fn a_removed_worktrees_failing_release_is_freed_and_never_run_again() {
+    shared::a_removed_worktrees_failing_release_is_freed_and_never_run_again(&Harness::bolt());
 }
 
 /// satisfies: S57, 121, 22, 45

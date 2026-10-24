@@ -41,12 +41,23 @@ fn say(out: &mut dyn Write, json: bool, text: &str) -> Result<()> {
 pub fn tell_dropped(out: &mut dyn Write, json: bool, dropped: &[Dropped]) -> Result<()> {
     for d in dropped {
         let text = match (&d.error, &d.failed) {
+            (Some(e), _) if d.held => format!(
+                "{name} is held: its release failed: {e}. `sluice release {name}` runs it again",
+                name = d.name
+            ),
             (Some(e), _) => format!("could not release {}: {e}", d.name),
             (None, Some(_)) => format!(
                 "released {}: its command failed; `sluice previews` shows what it printed",
                 d.name
             ),
-            (None, None) => format!("released {}: its checkout no longer exists", d.name),
+            (None, None) => {
+                let gone = d.gone.clone().unwrap_or_default();
+                format!(
+                    "freed {}: its checkout no longer exists; {}; its ports and names free",
+                    d.name,
+                    crate::exec::gone_release(gone.ran, gone.failed.as_deref())
+                )
+            }
         };
         say(out, json, &text)?;
     }
@@ -59,13 +70,18 @@ pub fn dropped_json(dropped: &[Dropped]) -> Vec<serde_json::Value> {
     dropped
         .iter()
         .map(|d| {
-            serde_json::json!({
+            let mut doc = serde_json::json!({
                 "name": d.name,
                 "branch": d.branch,
                 "released": d.error.is_none(),
                 "failed": d.failed.is_some(),
                 "error": d.error,
-            })
+                "held": d.held,
+            });
+            if let Some(g) = &d.gone {
+                doc["gone"] = serde_json::json!({"ran": g.ran, "failed": g.failed});
+            }
+            doc
         })
         .collect()
 }
@@ -86,6 +102,9 @@ pub(crate) fn preview_json(v: &PreviewView) -> serde_json::Value {
     });
     if let PreviewState::Failed(output) = &v.state {
         doc["output"] = output.clone().into();
+    }
+    if let Some(f) = &p.release_failed {
+        doc["release_failed"] = serde_json::json!(f);
     }
     doc
 }
@@ -111,6 +130,22 @@ fn write_preview(v: &PreviewView, out: &mut dyn Write) -> Result<()> {
     }
     if let PreviewState::Failed(output) = &v.state {
         for line in output.trim_end().lines() {
+            writeln!(out, "  | {line}")?;
+        }
+    }
+    // 123: kept until it is released by name, or its failure accepted.
+    if let Some(f) = &p.release_failed {
+        let tries = match f.tries {
+            1 => "1 try".to_string(),
+            n => format!("{n} tries"),
+        };
+        let held = if f.stopped { ", held" } else { "" };
+        writeln!(
+            out,
+            "  its release failed ({tries}{held}): sluice release {} runs it again, with --accept-failure frees it without",
+            p.name
+        )?;
+        for line in f.failed.trim_end().lines() {
             writeln!(out, "  | {line}")?;
         }
     }
@@ -279,11 +314,14 @@ pub fn list(s: &Sluice<'_>, host: &dyn Host, json: bool, out: &mut dyn Write) ->
 
 /// `sluice release <preview>`: release a preview at its caller's asking
 /// (101; rule core.16). The name may be given whole, `preview/<rev>`, or
-/// as the revision.
+/// as the revision. A release that fails exits 1, saying what failed, and
+/// leaves the preview held (123); with `accept`, it is freed with nothing
+/// run.
 pub fn release(
     s: &Sluice<'_>,
     host: &dyn Host,
     preview: &str,
+    accept: bool,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
@@ -301,25 +339,46 @@ pub fn release(
         .previews()?
         .into_iter()
         .find(|p| p.name == name);
-    let released = s.release_preview(&name)?;
+    let released = match accept {
+        true => s.accept_preview(&name),
+        false => s.release_preview(&name),
+    };
+    let (released, failed) = match released {
+        Ok(r) => (r, None),
+        Err(e) => (false, Some(format!("{e:#}"))),
+    };
     if released {
         if let Some(p) = place {
             host.end_session(&p.path.to_string_lossy())?;
         }
     }
-    if json {
-        writeln!(
-            out,
-            "{}",
-            serde_json::json!({ "preview": name, "released": released })
-        )?;
-    } else if released {
-        writeln!(
-            out,
+    let text = match (&failed, released) {
+        (Some(e), _) => format!(
+            "could not release {name}: {e}\n\
+             `sluice release {name}` runs it again; `sluice release {name} --accept-failure` frees it without"
+        ),
+        (None, true) if accept => format!(
+            "freed {name} without its release command: its command's run ended, its checkout removed, its ports and names free"
+        ),
+        (None, true) => format!(
             "released {name}: its command's run ended, the release command run, its ports and names free"
-        )?;
+        ),
+        (None, false) => "nothing to release".into(),
+    };
+    if json {
+        if failed.is_some() {
+            writeln!(std::io::stderr(), "{text}")?;
+        }
+        let mut doc = serde_json::json!({ "preview": name, "released": released });
+        if accept {
+            doc["accepted"] = released.into();
+        }
+        if let Some(f) = &failed {
+            doc["failed"] = f.clone().into();
+        }
+        writeln!(out, "{doc}")?;
     } else {
-        writeln!(out, "nothing to release")?;
+        writeln!(out, "{text}")?;
     }
-    Ok(LANDED)
+    Ok(if failed.is_some() { FAILED } else { LANDED })
 }

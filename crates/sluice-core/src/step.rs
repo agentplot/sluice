@@ -38,6 +38,7 @@ use crate::records::{
     LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State,
     SystemRun, Tested, ToldRecord,
 };
+use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
 
@@ -45,15 +46,21 @@ use crate::{verdict, Serves, Sluice, OUTPUT};
 /// row that leave a check not run and fail none on its own result.
 pub const NOT_RUN_BOUND: u32 = 3;
 
+/// 123: how many more times a checkout's release that failed is tried
+/// when the branch's policy names no `release_retries`.
+pub const RELEASE_RETRIES: u32 = 3;
+
 /// A round: how its step went, the session places it released because
-/// their worktrees no longer exist (session-runs-1 clause 97), and the
+/// their worktrees no longer exist (session-runs-1 clause 97), the
 /// previews it released because nobody can use them (previews-1 clause
-/// 101).
+/// 101), and the combinations' checkouts whose release failed, was held
+/// or found their working copy gone (123).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Round {
     pub step: Step,
     pub released: Vec<crate::session::Abandoned>,
     pub previews: Vec<crate::preview::Dropped>,
+    pub releases: Vec<ReleaseOutcome>,
     /// 121: the hold, as the records keep it, of a round that held the
     /// branch.
     pub held: Option<BranchHold>,
@@ -101,7 +108,8 @@ impl Sluice<'_> {
         let released = info_span!("sluice.abandoned").in_scope(|| self.release_abandoned())?;
         let previews =
             info_span!("sluice.previews").in_scope(|| self.release_unusable_previews())?;
-        let step = self.step_locked(branch, &round)?;
+        let mut releases = Vec::new();
+        let step = self.step_locked(branch, &round, &mut releases)?;
         let held = match step {
             Step::Held => self.read_line(branch)?.doc.held,
             _ => None,
@@ -110,11 +118,20 @@ impl Sluice<'_> {
             step,
             released,
             previews,
+            releases,
             held,
         })
     }
 
-    fn step_locked(&self, branch: &str, round: &tracing::Span) -> Result<Step> {
+    /// The round under the branch's lock; each release it tried that was
+    /// not plainly released goes in `releases`, and no place is tried
+    /// twice in one round (123).
+    fn step_locked(
+        &self,
+        branch: &str,
+        round: &tracing::Span,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<Step> {
         let Some(_lock) = self.seams.state.lock(branch)? else {
             round.record("sluice.step", "busy");
             return Ok(Step::Busy);
@@ -122,11 +139,11 @@ impl Sluice<'_> {
         if !self.keeps(branch)? {
             // 75: another instance keeps the branch; this one takes, runs
             // and reports runs of its own.
-            info_span!("sluice.claim").in_scope(|| self.execute(branch))?;
+            info_span!("sluice.claim").in_scope(|| self.execute(branch, releases))?;
             round.record("sluice.step", "led");
             return Ok(Step::Led);
         }
-        info_span!("sluice.recover").in_scope(|| self.recover(branch))?;
+        info_span!("sluice.recover").in_scope(|| self.recover(branch, releases))?;
         match info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
             Decided::Written => {}
             Decided::Contended => {
@@ -137,14 +154,14 @@ impl Sluice<'_> {
                 // 121: nothing new to start or land; an earlier round's
                 // outcomes are still told and its places released.
                 info_span!("sluice.perform").in_scope(|| {
-                    self.perform_releases(branch)?;
+                    self.perform_releases(branch, releases)?;
                     self.perform_outbox(branch)
                 })?;
                 round.record("sluice.step", "held");
                 return Ok(Step::Held);
             }
         }
-        info_span!("sluice.perform").in_scope(|| self.perform(branch))?;
+        info_span!("sluice.perform").in_scope(|| self.perform(branch, releases))?;
         round.record("sluice.step", "stepped");
         Ok(Step::Stepped)
     }
@@ -194,9 +211,11 @@ impl Sluice<'_> {
     // 1. Recover
     // -----------------------------------------------------------------------
 
-    fn recover(&self, branch: &str) -> Result<()> {
+    fn recover(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         // A place decided by a step that stopped before confirming its run
-        // started: release it by its name and open the run again.
+        // started: release it by its name and open the run again, whatever
+        // its release did (123); one that failed is tried again by the
+        // rounds after.
         let line = self.read_line(branch)?;
         let stale: Vec<(String, String)> = line
             .doc
@@ -210,8 +229,8 @@ impl Sluice<'_> {
             })
             .collect();
         for (cand, place) in stale {
-            self.seams.checkout.release(&place, false)?;
-            let now = self.now();
+            let outcome = self.release_made(branch, &place, false)?;
+            let retry = matches!(outcome.how, Releasing::Failed { .. });
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
                     for r in &mut c.runs {
@@ -222,54 +241,66 @@ impl Sluice<'_> {
                         }
                     }
                 }
-                l.log(
-                    &now,
-                    Event::Released {
-                        place: place.clone(),
-                        worktree: None,
-                    },
-                );
+                if retry && !l.doc.release.contains(&place) {
+                    l.doc.release.push(place.clone());
+                }
                 Ok(())
             })?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
         }
-        self.perform(branch)
+        self.perform(branch, releases)
     }
 
     // -----------------------------------------------------------------------
     // 3. Perform
     // -----------------------------------------------------------------------
 
-    fn perform(&self, branch: &str) -> Result<()> {
+    fn perform(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         self.perform_landing(branch)?;
-        self.perform_releases(branch)?;
+        self.perform_releases(branch, releases)?;
         self.perform_outbox(branch)?;
         self.perform_starts(branch)
     }
 
     /// 25, 34: release the places of candidates whose verdict was read or
-    /// that were dropped; only places sluice made (rule core.16).
-    fn perform_releases(&self, branch: &str) -> Result<()> {
+    /// that were dropped; only places sluice made (rule core.16). 123: a
+    /// release that fails holds its place, never the round, and is tried
+    /// once a round: a place tried already in this round, held, or made
+    /// by another host is passed over. A held place of this host's whose
+    /// working copy has gone since is released once, as any gone place is.
+    fn perform_releases(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let doc = self.read_line(branch)?.doc;
-        for place in doc.release {
-            let passed = doc.passed.contains(&place);
-            self.seams.checkout.release(&place, passed)?;
-            let now = self.now();
-            self.update(branch, |l| {
-                l.doc.passed.retain(|p| *p != place);
-                if let Some(n) = l.doc.release.iter().position(|p| *p == place) {
-                    l.doc.release.remove(n);
-                    l.log(
-                        &now,
-                        Event::Released {
-                            place: place.clone(),
-                            worktree: None,
-                        },
-                    );
-                }
-                Ok(())
-            })?;
+        let elsewhere = |f: &crate::records::FailedRelease| {
+            f.host.as_deref().is_some_and(|h| h != self.peer.name)
+        };
+        let gone_since = doc
+            .failed_releases
+            .iter()
+            .filter(|f| f.stopped && !elsewhere(f) && self.held_gone(&f.place))
+            .map(|f| &f.place);
+        for place in doc.release.iter().chain(gone_since) {
+            let passed_over = releases.iter().any(|o| o.place == *place)
+                || doc.failed_releases.iter().any(|f| {
+                    f.place == *place && ((f.stopped && !self.held_gone(place)) || elsewhere(f))
+                });
+            if passed_over {
+                continue;
+            }
+            let outcome = self.release_made(branch, place, doc.passed.contains(place))?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
         }
         Ok(())
+    }
+
+    /// 123: whether the working copy of the held place `place` is gone, so
+    /// it is released once more; a place whose state cannot be read is
+    /// left held.
+    fn held_gone(&self, place: &str) -> bool {
+        self.seams.checkout.gone(place).unwrap_or(false)
     }
 
     /// 24, 45, 46: move the branch from exactly the revision the landing
@@ -1984,8 +2015,12 @@ impl Sluice<'_> {
     /// 75, 77, 81: what an instance that does not keep `branch` does for
     /// it: shows it is alive, releases the places it made that no claim of
     /// its own holds, reports its runs that ended, and claims open runs it
-    /// may take, earliest first, up to its bound, then starts them.
-    fn execute(&self, branch: &str) -> Result<()> {
+    /// may take, earliest first, up to its bound, then starts them. 81,
+    /// 123: it claims once each place it left has been released, gone or
+    /// held, whatever their releases did: a held place bars no claim, and
+    /// keeps its ports and disk beside the places the claims are run in.
+    /// Only a failure to write the records stops its claims for the round.
+    fn execute(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(());
         };
@@ -2019,8 +2054,20 @@ impl Sluice<'_> {
             .collect();
         let prefix = format!("sluice/try/{branch}/");
         for p in self.seams.checkout.made()? {
-            if p.starts_with(&prefix) && !held.contains(&p) {
-                self.seams.checkout.release(&p, false)?;
+            if !p.starts_with(&prefix) || held.contains(&p) {
+                continue;
+            }
+            let stopped = line
+                .doc
+                .failed_releases
+                .iter()
+                .any(|f| f.place == p && f.stopped);
+            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
+                continue;
+            }
+            let outcome = self.release_made(branch, &p, false)?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
             }
         }
 
@@ -2070,7 +2117,10 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        self.seams.checkout.release(&p, false)?;
+                        let outcome = self.release_made(branch, &p, false)?;
+                        if outcome.how != Releasing::Released {
+                            releases.push(outcome);
+                        }
                     }
                 }
                 Progress::Finished(report) => {
@@ -2107,14 +2157,18 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        self.seams.checkout.release(&p, passed)?;
+                        let outcome = self.release_made(branch, &p, passed)?;
+                        if outcome.how != Releasing::Released {
+                            releases.push(outcome);
+                        }
                     }
                 }
             }
         }
 
         // 75, 76, 71: claims, earliest first, up to this host's bound, of
-        // candidates fetched from the remote (82).
+        // candidates fetched from the remote (82); 81, 123: whatever the
+        // releases above did.
         self.seams.state.fetch_candidates(branch)?;
         let mut room = self.capacity(&self.read_line(branch)?)?;
         while room > 0 {

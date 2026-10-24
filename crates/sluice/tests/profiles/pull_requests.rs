@@ -1174,9 +1174,10 @@ fn sent_back_keeps_the_worktree() {
     assert!(w.exists());
 }
 
-/// 122: a waiting submit whose pull request's submission lands, and whose
-/// round then fails releasing the combination's checkout, reports it
-/// landed, exits 0, and says what failed on stderr.
+/// 122, 123: a waiting submit whose pull request's submission lands, and
+/// whose round then fails to release the combination's checkout, says the
+/// failed try, reports it landed and exits 0: the round went on, so
+/// nothing failed after the landing.
 #[test]
 fn a_landing_stands_when_its_release_then_fails() {
     let g = OnGitHub::new("pr-release", "");
@@ -1217,14 +1218,15 @@ fn a_landing_stands_when_its_release_then_fails() {
         text(&out)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let after: Vec<&str> = stderr
-        .lines()
-        .filter(|l| l.starts_with("sluice: after the landing: "))
-        .collect();
-    assert_eq!(after.len(), 1, "{stderr}");
+    assert!(!stderr.contains("sluice: after the landing: "), "{stderr}");
     assert!(
-        after[0].contains("the release command of ") && after[0].contains("takes only up"),
-        "{stderr}"
+        stdout
+            .lines()
+            .any(|l| l.starts_with("could not release sluice/try/main/")
+                && l.contains("the release command of ")
+                && l.contains("takes only up")),
+        "{}",
+        text(&out)
     );
 }
 

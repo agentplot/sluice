@@ -72,7 +72,7 @@ Then ask the user which branches sluice should gate (`main`; a family like
 | more than one host, or more than one system (`[signers]`, `[systems]`) | peers on the git remote, standing hosts signing with SSH keys | [peers](references/profiles/peers.md) |
 
 The rules per branch (`required`, `parallel`, `batch`, `hold`, `flaky`,
-`timeout`, `trust`) and `[landing] subject` are in the
+`timeout`, `release_retries`, `trust`) and `[landing] subject` are in the
 [configuration reference](https://agentplot.github.io/sluice/reference/configuration/#branchespattern-rules-per-target-branch).
 Leave `flaky = "fail"`.
 
@@ -110,6 +110,9 @@ Then choose, and tell the user why:
 - Set `hold` on a branch whose every move starts a build or a deployment,
   such as `main`, to how far apart submissions may arrive and still land in
   one move, e.g. `"5m"`. Leave it off bolt branches.
+- Leave `release_retries` unset. A checkout whose release command fails is
+  tried three more times, one a round, then held for the user to release
+  with `sluice release <checkout>`; it never holds the branch.
 - Set the host's `[runs] max` (step 5) to how many runs the host holds at
   once. It caps every branch together, and agents' `sluice exec` runs too.
 - Every run gets its own checkout and its own ports. Check the tests write

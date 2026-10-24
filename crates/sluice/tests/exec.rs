@@ -294,25 +294,32 @@ fn a_clean_run_of_the_checks_is_recorded_and_a_dirty_one_is_not() {
     );
 }
 
-/// Session-runs-1 clause 97: a worktree removed with nothing released is
-/// no session's. The next `sluice exec` on the host, from another
-/// worktree, releases its place: the policy's release command runs in its
-/// scratch directory, with its ports, and its block of ports is free for
-/// the next worktree. `sluice status` lists every worktree held, and the
-/// removed one only until it is released.
+/// Session-runs-1 clause 97, 123: a worktree removed with `rm -rf`, with
+/// nothing released, is no session's. The next `sluice exec` on the host,
+/// from another worktree, runs the release its runs stored, once, in its
+/// scratch directory with its port, the policy's toolchain not run again
+/// in its name, and frees its place: its block of ports goes to the next
+/// worktree, and the branch's log names it `gone` with its release run. A
+/// third `sluice exec` runs its release no more. `sluice status` lists
+/// every worktree held, and the removed one only until it is freed.
 #[test]
-fn the_next_exec_releases_a_removed_worktree() {
+fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
     let s = Setup::new("exec-removed");
     let marks = Scratch::new("exec-removed-marks");
-    let script = marks.path().join("release.sh");
-    std::fs::write(
-        &script,
-        format!(
-            "echo \"$(pwd) $SLUICE_PORT_WEB\" >> {}\n",
-            marks.path().join("released").display()
-        ),
-    )
-    .unwrap();
+    // Each says where it ran, so a run in the removed worktree's name
+    // shows, and the release the port it was given.
+    let write = |name: &str| {
+        let script = marks.path().join(format!("{name}.sh"));
+        let log = marks.path().join(name);
+        std::fs::write(
+            &script,
+            format!("echo \"$(pwd -P) $SLUICE_PORT_WEB\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        (script, log)
+    };
+    let (release, released) = write("released");
+    let (toolchain, tooled) = write("toolchain");
     s.repo.write(
         ".config/sluice.toml",
         // Ports of its own: a block it frees is free only if no test
@@ -320,7 +327,11 @@ fn the_next_exec_releases_a_removed_worktree() {
         &POLICY
             .replace(
                 "[tests]\n",
-                &format!("[tests]\nrelease = \"sh {}\"\n", script.display()),
+                &format!(
+                    "[tests]\nrelease = \"sh {}\"\ntoolchain = [\"/bin/sh\", \"{}\"]\n",
+                    release.display(),
+                    toolchain.display()
+                ),
             )
             .replace("\"41500\"", "\"43200\""),
     );
@@ -376,32 +387,44 @@ fn the_next_exec_releases_a_removed_worktree() {
     );
     assert!(listed.contains("last run 20"), "{listed}");
 
+    // Its runs ran the toolchain in it, as every run does.
+    let ran_in = |log: &Path| std::fs::read_to_string(log).unwrap_or_default();
+    assert!(ran_in(&tooled).contains(canon_a.to_str().unwrap()));
+    std::fs::remove_file(&tooled).unwrap();
+
     // Removed with nothing released: still held, and listed as removed.
     std::fs::remove_dir_all(&s.worktree).unwrap();
     let out = sluice_in(s.repo.dir(), &["status", "--json"]);
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["worktrees"][0]["removed"], true, "{doc}");
-    assert!(!marks.path().join("released").exists());
+    assert!(!released.exists());
 
-    // The next run, in another worktree, releases it first.
+    // The next run, in another worktree, runs its stored release first,
+    // once, from its scratch directory with its port, and frees it.
+    let scratch = std::fs::canonicalize(s.repo.dir().join(".git/sluice/.tmp"))
+        .unwrap()
+        .join(sluice::runs::dir_name(&format!(
+            "session/{}",
+            canon_a.display()
+        )));
     let out = sluice_in(&other, &["exec", "bolt/x", "--", "true"]);
     assert!(out.status.success(), "{}", text(&out));
     let said = text(&out);
     assert!(
         said.contains(&format!(
-            "released {}: the worktree no longer exists",
+            "freed {}: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free",
             canon_a.display()
         )),
         "{said}"
     );
-    let released = std::fs::read_to_string(marks.path().join("released")).unwrap();
-    let words: Vec<&str> = released.split_whitespace().collect();
-    assert_eq!(words.len(), 2, "{released}");
+    let once = format!("{} {a_port}\n", scratch.display());
+    assert_eq!(ran_in(&released), once);
     assert!(
-        words[0].contains("/sluice/.tmp/"),
-        "the release command ran in the place's scratch directory: {released}"
+        !ran_in(&tooled).contains(canon_a.to_str().unwrap())
+            && !ran_in(&tooled).contains(scratch.to_str().unwrap()),
+        "the toolchain ran in its name: {}",
+        ran_in(&tooled)
     );
-    assert_eq!(words[1], a_port, "with the place's ports");
 
     // Its block of ports is free: the next worktree takes it.
     assert_eq!(port(&other), a_port);
@@ -414,13 +437,23 @@ fn the_next_exec_releases_a_removed_worktree() {
         std::fs::canonicalize(&other).unwrap().to_str().unwrap()
     );
     assert_eq!(held[0]["removed"], false);
-    // Logged where the branch's releases are, naming the worktree.
+    // Logged gone where the branch's releases are, naming the worktree,
+    // and never named again.
     let log = std::fs::read_to_string(s.repo.dir().join(".git/sluice/bolt/x/log.jsonl")).unwrap();
+    let named: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains(&format!("\"worktree\":\"{}\"", canon_a.display())))
+        .collect();
+    assert_eq!(named.len(), 1, "{log}");
+    assert!(named[0].contains("\"event\":\"gone\""), "{log}");
+    assert!(named[0].contains("\"ran\":true"), "{log}");
+    let out = sluice_in(&other, &["exec", "bolt/x", "--", "true"]);
     assert!(
-        log.lines().any(|l| l.contains("\"event\":\"released\"")
-            && l.contains(&format!("\"worktree\":\"{}\"", canon_a.display()))),
-        "{log}"
+        !text(&out).contains(canon_a.to_str().unwrap()),
+        "{}",
+        text(&out)
     );
+    assert_eq!(ran_in(&released), once, "its release ran again");
 }
 
 /// Session-runs-1 clauses 92, 97, rule core.18: each run leaves on the

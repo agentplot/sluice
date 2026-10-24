@@ -1,7 +1,8 @@
 //! A landing stands whatever fails after it (122), through the binary on
 //! a scratch repository under local refs: the release of the
 //! combination's checkout fails once the landing changed the script it
-//! runs, and the waiting submit still reports the landing and exits 0.
+//! runs, and the waiting submit still reports the landing and exits 0,
+//! the checkout held and the round going on (123).
 //! Needs git, so it is in the check-tools tier.
 
 #![cfg(feature = "tools")]
@@ -17,10 +18,11 @@ const POLICY: &str =
     "[tests]\nrunner = \"command\"\ncommand = \"true\"\nrelease = \"sh release.sh\"\n\n\
 [branches.\"bolt/*\"]\ntimeout = \"1m\"\n";
 
-/// 122: the branch moves to the submission's landing, then the release
-/// command, run in the checkout of the combination that landed, fails:
-/// the waiting submit says the landing as for any other, exits 0, and
-/// says on stderr what failed after it.
+/// 122, 123: the branch moves to the submission's landing, then the
+/// release command, run in the checkout of the combination that landed,
+/// fails: the waiting submit says the failed try and the landing as for
+/// any other, and exits 0; the round went on, so nothing failed after
+/// the landing.
 #[test]
 fn a_release_failing_after_the_landing_leaves_the_submit_landed() {
     let repo = Repo::new("landed");
@@ -64,14 +66,17 @@ fn a_release_failing_after_the_landing_leaves_the_submit_landed() {
         stdout.ends_with(&format!("passed · landed as {}\n", &tip[..7])),
         "{stdout}{stderr}"
     );
-    let after: Vec<&str> = stderr
-        .lines()
-        .filter(|l| l.starts_with("sluice: after the landing: "))
-        .collect();
-    assert_eq!(after.len(), 1, "{stderr}");
     assert!(
-        after[0].contains("the release command of ")
-            && after[0].contains("release.sh takes only up"),
-        "{stderr}"
+        !stderr.contains("sluice: after the landing: "),
+        "{stdout}{stderr}"
+    );
+    let tried = stdout
+        .lines()
+        .find(|l| l.starts_with("could not release sluice/try/bolt/x/"))
+        .unwrap_or_else(|| panic!("{stdout}{stderr}"));
+    assert!(
+        tried.contains("(try 1 of 4): the release command of ")
+            && tried.contains("release.sh takes only up"),
+        "{stdout}{stderr}"
     );
 }

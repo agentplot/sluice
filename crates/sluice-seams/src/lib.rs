@@ -99,6 +99,25 @@ pub struct SessionPlace {
     /// How its last run ended, once one has and none has started since
     /// (97).
     pub last_result: Option<LastResult>,
+    /// Its release at its session's or driver's asking failed, and how
+    /// (123).
+    pub release_failed: Option<ReleaseFailure>,
+}
+
+/// A release of a preview or of a session's place that failed, kept on
+/// the place's record until the place is released or freed (123).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseFailure {
+    /// What failed, the end of what the release command printed included.
+    pub failed: String,
+    /// How many times its release was tried, the first included.
+    pub tries: u32,
+    /// When it last failed.
+    pub at: String,
+    /// It is tried no more on its own: held until its release is asked
+    /// for by name, or its failure accepted.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// How a session's last run ended, kept on its place until the place's
@@ -197,6 +216,17 @@ pub struct PreviewPlace {
     /// It was released because its command failed: the end of what the
     /// command printed. Such a preview holds nothing (101).
     pub failed: Option<String>,
+    /// Its release failed, and how (123).
+    pub release_failed: Option<ReleaseFailure>,
+}
+
+/// How the release of a place whose working copy was gone went (123).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoneRelease {
+    /// A release command its runs stored was run.
+    pub ran: bool,
+    /// It failed, and how: the end of what it printed included.
+    pub failed: Option<String>,
 }
 
 /// How a session's place was released.
@@ -223,6 +253,30 @@ pub trait Checkout {
     /// `passed` says the place's candidate passed, by the verdict the core
     /// read: only such a place's declared caches are saved (35).
     fn release(&self, name: &str, passed: bool) -> Result<()>;
+
+    /// 123: whether the working copy of the place `name` is gone: its
+    /// record names one, and that path is no directory. A place with no
+    /// record, or one recorded before its checkout was made, is not gone:
+    /// `release` handles it. A read: nothing is written or released.
+    fn gone(&self, name: &str) -> Result<bool>;
+
+    /// 123: free what sluice itself holds for the place `name`, running
+    /// nothing in its name: its runs' groups ended and their directories
+    /// removed, the checkout sluice made removed, its scratch directory,
+    /// its ports and its record let go, and a preview's names. No release
+    /// command runs and no cache is saved; a session's worktree is left as
+    /// it is (25, rule core.16). Nothing when there is no such place.
+    fn free(&self, name: &str) -> Result<()>;
+
+    /// 123: release the place `name`, whose working copy is gone, from
+    /// what sluice itself holds for it: the release command its last run
+    /// stored, run once with the environment and ports stored with it, in
+    /// the place's scratch directory, entering no toolchain and reading no
+    /// policy; then free it as [`Checkout::free`] does, whatever the command
+    /// did. A place whose gone release has started once is freed with
+    /// nothing run, so the command never runs twice. Only a failure to free
+    /// is an error; the command's failure is in what is returned.
+    fn release_gone(&self, name: &str) -> Result<GoneRelease>;
 
     /// 81: every candidate's place this host made and has not released,
     /// by name: what a returning host releases before it claims again.
@@ -252,7 +306,8 @@ pub trait Checkout {
     /// session's or driver's asking: end every run in it, run the release
     /// command once, as `policy` states it or, given none, as its last run
     /// carried it, remove its scratch directory and let its ports go. The
-    /// worktree is left as it is (25, rule core.16).
+    /// worktree is left as it is (25, rule core.16). A release that fails
+    /// keeps the place with what failed, held: no round releases it (123).
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
 
     /// Session-runs-1 clause 97: every session's place the repository
@@ -297,8 +352,10 @@ pub trait Checkout {
     /// run ended, the release command run, its checkout removed, its ports
     /// and names let go. With `failed`, a record of it is kept, holding
     /// nothing, with what its command printed. `false` when there is no
-    /// such preview.
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool>;
+    /// such preview. A release that fails keeps the preview with what
+    /// failed, and holds it once it has been tried more than `retries`
+    /// times, the bound the core read for its branch (123).
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool>;
 }
 
 // ---------------------------------------------------------------------------
