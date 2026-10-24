@@ -315,6 +315,15 @@ in
       RUST_TEST_THREADS="$SLUICE_JOBS"
       export CARGO_BUILD_JOBS RUST_TEST_THREADS
     fi
+    # In a session's own shell rustc runs under sccache, whose server and
+    # cache are the user's, under their home, so the agents' worktrees on
+    # one host reuse each other's compiled crates ($RUSTC_WRAPPER
+    # --show-stats). A run sluice starts, told by the SLUICE_CHECKOUT it
+    # sets, runs rustc unwrapped.
+    if [ -z "''${SLUICE_CHECKOUT:-}" ]; then
+      RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+      export RUSTC_WRAPPER
+    fi
     # Only activates: sluice sources this inside its executor, where
     # nothing may be installed.
     ${activate}
