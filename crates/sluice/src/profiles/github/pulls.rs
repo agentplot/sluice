@@ -1097,6 +1097,11 @@ impl crate::PullRequests for Pulls {
         let Some(t) = self.target(&s, branch)? else {
             return Ok(Err(SubmitRefusal::NotManaged));
         };
+        // ADR 0047: refused before anything is pushed or opened.
+        let warnings = match s.check_kept_out(&session, branch, &t.tip)? {
+            Ok(w) => w,
+            Err(r) => return Ok(Err(r)),
+        };
         let forge = self.forge(branch)?;
         let head_ref = session.from.worktree.clone();
         self.pushed(&t.remote)?
@@ -1127,12 +1132,16 @@ impl crate::PullRequests for Pulls {
                 )
             }
         };
+        let mut said = format!(
+            "pushed {head_ref} · {word} #{}: {}",
+            pull.number, pull.title
+        );
+        for w in &warnings {
+            said.push_str(&format!("\nwarning: {w}"));
+        }
         Ok(Ok(Opened {
             number: pull.number,
-            said: format!(
-                "pushed {head_ref} · {word} #{}: {}",
-                pull.number, pull.title
-            ),
+            said,
         }))
     }
 

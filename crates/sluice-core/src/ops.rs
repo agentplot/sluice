@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sluice_seams::{Contested, Formed, Rev};
+use sluice_seams::{Contested, Formed, Rev, Session};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -204,14 +204,10 @@ impl Sluice<'_> {
         if !unknown.is_empty() {
             return Ok(Err(SubmitRefusal::UnknownAfter(unknown)));
         }
-        let mut warnings = Vec::new();
-        if let Some(path) = &session.from.path {
-            match self.kept_out_in(&req.branch, &tip, Path::new(path))? {
-                Ok(kept) if !kept.is_empty() => return Ok(Err(SubmitRefusal::KeptOut(kept))),
-                Ok(_) => {}
-                Err(why) => warnings.push(why),
-            }
-        }
+        let warnings = match self.check_kept_out(&session, &req.branch, &tip)? {
+            Ok(w) => w,
+            Err(r) => return Ok(Err(r)),
+        };
         // 82: the head is fetchable by every host before it is submitted.
         self.seams.state.publish_head(&req.branch, &session.head)?;
         let id = self.seams.state.allocate_id()?;
@@ -317,6 +313,27 @@ impl Sluice<'_> {
             }
         }
         Ok(Ok(accepted))
+    }
+
+    /// ADR 0047: refuse `session`'s submission to `branch`, whose revision
+    /// is `tip`, when its gate requires checks the runner keeps out of CI
+    /// in the session's worktree; otherwise the warnings to take it with.
+    /// A session with no worktree on this host has nothing to ask. Writes
+    /// nothing.
+    pub fn check_kept_out(
+        &self,
+        session: &Session,
+        branch: &str,
+        tip: &Rev,
+    ) -> Result<std::result::Result<Vec<String>, SubmitRefusal>> {
+        let Some(path) = &session.from.path else {
+            return Ok(Ok(Vec::new()));
+        };
+        Ok(match self.kept_out_in(branch, tip, Path::new(path))? {
+            Ok(kept) if !kept.is_empty() => Err(SubmitRefusal::KeptOut(kept)),
+            Ok(_) => Ok(Vec::new()),
+            Err(why) => Ok(vec![why]),
+        })
     }
 
     /// ADR 0047: the checks `branch`'s gate at `tip` requires that the

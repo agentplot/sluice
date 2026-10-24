@@ -67,7 +67,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
   `crates/sluice/tests/cli.rs` for the refusal's text and exit 2, its
   JSON, and the warning. Verify
   `sluice exec main -- cargo test -p sluice --test cli`.
-- [ ] 4.2 `crates/sluice/src/profiles/github/pulls.rs`: `open` refuses
+- [x] 4.2 `crates/sluice/src/profiles/github/pulls.rs`: `open` refuses
   with `KeptOut` before `push_branch`; `refusal_word` gains it. Add a
   test to `crates/sluice/tests/profiles/pull_requests.rs` that nothing
   is pushed and no request is opened or marked ready. Verify
