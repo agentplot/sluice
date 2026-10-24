@@ -1590,7 +1590,7 @@ fn submit(
         return Ok(0);
     }
     if !json {
-        let ahead = queued_ahead(&accepted.ahead);
+        let ahead = queued_ahead(&accepted.ahead, |i| format!("#{i}"));
         writeln!(out, "submission {id} to {} · {ahead}", req.branch)?;
         if let Some(copy) = copy {
             writeln!(out, "{}", copy_differs_line(copy))?;
@@ -1612,11 +1612,15 @@ fn submit(
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
 
-/// What a submission was queued behind, as a submit says it.
-fn queued_ahead(ahead: &[u64]) -> String {
+/// What a submission was queued behind, as a submit says it, each named
+/// by `name`.
+fn queued_ahead(ahead: &[u64], name: impl Fn(u64) -> String) -> String {
     match ahead.len() {
         0 => "nothing queued ahead".to_string(),
-        n => format!("{n} queued ahead ({})", hashes(ahead)),
+        n => {
+            let named: Vec<String> = ahead.iter().map(|i| name(*i)).collect();
+            format!("{n} queued ahead ({})", named.join(", "))
+        }
     }
 }
 
@@ -1660,7 +1664,7 @@ fn submit_group(
     }
     if !json {
         for (w, a) in &items {
-            let ahead = queued_ahead(&a.ahead);
+            let ahead = queued_ahead(&a.ahead, |i| format!("#{i}"));
             writeln!(out, "submission {} to {branch} from {w} · {ahead}", a.id)?;
             if let Some(copy) = &a.copy {
                 writeln!(out, "{}", copy_differs_line(copy))?;
@@ -2482,9 +2486,38 @@ fn submit_pull(
             Some(Followed::Open {
                 title,
                 lines,
-                submission: _,
-                names: _,
+                submission,
+                names,
             }) => {
+                // Taken in on the head just pushed: the submission is the
+                // answer, as a no-wait submit's on any branch, with the
+                // pull request beside it.
+                if let (true, Some(sub)) = (no_wait, &submission) {
+                    let ahead: Vec<u64> = s
+                        .status(branch)?
+                        .submissions
+                        .iter()
+                        .filter(|x| x.id < sub.id && !x.state.is_out())
+                        .map(|x| x.id)
+                        .collect();
+                    if json {
+                        let doc = serde_json::json!({
+                            "id": sub.id, "branch": branch, "ahead": ahead,
+                            "pull_request": number,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else {
+                        let name =
+                            |i: u64| names.get(&i).cloned().unwrap_or_else(|| format!("#{i}"));
+                        let ahead = queued_ahead(&ahead, name);
+                        writeln!(
+                            out,
+                            "submission {} to {branch} from #{number} · {ahead}",
+                            sub.id
+                        )?;
+                    }
+                    return Ok(0);
+                }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
                     if json && (no_wait || status) {
