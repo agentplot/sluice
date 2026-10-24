@@ -33,4 +33,4 @@
 ## 6. The gate
 
 - [x] 6.1 Run the gate's checks on the committed work with `sluice exec main` and verify every check-fast and check-tools task passes; run `moon run cli:sandbox` outside any sandbox and verify it passes.
-- [ ] 6.2 Verify the spec as the gate reads it once archived: in a scratch copy of `openspec/`, run `openspec archive a-run-compiles-through-a-declared-compilation-cache -y`, then `openspec validate --specs --strict`, and verify `spec/compile-cache` passes with every requirement's text under openspec's 500 characters. The gate validates only `openspec/specs/`, so it cannot run this before the archive (core.21).
+- [x] 6.2 Verify the spec as the gate reads it once archived: in a scratch copy of `openspec/`, run `openspec archive a-run-compiles-through-a-declared-compilation-cache -y`, then `openspec validate --specs --strict`, and verify `spec/compile-cache` passes with every requirement's text under openspec's 500 characters. The gate validates only `openspec/specs/`, so it cannot run this before the archive (core.21).
