@@ -19,11 +19,12 @@ See proposal.md for why. What the design rests on:
   it, with the server's socket and the focused pane's directory. That is
   why the segment's command already names `$HOME` (herdr-status, "Setup
   shows, never edits").
-- **What ops found on deneb.** Every failure in the servers' logs is
-  `timed out after 2s`; there are no non-zero exits. Run as the server
-  runs it at load ~7 the segment took 0.04–0.06 s. The failures cluster
-  where load ran 60–126. A blank at a quiet moment is right: no branch
-  had a queue.
+- **What ops found on deneb** (signal
+  `2026-10-24-madswan-design-d2a76780/01`). Every failure in the servers'
+  logs is `timed out after 2s`, over 1,400 of them; there are no non-zero
+  exits. Run as the server runs it at load ~7 the segment took
+  0.04–0.06 s. The failures cluster where load ran 60–126. A blank at a
+  quiet moment is right: no branch had a queue.
 - **What the segment does today** (`plugins/herdr/bin/segment.sh`):
   sources `lib/common.sh` (which makes the state's folders and hashes the
   socket path), finds the repository with `git rev-parse`, then
@@ -36,7 +37,10 @@ See proposal.md for why. What the design rests on:
 
 **Goals:**
 
-- The line is not cleared by a slow run on a loaded host.
+- Every client, on the server's host or another, shows the focused
+  repository's line while it has a queue, whatever the host's load.
+- The line is not cleared by a slow run on a loaded host: the segment
+  answers within the time the entry gives it.
 - The segment's work is its repository's, not every repository's on the
   server.
 - A test holds that the segment needs only the server's home, socket and
