@@ -25,4 +25,4 @@ group.
 
 ## 4. Integration
 
-- [ ] 4.1 With the work committed, run `sluice exec main` and see every check-fast and tools task pass.
+- [x] 4.1 With the work committed, run `sluice exec main` and see every check-fast and tools task pass.
