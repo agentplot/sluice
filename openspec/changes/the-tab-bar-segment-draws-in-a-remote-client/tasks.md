@@ -16,7 +16,7 @@
 
 ## 4. The gate
 
-- [ ] 4.1 Commit, then run `sluice exec main` and get a pass from every check-fast task, `plugin-herdr:manifest`, `plugin-herdr:test-sh`, `plugin-herdr:test-dash` and `root:format` among them.
+- [x] 4.1 Commit, then run `sluice exec main` and get a pass from every check-fast task, `plugin-herdr:manifest`, `plugin-herdr:test-sh`, `plugin-herdr:test-dash` and `root:format` among them.
 
 ## Workflow follow-up
 
