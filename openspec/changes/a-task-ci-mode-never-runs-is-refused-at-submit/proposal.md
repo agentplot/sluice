@@ -105,6 +105,7 @@ crates/sluice-conformance/**
 crates/sluice/tests/**
 docs/adr/0047-*.md
 docs/architecture/core.md
+site/src/content/docs/architecture/rules.md
 site/src/content/docs/reference/configuration.md
 site/src/content/docs/reference/commands.md
 plugins/sluice/skills/using-sluice/SKILL.md
