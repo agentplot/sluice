@@ -594,10 +594,7 @@ function inTheWay(branch: string, inWay: readonly InWay[]): string {
 }
 
 function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
-  return inTheWay(
-    branch,
-    f.with.map((c) => ({ id: c.id, worktree: c.from.worktree })),
-  );
+  return inTheWay(branch, forecastInWay(f));
 }
 
 /** What an opened conflict shows: its files, what is in the way, and the next step. */
@@ -620,6 +617,17 @@ export function recentInWay(b: OverviewBranch, r: Recent): InWay[] {
     const worktree = from[String(id)];
     return worktree ? { id, worktree } : { id };
   });
+}
+
+/** The row a conflict a forecast found draws under its branch. */
+export function forecastWords(f: NonNullable<Forecast["conflict"]>): string {
+  const more = f.paths.length > 1 ? ` +${f.paths.length - 1}` : "";
+  return `your work would conflict · ${f.paths[0] ?? "a file"}${more}`;
+}
+
+/** What is in a forecast conflict's way, as the forecast names it. */
+export function forecastInWay(f: NonNullable<Forecast["conflict"]>): InWay[] {
+  return f.with.map((c) => ({ id: c.id, worktree: c.from.worktree }));
 }
 
 /** The toast for a conflict a forecast found. */

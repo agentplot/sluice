@@ -32,9 +32,11 @@ import {
   failedName,
   flipped,
   forecastBranch,
+  forecastInWay,
   forecastKey,
   forecasts,
   forecastToast,
+  forecastWords,
   githubBase,
   hostLine,
   hostsLine,
@@ -259,7 +261,15 @@ async function forecastOnce($: $, wake: boolean, quiet: boolean) {
     }
   }
   const sig = f ? signature(b.branch, f) : null;
-  await update($, forecasting, () => ({ ...last, key, head, told: sig }));
+  // The conflict is kept for the pane's row until a forecast finds none.
+  const conflict = f?.conflict ?? null;
+  await update($, forecasting, () => ({
+    key,
+    head,
+    told: sig,
+    branch: conflict ? b.branch : null,
+    conflict,
+  }));
   if (f?.conflict && sig !== last.told) {
     $.ui.toast(forecastToast(b.branch, f.conflict));
     if (wake && !quiet) await $.prompt.submit({ text: conflictText(b.branch, f.conflict) });
@@ -506,6 +516,7 @@ export const register: Register = (on, options) => {
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
     const open_ = await read($, opened);
+    const ahead = await read($, forecasting);
     const shownOf = await read($, details);
     // A run's tasks, opened under its row: drawn from the document as it stands.
     const tasksView = (k: string, lines: { state?: OverviewTask["state"]; text: string }[]) => (
@@ -532,6 +543,22 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     );
+    // The session's own work, forecast to conflict on this branch: a row until a forecast finds none.
+    const forecastRow = (branch: string) => {
+      const f = ahead.branch === branch ? ahead.conflict : null;
+      if (!f) return null;
+      const k = `forecast-${branch}`;
+      return (
+        <Box key={`${k}-row`} flexDirection="column">
+          <Button key={k} plain onPress={() => flip($, k)}>
+            <Text color="yellow">
+              {"  "}⚠ {forecastWords(f)}
+            </Text>
+          </Button>
+          {open_.includes(k) && linesView(k, conflictLines(branch, f.paths, forecastInWay(f)))}
+        </Box>
+      );
+    };
     // An opened failure, under its row: each test, its log, the log's tail.
     const view = (k: string, shown: Detail[]) => (
       <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
@@ -647,6 +674,7 @@ export const register: Register = (on, options) => {
                 </Text>
               );
             })}
+            {forecastRow(b.branch)}
             {b.recent.length > 0 && <Text bold>RECENT</Text>}
             {[...b.recent]
               .reverse()

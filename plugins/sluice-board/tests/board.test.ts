@@ -17,6 +17,7 @@ import {
   forecastKey,
   forecasts,
   forecastToast,
+  forecastWords,
   githubBase,
   heldBack,
   hostLine,
@@ -612,6 +613,8 @@ describe("forecasts", () => {
     expect(forecastToast("main", queued.conflict)).toBe(
       "sluice: your work would conflict with main in docs/builds.md +1",
     );
+    expect(forecastWords(queued.conflict)).toBe("your work would conflict · docs/builds.md +1");
+    expect(forecastWords(landed.conflict)).toBe("your work would conflict · docs/builds.md");
     expect(clearText("main", null)).toBe(
       "[sluice] Your work no longer conflicts with main or anything queued.",
     );

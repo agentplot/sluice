@@ -1151,6 +1151,68 @@ test("a conflict with a queued submission names it, and its failing clears it on
   expect(seen.prompts).toHaveLength(told + 1);
 });
 
+test("the forecast's conflict is a row under its branch, kept across a reload until none is found", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d1 = free();
+  d1.branches[0]!.submissions.push({
+    id: 217,
+    state: "testing",
+    from: { agent: "runner", worktree: "bolt/runner" },
+  });
+  const w: World = { doc: d1, head: "h1", answer: WITH_217, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(1);
+  const row = "  ⚠ your work would conflict · docs/builds.md";
+  const mount = () =>
+    $.ui.mount({
+      plugin: "sluice-board",
+      surface: "terminal",
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+  let pane = await mount();
+  expect(await pane.find({ type: "Text", text: row })).toBeDefined();
+  // Under main, after its queue and before RECENT.
+  const order = (
+    await pane.findAll({ type: "Text", text: /^(QUEUED|RECENT| {2}⚠ your work)/ })
+  ).map((t) => t.text);
+  expect(order).toEqual(["QUEUED", row, "RECENT"]);
+  await pane.press({ key: "forecast-main" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "files: docs/builds.md" })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "in the way: #217 (bolt/runner)" })).toBeDefined();
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "next: take main into the worktree, resolve and commit, then sluice submit main",
+    }),
+  ).toBeDefined();
+  await pane.press({ key: "forecast-main" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: /^in the way: / })).toBeUndefined();
+  await pane.unmount();
+
+  // A reload keeps it.
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.advance(3000);
+  pane = await mount();
+  expect(await pane.find({ type: "Text", text: row })).toBeDefined();
+  await pane.unmount();
+
+  // #217 fails: the next forecast finds no conflict, and the row goes.
+  w.doc = free();
+  w.answer = CLEAR;
+  await clock.advance(3000);
+  pane = await mount();
+  expect(await pane.find({ type: "Text", text: /your work would conflict/ })).toBeUndefined();
+  await pane.unmount();
+});
+
 test("a conflict cleared by the agent's own merge starts no turn", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
