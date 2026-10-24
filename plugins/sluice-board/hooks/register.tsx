@@ -24,6 +24,7 @@ import {
   checkRows,
   clearText,
   combination,
+  conflictLines,
   conflictText,
   duration,
   emptyLines,
@@ -49,6 +50,7 @@ import {
   plural,
   progress,
   pullOf,
+  recentInWay,
   recentKeys,
   recentWords,
   shown,
@@ -520,6 +522,16 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     );
+    // An opened conflict, under its row: its files, what is in the way, the next step.
+    const linesView = (k: string, lines: string[]) => (
+      <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
+        {lines.map((l) => (
+          <Text key={`${k}-${l}`} dimColor>
+            {l}
+          </Text>
+        ))}
+      </Box>
+    );
     // An opened failure, under its row: each test, its log, the log's tail.
     const view = (k: string, shown: Detail[]) => (
       <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
@@ -655,6 +667,23 @@ export const register: Register = (on, options) => {
                         </Text>
                       </Button>
                       {open_.includes(k) && view(k, shownOf[k] ?? [])}
+                    </Box>
+                  );
+                }
+                if (r.event === "conflict" && r.id !== undefined) {
+                  const k = `conflict-${b.branch}-${r.id}-${r.at}`;
+                  return (
+                    <Box key={`recent-${b.branch}-${i}`} flexDirection="column">
+                      <Box key={`${k}-row`} flexDirection="row">
+                        <Button key={k} plain onPress={() => flip($, k)}>
+                          <Text color={color}>
+                            {"  "}
+                            {mark} {r.at.slice(11, 16)} {recentWords(r)}
+                          </Text>
+                        </Button>
+                      </Box>
+                      {open_.includes(k) &&
+                        linesView(k, conflictLines(b.branch, r.paths ?? [], recentInWay(b, r)))}
                     </Box>
                   );
                 }

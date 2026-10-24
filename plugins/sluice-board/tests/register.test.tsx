@@ -1,9 +1,9 @@
 import type { On } from "claude-code";
-import type { Engine } from "claude-code/testing";
+import type { Engine, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Overview } from "../types";
-import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withConflict, withRelease, withTasks } from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
@@ -952,6 +952,52 @@ test("a log it cannot read says why", async ($, on) => {
   ).toBeDefined();
   await pane.unmount();
 });
+
+/** A RECENT conflict, its `with` as given: closed, opened to `inWay`, folded, with no command run. */
+function conflictOpens(with_: number[], inWay: string): TestBody {
+  return async ($, on) => {
+    const next = "next: take main into the worktree, resolve and commit, then sluice submit main";
+    const clock = mock.clock(on);
+    await clock.set(NOW);
+    host(on, [withConflict(with_)], { prompts: [], toasts: [], status: [] });
+    await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+    await clock.settle();
+    ran.length = 0;
+    const pane = await $.ui.mount({
+      plugin: "sluice-board",
+      surface: "terminal",
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+    const key = "conflict-main-218-2026-10-16T19:44:00Z";
+    expect(
+      await pane.find({ type: "Text", text: /⚠ 19:44 #218 conflict · docs\/builds\.md/ }),
+    ).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^files: / })).toBeUndefined();
+    await pane.press({ key });
+    await pane.redraw();
+    expect(await pane.find({ type: "Text", text: "files: docs/builds.md" })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: inWay })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: next })).toBeDefined();
+    await pane.press({ key });
+    await pane.redraw();
+    expect(await pane.find({ type: "Text", text: /^(files|in the way|next): / })).toBeUndefined();
+    // Built from the line and the overview: no command ran.
+    expect(ran).toEqual([]);
+    await pane.unmount();
+  };
+}
+
+test(
+  "a RECENT conflict with a queued submission opens to it, and folds",
+  conflictOpens([217], "in the way: #217 (bolt/runner)"),
+);
+
+test(
+  "a RECENT conflict with what the branch landed opens to it, and folds",
+  conflictOpens([], "in the way: what main has landed"),
+);
 
 /** What a forecast host answers, changed as a test goes. */
 type World = { doc: Overview; head: string; answer: object; forecasts: number };

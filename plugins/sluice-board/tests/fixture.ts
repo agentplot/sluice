@@ -101,6 +101,31 @@ export function withTasks(): Overview {
   return doc;
 }
 
+/**
+ * The fixture with #218, from `design-runner`, removed from main for a
+ * conflict in `docs/builds.md` with the submissions `with`; #217 came from
+ * `bolt/runner`.
+ */
+export function withConflict(with_: number[] = [217]): Overview {
+  const doc = overview();
+  const main = doc.branches[0]!;
+  main.recent.push({
+    schema: "sluice/log@1",
+    at: "2026-10-16T19:44:00Z",
+    event: "conflict",
+    id: 218,
+    paths: ["docs/builds.md"],
+    with: with_,
+  });
+  main.recent_from = {
+    "9": "fix-cards",
+    "11": "unit/a",
+    "217": "bolt/runner",
+    "218": "design-runner",
+  };
+  return doc;
+}
+
 /** `n` finished tasks of a check, the first `failed` of them failed. */
 function finished(n: number, failed = 0): OverviewTask[] {
   return Array.from({ length: n }, (_, i) => ({
