@@ -453,6 +453,7 @@ host's own settings, not the repository's:
 ```toml
 [runs]
 max = 2        # default: a quarter of the cores; every repository shares it
+cores = 12     # default: what the host gives sluice; the cores sluice may use
 reserved = 1   # default: 0; runs of the bound agents' own runs never use
 
 [forge]
@@ -478,14 +479,27 @@ sluice on the host reads that one count from the host's state
 ([ADR 0047](/sluice/decisions/0047/)), and a run waits while the bound is
 full. sluice reads nothing of how busy the host is: what runs beside it,
 the agents' sessions among it, is yours to leave room for when you set
-`max`.
+`max` and `cores`.
 
-The cores are the logical CPUs the host gives sluice. With no `max`,
-the bound is a quarter of them, and never less than one, and every
-repository on the host shares it. Each run gets the cores divided by
-`max`, and never less than one: sluice hands that number to the run as
-`SLUICE_JOBS`, and to moon as `--concurrency`. With the bound shared,
-the runs going at once use the host's cores and no more.
+`cores` is how many of the host's logical CPUs sluice may use. Without
+it, sluice uses what the host gives it. On Linux that is the process's
+CPU affinity or its cgroup's quota, as systemd and container engines
+set, and every core where the host sets neither. Each run gets the
+cores sluice may use divided by `max`, and never less than one: sluice
+hands that number to the run as `SLUICE_JOBS`, and to moon as
+`--concurrency`. With the bound shared, the runs going at once use the
+cores sluice may use and no more. With no `max`, the bound is a quarter
+of those cores, and never less than one, so a lower `cores` lowers the
+default bound too; set `max` to keep it where you want it.
+
+A Mac never limits what sluice may use, so there the runs going at once
+take every core. Set `cores` to leave the rest for the agents' sessions
+and whatever else runs beside sluice: on a Mac of eighteen cores,
+`max = 3` and `cores = 12` run three at once with four cores each and
+leave six. sluice refuses to start, with the setting named, when
+`cores` is below 1, when it is more than the host's cores, or when the
+host already limits sluice by its affinity or quota. That limit is then
+what sluice may use, so leave `cores` out.
 
 `max` is the one setting for memory as well. Nothing but moon keeps to
 the share of cores, and an executor's `memory` limit holds the run's own
