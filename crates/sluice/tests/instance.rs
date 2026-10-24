@@ -70,6 +70,7 @@ mod bound {
 
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
+    use std::rc::Rc;
 
     use support::{Repo, Scratch};
 
@@ -83,15 +84,45 @@ mod bound {
     /// another run is alive or 6 s have passed, so the others started in
     /// the same round start beside it even on a loaded host, and leaves.
     fn check(seen: &Path) -> String {
+        check_until(seen, 2)
+    }
+
+    /// `check`, holding until `alive` runs are alive or 6 s have passed.
+    fn check_until(seen: &Path, alive: usize) -> String {
         let seen = seen.display();
         format!(
             "mkdir -p {seen}/alive\n\
              touch {seen}/alive/$$\n\
              echo \"$(ls {seen}/alive | wc -l | tr -d ' ') $SLUICE_JOBS\" >> {seen}/starts\n\
-             i=0; while [ \"$(ls {seen}/alive | wc -l | tr -d ' ')\" -lt 2 ] && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done\n\
+             i=0; while [ \"$(ls {seen}/alive | wc -l | tr -d ' ')\" -lt {alive} ] && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done\n\
              sleep 1\n\
              rm {seen}/alive/$$\n"
         )
+    }
+
+    /// What `check` wrote of each run: how many were alive as it started,
+    /// and the `SLUICE_JOBS` it was given.
+    fn starts(seen: &Path) -> Vec<(usize, usize)> {
+        std::fs::read_to_string(seen.join("starts"))
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let (alive, jobs) = l.split_once(' ').expect("alive and jobs");
+                (alive.parse().unwrap(), jobs.parse().unwrap())
+            })
+            .collect()
+    }
+
+    /// The host's configuration: a bound of `max`.
+    fn host_config(max: usize) -> Scratch {
+        let config = Scratch::new("instance-config");
+        std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+        std::fs::write(
+            config.path().join("sluice/config.toml"),
+            format!("[runs]\nmax = {max}\n"),
+        )
+        .unwrap();
+        config
     }
 
     fn text(out: &Output) -> String {
@@ -105,11 +136,11 @@ mod bound {
     struct Setup {
         repo: Repo,
         sessions: Scratch,
-        config: Scratch,
+        config: Rc<Scratch>,
         /// The host's state of its own: a session run alive on the host
         /// running the test, its own `sluice exec` included, would count
         /// toward the bound (rule core.18) and hold the runs to one.
-        state: Scratch,
+        state: Rc<Scratch>,
     }
 
     impl Setup {
@@ -171,18 +202,11 @@ mod bound {
         for b in BRANCHES {
             repo.git(&["branch", b, "main"]);
         }
-        let config = Scratch::new("instance-config");
-        std::fs::create_dir_all(config.path().join("sluice")).unwrap();
-        std::fs::write(
-            config.path().join("sluice/config.toml"),
-            "[runs]\nmax = 2\n",
-        )
-        .unwrap();
         let s = Setup {
             repo,
             sessions: Scratch::new("instance-sessions"),
-            config,
-            state: Scratch::new("instance-state"),
+            config: Rc::new(host_config(2)),
+            state: Rc::new(Scratch::new("instance-state")),
         };
         // Two submissions on each branch: six candidates want a run at once.
         for (n, b) in BRANCHES.iter().enumerate() {
@@ -197,14 +221,7 @@ mod bound {
             .unwrap();
         assert!(out.status.success(), "{}", text(&out));
 
-        let starts = std::fs::read_to_string(seen.path().join("starts")).unwrap();
-        let starts: Vec<(usize, usize)> = starts
-            .lines()
-            .map(|l| {
-                let (alive, jobs) = l.split_once(' ').expect("alive and jobs");
-                (alive.parse().unwrap(), jobs.parse().unwrap())
-            })
-            .collect();
+        let starts = starts(seen.path());
         assert_eq!(starts.len(), 6, "every candidate ran once: {starts:?}");
         let most = starts.iter().map(|(a, _)| *a).max().unwrap();
         assert_eq!(most, 2, "runs alive at once: {starts:?}");
@@ -227,5 +244,83 @@ mod bound {
                 .collect();
             assert_eq!(states, ["landed", "landed"], "{b}: {status}");
         }
+    }
+
+    /// The statuses of `branch`'s submissions in `s`'s repository.
+    fn states(s: &Setup, branch: &str) -> Vec<String> {
+        let out = s
+            .command(s.repo.dir())
+            .args(["status", branch, "--json", "--all"])
+            .output()
+            .unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        status["submissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["state"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// 71, S60: three repositories on one host whose bound is three, with
+    /// a `sluice run` going in each at once and four combinations ready
+    /// across them: at most three run at once, three do, the fourth runs
+    /// once one has ended, all four land, and every run is given the
+    /// host's cores divided by three.
+    #[test]
+    fn three_repositories_share_the_hosts_bound() {
+        let seen = Scratch::new("instance-three-seen");
+        let config = Rc::new(host_config(3));
+        let state = Rc::new(Scratch::new("instance-three-state"));
+        let setups: Vec<Setup> = ["x", "y", "z"]
+            .iter()
+            .map(|name| {
+                let repo = Repo::new(&format!("instance-three-{name}"));
+                repo.write(".config/sluice.toml", POLICY);
+                repo.write("check.sh", &check_until(seen.path(), 3));
+                repo.git(&["add", "-A"]);
+                repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+                repo.git(&["branch", "bolt/a", "main"]);
+                Setup {
+                    repo,
+                    sessions: Scratch::new(&format!("instance-three-{name}-sessions")),
+                    config: config.clone(),
+                    state: state.clone(),
+                }
+            })
+            .collect();
+        // Four combinations ready at once: two in the first repository.
+        setups[0].submit("bolt/a", "xa");
+        setups[0].submit("bolt/a", "xb");
+        setups[1].submit("bolt/a", "ya");
+        setups[2].submit("bolt/a", "za");
+
+        let runs: Vec<_> = setups
+            .iter()
+            .map(|s| {
+                s.command(s.repo.dir())
+                    .args(["run", "--rounds", "16"])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for run in runs {
+            let out = run.wait_with_output().unwrap();
+            assert!(out.status.success(), "{}", text(&out));
+        }
+
+        let starts = starts(seen.path());
+        assert_eq!(starts.len(), 4, "every combination ran once: {starts:?}");
+        let most = starts.iter().map(|(a, _)| *a).max().unwrap();
+        assert_eq!(most, 3, "runs alive at once: {starts:?}");
+        let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
+        for (_, jobs) in &starts {
+            assert_eq!(*jobs, (processors / 3).max(1), "{starts:?}");
+        }
+        assert_eq!(states(&setups[0], "bolt/a"), ["landed", "landed"]);
+        assert_eq!(states(&setups[1], "bolt/a"), ["landed"]);
+        assert_eq!(states(&setups[2], "bolt/a"), ["landed"]);
     }
 }

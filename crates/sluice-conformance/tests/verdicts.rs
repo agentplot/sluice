@@ -330,13 +330,12 @@ fn live_runs_serving(serves: sluice_core::Serves) -> usize {
 
 /// satisfies: 71
 #[test]
-fn an_instance_holds_the_branches_it_serves_to_its_bound() {
+fn every_instance_on_the_host_shares_its_bound() {
     // One instance serving every branch: two runs across both.
     assert_eq!(live_runs_serving(sluice_core::Serves::Every), 2);
-    // Instances that each serve the branch they step: each holds its own
-    // branch to the bound, and the windows are the only limit between
-    // them.
-    assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 4);
+    // Instances that each serve the branch they step share the host's
+    // bound all the same: two runs across both.
+    assert_eq!(live_runs_serving(sluice_core::Serves::Stepped), 2);
 }
 
 /// satisfies: 71; session-runs-1 89

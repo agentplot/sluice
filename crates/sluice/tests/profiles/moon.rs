@@ -79,6 +79,7 @@ fn checks(repo: &Repo) -> Checks {
             systems: None,
         },
     )
+    .with_running(repo.dir().join(".git/host-running"))
 }
 
 fn moon() -> Settings {
@@ -170,6 +171,27 @@ fn the_tasks_a_range_affects() {
     );
     let r = finish(&c, &request(&repo, "p3", &fast, Some(&base)));
     assert_eq!(names(&r), ["alpha:test", "beta:test"]);
+}
+
+/// 71, 83; the run-bound spec's "Six cores each": the moon runner hands
+/// moon the run's share of the cores as `--concurrency`, the
+/// `SLUICE_JOBS` its environment carries.
+#[test]
+fn moon_is_given_the_runs_share_of_the_cores() {
+    let repo = workspace("moon-share");
+    let c = checks(&repo);
+    let base = repo.rev("HEAD");
+    change(&repo, &[("alpha/notes.md", "shared\n")]);
+    finish(&c, &request(&repo, "p1", &["#check-fast"], Some(&base)));
+    let req = c.runs().request("p1").unwrap();
+    let jobs = &req.env["SLUICE_JOBS"];
+    assert_eq!(jobs, "4", "eight cores under a bound of two");
+    let at = req
+        .argv
+        .iter()
+        .position(|a| a == "--concurrency")
+        .unwrap_or_else(|| panic!("no --concurrency in {:?}", req.argv));
+    assert_eq!(req.argv.get(at + 1), Some(jobs), "{:?}", req.argv);
 }
 
 /// ADR 0028: while a run goes, its tasks read as moon writes them: one

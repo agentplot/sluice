@@ -48,12 +48,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place, Progress,
-    RunHandle, RunReport, RunRequest, Setting, Settings, Source, TaskLog, TaskProgress, TaskResult,
-    Tests,
+    log_tail, AtBound, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place,
+    Progress, RunHandle, RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog,
+    TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
+use crate::host_count::{self, HostCount};
 use crate::instance::Instance;
 use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
 
@@ -158,21 +159,27 @@ pub trait Launcher {
 /// The check seam's profile, for the repository whose common dir is
 /// `common`.
 pub struct Checks {
+    /// The repository's common git directory.
+    common: PathBuf,
     runs: Runs,
     instance: Instance,
     /// The pool this host can start runs on, where the binding gave one.
     pool: Option<Box<dyn Launcher>>,
     /// The host's session runs, when not the host's own directory.
     sessions: Option<Sessions>,
+    /// The host's running checks, when not the host's own directory.
+    running: Option<HostCount>,
 }
 
 impl Checks {
     /// `program` is the `sluice` executable that supervises a run.
     pub fn new(common: &Path, program: PathBuf, instance: Instance) -> Self {
         Checks {
+            common: common.to_path_buf(),
             runs: Runs::new(common, program),
             instance,
             sessions: None,
+            running: None,
             pool: None,
         }
     }
@@ -189,12 +196,27 @@ impl Checks {
         self
     }
 
-    /// The host's session runs: the count a session run is started under,
-    /// with their lock (session-runs-1 clauses 89, 91).
+    /// The same profile, counting the host's running checks under `dir`.
+    pub fn with_running(mut self, dir: PathBuf) -> Self {
+        self.running = Some(HostCount::new(dir));
+        self
+    }
+
+    /// The host's session runs, with what each `sluice exec` keeps of its
+    /// run (session-runs-1 clauses 89, 91; ADR 0035).
     pub fn host_sessions(&self) -> Result<Sessions> {
         match &self.sessions {
             Some(s) => Ok(s.clone()),
             None => Sessions::host(),
+        }
+    }
+
+    /// The host's running checks, every repository's: the count every run
+    /// is admitted against (71).
+    pub fn host_count(&self) -> Result<HostCount> {
+        match &self.running {
+            Some(c) => Ok(c.clone()),
+            None => HostCount::host(),
         }
     }
 
@@ -205,6 +227,35 @@ impl Checks {
     /// The host's settings the profile was bound with.
     pub fn instance(&self) -> &Instance {
         &self.instance
+    }
+
+    /// 71: admit the run `name` of `request` against the host's count:
+    /// a session's or a preview's under the bound less the reserve, any
+    /// other under the bound. `None` at the bound.
+    fn admit(
+        &self,
+        request: &RunRequest,
+        name: &str,
+        session: bool,
+    ) -> Result<Option<host_count::Admission>> {
+        let kind = if session || request.place.name.starts_with(super::places::PREVIEW) {
+            host_count::Kind::Session
+        } else {
+            host_count::Kind::Queue
+        };
+        let limit = match kind {
+            host_count::Kind::Queue => self.instance.bound,
+            host_count::Kind::Session => self.instance.bound.saturating_sub(self.instance.reserved),
+        };
+        let entry = host_count::Entry {
+            kind,
+            repository: self.common.clone(),
+            place: request.place.name.clone(),
+            run_dir: self.runs.dir(name),
+            pid: std::process::id(),
+            admitted: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        };
+        self.host_count()?.admit(&entry, limit)
     }
 
     /// `[tests] ready` after run `name`, run once and kept in the run's
@@ -652,10 +703,23 @@ impl Tests for Checks {
         }
         // A session's place takes a new run each time, and keeps the last
         // (session-runs-1 clause 94).
-        let name = &if crate::runs::is_session(&request.place.name) {
+        let session = crate::runs::is_session(&request.place.name);
+        let name = &if session {
             self.runs.next_run(&request.place.name)?
         } else {
             request.place.name.clone()
+        };
+        // 71: admitted against the host's count before anything runs; a
+        // session's or a preview's run never into the reserve (91, 102).
+        let admission = match self.admit(request, name, session)? {
+            Some(a) => a,
+            None => {
+                if session {
+                    // The run's number goes unused; nothing is in it.
+                    let _ = std::fs::remove_dir(self.runs.dir(name));
+                }
+                return Err(AtBound.into());
+            }
         };
         let dir = self.runs.prepare(name)?;
         let script = dir.join("toolchain.sh");
@@ -817,6 +881,8 @@ impl Tests for Checks {
                 release,
             },
         )?;
+        // Its supervisor holds the run directory, which keeps it counted.
+        admission.started();
         Ok(RunHandle(name.clone()))
     }
 
@@ -965,8 +1031,8 @@ impl Tests for Checks {
         })
     }
 
-    fn sessions(&self) -> Result<usize> {
-        Ok(self.host_sessions()?.running()?.len())
+    fn running(&self) -> Result<Running> {
+        self.host_count()?.running()
     }
 
     /// A command runner's one key is sluice's own; a moon task's is

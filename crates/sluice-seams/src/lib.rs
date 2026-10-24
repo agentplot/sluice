@@ -16,7 +16,9 @@
 //! Errors are `anyhow::Error`: a seam that cannot do what it was asked
 //! fails the step that asked. A refusal the statement names (a conflict,
 //! a branch found elsewhere, a records write refused) is a value, never an
-//! error, because the core acts on it.
+//! error, because the core acts on it. One refusal is an error the core
+//! finds by its type: a start at the host's bound, [`AtBound`], refused
+//! before the check seam runs anything (71).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -618,15 +620,22 @@ pub trait Tests {
     /// `request.since`, in a place, as one process group under the time
     /// limit and the request's limits (32, 66; rule core.10). 84: a limit
     /// the executor cannot hold is an error naming it, and nothing runs.
+    ///
+    /// 71: before it runs anything, the toolchain, readiness or the
+    /// runner's setup among it, it admits the run against the host's count
+    /// of running checks, every repository's, in one step under the host's
+    /// lock; at the host's bound it fails with [`AtBound`] and nothing
+    /// runs. A session's or a preview's run is admitted only under the
+    /// bound less the part kept for submissions' runs (91, 102).
     fn start(&self, request: &RunRequest) -> Result<RunHandle>;
 
     /// 37: a started run's progress; once finished, every check's key,
     /// outcome, executor and whether it was replayed.
     fn progress(&self, run: &RunHandle) -> Result<Progress>;
 
-    /// 71: the most runs this instance has under test at once, whatever
-    /// the windows of the branches it serves. The core counts the runs
-    /// under test from the records.
+    /// 71: the most checks running on the host at once, whatever
+    /// repositories and branches they serve and whatever their windows.
+    /// `running` counts them.
     fn bound(&self) -> Result<usize>;
 
     /// 87: the system this instance's executor runs on, so a run is taken
@@ -657,11 +666,11 @@ pub trait Tests {
         Ok(())
     }
 
-    /// Session-runs-1 clause 89: how many session runs are running on this
-    /// host, each counting against the bound. A session run is the
-    /// host's, never a branch's, so the check seam counts it beside the
-    /// bound and the records never hold it.
-    fn sessions(&self) -> Result<usize>;
+    /// 71, session-runs-1 clause 89: the checks running on this host, by
+    /// kind, every repository's, each counting against the bound. A
+    /// running check is the host's, never a branch's, so the check seam
+    /// counts it beside the bound and the records never hold the count.
+    fn running(&self) -> Result<Running>;
 
     /// Design D9 (C.6): the tasks of a finished run whose keys the
     /// candidate's tree bears out, read while its place still exists,
@@ -669,7 +678,7 @@ pub trait Tests {
     /// pass under a key it does not hold.
     fn proven(&self, run: &RunHandle, report: &RunReport) -> Result<Vec<String>>;
 
-    /// ADR 0035: the session runs running on this host, as `sessions`
+    /// ADR 0035: the session runs running on this host, as `running`
     /// counts them, each with what its `sluice exec` kept of it: for a
     /// person to read, never a run or a result (rule core.18).
     fn session_runs(&self) -> Result<Vec<HostRun>>;
@@ -699,6 +708,36 @@ pub trait Tests {
         Ok(Vec::new())
     }
 }
+
+/// The checks running on the host, every repository's (71).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Running {
+    /// Submissions' runs: combinations under test.
+    pub queue: usize,
+    /// Session runs (`sluice exec`) and previews' commands.
+    pub sessions: usize,
+}
+
+impl Running {
+    /// Every check running on the host.
+    pub fn total(&self) -> usize {
+        self.queue + self.sessions
+    }
+}
+
+/// 71: a start refused because the host's count of running checks has
+/// reached its bound; nothing of the run ran. The core finds it by
+/// downcasting `start`'s error, and the run waits for a later round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtBound;
+
+impl fmt::Display for AtBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the host is at its bound")
+    }
+}
+
+impl std::error::Error for AtBound {}
 
 /// A session run going on the host (session-runs-1 clause 89), as the
 /// host's state keeps it beside its count (ADR 0035). It decides nothing.

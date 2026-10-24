@@ -323,6 +323,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     let common = repo.dir().join(".git");
     let program = PathBuf::from(env!("CARGO_BIN_EXE_sluice"));
     let blocks = Scratch::new("stack-session-blocks");
+    let running = Scratch::new("stack-session-running");
     let places = Places::new(&common, Runs::new(&common, program.clone()))
         .with_blocks(blocks.path().to_path_buf());
     let checks = Checks::new(
@@ -337,7 +338,8 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             peers: Default::default(),
             systems: None,
         },
-    );
+    )
+    .with_running(running.path().to_path_buf());
     let checkout = Settings::from([
         ("ports".into(), Setting::List(vec!["web".into()])),
         ("ports_from".into(), Setting::Text("41400".into())),
