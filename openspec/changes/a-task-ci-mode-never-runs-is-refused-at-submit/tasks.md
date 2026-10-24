@@ -93,5 +93,5 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 6. The gate
 
-- [ ] 6.1 Commit, then run the gate's checks with `sluice exec main`;
+- [x] 6.1 Commit, then run the gate's checks with `sluice exec main`;
   every check passes.
