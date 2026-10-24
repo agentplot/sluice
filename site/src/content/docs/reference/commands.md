@@ -113,6 +113,19 @@ each with its `worktree`. With `--no-wait` an item holds `id` and
 worktrees under `worktrees`. `--check` and `--status` take one worktree,
 and exit `64` given more.
 
+To a branch that takes pull requests, the act pushes each branch and
+opens or updates its pull request, then takes every pull request or none.
+When each meets its reviews and checks, sluice marks every one ready for
+review and queues all of them at once, each said with its submission,
+`submission 61 to main from #51 · nothing queued ahead`, and each item
+under `--json` holding its `pull_request` too. When any falls short, it
+queues none, leaves every one a draft, names each short with what it
+lacks, and exits `2`; run it again once they're reviewed. Once queued, new
+commits that no submit pushed make that one a draft until its worktree
+submits again, and the rest land. The [pull requests
+guide](/sluice/guides/pull-requests/#several-pull-requests-as-one-act)
+says more.
+
 ## `sluice exec`
 
 An agent runs its tests while it works with `sluice exec`, in its own
