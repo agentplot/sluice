@@ -504,6 +504,21 @@ export const register: Register = (on, options) => {
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
     const open_ = await read($, opened);
     const shownOf = await read($, details);
+    // A run's tasks, opened under its row: drawn from the document as it stands.
+    const tasksView = (k: string, lines: { state?: OverviewTask["state"]; text: string }[]) => (
+      <Box key={`${k}-opened`} flexDirection="column">
+        {lines.map((t) => (
+          <Text
+            key={`${k}-${t.text}`}
+            color={t.state ? TASK_COLOR[t.state] : undefined}
+            dimColor={t.state === undefined || t.state === "waiting"}
+          >
+            {"    "}
+            {t.text}
+          </Text>
+        ))}
+      </Box>
+    );
     // An opened failure, under its row: each test, its log, the log's tail.
     const view = (k: string, shown: Detail[]) => (
       <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
@@ -566,30 +581,33 @@ export const register: Register = (on, options) => {
             )}
             {testing(b).map((c) => {
               const took = since(c.started, at);
+              const head = (
+                <Text color="yellow">
+                  ▶ testing {combination(b.branch, c.submissions)}
+                  {progress(c) ? `  ${progress(c)}` : ""}
+                  {took === undefined
+                    ? ""
+                    : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ""}`}
+                </Text>
+              );
+              // Its tasks open under it on a press; one with none is a plain line.
+              const k = `tasks-${b.branch}-${c.id}`;
+              const listed = (c.tasks ?? []).length > 0;
               return (
                 <Box key={`cand-${b.branch}-${c.id}`} flexDirection="column">
-                  <Text color="yellow">
-                    ▶ testing {combination(b.branch, c.submissions)}
-                    {progress(c) ? `  ${progress(c)}` : ""}
-                    {took === undefined
-                      ? ""
-                      : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ""}`}
-                  </Text>
+                  {listed ? (
+                    <Button key={k} plain onPress={() => flip($, k)}>
+                      {head}
+                    </Button>
+                  ) : (
+                    head
+                  )}
                   <Text dimColor>
                     {"    "}
                     {c.targets.join(" ")}
                     {c.executor ? ` · ${c.executor}` : ""}
                   </Text>
-                  {taskLines(c, at).map((t) => (
-                    <Text
-                      key={`task-${b.branch}-${c.id}-${t.text}`}
-                      color={TASK_COLOR[t.state]}
-                      dimColor={t.state === "waiting"}
-                    >
-                      {"    "}
-                      {t.text}
-                    </Text>
-                  ))}
+                  {listed && open_.includes(k) && tasksView(k, taskLines(c, at))}
                 </Box>
               );
             })}

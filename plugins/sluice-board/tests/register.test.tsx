@@ -173,6 +173,8 @@ test("the band and the pane show the queue on every surface", async ($, on) => {
     expect(
       await pane.find({ type: "Text", text: /▶ testing main\+#12\+#13\s+2m10s \/ 15m/ }),
     ).toBeDefined();
+    // A combination whose runner lists no tasks is a plain line, nothing to press.
+    expect(await pane.find({ type: "Button", key: "tasks-main-c41" })).toBeUndefined();
     // Headed as the herdr plugin's popup is.
     const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
     expect(heads.map((h) => h.text)).toEqual(["TESTING", "QUEUED", "RECENT"]);
@@ -219,7 +221,7 @@ test("the pane leaves out branches with nothing queued and no event this quarter
   await pane.unmount();
 });
 
-test("a combination's tasks: the count and bar in the band, the list in the pane alone", async ($, on) => {
+test("a combination's tasks: the count and bar in the band, the list in the pane on a press", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = {
@@ -256,10 +258,34 @@ test("a combination's tasks: the count and bar in the band, the list in the pane
       text: /▶ testing main\+#12\+#13\s+3\/5 ▓▓▓▓▓▓░░░░\s+2m10s \/ 15m/,
     }),
   ).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /✓ sluice:test\s+1m48s/ })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /… sluice:e2e\s+running/ })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /· core:test\s+waiting/ })).toBeDefined();
+  // Folded until its row is pressed.
+  const tasks = /^\s+[✓✗…·] (sluice|core|site):/;
+  expect(await pane.findAll({ type: "Text", text: tasks })).toEqual([]);
+  expect(await pane.find({ type: "Button", key: "tasks-main-c41" })).toBeDefined();
+  await pane.press({ key: "tasks-main-c41" });
+  await pane.redraw();
+  const lines = (await pane.findAll({ type: "Text", text: tasks })).map((t) => t.text);
+  const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+  expect(at(/✓ sluice:test\s+1m48s$/)).toBeGreaterThanOrEqual(0);
+  expect(at(/… sluice:e2e\s+running 1m12s$/)).toBeGreaterThan(at(/✓ sluice:test/));
+  expect(at(/· core:test\s+waiting$/)).toBeGreaterThan(at(/… sluice:e2e/));
+  await pane.press({ key: "tasks-main-c41" });
+  await pane.redraw();
+  expect(await pane.findAll({ type: "Text", text: tasks })).toEqual([]);
   await pane.unmount();
+
+  // The band is as it was, whatever the pane opened.
+  const after = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await after.find({ type: "Text", text: /testing main\+#12\+#13 3\/5 ▓▓▓▓▓▓░░░░ 2m10s\/15m/ }),
+  ).toBeDefined();
+  expect(await after.find({ type: "Text", text: /sluice:e2e/ })).toBeUndefined();
+  await after.unmount();
 });
 
 test("agents' checks: the clause in the band, CHECKING and the host line in the pane", async ($, on) => {
