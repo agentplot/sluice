@@ -148,20 +148,29 @@ struct ForgeForm {
 #[serde(deny_unknown_fields)]
 struct RunsForm {
     max: Option<i64>,
+    cores: Option<i64>,
     reserved: Option<i64>,
     systems: Option<Vec<String>>,
 }
 
 impl Instance {
     /// The instance's settings from its configuration file, or the
-    /// defaults where it has none: a quarter of the cores, never
-    /// fewer than one.
+    /// defaults where it has none: a quarter of the cores sluice may use,
+    /// never fewer than one.
     pub fn read() -> Result<Instance> {
         let processors = std::thread::available_parallelism().map_or(1, |n| n.get());
         Instance::from_file(config_path().as_deref(), processors)
     }
 
+    /// The settings on a host that gives sluice all of its `processors`
+    /// cores.
     pub fn from_file(path: Option<&Path>, processors: usize) -> Result<Instance> {
+        Instance::from_host(path, processors, processors)
+    }
+
+    /// The settings on a host of `all` cores that gives sluice `given` of
+    /// them: fewer where its affinity or quota limits sluice (71).
+    pub fn from_host(path: Option<&Path>, given: usize, all: usize) -> Result<Instance> {
         let text = match path.map(std::fs::read_to_string) {
             Some(Ok(t)) => t,
             Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -171,6 +180,21 @@ impl Instance {
         };
         let form: ConfigForm = toml::from_str(&text)
             .with_context(|| format!("reading {}", path.unwrap_or(Path::new("")).display()))?;
+        // What sluice may use (71): the host's limit where it gives one, the
+        // keeper's `cores` where it gives none, and all its cores otherwise.
+        let processors = match form.runs.cores {
+            None if given < all => given,
+            None => all,
+            Some(n) if n < 1 => bail!("[runs] cores must be at least 1, not {n}"),
+            Some(n) if n as usize > all => {
+                bail!("[runs] cores = {n} is more than this host's {all} cores")
+            }
+            Some(n) if given < all => bail!(
+                "[runs] cores = {n}, but this host already gives sluice {given} of its {all} \
+                 cores by its affinity or quota, and that is what sluice may use: leave cores out"
+            ),
+            Some(n) => n as usize,
+        };
         let bound = match form.runs.max {
             None => (processors / 4).max(1),
             Some(n) if n >= 1 => n as usize,
@@ -311,11 +335,19 @@ mod tests {
     use super::*;
 
     fn with(text: &str, processors: usize) -> Result<Instance> {
+        on(text, processors, processors)
+    }
+
+    /// The settings `text` gives on a host of `all` cores that gives sluice
+    /// `given` of them.
+    fn on(text: &str, given: usize, all: usize) -> Result<Instance> {
+        static FILES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("sluice-instance-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("{processors}-{}.toml", text.len()));
+        let n = FILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("{n}.toml"));
         std::fs::write(&path, text).unwrap();
-        let out = Instance::from_file(Some(&path), processors);
+        let out = Instance::from_host(Some(&path), given, all);
         let _ = std::fs::remove_file(&path);
         out
     }
@@ -340,6 +372,46 @@ mod tests {
                 .unwrap()
                 .bound,
             2
+        );
+    }
+
+    /// 71: what sluice may use is the host's limit where it gives one, the
+    /// keeper's `cores` where it gives none, and all its cores otherwise;
+    /// each run's share and the default bound follow from it.
+    #[test]
+    fn the_cores_sluice_may_use() {
+        // A Mac keeps six cores for its agents.
+        let mac = on("[runs]\nmax = 3\ncores = 12\n", 18, 18).unwrap();
+        assert_eq!((mac.processors, mac.bound, mac.jobs()), (12, 3, 4));
+        // Stated cores and no bound: a quarter of them.
+        let eight = on("[runs]\ncores = 8\n", 18, 18).unwrap();
+        assert_eq!((eight.bound, eight.jobs()), (2, 4));
+        // A quota of six of sixteen cores, and nothing stated.
+        let quota = on("[runs]\nmax = 2\n", 6, 16).unwrap();
+        assert_eq!((quota.processors, quota.jobs()), (6, 3));
+        assert_eq!(on("", 6, 16).unwrap().bound, 1);
+        // A Mac with nothing stated, as before.
+        let s60 = on("[runs]\nmax = 3\n", 18, 18).unwrap();
+        assert_eq!((s60.processors, s60.jobs()), (18, 6));
+    }
+
+    /// 71: a `cores` sluice cannot honour is refused, naming the setting
+    /// and the host's cores.
+    #[test]
+    fn stated_cores_sluice_cannot_honour() {
+        let err = |text: &str, given, all| on(text, given, all).unwrap_err().to_string();
+        assert_eq!(
+            err("[runs]\ncores = 0\n", 18, 18),
+            "[runs] cores must be at least 1, not 0"
+        );
+        assert_eq!(
+            err("[runs]\ncores = 24\n", 18, 18),
+            "[runs] cores = 24 is more than this host's 18 cores"
+        );
+        assert_eq!(
+            err("[runs]\ncores = 4\n", 6, 16),
+            "[runs] cores = 4, but this host already gives sluice 6 of its 16 cores by its \
+             affinity or quota, and that is what sluice may use: leave cores out"
         );
     }
 
