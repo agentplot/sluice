@@ -75,7 +75,7 @@ Read first: this change's proposal, design and spec; ADR 0044;
 
 ## 5. Records of the decision and the docs
 
-- [ ] 5.1 `docs/adr/0047-a-submission-whose-gate-requires-a-check-its-runner-never-runs-is-refused.md`
+- [x] 5.1 `docs/adr/0047-a-submission-whose-gate-requires-a-check-its-runner-never-runs-is-refused.md`
   (MADR, as 0044): the options of the design's first decision, and why
   the worktree; renumber if another ADR takes 0047 first. Add to
   core.15's details in `docs/architecture/core.md`, under "Not ruled
