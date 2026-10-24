@@ -20,7 +20,7 @@
 
 ## 4. Session runs and previews
 
-- [ ] 4.1 Verify a session run takes the cache: `a_session_run_takes_the_compile_cache` in `crates/sluice/tests/exec.rs` runs `sluice exec` under an open policy that declares the cache. Its command prints `RUSTC_WRAPPER`, which is set (`cli:tools`).
+- [x] 4.1 Verify a session run takes the cache: `a_session_run_takes_the_compile_cache` in `crates/sluice/tests/exec.rs` runs `sluice exec` under an open policy that declares the cache. Its command prints `RUSTC_WRAPPER`, which is set (`cli:tools`).
 - [ ] 4.2 Verify a preview does not: `a_preview_takes_no_compile_cache` in `crates/sluice/tests/previews.rs`. A preview of a revision that declares the cache runs a command that prints `RUSTC_WRAPPER`, which is unset (`cli:test`).
 
 ## 5. sluice's own runs, and the docs

@@ -197,6 +197,49 @@ fn a_command_gets_the_worktrees_environment_and_its_exit() {
     assert!(s.sessions().is_empty(), "the run is no longer counted");
 }
 
+/// 35: a session run takes the compile cache its branch's policy
+/// declares, as a combination's run does: its command compiles through
+/// the step, here to the host's server found through the variable the
+/// policy names.
+#[test]
+fn a_session_run_takes_the_compile_cache() {
+    let s = Setup::new("exec-compile-cache");
+    s.policy(
+        "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n\n\
+         [checkout]\ncompile_cache = \"sccache\"\n\
+         compile_cache_variables = [\"SCCACHE_SERVER_PORT\"]\n\n\
+         [branches.\"bolt/*\"]\ntimeout = \"1m\"\n",
+    );
+    // The host's server, as far as the step can tell.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port().to_string();
+    let out = support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
+        .args(["exec", "bolt/x", "--", "sh", "-c"])
+        .arg("echo \"${RUSTC_WRAPPER:-unset}\" > wrapper")
+        .current_dir(&s.worktree)
+        .env("XDG_CONFIG_HOME", s.config.path())
+        .env("XDG_STATE_HOME", s.state.path())
+        .env("SCCACHE_SERVER_PORT", &port)
+        .env_remove("SLUICE_AGENT")
+        .env_remove("SLUICE_OTEL")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let wrapper = std::fs::read_to_string(s.worktree.join("wrapper")).unwrap();
+    assert!(wrapper.trim_end().ends_with("/sccache"), "{wrapper}");
+    assert!(
+        text(&out).contains(&format!(
+            "compiling through the host's compile server at 127.0.0.1:{port}"
+        )),
+        "{}",
+        text(&out)
+    );
+    drop(server);
+}
+
 /// Every file name kept under `dir`, walked whole.
 /// 64: before it runs, exec says whether the head would form if
 /// submitted now; a conflict is told and the run goes on, and `--json`
