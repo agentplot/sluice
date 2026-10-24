@@ -96,6 +96,7 @@ None.
 crates/sluice/src/lib.rs
 crates/sluice/src/profiles/github/pulls.rs
 crates/sluice/tests/profiles/pull_requests.rs
+crates/sluice/tests/cli.rs
 site/src/content/docs/reference/commands.md
 site/src/content/docs/guides/pull-requests.md
 plugins/sluice/skills/using-sluice/SKILL.md
