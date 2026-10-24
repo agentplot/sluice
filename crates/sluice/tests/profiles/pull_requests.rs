@@ -844,6 +844,51 @@ fn output_posted_as_asked_and_scrubbed() {
     assert!(r.contains("[redacted]") && !r.contains("ghp_"), "{r}");
 }
 
+/// S63 (128): GitHub serves no head for one of two pull requests opened by
+/// hand, the one it lists first, whose branch is gone. Each round names it
+/// and that it has no head, and the other is submitted; once its branch is
+/// pushed again, the next round submits it. Closed, one with no head is
+/// named no more.
+#[test]
+fn s63_a_request_sluice_cannot_fetch_holds_no_other() {
+    let g = OnGitHub::new("pr-s63", "reviews = 0");
+    let (gone, gone_head) = g.by_hand("unit/gone", &[("gone.txt", Some("g\n"))], false);
+    let (fine, fine_head) = g.by_hand("unit/fine", &[("slow", Some("x\n"))], false);
+    g.no_head(gone);
+    let named = |said: &str, n: u64| {
+        said.contains(&format!("pull/{n}: ")) && said.contains(&format!("pull/{n} has no head"))
+    };
+    let said = g.round();
+    assert!(named(&said, gone), "{said}");
+    assert!(g.of(gone).is_empty(), "{:?}", g.subs());
+    assert_eq!(g.of(fine).len(), 1, "{:?}", g.subs());
+    let (_, title, _) = g.posted(&fine_head).unwrap();
+    assert!(
+        title.starts_with("queued") || title.starts_with("testing"),
+        "{title}"
+    );
+    // Read again each round, until GitHub serves its head.
+    for _ in 0..2 {
+        let said = g.round();
+        assert!(named(&said, gone), "{said}");
+        assert!(g.of(gone).is_empty(), "{:?}", g.subs());
+    }
+    g.repo
+        .git(&["push", "-q", "origin", "unit/gone:refs/heads/unit/gone"]);
+    g.step();
+    let subs = g.of(gone);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["head"], gone_head.as_str());
+    // Closed, it is no longer read.
+    let (third, _) = g.by_hand("unit/third", &[("third.txt", Some("t\n"))], false);
+    g.no_head(third);
+    let said = g.round();
+    assert!(named(&said, third), "{said}");
+    g.gh.forge.close(third).unwrap();
+    g.step();
+    assert!(g.of(third).is_empty(), "{:?}", g.subs());
+}
+
 // ---------------------------------------------------------------------------
 // pull-request-status
 // ---------------------------------------------------------------------------
