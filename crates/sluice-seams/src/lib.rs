@@ -16,7 +16,9 @@
 //! Errors are `anyhow::Error`: a seam that cannot do what it was asked
 //! fails the step that asked. A refusal the statement names (a conflict,
 //! a branch found elsewhere, a records write refused) is a value, never an
-//! error, because the core acts on it.
+//! error, because the core acts on it. One error is told apart,
+//! [`Unanswered`]: a remote that could not answer just then, which a
+//! waiting command reads again through.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -25,6 +27,25 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+/// A remote's or a forge's 5xx answer to a call, in the profile's words:
+/// its server could not answer just then, which says nothing of what it
+/// holds.
+#[derive(Debug)]
+pub struct Unanswered(pub String);
+
+impl fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unanswered {}
+
+/// Whether `e`, or anything that caused it, is an [`Unanswered`].
+pub fn unanswered(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<Unanswered>())
+}
 
 /// A git revision, as the branch seam names it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

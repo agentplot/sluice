@@ -694,6 +694,21 @@ command line: an unknown command, flag or value, or a missing argument. `64` is 
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
 
+A waiting submit or `sluice wait` whose read the forge answers with a 5xx,
+GitHub unable to answer at the time, reads again, a pause apart, for five
+minutes. Past them it exits `3` as well, saying it could not read, apart
+from any outcome:
+
+```console
+could not read #77: sluice wait main
+sluice: could not read #77 for 5m03s, so whether it landed is not known: GET /repos/o/r/pulls/77: 503 Service Unavailable
+```
+
+Under `--json`, stdout holds the error document, with that command in its
+`next`. Whether the submission landed is not known then: only its record
+says, and the command in `next` reads it again. An outcome only ever comes
+from the submission's record.
+
 With `--json`, a command that cannot do what it was asked still prints
 JSON on stdout, one document in place of the one it would have printed:
 

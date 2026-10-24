@@ -1379,6 +1379,30 @@ fn a_landing_stands_when_its_release_then_fails() {
     );
 }
 
+/// GitHub answering 503 to a read of the pull request a waiting submit
+/// follows is no outcome: the submit reads it again, a pause apart, and
+/// follows it to its landing.
+#[test]
+fn a_waiting_submit_reads_again_through_githubs_503() {
+    let g = OnGitHub::new("pr-503", "");
+    let w = g.session("unanswered", &[("u.txt", "u\n")]);
+    g.gh.unavailable(2);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    assert_eq!(g.gh.unavailable_left(), 0);
+    let main = g.main_on_github();
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .ends_with(&format!("passed · landed as {}\n", &main[..7])),
+        "{}",
+        text(&out)
+    );
+}
+
 /// Blamed, then submitted again on the same head (120): the submit marks
 /// the pull request ready for review, intake takes the same head, and its
 /// checks run again; the submit follows that test to its outcome.

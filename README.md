@@ -196,7 +196,8 @@ fix it in your worktree and submit again
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
 refusal, `130` stopped with Ctrl-C (the submission stays queued). Any
-command exits `3` when sluice itself fails and `64` on a command line it
+command exits `3` when sluice itself fails, as a waiting submit does when
+it could not read the forge for five minutes, and `64` on a command line it
 cannot read.
 
 A complete setup, with moon, a sandbox, a build cache and two tiers of
