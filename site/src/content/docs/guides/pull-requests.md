@@ -130,9 +130,22 @@ revision.
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
 people review, so an agent that shouldn't wait submits with
-`--no-wait`, and `wt submit --status` reads it later. `sluice wait main`
-follows the pull request as a waiting submit does, and with `--timeout`
-returns after that long, exiting `5` while it is still open.
+`--no-wait`, and `wt submit --status` reads it later. When the pull
+request's conditions already hold, sluice queues it then, and the
+submit answers with that submission:
+
+```console
+$ wt submit main --no-wait --json
+{"id":12,"branch":"main","ahead":[],"pull_request":41}
+```
+
+When they don't, the submit answers with the pull request and what it
+waits for, `{"pull_request":41,"branch":"main","state":"waiting: needs
+1 review"}`. An agent waiting in steps hands an `id` to `sluice wait 12
+--timeout 9m --json`. With only `pull_request`, it runs `sluice wait
+main --timeout 9m --json` in its worktree, which follows the pull
+request and, once sluice queues it, its submission. Each exits `5`
+while there is no outcome yet; run it again.
 
 ## Several pull requests as one act
 
