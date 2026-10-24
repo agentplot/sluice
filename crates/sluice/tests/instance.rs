@@ -323,4 +323,51 @@ mod bound {
         assert_eq!(states(&setups[1], "bolt/a"), ["landed"]);
         assert_eq!(states(&setups[2], "bolt/a"), ["landed"]);
     }
+
+    /// 71: on a host that gives sluice all its cores, `[runs] cores = 2`
+    /// under a bound of two gives each run one core, however many the host
+    /// has; on a host that already limits sluice, `sluice run` refuses the
+    /// setting, naming it, and nothing runs.
+    #[test]
+    fn the_keepers_cores_set_each_runs_share() {
+        let repo = Repo::new("instance-cores");
+        let seen = Scratch::new("instance-cores-seen");
+        repo.write(".config/sluice.toml", POLICY);
+        repo.write("check.sh", &check_until(seen.path(), 1));
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+        repo.git(&["branch", "bolt/a", "main"]);
+        let s = Setup {
+            repo,
+            sessions: Scratch::new("instance-cores-sessions"),
+            config: Rc::new(host_config(2)),
+            state: Rc::new(Scratch::new("instance-cores-state")),
+        };
+        s.submit("bolt/a", "ca");
+        // Stated once the submission is in, so a host that refuses them
+        // still has a combination that would run.
+        std::fs::write(
+            s.config.path().join("sluice/config.toml"),
+            "[runs]\nmax = 2\ncores = 2\n",
+        )
+        .unwrap();
+
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "16"])
+            .output()
+            .unwrap();
+        let (given, all) = sluice::instance::host_cores();
+        if given == all && all >= 2 {
+            assert!(out.status.success(), "{}", text(&out));
+            let starts = starts(seen.path());
+            let jobs: Vec<usize> = starts.iter().map(|(_, jobs)| *jobs).collect();
+            assert_eq!(jobs, [1], "{starts:?}");
+            assert_eq!(states(&s, "bolt/a"), ["landed"]);
+        } else {
+            assert!(!out.status.success(), "{}", text(&out));
+            assert!(text(&out).contains("[runs] cores"), "{}", text(&out));
+            assert!(!seen.path().join("starts").exists(), "nothing runs");
+        }
+    }
 }

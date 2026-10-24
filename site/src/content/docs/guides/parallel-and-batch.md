@@ -105,16 +105,18 @@ the host together, along with the runs agents start in their own
 worktrees with `sluice exec` and previews' commands. Every sluice on the
 host reads one count of the runs going there, so three repositories
 under `max = 3` run three at once, not nine. With no `max`, the bound is
-a quarter of the host's logical CPUs, and never less than one, and every
-repository on the host shares it. A branch with room under its own
-number still waits while the host's bound is full, whichever repository
-fills it. `reserved` keeps some of the bound for submissions, so agents'
+a quarter of the logical CPUs sluice may use, and never less than one,
+and every repository on the host shares it. A branch with room under its
+own number still waits while the host's bound is full, whichever
+repository fills it. `reserved` keeps some of the bound for submissions, so agents'
 own runs can't take all of it
 ([configuration](/sluice/reference/configuration/#runs)).
 
 sluice reads nothing of how busy the host is. What runs beside it, the
 agents' sessions among it, is yours to leave room for when you set
-`max`.
+`max`. On a host that gives sluice all its cores, as a Mac does,
+`[runs] cores` keeps the bound's runs to fewer cores than the host has,
+and leaves the rest for them.
 
 If each run starts containers, an emulator or a database, set `max` to
 how many of those the host holds in memory at once, whatever its count

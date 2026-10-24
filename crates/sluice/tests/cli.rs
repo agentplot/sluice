@@ -498,6 +498,105 @@ fn a_dirty_place_is_refused_with_exit_two() {
     );
 }
 
+/// ADR 0050: a branch requiring a check the task runner in the worktree
+/// keeps out of CI refuses the submission with exit 2, naming the check,
+/// the tag that requires it and its line of the policy, and the way on;
+/// nothing is queued or published.
+#[test]
+fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused_with_exit_two() {
+    let f = setup();
+    f.world.keeps_out("plugin:test");
+    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    f.world.at_path("unit/a", "/work/unit-a");
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, CONFLICT);
+    assert_eq!(
+        out,
+        format!(
+            "refused: {BRANCH} requires plugin:test through #gate (.config/sluice.toml line 2), \
+             which the task runner in this worktree keeps out of CI, so it is never run and \
+             {BRANCH} cannot pass while it is required\n\
+             let it run in CI in this worktree, or drop it from {BRANCH}'s policy in the same \
+             submission that lets it run, and submit again\n"
+        )
+    );
+    assert!(f.world.published().is_empty());
+    let (_, status) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&status).unwrap();
+    assert_eq!(v["submissions"], serde_json::json!([]), "{status}");
+
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/a",
+            "--no-wait",
+            "--json",
+        ],
+    );
+    assert_eq!(code, CONFLICT, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["error"]["kind"], "refused");
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{BRANCH} requires plugin:test through #gate")));
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice status {BRANCH}")])
+    );
+}
+
+/// ADR 0050: when the task runner cannot be asked, the submission is
+/// taken, with a warning saying why it was not checked; under `--json
+/// --no-wait`, the warning is the document's.
+#[test]
+fn a_submission_the_runner_could_not_check_is_taken_with_a_warning() {
+    let f = setup();
+    f.world
+        .kept_out_fails(Some("[tests] toolchain exited 1: no devenv"));
+    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    f.world.at_path("unit/a", "/work/unit-a");
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        format!(
+            "submission 1 to {BRANCH} · nothing queued ahead\n\
+             warning: could not check which of {BRANCH}'s required checks the task runner in \
+             this worktree keeps out of CI, so the submission was taken unchecked: \
+             [tests] toolchain exited 1: no devenv\n"
+        )
+    );
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("y"))],
+    );
+    f.world.at_path("unit/b", "/work/unit-b");
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/b",
+            "--no-wait",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["id"], 2);
+    let warnings = v["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 1, "{out}");
+    assert!(warnings[0].as_str().unwrap().contains("no devenv"), "{out}");
+}
+
 /// Under `--json`, a refusal is one error document on stdout, naming
 /// what moves it on; the exit is a refusal's still.
 #[test]

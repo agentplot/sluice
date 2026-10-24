@@ -239,6 +239,7 @@ once is the host's own setting, in `~/.config/sluice/config.toml`:
 ```toml
 [runs]
 max = 2    # default: a quarter of the cores, shared equally between runs
+cores = 12 # default: what the host gives sluice; set it on a Mac to leave cores for the agents
 ```
 
 ## Telemetry

@@ -1029,6 +1029,13 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
         SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
+        SubmitRefusal::KeptOut(kept) => format!(
+            "its branch requires {}, which the task runner keeps out of CI",
+            kept.iter()
+                .map(|k| k.task.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1747,6 +1754,18 @@ impl crate::PullRequests for Pulls {
         let (Some(t), true) = (target, refused.is_empty()) else {
             return Ok(Err(refused));
         };
+        // ADR 0050: refused before anything is pushed or opened, each place
+        // its runner keeps a required check out of CI in.
+        let mut warnings = Vec::new();
+        for (worktree, session) in worktrees.iter().zip(&sessions) {
+            match s.check_kept_out(session, branch, &t.tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(refused));
+        }
         let forge = self.forge(branch)?;
         let _lock = self.wait_lock(branch)?;
         // 124, 1: a branch sluice lands on is asked for as its remote holds
@@ -1838,6 +1857,9 @@ impl crate::PullRequests for Pulls {
             if let Some(copy) = &submitted.copy {
                 said.push('\n');
                 said.push_str(&crate::copy_differs_line(copy));
+            }
+            for w in &warnings[k] {
+                said.push_str(&format!("\nwarning: {w}"));
             }
             opened.push(Opened {
                 number,
