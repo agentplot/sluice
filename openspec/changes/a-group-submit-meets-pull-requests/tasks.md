@@ -19,7 +19,7 @@ exec main -- <command>`; before submitting, `sluice exec main`.
 
 ## 3. One of a taken group on a new head
 
-- [ ] 3.1 Rewrite the end of `one_of_a_group_on_a_new_head_is_withdrawn_alone` to the group-submit delta's second requirement: after the push to the second's branch, its submission is withdrawn and its request a draft, the first and third not withdrawn; rounds land the first and third, tested without the second; the second still has one submission and is a draft; then `sluice submit main --no-wait` from the second's worktree leaves it ready, with no group mark, and the next round submits it alone. Fix the driver only if the test shows it not holding (the design reads the hold as already in place). Verify `sluice exec main -- cargo test -p sluice --features tools --test pull_requests one_of_a_group_on_a_new_head_is_withdrawn_alone`.
+- [x] 3.1 Rewrite the end of `one_of_a_group_on_a_new_head_is_withdrawn_alone` to the group-submit delta's second requirement: after the push to the second's branch, its submission is withdrawn and its request a draft, the first and third not withdrawn; rounds land the first and third, tested without the second; the second still has one submission and is a draft; then `sluice submit main --no-wait` from the second's worktree leaves it ready, with no group mark, and the next round submits it alone. Fix the driver only if the test shows it not holding (the design reads the hold as already in place). Verify `sluice exec main -- cargo test -p sluice --features tools --test pull_requests one_of_a_group_on_a_new_head_is_withdrawn_alone`.
 
 ## 4. Records and docs
 

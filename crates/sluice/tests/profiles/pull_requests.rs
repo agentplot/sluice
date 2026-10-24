@@ -2505,10 +2505,12 @@ fn one_of_a_group_closed_holds_the_rest() {
     assert!(g.of(ns[2]).is_empty(), "{:?}", g.subs());
 }
 
-/// Each its own once taken: a commit pushed to the second of a group
-/// already submitted withdraws only the second's submission; the first
-/// and third are tested without it and land, and the second is submitted
-/// again alone on its new head.
+/// Each its own once taken: a commit no submit made, pushed to the second
+/// of a group already submitted, withdraws only the second's submission,
+/// and sluice marks the second a draft; the first and third are tested
+/// without it and land, and no round submits the second again. Its
+/// worktree's `sluice submit main` marks it ready at its new head, one of
+/// no group, and it is submitted again alone and lands (120, 125).
 #[test]
 fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
     let g = OnGitHub::new("pr-group-new-head", "");
@@ -2525,16 +2527,18 @@ fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
         .iter()
         .map(|n| g.of(*n)[0]["id"].as_u64().expect("submitted together"))
         .collect();
-    g.commit_in(&ws[1], &[("h2-more.txt", "more\n")]);
+    let moved = g.commit_in(&ws[1], &[("h2-more.txt", "more\n")]);
     g.repo
         .git(&["push", "-q", "origin", "unit/h2:refs/heads/unit/h2"]);
     g.step();
     assert_eq!(g.of(ns[1])[0]["state"], "withdrawn", "{:?}", g.subs());
+    assert!(is_draft(&g, ns[1]));
     for n in [ns[0], ns[2]] {
         assert_ne!(g.of(n)[0]["state"], "withdrawn", "{:?}", g.subs());
     }
-    g.step_until("landed", |g| {
-        ns.iter()
+    g.step_until("the first and third landed", |g| {
+        [ns[0], ns[2]]
+            .iter()
             .all(|n| g.of(*n).iter().any(|s| s["state"] == "landed"))
     });
     for n in [ns[0], ns[2]] {
@@ -2546,8 +2550,35 @@ fn one_of_a_group_on_a_new_head_is_withdrawn_alone() {
         let tested = landed["tested"]["submissions"].as_array().unwrap().clone();
         assert!(!tested.contains(&serde_json::json!(first[1])), "{landed}");
     }
-    let again = g.of(ns[1]);
-    assert_eq!(again.len(), 2, "submitted again alone: {again:?}");
+    let held = g.of_after(ns[1], 2);
+    assert_eq!(held.len(), 1, "never submitted again by a round: {held:?}");
+    assert!(is_draft(&g, ns[1]));
+
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &ws[1])
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_of("h2");
+    assert!(!pull.draft && pull.head == moved, "{pull:?}");
+    assert_eq!(group_mark(&pull.body), None, "{}", pull.body);
+    g.step_until("the second submitted again and landed", |g| {
+        g.of(ns[1])
+            .iter()
+            .any(|s| s["head"] == moved.as_str() && s["state"] == "landed")
+    });
+    let again: Vec<Value> = g
+        .of(ns[1])
+        .into_iter()
+        .filter(|s| s["head"] == moved.as_str())
+        .collect();
+    assert_eq!(again.len(), 1, "{:?}", g.subs());
+    assert_eq!(
+        again[0]["tested"]["submissions"],
+        serde_json::json!([again[0]["id"]]),
+        "alone"
+    );
 }
 
 /// S58, 124, 1: a worktree that has checked out `bolt/x`, this host's copy
