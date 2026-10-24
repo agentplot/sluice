@@ -14,7 +14,7 @@ Read first: this change's proposal, specs and design; clauses 1, 2, 121,
 
 - [x] 2.1 `Branch` gains `copy(branch) -> Result<HostCopy>` (`Itself` or `At(Option<Rev>)`) and `level(branch, expected: Option<&Rev>, to: &Rev) -> Result<Moved>`; local refs answer `Itself` and bail on `level`; pushed refs answer `At` from `refs/heads/<branch>` with no fetch and level with gix from exactly `expected` (`MustExistAndMatch` or `MustNotExist`), reflog `sluice: level <branch> to its landing`, a copy found elsewhere `Moved::Elsewhere`; `Branches` routes both like `read`; verify cases in `tests/pushed_refs.rs` (copy read with the remote unreachable, a level from the right value, one from a stale value refused, one failing on a `refs/heads/<branch>.lock` file) and `tests/local_refs.rs` (`Itself`).
 - [x] 2.2 `PushedRefs::move_to` and `make` no longer set the local ref after an accepted push; verify `tests/pushed_refs.rs` that an accepted push with the local ref's lock held returns `Moved::Moved` and leaves the local ref where it was.
-- [ ] 2.3 The fakes keep a host copy for a branch marked as on a remote, answer `copy` and `level` for it, and can be told to fail the next n levellings with a given error; verify their unit tests in `crates/sluice-fakes`.
+- [x] 2.3 The fakes keep a host copy for a branch marked as on a remote, answer `copy` and `level` for it, and can be told to fail the next n levellings with a given error; verify their unit tests in `crates/sluice-fakes`.
 
 ## 3. Levelling in the round
 

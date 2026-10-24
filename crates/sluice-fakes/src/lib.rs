@@ -2380,6 +2380,51 @@ mod tests {
         assert_eq!(f.tests.running().unwrap().queue, 2);
     }
 
+    /// 124: a branch on a remote has a host copy, levelled only from the
+    /// value it holds, and failing as many times as it is told; any other
+    /// branch is its own copy and is never levelled.
+    #[test]
+    fn a_branch_on_a_remote_has_a_copy_levelled_from_its_value() {
+        let f = Fakes::new();
+        let base = f.world.init("main", &[("a", "1")]);
+        let bolt = f.world.init("bolt/x", &[("b", "1")]);
+        f.world.on_remote("bolt/x");
+        assert_eq!(f.branch.copy("main").unwrap(), HostCopy::Itself);
+        assert!(f.branch.level("main", Some(&base), &base).is_err());
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(bolt.clone()))
+        );
+        let landed = f.world.hand_commit("bolt/x", &[("b", Some("2"))]);
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&base), &landed).unwrap(),
+            Moved::Elsewhere(Some(bolt.clone()))
+        );
+        f.world
+            .fail_levels(2, "git holds the lock on refs/heads/bolt/x");
+        for _ in 0..2 {
+            let err = f.branch.level("bolt/x", Some(&bolt), &landed).unwrap_err();
+            assert_eq!(err.to_string(), "git holds the lock on refs/heads/bolt/x");
+        }
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(f.world.levels(), 0);
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&bolt), &landed).unwrap(),
+            Moved::Moved
+        );
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(landed.clone()))
+        );
+        assert_eq!(f.world.levels(), 1);
+        f.world.set_copy("bolt/x", None);
+        assert_eq!(
+            f.branch.level("bolt/x", None, &landed).unwrap(),
+            Moved::Moved
+        );
+    }
+
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {
         LastResult {
             at: "2026-10-16T09:00:00Z".into(),
