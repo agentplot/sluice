@@ -12,9 +12,11 @@ import type {
   Forecast,
   Forecasting,
   Mine,
+  OpenedLog,
   OpenedTest,
   Outcome,
   Overview,
+  OverviewFailed,
   OverviewTask,
 } from "../types";
 import type { CheckRow } from "./board";
@@ -30,6 +32,7 @@ import {
   emptyLines,
   errorLine,
   failedName,
+  flakyLines,
   flipped,
   forecastBranch,
   forecastInWay,
@@ -102,24 +105,36 @@ const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
 
 type Detail = OpenedTest;
 
-/** What a failure shows opened: each failed test's log tail, read with `tail`. */
-async function open($: $, failed: { task: string; log?: string }[]): Promise<Detail[]> {
+/** A log's last 20 lines, read with `tail`, or why they could not be read. */
+async function tailOf($: $, log: string): Promise<OpenedLog> {
+  const got = await $.process.run(["tail", "-n", "20", "--", log]).catch(() => null);
+  if (got && got.exitCode === 0)
+    return { log, tail: got.stdout.split("\n").filter((l) => l !== "") };
+  return { log, error: (got?.stderr ?? "").trim() || "it could not be read" };
+}
+
+/**
+ * What a failure shows opened: each failed test's log tail, read with
+ * `tail`, and for a flaky one the run it contradicts, its log's tail too.
+ */
+async function open($: $, failed: OverviewFailed[]): Promise<Detail[]> {
   const out: Detail[] = [];
   for (const f of failed) {
-    if (!f.log) {
-      out.push({ task: f.task, error: "no log was kept" });
-      continue;
+    const shown: Detail = f.log
+      ? { ...f, ...(await tailOf($, f.log)) }
+      : { task: f.task, error: "no log was kept" };
+    if (f.flaky) {
+      const other = f.flaky.other.log;
+      shown.flaky = f.flaky;
+      shown.other = other ? await tailOf($, other) : {};
     }
-    const got = await $.process.run(["tail", "-n", "20", "--", f.log]).catch(() => null);
-    if (got && got.exitCode === 0)
-      out.push({ ...f, tail: got.stdout.split("\n").filter((l) => l !== "") });
-    else out.push({ ...f, error: (got?.stderr ?? "").trim() || "it could not be read" });
+    out.push(shown);
   }
   return out;
 }
 
 /** Open a failure in place, or fold it: it never leaves this pane. */
-async function toggle($: $, key: string, failed: () => Promise<{ task: string; log?: string }[]>) {
+async function toggle($: $, key: string, failed: () => Promise<OverviewFailed[]>) {
   if ((await read($, opened)).includes(key)) {
     await update($, opened, (list) => flipped(list, key));
     return;
@@ -135,7 +150,7 @@ async function flip($: $, key: string) {
 }
 
 /** The failed tests of a blamed submission, from sluice. */
-async function blamedTests($: $, id: number): Promise<{ task: string; log?: string }[]> {
+async function blamedTests($: $, id: number): Promise<OverviewFailed[]> {
   const cwd = (await read($, mine)).root ?? undefined;
   const got = await $.process
     .run(["sluice", "status", String(id), "--json"], cwd ? { cwd } : undefined)
@@ -559,32 +574,50 @@ export const register: Register = (on, options) => {
         </Box>
       );
     };
-    // An opened failure, under its row: each test, its log, the log's tail.
+    // A log as an opened failure shows it: its path to copy, then its tail or why not.
+    const logView = (k: string, l: OpenedLog) => [
+      l.log && (
+        <Button
+          key={`${k}-copy`}
+          plain
+          onPress={() => $.ui.copy({ text: l.log ?? "", surface: e.surface }).then(() => undefined)}
+        >
+          <Text dimColor>{l.log} [copy]</Text>
+        </Button>
+      ),
+      l.error && (
+        <Text key={`${k}-error`} color="red">
+          cannot read it: {l.error}
+        </Text>
+      ),
+      ...(l.tail ?? []).map((line, n) => (
+        <Text key={`${k}-${n}`} dimColor wrap="truncate-end">
+          {line}
+        </Text>
+      )),
+    ];
+    // An opened failure, under its row: each test, its log, the log's tail; a
+    // flaky one's two runs, each headed by when and where it ran.
     const view = (k: string, shown: Detail[]) => (
       <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
         {shown.length === 0 && <Text dimColor>no failed tests recorded</Text>}
-        {shown.map((t) => (
-          <Box key={`${k}-${t.task}`} flexDirection="column">
-            <Text bold>{t.task}</Text>
-            {t.log && (
-              <Button
-                key={`${k}-${t.task}-copy`}
-                plain
-                onPress={() =>
-                  $.ui.copy({ text: t.log ?? "", surface: e.surface }).then(() => undefined)
-                }
-              >
-                <Text dimColor>{t.log} [copy]</Text>
-              </Button>
-            )}
-            {t.error && <Text color="red">cannot read it: {t.error}</Text>}
-            {(t.tail ?? []).map((l, n) => (
-              <Text key={`${k}-${t.task}-${n}`} dimColor wrap="truncate-end">
-                {l}
-              </Text>
-            ))}
-          </Box>
-        ))}
+        {shown.map((t) => {
+          const heads = t.flaky ? flakyLines(t.flaky) : null;
+          return (
+            <Box key={`${k}-${t.task}`} flexDirection="column">
+              <Text bold>{t.task}</Text>
+              {heads && <Text>{heads[0]}</Text>}
+              {logView(`${k}-${t.task}`, t)}
+              {heads && <Text>{heads[1]}</Text>}
+              {t.other &&
+                (t.other.log ? (
+                  logView(`${k}-${t.task}-other`, t.other)
+                ) : (
+                  <Text dimColor>its log was not kept</Text>
+                ))}
+            </Box>
+          );
+        })}
       </Box>
     );
     return (

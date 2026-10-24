@@ -2,12 +2,31 @@ import type { On } from "claude-code";
 import type { Engine, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
-import type { Overview } from "../types";
+import type { Flaky, Overview } from "../types";
 import { NOW, overview, withChecks, withConflict, withRelease, withTasks } from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
 const LOG = "/work/sluice/sluice.git/sluice/.logs/main/c41/cli:test.log";
+/** The log of the run a flaky failure contradicts. */
+const OTHER = "/work/sluice/sluice.git/sluice/.logs/main/c38/cli:test.log";
+
+/** `cli:test` passed here, read as failed for a fail recorded earlier, whose log is `log`. */
+function flaky(log?: string): Flaky {
+  return {
+    here: "pass",
+    at: "2026-10-16T19:42:05Z",
+    host: "devbox",
+    other: {
+      outcome: "fail",
+      at: "2026-10-16T19:10:30Z",
+      branch: "main",
+      combination: "4f1c2aa0e1",
+      host: "mac-studio",
+      ...(log ? { log } : {}),
+    },
+  };
+}
 
 /** The fixture, then #13 blamed. */
 function blamed(): Overview {
@@ -29,7 +48,7 @@ function blamed(): Overview {
 const ran: string[] = [];
 
 /** The fixture, with #9's blame and its failed test kept on a combination. */
-function blamedWithLog(log: string): Overview {
+function blamedWithLog(log: string, f?: Flaky): Overview {
   const d = overview();
   d.branches[0]!.candidates.push({
     id: "c40",
@@ -40,20 +59,22 @@ function blamedWithLog(log: string): Overview {
     executor: "sandbox",
     ran: 1,
     replayed: 0,
-    failed: [{ task: "cli:test", log }],
+    failed: [{ task: "cli:test", log, ...(f ? { flaky: f } : {}) }],
   });
   return d;
 }
 
 /**
  * A host where sluice answers from `docs`, streamed by --watch in turn, and
- * the session was started with the variables `env`.
+ * the session was started with the variables `env`; a command `more` names
+ * prints what it says there, before any other answer.
  */
 function host(
   on: On,
   docs: Overview[],
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
   env: Record<string, string> = {},
+  more: Record<string, string> = {},
 ) {
   mock.env(on, env);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -61,6 +82,9 @@ function host(
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
     ran.push(argv);
+    const answer = more[argv];
+    if (answer !== undefined)
+      return { value: { exitCode: 0, stdout: answer, stderr: "", ...WHOLE } };
     if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
     if (argv === "sluice status 9 --json") {
@@ -950,6 +974,134 @@ test("a log it cannot read says why", async ($, on) => {
   expect(
     await pane.find({ type: "Text", text: /cannot read it: tail: No such file or directory/ }),
   ).toBeDefined();
+  await pane.unmount();
+});
+
+const THIS_RUN = "this run: passed 19:42 on devbox";
+const THAT_RUN = "the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa";
+
+/** The texts an opened row shows, from its test's name on. */
+async function openedTexts(pane: {
+  findAll: (q: { type: string }) => Promise<{ text: string }[]>;
+}) {
+  const all = (await pane.findAll({ type: "Text" })).map((t) => t.text);
+  return all.slice(all.indexOf("cli:test"));
+}
+
+test("a flaky failure opens to this run and the run it contradicts, each with its log", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const status = { id: 9, failed: [{ task: "cli:test", log: LOG, flaky: flaky(OTHER) }] };
+  host(
+    on,
+    [blamedWithLog(LOG, flaky(OTHER))],
+    nothingSeen(),
+    {},
+    {
+      "sluice status 9 --json": JSON.stringify(status),
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const both = [
+    "cli:test",
+    THIS_RUN,
+    `${LOG} [copy]`,
+    "first",
+    "last line",
+    THAT_RUN,
+    `${OTHER} [copy]`,
+    "other first",
+    "other last",
+  ];
+  // The blamed row, from sluice's record of #9.
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, both.length)).toEqual(both);
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  // The `log of` row, from the combination the overview lists.
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, both.length)).toEqual(both);
+  expect(ran).toEqual([
+    "sluice status 9 --json",
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+  ]);
+  await pane.unmount();
+});
+
+test("a flaky failure whose contradicting run's log was not kept says so", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [blamedWithLog(LOG, flaky())], nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  const shown = await openedTexts(pane);
+  expect(shown.slice(shown.indexOf(THAT_RUN), shown.indexOf(THAT_RUN) + 2)).toEqual([
+    THAT_RUN,
+    "its log was not kept",
+  ]);
+  expect(ran).toEqual([`tail -n 20 -- ${LOG}`]);
+  await pane.unmount();
+});
+
+test("a flaky failure whose own log cannot be read still shows the run it contradicts", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const gone = "/gone/cli:test.log";
+  host(
+    on,
+    [blamedWithLog(gone, flaky(OTHER))],
+    nothingSeen(),
+    {},
+    {
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, 8)).toEqual([
+    "cli:test",
+    THIS_RUN,
+    `${gone} [copy]`,
+    "cannot read it: tail: No such file or directory",
+    THAT_RUN,
+    `${OTHER} [copy]`,
+    "other first",
+    "other last",
+  ]);
   await pane.unmount();
 });
 

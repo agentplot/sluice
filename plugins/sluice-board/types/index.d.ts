@@ -212,8 +212,14 @@ export type Forecasting = {
 /** The session's latest submission, as the document shows it. */
 export type Latest = { id: number; branch: string; conflict: boolean; active: boolean };
 
-/** A failed test as an opened failure shows it: its log's last lines, or why not. */
-export type OpenedTest = { task: string; log?: string; tail?: string[]; error?: string };
+/** A log as an opened failure shows it: its path, its last lines, or why not. */
+export type OpenedLog = { log?: string; tail?: string[]; error?: string };
+
+/**
+ * A failed test as an opened failure shows it: its log's last lines, or why
+ * not; and, for a flaky one, the run it contradicts with its log.
+ */
+export type OpenedTest = OpenedLog & { task: string; flaky?: Flaky; other?: OpenedLog };
 
 declare module "claude-code" {
   interface PluginState {
