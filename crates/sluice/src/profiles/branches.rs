@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result};
 use sluice_core::policy::{Policy, POLICY_PATH};
-use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
 use super::pushed_refs::{remotes, PushedRefs};
@@ -187,6 +187,20 @@ impl Branch for Branches {
         match self.route(branch)? {
             Some(p) => p.read(branch),
             None => self.local.read(branch),
+        }
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        match self.route(branch)? {
+            Some(p) => p.copy(branch),
+            None => self.local.copy(branch),
+        }
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        match self.route(branch)? {
+            Some(p) => p.level(branch, expected, to),
+            None => self.local.level(branch, expected, to),
         }
     }
 

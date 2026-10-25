@@ -24,6 +24,22 @@ sluice reads the policy from `main` as it stands before a landing, so
 the landing that adds `remote` lands on your machine only. Push `main`
 to GitHub by hand that once; sluice pushes every landing after it.
 
+If GitHub's `main` is still older than what landed on your machine when
+the next round reads it, sluice doesn't build on it: that would drop
+the landings GitHub lacks. It holds `main` instead. Nothing is tested
+or landed, and `sluice step`, `sluice status main` and a waiting submit
+say so, naming GitHub's revision and the landing it lacks:
+
+```console
+$ sluice step main
+held: main reads 10e4791, which lacks the landing c43609b; put the landing back on main, or run sluice branch accept main 10e4791
+```
+
+Either of two things ends the hold. Push your machine's `main` to GitHub, and the
+next round lands the queue on it. Or, if GitHub's revision is the one
+to keep, accept it with `sluice branch accept main 10e4791`, and the
+queue is formed on it from then on.
+
 With `remote` set, GitHub's copy of `main` is the real one:
 
 - **Every round fetches it first.** Whoever runs the round (a waiting
@@ -32,8 +48,13 @@ With `remote` set, GitHub's copy of `main` is the real one:
   combination on it. Fetching leaves your local `main` where it is.
 - **A landing is a push.** When a combination passes, sluice pushes its
   merge commit to GitHub's `main`, and the push only succeeds if `main`
-  is still where the combination started. Then it moves your local
-  `main` to match.
+  is still where the combination started.
+- **Your local `main` is sluice's copy.** Every round on every host that
+  reads a landing sets that host's `main` to it, from exactly where it
+  stood, whichever host landed. A round that can't, as while git holds
+  the branch's lock, leaves the landing landed; the next round tries
+  again, and `sluice status main` says meanwhile which revision your
+  `main` holds and why.
 - **Only the branch goes to GitHub.** The queue, the test results and
   the logs stay in `.git/sluice/` on your machine, as before. On one
   machine nothing else needs them.
@@ -52,7 +73,7 @@ sequenceDiagram
     Note over S: passed
     S->>G: git push origin L:main --force-with-lease=main:m1
     G-->>S: accepted: main is at L
-    Note over S: move local main to L, record submission 12 landed
+    Note over S: record submission 12 landed, set local main to L
 ```
 
 `sluice submit` and `wt submit` report "landed" only once GitHub has
@@ -84,10 +105,18 @@ off `main` is then the job of the `reference-transaction` hook that
 `sluice protect` installs, as in [branch
 protection](/sluice/guides/walkthrough/#4-branch-protection).
 
-A worktree with `main` checked out falls behind GitHub's `main` on every
-host that didn't land, and sluice moves `main` under it on the host that
-did. Keep a detached worktree at `origin/main` instead, as [worktrees
-beside sluice](/sluice/guides/worktrees/) shows.
+The hook judges a write by your local `main` as it stands, and fetches
+nothing. A `git reset --hard` to where it stands, and git's packing of
+its refs, pass; any other write to it is refused, naming the command and
+both revisions. It judges the repository git names, wherever the command
+runs: a `git --git-dir=<repository> fetch` from another folder is judged
+by that repository's policy alone. A transaction it can't read, as one
+whose policy doesn't parse, goes through with one warning saying why.
+
+sluice moves `main` under a worktree that has it checked out, on every
+host whose rounds read a landing. Keep a detached worktree at
+`origin/main` instead, as [worktrees beside
+sluice](/sluice/guides/worktrees/) shows.
 
 ## Bolts on GitHub
 
@@ -154,7 +183,7 @@ The same holds when the push fails for any other reason, a dropped
 connection included: the next round fetches and finds out where `main`
 is. If sluice stops between the push and recording it, it
 fetches on restart, finds its landing on `main`, and records it. Your
-local `main` catches up at the next landing.
+local `main` catches up in that round.
 
 When sluice lands submissions exactly as they were tested, the ones behind
 them keep their results and aren't tested again. Only a move from

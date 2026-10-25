@@ -100,32 +100,111 @@ waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 ```
 
-The agent's branch is pushed, and the pull request is opened with the
-branch's commit messages. Submitting again from the same worktree
-updates the same pull request.
+The agent's branch is pushed, and the pull request is opened. Its
+description holds the branch's commit messages, each whole and oldest
+first, and names the agent, which makes it the agent's pull request.
+Submitting again from the same worktree updates the same pull request
+and marks it ready for review.
+
+GitHub holds 65,536 characters in a description. When a branch's
+messages pass that, as a long bolt's can, the description holds as many
+of them whole as fit. A count of the rest follows, with a link to
+GitHub's comparison of the branch, then the subject of each of the rest:
+
+```text
+38 more commits, each by its subject; all of them in full: https://github.com/org/cards/compare/main...bolt/review-cards
+
+- Show the review card's footer
+- Count the cards left to review
+…
+```
+
+No message is cut part way. Each submit writes the description again
+for the commits it pushes, so it follows the pull request's commits. It
+replaces any text a person added there; a person's notes belong in a
+comment.
+
+### A bolt's landing worktree submits
+
+A worktree that has checked out a branch sluice lands on, such as a
+bolt kept on GitHub, submits that branch as GitHub holds it. Nothing is
+pushed: sluice lands on the bolt, and only sluice writes it. The pull
+request is from the bolt into `main`, at GitHub's revision of it, which
+is also the head submitted:
+
+```console
+$ wt submit main
+opened #52: Land bolt/review-cards
+this host's bolt/review-cards is at 10e4791, behind origin's 8079db3; submitted 8079db3
+waiting: needs 1 review
+```
+
+The second line appears only when the worktree's head, this host's own
+`bolt/review-cards`, differs from GitHub's: behind it, ahead of it, or
+apart from it. It refuses nothing; a round of the bolt sets this host's
+branch to its landing. Submitting again after another landing on the
+bolt updates the same pull request and marks it ready at the new
+revision.
 
 A waiting `wt submit` reports each state as it changes and returns when
 the pull request lands or is sent back. Waiting can take a day when
 people review, so an agent that shouldn't wait submits with
-`--no-wait`, and `wt submit --status` reads it later. `sluice wait main`
-follows the pull request as a waiting submit does, and with `--timeout`
-returns after that long, exiting `5` while it is still open.
+`--no-wait`, and `wt submit --status` reads it later. When the pull
+request's conditions already hold, sluice queues it then, and the
+submit answers with that submission:
+
+```console
+$ wt submit main --no-wait --json
+{"id":12,"branch":"main","ahead":[],"pull_request":41}
+```
+
+When they don't, the submit answers with the pull request and what it
+waits for, `{"pull_request":41,"branch":"main","state":"waiting: needs
+1 review"}`. An agent waiting in steps hands an `id` to `sluice wait 12
+--timeout 9m --json`. With only `pull_request`, it runs `sluice wait
+main --timeout 9m --json` in its worktree, which follows the pull
+request and, once sluice queues it, its submission. Each exits `5`
+while there is no outcome yet; run it again.
 
 ## Several pull requests as one act
 
 `sluice submit main` given several worktrees pushes each branch and
-opens or updates each pull request, in the order given, as one act:
+opens or updates each pull request, in the order given, as one act. It
+then reads each pull request's reviews and checks on the commit it
+pushed, and takes every pull request or none of them.
+
+When any falls short, sluice queues none of them and leaves every one a
+draft at its commit, so no round takes one of them alone. It names each
+one short of its conditions with what it lacks, and exits `2`:
 
 ```console
 $ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
 pushed bolt/a · opened #51: Runner credentials
 pushed bolt/b · opened #52: Runner cache
-#51 waiting: needs 1 review
-#52 waiting: needs 1 review
+refused: #51 from ../bolt-a needs 1 review
+refused: #52 from ../bolt-b needs 1 review
+nothing submitted: #51, #52 are drafts at their heads
+once each meets its conditions, the same submit takes them all: sluice submit main --worktree ../bolt-a --worktree ../bolt-b
 ```
 
-When sluice refuses one of the worktrees, one holding changes beyond its
-commits, it refuses the act, and pushes nothing for any of them.
+Reviewers review the drafts. Once each meets its conditions, run the
+same submit again. sluice marks every pull request ready for review and
+queues all of them at once, in the order given, each with its
+submission:
+
+```console
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
+pushed bolt/a · updated #51: Runner credentials · marked ready for review
+submission 61 to main from #51 · nothing queued ahead
+pushed bolt/b · updated #52: Runner cache · marked ready for review
+submission 62 to main from #52 · 1 queued ahead (#51)
+```
+
+Under `--json` each item of `submissions` holds its `id`, `worktree`,
+`ahead` and `pull_request`. When sluice refuses one of the worktrees,
+one holding changes beyond its commits, it refuses the act before
+anything is pushed. A pull request from a fork is never one of the act:
+sluice opens or updates only the repository's own.
 
 Each pull request's description gets a mark beside the one naming its
 agent. The mark says it is one of the group, with its place in the
@@ -135,18 +214,21 @@ group, the group's size, and the commit it was opened at:
 <!-- sluice: group=20261023T120000Z-4f0c2a1 1/2 head=4f0c2a1… -->
 ```
 
-sluice takes a group's pull requests only all together, in one pass and
-in the group's order. It takes them once every one is open, out of
-draft, and meeting its conditions on the commit it was marked at. Until
-then each waits for the rest. One that is ready says which of its group
-it waits for, `waiting for its group: #52`, and one that is not says
-what it lacks itself. So no round tests the first alone before the rest
-are in.
+Once queued, each is a pull request of its own in the queue, blamed, sent
+back and landed alone. New commits that no submit pushed, on one of
+them, take that one out of the queue, and sluice marks it a draft. The
+others stay queued and land without it. It waits for its worktree to
+submit again, or for a person to mark it ready for review: the mark
+binds only the commit it was made at.
 
-Once taken, each is a pull request of its own in the queue, blamed, sent
-back and landed alone. New commits on one take that one out of the
-queue, and it waits for its own conditions again: the mark binds only
-the commit it was made at.
+A person can also mark the drafts of a refused act ready for review by
+hand. sluice then takes the group's pull requests only all together, in
+one pass and in the group's order. It takes them once every one is open,
+out of draft, and meeting its conditions on the commit it was marked at.
+Until then each waits for the rest. One that is ready says which of its
+group it waits for, `waiting for its group: #52`, and one that is not
+says what it lacks itself. So no round tests the first alone before the
+rest are in.
 
 A group waits as long as any of it does. To free the rest when one is
 closed or will not be ready, submit them again, as a new group without
@@ -178,6 +260,8 @@ check reads:
 | the check reads | means |
 |---|---|
 | `waiting: a draft` | still a draft; sluice takes it once it is marked ready for review |
+| `waiting: the next submit` | an agent's pull request whose submission left the queue; sluice marked it a draft, and takes it again once the agent's next `sluice submit` from its branch, or a person, marks it ready for review |
+| `waiting: withdrawn by the operator` | a pull request a person opened, withdrawn with `sluice withdraw` (`by the planner` when a planner withdrew it); sluice takes it again on new commits, or once it is marked a draft and then ready for review |
 | `waiting: needs 1 review, qa/approved` | out of draft, and these are missing on its latest commit; the details add where it would land now: "merges without conflict behind #38, #40" or "conflicts with #40 in plan.py" |
 | `queued behind #38, #40` | in the queue, behind the pull requests it names |
 | `testing main + #38 + #40 + #41` | its combination is being tested |
@@ -259,15 +343,35 @@ sequenceDiagram
 
 ## When things change
 
-- **New commits on a pull request.** It leaves the queue and waits
-  again. GitHub drops the old review if your repository dismisses stale
-  reviews, and QA tests the new commits. sluice forms the combinations
-  behind it again without it.
-- **Sent back as the blamed submission, or for a conflict.** It stays open with
-  the comment saying why. Push a fix and it waits for its conditions
-  again. To retry the same commits, mark it a draft and then ready
-  again.
+- **New commits on a pull request a person opened.** It leaves the
+  queue and waits again. GitHub drops the old review if your repository
+  dismisses stale reviews, and QA tests the new commits. sluice forms
+  the combinations behind it again without it.
+- **New commits on an agent's pull request.** Commits the agent's own
+  submit pushes replace its submission in the queue, and wait for their
+  conditions. Commits that arrive any other way, such as a fix another
+  submission lands on its branch, take it out of the queue, and sluice
+  marks it a draft. No round takes it again in the agent's name until
+  the agent's next `sluice submit`, or a person marking it ready for
+  review.
+- **Sent back as the blamed submission, or for a conflict.** It stays
+  open with the comment saying why. A pull request a person opened waits
+  for a fix: push one and it waits for its conditions again, or mark it
+  a draft and then ready to retry the same commits. An agent's is
+  marked a draft, and waits for the agent's next `sluice submit`, with a
+  fix or the same commits, or for a person to mark it ready for review.
+- **Withdrawn with `sluice withdraw`.** An agent's pull request is
+  marked a draft, and waits the same way. One a person opened stays out
+  of the queue as a blamed one does, however long its conditions hold:
+  push new commits, or mark it a draft and then ready, to bring it back.
+  Its `sluice` check names who withdrew it.
 - **Back to draft, or closed.** It leaves the queue.
+- **sluice can't read it.** sluice may fail to fetch a pull request's
+  head from GitHub, or to read its reviews or checks. Each round then
+  prints a warning naming the pull request and what failed, and goes on
+  with the branch's other pull requests. sluice reads it again each round
+  until it can, or until the pull request is closed. A draft's `sluice`
+  check reads `waiting: a draft` either way.
 - **One of a group closed before the group is taken.** The rest wait,
   and say they wait for it, until a submit names them again.
 - **Merged with GitHub's button.** Don't, on a branch sluice keeps: with

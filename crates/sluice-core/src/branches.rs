@@ -4,10 +4,14 @@
 //! Each takes the branch's lock, so no step acts on it meanwhile (rule
 //! core.14), and each is one move under 45, refused when the branch was
 //! elsewhere and never retried blind (rule core.5).
+//!
+//! 121: the operator accepts the revision a held branch is read at, under
+//! the same lock; it moves nothing.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use sluice_seams::{Moved, Rev};
 
+use crate::records::Event;
 use crate::Sluice;
 
 /// Why a branch was not made (104).
@@ -46,9 +50,89 @@ pub enum RemoveRefusal {
     Elsewhere(Option<Rev>),
 }
 
+/// 121: a revision the operator accepted as a held branch's, and the
+/// landing it lacked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Acceptance {
+    pub revision: Rev,
+    pub lacked: Rev,
+}
+
+/// Why a revision was not accepted (121).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AcceptRefusal {
+    /// Another step holds the branch's lock.
+    Busy,
+    /// There is no such branch.
+    Absent,
+    /// Its reading and its records agree: it is not held. It reads this.
+    NotHeld(Rev),
+    /// It is held at `held`, and reads `read`: the revision given is not
+    /// both.
+    NotHeldAt { held: Rev, read: Rev },
+}
+
+/// Whether `given` names `rev`: all of it, or a prefix of seven hex
+/// digits or more, as git takes one.
+fn names(given: &str, rev: &Rev) -> bool {
+    let given = given.to_ascii_lowercase();
+    given.len() >= 7
+        && given.chars().all(|c| c.is_ascii_hexdigit())
+        && rev.as_str().starts_with(&given)
+}
+
 impl Sluice<'_> {
+    /// 121, C.5 branch: record the operator's acceptance of `revision`,
+    /// the one `branch` is held at and still read at, as the landing it
+    /// stands on: every later read must contain it, and the next round
+    /// forms on it. It moves no branch and touches no candidate.
+    pub fn accept_branch(
+        &self,
+        branch: &str,
+        revision: &str,
+    ) -> Result<Result<Acceptance, AcceptRefusal>> {
+        let Some(_lock) = self.seams.state.lock(branch)? else {
+            return Ok(Err(AcceptRefusal::Busy));
+        };
+        let Some(read) = self.seams.branch.read(branch)? else {
+            return Ok(Err(AcceptRefusal::Absent));
+        };
+        // A refusal writes nothing, not even records for a branch that has
+        // none.
+        let Some(hold) = self.read_line(branch)?.doc.held else {
+            return Ok(Err(AcceptRefusal::NotHeld(read)));
+        };
+        if hold.read != read || !names(revision, &read) {
+            return Ok(Err(AcceptRefusal::NotHeldAt {
+                held: hold.read,
+                read,
+            }));
+        }
+        let now = self.now();
+        self.update(branch, |l| {
+            if l.doc.held.as_ref() != Some(&hold) {
+                bail!("{branch}'s hold changed while its revision was accepted");
+            }
+            l.doc.landed = Some(read.clone());
+            l.doc.held = None;
+            l.log(
+                &now,
+                Event::Accepted {
+                    revision: read.clone(),
+                    lacked: hold.lacks.clone(),
+                },
+            );
+            Ok(())
+        })?;
+        Ok(Ok(Acceptance {
+            revision: read,
+            lacked: hold.lacks,
+        }))
+    }
+
     /// 104: make `branch` at `from`'s current revision, when the policy
-    /// there gives it a gate and its records hold nothing still queued.
+    /// there gives it a gate and its records hold nothing still queued;
+    /// that revision is the one its reads must contain (121).
     pub fn make_branch(&self, branch: &str, from: &str) -> Result<Result<Rev, MakeRefusal>> {
         let Some(_lock) = self.seams.state.lock(branch)? else {
             return Ok(Err(MakeRefusal::Busy));
@@ -73,7 +157,17 @@ impl Sluice<'_> {
             return Ok(Err(MakeRefusal::Queued(queued)));
         }
         Ok(match self.seams.branch.make(branch, &at)? {
-            Moved::Moved => Ok(at),
+            Moved::Moved => {
+                // 121: it stands on the revision it was made at until its
+                // first landing, whatever a branch of its name removed
+                // before had landed.
+                self.update(branch, |l| {
+                    l.doc.landed = Some(at.clone());
+                    l.doc.held = None;
+                    Ok(())
+                })?;
+                Ok(at)
+            }
             Moved::Elsewhere(found) => Err(MakeRefusal::Present(found)),
         })
     }
@@ -102,7 +196,16 @@ impl Sluice<'_> {
             return Ok(Err(RemoveRefusal::NotLanded(tip)));
         }
         Ok(match self.seams.branch.remove(branch, &tip)? {
-            Moved::Moved => Ok(tip),
+            Moved::Moved => {
+                // 121: no reader sees a hold on a branch that is gone.
+                if self.read_line(branch)?.doc.held.is_some() {
+                    self.update(branch, |l| {
+                        l.doc.held = None;
+                        Ok(())
+                    })?;
+                }
+                Ok(tip)
+            }
             Moved::Elsewhere(found) => Err(RemoveRefusal::Elsewhere(found)),
         })
     }

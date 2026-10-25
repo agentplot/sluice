@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use sluice_core::line::Line;
-use sluice_core::records::{parse_lines, Event, LogLine, ResultLine, Submission};
+use sluice_core::records::{parse_lines, BranchDoc, Event, LogLine, ResultLine, Submission};
 use sluice_core::session::Recorded;
 use sluice_core::{Accepted, GroupRequest, Requester, Sluice, Step, SubmitRefusal, SubmitRequest};
 use sluice_fakes::Fakes;
@@ -82,6 +82,20 @@ pub trait Rig {
 
     /// `task` fails on any candidate whose `path` holds `content`.
     fn fails_with(&self, task: &str, path: &str, content: &str);
+
+    /// 123: every release of a combination's checkout from now fails, as
+    /// a release command that exits 2 printing [`shared::RELEASE_FAILS`]
+    /// does, or succeeds again.
+    fn release_fails(&self, fails: bool);
+
+    /// How many times the release of the place `name`, a combination's, a
+    /// session's or a preview's, was asked of the place seam: a release
+    /// command run, or refused.
+    fn releases_of(&self, name: &str) -> usize;
+
+    /// 123: how many times the release command the runs of the place
+    /// `name` stored was run because its working copy was gone.
+    fn gone_releases_of(&self, name: &str) -> usize;
 
     /// A policy written for the fakes, as this rig's own: its runner in
     /// place of `fake`.
@@ -263,6 +277,13 @@ pub trait Rig {
         parse_lines(&bytes).expect("the results log parses")
     }
 
+    /// The branch's own document, `branch.json`.
+    fn doc(&self) -> BranchDoc {
+        let s = self.sluice();
+        let snap = s.seams().state.read(BRANCH).expect("records read");
+        Line::load(BRANCH, snap).expect("the records parse").doc
+    }
+
     fn log(&self) -> Vec<LogLine> {
         let s = self.sluice();
         let snap = s.seams().state.read(BRANCH).expect("records read");
@@ -367,6 +388,27 @@ impl Rig for Harness {
 
     fn fails_with(&self, task: &str, path: &str, content: &str) {
         self.w().fails_with(task, path, content);
+    }
+
+    fn release_fails(&self, fails: bool) {
+        self.w()
+            .release_fails(fails.then_some(shared::RELEASE_FAILS));
+    }
+
+    fn releases_of(&self, name: &str) -> usize {
+        self.w()
+            .release_attempts()
+            .iter()
+            .filter(|p| *p == name)
+            .count()
+    }
+
+    fn gone_releases_of(&self, name: &str) -> usize {
+        self.w()
+            .gone_releases()
+            .iter()
+            .filter(|p| *p == name)
+            .count()
     }
 
     fn host(&self) -> String {

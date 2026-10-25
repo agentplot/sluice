@@ -13,7 +13,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::{hashes, progress, sessions_json, Pause, STOPPED};
+use crate::{hashes, held_line, progress, sessions_json, Pause, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -118,6 +118,9 @@ fn write_overview(
             "{} at {at} · {} in the queue · testing {testing} at once{up_to}{held}",
             b.branch, b.depth
         )?;
+        if let Some(hold) = &b.held {
+            writeln!(out, "  {}", held_line(&b.branch, hold))?;
+        }
         for c in &b.candidates {
             if !matches!(c.state, CandidateState::Starting | CandidateState::Testing) {
                 continue;
