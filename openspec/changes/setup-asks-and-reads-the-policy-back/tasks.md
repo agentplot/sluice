@@ -3,7 +3,7 @@
 ## 1. The example policies hold every moon branch to a check
 
 - [x] 1.1 In `crates/sluice-core/src/policy.rs`, extend `the_plugins_example_policies_read` to keep each example's file name beside its text and, for every example whose `[tests] runner` is `"moon"`, assert that every entry of `p.branches` has a non-empty `required`, the message naming the example and the branch pattern; verify `sluice exec main -- moon run core:test` passes on the shipped examples.
-- [ ] 1.2 Factor that check into a test helper returning the branch patterns that name no check under moon, and add a second `#[test]` giving it an inline moon policy with `[branches."dev/*"]` (`parallel = 2`, no `required`) and `[branches.main]` (`required = ["#test"]`), asserting it returns exactly `dev/*`, so the case the check exists for is in the suite; verify `sluice exec main -- moon run core:test` passes with both tests.
+- [x] 1.2 Factor that check into a test helper returning the branch patterns that name no check under moon, and add a second `#[test]` giving it an inline moon policy with `[branches."dev/*"]` (`parallel = 2`, no `required`) and `[branches.main]` (`required = ["#test"]`), asserting it returns exactly `dev/*`, so the case the check exists for is in the suite; verify `sluice exec main -- moon run core:test` passes with both tests.
 
 ## 2. The setup asks, reads back, and warns
 

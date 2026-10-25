@@ -952,6 +952,31 @@ hold = "5m"
         assert_eq!(main.required_lines, [6, 7]);
     }
 
+    /// The branch patterns that name no check under the moon runner: a
+    /// branch with no `required` plans no task, so every submission to it
+    /// lands untested.
+    fn unchecked_under_moon(p: &Policy) -> Vec<&str> {
+        if p.tests.get("runner") != Some(&Setting::Text("moon".into())) {
+            return Vec::new();
+        }
+        p.branches
+            .iter()
+            .filter(|(_, rules)| rules.required.is_empty())
+            .map(|(pattern, _)| pattern.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_moon_branch_that_requires_nothing_is_unchecked() {
+        let p = Policy::parse(
+            "[tests]\nrunner = \"moon\"\n\n\
+             [branches.\"dev/*\"]\nparallel = 2\n\n\
+             [branches.main]\nrequired = [\"#test\"]\n",
+        )
+        .unwrap();
+        assert_eq!(unchecked_under_moon(&p), ["dev/*"]);
+    }
+
     /// The Claude Code plugin's example policies read, gate the branches
     /// their comments say, and hold every branch under moon to a check.
     #[test]
@@ -993,14 +1018,11 @@ hold = "5m"
                 p.rules_for(branch).unwrap().is_some(),
                 "{DIR}/{name}: {branch}"
             );
-            if p.tests.get("runner") == Some(&Setting::Text("moon".into())) {
-                for (pattern, rules) in &p.branches {
-                    assert!(
-                        !rules.required.is_empty(),
-                        "{DIR}/{name}: {pattern} names no check, so it lands untested"
-                    );
-                }
-            }
+            let unchecked = unchecked_under_moon(&p);
+            assert!(
+                unchecked.is_empty(),
+                "{DIR}/{name}: {unchecked:?} name no check, so they land untested"
+            );
         }
         let full = Policy::parse(examples[1].1).unwrap();
         assert!(full.rules_for("bolt/x").unwrap().is_some());
