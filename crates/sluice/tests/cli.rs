@@ -819,8 +819,8 @@ fn home_shows_a_pull_requests_submission_to_the_worktree_it_was_opened_from() {
     assert_eq!(home(&f, "unit/b")["submission"], serde_json::Value::Null);
 }
 
-/// Outside any worktree sluice can submit from, it says so, shows the
-/// queues and points at the overview.
+/// Outside any worktree sluice can submit from, it says so and who
+/// submits, shows the queues and points at the overview.
 #[test]
 fn home_outside_a_worktree_says_so() {
     let f = setup();
@@ -829,7 +829,10 @@ fn home_outside_a_worktree_says_so() {
     assert_eq!(v["next"], serde_json::json!(["sluice overview"]));
     let (_, out) = sluice(&f, &["--worktree", "nowhere"]);
     assert!(
-        out.starts_with("not in a worktree sluice can submit from\n"),
+        out.starts_with(
+            "not in a worktree sluice can submit from: the agent working in a worktree submits \
+             its work from there\n"
+        ),
         "{out}"
     );
 }
