@@ -12,6 +12,8 @@
 Agents submit. sluice tests each submission exactly as it would land,<br>
 names the one that broke the build, and moves the branch only to code that passed.
 
+**New to sluice?** [What it is, and what it leaves to other tools](https://agentplot.github.io/sluice/guides/new-to-sluice/).
+
 [![ci](https://github.com/agentplot/sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/agentplot/sluice/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/agentplot/sluice?sort=semver)](https://github.com/agentplot/sluice/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -35,18 +37,29 @@ names the one that broke the build, and moves the branch only to code that passe
 ```
 
 Then ask Claude to set sluice up in your repository. It installs the
-`sluice` binary if it is missing, asking first, writes
-`.config/sluice.toml` for the tools you already use, and lands its own work
-through the queue from then on. [The Claude Code
-plugin](https://agentplot.github.io/sluice/guides/claude-code/) says what it
-does.
+`sluice` binary if it is missing, asking first. In a plain clone, your
+repository's one working copy, it first offers to lay the repository out
+with a working copy per branch, so each agent works in one of its own: it
+names what has the folder open, carries your Claude Code sessions'
+history to the new path, and goes on in the plain clone only if you tell
+it to. Then it writes `.config/sluice.toml` for the tools you already use,
+and lands its own work through the queue from then on. [The Claude Code
+plugin](https://agentplot.github.io/sluice/guides/claude-code/#set-up-a-repository)
+says what it does.
 
-**With herdr.** [The herdr
-plugin](https://agentplot.github.io/sluice/guides/herdr/) shows the queue
-beside your agents' panes. It is not released yet.
+**With herdr.** herdr is optional for seeing the queue. The Claude Code
+board (`sluice-board`) shows it in any Claude Code session, with
+full-screen mode on or off: [the queue in your
+session](https://agentplot.github.io/sluice/guides/claude-code/#the-queue-in-your-session).
+[The herdr plugin](https://agentplot.github.io/sluice/guides/herdr/) adds a
+view beside your agents' panes. It is not released yet.
 
-**By hand.** [Install](#install) the binary and follow the
-[walkthrough](https://agentplot.github.io/sluice/guides/walkthrough/).
+**By hand.** Start from a repository laid out with a working copy per
+branch, as [one working copy per
+branch](https://agentplot.github.io/sluice/guides/worktrees/#one-working-copy-per-branch)
+shows. Then [install](#install) the binary and follow the
+[walkthrough](https://agentplot.github.io/sluice/guides/walkthrough/) in
+its `main` worktree.
 
 ## Why
 
@@ -191,7 +204,7 @@ failed: tests:t-cards
   on main + #2 + #3 (5b81d07)
   #2 passed on its own, so the failure is from this submission
   log of tests:t-cards: /…/sluice/.logs/main/c4/tests:t-cards.log
-fix it in your worktree and submit again
+the agent working in unit/cards fixes it there and submits again
 ```
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a

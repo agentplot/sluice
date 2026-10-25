@@ -43,6 +43,12 @@ Details and the reasons behind each setting: [references/layout.md](references/l
 - **Never move a worktree that something is working in.** A running agent or
   editor keeps its old path; its session breaks. Check first:
   `lsof -d cwd -Fn | grep -F "<path>"` and `git -C <path> status --porcelain`.
+- **A plain clone's conversion is one script**,
+  `${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh`, never commands typed out by
+  hand. It refuses while anything but this session holds the folder, and
+  carries Claude Code's history: the folder's other sessions to `main/`'s
+  key, its memory to the git directory's. This session, `${CLAUDE_SESSION_ID}`,
+  it leaves for Claude Code's `/cd <folder>/main`, which the user types.
 - **Never `git worktree prune`, `git worktree remove` or `rm -rf` a worktree
   during a conversion.** Moves and `git worktree repair` are enough, and
   nothing is lost if a step fails.
@@ -62,6 +68,8 @@ Details and the reasons behind each setting: [references/layout.md](references/l
   yours to prune.
 - Submit from any worktree: `sluice submit <branch>` reads that worktree's
   head. Its `from.path` in the record is the worktree's path.
-- A repository without worktrees can still use sluice: an agent's branch
-  checked out in the main clone submits the same way, but agents then share
-  one working copy. Give each agent a worktree.
+- sluice is set up in this layout. Asked to set sluice up in a
+  repository's only working copy, the setting-up-sluice skill offers the
+  layout first, by the same script, and goes on in the plain clone only on
+  the user's word; the commit that adds `.config/sluice.toml` then says
+  the user chose to keep the plain clone (126). Give each agent a worktree.
