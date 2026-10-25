@@ -53,6 +53,7 @@ import {
   submitted,
   taskLines,
   testing,
+  unreadReason,
   wakeText,
 } from "./board";
 
@@ -86,6 +87,8 @@ const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
 // The branch the session works for, when what started it named one.
 const named = atom({ plugin: "sluice-board", key: "named" } as const, null);
 const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const, NOT_YET);
+// Why sluice could not be read, while the board has no overview.
+const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
 
 type Detail = OpenedTest;
 
@@ -279,41 +282,63 @@ async function feed($: $, cwd: string, how: How) {
   });
 }
 
+/** `sluice overview --json` once: the overview, or null with why kept in `unread`. */
+async function probe($: $, cwd: string): Promise<Overview | null> {
+  const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
+  const ok = got && got.exitCode === 0;
+  await update($, unread, () => (ok ? null : unreadReason(got)));
+  return ok ? (JSON.parse(got.stdout) as Overview) : null;
+}
+
+// The session's directory, kept for /sluice, which carries none; and whether
+// the board follows sluice yet: once a load, however many reads succeed.
+let dir: string | null = null;
+let following = false;
+
+/**
+ * Follow sluice from its first overview: the band, the pane, the wake and
+ * the forecast, as the options turn them on.
+ */
+async function follow($: $, cwd: string, first: Overview, chosen: How) {
+  if (following) return;
+  following = true;
+  const top = await $.process
+    .run(["git", "rev-parse", "--show-toplevel"], { cwd })
+    .catch(() => null);
+  const root = top && top.exitCode === 0 ? top.stdout.trim() : null;
+  await update($, mine, (m) => ({ ...m, root }));
+  // An orchestrator that starts several agents in one checkout names each
+  // one's branch, which the checkout can't say.
+  const hint = await $.env.get("SLUICE_BRANCH").catch(() => undefined);
+  await update($, named, () => (hint ? hint : null));
+  const origin = await $.process
+    .run(["git", "remote", "get-url", "origin"], { cwd })
+    .catch(() => null);
+  const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
+  await update($, repo, () => base);
+  // A session whose orchestrator forecasts for it turns this off.
+  const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
+  const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
+  await take($, first, cwd, how);
+  void feed($, cwd, how);
+  // Elapsed times move while something is under test or an agent's check
+  // goes, and a finished check leaves the pane a quarter hour on.
+  $.clock.every(5000, async () => {
+    const t = await $.clock.now();
+    if (moving(await read($, doc), t)) await update($, now, () => t);
+  });
+}
+
 export const register: Register = (on, options) => {
-  const wake = options.wake !== false;
+  const chosen = { wake: options.wake !== false, forecast: options.forecast !== false };
 
   on("session.start", async ($, e, next) => {
     const started = await next(e);
     await $.command.register({ name: "sluice", description: "Show sluice's queue in a pane" });
-    const cwd = e.cwd;
-    // Only in a repository with sluice's records.
-    const probe = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    if (!probe || probe.exitCode !== 0) return started;
-    const top = await $.process
-      .run(["git", "rev-parse", "--show-toplevel"], { cwd })
-      .catch(() => null);
-    const root = top && top.exitCode === 0 ? top.stdout.trim() : null;
-    await update($, mine, (m) => ({ ...m, root }));
-    // An orchestrator that starts several agents in one checkout names each
-    // one's branch, which the checkout can't say.
-    const hint = await $.env.get("SLUICE_BRANCH").catch(() => undefined);
-    await update($, named, () => (hint ? hint : null));
-    const origin = await $.process
-      .run(["git", "remote", "get-url", "origin"], { cwd })
-      .catch(() => null);
-    const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
-    await update($, repo, () => base);
-    // A session whose orchestrator forecasts for it turns this off.
-    const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
-    const how = { wake, forecast: options.forecast !== false && env !== "0" };
-    await take($, JSON.parse(probe.stdout) as Overview, cwd, how);
-    void feed($, cwd, how);
-    // Elapsed times move while something is under test or an agent's check
-    // goes, and a finished check leaves the pane a quarter hour on.
-    $.clock.every(5000, async () => {
-      const t = await $.clock.now();
-      if (moving(await read($, doc), t)) await update($, now, () => t);
-    });
+    dir = e.cwd;
+    // Only where sluice can be read; /sluice tries again where it can't.
+    const first = await probe($, e.cwd);
+    if (first) await follow($, e.cwd, first, chosen);
     return started;
   });
 
