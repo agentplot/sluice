@@ -6,9 +6,17 @@ From `project/` with `project/.git` a directory and the working copy in
 One script does it, `${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh`, told the
 session's id, `${CLAUDE_SESSION_ID}`. Where this page shows either as
 written, take it from SKILL.md, which Claude Code fills in. It moves
-nothing while any process but the session running it has its working
+nothing while a process outside the session running it has its working
 directory or a file open in `project/`, and it overwrites and deletes
-nothing. Existing worktrees outside `project/` are kept and repaired.
+nothing. The session, its ancestors and everything it started (the shell
+a command runs in, a tool server, a watcher) are never named as holding
+the folder. Existing worktrees outside `project/` are kept and repaired.
+
+The session is the process `--session-pid` names. From Claude Code, write
+`--session-pid "$PPID"` into the command line itself, as below: the shell
+Claude Code runs it in expands `$PPID` to its own parent, the session's
+process. Outside Claude Code, leave it out: the script then takes the
+process that started it, the person's shell, as the session.
 
 ## Plan, then wait for "go"
 
@@ -18,7 +26,7 @@ nothing. Existing worktrees outside `project/` are kept and repaired.
 2. Run the plan, which changes nothing:
 
    ```sh
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan /abs/path/to/project
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan /abs/path/to/project --session-pid "$PPID"
    ```
 
    It prints the git directory's new name, `main/` on the branch checked
@@ -39,14 +47,15 @@ nothing. Existing worktrees outside `project/` are kept and repaired.
 
 ## Execute
 
-From Claude Code, name this session so its own transcript, still being
-written, is left for `/cd`:
+From Claude Code, name this session by its id, so its own transcript,
+still being written, is left for `/cd`, and by its process, as the plan
+did:
 
 ```sh
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go /abs/path/to/project --session "${CLAUDE_SESSION_ID}"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go /abs/path/to/project --session "${CLAUDE_SESSION_ID}" --session-pid "$PPID"
 ```
 
-Outside Claude Code, leave out `--session`.
+Outside Claude Code, leave out `--session` and `--session-pid`.
 
 - Exit 1: refused, nothing moved. Tell the user what holds the folder,
   wait for their word that it has let go, and run `go` again.
