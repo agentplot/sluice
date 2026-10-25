@@ -72,6 +72,7 @@ fn main() {
         if state != "prepared" {
             return;
         }
+        std::process::exit(hook(cli));
     }
     // 1: whatever runs sluice's work keeps its branches protected.
     if matches!(
@@ -149,6 +150,44 @@ fn main() {
         t.finish();
     }
     std::process::exit(code);
+}
+
+/// 124: the protection hook, judging the repository git names: `GIT_DIR`
+/// when git set it, resolved against the folder the command ran in, and
+/// that folder only when git set none. A transaction it cannot read for a
+/// reason of its own passes, said once; it never exits 3.
+fn hook(cli: Cli) -> i32 {
+    let bound = std::env::current_dir()
+        .map(|dir| match std::env::var_os("GIT_DIR") {
+            Some(git_dir) if !git_dir.is_empty() => dir.join(git_dir),
+            _ => dir,
+        })
+        .map_err(anyhow::Error::from)
+        .and_then(|dir| Bound::open(&dir));
+    let bound = match bound {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{}", sluice::protect::unread(&e));
+            return 0;
+        }
+    };
+    let mut out = std::io::stdout();
+    match run(
+        cli,
+        bound.seams(),
+        &bound,
+        &bound.branch,
+        &*bound.pulls,
+        &SystemClock,
+        &Sleep(Duration::from_secs(3)),
+        &mut out,
+    ) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("{}", sluice::protect::unread(&e));
+            0
+        }
+    }
 }
 
 /// sluice failing itself (exit 3), told on stdout as well when the reader

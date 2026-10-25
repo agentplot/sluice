@@ -55,7 +55,7 @@ fn help(args: &[&str]) -> String {
 fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
     let text = help(&["submit", "--help"]);
     for exit in [
-        "0    landed",
+        "0    landed, whatever failed after the landing (said on stderr)",
         "1    failed",
         "2    a conflict",
         "3    sluice itself failed",
@@ -74,7 +74,7 @@ fn submit_help_lists_the_exits_and_not_the_telemetry_flags() {
 fn wait_help_lists_the_exits_and_a_bad_timeout_exits_usage() {
     let text = help(&["wait", "--help"]);
     for exit in [
-        "0    landed",
+        "0    landed, whatever failed after the landing (said on stderr)",
         "1    failed",
         "2    a conflict",
         "4    withdrawn",
@@ -87,6 +87,16 @@ fn wait_help_lists_the_exits_and_a_bad_timeout_exits_usage() {
     let out = sluice(&["wait", "3", "--timeout", "soon"]);
     assert_eq!(out.status.code(), Some(sluice::USAGE));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--timeout"));
+}
+
+/// C.5 branch: accepting a held branch's revision is a `sluice branch`
+/// command, with an example.
+#[test]
+fn branch_accept_help_has_an_example() {
+    let text = help(&["branch", "accept", "--help"]);
+    assert!(text.contains("<BRANCH> <REVISION>"), "{text}");
+    assert!(text.contains("$ sluice branch accept "), "{text}");
+    assert!(help(&["branch", "--help"]).contains("accept"));
 }
 
 #[test]

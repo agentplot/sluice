@@ -60,9 +60,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    log_tail, AtBound, Enforced, HostRun, Limits, Network, NotRun, Outcome, Place, Progress,
-    RunHandle, RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog, TaskProgress,
-    TaskResult, Tests,
+    log_tail, AtBound, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place,
+    Progress, RunHandle, RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog,
+    TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -789,6 +789,15 @@ pub fn release_request(
     }))
 }
 
+/// A scratch directory removed when it is dropped.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub fn hostname() -> String {
     nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().into_owned())
@@ -1250,6 +1259,62 @@ impl Tests for Checks {
                 }
             })
             .collect())
+    }
+
+    /// ADR 0050: moon asked in the worktree as a run's place is set up,
+    /// the run's environment and `[tests] toolchain` included, with the
+    /// toolchain's script in a scratch directory of sluice's state, gone
+    /// once moon has answered. Outside any executor, as `plan`'s own
+    /// `moon query` is. A command runner keeps nothing out.
+    fn kept_out(
+        &self,
+        worktree: &Path,
+        tests: &Settings,
+        required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        if text(tests, "runner")? != Some("moon") {
+            return Ok(Vec::new());
+        }
+        let tool_argv = match tests.get("toolchain") {
+            None => None,
+            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
+            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+        };
+        let scratch = Scratch(self.runs.dir(&format!("kept-out-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&scratch.0);
+        let tmp = scratch.0.join("tmp");
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let request = RunRequest {
+            place: Place {
+                name: "kept-out".into(),
+                path: worktree.to_path_buf(),
+                tmp,
+                env: BTreeMap::new(),
+                compile_cache: None,
+            },
+            revision: sluice_seams::Rev::new(""),
+            required: required.to_vec(),
+            since: None,
+            limit: None,
+            limits: Limits::default(),
+            tests: tests.clone(),
+            replay: false,
+            system: None,
+        };
+        let jobs = self.instance.jobs();
+        let env = environment(&request, jobs, Kind::Open, &self.host_env());
+        let script = scratch.0.join("toolchain.sh");
+        if let Some(argv) = &tool_argv {
+            toolchain(argv, worktree, &env, &script)?;
+        }
+        let cx = Context {
+            request: &request,
+            env: &env,
+            toolchain: tool_argv.is_some().then_some(script.as_path()),
+            jobs,
+            step: None,
+        };
+        Moon.kept_out(&cx)
     }
 
     /// ADR 0028: the moon runner's tasks while the run goes; the command

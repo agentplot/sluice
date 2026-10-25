@@ -15,6 +15,10 @@ pub const SLUICE_CHECK: &str = "sluice";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pull {
     pub number: u64,
+    /// Its id in GitHub's GraphQL API, which alone marks it a draft or
+    /// ready for review.
+    #[serde(default)]
+    pub node_id: String,
     pub title: String,
     pub body: String,
     /// Who opened it.
@@ -201,7 +205,7 @@ pub trait Forge {
     fn edit_comment(&self, repo: &Repo, id: u64, body: &str) -> Result<()>;
 
     /// Open a pull request from the branch `head_ref` of `repo` into
-    /// `base`, ready for review.
+    /// `base`, a draft or ready for review.
     fn open(
         &self,
         repo: &Repo,
@@ -209,10 +213,15 @@ pub trait Forge {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull>;
 
     /// Replace pull request `number`'s body.
     fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()>;
+
+    /// Mark pull request `number` a draft, or ready for review, which
+    /// GitHub's timeline records.
+    fn set_draft(&self, repo: &Repo, number: u64, draft: bool) -> Result<()>;
 }
 
 #[cfg(test)]

@@ -155,6 +155,37 @@ its [`[signing]`](/sluice/reference/configuration/#signing) names. sluice counts
 only once the signature checks against a signer the branch's policy
 names.
 
+## A branch's own record
+
+`branch.json` holds the queue's own state: the revision its
+combinations are formed on, the combinations, a landing under way and
+the outcomes still to tell. Two fields say what a round reads the
+branch against:
+
+- `landed`: the revision every later read of the branch must contain.
+  A landing sets it to the revision it landed, `sluice branch accept`
+  to the revision accepted, and `sluice branch create` to the revision
+  it made the branch at. A record an older sluice wrote has none. The
+  next round takes the log's last `landed` line, or the revision the
+  queue was last formed on when that one lacks the landing, as for a
+  branch deleted and made again.
+- `held`: while the revision the branch was last read at lacks
+  `landed`, `{"read": "10e4791a2b", "lacks": "c43609b8e1", "since":
+  "2026-10-23T09:16:40Z"}`. Nothing is formed or landed on the branch
+  meanwhile. It goes on the first round that reads a revision holding
+  `landed`, or with `sluice branch accept`.
+- `copies`: for a branch kept on a remote, each host whose own branch
+  of that name a round could not set to `landed`, by the host's name:
+  `{"deneb": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
+  holds the lock on refs/heads/bolt/x", "since":
+  "2026-10-23T09:16:40Z"}}`. `at` is the revision that host's branch
+  holds, `null` when it has none. Each host writes only its own entry,
+  and takes it out on the round that sets its branch to `landed`.
+
+All three are left out when there is nothing to say, so
+`sluice/branch@1` is unchanged, and an older sluice reading them passes
+over them.
+
 ## A submission
 
 ```json
@@ -237,13 +268,55 @@ run:
 round that crashes between the two is finished correctly by the next
 one.
 
-`released` is logged when a combination's checkout is released, and
-when a run or round releases the checkout of a worktree that no longer
-exists, which also names the worktree:
+`held` is logged once for each revision a held branch is read at, with
+the landing it lacks, and `accepted` when the operator accepts that
+revision with `sluice branch accept`:
 
 ```json
-{"schema":"sluice/log@1","event":"released","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c"}
+{"schema":"sluice/log@1","event":"held","read":"10e4791a2b","lacks":"c43609b8e1"}
+{"schema":"sluice/log@1","event":"accepted","revision":"10e4791a2b","lacked":"c43609b8e1"}
 ```
+
+`copy-behind` is logged when a round can't set this host's own branch
+of a branch kept on a remote to its landing. It's logged once for each
+revision that branch holds, landing and reason. `copy-levelled` is
+logged when a round sets one that was behind. `copy` is the revision
+this host's branch holds:
+
+```json
+{"schema":"sluice/log@1","event":"copy-behind","host":"deneb","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
+{"schema":"sluice/log@1","event":"copy-levelled","host":"deneb","copy":"c43609b8e1"}
+```
+
+`released` is logged when a combination's checkout is released. One
+freed at the operator's `--accept-failure` carries `accepted`, what had
+failed of its release:
+
+```json
+{"schema":"sluice/log@1","event":"released","place":"sluice/try/main/48","accepted":"the release command of /home/me/repo/.git/sluice/.places/sluice+2Ftry+2Fmain+2F48 ended exit status: 2: usage: scripts/preview up"}
+```
+
+`release_failed` is logged for each try of a release that failed, with
+what failed and how many tries so far; `held` is true on the try after
+which it is tried no more. `gone` is logged when a run or round frees a
+checkout whose directory no longer exists, once it has run the release
+command its last run stored, once, from its scratch directory. `ran`
+says whether its runs stored one to run, and `failed` what it printed
+when it failed; the checkout is freed either way and never tried again.
+For a worktree it also names the worktree:
+
+```json
+{"schema":"sluice/log@1","event":"release_failed","place":"sluice/try/main/48","failed":"…: usage: scripts/preview up","tries":4,"held":true}
+{"schema":"sluice/log@1","event":"gone","place":"session//home/me/wt/unit-c","worktree":"/home/me/wt/unit-c","ran":true}
+```
+
+While a checkout's release is failing, `branch.json` keeps it in
+`failed_releases`: its `place`, what `failed`, its `tries`, when it was
+last tried (`at`), `stopped` once it is held, and on a branch whose
+state is on its remote the `host` that made it. It leaves the list once
+it is released, freed or found gone. A worktree's or a preview's own
+release that failed is kept on its record in `.places/` or `.previews/`
+as `release_failed`, since those are the host's alone.
 
 Full example files are in the repository under
 [docs/examples/state](https://github.com/agentplot/sluice/tree/main/docs/examples/state).

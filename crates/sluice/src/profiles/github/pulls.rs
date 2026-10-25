@@ -21,15 +21,15 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use sluice_core::line::Line;
 use sluice_core::policy::{Policy, PullRequests as Conditions, POLICY_PATH};
 use sluice_core::records::{Event, State, Submission};
 use sluice_core::{
-    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest,
+    Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Formed, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
+    Branch, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
 };
 
 use super::app::Repo;
@@ -37,7 +37,7 @@ use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHE
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
-use crate::{Followed, Opened};
+use crate::{Followed, GroupRefused, Opened, Short};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -66,18 +66,22 @@ fn marked_agent(body: &str) -> Option<String> {
     })
 }
 
-/// `body` naming `agent` and, with `group`, marked one of that group, in
-/// place of any agent and group it named.
-fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
-    let kept: Vec<&str> = body
+/// `text` without any line that names an agent or a group.
+fn unmarked(text: &str) -> String {
+    let kept: Vec<&str> = text
         .lines()
         .filter(|l| {
             let l = l.trim();
             !l.starts_with("<!-- sluice: agent=") && !l.starts_with(GROUP_MARK)
         })
         .collect();
-    let kept = kept.join("\n");
-    let kept = kept.trim_end();
+    kept.join("\n").trim_end().to_string()
+}
+
+/// `body` naming `agent` and, with `group`, marked one of that group, in
+/// place of any agent and group it named.
+fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
+    let kept = unmarked(body);
     let mut marks = marker(agent);
     if let Some(g) = group {
         marks.push('\n');
@@ -88,6 +92,82 @@ fn with_marks(body: &str, agent: &str, group: Option<&Group>) -> String {
     } else {
         format!("{kept}\n\n{marks}")
     }
+}
+
+/// The characters GitHub holds in a pull request's description: a longer
+/// one it refuses with `422 Validation Failed`.
+pub const DESCRIPTION_LIMIT: usize = 65_536;
+
+/// GitHub's compare view of the request's branch `head_ref` against
+/// `branch`, every commit of the request in full.
+fn compare_address(repo: &Repo, branch: &str, head_ref: &str) -> String {
+    format!(
+        "https://github.com/{}/{}/compare/{branch}...{head_ref}",
+        repo.owner, repo.name
+    )
+}
+
+/// C.5 pull request: a request's description from its commits' messages,
+/// oldest first, each whole, a blank line between them, then the marks,
+/// when that fits [`DESCRIPTION_LIMIT`]. Otherwise the first messages, as
+/// many as fit with every other commit named; then a line counting the
+/// rest and linking `compare`, and each one's subject; then the marks.
+/// When even every subject cannot be named, no message is whole, and the
+/// subjects are named in order as many as fit, the others counted.
+fn description(messages: &[String], agent: &str, group: Option<&Group>, compare: &str) -> String {
+    let len = |s: &str| s.chars().count();
+    let messages: Vec<String> = messages
+        .iter()
+        .map(|m| unmarked(m).trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
+    let all = with_marks(&messages.join("\n\n"), agent, group);
+    if len(&all) <= DESCRIPTION_LIMIT {
+        return all;
+    }
+    let n = messages.len();
+    let subjects: Vec<&str> = messages
+        .iter()
+        .map(|m| m.lines().next().unwrap_or_default().trim())
+        .collect();
+    let count = |r: usize| {
+        let s = if r == 1 { "" } else { "s" };
+        format!("{r} more commit{s}, each by its subject; all of them in full: {compare}")
+    };
+    let others = |r: usize| format!("and {r} more, in the compare view");
+    // Each length counts the line breaks before its part: the marks follow
+    // a blank line, a named subject is `- <subject>` and its line break.
+    let marks = 2 + len(&with_marks("", agent, group));
+    let named = |s: &str| len(s) + 3;
+    // The first `k` messages, each with the blank line after it, then the
+    // count line, a blank line and the other subjects.
+    let mut whole: usize = messages.iter().map(|m| len(m) + 2).sum();
+    let mut rest = 0;
+    for k in (0..n).rev() {
+        whole -= len(&messages[k]) + 2;
+        rest += named(subjects[k]);
+        if whole + len(&count(n - k)) + 2 + rest - 1 + marks <= DESCRIPTION_LIMIT {
+            let list: Vec<String> = subjects[k..].iter().map(|s| format!("- {s}")).collect();
+            let mut parts = messages[..k].to_vec();
+            parts.push(count(n - k));
+            parts.push(list.join("\n"));
+            return with_marks(&parts.join("\n\n"), agent, group);
+        }
+    }
+    let mut room = len(&count(n)) + 2;
+    let mut j = 0;
+    while j < n && room + named(subjects[j]) + len(&others(n - j - 1)) + marks <= DESCRIPTION_LIMIT
+    {
+        room += named(subjects[j]);
+        j += 1;
+    }
+    let mut list: Vec<String> = subjects[..j].iter().map(|s| format!("- {s}")).collect();
+    list.push(others(n - j));
+    with_marks(
+        &format!("{}\n\n{}", count(n), list.join("\n")),
+        agent,
+        group,
+    )
 }
 
 const GROUP_MARK: &str = "<!-- sluice: group=";
@@ -139,6 +219,15 @@ struct Bound {
     missing: Vec<String>,
 }
 
+/// 125: what intake's pass over a branch's groups did: whether it took
+/// any, what each bound request of a group not taken waits for, and what
+/// failed for each it could not read (128).
+struct Groups {
+    taken: bool,
+    bound: BTreeMap<u64, Bound>,
+    unread: BTreeMap<u64, anyhow::Error>,
+}
+
 /// The line written into a comment, naming the notification it tells, so
 /// a repeat is known as one (51).
 fn told_marker(id: &str) -> String {
@@ -183,6 +272,22 @@ pub struct Pulls {
 struct Shown {
     posting: Posting,
     lines: Vec<String>,
+}
+
+/// What intake makes of one pull request this round: what to post on it,
+/// if anything, and what of it sluice could not read, if anything.
+struct Considered {
+    shown: Option<Shown>,
+    failed: Option<anyhow::Error>,
+}
+
+impl From<Shown> for Considered {
+    fn from(shown: Shown) -> Considered {
+        Considered {
+            shown: Some(shown),
+            failed: None,
+        }
+    }
 }
 
 /// A branch with pull requests, read at its revision.
@@ -255,9 +360,8 @@ impl Pulls {
         }))
     }
 
-    /// Intake's lock on `branch`, or `None` when another process holds it:
-    /// that process takes the branch's pull requests in this round.
-    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+    /// The file of intake's lock on `branch`, and its path.
+    fn lock_file(&self, branch: &str) -> Result<(std::fs::File, PathBuf)> {
         std::fs::create_dir_all(&self.locks)?;
         let path = self.locks.join(format!("{}.lock", lock_name(branch)));
         let file = std::fs::OpenOptions::new()
@@ -266,11 +370,26 @@ impl Pulls {
             .write(true)
             .open(&path)
             .with_context(|| path.display().to_string())?;
+        Ok((file, path))
+    }
+
+    /// Intake's lock on `branch`, or `None` when another process holds it:
+    /// that process takes the branch's pull requests in this round.
+    fn lock(&self, branch: &str) -> Result<Option<std::fs::File>> {
+        let (file, path) = self.lock_file(branch)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e).context(path.display().to_string()),
         }
+    }
+
+    /// Intake's lock on `branch`, waited for: a submit holds it while it
+    /// changes its pull request, so no pass reads it halfway.
+    fn wait_lock(&self, branch: &str) -> Result<std::fs::File> {
+        let (file, path) = self.lock_file(branch)?;
+        file.lock().context(path.display().to_string())?;
+        Ok(file)
     }
 
     /// The commit messages of `tip..head`, oldest first.
@@ -422,7 +541,11 @@ impl Pulls {
             );
         }
         // 125: a group is taken whole, before any of it is considered alone.
-        let (taken, waits) = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest)?;
+        let Groups {
+            taken,
+            bound,
+            mut unread,
+        } = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest, &log)?;
         if taken {
             status = s.status(branch)?;
             self.register(&t.repo, &status.submissions);
@@ -430,36 +553,57 @@ impl Pulls {
             latest = s.latest_of(branch, &open)?;
         }
         for p in ours {
-            let shown = self.consider(
-                s,
-                forge,
-                &t,
-                &pushed,
-                branch,
-                p,
-                latest.get(&place(p.number)),
-                waits.get(&p.number),
-                &status.submissions,
-                &log,
-                &names,
-            )?;
-            let report = match latest.get(&place(p.number)) {
-                Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
-                _ => None,
-            };
             self.log_lines
                 .borrow_mut()
                 .insert(branch.to_string(), t.conditions.log_lines);
-            self.show_report(
-                forge,
-                &t.repo,
-                p.number,
-                &p.head,
-                t.conditions.log_lines,
-                &names,
-                shown,
-                report.as_ref(),
-            )?;
+            // 128: what sluice reads of one pull request, or cannot,
+            // decides that pull request alone; the next round reads it
+            // again.
+            let step = || -> Result<Option<anyhow::Error>> {
+                let c = self.consider(
+                    s,
+                    forge,
+                    &t,
+                    &pushed,
+                    branch,
+                    p,
+                    latest.get(&place(p.number)),
+                    bound.get(&p.number),
+                    &status.submissions,
+                    &log,
+                    &names,
+                )?;
+                if let Some(shown) = c.shown {
+                    let report = match latest.get(&place(p.number)) {
+                        Some(e) if e.head.0 == p.head => s.verdict_of(branch, e.id)?,
+                        _ => None,
+                    };
+                    self.show_report(
+                        forge,
+                        &t.repo,
+                        p.number,
+                        &p.head,
+                        t.conditions.log_lines,
+                        &names,
+                        shown,
+                        report.as_ref(),
+                    )?;
+                }
+                Ok(c.failed)
+            };
+            // One of a group that could not be read is not considered
+            // alone; the rest of its group waits for it.
+            let stepped = match unread.remove(&p.number) {
+                Some(e) => Ok(Some(e)),
+                None => step(),
+            };
+            match stepped {
+                Ok(None) => {}
+                Ok(Some(e)) | Err(e) => crate::telemetry::warn(&format!(
+                    "sluice: warning: taking in {branch}'s pull requests: {}: {e:#}",
+                    place(p.number)
+                )),
+            }
         }
         Ok(true)
     }
@@ -555,7 +699,7 @@ impl Pulls {
     }
 
     /// Where pull request `p` stands this round, submitting it if it is
-    /// ready.
+    /// ready; with the failure to fetch its head, if it could not be.
     #[allow(clippy::too_many_arguments)]
     fn consider(
         &self,
@@ -570,40 +714,88 @@ impl Pulls {
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
-    ) -> Result<Shown> {
+    ) -> Result<Considered> {
         let here = place(p.number);
+        // A submit's pull request whose submission left the queue without
+        // landing waits for its submitter's act, a submit or a person's
+        // ready mark, at or after the second it left: whatever its head,
+        // no round submits it in its agent's name before then (120, S56).
+        let from = submits(p);
+        let held = is_held(forge, &t.repo, p, latest, log)?;
+        // Its draft shows the hold, and is not the hold: one GitHub
+        // refuses holds it all the same, and the next pass tries again.
+        if held && !p.draft {
+            if let Err(e) = forge.set_draft(&t.repo, p.number, true) {
+                crate::telemetry::warn(&format!(
+                    "sluice: warning: #{} waits for the next submit, and GitHub would not mark \
+                     it a draft: {e:#}",
+                    p.number
+                ));
+            }
+        }
+        // Who withdrew a hand-opened pull request, when it was someone
+        // other than its own agent: it rests as one sent back does, and only
+        // its person's act, a new head or a ready mark, offers it again
+        // (120, C.5).
+        let mut rests = None;
         if let Some(e) = latest.filter(|e| e.head.0 == p.head) {
             match e.state {
-                State::Withdrawn => {}
-                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names)),
+                State::Withdrawn => {
+                    if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
+                        if !retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?
+                        {
+                            rests = Some(by);
+                        }
+                    }
+                }
+                State::Landed => return Ok(outcome_shown(branch, &Outcome::of(e)?, names).into()),
                 State::Failed | State::Conflict => {
-                    // Sent back: submitted again only once it is marked
-                    // ready for review after it was sent back.
-                    let removed = removal(log, e.id);
-                    let retried = !p.draft
-                        && forge
-                            .readied(&t.repo, p.number)?
-                            .iter()
-                            .any(|at| removed.is_some_and(|r| *at > r));
+                    // Sent back: one opened by hand is submitted again only
+                    // once it is marked ready for review after it was sent
+                    // back; a submit's, once it is no longer held.
+                    let retried = match from {
+                        Some(_) => !held,
+                        None => retried_by_hand(forge, &t.repo, p, log, e.id)
+                            .with_context(|| format!("reading {here}'s timeline"))?,
+                    };
                     if !retried {
                         let outcome = Outcome::of(e)?;
-                        if let Some(body) = comment(branch, &outcome, names) {
+                        if let Some(body) = comment(branch, &outcome, names, from) {
                             let id = format!("{}:{}", e.id, e.state.word());
                             self.comment_once(forge, &t.repo, p.number, &id, &body)?;
                         }
-                        return Ok(outcome_shown(branch, &outcome, names));
+                        if !held {
+                            return Ok(outcome_shown(branch, &outcome, names).into());
+                        }
                     }
                 }
-                _ => return Ok(queue_shown(branch, e, subs, names)),
+                _ => return Ok(queue_shown(branch, e, subs, names).into()),
             }
         }
         // Waiting: what is missing, and where it would land now. One of a
         // group waits for its group whole, and is taken only with it.
-        let missing = match group {
-            Some(g) => g.missing.clone(),
-            None => self.missing(forge, t, p)?,
+        let missing = if held {
+            vec![NEXT_SUBMIT.to_string()]
+        } else if let Some(by) = rests {
+            vec![format!("{WITHDRAWN_BY}{}", withdrawer(by))]
+        } else if let Some(g) = group {
+            g.missing.clone()
+        } else {
+            self.missing(forge, t, p)?
         };
-        self.fetch_head(pushed, p)?;
+        // 128: a waiting pull request needs its head only for its
+        // forecast, and is shown waiting without one; one missing nothing
+        // is not submitted, and nothing new is posted on it.
+        if let Err(e) = self.fetch_head(pushed, p) {
+            return Ok(Considered {
+                shown: (p.draft || !missing.is_empty() || group.is_some()).then(|| match group {
+                    Some(g) => waiting_in_group(branch, from, &missing, g, None),
+                    None => waiting(branch, from, &missing, None),
+                }),
+                failed: Some(e),
+            });
+        }
         if missing.is_empty() && group.is_none() {
             let accepted = s.submit(&SubmitRequest {
                 worktree: place(p.number),
@@ -611,7 +803,7 @@ impl Pulls {
                 after: Vec::new(),
                 priority: 0,
             })?;
-            return Ok(match accepted {
+            return Ok(Considered::from(match accepted {
                 Ok(a) => {
                     self.entries.borrow_mut().insert(
                         a.id,
@@ -624,8 +816,13 @@ impl Pulls {
                     let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
                     queued(branch, &ahead)
                 }
-                Err(r) => waiting(&[format!("refused: {}", refusal_word(&r))], None),
-            });
+                Err(r) => waiting(
+                    branch,
+                    from,
+                    &[format!("refused: {}", refusal_word(&r))],
+                    None,
+                ),
+            }));
         }
         let forecast = match s
             .forecast(&place(p.number), branch, &[])?
@@ -658,26 +855,33 @@ impl Pulls {
             Err(r) => format!("forecast: none, {}", refusal_word(&r)),
         };
         Ok(match group {
-            Some(g) => waiting_in_group(&missing, g, forecast),
-            None => waiting(&missing, Some(forecast)),
-        })
+            Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
+            None => waiting(branch, from, &missing, Some(forecast)),
+        }
+        .into())
     }
 
     /// What pull request `p` lacks before sluice takes it: out of draft,
     /// and its reviews and checks on its head (C.7).
     fn missing(&self, forge: &dyn Forge, t: &Target, p: &Pull) -> Result<Vec<String>> {
+        let here = place(p.number);
         let mut missing = Vec::new();
         if p.draft {
             missing.push("a draft".to_string());
             return Ok(missing);
         }
-        let have = approvals(&forge.reviews(&t.repo, p.number)?, &p.head);
+        let reviews = forge
+            .reviews(&t.repo, p.number)
+            .with_context(|| format!("reading {here}'s reviews"))?;
+        let have = approvals(&reviews, &p.head);
         if have < t.conditions.reviews {
             let need = t.conditions.reviews - have;
             missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
         }
         if !t.conditions.checks.is_empty() {
-            let checks = forge.checks(&t.repo, &p.head)?;
+            let checks = forge
+                .checks(&t.repo, &p.head)
+                .with_context(|| format!("reading {here}'s checks"))?;
             for name in &t.conditions.checks {
                 if !checks
                     .iter()
@@ -693,9 +897,11 @@ impl Pulls {
     /// 125: each group of bound pull requests submitted whole, through one
     /// group submit in its order, once every one of it is open, out of
     /// draft, at its marked head and meeting its conditions; whether any
-    /// was, and what each request of a group not taken waits for. A
-    /// request is bound to the group its body marks it one of while its
-    /// head is the marked head and it has had no submission at that head.
+    /// was, what each request of a group not taken waits for, and what
+    /// failed for each sluice could not read, which its group waits on
+    /// (128). A request is bound to the group its body marks it one of
+    /// while its head is the marked head and it has had no submission at
+    /// that head.
     #[allow(clippy::too_many_arguments)]
     fn take_groups(
         &self,
@@ -706,7 +912,8 @@ impl Pulls {
         branch: &str,
         pulls: &[&Pull],
         latest: &BTreeMap<String, Submission>,
-    ) -> Result<(bool, BTreeMap<u64, Bound>)> {
+        log: &[sluice_core::records::LogLine],
+    ) -> Result<Groups> {
         let mut groups: BTreeMap<String, Vec<(Group, &Pull)>> = BTreeMap::new();
         for p in pulls {
             let Some(g) = Group::of(&p.body) else {
@@ -721,6 +928,7 @@ impl Pulls {
         }
         let mut taken = false;
         let mut bound = BTreeMap::new();
+        let mut unread = BTreeMap::new();
         for members in groups.values() {
             let n = members[0].0.n;
             let mut by_k: BTreeMap<usize, &Pull> = BTreeMap::new();
@@ -728,17 +936,38 @@ impl Pulls {
             for (g, p) in members {
                 agree &= g.n == n && by_k.insert(g.k, p).is_none();
             }
+            // What each lacks: its submitter's act while it is held (120),
+            // else its conditions.
             let mut missing = BTreeMap::new();
             for p in by_k.values() {
-                missing.insert(p.number, self.missing(forge, t, p)?);
+                let lacks = match is_held(forge, &t.repo, p, latest.get(&place(p.number)), log) {
+                    Ok(true) => Ok(vec![NEXT_SUBMIT.to_string()]),
+                    Ok(false) => self.missing(forge, t, p),
+                    Err(e) => Err(e),
+                };
+                match lacks {
+                    Ok(m) => {
+                        missing.insert(p.number, m);
+                    }
+                    Err(e) => {
+                        unread.insert(p.number, e);
+                    }
+                }
             }
             let absent: Vec<usize> = (1..=n).filter(|k| !by_k.contains_key(k)).collect();
-            let ready = missing.values().all(Vec::is_empty);
+            let ready = missing.len() == by_k.len() && missing.values().all(Vec::is_empty);
             let mut refused = None;
-            if agree && absent.is_empty() && ready {
-                for p in by_k.values() {
-                    self.fetch_head(pushed, p)?;
-                }
+            if agree
+                && absent.is_empty()
+                && ready
+                && by_k.values().all(|p| match self.fetch_head(pushed, p) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        unread.insert(p.number, e);
+                        false
+                    }
+                })
+            {
                 let req = GroupRequest {
                     branch: branch.into(),
                     worktrees: by_k.values().map(|p| place(p.number)).collect(),
@@ -763,10 +992,25 @@ impl Pulls {
                     Err(r) => refused = r.first().map(|(_, r)| refusal_word(r)),
                 }
             }
+            // Each of the group that waits, on what it lacks or on being
+            // read again.
+            let waits: BTreeMap<u64, bool> = by_k
+                .values()
+                .map(|p| {
+                    let lacks = missing.get(&p.number).is_some_and(|m| !m.is_empty());
+                    (p.number, lacks || unread.contains_key(&p.number))
+                })
+                .collect();
             for p in by_k.values() {
-                let mut on: Vec<String> = missing
+                let Some(lacks) = missing
+                    .get(&p.number)
+                    .filter(|_| !unread.contains_key(&p.number))
+                else {
+                    continue;
+                };
+                let mut on: Vec<String> = waits
                     .iter()
-                    .filter(|(number, m)| **number != p.number && !m.is_empty())
+                    .filter(|(number, w)| **number != p.number && **w)
                     .map(|(number, _)| format!("#{number}"))
                     .collect();
                 on.extend(
@@ -785,12 +1029,153 @@ impl Pulls {
                     Bound {
                         n,
                         on,
-                        missing: missing[&p.number].clone(),
+                        missing: lacks.clone(),
                     },
                 );
             }
         }
-        Ok((taken, bound))
+        Ok(Groups {
+            taken,
+            bound,
+            unread,
+        })
+    }
+
+    /// 125: the act's pull requests, `acted`, each at the head the act
+    /// pushed and with when its last submission left the queue. When every
+    /// one meets its conditions there, the reviews and checks the branch
+    /// names, each is marked ready as one submit marks it and all are
+    /// queued in one write in the act's order, while the act holds intake's
+    /// lock, so no pass takes one of them alone (rules core.6, core.14).
+    /// Out of draft is the act's to give, so each is read as out of draft.
+    /// Otherwise none is marked ready, each ready one is marked a draft,
+    /// and none is queued: the refusal names each short of its conditions
+    /// (120).
+    #[allow(clippy::too_many_arguments)]
+    fn take_act(
+        &self,
+        s: &Sluice<'_>,
+        forge: &dyn Forge,
+        t: &Target,
+        branch: &str,
+        worktrees: &[String],
+        acted: &[(Pull, Option<DateTime<Utc>>)],
+        mut opened: Vec<Opened>,
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
+        let mut short = Vec::new();
+        for (w, (p, _)) in worktrees.iter().zip(acted) {
+            let ready = Pull {
+                draft: false,
+                ..p.clone()
+            };
+            let lacks = self.missing(forge, t, &ready)?;
+            if !lacks.is_empty() {
+                short.push(Short {
+                    worktree: w.clone(),
+                    number: p.number,
+                    lacks,
+                });
+            }
+        }
+        if !short.is_empty() {
+            self.leave_drafts(forge, t, acted, &mut opened)?;
+            return Ok(Err(GroupRefused::Short { opened, short }));
+        }
+        // Every head is here before any is marked ready, so one GitHub
+        // serves none of leaves every request as it was.
+        let pushed = self.pushed(&t.remote)?;
+        for (p, _) in acted {
+            self.fetch_head(&pushed, p)
+                .with_context(|| format!("fetching #{}'s head", p.number))?;
+        }
+        for ((p, left), o) in acted.iter().zip(&mut opened) {
+            if p.draft || left.is_some() {
+                mark_ready(forge, &t.repo, p.number, p.draft, *left)?;
+                o.said.push_str(" · marked ready for review");
+            }
+            // The driver's session of `pull/<n>` answers from what is known.
+            self.known.borrow_mut().insert(
+                place(p.number),
+                Known {
+                    remote: t.remote.clone(),
+                    pull: Pull {
+                        draft: false,
+                        ..p.clone()
+                    },
+                },
+            );
+        }
+        let req = GroupRequest {
+            branch: branch.into(),
+            worktrees: acted.iter().map(|(p, _)| place(p.number)).collect(),
+            after: Vec::new(),
+            priority: 0,
+        };
+        let accepted = match s.submit_group(&req)? {
+            Ok(accepted) => accepted,
+            Err(refused) => {
+                // Refused by the branch since it was read: left drafts, as
+                // any refused act leaves them, each refusal its worktree's.
+                let drafted: Vec<(Pull, Option<DateTime<Utc>>)> = acted
+                    .iter()
+                    .map(|(p, left)| {
+                        (
+                            Pull {
+                                draft: false,
+                                ..p.clone()
+                            },
+                            *left,
+                        )
+                    })
+                    .collect();
+                self.leave_drafts(forge, t, &drafted, &mut opened)?;
+                let refused = refused
+                    .into_iter()
+                    .map(|(at, r)| {
+                        let w = req
+                            .worktrees
+                            .iter()
+                            .position(|x| *x == at)
+                            .map_or(at, |i| worktrees[i].clone());
+                        (w, r)
+                    })
+                    .collect();
+                return Ok(Err(GroupRefused::Worktrees(refused)));
+            }
+        };
+        for ((a, (p, _)), o) in accepted.into_iter().zip(acted).zip(&mut opened) {
+            self.entries.borrow_mut().insert(
+                a.id,
+                Entry {
+                    repo: t.repo.clone(),
+                    number: p.number,
+                    head: p.head.clone(),
+                },
+            );
+            o.submission = Some(a);
+        }
+        Ok(Ok(opened))
+    }
+
+    /// 125: each of a refused act's pull requests left a draft at its
+    /// head, so no round takes one of it alone, by its conditions or by its
+    /// group's marks, in its submitter's name (120).
+    fn leave_drafts(
+        &self,
+        forge: &dyn Forge,
+        t: &Target,
+        acted: &[(Pull, Option<DateTime<Utc>>)],
+        opened: &mut [Opened],
+    ) -> Result<()> {
+        for ((p, _), o) in acted.iter().zip(opened) {
+            if !p.draft {
+                forge
+                    .set_draft(&t.repo, p.number, true)
+                    .with_context(|| format!("marking #{} a draft", p.number))?;
+                o.said.push_str(" · marked a draft");
+            }
+        }
+        Ok(())
     }
 
     /// The pull request's head on this host, fetched unless it is here.
@@ -861,29 +1246,224 @@ fn refusal_word(r: &SubmitRefusal) -> String {
         SubmitRefusal::UnknownAfter(_) => "it names an unknown submission".into(),
         SubmitRefusal::NoHead(_) => "its head's branch is gone".into(),
         SubmitRefusal::NamedTwice(_) => "it is named twice".into(),
+        SubmitRefusal::KeptOut(kept) => format!(
+            "its branch requires {}, which the task runner keeps out of CI",
+            kept.iter()
+                .map(|k| k.task.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
-/// When submission `id` was blamed or found conflicting, from the log.
+/// When submission `id` left the queue without landing, withdrawn, blamed
+/// or found conflicting, from the log.
 fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Utc>> {
     log.iter()
         .rev()
         .find(|l| match &l.event {
-            Event::Blamed { id: i, .. } | Event::Conflict { id: i, .. } => *i == id,
+            Event::Withdrawn { id: i, .. }
+            | Event::Blamed { id: i, .. }
+            | Event::Conflict { id: i, .. } => *i == id,
             _ => false,
         })
         .and_then(|l| DateTime::parse_from_rfc3339(&l.at).ok())
         .map(|t| t.with_timezone(&Utc))
 }
 
-fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
-    let title = if missing.iter().any(|m| m == "a draft") {
+/// What a pull request a submit opened or updated waits for once its
+/// submission left the queue.
+const NEXT_SUBMIT: &str = "the next submit";
+
+/// The branch a submit's pull request is submitted from, `None` for one a
+/// person opened by hand: a submit names its agent in the body, and is
+/// the act that stands for the pull request from then on.
+fn submits(p: &Pull) -> Option<&str> {
+    marked_agent(&p.body).map(|_| p.head_ref.as_str())
+}
+
+/// What a pull request opened by hand waits for once someone other than
+/// its own agent withdrew it, before who that was.
+const WITHDRAWN_BY: &str = "withdrawn by ";
+
+/// Who withdrew `e`, when it was not its own agent: the operator, a
+/// planner or another agent, never intake, which withdraws a pull
+/// request's submission as its agent.
+fn withdrawn_by_another(e: &Submission) -> Option<&str> {
+    e.withdrawn
+        .as_ref()
+        .map(|w| w.by.as_str())
+        .filter(|by| *by != e.from.agent)
+}
+
+/// A withdrawal's `by` in a pull request's words.
+fn withdrawer(by: &str) -> String {
+    match by {
+        "operator" | "planner" => format!("the {by}"),
+        agent => agent.to_string(),
+    }
+}
+
+/// Out of the queue without landing: withdrawn, blamed or conflicting.
+fn left_unlanded(e: &Submission) -> bool {
+    matches!(e.state, State::Withdrawn | State::Failed | State::Conflict)
+}
+
+/// Whether a submit's pull request `p` waits for its submitter's act: its
+/// latest submission, `latest`, left the queue without landing, and no
+/// ready mark has followed since (120, S56).
+fn is_held(
+    forge: &dyn Forge,
+    repo: &Repo,
+    p: &Pull,
+    latest: Option<&Submission>,
+    log: &[sluice_core::records::LogLine],
+) -> Result<bool> {
+    match latest.filter(|e| submits(p).is_some() && left_unlanded(e)) {
+        Some(e) => Ok(!readied_since(forge, repo, p.number, acts_from(log, e))
+            .with_context(|| format!("reading {}'s timeline", place(p.number)))?),
+        None => Ok(false),
+    }
+}
+
+/// The second from which a ready mark is its submitter's act after `e`
+/// left the queue: the second it left, from the log, as GitHub and the
+/// log both keep whole seconds. Never the second `e` was submitted in,
+/// whose ready mark is the act that submitted it.
+fn acts_from(log: &[sluice_core::records::LogLine], e: &Submission) -> DateTime<Utc> {
+    let submitted = DateTime::parse_from_rfc3339(&e.submitted)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let left = removal(log, e.id).unwrap_or(submitted);
+    if left > submitted {
+        left
+    } else {
+        submitted + chrono::TimeDelta::seconds(1)
+    }
+}
+
+/// Whether pull request `number` was marked ready for review at or after
+/// `at`, to the whole second.
+fn readied_since(forge: &dyn Forge, repo: &Repo, number: u64, at: DateTime<Utc>) -> Result<bool> {
+    Ok(forge
+        .readied(repo, number)?
+        .iter()
+        .any(|r| r.trunc_subsecs(0) >= at))
+}
+
+/// Whether pull request `p`, opened by hand and sent back as submission
+/// `id`, or withdrawn by someone other than its agent, was marked ready
+/// for review after it left: intake then submits the same head again.
+fn retried_by_hand(
+    forge: &dyn Forge,
+    repo: &Repo,
+    p: &Pull,
+    log: &[sluice_core::records::LogLine],
+    id: u64,
+) -> Result<bool> {
+    let removed = removal(log, id);
+    Ok(!p.draft
+        && forge
+            .readied(repo, p.number)?
+            .iter()
+            .any(|at| removed.is_some_and(|r| *at > r)))
+}
+
+/// A submit's ready mark on pull request `number`, a draft first unless
+/// it is one, so that GitHub's timeline holds a ready mark at or after
+/// `left`, the second from which it is the act after its submission left
+/// the queue. GitHub's clock may be behind the host's: a mark read back
+/// before `left` is made again the next second, three times at most.
+fn mark_ready(
+    forge: &dyn Forge,
+    repo: &Repo,
+    number: u64,
+    draft: bool,
+    left: Option<DateTime<Utc>>,
+) -> Result<()> {
+    const TRIES: usize = 3;
+    let mut draft = draft;
+    let mut newest = None;
+    for tried in 1..=TRIES {
+        if !draft {
+            forge.set_draft(repo, number, true)?;
+        }
+        forge.set_draft(repo, number, false)?;
+        draft = false;
+        let Some(left) = left else {
+            return Ok(());
+        };
+        newest = forge
+            .readied(repo, number)?
+            .into_iter()
+            .map(|r| r.trunc_subsecs(0))
+            .max();
+        if newest.is_some_and(|r| r >= left) {
+            return Ok(());
+        }
+        if tried < TRIES {
+            let into = Utc::now().timestamp_subsec_millis();
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(
+                1000 - into.min(999),
+            )));
+        }
+    }
+    let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let left = left.map(at).unwrap_or_default();
+    match newest {
+        Some(r) => bail!(
+            "#{number}'s ready mark reads {} on GitHub, and a submit's counts from {left}, when \
+             its submission left the queue, after {TRIES} tries: GitHub's clock may be behind \
+             this host's; submit again",
+            at(r)
+        ),
+        None => bail!(
+            "GitHub's timeline of #{number} holds no ready mark after {TRIES} tries, and a \
+             submit's counts from {left}, when its submission left the queue; submit again"
+        ),
+    }
+}
+
+/// The way on for a submit's pull request held for its submitter: the next
+/// submit from `from`, or a ready mark.
+fn next_submit(branch: &str, from: &str) -> String {
+    format!(
+        "The next `sluice submit {branch}` from `{from}`, or marking it ready for review, \
+         submits it again."
+    )
+}
+
+/// What a waiting pull request into `branch` shows: `from` is the branch
+/// a submit's pull request is submitted from.
+fn waiting(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    forecast: Option<String>,
+) -> Shown {
+    let held = missing.iter().any(|m| m == NEXT_SUBMIT);
+    let rests = missing.iter().find_map(|m| m.strip_prefix(WITHDRAWN_BY));
+    let title = if held {
+        format!("waiting: {NEXT_SUBMIT}")
+    } else if let Some(who) = rests {
+        format!("waiting: {WITHDRAWN_BY}{who}")
+    } else if missing.iter().any(|m| m == "a draft") {
         "waiting: a draft".to_string()
     } else {
         format!("waiting: needs {}", missing.join(", "))
     };
     let mut summary = Vec::new();
-    if missing.iter().any(|m| m == "a draft") {
+    if held {
+        summary.push(format!(
+            "Its submission left the queue, and sluice marked it a draft. {}",
+            next_submit(branch, from.unwrap_or("its branch"))
+        ));
+    } else if let Some(who) = rests {
+        summary.push(format!(
+            "Withdrawn from {branch}'s queue by {who}. New commits, or marking it a draft and \
+             then ready for review, submit it again."
+        ));
+    } else if missing.iter().any(|m| m == "a draft") {
         summary.push("A draft: sluice takes it once it is marked ready for review.".to_string());
     } else {
         let named: Vec<String> = missing
@@ -918,8 +1498,15 @@ fn waiting(missing: &[String], forecast: Option<String>) -> Shown {
 }
 
 /// 125: one of a group intake has not taken, which waits for what it
-/// lacks itself, or else for the rest of its group.
-fn waiting_in_group(missing: &[String], g: &Bound, forecast: String) -> Shown {
+/// lacks itself, or else for the rest of its group: `from` is the branch
+/// it is submitted from.
+fn waiting_in_group(
+    branch: &str,
+    from: Option<&str>,
+    missing: &[String],
+    g: &Bound,
+    forecast: Option<String>,
+) -> Shown {
     let together = format!(
         "One of a group of {} submitted together, which sluice takes only all together, once \
          each is ready.",
@@ -937,15 +1524,17 @@ fn waiting_in_group(missing: &[String], g: &Bound, forecast: String) -> Shown {
             lines: Vec::new(),
         }
     } else {
-        let mut w = waiting(missing, None);
+        let mut w = waiting(branch, from, missing, None);
         w.posting.summary = format!("{}\n\n{together}", w.posting.summary);
         w
     };
-    shown.posting.summary.push_str(&format!(
-        "\n\n{}",
-        forecast.replacen("forecast:", "Forecast:", 1)
-    ));
-    shown.lines.push(forecast);
+    if let Some(f) = forecast {
+        shown
+            .posting
+            .summary
+            .push_str(&format!("\n\n{}", f.replacen("forecast:", "Forecast:", 1)));
+        shown.lines.push(f);
+    }
     shown
 }
 
@@ -1131,10 +1720,22 @@ fn outcome_shown(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Sh
     }
 }
 
-/// The comment on a pull request sent back; none for a landing.
-fn comment(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Option<String> {
-    let again = "Push a fix to submit again, or mark this pull request a draft and then ready \
-                 for review to submit the same commits again.";
+/// The comment on a pull request sent back; none for a landing. `from` is
+/// the branch a submit's pull request is submitted from: sluice marks it a
+/// draft, and only its submitter's act brings it back.
+fn comment(
+    branch: &str,
+    o: &Outcome,
+    names: &BTreeMap<u64, String>,
+    from: Option<&str>,
+) -> Option<String> {
+    let drafted = from.map(|f| format!("sluice marked it a draft. {}", next_submit(branch, f)));
+    let again = match &drafted {
+        Some(d) => d.clone(),
+        None => "Push a fix to submit again, or mark this pull request a draft and then ready \
+                 for review to submit the same commits again."
+            .to_string(),
+    };
     match o {
         Outcome::Landed { .. } => None,
         Outcome::Failed {
@@ -1168,13 +1769,23 @@ fn comment(branch: &str, o: &Outcome, names: &BTreeMap<u64, String>) -> Option<S
             Some(s)
         }
         Outcome::Conflict { paths, with } => {
+            let way = match &drafted {
+                Some(d) => format!("Merge or rebase onto {branch}. {d}"),
+                None => format!(
+                    "Merge or rebase onto {branch} and push, or mark this pull request a draft \
+                     and then ready for review to submit the same commits again."
+                ),
+            };
             Some(format!(
-            "sluice sent this pull request back: it no longer merges with what is ahead of it. \
-             `{}` conflicts with {}.\n\nMerge or rebase onto {branch} and push, or mark this pull \
-             request a draft and then ready for review to submit the same commits again.",
-            paths.join("`, `"),
-            if with.is_empty() { branch.to_string() } else { with.join(", ") }
-        ))
+                "sluice sent this pull request back: it no longer merges with what is ahead of \
+                 it. `{}` conflicts with {}.\n\n{way}",
+                paths.join("`, `"),
+                if with.is_empty() {
+                    branch.to_string()
+                } else {
+                    with.join(", ")
+                }
+            ))
         }
     }
 }
@@ -1195,6 +1806,14 @@ impl Branch for ReadOnce<'_> {
         let r = self.branch.read(branch)?;
         self.read.borrow_mut().insert(branch.into(), r.clone());
         Ok(r)
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        self.branch.copy(branch)
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        self.branch.level(branch, expected, to)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
@@ -1305,23 +1924,28 @@ impl crate::PullRequests for Pulls {
         Ok(
             match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
                 Ok(mut opened) => Ok(opened.remove(0)),
-                Err(mut refused) => Err(refused.remove(0).1),
+                Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
+                Err(GroupRefused::Short { .. }) => {
+                    bail!("a submit of one worktree read its pull request's conditions")
+                }
             },
         )
     }
 
     /// 125: every worktree read before anything is pushed, and a refusal
     /// for each refused; then, in order, each request marked one of the
-    /// group before its head reaches it: an open request's body edited
-    /// before its branch is pushed, a new one opened with the mark once
-    /// its branch is. One worktree is marked one of no group.
+    /// group before its head reaches it: an open request's description
+    /// written for its head before its branch is pushed, a new one opened
+    /// a draft with it once its branch is. Then the group is taken whole or left drafts
+    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
+    /// marked ready, for intake to take on its conditions.
     fn open_group(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
-    ) -> Result<Result<Vec<Opened>, Vec<(String, SubmitRefusal)>>> {
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
         for (k, worktree) in worktrees.iter().enumerate() {
@@ -1350,59 +1974,153 @@ impl crate::PullRequests for Pulls {
             }
         }
         let (Some(t), true) = (target, refused.is_empty()) else {
-            return Ok(Err(refused));
+            return Ok(Err(GroupRefused::Worktrees(refused)));
         };
+        // ADR 0050: refused before anything is pushed or opened, each place
+        // its runner keeps a required check out of CI in.
+        let mut warnings = Vec::new();
+        for (worktree, session) in worktrees.iter().zip(&sessions) {
+            match s.check_kept_out(session, branch, &t.tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(GroupRefused::Worktrees(refused)));
+        }
         let forge = self.forge(branch)?;
-        let pushed = self.pushed(&t.remote)?;
+        let _lock = self.wait_lock(branch)?;
+        // 124, 1: a branch sluice lands on is asked for as its remote holds
+        // it, and nothing is pushed; only a branch it lands on nowhere is.
+        let submitted = sessions
+            .iter()
+            .map(|session| s.submitted_head(session))
+            .collect::<Result<Vec<_>>>()?;
         let open = forge.pulls(&t.repo, branch)?;
         let n = sessions.len();
-        let token = group_token(clock.now(), &sessions[0].head);
+        let token = group_token(clock.now(), &submitted[0].head);
         let mut opened = Vec::new();
-        for (k, session) in sessions.iter().enumerate() {
+        // Each request as the act leaves it, and when its last submission
+        // left the queue, for the group's taking.
+        let mut acted = Vec::new();
+        for (k, (session, submitted)) in sessions.iter().zip(&submitted).enumerate() {
             let head_ref = session.from.worktree.clone();
+            let head = &submitted.head;
             let agent = &session.from.agent;
             let group = (n > 1).then(|| Group {
                 token: token.clone(),
                 k: k + 1,
                 n,
-                head: session.head.0.clone(),
+                head: head.0.clone(),
             });
+            let push = || -> Result<()> {
+                if !submitted.from_remote {
+                    self.pushed(&t.remote)?.push_branch(head, &head_ref)?;
+                }
+                Ok(())
+            };
             let existing = open
                 .iter()
                 .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
-            let (number, title, word) = match existing {
+            // C.5: the description of the head submitted, its commits'
+            // messages as many as GitHub holds; the head is in the
+            // repository's objects before it is pushed.
+            let messages = self.messages(&t.tip, head)?;
+            let compare = compare_address(&t.repo, branch, &head_ref);
+            let body = description(&messages, agent, group.as_ref(), &compare);
+            let (pull, word) = match existing {
                 Some(p) => {
-                    if marked_agent(&p.body).as_deref() != Some(agent.as_str())
-                        || Group::of(&p.body) != group
-                    {
-                        forge.edit(
-                            &t.repo,
-                            p.number,
-                            &with_marks(&p.body, agent, group.as_ref()),
-                        )?;
+                    if p.body != body {
+                        forge.edit(&t.repo, p.number, &body)?;
                     }
-                    pushed.push_branch(&session.head, &head_ref)?;
-                    (p.number, p.title.clone(), "updated")
+                    push()?;
+                    (Pull { body, ..p.clone() }, "updated")
                 }
                 None => {
-                    pushed.push_branch(&session.head, &head_ref)?;
-                    let messages = self.messages(&t.tip, &session.head)?;
+                    push()?;
                     let title = messages
                         .first()
                         .and_then(|m| m.lines().next())
                         .unwrap_or(&head_ref)
                         .to_string();
-                    let body = with_marks(&messages.join("\n\n"), agent, group.as_ref());
-                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body)?;
-                    (p.number, p.title, "opened")
+                    // A group's request is opened a draft, which the act
+                    // marks ready only once it takes the group (125).
+                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
+                    (p, "opened")
                 }
             };
+            let number = pull.number;
+            let mut said = format!("{word} #{number}: {}", pull.title);
+            if !submitted.from_remote {
+                said = format!("pushed {head_ref} · {said}");
+            }
+            // The submit is its submitter's act (120). The submission on an
+            // older head leaves the queue, withdrawn by the submit itself
+            // (67), and a ready mark follows the latest leaving, so intake
+            // reads the act as given.
+            let here = place(number);
+            let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
+            if let Some(e) = latest
+                .get(&here)
+                .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != *head)
+            {
+                // Landing since it was read: it lands, and the new head waits.
+                if let Ok(Withdrew::Now) =
+                    s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+                {
+                    said.push_str(&format!(" · withdrew its submission {}", e.id));
+                }
+            }
+            let latest = s
+                .latest_of(branch, std::slice::from_ref(&here))?
+                .remove(&here);
+            let log = Line::read_log(&s.seams().state.read(branch)?)?;
+            let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
+            if n == 1 && (pull.draft || left.is_some()) {
+                mark_ready(forge, &t.repo, number, pull.draft, left)?;
+                said.push_str(" · marked ready for review");
+            }
             opened.push(Opened {
                 number,
-                said: format!("pushed {head_ref} · {word} #{number}: {title}"),
+                said,
+                copy: submitted.copy.clone(),
+                submission: None,
             });
+            acted.push((
+                Pull {
+                    head: head.0.clone(),
+                    ..pull
+                },
+                left,
+            ));
         }
-        Ok(Ok(opened))
+        let taken = if n > 1 {
+            self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
+        } else {
+            Ok(opened)
+        };
+        // 124: how the host's copy differs, and ADR 0050: why the runner
+        // could not be asked, beneath what the act did.
+        let beneath = |mut opened: Vec<Opened>| {
+            for (o, warnings) in opened.iter_mut().zip(&warnings) {
+                if let Some(copy) = &o.copy {
+                    o.said.push('\n');
+                    o.said.push_str(&crate::copy_differs_line(copy));
+                }
+                for w in warnings {
+                    o.said.push_str(&format!("\nwarning: {w}"));
+                }
+            }
+            opened
+        };
+        Ok(match taken {
+            Ok(opened) => Ok(beneath(opened)),
+            Err(GroupRefused::Short { opened, short }) => Err(GroupRefused::Short {
+                opened: beneath(opened),
+                short,
+            }),
+            Err(refused) => Err(refused),
+        })
     }
 
     fn find(
@@ -1426,11 +2144,12 @@ impl crate::PullRequests for Pulls {
         {
             return Ok(Some(p.number));
         }
-        // Landed and closed: its entry has this worktree's head.
+        // Landed and closed: its entry has the head this worktree submits.
+        let head = s.submitted_head(&session)?.head;
         Ok(s.history(branch)?
             .iter()
             .rev()
-            .filter(|x| x.head == session.head)
+            .filter(|x| x.head == head)
             .find_map(|x| number(&x.from.worktree)))
     }
 
@@ -1452,21 +2171,40 @@ impl crate::PullRequests for Pulls {
         if let Some(e) = &latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
-                return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                // Sent back on this head, and marked ready since: intake
+                // takes it again, so that verdict is no longer its outcome.
+                let again = match &pull {
+                    Some(p) if p.open && e.state != State::Landed => {
+                        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+                        match submits(p) {
+                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
+                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
+                        }
+                    }
+                    _ => false,
+                };
+                if !again {
+                    return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                }
             }
         }
         if !pull.as_ref().is_some_and(|p| p.open) {
             return Ok(Followed::Closed);
         }
-        Ok(match self.shown.borrow().get(&n) {
-            Some(shown) => Followed::Open {
-                title: shown.posting.title.clone(),
-                lines: shown.lines.clone(),
-            },
-            None => Followed::Open {
-                title: "waiting".into(),
-                lines: Vec::new(),
-            },
+        // Taken in on the head it has now, and undecided: the submission
+        // a submit that does not wait answers with, and a wait follows.
+        let submission = latest
+            .filter(|e| !e.state.is_out() && pull.as_ref().is_some_and(|p| p.head == e.head.0));
+        let names = names(&status.submissions);
+        let (title, lines) = match self.shown.borrow().get(&n) {
+            Some(shown) => (shown.posting.title.clone(), shown.lines.clone()),
+            None => ("waiting".into(), Vec::new()),
+        };
+        Ok(Followed::Open {
+            title,
+            lines,
+            submission,
+            names,
         })
     }
 }
@@ -1526,7 +2264,22 @@ impl Pulls {
             shown,
             n.report.as_ref(),
         )?;
-        if let Some(body) = comment(&n.branch, &outcome, &names) {
+        if matches!(outcome, Outcome::Landed { .. }) {
+            return Ok(());
+        }
+        // Its body, as intake read it this round, says whether a submit
+        // opened it.
+        let known = self
+            .known
+            .borrow()
+            .get(&place(e.number))
+            .map(|k| k.pull.clone());
+        let pull = match known {
+            Some(p) => Some(p),
+            None => forge.pull(&e.repo, e.number)?,
+        };
+        let from = pull.as_ref().and_then(submits);
+        if let Some(body) = comment(&n.branch, &outcome, &names, from) {
             self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
         }
         Ok(())
@@ -1709,9 +2462,150 @@ mod tests {
         assert_eq!(Group::of("<!-- sluice: group=t 4/3 head=x -->"), None);
     }
 
+    const COMPARE: &str = "https://github.com/o/r/compare/main...unit/x";
+
+    /// A request's marks with no group and with one.
+    fn groups() -> [Option<Group>; 2] {
+        [
+            None,
+            Some(Group {
+                token: "20261024T120000Z-0123456".into(),
+                k: 1,
+                n: 2,
+                head: "0123456789abcdef0123456789abcdef01234567".into(),
+            }),
+        ]
+    }
+
+    /// A message of `chars` characters: `subject`, a blank line, a body.
+    fn message(subject: &str, chars: usize) -> String {
+        let body = "x".repeat(chars - subject.chars().count() - 2);
+        format!("{subject}\n\n{body}")
+    }
+
+    /// `body` no longer than GitHub holds, its marks read back.
+    fn reads_back(body: &str, group: Option<&Group>) {
+        let chars = body.chars().count();
+        assert!(chars <= DESCRIPTION_LIMIT, "{chars} characters");
+        assert_eq!(marked_agent(body).as_deref(), Some("crw-1"));
+        assert_eq!(Group::of(body).as_ref(), group);
+    }
+
+    #[test]
+    fn the_compare_view_of_a_request() {
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(compare_address(&repo, "main", "unit/x"), COMPARE);
+    }
+
+    /// C.5 pull request: every message fits, so the description is each
+    /// message whole, oldest first, then the marks.
+    #[test]
+    fn a_description_holds_every_message_that_fits() {
+        let ms = vec![
+            "Add the first file".to_string(),
+            "Add the second file\n\nIts body.".to_string(),
+        ];
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            assert_eq!(body, with_marks(&ms.join("\n\n"), "crw-1", g.as_ref()));
+            assert!(!body.contains("more commit"), "{body}");
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: three messages of 30,000 characters: two whole, the third
+    /// named by its subject after the line counting it.
+    #[test]
+    fn a_description_too_long_names_the_rest_by_subject() {
+        let ms: Vec<String> = (1..=3)
+            .map(|k| message(&format!("Commit {k}"), 30_000))
+            .collect();
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "{}\n\n{}\n\n1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- Commit 3",
+                ms[0], ms[1]
+            );
+            assert_eq!(body, with_marks(&text, "crw-1", g.as_ref()));
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: a message longer than the limit is never cut: its subject is
+    /// named, and no part of its body is in the description.
+    #[test]
+    fn a_message_longer_than_the_limit_is_named_by_its_subject() {
+        let ms = vec![message("One long commit", 70_000)];
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- One long commit"
+            );
+            assert_eq!(body, with_marks(&text, "crw-1", g.as_ref()));
+            assert!(!body.contains("xx"), "{body}");
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: 70 subjects of 1,000 characters cannot all be named: none of
+    /// the messages is whole, the subjects are named in order as many as
+    /// fit, each whole, and the others counted.
+    #[test]
+    fn more_subjects_than_the_limit_holds_are_counted() {
+        let ms: Vec<String> = (0..70)
+            .map(|k| format!("{k:02}{}", "s".repeat(998)))
+            .collect();
+        for g in groups() {
+            let body = description(&ms, "crw-1", g.as_ref(), COMPARE);
+            let head =
+                format!("70 more commits, each by its subject; all of them in full: {COMPARE}\n\n");
+            assert!(body.starts_with(&head), "{}", &body[..200]);
+            let named: Vec<&str> = body.lines().filter_map(|l| l.strip_prefix("- ")).collect();
+            let j = named.len();
+            assert!(j > 0 && j < 70, "{j} named");
+            assert_eq!(
+                named,
+                ms[..j].iter().map(String::as_str).collect::<Vec<_>>()
+            );
+            assert!(
+                body.contains(&format!("\nand {} more, in the compare view\n", 70 - j)),
+                "{}",
+                &body[body.len() - 300..]
+            );
+            // One more subject would not fit.
+            assert!(body.chars().count() + 1_002 > DESCRIPTION_LIMIT);
+            reads_back(&body, g.as_ref());
+        }
+    }
+
+    /// C.5: the limit is counted in characters: a message of 39,000
+    /// two-byte characters is held whole, though its bytes pass it.
+    #[test]
+    fn a_description_is_measured_in_characters() {
+        let long = |k: usize| format!("Écrit le fichier {k}\n\n{}", "é".repeat(39_000));
+        for g in groups() {
+            let one = description(&[long(1)], "crw-1", g.as_ref(), COMPARE);
+            assert!(one.len() > DESCRIPTION_LIMIT, "{} bytes", one.len());
+            assert_eq!(one, with_marks(&long(1), "crw-1", g.as_ref()));
+            reads_back(&one, g.as_ref());
+            let two = description(&[long(1), long(2)], "crw-1", g.as_ref(), COMPARE);
+            let text = format!(
+                "{}\n\n1 more commit, each by its subject; all of them in full: \
+                 {COMPARE}\n\n- Écrit le fichier 2",
+                long(1)
+            );
+            assert_eq!(two, with_marks(&text, "crw-1", g.as_ref()));
+            reads_back(&two, g.as_ref());
+        }
+    }
+
     #[test]
     fn what_a_waiting_pull_request_shows() {
         let w = waiting(
+            "main",
+            None,
             &["1 review".into(), "qa/approved".into()],
             Some("forecast: merges onto main without conflict".into()),
         );
@@ -1721,8 +2615,237 @@ mod tests {
         );
         assert_eq!(w.lines, ["forecast: merges onto main without conflict"]);
         assert_eq!(
-            waiting(&["a draft".into()], None).posting.title,
+            waiting("main", None, &["a draft".into()], None)
+                .posting
+                .title,
             "waiting: a draft"
+        );
+    }
+
+    /// pull-request-status, a draft with no head: shown as a draft, with
+    /// no forecast (128).
+    #[test]
+    fn a_draft_with_no_head_shows_no_forecast() {
+        let w = waiting("main", None, &["a draft".into()], None);
+        assert_eq!(w.posting.title, "waiting: a draft");
+        assert!(
+            !w.posting.summary.contains("Forecast:"),
+            "{}",
+            w.posting.summary
+        );
+        assert!(w.lines.is_empty(), "{:?}", w.lines);
+    }
+
+    /// pull-request-status: a submit's pull request held for its
+    /// submitter is queued, and names the next submit from its branch and
+    /// the ready mark.
+    #[test]
+    fn what_a_held_pull_request_shows() {
+        let w = waiting(
+            "main",
+            Some("unit/review"),
+            &[NEXT_SUBMIT.into()],
+            Some("forecast: merges onto main without conflict".into()),
+        );
+        assert_eq!(w.posting.status, Status::Queued);
+        assert_eq!(w.posting.title, "waiting: the next submit");
+        let s = &w.posting.summary;
+        assert!(
+            s.contains("sluice marked it a draft")
+                && s.contains("The next `sluice submit main` from `unit/review`")
+                && s.contains("marking it ready for review"),
+            "{s}"
+        );
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+    }
+
+    /// pull-request-status, withdrawn by the operator: a hand-opened pull
+    /// request someone other than its agent withdrew is queued, names who
+    /// withdrew it, and says new commits or a ready mark after draft submit
+    /// it again; intake's own withdrawal, as its agent, is no one else's.
+    #[test]
+    fn what_a_withdrawn_pull_request_shows() {
+        let w = waiting(
+            "main",
+            None,
+            &[format!("{WITHDRAWN_BY}{}", withdrawer("operator"))],
+            Some("forecast: merges onto main without conflict".into()),
+        );
+        assert_eq!(w.posting.status, Status::Queued);
+        assert_eq!(w.posting.title, "waiting: withdrawn by the operator");
+        let s = &w.posting.summary;
+        assert!(
+            s.contains("Withdrawn from main's queue by the operator")
+                && s.contains("New commits, or marking it a draft and then ready for review")
+                && !s.contains("sluice marked it a draft"),
+            "{s}"
+        );
+        assert!(s.contains("Forecast: merges onto main"), "{s}");
+        assert_eq!(withdrawer("planner"), "the planner");
+        assert_eq!(withdrawer("crw-2"), "crw-2");
+
+        let sub = |by: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 4, "branch": "main",
+                "head": "h", "from": { "agent": "person", "worktree": "pull/4" },
+                "submitted": "2026-10-23T10:00:00Z", "after": [], "priority": 0, "attempt": 1,
+                "state": "withdrawn",
+                "withdrawn": { "by": by, "at": "2026-10-23T10:00:05Z" },
+            }))
+            .unwrap()
+        };
+        assert_eq!(withdrawn_by_another(&sub("operator")), Some("operator"));
+        assert_eq!(withdrawn_by_another(&sub("planner")), Some("planner"));
+        assert_eq!(withdrawn_by_another(&sub("person")), None);
+    }
+
+    /// pull-request-status, blamed: a submit's pull request is told it is
+    /// a draft until the next submit or a ready mark; one opened by hand
+    /// keeps today's words.
+    #[test]
+    fn the_comment_on_a_pull_request_sent_back() {
+        let names = BTreeMap::from([(4, "#4".to_string())]);
+        let failed = Outcome::Failed {
+            tasks: vec!["sh check.sh".into()],
+            logs: Vec::new(),
+            combination: Rev::new("c1c1c1c1"),
+            ids: vec![4],
+            timed_out: false,
+        };
+        let conflict = Outcome::Conflict {
+            paths: vec!["plan.py".into()],
+            with: vec!["#3".into()],
+        };
+        for o in [&failed, &conflict] {
+            let mine = comment("main", o, &names, Some("unit/review")).unwrap();
+            assert!(
+                mine.contains(
+                    "sluice marked it a draft. The next `sluice submit main` from \
+                     `unit/review`, or marking it ready for review, submits it again."
+                ),
+                "{mine}"
+            );
+            assert!(
+                !mine.contains("Push a fix") && !mine.contains("and push"),
+                "{mine}"
+            );
+            let by_hand = comment("main", o, &names, None).unwrap();
+            assert!(
+                by_hand.contains("draft and then ready for review to submit the same commits"),
+                "{by_hand}"
+            );
+            assert!(!by_hand.contains("sluice marked it a draft"), "{by_hand}");
+        }
+        assert!(comment(
+            "main",
+            &Outcome::Landed {
+                landed_as: Rev::new("l1")
+            },
+            &names,
+            Some("unit/review")
+        )
+        .is_none());
+    }
+
+    /// A submit's ready mark: a draft first unless it is one, read back,
+    /// and made again the next second while it reads before the second
+    /// it counts from, three times at most, then refused naming both
+    /// times.
+    #[test]
+    fn a_submits_ready_mark_is_read_back() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let f = FileForge::new(&dir.join("github.json"), &repo);
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let now = || Utc::now().trunc_subsecs(0);
+        // Out of draft and nothing to count from: a draft, then ready.
+        mark_ready(&f, &repo, n, false, None).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 1);
+        assert!(!f.pull(&repo, n).unwrap().unwrap().draft);
+        // A draft already: ready, and read back at the second it counts
+        // from.
+        f.set_draft(n, true).unwrap();
+        mark_ready(&f, &repo, n, true, Some(now())).unwrap();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), 2);
+        // GitHub a second behind: made again the next second.
+        let next = now() + chrono::TimeDelta::seconds(1);
+        mark_ready(&f, &repo, n, false, Some(next)).unwrap();
+        let marks = f.readied(&repo, n).unwrap();
+        assert!(marks.len() >= 4, "{marks:?}");
+        assert!(marks.last().unwrap().trunc_subsecs(0) >= next, "{marks:?}");
+        // Never at or after it: refused after three tries.
+        let later = now() + chrono::TimeDelta::seconds(60);
+        let before = f.readied(&repo, n).unwrap().len();
+        let e = mark_ready(&f, &repo, n, false, Some(later))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(f.readied(&repo, n).unwrap().len(), before + 3);
+        let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert!(
+            e.contains(&format!("counts from {}", at(later)))
+                && e.contains("ready mark reads 20")
+                && e.contains("after 3 tries"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The second a submission left the queue: its withdrawal, blame or
+    /// conflict, whichever the log holds last for it.
+    #[test]
+    fn when_a_submission_left() {
+        use sluice_core::records::LogLine;
+        let line = |at: &str, event: Event| LogLine {
+            schema: sluice_core::records::LOG_SCHEMA.into(),
+            at: at.into(),
+            event,
+        };
+        let log = [
+            line(
+                "2026-10-23T10:00:00Z",
+                Event::Blamed {
+                    id: 1,
+                    combination: Rev::new("c"),
+                },
+            ),
+            line(
+                "2026-10-23T10:00:05Z",
+                Event::Withdrawn {
+                    id: 2,
+                    by: "unit/a".into(),
+                },
+            ),
+        ];
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        assert_eq!(removal(&log, 1), Some(at("2026-10-23T10:00:00Z")));
+        assert_eq!(removal(&log, 2), Some(at("2026-10-23T10:00:05Z")));
+        assert_eq!(removal(&log, 3), None);
+        // A ready mark counts from the second it left; one in the second
+        // it was submitted in is the act that submitted it.
+        let sub = |id: u64, submitted: &str| -> Submission {
+            serde_json::from_value(serde_json::json!({
+                "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": id, "branch": "main",
+                "head": "h", "from": { "agent": "unit/a", "worktree": "pull/4" },
+                "submitted": submitted, "after": [], "priority": 0, "attempt": 1,
+                "state": "failed",
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            acts_from(&log, &sub(2, "2026-10-23T09:59:00Z")),
+            at("2026-10-23T10:00:05Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(1, "2026-10-23T10:00:00Z")),
+            at("2026-10-23T10:00:01Z")
+        );
+        assert_eq!(
+            acts_from(&log, &sub(3, "2026-10-23T10:01:00Z")),
+            at("2026-10-23T10:01:01Z")
         );
     }
 }

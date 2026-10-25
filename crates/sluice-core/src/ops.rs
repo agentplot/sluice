@@ -3,9 +3,11 @@
 //! keeps, runs a check or moves a branch (1; rule core.4).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use sluice_seams::{Contested, Formed, Rev, Session};
+use serde::Serialize;
+use sluice_seams::{Contested, Formed, HostCopy, Rev, Session};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -40,6 +42,62 @@ pub struct Accepted {
     pub ahead: Vec<u64>,
     /// The earlier submission from the same place it withdrew (67).
     pub withdrew: Vec<u64>,
+    /// What the submitter should know of a submission taken: that the
+    /// runner could not be asked which required checks it keeps out of
+    /// CI, and why (ADR 0050).
+    pub warnings: Vec<String>,
+    /// 124: the worktree's head, this host's copy of a branch sluice lands
+    /// on, where it differs from the remote's revision submitted.
+    pub copy: Option<CopyDiffers>,
+}
+
+/// 124: the head a session submits, and how the worktree's head differs
+/// from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmittedHead {
+    pub head: Rev,
+    /// The head is the remote's revision of a branch sluice lands on: the
+    /// submit pushes nothing to it (1).
+    pub from_remote: bool,
+    pub copy: Option<CopyDiffers>,
+}
+
+/// 124: a worktree on a branch sluice lands on, kept on a remote, whose
+/// head, this host's copy of the branch, differs from the remote's
+/// revision of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CopyDiffers {
+    pub branch: String,
+    /// The worktree's head: this host's copy.
+    pub copy: Rev,
+    /// The remote the branch's policy names.
+    pub remote: String,
+    /// The remote's revision of the branch, which is submitted.
+    pub at: Rev,
+    pub how: CopyHow,
+}
+
+/// How a host's copy stands to the remote's revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyHow {
+    /// The remote's revision holds the copy.
+    Behind,
+    /// The copy holds the remote's revision.
+    Ahead,
+    /// Neither holds the other.
+    Apart,
+}
+
+impl CopyHow {
+    /// How the copy stands to the remote's revision, as a submit says it.
+    pub fn words(self) -> &'static str {
+        match self {
+            CopyHow::Behind => "behind",
+            CopyHow::Ahead => "ahead of",
+            CopyHow::Apart => "apart from",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +115,22 @@ pub enum SubmitRefusal {
     NoHead(String),
     /// 125: a group names this place already, as the place given.
     NamedTwice(String),
+    /// ADR 0050: the branch's gate requires checks the runner, in the
+    /// submitting worktree, keeps out of CI, so the branch cannot pass.
+    KeptOut(Vec<KeptOut>),
+}
+
+/// ADR 0050: a check the branch's gate requires that the runner keeps out
+/// of CI in the submitting worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptOut {
+    /// The task, as the runner names it.
+    pub task: String,
+    /// The required entry that names it: the task, or a tag it carries.
+    pub entry: String,
+    /// The line of `.config/sluice.toml`, at the branch's revision, the
+    /// entry is written on.
+    pub line: usize,
 }
 
 /// Who asks to change a submission (48, 47b; actors table).
@@ -155,6 +229,15 @@ pub struct Status {
     /// 80: the remote the branch's state could not be read from just now,
     /// so what is shown is what was last fetched from it.
     pub stale: Option<String>,
+    /// 123: the branch's checkouts whose release failed, still tried or
+    /// held.
+    pub failed_releases: Vec<crate::records::FailedRelease>,
+    /// 121: the branch was last read at a revision lacking its last
+    /// landing, and nothing is formed or landed on it.
+    pub held: Option<crate::records::BranchHold>,
+    /// 124, S64: this host's copy of the branch, while a round could not
+    /// level it to the landing.
+    pub copy: Option<crate::records::CopyBehind>,
 }
 
 impl Status {
@@ -171,6 +254,55 @@ impl Status {
 }
 
 impl Sluice<'_> {
+    /// 124, 1: the head `session` submits. From a worktree that has checked
+    /// out a branch sluice lands on, kept on a remote, it is the remote's
+    /// revision of that branch, never the worktree's head, which is this
+    /// host's copy; where the two differ, it says how. From any other
+    /// worktree, the session's head. It reads, and writes nothing (rule
+    /// core.4).
+    pub fn submitted_head(&self, session: &Session) -> Result<SubmittedHead> {
+        let own = SubmittedHead {
+            head: session.head.clone(),
+            from_remote: false,
+            copy: None,
+        };
+        let branch = &session.from.worktree;
+        // A name that is no branch, as a pull request's `pull/<n>`, reads
+        // none.
+        let Some(at) = self.seams.branch.read(branch)? else {
+            return Ok(own);
+        };
+        let Some(rules) = self.rules_at(branch, &at)? else {
+            return Ok(own);
+        };
+        if self.seams.branch.copy(branch)? == HostCopy::Itself {
+            return Ok(own);
+        }
+        let copy = (session.head != at)
+            .then(|| -> Result<CopyDiffers> {
+                let how = if self.seams.branch.contains(&at, &session.head)? {
+                    CopyHow::Behind
+                } else if self.seams.branch.contains(&session.head, &at)? {
+                    CopyHow::Ahead
+                } else {
+                    CopyHow::Apart
+                };
+                Ok(CopyDiffers {
+                    branch: branch.clone(),
+                    copy: session.head.clone(),
+                    remote: rules.remote.clone().unwrap_or_default(),
+                    at: at.clone(),
+                    how,
+                })
+            })
+            .transpose()?;
+        Ok(SubmittedHead {
+            head: at,
+            from_remote: true,
+            copy,
+        })
+    }
+
     /// 47, 1, 2, 3, 67: admit a head to a branch's queue, and nothing
     /// more: a group of one.
     pub fn submit(&self, req: &SubmitRequest) -> Result<Result<Accepted, SubmitRefusal>> {
@@ -248,10 +380,29 @@ impl Sluice<'_> {
         let (Some(tip), true) = (tip, refused.is_empty()) else {
             return Ok(Err(refused));
         };
+        // ADR 0050: each place's runner is asked which of the gate's
+        // required checks it keeps out of CI; a place that keeps one out is
+        // refused, and the act with it.
+        let mut warnings = Vec::new();
+        for (worktree, session) in req.worktrees.iter().zip(&sessions) {
+            match self.check_kept_out(session, &req.branch, &tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(refused));
+        }
+        // 124: from a worktree on a branch sluice lands on, the remote's
+        // revision of it.
+        let submitted = sessions
+            .iter()
+            .map(|s| self.submitted_head(s))
+            .collect::<Result<Vec<_>>>()?;
         // 82: every head is fetchable by every host before any is
         // submitted.
-        for session in &sessions {
-            self.seams.state.publish_head(&req.branch, &session.head)?;
+        for s in &submitted {
+            self.seams.state.publish_head(&req.branch, &s.head)?;
         }
         let mut ids = Vec::new();
         for _ in &sessions {
@@ -261,11 +412,16 @@ impl Sluice<'_> {
         let _lock = self.seams.state.wait_lock(&req.branch)?;
         let accepted = self.update(&req.branch, |l| {
             let mut accepted = Vec::new();
-            for (&id, session) in ids.iter().zip(&sessions) {
-                accepted.push(admit(l, req, id, session, &now));
+            for ((&id, session), head) in ids.iter().zip(&sessions).zip(&submitted) {
+                accepted.push(admit(l, req, id, session, head, &now));
             }
             Ok(accepted)
         })?;
+        let accepted = accepted
+            .into_iter()
+            .zip(warnings)
+            .map(|(a, warnings)| Accepted { warnings, ..a })
+            .collect();
         // 111: work on a branch whose records are on its remote may be
         // taken by no instance now running: the first pool is asked to
         // advance the branch, once for the act. A wake that is lost delays
@@ -289,6 +445,79 @@ impl Sluice<'_> {
             }
         }
         Ok(Ok(accepted))
+    }
+
+    /// ADR 0050: refuse `session`'s submission to `branch`, whose revision
+    /// is `tip`, when its gate requires checks the runner keeps out of CI
+    /// in the session's worktree; otherwise the warnings to take it with.
+    /// A session with no worktree on this host has nothing to ask. Writes
+    /// nothing.
+    pub fn check_kept_out(
+        &self,
+        session: &Session,
+        branch: &str,
+        tip: &Rev,
+    ) -> Result<std::result::Result<Vec<String>, SubmitRefusal>> {
+        let Some(path) = &session.from.path else {
+            return Ok(Ok(Vec::new()));
+        };
+        Ok(match self.kept_out_in(branch, tip, Path::new(path))? {
+            Ok(kept) if !kept.is_empty() => Err(SubmitRefusal::KeptOut(kept)),
+            Ok(_) => Ok(Vec::new()),
+            Err(why) => Ok(vec![why]),
+        })
+    }
+
+    /// ADR 0050: the checks `branch`'s gate at `tip` requires that the
+    /// runner keeps out of CI in the worktree at `worktree`, which holds
+    /// the head to submit (2). The gate and its lines are the branch's
+    /// (56); only the runner's own setting is the worktree's. `Err` says
+    /// why the runner could not be asked, for a warning: the submission
+    /// is taken unchecked. Writes nothing.
+    pub fn kept_out_in(
+        &self,
+        branch: &str,
+        tip: &Rev,
+        worktree: &Path,
+    ) -> Result<std::result::Result<Vec<KeptOut>, String>> {
+        let Some(policy) = self.policy_at(tip)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        let Some(rules) = policy.rules_for(branch)? else {
+            return Ok(Ok(Vec::new()));
+        };
+        if rules.required.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        let kept = match self
+            .seams
+            .tests
+            .kept_out(worktree, &policy.tests, &rules.required)
+        {
+            Ok(k) => k,
+            Err(e) => {
+                return Ok(Err(format!(
+                    "could not check which of {branch}'s required checks the task runner in \
+                     this worktree keeps out of CI, so the submission was taken unchecked: {e:#}"
+                )))
+            }
+        };
+        Ok(Ok(kept
+            .into_iter()
+            .map(|k| {
+                let line = rules
+                    .required
+                    .iter()
+                    .position(|r| *r == k.entry)
+                    .and_then(|i| rules.required_lines.get(i).copied())
+                    .unwrap_or(0);
+                KeptOut {
+                    task: k.task,
+                    entry: k.entry,
+                    line,
+                }
+            })
+            .collect()))
     }
 
     /// 64, 65, 47a: the conflicts a place's head would meet if submitted
@@ -554,6 +783,38 @@ impl Sluice<'_> {
         self.finished_sub(&branch, id)
     }
 
+    /// 122: the commit submission `id`'s work is on its branch as, if it
+    /// is: its record's `landed_as` once it landed; or, while the records
+    /// hold the landing that lands it, its commit there once the branch is
+    /// at the landing's revision or past it, as a round confirms a landing
+    /// (24). Read with no step running; it writes nothing (rule core.4).
+    pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
+        let Some(branch) = self.find(id)? else {
+            return Ok(None);
+        };
+        let line = self.read_line(&branch)?;
+        let Some(sub) = line.subs.get(&id) else {
+            let finished = self.finished_sub(&branch, id)?;
+            return Ok(finished
+                .filter(|s| s.state == State::Landed)
+                .and_then(|s| s.landed_as));
+        };
+        if sub.state == State::Landed {
+            return Ok(sub.landed_as.clone());
+        }
+        let Some(intent) = &line.doc.landing else {
+            return Ok(None);
+        };
+        let Some(commit) = intent.commits.iter().find(|c| c.id == id) else {
+            return Ok(None);
+        };
+        let moved = match self.seams.branch.read(&branch)? {
+            Some(at) => at == intent.to || self.seams.branch.contains(&at, &intent.to)?,
+            None => false,
+        };
+        Ok(moved.then(|| commit.commit.clone()))
+    }
+
     /// Design D10: the submission that `old`, a submission of this host's
     /// own records, became when the branch's records moved to its remote.
     pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {
@@ -717,7 +978,10 @@ impl Sluice<'_> {
                 .count(),
             window: line.doc.window,
             parallel,
+            held: line.doc.held.clone(),
+            copy: line.doc.copies.get(&self.peer.name).cloned(),
             finished: line.finished.len(),
+            failed_releases: line.doc.failed_releases.clone(),
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch),
@@ -753,8 +1017,16 @@ pub fn kept_out_warning(branch: &str, task: &str) -> String {
 }
 
 /// 47, 67: withdraw the earlier submissions from `session`'s place and
-/// queue its head as submission `id`, in `l`.
-fn admit(l: &mut Line, req: &GroupRequest, id: u64, session: &Session, now: &str) -> Accepted {
+/// queue the head it submits, `submitted` (124), as submission `id`, in
+/// `l`.
+fn admit(
+    l: &mut Line,
+    req: &GroupRequest,
+    id: u64,
+    session: &Session,
+    submitted: &SubmittedHead,
+    now: &str,
+) -> Accepted {
     let mine: Vec<u64> = l
         .subs
         .values()
@@ -795,7 +1067,7 @@ fn admit(l: &mut Line, req: &GroupRequest, id: u64, session: &Session, now: &str
             schema: SUBMISSION_SCHEMA.into(),
             id,
             branch: req.branch.clone(),
-            head: session.head.clone(),
+            head: submitted.head.clone(),
             from: session.from.clone(),
             submitted: now.into(),
             after: req.after.clone(),
@@ -817,13 +1089,15 @@ fn admit(l: &mut Line, req: &GroupRequest, id: u64, session: &Session, now: &str
         now,
         Event::Submitted {
             id,
-            head: session.head.clone(),
+            head: submitted.head.clone(),
         },
     );
     Accepted {
         id,
         ahead,
         withdrew,
+        warnings: Vec::new(),
+        copy: submitted.copy.clone(),
     }
 }
 
@@ -841,10 +1115,10 @@ mod tests {
 
     use chrono::{DateTime, TimeZone, Utc};
     use sluice_seams::{
-        Adopted, Branch, Changes, CheckedOut, Checkout, Driver, Guard, HostRun, LandingCommit,
-        LastResult, Moved, Notification, Place, Platform, PreviewPlace, Progress, ReleasePolicy,
-        Released, RunHandle, RunReport, RunRequest, Running, SessionPlace, Settings, Snapshot,
-        State as Records, Submitter, TaskLog, TaskProgress, Tests, Written, FINISHED,
+        Adopted, Branch, Changes, CheckedOut, Checkout, Driver, GoneRelease, Guard, HostRun,
+        LandingCommit, LastResult, Moved, Notification, Place, Platform, PreviewPlace, Progress,
+        ReleasePolicy, Released, RunHandle, RunReport, RunRequest, Running, SessionPlace, Settings,
+        Snapshot, State as Records, Submitter, TaskLog, TaskProgress, Tests, Written, FINISHED,
     };
 
     use super::*;
@@ -943,6 +1217,14 @@ mod tests {
     impl Branch for Host {
         fn read(&self, branch: &str) -> Result<Option<Rev>> {
             Ok((branch == BRANCH).then(|| Rev::new("tip")))
+        }
+
+        fn copy(&self, _: &str) -> Result<HostCopy> {
+            Ok(HostCopy::Itself)
+        }
+
+        fn level(&self, _: &str, _: Option<&Rev>, _: &Rev) -> Result<Moved> {
+            unreachable!("a submit levels no copy")
         }
 
         fn read_file(&self, _: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
@@ -1078,6 +1360,18 @@ mod tests {
             unreachable!("a submit releases no place")
         }
 
+        fn gone(&self, _: &str) -> Result<bool> {
+            unreachable!("a submit reads no place")
+        }
+
+        fn free(&self, _: &str) -> Result<()> {
+            unreachable!("a submit releases no place")
+        }
+
+        fn release_gone(&self, _: &str) -> Result<GoneRelease> {
+            unreachable!("a submit releases no place")
+        }
+
         fn made(&self) -> Result<Vec<String>> {
             unreachable!("a submit reads no place")
         }
@@ -1130,7 +1424,7 @@ mod tests {
             unreachable!("a submit previews nothing")
         }
 
-        fn release_preview(&self, _: &str, _: Option<&str>) -> Result<bool> {
+        fn release_preview(&self, _: &str, _: Option<&str>, _: u32) -> Result<bool> {
             unreachable!("a submit previews nothing")
         }
     }

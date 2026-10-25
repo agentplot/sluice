@@ -20,7 +20,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::Value;
-use sluice_seams::{NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState};
+use sluice_seams::{
+    KeptOutTask, NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState,
+};
 
 use super::checks::{not_run_reason, Context, Plan};
 
@@ -91,10 +93,10 @@ impl Moon {
         let targets: Vec<String> = wanted.into_iter().collect();
         // ADR 0044: moon runs in its CI mode, which runs no task the
         // repository keeps out of CI; each such target reads missing.
-        let kept_out: Vec<String> = targets
-            .iter()
-            .filter(|t| tasks.get(*t).is_some_and(|task| !task.in_ci))
-            .cloned()
+        let kept_out: Vec<String> = kept_out(&tasks, &request.required)
+            .into_iter()
+            .map(|k| k.task)
+            .filter(|t| targets.contains(t))
             .collect();
         // A report left in the place is not this run's.
         match std::fs::remove_file(place.join(REPORT)) {
@@ -136,6 +138,16 @@ impl Moon {
             stamps: vec![".last-used"],
             kept_out,
         })
+    }
+
+    /// ADR 0050: which of the required checks moon keeps out of its CI
+    /// mode in the place, read as `plan` reads them, before any run: moon
+    /// installed and checked, then `moon query tasks`. Runs no task.
+    pub fn kept_out(&self, cx: &Context) -> Result<Vec<KeptOutTask>> {
+        self.install(cx)?;
+        self.check_version(cx)?;
+        let tasks = self.tasks(cx, &[])?;
+        Ok(kept_out(&tasks, &cx.request.required))
     }
 
     /// What a task printed, as moon keeps it in the place: `stdout.log`
@@ -370,6 +382,29 @@ impl Moon {
         }
         Ok(tasks)
     }
+}
+
+/// ADR 0044, 0050: the tasks `required` names, by name or through a tag
+/// they carry, that moon keeps out of its CI mode, each with the entry
+/// that names it: its own name before the first tag. `plan` and
+/// `Moon::kept_out` both read them so, so the two cannot differ.
+fn kept_out(tasks: &BTreeMap<String, Task>, required: &[String]) -> Vec<KeptOutTask> {
+    tasks
+        .iter()
+        .filter(|(_, task)| !task.in_ci)
+        .filter_map(|(target, task)| {
+            let entry = required.iter().find(|r| *r == target).or_else(|| {
+                required.iter().find(|r| {
+                    r.strip_prefix('#')
+                        .is_some_and(|tag| task.tags.iter().any(|t| t == tag))
+                })
+            })?;
+            Some(KeptOutTask {
+                task: target.clone(),
+                entry: entry.clone(),
+            })
+        })
+        .collect()
 }
 
 /// `moon 2.6.1` → `(2, 6)`.
@@ -754,6 +789,37 @@ pub fn blob_in(place: &Path, key: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 0050: a task kept out of CI is named with the entry that names
+    /// it, its own name before a tag; one in CI, or not required, is not.
+    #[test]
+    fn a_required_task_kept_out_of_ci_is_named_with_its_entry() {
+        let task = |tags: &[&str], in_ci| Task {
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            in_ci,
+        };
+        let tasks = BTreeMap::from([
+            ("app:serve".to_string(), task(&["check-fast"], false)),
+            ("app:test".to_string(), task(&["check-fast"], true)),
+            ("root:integration".to_string(), task(&["check-fast"], false)),
+            ("root:screenshots".to_string(), task(&[], false)),
+        ]);
+        let required = ["#check-fast".to_string(), "root:integration".to_string()];
+        let kept: Vec<(String, String)> = kept_out(&tasks, &required)
+            .into_iter()
+            .map(|k| (k.task, k.entry))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("app:serve".to_string(), "#check-fast".to_string()),
+                (
+                    "root:integration".to_string(),
+                    "root:integration".to_string()
+                ),
+            ]
+        );
+    }
 
     mod keys {
         use super::super::*;

@@ -7,7 +7,7 @@
 mod support;
 
 use sluice::profiles::local_refs::LocalRefs;
-use sluice_seams::{Branch, Formed, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 use support::Repo;
 
 fn rev(s: String) -> Rev {
@@ -43,6 +43,19 @@ fn read_existing_missing_and_packed() {
     repo.git(&["pack-refs", "--all"]);
     assert!(!repo.dir().join(".git/refs/heads/bolt/x").exists());
     assert_eq!(refs(&repo).read("bolt/x").unwrap(), Some(rev(head)));
+}
+
+/// 124: a branch in this host's refs is its own copy, and a levelling of
+/// it is refused, moving nothing.
+#[test]
+fn a_branch_in_this_hosts_refs_has_no_copy_apart() {
+    let repo = Repo::new("itself");
+    let head = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let base = rev(repo.rev("main"));
+    let r = refs(&repo);
+    assert_eq!(r.copy("bolt/x").unwrap(), HostCopy::Itself);
+    assert!(r.level("bolt/x", Some(&head), &base).is_err());
+    assert_eq!(repo.rev("bolt/x"), head.as_str());
 }
 
 /// 2, 43: a clean candidate is git's merge, a commit of the two.
@@ -312,6 +325,19 @@ fn contains_answers_ancestry() {
     assert!(r.contains(&b, &b).unwrap());
     assert!(!r.contains(&a, &b).unwrap());
     assert!(!r.contains(&b, &other).unwrap());
+}
+
+/// 121: a revision that is no commit on this host, as another host's
+/// landing a remote has since lost, is contained in nothing read here.
+#[test]
+fn contains_answers_no_for_a_commit_this_host_lacks() {
+    let repo = Repo::new("contains-unknown");
+    let r = refs(&repo);
+    let a = rev(repo.branch("bolt/x", "main", &[("a", Some("1"))]));
+    let unknown = Rev::new("0123456789abcdef0123456789abcdef01234567");
+    assert!(!r.contains(&a, &unknown).unwrap());
+    let blob = rev(repo.git(&["rev-parse", "bolt/x:a"]).trim().to_string());
+    assert!(!r.contains(&a, &blob).unwrap());
 }
 
 /// The common directory is the same from a linked worktree.

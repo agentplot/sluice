@@ -1080,12 +1080,14 @@ pub fn a_last_result_decides_nothing(h: &impl Rig) {
     }
 }
 
-/// Session-runs-1 clause 97: a session's place whose worktree no longer
-/// exists is no session's, and the next round on the host releases it
-/// and logs the release where the branch's other releases are; a place
-/// whose worktree exists stays, however long since its last run, and is
-/// listed with the time of that run (25, 95; core.16).
-pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
+/// Session-runs-1 clause 97, 123: a session's place whose worktree no
+/// longer exists is no session's, and the next round on the host runs the
+/// release its runs stored, once, frees it and logs it `gone`, with its
+/// release run, where the branch's releases are; no round runs its release
+/// or names it again. A place whose worktree exists stays, however long
+/// since its last run, and is listed with the time of that run (25, 95;
+/// core.16).
+pub fn a_removed_worktrees_place_is_freed_by_the_next_round(h: &impl Rig) {
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
     h.session_run("unit/a");
@@ -1099,19 +1101,80 @@ pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
     );
     assert!(held.iter().all(|p| p.branch == BRANCH), "{held:?}");
 
-    h.remove_worktree("unit/a");
+    let (gone, kept) = removed(h, "unit/a");
+    let named = || named_gone(h, &gone);
+    assert_eq!(named(), 1, "{:?}", h.events());
+    let ran = h.events().into_iter().find_map(|e| match e {
+        Event::Gone {
+            place, ran, failed, ..
+        } if place == gone.name => Some((ran, failed)),
+        _ => None,
+    });
+    assert_eq!(ran, Some((true, None)), "{:?}", h.events());
+    // Its stored release ran once; no release was built for it.
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+    assert_eq!(h.releases_of(&gone.name), 0);
+
+    // Rounds after leave a place whose worktree exists alone, and never
+    // run or name the one freed again.
+    h.step();
+    h.step();
+    assert_eq!(s.session_places().expect("lists"), vec![kept]);
+    assert_eq!(named(), 1);
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+}
+
+/// 123: a removed worktree whose stored release fails is freed all the
+/// same and logged `gone` with what its release printed; its release is
+/// never run again, and no round counts it as a failed release.
+pub fn a_removed_worktrees_failing_release_is_freed_and_never_run_again(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    h.session_run("unit/a");
+    h.session_run("unit/b");
+    h.release_fails(true);
+    let (gone, kept) = removed(h, "unit/a");
+    assert_eq!(named_gone(h, &gone), 1, "{:?}", h.events());
+    let failed = h.events().into_iter().find_map(|e| match e {
+        Event::Gone {
+            place, ran, failed, ..
+        } if place == gone.name => Some((ran, failed)),
+        _ => None,
+    });
+    let Some((true, Some(failed))) = failed else {
+        panic!("{:?}", h.events());
+    };
+    assert!(failed.contains(RELEASE_FAILS), "{failed}");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&gone.name), 1);
+    assert_eq!(h.sluice().session_places().expect("lists"), vec![kept]);
+    assert!(
+        !h.events()
+            .iter()
+            .any(|e| matches!(e, Event::ReleaseFailed { place, .. } if *place == gone.name)),
+        "{:?}",
+        h.events()
+    );
+}
+
+/// The worktree `worktree`, whose session ran, is removed by hand, and
+/// rounds step until its place is freed: that place as listed while gone,
+/// and the place left, the other session's.
+fn removed(h: &impl Rig, worktree: &str) -> (SessionPlace, SessionPlace) {
+    let s = h.sluice();
+    h.remove_worktree(worktree);
     let listed = s.session_places().expect("the place seam lists");
     let gone: Vec<_> = listed.iter().filter(|p| p.gone).cloned().collect();
     assert_eq!(gone.len(), 1, "{listed:?}");
-    let gone = gone[0].clone();
     let kept = listed
         .iter()
         .find(|p| !p.gone)
         .cloned()
-        .expect("unit/b's place is listed");
-
-    // A rig whose lock a starting child holds for a moment leaves the
-    // release to the round after; on the fakes the first round releases.
+        .expect("the other session's place is listed");
+    // A rig whose lock a starting child holds for a moment leaves it to
+    // the round after; on the fakes the first round frees it.
     for _ in 0..50 {
         h.step();
         if s.session_places().expect("lists").iter().all(|p| !p.gone) {
@@ -1119,21 +1182,26 @@ pub fn a_removed_worktrees_place_is_released_by_the_next_round(h: &impl Rig) {
         }
     }
     let left = s.session_places().expect("the place seam lists");
-    assert_eq!(left, vec![kept.clone()], "only unit/b's place is left");
-    let worktree = gone.worktree.to_string_lossy().into_owned();
-    assert!(
-        h.events().iter().any(|e| matches!(
-            e,
-            Event::Released { place, worktree: Some(w) } if *place == gone.name && *w == worktree
-        )),
-        "{:?}",
-        h.events()
-    );
+    assert_eq!(left, vec![kept.clone()], "only the other place is left");
+    (gone[0].clone(), kept)
+}
 
-    // Rounds after leave a place whose worktree exists alone.
-    h.step();
-    h.step();
-    assert_eq!(s.session_places().expect("lists"), vec![kept]);
+/// How many lines of the log name the session's place `gone`: as gone,
+/// with its worktree, or as released or failed.
+fn named_gone(h: &impl Rig, gone: &SessionPlace) -> usize {
+    let worktree = gone.worktree.to_string_lossy().into_owned();
+    h.events()
+        .into_iter()
+        .filter(|e| match e {
+            Event::Gone {
+                place, worktree: w, ..
+            } => *place == gone.name && w.as_deref() == Some(worktree.as_str()),
+            Event::Released { place, .. } | Event::ReleaseFailed { place, .. } => {
+                *place == gone.name
+            }
+            _ => false,
+        })
+        .count()
 }
 
 /// A preview of `rev` through the rig's branch, its command started and
@@ -1247,4 +1315,137 @@ pub fn s32_asking_again_gives_back_the_same_preview(h: &impl Rig) {
     h.step();
     assert_eq!(s.preview_of(&rev).unwrap(), Some(up.clone()));
     assert!(s.release_preview(&up.name).unwrap());
+}
+
+/// What a failing release command prints, in the scenarios of 123.
+pub const RELEASE_FAILS: &str = "usage: scripts/preview up";
+
+/// Step until `done`, a round at a time, as a waiting submit does: at once
+/// on the fakes, and between a rig's runs on the real profiles.
+fn step_until(h: &impl Rig, what: &str, done: impl Fn() -> bool) {
+    for _ in 0..3000 {
+        if done() {
+            return;
+        }
+        h.step();
+        if !done() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    panic!("{what} never came");
+}
+
+/// A submission from `unit/a` landed while every release fails; its
+/// checkout's name.
+fn landed_with_its_release_failing(h: &impl Rig) -> String {
+    h.release_fails(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    step_until(h, "#1's landing", || h.sub(one).state == State::Landed);
+    h.made_places()[0].clone()
+}
+
+/// Each failed try of `place`'s release the log holds: its tries and
+/// whether it held the place.
+fn failed_tries(h: &impl Rig, place: &str) -> Vec<(u32, bool)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::ReleaseFailed {
+                place: p,
+                failed,
+                tries,
+                held,
+            } if p == place => {
+                assert!(failed.contains(RELEASE_FAILS), "{failed}");
+                Some((tries, held))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// 123, 122: a combination's checkout whose release command fails stays,
+/// and the branch's state names it with what failed and one try; the log
+/// holds `release_failed` naming it, and its submission landed all the
+/// same.
+pub fn a_failed_release_is_held_with_what_failed(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    assert!(h.live_places().contains(&place), "{place} was removed");
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].place, place);
+    assert!(held[0].failed.contains(RELEASE_FAILS), "{held:?}");
+    assert_eq!((held[0].tries, held[0].stopped), (1, false));
+    assert_eq!(failed_tries(h, &place), [(1, false)]);
+}
+
+/// 123: with no `release_retries`, a release that fails on every try is
+/// run four times in all, one a round, held on the fourth, and run no
+/// more by the rounds after.
+pub fn a_failed_release_is_tried_a_bounded_number_of_times(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    step_until(h, "the hold", || h.releases_of(&place) >= 4);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.releases_of(&place), 4);
+    assert_eq!(
+        failed_tries(h, &place),
+        [(1, false), (2, false), (3, false), (4, true)]
+    );
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!((held[0].tries, held[0].stopped), (4, true), "{held:?}");
+    assert!(h.live_places().contains(&place));
+}
+
+/// 123, 56: with `release_retries = 1`, a release that fails twice holds
+/// its checkout after the second failure, with what failed.
+pub fn a_failed_release_is_held_after_the_retries_its_branch_names(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    step_until(h, "the hold", || h.releases_of(&place) >= 2);
+    h.step();
+    assert_eq!(h.releases_of(&place), 2);
+    assert_eq!(failed_tries(h, &place), [(1, false), (2, true)]);
+}
+
+/// 123: a release that fails once and succeeds on the next round leaves
+/// no checkout and no failure in the branch's state, and the log holds
+/// `released` naming it.
+pub fn a_release_that_succeeds_on_a_retry_is_listed_no_more(h: &impl Rig) {
+    let place = landed_with_its_release_failing(h);
+    h.release_fails(false);
+    h.step();
+    assert!(!h.live_places().contains(&place), "{place} is left");
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+    let events = h.events();
+    let failed = events
+        .iter()
+        .position(|e| matches!(e, Event::ReleaseFailed { place: p, .. } if *p == place));
+    let released = events
+        .iter()
+        .position(|e| matches!(e, Event::Released { place: p, .. } if *p == place));
+    assert!(failed < released && failed.is_some(), "{events:?}");
+}
+
+/// 123, 122: a held checkout never holds its branch: the round that tries
+/// its release again starts a waiting submission's combination in a new
+/// checkout, and that submission lands when it passes.
+pub fn a_held_checkout_never_holds_its_branch(h: &impl Rig) {
+    let first = landed_with_its_release_failing(h);
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/b");
+    h.step();
+    assert_eq!(h.releases_of(&first), 2, "the round tried it again");
+    let made = h.made_places();
+    assert_eq!(made.len(), 2, "the round started #{two}: {made:?}");
+    assert_ne!(made[1], first);
+    step_until(h, "#2's landing", || h.sub(two).state == State::Landed);
+    assert!(h.live_places().contains(&first));
+    assert_eq!(h.tested().last(), Some(&vec![two]));
 }
