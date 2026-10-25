@@ -35,7 +35,74 @@ curl -fsSL https://github.com/agentplot/sluice/releases/latest/download/sluice-a
 Each way installs `sluice` and `wt-submit` (worktrunk runs it as `wt submit`).
 Check `~/.local/bin` is on `PATH`, then `sluice --version` again.
 
-## 2. Survey the repository
+## 2. A working copy per branch
+
+sluice is set up in a repository whose git directory stands apart from its
+working copies, one per branch, so every session works and submits from a
+working copy of its own (126). Before surveying or writing anything, check
+where you were asked:
+
+```sh
+git rev-parse --is-bare-repository                      # false
+git rev-parse --show-toplevel                           # the folder
+git rev-parse --path-format=absolute --git-common-dir   # <the folder>/.git
+git worktree list --porcelain | grep -c '^worktree '    # 1
+```
+
+When all four answer so, the folder is a plain clone, the repository's
+one and only working copy: offer the layout before anything else. When
+any differs, go on to step 3: in a worktree of a bare git directory the
+repository is in the layout already, and a clone that has worktrees of
+its own is the `worktrees` skill's to convert, when the user asks.
+
+1. Run the plan, which changes nothing:
+
+   ```sh
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan <the folder>
+   ```
+
+   When worktrunk is used, check its `worktree-path` template as the
+   `worktrees` skill's layout reference says, "worktrunk", as part of
+   the plan.
+2. Show it to the user in plain words, the costs first:
+   - each process the plan says holds the folder, by its command and id,
+     which must be stopped, or close the folder, and be started again
+     from `<the folder>/main`;
+   - every editor or app to close the folder in and reopen at `main/`:
+     an editor that only watches the folder shows in no listing;
+   - the Claude Code history kept under the folder's path, and the paths
+     it will be carried to;
+   - what stays under the old path: prompt recall, and the folder's trust
+     and permission answers, which Claude asks again once for `main/`;
+     sessions started in a subfolder keep their own, and
+     `claude --resume <session-id>` still finds them.
+
+   Then the layout: the git directory kept bare in the folder as
+   `<name>.git`, the working copy moved into `main/` on its branch with
+   its changes, and a folder per branch beside it.
+3. Ask one question: lay it out, or keep the plain clone. Write nothing
+   and commit nothing until the user answers.
+4. On "lay it out", run the conversion, naming this session so its own
+   transcript is left for `/cd`:
+
+   ```sh
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go <the folder> --session "${CLAUDE_SESSION_ID}"
+   ```
+
+   - Exit 1: it refused and moved nothing. Name what holds the folder, as
+     its output does, and wait for the user's word that it has let go
+     before running `go` again. Never move anything by hand.
+   - Exit 2: a step failed after the move began. Stop and show the user
+     its output: every file is still on disk and nothing was deleted (the
+     `worktrees` skill's repair reference).
+   - Exit 0: tell the user what it carried and what it left, then ask them
+     to type `/cd <the folder>/main`, which moves this session there. Go
+     on to step 3 in `main/`, never in the folder, which now holds the git
+     directory.
+5. On "keep the plain clone", go on to step 3 in the clone. Step 5's
+   commit records the choice.
+
+## 3. Survey the repository
 
 Find out what the repository already uses before writing anything:
 
@@ -52,7 +119,6 @@ Find out what the repository already uses before writing anything:
 | `git remote get-url origin` on github.com, and the target branch lives there | `remote = "origin"` ([profiles/remote-branches.md](references/profiles/remote-branches.md)) |
 | reviews or other systems' checks must pass before landing | pull requests ([profiles/pull-requests.md](references/profiles/pull-requests.md)) |
 | a stack a person should try after each landing | previews ([profiles/previews.md](references/profiles/previews.md)) |
-| a bare repo with worktrees, or none yet | the `worktrees` skill |
 
 Then ask the user, before writing anything:
 
@@ -74,7 +140,7 @@ each branch's `required` picks which. Under the command runner the one
 command runs in full on every gated branch, so a quick suite on `dev/*`
 and the full one on `main` need moon, whose tasks each branch names.
 
-## 3. Choose, per part
+## 4. Choose, per part
 
 | part | choices today | reference |
 |---|---|---|
@@ -130,7 +196,7 @@ Then choose, and tell the user why:
 - Leave `release_retries` unset. A checkout whose release command fails is
   tried three more times, one a round, then held for the user to release
   with `sluice release <checkout>`; it never holds the branch.
-- Set the host's `[runs] max` (step 5) to how many runs the host holds at
+- Set the host's `[runs] max` (step 6) to how many runs the host holds at
   once. It caps every branch of every repository on the host together,
   agents' `sluice exec` runs and previews too: every sluice on the host
   reads one count. With no `max`, a quarter of the cores sluice may use is
@@ -157,7 +223,7 @@ Complete starting points:
 [command-only](references/examples/command-only.sluice.toml).
 Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
 
-## 4. Write, read back and commit the policy
+## 5. Write, read back and commit the policy
 
 Write `.config/sluice.toml`. sluice reads it **from the branch it gates**,
 never from a submission, so it takes effect once it is committed on that
@@ -172,7 +238,7 @@ names a check for it or says it is meant to land untested.
 Then commit it the way the repository lands work today, before protecting
 the branch. That one change is the last one landed by hand.
 
-## 5. Protect the branch and set up the host
+## 6. Protect the branch and set up the host
 
 ```sh
 sluice protect        # git hook: only sluice moves a gated branch (submit, step and run install it too)
@@ -216,7 +282,7 @@ A bolt pattern with `remote = "origin"` needs no push by hand: `sluice branch
 create bolt/<b> --from main` makes each bolt there as the app, and its
 ruleset restricts creations and deletions as well as updates.
 
-## 6. Check it end to end
+## 7. Check it end to end
 
 1. Make a worktree on a new branch, commit a harmless change.
 2. `sluice submit --check <branch>` says no conflict.
