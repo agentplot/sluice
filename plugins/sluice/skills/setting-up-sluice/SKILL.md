@@ -369,8 +369,15 @@ For a branch on GitHub, do these in this order, or a step is refused:
 2. Add the branch's ruleset with the user's own account in its bypass list.
 3. Create and install the GitHub App, and name it in `[forge]`
    ([github-app](references/profiles/github-app.md)).
-4. Put the app in the bypass list, then remove every other entry.
-5. `sluice forge check <branch>`.
+4. For a branch with a `pull_requests` table, now that the policy holds
+   its conditions: propose removing the required approvals and status
+   checks from its ruleset, or its classic branch protection, and turning
+   GitHub's merge queue off. The conditions belong to the policy, read
+   from the branch so a pull request can't loosen them, and sluice is the
+   queue: GitHub's would land what sluice never tested. Make each change
+   only on the user's word.
+5. Put the app in the bypass list, then remove every other entry.
+6. `sluice forge check <branch>`.
 
 For more than one host or system, follow [peers](references/profiles/peers.md)'s
 "Set it up, in order": a signing key per host, `[signing]` in each host's
