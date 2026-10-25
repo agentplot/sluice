@@ -95,6 +95,41 @@ impl Context<'_> {
             .collect(),
         }
     }
+
+    /// The environment a command run by [`Context::argv`] starts in: `env`
+    /// as the toolchain's script leaves it once sourced, which may set
+    /// variables of the runner's own (devenv's `MOON_HOME`).
+    pub fn command_env(&self) -> Result<BTreeMap<String, String>> {
+        if self.toolchain.is_none() {
+            return Ok(self.env.clone());
+        }
+        let argv = self.argv(&["env", "-0"]);
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(&self.request.place.path)
+            .env_clear()
+            .envs(self.env)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("running {}", argv.join(" ")))?;
+        if !out.status.success() {
+            bail!(
+                "{} exited {}: {}",
+                argv.join(" "),
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(out
+            .stdout
+            .split(|b| *b == 0)
+            .filter_map(|entry| {
+                let entry = String::from_utf8_lossy(entry);
+                let (k, v) = entry.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect())
+    }
 }
 
 /// What a runner decided to run.
@@ -846,10 +881,11 @@ impl Tests for Checks {
         if let Some(argv) = &tool_argv {
             toolchain(argv, &request.place.path, &env, &script)?;
         }
+        let sourced = tool_argv.is_some().then_some(script.as_path());
         let cx = Context {
             request,
             env: &env,
-            toolchain: tool_argv.is_some().then_some(script.as_path()),
+            toolchain: sourced,
             jobs,
         };
         let not_run = not_run_exits(&request.tests)?;
@@ -936,9 +972,24 @@ impl Tests for Checks {
             &self.instance.caches
         };
         let env = if plan.cold { run_env(caches) } else { env };
-        // Design D8: where moon keeps this run's manifests, from what its
-        // command is given, as moon finds it when it starts.
-        let store = (runner == "moon").then(|| super::moon::store(&request.place.path, &env));
+        // Design D8 (C.2 moon, 35): where moon keeps this run's manifests,
+        // as moon finds it when it starts, from the environment its command
+        // starts in: the run's, cold or not, with the toolchain sourced.
+        let store = match runner.as_str() {
+            "moon" => {
+                let command = Context {
+                    request,
+                    env: &env,
+                    toolchain: sourced,
+                    jobs,
+                };
+                Some(super::moon::store(
+                    &request.place.path,
+                    &command.command_env()?,
+                ))
+            }
+            _ => None,
+        };
         let docker = request.limits.docker;
         let executor = match kind {
             Kind::Open => Enforced {

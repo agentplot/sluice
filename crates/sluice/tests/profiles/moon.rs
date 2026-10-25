@@ -8,7 +8,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use sluice::instance::{HostCache, Instance};
@@ -71,8 +71,14 @@ fn checks(repo: &Repo) -> Checks {
 
 /// The check profile of `repo` on a host that declares `caches`.
 fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
+    checks_in(&repo.dir().join(".git"), caches)
+}
+
+/// The check profile of the repository whose common directory is
+/// `common`, on a host that declares `caches`.
+fn checks_in(common: &Path, caches: Vec<HostCache>) -> Checks {
     Checks::new(
-        &repo.dir().join(".git"),
+        common,
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
         Instance {
             bound: 2,
@@ -85,7 +91,7 @@ fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
             caches,
         },
     )
-    .with_running(repo.dir().join(".git/host-running"))
+    .with_running(common.join("host-running"))
 }
 
 fn moon() -> Settings {
@@ -1153,4 +1159,60 @@ fn a_key_run_in_a_bare_repositorys_worktree_is_proven() {
         held[1].starts_with("plugins/toolchains/system-") && held[1].ends_with(".wasm"),
         "{held:?}"
     );
+}
+
+/// Design D8 (C.2 moon, 35): moon's home is read as the run's command
+/// starts in it, the toolchain sourced. On the fleet's layout, a toolchain
+/// that sets `MOON_HOME` and moon's shared worktree setting, as sluice's
+/// own devenv sets its home, has moon keep the run's manifests under that
+/// home, whatever home sluice's own process has; and the run's keys are
+/// proven reading them there.
+#[test]
+fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
+    let src = workspace("moon-toolchain-home-src");
+    let scratch = support::Scratch::new("moon-toolchain-home");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    assert_eq!(
+        tasks(&report),
+        [("alpha:test".into(), Outcome::Pass, false)]
+    );
+
+    let key = &report.tasks[0].hash;
+    let manifest = |root: &Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    assert!(
+        manifest(&home.join("cache/shared")).is_file(),
+        "the manifest under the toolchain's home"
+    );
+    assert!(
+        !manifest(&worktree.join(".moon/cache")).exists(),
+        "no manifest in the worktree"
+    );
+    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
 }
