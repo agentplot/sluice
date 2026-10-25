@@ -325,9 +325,9 @@ fn a_timed_out_submission_names_the_test_the_limit_ended() {
     assert_eq!(
         lines.last().copied(),
         Some(
-            "nothing was recorded for tests:t-batch-cards: if the host was slow, submit the \
-             same head again; if tests:t-batch-cards never ends, fix it in your worktree and \
-             submit again"
+            "nothing was recorded for tests:t-batch-cards: if the host was slow, the agent \
+             working in unit/batch-review submits the same head again; if tests:t-batch-cards \
+             never ends, it fixes it there and submits again"
         ),
         "{out}"
     );
@@ -516,8 +516,8 @@ fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused_with_exit_
             "refused: {BRANCH} requires plugin:test through #gate (.config/sluice.toml line 2), \
              which the task runner in this worktree keeps out of CI, so it is never run and \
              {BRANCH} cannot pass while it is required\n\
-             let it run in CI in this worktree, or drop it from {BRANCH}'s policy in the same \
-             submission that lets it run, and submit again\n"
+             the agent working in unit/a lets it run in CI there, or drops it from {BRANCH}'s \
+             policy in the same submission that lets it run, and submits again\n"
         )
     );
     assert!(f.world.published().is_empty());
