@@ -66,7 +66,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,10 +168,10 @@ struct ConfigForm {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CacheForm {
-    dir: String,
+    dir: Option<String>,
     socket: Option<String>,
     #[serde(default)]
-    env: BTreeMap<String, String>,
+    env: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -328,27 +328,59 @@ impl Instance {
     }
 }
 
-/// The host's `[[caches]]`, `~` expanded in each `dir` and `socket` (35).
+/// The host's `[[caches]]`, `~` expanded in each `dir` and `socket`;
+/// refused, naming the entry and the key, where sluice cannot honour one:
+/// a path that is neither absolute nor under `~/`, a value that is not a
+/// string, a variable sluice sets for a run itself, or one two entries set
+/// (35).
 fn caches(forms: Vec<toml::Value>, home: Option<&Path>) -> Result<Vec<HostCache>> {
     let mut out = Vec::new();
+    let mut set: BTreeMap<String, usize> = BTreeMap::new();
     for (i, form) in forms.into_iter().enumerate() {
         let which = format!("the {} [[caches]]", ordinal(i + 1));
-        let form: CacheForm = form.try_into().with_context(|| which.clone())?;
+        let form: CacheForm = form
+            .try_into()
+            .map_err(|e: toml::de::Error| anyhow!("{which}: {}", e.message().trim()))?;
         let path = |key: &str, p: &str| -> Result<PathBuf> {
             match (p.strip_prefix("~/"), home) {
                 (Some(rest), Some(home)) => Ok(home.join(rest)),
                 (Some(_), None) => bail!("{which} {key} {p}: no home directory to expand ~ in"),
-                (None, _) => Ok(PathBuf::from(p)),
+                (None, _) if Path::new(p).is_absolute() => Ok(PathBuf::from(p)),
+                (None, _) => {
+                    bail!("{which} {key} {p:?} must be an absolute path, or one under ~/")
+                }
             }
         };
+        let Some(dir) = &form.dir else {
+            bail!("{which} has no dir: the directory the cache keeps, outside every checkout");
+        };
+        let mut env = BTreeMap::new();
+        for (name, value) in form.env {
+            let toml::Value::String(value) = value else {
+                bail!(
+                    "{which} env {name} must be a string, not {}",
+                    value.type_str()
+                );
+            };
+            if crate::profiles::checks::sets_itself(&name) {
+                bail!("{which} env sets {name}, which sluice sets for every run itself");
+            }
+            if let Some(first) = set.insert(name.clone(), i) {
+                bail!(
+                    "{name} is set by both the {} and {which}: a variable has one value for every run",
+                    ordinal(first + 1)
+                );
+            }
+            env.insert(name, value);
+        }
         out.push(HostCache {
-            dir: path("dir", &form.dir)?,
+            dir: path("dir", dir)?,
             socket: form
                 .socket
                 .as_deref()
                 .map(|s| path("socket", s))
                 .transpose()?,
-            env: form.env,
+            env,
         });
     }
     Ok(out)
@@ -688,5 +720,61 @@ dir = "/caches/moon"
         assert_eq!(ordinal(2), "second");
         assert_eq!(ordinal(12), "12th");
         assert_eq!(ordinal(22), "22nd");
+    }
+
+    /// 35: an entry sluice cannot honour is refused, naming the entry by
+    /// its place and the key or the variable.
+    #[test]
+    fn a_cache_entry_sluice_cannot_honour_is_refused() {
+        let err = |text: &str| format!("{:#}", with(text, 4).unwrap_err());
+        let ok = "[[caches]]\ndir = \"/caches/a\"\n";
+        assert_eq!(
+            err(&format!("{ok}[[caches]]\nsocket = \"/caches/b.sock\"\n")),
+            "the second [[caches]] has no dir: the directory the cache keeps, outside every checkout"
+        );
+        let unknown = err("[[caches]]\ndir = \"/caches/a\"\npath = \"/caches/b\"\n");
+        assert!(
+            unknown.starts_with("the first [[caches]]: unknown field `path`"),
+            "{unknown}"
+        );
+        assert_eq!(
+            err("[[caches]]\ndir = \"cache\"\n"),
+            "the first [[caches]] dir \"cache\" must be an absolute path, or one under ~/"
+        );
+        assert_eq!(
+            err(&format!(
+                "{ok}[[caches]]\ndir = \"/caches/b\"\nsocket = \"b.sock\"\n"
+            )),
+            "the second [[caches]] socket \"b.sock\" must be an absolute path, or one under ~/"
+        );
+        assert_eq!(
+            err("[[caches]]\ndir = \"/caches/a\"\nenv = { SCCACHE_CACHE_SIZE = 10 }\n"),
+            "the first [[caches]] env SCCACHE_CACHE_SIZE must be a string, not integer"
+        );
+        for name in [
+            "TMPDIR",
+            "SLUICE_JOBS",
+            "PATH",
+            "HOME",
+            "LC_ALL",
+            "PROTO_HOME",
+        ] {
+            assert_eq!(
+                err(&format!(
+                    "[[caches]]\ndir = \"/caches/a\"\nenv = {{ {name} = \"x\" }}\n"
+                )),
+                format!(
+                    "the first [[caches]] env sets {name}, which sluice sets for every run itself"
+                )
+            );
+        }
+        assert_eq!(
+            err(
+                "[[caches]]\ndir = \"/caches/a\"\nenv = { RUSTC_WRAPPER = \"a\" }\n\
+                 [[caches]]\ndir = \"/caches/b\"\nenv = { RUSTC_WRAPPER = \"b\" }\n"
+            ),
+            "RUSTC_WRAPPER is set by both the first and the second [[caches]]: \
+             a variable has one value for every run"
+        );
     }
 }

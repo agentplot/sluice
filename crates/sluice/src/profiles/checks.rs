@@ -472,24 +472,33 @@ fn toolchain(
     Ok(())
 }
 
+/// What a check may need of sluice's own environment: paths, the user,
+/// the locale, the terminal, and the tool homes `PATH` points into.
+const KEEP: [&str; 10] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "TERM",
+    // A proto shim on PATH resolves its tool under its home.
+    "PROTO_HOME",
+    "MOON_HOME",
+];
+
+/// Whether sluice sets `name` for every run itself: what it keeps of its
+/// own environment, the locale's `LC_*` and its own `SLUICE_*`. A host's
+/// cache declares none of them, so none is silently replaced (35).
+pub fn sets_itself(name: &str) -> bool {
+    KEEP.contains(&name) || name.starts_with("LC_") || name.starts_with("SLUICE_")
+}
+
 /// The command's environment: what a check may need of sluice's own
-/// (paths, the user, the locale, the terminal, and the tool homes `PATH`
-/// points into), the place's paths, and nothing that names another place
-/// or tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
+/// (`KEEP`), the place's paths, and nothing that names another place or
+/// tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
 fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
-    const KEEP: [&str; 10] = [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "TMPDIR",
-        "LANG",
-        "TERM",
-        // A proto shim on PATH resolves its tool under its home.
-        "PROTO_HOME",
-        "MOON_HOME",
-    ];
     let mut env: BTreeMap<String, String> = std::env::vars()
         .filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_"))
         .collect();
