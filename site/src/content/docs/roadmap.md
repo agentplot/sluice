@@ -15,7 +15,7 @@ host, gated on every test tier in a sandbox.
 | Release binaries | Apple silicon | x86-64, ARM |
 | Sandboxed checks | ✓ Seatbelt | planned: bubblewrap, Landlock |
 | moon as the task runner, or one command | ✓ | ✓ |
-| A build cache a checkout starts from | ✓ | ✓ |
+| The host's shared caches, given to every run | ✓ | ✓ |
 | An agent's own test runs, under the host's bound | ✓ | ✓ |
 | Previews of what a branch landed, held until released | ✓ | ✓ |
 | Telemetry over OTLP, opt-in | ✓ | ✓ |

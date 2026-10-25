@@ -97,8 +97,6 @@ fn every_policy_key_is_named_in_the_setup_references() {
         "cold",
         "ports",
         "ports_from",
-        "key",
-        "paths",
     ] {
         keys.push(k.to_string());
     }

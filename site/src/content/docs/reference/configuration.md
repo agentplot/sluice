@@ -14,10 +14,6 @@ submission cannot loosen the rules it is tested under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 network = "localhost"
@@ -111,26 +107,18 @@ There is one way to make a checkout, so no key names it. An older
 `method = "git-worktree"` is still read; any other `method` is refused
 with the reason ([ADR 0013](/sluice/decisions/0013/)).
 
+A checkout holds its combination and nothing restored from another
+checkout, and saves nothing when it is released. What its tests build is
+shared through the host's [`[[caches]]`](#caches), which every run on
+the host is given. A cache table an older revision's `[checkout]` still
+declares is read as nothing, so a branch whose policy holds one is
+tested and lands as before. The caches an earlier sluice saved in `.git/sluice/.caches/`
+are removed when the next checkout is made.
+
 | key | values | meaning |
 |---|---|---|
 | `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. A preview gets a name for each as well, `SLUICE_NAME_WEB`. |
 | `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
-
-### `[[checkout.cache]]`
-
-What a new checkout may start with, the way a CI job restores a cache.
-
-| key | meaning |
-|---|---|
-| `key` | The files whose content keys the cache. |
-| `paths` | The ignored paths it holds. |
-
-A checkout starts with the cache of its combination's key, or else the
-one saved last; a checkout whose combination passed saves its `paths`
-under its key. sluice's own repository caches `target` keyed by
-`Cargo.lock` and `.prototools`: a test build that takes two and a half
-minutes cold takes under a second warm. A cache only spares work: it
-never decides a result.
 
 ## `[executor]`: what the tests may touch
 

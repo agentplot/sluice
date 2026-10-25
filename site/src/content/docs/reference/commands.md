@@ -174,13 +174,12 @@ recorded 2 results under their keys for 8d41b6c
 
 When the worktree holds exactly its head, with nothing modified, staged
 or untracked, each test's result is recorded under its key as an open
-run. A run that passed also saves the caches `[[checkout.cache]]`
-declares, as a passed combination's checkout does. The worktree keeps
-its own copy. A later submission's combination with the same key reads
-the result on a branch that trusts open runs, and replays the test when
-the policy declares the cache, the same condition as between
-combinations. A worktree holding anything more runs the same tests,
-records nothing, and says `not recorded: worktree is not clean`.
+run. A later submission's combination with the same key reads the
+result on a branch that trusts open runs. Its runner replays the test
+when the host's [`[[caches]]`](/sluice/reference/configuration/#caches)
+share the runner's cache among the host's worktrees, the same condition
+as between combinations. A worktree holding anything more runs the same
+tests, records nothing, and says `not recorded: worktree is not clean`.
 
 Before it runs, exec forecasts the head against the branch, as `sluice
 submit --check` does, and says when it would conflict: `would conflict:

@@ -3,10 +3,8 @@
 
 [tests]
 runner = "moon" # run only the required tasks a change affects
-
-[[checkout.cache]]
-key = ["bun.lock"]       # the files whose content keys the cache
-paths = ["node_modules"] # what a new checkout starts with
+# A warm build comes from the host's [[caches]] in
+# ~/.config/sluice/config.toml, never from this file.
 
 [branches.main]
 required = ["#test"]                 # every task tagged `test` in moon.yml

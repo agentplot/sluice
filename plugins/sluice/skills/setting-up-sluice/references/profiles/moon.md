@@ -52,8 +52,11 @@ trust = ["confined", "sandbox"]           # no "cache": every required task real
   shell's earlier run. Keep `"cache"` off branches whose gate must run for
   real.
 - With the cache off a branch's `trust`, every required task runs every time.
-  Declare `[[checkout.cache]]` for build outputs (`target`, `node_modules`) so
-  checkouts start warm; a cache only spares work and never decides a result.
+  For warm builds, declare the host's caches in the host's config
+  (`[[caches]]`, see the checkout reference): share moon's cache through its
+  shared worktree cache, never `MOON_CACHE_DIR`, which moves the run report
+  sluice reads out of the checkout. A cache only spares work and never
+  decides a result.
 - moon reads `MOON_*` from the environment; sluice gives moon the run's
   environment only, so set what tasks need through the toolchain.
 

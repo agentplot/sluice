@@ -19,20 +19,27 @@ on its first `sluice exec` and keeps them until `sluice release`.
 
 ## Caches
 
-```toml
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]   # files whose content keys the cache
-paths = ["target"]                    # ignored paths it holds
+A checkout starts from its revision alone and saves nothing when it is
+released; the policy declares no cache. A cache every build on the host
+shares, a compile server's or moon's shared worktree cache, is the host's:
+declare it in the host's config, which whoever keeps the host writes.
 
-[[checkout.cache]]
-key = ["bun.lock"]
-paths = ["node_modules"]
+```toml
+# ~/.config/sluice/config.toml
+[[caches]]
+dir = "~/.cache/sccache"                  # outside every checkout
+socket = "~/.cache/sccache/server.sock"   # the cache's server, if it has one
+env = { RUSTC_WRAPPER = "sccache", SCCACHE_DIR = "/Users/me/.cache/sccache" }
+
+[[caches]]
+dir = "~/.moon/cache/shared"
+env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true", MOON_EXPERIMENT_CAS_OUTPUTS_CACHE = "true" }
 ```
 
-A checkout starts with the cache of its key, or the one saved last; a
-checkout whose combination passed saves its paths under its key. sluice's
-own repository: a two-and-a-half-minute cold test build becomes under a
-second.
+Every run on the host gets each `env`, written as the agents' shells have
+it, and the sandbox opens each `dir` and `socket`. sluice starts no cache's
+server. A cache table an older policy's `[checkout]` still holds is read as
+nothing.
 
 ## Services and the release command
 
