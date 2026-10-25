@@ -42,4 +42,4 @@
 
 ## 7. The whole
 
-- [ ] 7.1 Run the gate's checks on the committed change with `sluice exec main`, and verify every task of `#check-fast`, `#check-tools` and `#check-e2e` passes.
+- [x] 7.1 Run the gate's checks on the committed change with `sluice exec main`, and verify every task of `#check-fast`, `#check-tools` and `#check-e2e` passes.
