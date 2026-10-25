@@ -570,6 +570,19 @@ cmp -s "${f%.json}.paths" "$t/before.paths" || fail "a document it cannot read c
 grep -q 'cannot read' "$t/err" || fail "nothing logged: $(cat "$t/err")"
 pass
 
+fresh 'watch: what a held place failed is kept to its last line'
+feed "$(doc '.branches[0].held_checkouts = [{place: "sluice/try/main/48", failed: "preview: stopping\nusage: scripts/preview up\n\n",
+      tries: 4, at: "2026-10-16T19:40:00Z", stopped: true}, {place: 7}, "x"]
+  | .branches += [{branch: "release", depth: 0}]
+  | .sessions = [{worktree: $work, branch: "main", release_failed: {failed: "one\ntwo\n", tries: 1, stopped: true}}]
+  | .previews = [{name: "docs", branch: "main", release_failed: {failed: "a\nb", tries: 3, stopped: true}}]')"
+f=$(ls "$S"/docs/*.json)
+out=$(jq -c '[.branches[] | .held_checkouts | map(.failed)]' "$f")
+[ "$out" = '[["usage: scripts/preview up"],[]]' ] || fail "the branches' held checkouts read as $out"
+[ "$(jq -r '.sessions[0].release_failed.failed' "$f")" = two ] || fail "a worktree's failure read as $(jq -c .sessions "$f")"
+[ "$(jq -r '.previews[0].release_failed.failed' "$f")" = b ] || fail "a preview's failure read as $(jq -c .previews "$f")"
+pass
+
 fresh 'watch: source exits'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"

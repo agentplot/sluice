@@ -39,7 +39,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
 
 ## 2. herdr
 
-- [ ] 2.1 In `plugins/herdr/bin/document.sh`, default
+- [x] 2.1 In `plugins/herdr/bin/document.sh`, default
   `branches[].held_checkouts` to an empty list, keep only objects with a
   string `place`, and replace each `failed` (the branch's and each
   `release_failed.failed`) by its last non-empty line before control
