@@ -26,5 +26,5 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Run the gate on the committed work, `sluice exec main`, and verify every task passes, `plugin-sluice:lay-out` among them
+- [x] 5.1 Run the gate on the committed work, `sluice exec main`, and verify every task passes, `plugin-sluice:lay-out` among them
 - [ ] 5.2 Check the site's links resolve: `sluice exec main -- moon run site:build` passes with no broken link reported on `guides/worktrees` or `guides/claude-code`, and the README's anchors exist in `dist/`. Run by hand because the site's build is the Pages workflow's, not a gate task (core.21)
