@@ -27,6 +27,16 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   a quarter hour has passed since its last landing, blame or conflict.
   Branches come in the order the repository's `.config/sluice.toml` names
   them, as `sluice overview` gives them.
+- **Checkouts held because their release failed**, under RELEASE FAILED, first
+  under the branch's heading: each checkout, worktree and preview of the
+  branch whose release failed and that sluice tries no more, with how many
+  times it failed, the last line of what failed, and the command that
+  releases it, in the Claude Code board's words:
+  `✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up`,
+  then `sluice release sluice/try/main/48 · --accept-failure frees it
+  without`. One another host made says `held on deneb`, and its command
+  begins `on deneb:`. A branch with a held place is shown even with
+  nothing queued. The popup shows the command; no row runs it.
 - **Agents' checks**, under CHECKING in the popup: each worktree whose
   agent is running `sluice exec`, with how many of its tasks have ended
   (`fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s`), and one that finished in the
@@ -75,12 +85,16 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   branch with a `remote`, a forecast fetches the branch; set
   `ahead_check = false` (below) to show the count alone.
 - **The queue on each workspace's row**, the `$sluice_q` token
-  (`4 submissions`, every branch counted).
+  (`4 submissions · 1 held: release failed`, every branch counted, a
+  checkout that several hosts list once).
 - **The tab bar**: the focused repository's queue on one line, as the
   board's band says it: `sluice main · 3 submissions · testing
   main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa`. When
   agents' checks hold the queue back, the host has no run free while a
   submission is queued, and the line ends `· 1 slot to an agent's checks`.
+  A branch with checkouts held because their release failed ends its line
+  `· 1 held: release failed`, and gets one with nothing queued:
+  `sluice main · 0 submissions · 1 held: release failed`.
 
 Every token is set again at least every 15 seconds and expires after two
 minutes, so nothing stale stays if the plugin stops.

@@ -60,7 +60,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   nothing queued, a checkout two documents list counted once; verify
   with `tests/run.sh` cases for the three `herdr-sidebar` scenarios
   (`plugin-herdr:test-sh`), and `plugin-herdr:test-dash` still passing
-- [ ] 2.4 Document the RELEASE FAILED rows and the `held: release
+- [x] 2.4 Document the RELEASE FAILED rows and the `held: release
   failed` clause in `plugins/herdr/README.md` and
   `site/src/content/docs/guides/herdr.md`; verify with `site:prose`
 
