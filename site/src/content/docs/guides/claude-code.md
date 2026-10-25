@@ -68,7 +68,12 @@ In a repository with a `.config/sluice.toml`, Claude:
   while the conflict is small;
 - runs its tests while it works with `sluice exec`, and cleans up with
   `sluice release`;
-- brings up a landed revision with `sluice preview` when you ask to try it.
+- brings up a landed revision with `sluice preview` when you ask to try it;
+- tells each background agent it starts in a worktree, in that agent's
+  prompt, to submit its own work through sluice from there and report the
+  outcome;
+- starts an agent in a worktree to submit work left there by an agent that
+  has ended, and never hands you the submit to run.
 
 ## Kept off protected branches
 
@@ -76,6 +81,8 @@ Two hooks come with the skills.
 
 At the start of a session in a repository whose policy protects branches,
 Claude is told which ones, and that work lands on them only through
+`sluice submit`. It's told too that an agent it starts in a worktree
+submits its own work from there, and that you're never asked to run
 `sluice submit`.
 
 Before Claude runs a shell command, a guard checks it. A `git push` to a
