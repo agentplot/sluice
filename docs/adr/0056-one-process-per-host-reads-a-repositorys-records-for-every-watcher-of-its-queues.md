@@ -1,7 +1,7 @@
 ---
 number: 56
 title: One process per host reads a repository's records for every watcher of its queues
-status: proposed
+status: accepted
 date: 2026-10-25
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # One process per host reads a repository's records for every watcher of its queues
 
-Status: proposed to the user on 2026-10-25, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-25, on their card ("Approved").
 
 Deciders: the user, who asked through the operator on 2026-10-24 whether the herdr and Claude Code plugins could do without one sluice process per Claude Code tab, and answered the design put to them in madswan-design's pane with "go" on 2026-10-25; the record's other words are madswan-design's, for the user to accept on this record's card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 26, 71, 80, 129; ADR 0023; rules core.11, core.14; `plugins/sluice-board/hooks/register.tsx` (`feed`), `plugins/herdr/lib/sources.sh` and the herdr-watch spec; `crates/sluice/src/overview.rs` (`document`, `run`); signal `2026-10-24-madswan-design-fe11a4cd/01`.

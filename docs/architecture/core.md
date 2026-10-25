@@ -46,7 +46,7 @@ part exists.
 
 - **[core.12]** A change that bears on a clause cites the clause by number; a clause that no longer holds is changed in the statement first, never worked around here.
 - **[core.13]** Nothing commercial, no pricing, tier or customer, appears in this repository.
-- **[core.25]** On a host, at most one process reads a repository's records to watch its queues; every other watch and wait follows that reader's document. (Proposed 2026-10-25, record 0056, on the user's card; accepted only on their yes.)
+- **[core.25]** On a host, at most one process reads a repository's records to watch its queues; every other watch and wait follows that reader's document.
 
 ### The gate
 
