@@ -8,10 +8,12 @@
 //! names no method; an older revision's `method = "git-worktree"` is read
 //! as before (core.15), and any other method is refused.
 //!
-//! Once the checkout exists, the place takes the caches `[[checkout.cache]]` declares, each keyed by the
-//! content of the files it names in the candidate; a place whose
-//! candidate passed saves them as it is released (35; section 5,
-//! *Caches*).
+//! A place holds its candidate and nothing restored from another place:
+//! the caches its runs share are the host's, which the check seam gives
+//! them (35; ADR 0049). An older revision's `[[checkout.cache]]` is read
+//! as nothing, as its `method` is read quietly (core.15), and the caches
+//! an earlier sluice saved under `<common>/sluice/.caches/` are removed
+//! when a place is made.
 //!
 //! A place holds a block of ports when `[checkout] ports` names any (31;
 //! ADR 0016): block `n` runs from `ports_from + n × names`, one port per
@@ -115,9 +117,10 @@ struct Made {
     /// The checkout, once it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
-    /// The caches it may hold, keyed for its candidate (35).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    caches: Vec<Cache>,
+    /// The checkout cache an older sluice kept on the record: read, and
+    /// ignored (35; ADR 0049).
+    #[serde(rename = "caches", default, skip_serializing)]
+    _caches: serde::de::IgnoredAny,
     /// The block of ports it holds on the host (31).
     #[serde(default, alias = "slot", skip_serializing_if = "Option::is_none")]
     block: Option<u32>,
@@ -161,7 +164,7 @@ impl Made {
             branch: None,
             ports: BTreeMap::new(),
             path: None,
-            caches: Vec::new(),
+            _caches: serde::de::IgnoredAny,
             block: None,
             last_run: None,
             revision: None,
@@ -392,21 +395,6 @@ fn free_block(dir: &Path, n: u32, record: &Path) -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-
-/// A cache `[[checkout.cache]]` declares, keyed for one candidate:
-/// `<common>/sluice/.caches/<bucket>/<key>/` holds its `paths`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Cache {
-    paths: Vec<String>,
-    /// A hash of `paths`: every key of this cache is under it.
-    bucket: String,
-    /// A hash of `paths` and the content of each key file in the
-    /// candidate's tree.
-    key: String,
-}
-
-/// How many keys of each cache are kept.
-const KEPT: usize = 2;
 
 pub struct Places {
     common: PathBuf,
@@ -728,61 +716,7 @@ impl Places {
         Ok(path)
     }
 
-    /// The caches `[[checkout.cache]]` declares, keyed for `rev`.
-    fn caches(&self, rev: &Rev, checkout: &Settings) -> Result<Vec<Cache>> {
-        let tables = match checkout.get("cache") {
-            None => return Ok(Vec::new()),
-            Some(Setting::Tables(t)) => t,
-            Some(_) => bail!("[[checkout.cache]] must be an array of tables"),
-        };
-        let mut out = Vec::new();
-        for t in tables {
-            let list = |k: &str| -> Result<Vec<String>> {
-                match t.get(k) {
-                    Some(Setting::List(xs)) if !xs.is_empty() => Ok(xs.clone()),
-                    _ => bail!("[[checkout.cache]] {k} must be a list of paths"),
-                }
-            };
-            if let Some(k) = t.keys().find(|k| !matches!(k.as_str(), "key" | "paths")) {
-                bail!("[[checkout.cache]] has no setting {k:?}: key, paths");
-            }
-            let (keys, paths) = (list("key")?, list("paths")?);
-            for p in keys.iter().chain(&paths) {
-                let path = Path::new(p);
-                if path.is_absolute()
-                    || path
-                        .components()
-                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                {
-                    bail!("[[checkout.cache]] {p:?} must be a path inside the checkout");
-                }
-            }
-            let bucket = self.hash(&format!("paths\0{}", paths.join("\0")))?;
-            let mut text = format!("{bucket}\n");
-            for k in &keys {
-                let out = self.git(&[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{}:{k}", rev.as_str()),
-                ])?;
-                let blob = if out.status.success() {
-                    String::from_utf8_lossy(&out.stdout).trim().to_string()
-                } else {
-                    "missing".into()
-                };
-                text.push_str(&format!("{k}\0{blob}\n"));
-            }
-            out.push(Cache {
-                key: self.hash(&text)?,
-                paths,
-                bucket,
-            });
-        }
-        Ok(out)
-    }
-
-    /// git's hash of `text`: keys stay the same across sluice's builds.
+    /// git's hash of `text`: names stay the same across sluice's builds.
     fn hash(&self, text: &str) -> Result<String> {
         use std::io::Write as _;
         let mut child = Command::new("git")
@@ -807,114 +741,20 @@ impl Places {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    fn bucket(&self, cache: &Cache) -> PathBuf {
-        let dir = self.root().join(".caches");
-        // Under a dotted name, which no branch's records can take, so a
-        // reader listing the branches never walks the caches. Caches saved
-        // under `caches` before are moved there once; a branch named
-        // `caches`, whose records hold a version, is left alone.
-        let old = self.root().join("caches");
-        if !dir.exists() && old.is_dir() && !old.join("version").exists() {
-            // Another process may move it first.
-            let _ = std::fs::rename(&old, &dir);
-        }
-        dir.join(&cache.bucket)
-    }
-
-    /// The saved keys of a cache, the last saved first.
-    fn saved(&self, cache: &Cache) -> Result<Vec<PathBuf>> {
-        let dir = self.bucket(cache);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e.into()),
-        };
-        let mut saved = Vec::new();
-        for e in entries {
-            let e = e?;
-            if e.file_name().to_string_lossy().starts_with('.') || !e.file_type()?.is_dir() {
-                continue;
-            }
-            saved.push((e.metadata()?.modified()?, e.path()));
-        }
-        saved.sort_by_key(|s| std::cmp::Reverse(s.0));
-        Ok(saved.into_iter().map(|(_, p)| p).collect())
-    }
-
-    /// Each cache into the place: its candidate's key, or else the one
-    /// saved last; none yet leaves the place cold.
-    fn restore(&self, caches: &[Cache], place: &Path) -> Result<()> {
-        for cache in caches {
-            let exact = self.bucket(cache).join(&cache.key);
-            let (from, hit) = if exact.is_dir() {
-                (exact, "key")
-            } else {
-                match self.saved(cache)?.into_iter().next() {
-                    Some(p) => (p, "last"),
-                    None => {
-                        tracing::info!(
-                            monotonic_counter.sluice.cache.restored = 1u64,
-                            sluice.cache = %cache.bucket,
-                            sluice.hit = "none",
-                        );
-                        continue;
-                    }
-                }
-            };
-            tracing::info!(
-                monotonic_counter.sluice.cache.restored = 1u64,
-                sluice.cache = %cache.bucket,
-                sluice.hit = hit,
-            );
-            for p in &cache.paths {
-                let (src, dst) = (from.join(p), place.join(p));
-                if src.symlink_metadata().is_err() || dst.symlink_metadata().is_ok() {
-                    continue;
-                }
-                if let Some(parent) = dst.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                clone(&src, &dst)?;
+    /// 35: the checkout cache is gone, and so are the caches an earlier
+    /// sluice saved, under a dotted name no branch's records can take. A
+    /// directory another process is removing at once, or one that cannot
+    /// be removed, leaves the place to be made all the same.
+    fn remove_saved_caches(&self) {
+        let saved = self.root().join(".caches");
+        if let Err(e) = std::fs::remove_dir_all(&saved) {
+            if e.kind() != std::io::ErrorKind::NotFound && saved.exists() {
+                tracing::warn!(
+                    "removing the caches an earlier sluice saved, {}: {e}",
+                    saved.display()
+                );
             }
         }
-        Ok(())
-    }
-
-    /// The place's `paths` moved, or copied when `keep`, into a new cache
-    /// of its key, whole or not at all; a saved key never changes. The
-    /// last `KEPT` keys stay.
-    fn save(&self, cache: &Cache, place: &Path, keep: bool) -> Result<()> {
-        let dir = self.bucket(cache);
-        let dest = dir.join(&cache.key);
-        if dest.exists() {
-            return Ok(());
-        }
-        let tmp = dir.join(format!(".{}.{}", cache.key, std::process::id()));
-        if tmp.exists() {
-            std::fs::remove_dir_all(&tmp)?;
-        }
-        std::fs::create_dir_all(&tmp)?;
-        for p in &cache.paths {
-            let (src, dst) = (place.join(p), tmp.join(p));
-            if src.symlink_metadata().is_err() {
-                continue;
-            }
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            // Across filesystems, copied.
-            if keep || std::fs::rename(&src, &dst).is_err() {
-                clone(&src, &dst)?;
-            }
-        }
-        if std::fs::rename(&tmp, &dest).is_err() {
-            // Saved meanwhile under the same key.
-            std::fs::remove_dir_all(&tmp)?;
-        }
-        for old in self.saved(cache)?.into_iter().skip(KEPT) {
-            std::fs::remove_dir_all(old)?;
-        }
-        Ok(())
     }
 
     fn remove_worktree(&self, path: &Path) -> Result<()> {
@@ -1023,50 +863,17 @@ fn places_dir(name: &str) -> &'static str {
     }
 }
 
-/// A copy that shares blocks until written where the filesystem allows,
-/// keeping times, which cargo's fingerprints read. macOS's own `cp`, by
-/// path: a toolchain's GNU `cp` may come first on `PATH`.
-fn clone(src: &Path, dst: &Path) -> Result<()> {
-    let mut cp = if cfg!(target_os = "macos") {
-        let mut c = Command::new("/bin/cp");
-        c.args(["-c", "-p", "-R"]);
-        c
-    } else {
-        let mut c = Command::new("cp");
-        c.args(["-a", "--reflink=auto"]);
-        c
-    };
-    let out = cp
-        .arg(src)
-        .arg(dst)
-        .stdin(Stdio::null())
-        .output()
-        .context("running cp")?;
-    if !out.status.success() {
-        bail!(
-            "copying {} to {}: {}",
-            src.display(),
-            dst.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
 impl Checkout for Places {
     fn materialize(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<Place> {
         one_method(checkout)?;
-        let caches = self.caches(rev, checkout)?;
         let ports = Ports::read(checkout)?;
+        self.remove_saved_caches();
         // A place of this name left by a step that stopped part way.
         if self.read_record(name)?.is_some() {
             self.release(name, false)?;
         }
         let record = self.record(name);
-        let mut made = Made {
-            caches,
-            ..Made::new(Kind::Made, METHOD)
-        };
+        let mut made = Made::new(Kind::Made, METHOD);
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
             "SLUICE_PLACE".to_string(),
@@ -1087,7 +894,6 @@ impl Checkout for Places {
         }
         std::fs::create_dir_all(&tmp)?;
         let path = self.make_worktree(name, rev)?;
-        self.restore(&made.caches, &path)?;
         made.path = Some(path.clone());
         self.write_record(name, &made)?;
         Ok(Place {
@@ -1140,7 +946,7 @@ impl Checkout for Places {
         Ok(out)
     }
 
-    fn release(&self, name: &str, passed: bool) -> Result<()> {
+    fn release(&self, name: &str, _passed: bool) -> Result<()> {
         if crate::runs::is_session(name) {
             self.release_session(name, None)?;
             return Ok(());
@@ -1154,14 +960,6 @@ impl Checkout for Places {
         self.runs.remove(name)?;
         let made = self.read_record(name)?;
         if let Some(made) = made.as_ref().filter(|m| m.kind == Kind::Made) {
-            // 35: a passed candidate's place saves what it built.
-            if passed {
-                if let Some(path) = made.path.as_deref().filter(|p| p.exists()) {
-                    for cache in &made.caches {
-                        self.save(cache, path, false)?;
-                    }
-                }
-            }
             match made.method.as_str() {
                 METHOD => self.remove_worktree(&self.worktree_path(name))?,
                 other => {
@@ -1182,7 +980,7 @@ impl Checkout for Places {
     fn free(&self, name: &str) -> Result<()> {
         let made = self.read_record(name)?;
         // 123: everything started in it ends, and nothing runs in its
-        // name: no release command, no cache saved.
+        // name: no release command.
         self.runs.discard(name)?;
         if let Some(made) = made.as_ref().filter(|m| m.kind != Kind::Session) {
             match made.method.as_str() {
@@ -1341,18 +1139,8 @@ impl Checkout for Places {
         self.write_record(name, &made)
     }
 
-    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
-        let made = match self.read_record(name)? {
-            Some(m) if m.kind == Kind::Session => m,
-            Some(_) => bail!("place {name} is a candidate's: its caches are saved on release"),
-            None => bail!("no session's place {name}"),
-        };
-        let path = made
-            .path
-            .ok_or_else(|| anyhow!("place {name} names no worktree"))?;
-        for cache in self.caches(rev, checkout)? {
-            self.save(&cache, &path, true)?;
-        }
+    /// 35: a place saves nothing; the caches are the host's.
+    fn save_caches(&self, _: &str, _: &Rev, _: &Settings) -> Result<()> {
         Ok(())
     }
 
@@ -1446,7 +1234,6 @@ impl Checkout for Places {
             ));
         }
         one_method(checkout)?;
-        let caches = self.caches(rev, checkout)?;
         let ports = Ports::read(checkout)?;
         // 99: each address checked against the ports before anything is
         // made, with stand-in names and ports.
@@ -1461,7 +1248,6 @@ impl Checkout for Places {
         let record = self.record(name);
         let mut made = Made {
             branch: Some(branch.into()),
-            caches,
             last_run: Some(at.into()),
             revision: Some(rev.clone()),
             ..Made::new(Kind::Preview, METHOD)
@@ -1493,7 +1279,6 @@ impl Checkout for Places {
         }
         std::fs::create_dir_all(&tmp)?;
         let path = self.make_worktree(name, rev)?;
-        self.restore(&made.caches, &path)?;
         made.path = Some(path);
         self.write_record(name, &made)?;
         Ok((
@@ -1656,6 +1441,20 @@ mod tests {
         });
         assert!(!record.exists(), "a released place's record written again");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 35: a record an older sluice wrote with the caches it kept reads,
+    /// and is written back without them.
+    #[test]
+    fn an_older_records_caches_are_read_and_dropped() {
+        let made: Made = serde_json::from_str(
+            r#"{"kind":"made","method":"git-worktree","path":"/p",
+                "caches":[{"paths":["target"],"bucket":"b","key":"k"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(made.path.as_deref(), Some(Path::new("/p")));
+        let text = serde_json::to_string(&made).unwrap();
+        assert!(!text.contains("caches"), "{text}");
     }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.

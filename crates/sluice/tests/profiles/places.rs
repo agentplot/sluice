@@ -233,6 +233,8 @@ fn a_policy_need_not_name_the_method() {
     }
 }
 
+/// A `[checkout]` an older revision may hold: a cache of `target` keyed
+/// by `Cargo.lock`, which a place reads as nothing.
 fn cached() -> Settings {
     let mut s = Settings::new();
     s.insert(
@@ -260,103 +262,64 @@ fn locked(repo: &Repo, lock: &str) -> Rev {
     Rev::new(rev)
 }
 
-/// 35, section 5's acceptance test 7: a place starts cold; one released
-/// as passed saves its `target`, which the next place of that key holds,
-/// with its times; one released as failed saves nothing; another key
-/// takes the cache saved last; a third key removes the first.
-#[test]
-fn a_place_holds_the_caches_its_policy_declares() {
-    let (repo, _) = scratch("places-cache");
-    let p = places(&repo);
-    let cached = cached();
-    let one = locked(&repo, "one\n");
-    let built = |place: &Place| {
-        std::fs::read_to_string(place.path.join("target/debug/a"))
-            .unwrap_or_else(|_| "none\n".into())
-    };
-    let build = |place: &Place, what: &str| {
-        std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
-        std::fs::write(place.path.join("target/debug/a"), what).unwrap();
-    };
-
-    // Cold, and failed: nothing saved.
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    assert_eq!(built(&place), "none\n");
-    build(&place, "failed\n");
-    p.release(NAME, false).unwrap();
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    assert_eq!(built(&place), "none\n");
-
-    // Passed: saved, and the next place of the key holds it.
-    build(&place, "one\n");
-    let at = std::fs::metadata(place.path.join("target/debug/a"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    p.release(NAME, true).unwrap();
-    left_behind(&repo, &place);
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    assert_eq!(built(&place), "one\n");
-    let a = place.path.join("target/debug/a");
-    assert_eq!(std::fs::metadata(&a).unwrap().modified().unwrap(), at);
-    holds_the_candidate(&repo, &place, &one);
-    p.release(NAME, false).unwrap();
-
-    // Another key: the cache saved last; saved under its own key.
-    let two = locked(&repo, "two\n");
-    let place = p.materialize(NAME, &two, &cached).unwrap();
-    assert_eq!(built(&place), "one\n");
-    build(&place, "two\n");
-    p.release(NAME, true).unwrap();
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    assert_eq!(built(&place), "one\n", "the first key's own");
-    p.release(NAME, false).unwrap();
-
-    // A third key: two kept, the first gone.
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-    let three = locked(&repo, "three\n");
-    let place = p.materialize(NAME, &three, &cached).unwrap();
-    assert_eq!(built(&place), "two\n");
-    build(&place, "three\n");
-    p.release(NAME, true).unwrap();
-    let caches = repo.dir().join(".git/sluice/.caches");
-    let bucket = std::fs::read_dir(&caches)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let mut kept: Vec<String> = std::fs::read_dir(&bucket)
-        .unwrap()
-        .map(|e| std::fs::read_to_string(e.unwrap().path().join("target/debug/a")).unwrap())
-        .collect();
-    kept.sort();
-    assert_eq!(kept, ["three\n", "two\n"]);
+/// Build `target` in `place`, as a check would.
+fn build(place: &Place) {
+    std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
+    std::fs::write(place.path.join("target/debug/a"), "built\n").unwrap();
 }
 
-/// Caches live under a dotted name no branch's records can take, so a
-/// reader listing the branches never walks them; those saved under
-/// `caches` before are moved there and still restored.
+/// 35; record 0049 as amended: a place holds its candidate and nothing
+/// restored from another; one released as passed saves nothing, so the
+/// next of the same lock file starts with no `target`. The caches an
+/// earlier sluice saved go when a place is made, and nothing else of
+/// sluice's beside them.
 #[test]
-fn caches_saved_under_the_old_name_are_moved_and_kept() {
-    let (repo, _) = scratch("places-cache-moved");
+fn a_checkout_starts_with_nothing_but_its_revision() {
+    let (repo, _) = scratch("places-no-cache");
     let p = places(&repo);
-    let cached = cached();
     let one = locked(&repo, "one\n");
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    std::fs::create_dir_all(place.path.join("target/debug")).unwrap();
-    std::fs::write(place.path.join("target/debug/a"), "one\n").unwrap();
-    p.release(NAME, true).unwrap();
-
     let root = repo.dir().join(".git/sluice");
-    std::fs::rename(root.join(".caches"), root.join("caches")).unwrap();
-    let place = p.materialize(NAME, &one, &cached).unwrap();
-    assert_eq!(
-        std::fs::read_to_string(place.path.join("target/debug/a")).unwrap(),
-        "one\n"
-    );
-    assert!(root.join(".caches").is_dir());
-    assert!(!root.join("caches").exists());
+    let saved = root.join(".caches/bucket/key/target/debug");
+    std::fs::create_dir_all(&saved).unwrap();
+    std::fs::write(saved.join("a"), "saved by an earlier sluice\n").unwrap();
+    // `caches`, without the dot, may be a branch's records.
+    std::fs::create_dir_all(root.join("caches")).unwrap();
+    std::fs::write(root.join("caches/version"), "1\n").unwrap();
+
+    let place = p.materialize(NAME, &one, &Settings::new()).unwrap();
+    holds_the_candidate(&repo, &place, &one);
+    assert!(!place.path.join("target").exists());
+    assert!(!root.join(".caches").exists(), "the saved caches are gone");
+    assert!(root.join("caches/version").exists());
+    build(&place);
+    p.release(NAME, true).unwrap();
+    left_behind(&repo, &place);
+
+    let next = p.materialize(NAME, &one, &Settings::new()).unwrap();
+    holds_the_candidate(&repo, &next, &one);
+    assert!(!next.path.join("target").exists());
+    assert!(!root.join(".caches").exists());
+    p.release(NAME, false).unwrap();
+}
+
+/// 35, core.15: a `[checkout]` that still declares `[[checkout.cache]]`
+/// makes a place as one that declares none, with no error: nothing
+/// restored into it, and nothing saved once it is released as passed.
+#[test]
+fn an_older_policys_checkout_cache_is_read_as_nothing() {
+    let (repo, _) = scratch("places-old-cache");
+    let p = places(&repo);
+    let one = locked(&repo, "one\n");
+    let place = p.materialize(NAME, &one, &cached()).unwrap();
+    holds_the_candidate(&repo, &place, &one);
+    build(&place);
+    p.release(NAME, true).unwrap();
+    left_behind(&repo, &place);
+    assert!(!repo.dir().join(".git/sluice/.caches").exists());
+
+    let next = p.materialize(NAME, &one, &cached()).unwrap();
+    holds_the_candidate(&repo, &next, &one);
+    assert!(!next.path.join("target").exists());
     p.release(NAME, false).unwrap();
 }
 
@@ -634,55 +597,6 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
     p.release(&place.name, false).unwrap();
     assert_eq!(std::fs::read_to_string(&log).unwrap(), web);
     assert!(session.exists());
-}
-
-/// 35, session-runs-1 clause 93: a session's place saves the caches its
-/// policy declares as a passed candidate's does, keyed at its head, and
-/// keeps its own copy; a candidate's place of that key restores them. A
-/// candidate's place saves only on release.
-#[test]
-fn a_sessions_place_saves_its_caches_and_keeps_them() {
-    let (repo, _) = scratch("places-session-cache");
-    let p = places(&repo);
-    let cached = cached();
-    let head = locked(&repo, "one\n");
-    let wt = repo.dir().with_extension("cached");
-    let _ = std::fs::remove_dir_all(&wt);
-    repo.git(&[
-        "worktree",
-        "add",
-        "-q",
-        "--detach",
-        wt.to_str().unwrap(),
-        head.as_str(),
-    ]);
-    std::fs::create_dir_all(wt.join("target/debug")).unwrap();
-    std::fs::write(wt.join("target/debug/a"), "built by the session\n").unwrap();
-
-    let place = p
-        .adopt(
-            wt.to_str().unwrap(),
-            "bolt/x",
-            &cached,
-            "2026-10-14T09:00:00Z",
-        )
-        .unwrap();
-    p.save_caches(&place.name, &head, &cached).unwrap();
-    assert_eq!(
-        std::fs::read_to_string(wt.join("target/debug/a")).unwrap(),
-        "built by the session\n",
-        "the session keeps what it built"
-    );
-
-    let candidate = p.materialize(NAME, &head, &cached).unwrap();
-    assert_eq!(
-        std::fs::read_to_string(candidate.path.join("target/debug/a")).unwrap(),
-        "built by the session\n"
-    );
-    assert!(p.save_caches(NAME, &head, &cached).is_err());
-    p.release(NAME, false).unwrap();
-    p.release(&place.name, false).unwrap();
-    assert!(wt.join("target/debug/a").exists());
 }
 
 /// 56, 95: a session's place is released under the release command its
