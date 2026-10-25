@@ -55,11 +55,17 @@ any differs, go on to step 3: in a worktree of a bare git directory the
 repository is in the layout already, and a clone that has worktrees of
 its own is the `worktrees` skill's to convert, when the user asks.
 
-1. Run the plan, which changes nothing:
+1. Run the plan, which changes nothing, naming this session's process:
 
    ```sh
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan <the folder>
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan <the folder> --session-pid "$PPID"
    ```
+
+   Write `--session-pid "$PPID"` into the command line itself: the shell
+   that runs it expands `$PPID` to its parent, this session's process.
+   The script then never counts this session, or anything it started
+   (the shell the command runs in, a tool server, a watcher), as holding
+   the folder, so it neither shows them nor refuses on them.
 
    When worktrunk is used, check its `worktree-path` template as the
    `worktrees` skill's layout reference says, "worktrunk", as part of
@@ -67,7 +73,8 @@ its own is the `worktrees` skill's to convert, when the user asks.
 2. Show it to the user in plain words, the costs first:
    - each process the plan says holds the folder, by its command and id,
      which must be stopped, or close the folder, and be started again
-     from `<the folder>/main`;
+     from `<the folder>/main`; this session and what it started are
+     never among them;
    - every editor or app to close the folder in and reopen at `main/`:
      an editor that only watches the folder shows in no listing;
    - the Claude Code history kept under the folder's path, and the paths
@@ -82,11 +89,12 @@ its own is the `worktrees` skill's to convert, when the user asks.
    its changes, and a folder per branch beside it.
 3. Ask one question: lay it out, or keep the plain clone. Write nothing
    and commit nothing until the user answers.
-4. On "lay it out", run the conversion, naming this session so its own
-   transcript is left for `/cd`:
+4. On "lay it out", run the conversion, naming this session by its id,
+   so its own transcript is left for `/cd`, and by its process, as the
+   plan did:
 
    ```sh
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go <the folder> --session "${CLAUDE_SESSION_ID}"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go <the folder> --session "${CLAUDE_SESSION_ID}" --session-pid "$PPID"
    ```
 
    - Exit 1: it refused and moved nothing. Name what holds the folder, as
