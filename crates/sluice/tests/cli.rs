@@ -151,7 +151,30 @@ fn submit_fails_and_names_the_combination() {
         .kept_log(at)
         .unwrap()
         .contains("tests:t-batch-cards failed"));
-    assert_eq!(lines[6], "fix it in your worktree and submit again");
+    assert_eq!(
+        lines[6],
+        "the agent working in unit/batch-review fixes it there and submits again"
+    );
+}
+
+/// Could-not-run-1 115: a check the host could not run is blamed on no
+/// one, and its way on names the agent working in the worktree.
+#[test]
+fn a_check_the_host_could_not_run_is_submitted_again_by_the_agent_in_its_worktree() {
+    let f = setup();
+    f.world
+        .cannot_run("tests:t-batch-cards", Some("no emulator on this host"));
+    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert_eq!(
+        out.lines().last(),
+        Some(
+            "the host could not run tests:t-batch-cards: once it can, the agent working in \
+             unit/a submits again"
+        ),
+        "{out}"
+    );
 }
 
 /// 85, 86: a failure on a system the gate names says which system.
@@ -428,7 +451,8 @@ fn a_conflict_exits_two_and_check_says_so_first() {
         format!(
             "submission 2 to {BRANCH} · 1 queued ahead (#1)\n\
              conflict: plugin/lib/plan.py\n  conflicts with #1 (crw-1-unit-1, unit/touches)\n\
-             merge or rebase onto {BRANCH} in your worktree and submit again\n"
+             the agent working in unit/forecast merges or rebases onto {BRANCH} there and \
+             submits again\n"
         )
     );
 }
@@ -3225,7 +3249,10 @@ fn a_waiting_group_exits_with_the_first_that_did_not_land() {
             "submission 2 from unit/b2:",
             "conflict: plugin/lib/plan.py",
             "  conflicts with #1 (agent-1, unit/b1)",
-            &format!("merge or rebase onto {BRANCH} in your worktree and submit again"),
+            &format!(
+                "the agent working in unit/b2 merges or rebases onto {BRANCH} there and submits \
+                 again"
+            ),
             "submission 3 from unit/b3:",
         ],
         "{out}"

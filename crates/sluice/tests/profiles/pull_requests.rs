@@ -1004,8 +1004,8 @@ fn submit_again_on_a_head_sent_back() {
     assert_eq!(
         lines[at + 4..],
         [format!(
-            "fix it in your worktree and submit again, or mark #{n} a draft and then ready \
-             for review to test the same commits again"
+            "the agent working in unit/again fixes it there and submits again, or marks #{n} a \
+             draft and then ready for review to test the same commits again"
         )],
         "{said}"
     );

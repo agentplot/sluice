@@ -1898,9 +1898,13 @@ fn report(
     let same_commits = match reached {
         Reached::Now => String::new(),
         Reached::Before(n) => format!(
-            ", or mark #{n} a draft and then ready for review to test the same commits again"
+            ", or marks #{n} a draft and then ready for review to test the same commits again"
         ),
     };
+    // Who moves it on: the agent working in the worktree it came from, by
+    // that worktree's branch, a pull request's the one it was opened from.
+    let from = sub.from.head.as_deref().unwrap_or(&sub.from.worktree);
+    let agent = words::agent_in(from);
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -2024,7 +2028,7 @@ fn report(
             if !could_not.is_empty() {
                 writeln!(
                     out,
-                    "the host could not run {}: once it can, submit again{same_commits}",
+                    "the host could not run {}: once it can, {agent} submits again{same_commits}",
                     could_not
                         .iter()
                         .map(|f| f.task.as_str())
@@ -2036,13 +2040,13 @@ fn report(
                 writeln!(
                     out,
                     "{}",
-                    words::timed_out_way_on(&sub.from.worktree, &cut, &same_commits)
+                    words::timed_out_way_on(from, &cut, &same_commits)
                 )?;
             }
             if not_run.len() > could_not.len() || ran.len() > flaky.len() {
                 writeln!(
                     out,
-                    "fix it in your worktree and submit again{same_commits}"
+                    "{agent} fixes it there and submits again{same_commits}"
                 )?;
             }
             if !flaky.is_empty() {
@@ -2067,8 +2071,7 @@ fn report(
             }
             writeln!(
                 out,
-                "merge or rebase onto {} in your worktree and submit again{same_commits}",
-                branch
+                "{agent} merges or rebases onto {branch} there and submits again{same_commits}"
             )?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
