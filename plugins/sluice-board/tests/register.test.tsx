@@ -1,4 +1,5 @@
 import type { On } from "claude-code";
+import type { Engine } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Overview } from "../types";
@@ -651,13 +652,110 @@ test("/sluice reads sluice again where the session could not, and follows it onc
   await band.unmount();
 });
 
-test("/sluice reads sluice again where it still cannot be started", async ($, on) => {
+/** The pane as `/sluice` drew it, docked unless `props` says otherwise. */
+function mountPane($: Engine, props = PANE) {
+  return $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props,
+    requestId: "sluice",
+  });
+}
+
+const ASK = "Ask Claude to set sluice up in this repository.";
+
+test("/sluice reads sluice again where it still cannot be started, and says so", async ($, on) => {
   const n = readsHost(on, ["missing"]);
   panes(on);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await $.command.run(slash(false));
   expect(n.reads).toBe(2);
   expect(n.watches).toBe(0);
+  const pane = await mountPane($, INLINE);
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "sluice could not be read here: the sluice command was not found",
+    }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Text", text: ASK })).toBeDefined();
+  expect(await pane.find({ type: "Button", key: "close" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a pane whose sluice overview failed gives sluice's words and what to do", async ($, on) => {
+  readsHost(on, [{ exitCode: 3, stderr: "sluice: not a git repository\n" }]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await $.command.run(slash(true));
+  const pane = await mountPane($);
+  const lines = await pane.findAll({ type: "Text" });
+  expect(lines.map((l) => l.text)).toEqual([
+    "sluice could not be read here: sluice: not a git repository",
+    ASK,
+  ]);
+  await pane.unmount();
+});
+
+test("a pane with no branch says how a submission gets there", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const none = overview();
+  none.branches = [];
+  readsHost(on, [none]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeDefined();
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "When an agent in a worktree runs sluice submit <branch>, its submission shows here until it lands.",
+    }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a pane whose branches have nothing to show says no branch has a queue", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const quiet = overview();
+  quiet.branches[0] = {
+    ...quiet.branches[0]!,
+    depth: 0,
+    candidates: [],
+    submissions: [],
+    recent: [{ schema: "sluice/log@1", at: "2026-10-16T19:20:00Z", event: "landed", ids: [11] }],
+  };
+  readsHost(on, [quiet]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a named branch with no records keeps its line, and no 'Nothing submitted yet'", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  mock.env(on, { SLUICE_BRANCH: "hotfix" });
+  const none = overview();
+  none.branches = [];
+  readsHost(on, [none]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "hotfix · no records" })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeUndefined();
+  await pane.unmount();
 });
 
 test("two good reads of sluice start one watch between them", async ($, on) => {

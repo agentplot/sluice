@@ -25,6 +25,7 @@ import {
   combination,
   conflictText,
   duration,
+  emptyLines,
   failedName,
   forecastBranch,
   forecastKey,
@@ -433,19 +434,35 @@ export const register: Register = (on, options) => {
     const m = await read($, mine);
     const base = await read($, repo);
     await read($, now);
-    if (!d)
+    if (!d) {
+      // No overview: why sluice could not be read, and what to do; or the
+      // session's first read is still under way.
+      const why = await read($, unread);
+      if (why === null)
+        return (
+          <Box gap={1}>
+            <Text dimColor>Reading sluice…</Text>
+            {close}
+          </Box>
+        );
       return (
-        <Box gap={1}>
-          <Text dimColor>No sluice records in this repository.</Text>
-          {close}
+        <Box flexDirection="column">
+          <Box gap={1}>
+            <Text>sluice could not be read here: {why}</Text>
+            {close}
+          </Box>
+          <Text>Ask Claude to set sluice up in this repository.</Text>
         </Box>
       );
+    }
     const at = await $.clock.now();
     // The session's named branch first, shown when idle too.
     const first = await read($, named);
     const visible = namedFirst(d.branches, first).filter((b) => b.branch === first || shown(b, at));
     const quiet = d.branches.length - visible.length;
     const unknown = first !== null && !d.branches.some((b) => b.branch === first);
+    // sluice has records of no branch: how a submission gets here.
+    const empty = emptyLines(d, first);
     const checks = checkRows(d, at);
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
@@ -492,7 +509,14 @@ export const register: Register = (on, options) => {
             <Text bold>{first} · no records</Text>
           </Box>
         )}
-        {visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
+        {empty.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {empty.map((line) => (
+              <Text key={line}>{line}</Text>
+            ))}
+          </Box>
+        )}
+        {empty.length === 0 && visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
         {visible.map((b) => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>
             <Text bold>
