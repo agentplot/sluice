@@ -4,7 +4,7 @@ sluice's queue inside a Claude Code session.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="screenshots/board-dark.png">
-  <img src="screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="800">
+  <img src="screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: one combination under test at 3/5, pressed open to its tasks, three passed and two running; three submissions queued, this session's among them; a landing and a blame; an agent's check at 4/5; the band above the prompt and the status line below it." width="800">
 </picture>
 
 ```
