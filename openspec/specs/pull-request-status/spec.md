@@ -38,6 +38,22 @@ submissions, or which pull requests and files it conflicts with.
 - **WHEN** a waiting pull request changes a file that a queued pull request changes in a way git cannot merge
 - **THEN** its `sluice` check names the queued pull request and the file, and no check of the branch's gate runs for it
 
+### Requirement: A pull request sluice cannot read gets no forecast
+A waiting pull request whose head sluice cannot fetch SHALL get no
+forecast: a draft's check SHALL read `waiting: a draft`, and an
+out-of-draft one's SHALL name what it is missing, each with no forecast
+in its details. A pull request missing nothing whose head sluice cannot
+fetch, or one whose conditions sluice cannot read, SHALL have nothing
+new posted that round.
+
+#### Scenario: A draft with no head is only a draft
+- **WHEN** a draft's head cannot be fetched
+- **THEN** its `sluice` check reads `waiting: a draft`, and its details hold no forecast
+
+#### Scenario: Ready but unreadable, nothing new is posted
+- **WHEN** a pull request is out of draft with every condition holding and its head cannot be fetched
+- **THEN** sluice posts nothing new on it that round, and its earlier check, if any, stands
+
 ### Requirement: A pull request sent back gets a comment
 When a pull request's submission is blamed for a failure or removed for
 a conflict, sluice SHALL comment on the pull request once. The comment
@@ -46,8 +62,12 @@ and say how to submit again. A blamed submission's comment SHALL link
 to the pull request's report.
 
 #### Scenario: Blamed
-- **WHEN** a pull request's submission is blamed
+- **WHEN** a hand-opened pull request's submission is blamed
 - **THEN** one comment names the failed checks, links to the report, and says to push a fix or mark it draft and ready again
+
+#### Scenario: Blamed, opened by a submit
+- **WHEN** a pull request `wt submit` opened is blamed
+- **THEN** one comment names the failed checks, links to the report, and says sluice marked it a draft and that the next submit from its branch, or marking it ready for review, submits it again
 
 ### Requirement: A landing merges the pull request
 A pull request's submission SHALL land by the push of its branch, never
@@ -145,3 +165,28 @@ scrubs them. Otherwise the report SHALL say where the output is kept.
 #### Scenario: Asked, with a secret in it
 - **WHEN** `main`'s policy sets `log_lines = 40` and `app:test`'s output ends with a line holding `GITHUB_TOKEN=ghp_abc123...`
 - **THEN** the report posts at most the last 40 lines, and that line reads `[redacted]` in place of the token
+
+### Requirement: A pull request held for its submitter says so
+The `sluice` check on a pull request a submit opened, held after its
+submission left the queue, SHALL be queued and say it waits for the
+next submit from its branch or for a person to mark it ready for
+review.
+
+#### Scenario: A draft sluice made
+- **WHEN** sluice marked a pull request `wt submit` opened a draft after its head moved
+- **THEN** its `sluice` check reads "waiting: the next submit" and its summary names the next `sluice submit` from its branch and marking it ready for review
+
+#### Scenario: A draft a person made
+- **WHEN** a person marks a hand-opened pull request a draft
+- **THEN** its `sluice` check reads "waiting: a draft", as it does today
+
+### Requirement: A pull request withdrawn by the operator says so
+The `sluice` check on a pull request opened by hand, whose submission
+the operator or a planner withdrew and that has had no new head or
+ready mark since, SHALL be queued, name who withdrew it, and say that
+new commits, or marking it a draft and then ready for review, submit it
+again.
+
+#### Scenario: Withdrawn by the operator
+- **WHEN** the operator withdraws the submission of a pull request a person opened by hand
+- **THEN** its `sluice` check reads "waiting: withdrawn by the operator", its summary says the operator withdrew it and that new commits or marking it draft and then ready submits it again, and no comment is left

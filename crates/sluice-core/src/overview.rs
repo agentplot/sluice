@@ -18,7 +18,7 @@ use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
+    parse_lines, BranchHold, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
 };
 use crate::Sluice;
 
@@ -78,6 +78,10 @@ pub struct BranchView {
     /// from, as its `from.worktree` says (26, 49, 61): live, or moved to
     /// the finished index, which keeps it (finished-records-1 clause 104).
     pub recent_from: BTreeMap<u64, String>,
+    /// 121: the branch was last read at a revision lacking its last
+    /// landing, and nothing is formed or landed on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<BranchHold>,
 }
 
 /// One candidate: a combination under test or judged.
@@ -178,6 +182,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         submissions,
         recent,
         recent_from,
+        held: line.doc.held.clone(),
     })
 }
 
@@ -580,6 +585,7 @@ mod tests {
             submissions: Vec::new(),
             recent,
             recent_from: BTreeMap::new(),
+            held: None,
         }
     }
 

@@ -14,6 +14,8 @@
 //! walkthrough's shape, with no schema of their own: `branch.json` names
 //! the log's (`log`). See `docs/plans/phase-1-questions.md`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     Contested, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog, Told,
@@ -580,12 +582,50 @@ pub struct BranchDoc {
     /// caches are saved as they are released (35).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub passed: Vec<String>,
+    /// 123: each place whose release failed, still tried or held.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_releases: Vec<FailedRelease>,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
     /// 72: the instance that keeps the branch, on a branch whose records
     /// are on its remote; `None` until one takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead: Option<String>,
+    /// 121: the revision every read of the branch must contain: its last
+    /// landing, the revision the operator accepted, or the one sluice
+    /// made it at. `None` in records written before it, until a round
+    /// takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<Rev>,
+    /// 121: the branch was last read at a revision lacking `landed`, and
+    /// nothing is formed or landed on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<BranchHold>,
+    /// 124: each host whose copy of the branch a round could not level to
+    /// `landed`, by the instance's name; a host whose copy holds it has no
+    /// entry, and each host writes only its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub copies: BTreeMap<String, CopyBehind>,
+}
+
+/// 121: a branch read at a revision that lacks the landing its records
+/// say it must contain, and since when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchHold {
+    pub read: Rev,
+    pub lacks: Rev,
+    pub since: String,
+}
+
+/// 124, S64: a host's copy of the branch left behind its landing: the
+/// value it holds, `None` when the host has none, the landing it lacks,
+/// why the levelling failed, and since when it has been behind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopyBehind {
+    pub at: Option<Rev>,
+    pub lacks: Rev,
+    pub why: String,
+    pub since: String,
 }
 
 impl BranchDoc {
@@ -603,10 +643,36 @@ impl BranchDoc {
             landing: None,
             release: Vec::new(),
             passed: Vec::new(),
+            failed_releases: Vec::new(),
             outbox: Vec::new(),
             lead: None,
+            landed: None,
+            held: None,
+            copies: BTreeMap::new(),
         }
     }
+}
+
+/// 123: a place whose release failed. It stays in the branch's `release`
+/// while it is tried; once its tries pass the branch's `release_retries`
+/// it leaves `release`, `stopped`, and is held until the operator releases
+/// it or accepts its failure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedRelease {
+    pub place: String,
+    /// What failed, the end of what the release command printed included.
+    pub failed: String,
+    /// How many times its release was tried, the first included.
+    pub tries: u32,
+    /// When it last failed.
+    pub at: String,
+    /// It is tried no more: held.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
+    /// The instance that made it, on a branch whose records are on its
+    /// remote: only that host can release it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -738,6 +804,36 @@ pub enum Event {
         ids: Vec<u64>,
         to: Rev,
     },
+    /// 121: the branch was read at a revision lacking the landing it must
+    /// contain; one line for each revision read so.
+    Held {
+        read: Rev,
+        lacks: Rev,
+    },
+    /// 121: the operator accepted the revision a held branch was read at,
+    /// which lacked the landing named.
+    Accepted {
+        revision: Rev,
+        lacked: Rev,
+    },
+    /// 124, S64: a host's copy could not be levelled to the landing; one
+    /// line for each distinct value, landing and why.
+    /// The copy's value is `copy` on the line, whose `at` is its time.
+    #[serde(rename = "copy-behind")]
+    CopyBehind {
+        host: String,
+        #[serde(rename = "copy")]
+        at: Option<Rev>,
+        lacks: Rev,
+        why: String,
+    },
+    /// 124: a host's copy that was behind holds the landing again.
+    #[serde(rename = "copy-levelled")]
+    CopyLevelled {
+        host: String,
+        #[serde(rename = "copy")]
+        at: Rev,
+    },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
         ids: Vec<u64>,
@@ -750,6 +846,33 @@ pub enum Event {
         /// longer exists (session-runs-1 clause 97).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
+        /// 123: freed at the operator's accepting that its release failed,
+        /// with nothing run: what failed last, if its release ever did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accepted: Option<String>,
+    },
+    /// 123: a release that failed, and how many times it has been tried;
+    /// `held` on the try that spent its retries.
+    ReleaseFailed {
+        place: String,
+        failed: String,
+        tries: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        held: bool,
+    },
+    /// 123: a place whose working copy was gone, released once from what
+    /// sluice held for it and freed whatever that did; for a session's
+    /// place, its worktree.
+    Gone {
+        place: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
+        /// A release command its runs stored was run.
+        #[serde(default)]
+        ran: bool,
+        /// The release failed, and how.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed: Option<String>,
     },
     /// An update to the branch made by anything but sluice, refused (1).
     Protected {
@@ -921,6 +1044,227 @@ pub fn to_document<T: Serialize>(value: &T) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A document written before the hold existed reads as before, with
+    /// no revision it must contain and no hold, and writes back unchanged.
+    #[test]
+    fn a_branch_document_without_the_hold_reads_as_before() {
+        let old = r#"{
+  "schema": "sluice/branch@1",
+  "branch": "bolt/x",
+  "log": "sluice/log@1",
+  "base": "c43609b",
+  "verified": true,
+  "window": 4,
+  "next_place": 3,
+  "next_candidate": 5,
+  "candidates": [],
+  "landing": null,
+  "release": [],
+  "outbox": []
+}
+"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert_eq!(doc.landed, None);
+        assert_eq!(doc.held, None);
+        assert!(doc.copies.is_empty());
+        assert_eq!(String::from_utf8(to_document(&doc)).unwrap(), old);
+    }
+
+    /// 124: each host's copy left behind round-trips under `copies`, by
+    /// the host's name.
+    #[test]
+    fn a_branch_document_with_a_copy_behind_round_trips() {
+        let mut doc = BranchDoc::new("bolt/x");
+        doc.landed = Some(Rev::new("c43609b"));
+        doc.copies.insert(
+            "deneb".into(),
+            CopyBehind {
+                at: Some(Rev::new("10e4791")),
+                lacks: Rev::new("c43609b"),
+                why: "git holds the lock on refs/heads/bolt/x".into(),
+                since: "2026-10-23T12:00:00Z".into(),
+            },
+        );
+        let bytes = to_document(&doc);
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            v["copies"],
+            serde_json::json!({
+                "deneb": {
+                    "at": "10e4791", "lacks": "c43609b",
+                    "why": "git holds the lock on refs/heads/bolt/x",
+                    "since": "2026-10-23T12:00:00Z",
+                },
+            })
+        );
+        assert_eq!(serde_json::from_slice::<BranchDoc>(&bytes).unwrap(), doc);
+    }
+
+    #[test]
+    fn a_copy_behind_and_levelled_are_log_lines() {
+        let lines = [
+            Event::CopyBehind {
+                host: "deneb".into(),
+                at: Some(Rev::new("10e4791")),
+                lacks: Rev::new("c43609b"),
+                why: "git holds the lock on refs/heads/bolt/x".into(),
+            },
+            Event::CopyLevelled {
+                host: "deneb".into(),
+                at: Rev::new("c43609b"),
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|event| {
+                let line = LogLine {
+                    schema: LOG_SCHEMA.into(),
+                    at: "2026-10-23T12:00:00Z".into(),
+                    event: event.clone(),
+                };
+                String::from_utf8(to_line(&line)).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"copy-behind\",\"host\":\"deneb\",\"copy\":\"10e4791\",\"lacks\":\"c43609b\",\"why\":\"git holds the lock on refs/heads/bolt/x\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"copy-levelled\",\"host\":\"deneb\",\"copy\":\"c43609b\"}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back.into_iter().map(|l| l.event).collect::<Vec<_>>(), lines);
+    }
+
+    #[test]
+    fn a_branch_document_with_the_hold_round_trips() {
+        let mut doc = BranchDoc::new("bolt/x");
+        doc.landed = Some(Rev::new("c43609b"));
+        doc.held = Some(BranchHold {
+            read: Rev::new("10e4791"),
+            lacks: Rev::new("c43609b"),
+            since: "2026-10-23T12:00:00Z".into(),
+        });
+        let bytes = to_document(&doc);
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["landed"], "c43609b");
+        assert_eq!(
+            v["held"],
+            serde_json::json!({
+                "read": "10e4791", "lacks": "c43609b", "since": "2026-10-23T12:00:00Z",
+            })
+        );
+        assert_eq!(serde_json::from_slice::<BranchDoc>(&bytes).unwrap(), doc);
+    }
+
+    #[test]
+    fn the_hold_and_the_acceptance_are_log_lines() {
+        let lines = [
+            Event::Held {
+                read: Rev::new("10e4791"),
+                lacks: Rev::new("c43609b"),
+            },
+            Event::Accepted {
+                revision: Rev::new("10e4791"),
+                lacked: Rev::new("c43609b"),
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|event| {
+                let line = LogLine {
+                    schema: LOG_SCHEMA.into(),
+                    at: "2026-10-23T12:00:00Z".into(),
+                    event: event.clone(),
+                };
+                String::from_utf8(to_line(&line)).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"held\",\"read\":\"10e4791\",\"lacks\":\"c43609b\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-23T12:00:00Z\",\"event\":\"accepted\",\"revision\":\"10e4791\",\"lacked\":\"c43609b\"}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back.into_iter().map(|l| l.event).collect::<Vec<_>>(), lines);
+    }
+
+    /// 123: a branch file written before failed releases reads with none,
+    /// and one holding them, and the new events, reads back as written.
+    #[test]
+    fn failed_releases_read_and_round_trip() {
+        let old = r#"{"schema":"sluice/branch@1","branch":"main","log":"sluice/log@1",
+            "release":["sluice/try/main/48"],"outbox":[]}"#;
+        let doc: BranchDoc = serde_json::from_str(old).unwrap();
+        assert!(doc.failed_releases.is_empty());
+        assert_eq!(doc.release, ["sluice/try/main/48"]);
+        let written = String::from_utf8(to_document(&doc)).unwrap();
+        assert!(!written.contains("failed_releases"), "{written}");
+
+        let mut doc = BranchDoc::new("main");
+        doc.failed_releases.push(FailedRelease {
+            place: "sluice/try/main/48".into(),
+            failed: "usage: scripts/preview up".into(),
+            tries: 4,
+            at: "2026-10-23T09:00:00Z".into(),
+            stopped: true,
+            host: Some("deneb".into()),
+        });
+        let back: BranchDoc = serde_json::from_slice(&to_document(&doc)).unwrap();
+        assert_eq!(back.failed_releases, doc.failed_releases);
+
+        for event in [
+            Event::ReleaseFailed {
+                place: "sluice/try/main/48".into(),
+                failed: "usage: scripts/preview up".into(),
+                tries: 4,
+                held: true,
+            },
+            Event::Gone {
+                place: "session//w/a".into(),
+                worktree: Some("/w/a".into()),
+                ran: true,
+                failed: Some("usage: scripts/preview up".into()),
+            },
+            Event::Released {
+                place: "sluice/try/main/48".into(),
+                worktree: None,
+                accepted: Some("usage: scripts/preview up".into()),
+            },
+        ] {
+            let line = LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-10-23T09:00:00Z".into(),
+                event,
+            };
+            let text = serde_json::to_string(&line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<LogLine>(&text).unwrap(),
+                line,
+                "{text}"
+            );
+        }
+        let line: LogLine = serde_json::from_str(
+            r#"{"at":"2026-10-23T09:00:00Z","event":"released","place":"sluice/try/main/48"}"#,
+        )
+        .unwrap();
+        assert!(matches!(line.event, Event::Released { accepted: None, .. }));
+        let line: LogLine = serde_json::from_str(
+            r#"{"at":"2026-10-23T09:00:00Z","event":"gone","place":"session//w/a","worktree":"/w/a"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            line.event,
+            Event::Gone {
+                ran: false,
+                failed: None,
+                ..
+            }
+        ));
+    }
 
     /// A flaky failure recorded before its times and hosts reads with
     /// them left out, and is written back without them.
