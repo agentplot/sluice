@@ -66,7 +66,7 @@ it's required.
 ```console
 $ sluice submit main
 refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
-let it run in CI in this worktree, or drop it from main's policy in the same submission that lets it run, and submit again
+the agent working in unit/integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
 ```
 
 A task required through a tag names the tag: `main requires app:serve
@@ -123,7 +123,7 @@ passed · landed as b7d2e94
 submission 45 from ../bolt-b:
 conflict: docs/architecture/builds.md
   conflicts with #44 (ops, bolt/runner)
-merge or rebase onto main in your worktree and submit again
+the agent working in bolt/docs merges or rebases onto main there and submits again
 ```
 
 It exits `0` when every one landed, and otherwise with the exit of the

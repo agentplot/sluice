@@ -1783,9 +1783,9 @@ fn blamed_then_submitted_again_on_the_same_head() {
     );
     assert!(said.contains("failed: sh check.sh"), "{said}");
     assert!(
-        said.lines()
-            .last()
-            .is_some_and(|l| l == "fix it in your worktree and submit again"),
+        said.lines().last().is_some_and(
+            |l| l == "the agent working in unit/again fixes it there and submits again"
+        ),
         "{said}"
     );
     let subs = g.of(n);
@@ -1809,7 +1809,9 @@ fn timed_out_then_submitted_again_on_the_same_head() {
     let said = text(&out);
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(
-        said.contains("if the host was slow, submit the same head again"),
+        said.contains(
+            "if the host was slow, the agent working in unit/slowly submits the same head again"
+        ),
         "{said}"
     );
     assert!(!said.contains("draft"), "{said}");

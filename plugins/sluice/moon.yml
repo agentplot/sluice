@@ -10,6 +10,11 @@ tasks:
     command: 'bash tests/hooks.sh'
     inputs: ['scripts/**/*', 'tests/**/*', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
+  # The plain-clone conversion on scratch clones, with a stand-in lsof.
+  lay-out:
+    command: 'bash tests/lay-out.sh'
+    inputs: ['scripts/**/*', 'tests/**/*', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
   # The manifest and its skills, by the pinned Claude Code.
   validate:
     command: '../claude.sh plugin validate --strict .'

@@ -18,7 +18,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 
 ```
 refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
-let it run in CI in this worktree, or drop it from main's policy in the same submission that lets it run, and submit again
+the agent working in unit/integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
 ```
 
 The branch requires a task the task runner, in your worktree, never runs

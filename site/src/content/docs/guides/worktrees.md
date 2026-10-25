@@ -9,6 +9,70 @@ sluice lands on a branch and moves it. It never touches the worktrees
 around it, other than the checkouts it makes for combinations and the
 worktrees it runs checks in. This page is how the rest keep up.
 
+## One working copy per branch
+
+sluice is set up in a repository whose git directory stands apart from
+its working copies, one per branch, so every person and every agent works
+and submits from a working copy of their own. The git directory stays
+bare in the repository's folder, and `main` is a worktree like any other:
+
+```
+project/
+├── .git            # a file: gitdir: ./project.git
+├── project.git/    # the git directory, bare
+├── main/           # a worktree on main
+└── unit-x/         # a worktree per branch, named for it
+```
+
+From a fresh clone:
+
+```sh
+mkdir project && cd project
+git clone --bare https://github.com/acme/project.git project.git
+printf 'gitdir: ./project.git\n' > .git
+
+# A bare clone maps no remote branches: give it the usual refspec, then fetch.
+git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git fetch origin
+
+# Worktrees record relative paths, so the whole folder can move (git 2.48+).
+git config worktree.useRelativePaths true
+
+git worktree add main main
+git -C main branch --set-upstream-to=origin/main
+```
+
+The `.git` file lets a tool started in `project/` find the repository.
+Once sluice lands on `main`, switch `main/` to a detached checkout, as the
+next section says.
+
+For a clone you already have, ask the Claude Code plugin to set sluice up
+in it. In a plain clone, the repository's one working copy, it offers this
+layout before anything else, and goes on in the plain clone only if you
+tell it to. The commit that adds `.config/sluice.toml` then says you chose
+to keep it. Laying it out keeps the git directory in the folder as
+`project.git`, and moves the working copy into `project/main` on its
+branch, uncommitted changes and all. A worktree outside the folder keeps
+working.
+
+Before anything moves, Claude names what it costs:
+
+- every process with its working directory or a file open in the folder:
+  a dev server, a shell, an editor, another agent. Nothing moves until
+  each has let the folder go, and each starts again from `main/`. An
+  editor that only watches the folder shows in no listing, so close the
+  folder in every editor.
+- what stays under the old path: Claude Code's prompt recall, and the
+  folder's trust and permission answers, which Claude asks again once for
+  `main/`.
+
+What it carries: the folder's Claude Code sessions, to the path Claude
+Code keeps for `main/`, and its project memory, to the git directory's,
+overwriting nothing. The session doing the setup moves itself when you
+type `/cd project/main`. A session started in a subfolder of the clone
+keeps its own path, and `claude --resume <session-id>` finds it from
+anywhere.
+
 ## Never check out a branch sluice lands on
 
 A branch sluice lands on is one with a queue, or one your policy gives a

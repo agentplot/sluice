@@ -151,7 +151,30 @@ fn submit_fails_and_names_the_combination() {
         .kept_log(at)
         .unwrap()
         .contains("tests:t-batch-cards failed"));
-    assert_eq!(lines[6], "fix it in your worktree and submit again");
+    assert_eq!(
+        lines[6],
+        "the agent working in unit/batch-review fixes it there and submits again"
+    );
+}
+
+/// Could-not-run-1 115: a check the host could not run is blamed on no
+/// one, and its way on names the agent working in the worktree.
+#[test]
+fn a_check_the_host_could_not_run_is_submitted_again_by_the_agent_in_its_worktree() {
+    let f = setup();
+    f.world
+        .cannot_run("tests:t-batch-cards", Some("no emulator on this host"));
+    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert_eq!(
+        out.lines().last(),
+        Some(
+            "the host could not run tests:t-batch-cards: once it can, the agent working in \
+             unit/a submits again"
+        ),
+        "{out}"
+    );
 }
 
 /// 85, 86: a failure on a system the gate names says which system.
@@ -325,9 +348,9 @@ fn a_timed_out_submission_names_the_test_the_limit_ended() {
     assert_eq!(
         lines.last().copied(),
         Some(
-            "nothing was recorded for tests:t-batch-cards: if the host was slow, submit the \
-             same head again; if tests:t-batch-cards never ends, fix it in your worktree and \
-             submit again"
+            "nothing was recorded for tests:t-batch-cards: if the host was slow, the agent \
+             working in unit/batch-review submits the same head again; if tests:t-batch-cards \
+             never ends, it fixes it there and submits again"
         ),
         "{out}"
     );
@@ -428,7 +451,8 @@ fn a_conflict_exits_two_and_check_says_so_first() {
         format!(
             "submission 2 to {BRANCH} · 1 queued ahead (#1)\n\
              conflict: plugin/lib/plan.py\n  conflicts with #1 (crw-1-unit-1, unit/touches)\n\
-             merge or rebase onto {BRANCH} in your worktree and submit again\n"
+             the agent working in unit/forecast merges or rebases onto {BRANCH} there and \
+             submits again\n"
         )
     );
 }
@@ -494,7 +518,28 @@ fn a_dirty_place_is_refused_with_exit_two() {
     assert_eq!(
         out,
         "refused: unit/a holds changes beyond its commits:\n  plugin/scratch.py\n\
-         commit or remove them and submit again\n"
+         the agent working in unit/a commits or removes them and submits again\n"
+    );
+}
+
+/// A refusal's way on names the agent working in the worktree under
+/// `--json` as in text, and what moves it on is the same command.
+#[test]
+fn a_refusal_under_json_names_the_agent_and_keeps_its_next() {
+    let f = setup();
+    work(&f, "unit/a", "agent", &[("plugin/x", Some("x"))]);
+    f.world.dirty("unit/a", &["plugin/scratch.py"]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, CONFLICT, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["error"]["message"],
+        "unit/a holds changes beyond its commits:\n  plugin/scratch.py\n\
+         the agent working in unit/a commits or removes them and submits again"
+    );
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice submit {BRANCH}")])
     );
 }
 
@@ -516,8 +561,8 @@ fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused_with_exit_
             "refused: {BRANCH} requires plugin:test through #gate (.config/sluice.toml line 2), \
              which the task runner in this worktree keeps out of CI, so it is never run and \
              {BRANCH} cannot pass while it is required\n\
-             let it run in CI in this worktree, or drop it from {BRANCH}'s policy in the same \
-             submission that lets it run, and submit again\n"
+             the agent working in unit/a lets it run in CI there, or drops it from {BRANCH}'s \
+             policy in the same submission that lets it run, and submits again\n"
         )
     );
     assert!(f.world.published().is_empty());
@@ -774,8 +819,8 @@ fn home_shows_a_pull_requests_submission_to_the_worktree_it_was_opened_from() {
     assert_eq!(home(&f, "unit/b")["submission"], serde_json::Value::Null);
 }
 
-/// Outside any worktree sluice can submit from, it says so, shows the
-/// queues and points at the overview.
+/// Outside any worktree sluice can submit from, it says so and who
+/// submits, shows the queues and points at the overview.
 #[test]
 fn home_outside_a_worktree_says_so() {
     let f = setup();
@@ -784,7 +829,10 @@ fn home_outside_a_worktree_says_so() {
     assert_eq!(v["next"], serde_json::json!(["sluice overview"]));
     let (_, out) = sluice(&f, &["--worktree", "nowhere"]);
     assert!(
-        out.starts_with("not in a worktree sluice can submit from\n"),
+        out.starts_with(
+            "not in a worktree sluice can submit from: the agent working in a worktree submits \
+             its work from there\n"
+        ),
         "{out}"
     );
 }
@@ -2799,6 +2847,59 @@ fn wait_runs_to_the_outcome() {
     assert_eq!(json(&out)["state"], "queued");
 }
 
+/// A report waited on from another worktree names the agent working in
+/// the one the submission came from as who moves it on, and sends its
+/// reader into no worktree; a step that is the operator's, setting a fail
+/// aside, still names the operator.
+#[test]
+fn a_report_waited_on_elsewhere_names_the_agent_in_the_worktree_it_came_from() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1", "--worktree", "unit/b"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert_eq!(
+        out.lines().last(),
+        Some("the agent working in unit/a fixes it there and submits again"),
+        "{out}"
+    );
+    for word in ["your worktree", "inside"] {
+        assert!(!out.contains(word), "{word}: {out}");
+    }
+
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let submit = ["submit", BRANCH, "--worktree", "unit/a", "--no-wait"];
+    sluice(&f, &submit);
+    assert_eq!(sluice(&f, &["wait", "1", "--worktree", "unit/b"]).0, FAILED);
+    sluice(&f, &submit);
+    let (code, out) = sluice(&f, &["wait", "2", "--worktree", "unit/b"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(
+        out.contains("the operator can set it aside: sluice set-aside tests:t-batch-cards --at "),
+        "{out}"
+    );
+    for word in ["your worktree", "inside"] {
+        assert!(!out.contains(word), "{word}: {out}");
+    }
+}
+
 /// ADR 0041: the exits tell a blame, a conflict and a withdrawal apart,
 /// for `wait` and a waiting submit alike.
 #[test]
@@ -4104,7 +4205,7 @@ fn a_group_is_queued_whole_or_not_at_all() {
     assert_eq!(
         out,
         "refused: unit/b2 holds changes beyond its commits:\n  plugin/scratch.py\n\
-         commit or remove them and submit again\n\
+         the agent working in unit/b2 commits or removes them and submits again\n\
          nothing submitted: the 2 worktrees are submitted together or not at all\n"
     );
     assert!(queued(&f).is_empty());
@@ -4233,7 +4334,10 @@ fn a_waiting_group_exits_with_the_first_that_did_not_land() {
             "submission 2 from unit/b2:",
             "conflict: plugin/lib/plan.py",
             "  conflicts with #1 (agent-1, unit/b1)",
-            &format!("merge or rebase onto {BRANCH} in your worktree and submit again"),
+            &format!(
+                "the agent working in unit/b2 merges or rebases onto {BRANCH} there and submits \
+                 again"
+            ),
             "submission 3 from unit/b3:",
         ],
         "{out}"

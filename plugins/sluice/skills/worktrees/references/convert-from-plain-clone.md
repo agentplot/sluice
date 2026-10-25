@@ -3,52 +3,77 @@
 From `project/` with `project/.git` a directory and the working copy in
 `project/` itself, to `project/project.git` plus `project/main/`.
 
-The working copy's files move into `project/main/`, so do this only when
-nothing is working in `project/`: no editor, agent or shell with its cwd
-there (`lsof -d cwd -Fn | grep -F "/abs/path/to/project/"`, the absolute path
-with a trailing slash, and the exact path too). Existing worktrees outside
-`project/` are kept and repaired.
+One script does it, `${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh`, told the
+session's id, `${CLAUDE_SESSION_ID}`. Where this page shows either as
+written, take it from SKILL.md, which Claude Code fills in. It moves
+nothing while a process outside the session running it has its working
+directory or a file open in `project/`, and it overwrites and deletes
+nothing. The session, its ancestors and everything it started (the shell
+a command runs in, a tool server, a watcher) are never named as holding
+the folder. Existing worktrees outside `project/` are kept and repaired.
+
+The session is the process `--session-pid` names. From Claude Code, write
+`--session-pid "$PPID"` into the command line itself, as below: the shell
+Claude Code runs it in expands `$PPID` to its own parent, the session's
+process. Outside Claude Code, leave it out: the script then takes the
+process that started it, the person's shell, as the session.
 
 ## Plan, then wait for "go"
 
-1. `git -C project status --porcelain` is empty, or the user agrees to carry
-   the changes as they are (they move with the files).
-2. Note the branch checked out (`git -C project branch --show-current`) and
-   every worktree (`git -C project worktree list`).
-3. `project/project.git` and `project/main` do not exist.
-4. No registered worktree lives inside `project/` (for example
-   `project/.worktrees/x` or `project/.claude/worktrees/…`): the move below
-   would carry it into `main/`. If one does, add `! -name <its top-level dir>`
-   to the `find` below and repair it afterwards, or stop and report.
+1. When worktrunk is used, its `worktree-path` template is the one in
+   [layout.md](layout.md), "worktrunk" (`wt config show`), or new
+   worktrees land at `project.git.<branch>`.
+2. Run the plan, which changes nothing:
 
-## Execute, from the parent of `project`
+   ```sh
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan /abs/path/to/project --session-pid "$PPID"
+   ```
+
+   It prints the git directory's new name, `main/` on the branch checked
+   out with the changes it carries as they are, every other worktree and
+   what becomes of it, each process holding the folder (its id, command,
+   and whether by working directory or an open file), and the Claude Code
+   history it will carry, from which key to which. It exits 1, with the
+   reasons, when `go` would refuse now.
+3. Show the user the plan, costs first: each process that must be stopped,
+   or must close the folder, and be started again from `project/main`;
+   every editor or app to reopen at `main/`, since an editor that only
+   watches the folder shows in no listing; the history to be carried and
+   where it goes; and what stays under the old path: prompt recall, the
+   folder's trust and permission answers (Claude asks again once for
+   `main/`), and the sessions started in a subfolder, which
+   `claude --resume <session-id>` still finds.
+4. Wait for the user's go.
+
+## Execute
+
+From Claude Code, name this session by its id, so its own transcript,
+still being written, is left for `/cd`, and by its process, as the plan
+did:
 
 ```sh
-cd project
-mv .git project.git
-git --git-dir=project.git config core.bare true
-printf 'gitdir: ./project.git\n' > .git
-
-# The old working copy's files become the main worktree.
-mkdir main
-# move every entry except .git, project.git and main into main/ (include dotfiles)
-find . -mindepth 1 -maxdepth 1 ! -name .git ! -name project.git ! -name main -exec mv {} main/ \;
-
-# Register main/ as a worktree of the bare repository without checking out again.
-git --git-dir=project.git worktree add --no-checkout main-tmp <branch>
-mv main-tmp/.git main/.git && rmdir main-tmp
-git --git-dir=project.git worktree repair main
-git -C main reset --mixed      # index matches HEAD; files on disk are untouched
-
-git --git-dir=project.git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-git --git-dir=project.git config worktree.useRelativePaths true
-git worktree repair
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" go /abs/path/to/project --session "${CLAUDE_SESSION_ID}" --session-pid "$PPID"
 ```
 
-The `worktree add --no-checkout` step creates the git directory's record for
-the worktree; moving its `.git` file into `main/` and repairing points that
-record at `main/`. If the worktree record ends up named `main-tmp`, that is
-only its internal name; `git worktree list` shows the path.
+Outside Claude Code, leave out `--session` and `--session-pid`.
+
+- Exit 1: refused, nothing moved. Tell the user what holds the folder,
+  wait for their word that it has let go, and run `go` again.
+- Exit 2: a step failed after the move began. Stop and show the user its
+  output: every file is still on disk and nothing was deleted.
+- Exit 0: it prints what it carried and what it left. Ask the user to
+  type `/cd /abs/path/to/project/main`, which moves this session there;
+  then work from `main/`.
+
+What `go` does, in order: renames `.git` to `project.git` and makes it
+bare; writes `project/.git` as `gitdir: ./project.git`; moves every other
+entry into `main/`; registers `main/` as a worktree on the branch with
+`worktree add --no-checkout` and `worktree repair`, and resets its index
+to the branch, the files on disk untouched; maps `origin`'s branches to
+`origin/*`; sets `worktree.useRelativePaths`; repairs every worktree.
+Then it moves the folder's transcripts, each `<id>.jsonl` with its
+`<id>/` folder, from the folder's key under `projects/` to `main/`'s,
+and the files of its `memory/` to the git directory's key.
 
 ## Verify
 
