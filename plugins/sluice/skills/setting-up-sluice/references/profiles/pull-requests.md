@@ -1,9 +1,10 @@
 # Pull requests
 
-**Choose it when** work should get a pull request on GitHub before it lands:
-for review, for other systems' checks (QA, CI, a deployment), or so each
-landing has a page. Needs [remote-branches](remote-branches.md) and the
-[github-app](github-app.md).
+**Choose it when** the team lands on the branch through pull requests
+today, so it keeps them, or when work should get a pull request on GitHub
+before it lands: for review, for other systems' checks (QA, CI, a
+deployment), or so each landing has a page. Needs
+[remote-branches](remote-branches.md) and the [github-app](github-app.md).
 
 ## Keys
 
@@ -65,8 +66,13 @@ open pull requests and moves the queue. sluice starts no service itself.
 ## GitHub settings
 
 - Leave GitHub's merge queue off.
-- Require no approvals or status checks in the ruleset; put them in
-  `[branches.main.pull_requests]`.
+- Required approvals and status checks move from the ruleset, or branch
+  protection, into `[branches.main.pull_requests]`: read them from GitHub,
+  write them as `reviews` and `checks`, then remove them there on the
+  user's word.
+- No setting lets GitHub's merge button land while sluice only tests:
+  what the button lands was never tested with what landed just before it.
+  Asked for one, say there is none, and why, and offer this table.
 - Turn on "dismiss stale pull request approvals" if new commits need a new
   review.
 - The repository's own CI may keep running on pull requests; name its job in
