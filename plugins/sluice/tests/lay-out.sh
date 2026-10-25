@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The plain-clone conversion, scripts/lay-out.sh, on scratch clones: its
-# plan changes nothing; it refuses while another process holds the folder
-# or when it cannot tell; otherwise it lays the clone out with its changes
+# plan changes nothing; it refuses while a process outside its session
+# holds the folder, or when it cannot tell, and never on the session or
+# what the session started; otherwise it lays the clone out with its changes
 # and its worktrees intact, and carries Claude Code's history to the new
 # keys, overwriting nothing. git runs isolated from the user's config and
 # credentials, `lsof` is a stand-in, and Claude Code's directory is
@@ -67,6 +68,11 @@ clone() {
 holds() {
   printf 'p%s\nR%s\nc%s\nfcwd\nn%s\n' "$1" "$2" "$3" "$4" >>"$scratch/lsof.out"
 }
+# Process $1, its parent $2, command $3, working directory / and file $4
+# open.
+opens() {
+  printf 'p%s\nR%s\nc%s\nfcwd\nn/\nf12\nn%s\n' "$1" "$2" "$3" "$4" >>"$scratch/lsof.out"
+}
 listing() {
   : >"$scratch/lsof.out"
   export FAKE_LSOF=$scratch/lsof.out
@@ -127,7 +133,7 @@ fi
 
 # A process with a file open in the folder holds it too.
 listing
-printf 'p4194302\nR1\nccode\nfcwd\nn/\nf12\nn%s\n' "$p/a.txt" >>"$scratch/lsof.out"
+opens 4194302 1 code "$p/a.txt"
 run bash "$lay_out" go "$p"
 if [ $status = 1 ] && has "$out" "4194302  code  open file $p/a.txt" &&
   [ "$(snapshot "$p")" = "$before" ]; then
@@ -163,13 +169,70 @@ else
   fail "go with main/ there (exit $status): $out"
 fi
 
-# With only the caller's session in the folder, its shell and the session
-# above it, go lays it out with its
+# The caller names its session. The session, the shell the conversion
+# runs in, a helper the session started beside that shell and the
+# helper's own child, with a file open, hold nothing: the plan names none
+# of them, and go lays the folder out. A process outside the session
+# beside them refuses go, which names it and none of the session's own.
+h=$scratch/h
+clone "$h"
+session_pid=4194310
+helpers() {
+  listing
+  holds $session_pid 1 claude "$h"
+  holds $$ $session_pid zsh "$h"
+  holds 4194311 $session_pid node "$h"
+  opens 4194312 4194311 esbuild "$h/a.txt"
+}
+names_none() { # text
+  ! has "$1" 4194310 && ! has "$1" 4194311 && ! has "$1" 4194312 && ! has "$1" "$$  zsh"
+}
+helpers
+before=$(snapshot "$h")
+run bash "$lay_out" plan "$h" --session-pid $session_pid
+if [ $status = 0 ] && has "$out" "holds the folder: nothing but this session and what it started" &&
+  names_none "$out" && [ "$(snapshot "$h")" = "$before" ]; then
+  ok "the plan names none of the named session's own: its shell, its helper, the helper's child"
+else
+  fail "plan with the session's helpers (exit $status): $out"
+fi
+holds 4194313 1 vim "$h"
+run bash "$lay_out" go "$h" --session-pid $session_pid
+if [ $status = 1 ] && has "$out" "4194313  vim  working directory $h" && names_none "$out" &&
+  [ "$(snapshot "$h")" = "$before" ]; then
+  ok "a process outside the session beside its helpers refuses go, which names only that process"
+else
+  fail "go with a helper and an outsider (exit $status): $out"
+fi
+helpers
+run bash "$lay_out" go "$h" --session-pid $session_pid
+if [ $status = 0 ] && [ "$(git -C "$h/h.git" rev-parse --is-bare-repository)" = true ] &&
+  [ "$(git -C "$h/main" branch --show-current)" = feat ] && names_none "$out"; then
+  ok "go lays the folder out with only the named session and what it started in it"
+else
+  fail "go with the session's helpers (exit $status): $out"
+fi
+
+# With no session named, the process that started the conversion is the
+# session: in the folder, it holds nothing.
+c=$scratch/c
+clone "$c"
+listing
+holds $$ 4194320 bash "$c"
+before=$(snapshot "$c")
+run bash "$lay_out" plan "$c"
+if [ $status = 0 ] && has "$out" "holds the folder: nothing but this session and what it started" &&
+  ! has "$out" "$$  bash" && [ "$(snapshot "$c")" = "$before" ]; then
+  ok "with no session named, the process that started the conversion holds nothing"
+else
+  fail "plan with no session named (exit $status): $out"
+fi
+
+# With only the caller's session in the folder, the process that started
+# the conversion and the one above it, go lays it out with its
 # changes and its outside worktree working, and carries the history: two
 # sessions to main/'s key, the caller's left, memory to the git
 # directory's key.
-c=$scratch/c
-clone "$c"
 old=$projects/$(key "$c")
 mkdir -p "$old/memory" "$old/s2" "$old/s1"
 for s in s1 s2 s3; do echo "{\"$s\":1}" >"$old/$s.jsonl"; done
