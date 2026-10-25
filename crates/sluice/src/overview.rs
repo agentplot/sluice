@@ -3,6 +3,7 @@
 //! counts and writes nothing (rules core.11, core.14), so `sluice
 //! previews`' own tidying is left to it.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 
 use anyhow::Result;
@@ -121,6 +122,7 @@ fn write_overview(
         if let Some(hold) = &b.held {
             writeln!(out, "  {}", held_line(&b.branch, hold))?;
         }
+        write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
         for c in &b.candidates {
             if !matches!(c.state, CandidateState::Starting | CandidateState::Testing) {
                 continue;
@@ -131,6 +133,12 @@ fn write_overview(
         for r in b.recent.iter().rev().take(3) {
             writeln!(out, "  {}", recent_line(r))?;
         }
+    }
+    // 123: a worktree's or a preview's held place whose branch has no
+    // records is named all the same.
+    for branch in unlisted_branches(branches, doc) {
+        writeln!(out, "{branch} · no records")?;
+        write_held_places(&held_places(&branch, None, doc), out)?;
     }
     // 77, 107: the hosts serving a remote, by their last sign of life.
     for h in doc["hosts"].as_array().map_or(&[][..], Vec::as_slice) {
@@ -202,6 +210,127 @@ fn write_overview(
                 w["worktree"].as_str().unwrap_or("")
             )?;
         }
+    }
+    Ok(())
+}
+
+/// 123: a place of a branch held because its release failed and tried
+/// no more, as the overview names it.
+struct HeldPlace {
+    /// `sluice/try/main/48`, `worktree /work/app/unit-a` or `preview docs`.
+    name: String,
+    /// What `sluice release` is given to release it.
+    release: String,
+    /// How many times its release failed.
+    tries: u64,
+    /// The last line of what failed.
+    failed: String,
+    /// Another host's, on which alone it is released.
+    host: Option<String>,
+}
+
+/// `branch`'s held places: its checkouts held, then the worktrees and the
+/// previews of it whose release failed and is tried no more.
+fn held_places(branch: &str, b: Option<&BranchView>, doc: &serde_json::Value) -> Vec<HeldPlace> {
+    let here = doc["host"].as_str();
+    let checkouts = b
+        .into_iter()
+        .flat_map(|b| &b.held_checkouts)
+        .filter(|f| f.stopped)
+        .map(|f| HeldPlace {
+            name: f.place.clone(),
+            release: f.place.clone(),
+            tries: f.tries.into(),
+            failed: last_line(&f.failed),
+            host: f.host.clone().filter(|h| Some(h.as_str()) != here),
+        });
+    let of = |key: &str| doc[key].as_array().map_or(&[][..], Vec::as_slice);
+    let stopped = |v: &&serde_json::Value| {
+        v["branch"] == branch && v["release_failed"]["stopped"].as_bool() == Some(true)
+    };
+    let failure = |v: &serde_json::Value| {
+        (
+            v["release_failed"]["tries"].as_u64().unwrap_or(0),
+            last_line(v["release_failed"]["failed"].as_str().unwrap_or("")),
+        )
+    };
+    let worktrees = of("sessions").iter().filter(stopped).map(|w| {
+        let path = w["worktree"].as_str().unwrap_or("");
+        let (tries, failed) = failure(w);
+        HeldPlace {
+            name: format!("worktree {path}"),
+            release: format!("--worktree {path}"),
+            tries,
+            failed,
+            host: None,
+        }
+    });
+    let previews = of("previews").iter().filter(stopped).map(|p| {
+        let name = p["name"].as_str().unwrap_or("");
+        let (tries, failed) = failure(p);
+        HeldPlace {
+            name: format!("preview {name}"),
+            release: name.to_string(),
+            tries,
+            failed,
+            host: None,
+        }
+    });
+    checkouts.chain(worktrees).chain(previews).collect()
+}
+
+/// The branches of held worktrees and previews that have no records, in
+/// name order.
+fn unlisted_branches(branches: &[BranchView], doc: &serde_json::Value) -> BTreeSet<String> {
+    ["sessions", "previews"]
+        .iter()
+        .flat_map(|key| doc[*key].as_array().map_or(&[][..], Vec::as_slice))
+        .filter(|v| v["release_failed"]["stopped"].as_bool() == Some(true))
+        .filter_map(|v| v["branch"].as_str())
+        .filter(|b| !branches.iter().any(|v| v.branch == *b))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The last line of `text` with anything on it.
+fn last_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 123: each held place in two lines, as the round says a hold: what
+/// failed, then how to run its release again or free it without.
+fn write_held_places(places: &[HeldPlace], out: &mut dyn Write) -> Result<()> {
+    for p in places {
+        let on = p
+            .host
+            .as_ref()
+            .map_or(String::new(), |h| format!(" on {h}"));
+        let times = match p.tries {
+            1 => "once".to_string(),
+            n => format!("{n} times"),
+        };
+        let failed = match p.failed.as_str() {
+            "" => String::new(),
+            f => format!(": {f}"),
+        };
+        writeln!(
+            out,
+            "  {}{on} is held: its release failed {times}{failed}",
+            p.name
+        )?;
+        let run = p
+            .host
+            .as_ref()
+            .map_or(String::new(), |h| format!("on {h}: "));
+        writeln!(
+            out,
+            "    {run}sluice release {r} runs it again; sluice release {r} --accept-failure frees it without",
+            r = p.release
+        )?;
     }
     Ok(())
 }

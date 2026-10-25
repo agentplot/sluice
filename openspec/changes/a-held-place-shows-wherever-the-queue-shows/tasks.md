@@ -19,7 +19,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   and its `failed`, and that reading the overview ten times leaves the
   branch's state, its log and the checkout's release count unchanged;
   verify with `conformance:test`
-- [ ] 1.3 In `crates/sluice/src/overview.rs`, print under each branch's
+- [x] 1.3 In `crates/sluice/src/overview.rs`, print under each branch's
   line its held places as design D2 words them: stopped checkouts from
   `held_checkouts`, worktrees from `sessions[]` and previews from
   `previews[]` whose `release_failed` is stopped, each with the last
