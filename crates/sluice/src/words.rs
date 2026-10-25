@@ -78,8 +78,8 @@ pub fn agent_in(branch: &str) -> String {
 
 /// Time-limit-1 66: the way on after a run its time limit ended, for the
 /// agent working in `worktree`. Nothing was recorded for a test it cut
-/// off, so the same head is tested afresh.
-pub fn timed_out_way_on(worktree: &str, tasks: &[&str], same_commits: &str) -> String {
+/// off, so the same head is tested afresh, a pull request's too (120).
+pub fn timed_out_way_on(worktree: &str, tasks: &[&str]) -> String {
     let (recorded, which) = match tasks {
         [] => (String::new(), "a test".to_string()),
         [one] => (format!("nothing was recorded for {one}: "), one.to_string()),
@@ -89,8 +89,33 @@ pub fn timed_out_way_on(worktree: &str, tasks: &[&str], same_commits: &str) -> S
         ),
     };
     format!(
-        "{recorded}if the host was slow, {} submits the same head again{same_commits}; \
+        "{recorded}if the host was slow, {} submits the same head again; \
          if {which} never ends, it fixes it there and submits again",
+        agent_in(worktree)
+    )
+}
+
+/// The way on after a check failed on this submission, for the agent
+/// working in `worktree`.
+pub fn fix_way_on(worktree: &str) -> String {
+    format!("{} fixes it there and submits again", agent_in(worktree))
+}
+
+/// Could-not-run-1 115: the way on after the host could not run `tasks`,
+/// for the agent working in `worktree`.
+pub fn could_not_run_way_on(worktree: &str, tasks: &[&str]) -> String {
+    format!(
+        "the host could not run {}: once it can, {} submits again",
+        tasks.join(", "),
+        agent_in(worktree)
+    )
+}
+
+/// The way on after a conflict with what is ahead of it on `branch`, for
+/// the agent working in `worktree`.
+pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
+    format!(
+        "{} merges or rebases onto {branch} there and submits again",
         agent_in(worktree)
     )
 }
@@ -140,19 +165,55 @@ mod tests {
         }
     }
 
+    /// 120, pull-request-submit: the way on after a time-out, a blame, a
+    /// check the host could not run or a conflict is a submit, which
+    /// sluice takes, a pull request's included; none names a draft.
+    #[test]
+    fn the_ways_on_name_a_submit_and_no_draft() {
+        let ways = [
+            timed_out_way_on("unit/a", &[]),
+            timed_out_way_on("unit/a", &["cli:test"]),
+            timed_out_way_on("unit/a", &["cli:test", "cli:tools"]),
+            fix_way_on("unit/a"),
+            could_not_run_way_on("unit/a", &["cli:tools"]),
+            conflict_way_on("unit/a", "main"),
+        ];
+        for w in &ways {
+            assert!(w.contains("submit"), "{w}");
+            assert!(
+                !w.contains("draft") && !w.contains("ready for review"),
+                "{w}"
+            );
+            assert!(!w.contains("your worktree"), "{w}");
+        }
+        assert_eq!(
+            fix_way_on("unit/a"),
+            "the agent working in unit/a fixes it there and submits again"
+        );
+        assert_eq!(
+            could_not_run_way_on("unit/a", &["cli:tools"]),
+            "the host could not run cli:tools: once it can, the agent working in unit/a submits \
+             again"
+        );
+        assert_eq!(
+            conflict_way_on("unit/a", "main"),
+            "the agent working in unit/a merges or rebases onto main there and submits again"
+        );
+    }
+
     #[test]
     fn a_time_limit_names_the_agent_in_the_worktree() {
         assert_eq!(
-            timed_out_way_on("unit/a", &["tests:t-cards"], ""),
+            timed_out_way_on("unit/a", &["tests:t-cards"]),
             "nothing was recorded for tests:t-cards: if the host was slow, the agent working \
              in unit/a submits the same head again; if tests:t-cards never ends, it fixes it \
              there and submits again"
         );
         assert_eq!(
-            timed_out_way_on("unit/a", &["tests:a", "tests:b"], ", or marks #4 a draft"),
+            timed_out_way_on("unit/a", &["tests:a", "tests:b"]),
             "nothing was recorded for tests:a, tests:b: if the host was slow, the agent \
-             working in unit/a submits the same head again, or marks #4 a draft; if one never \
-             ends, it fixes it there and submits again"
+             working in unit/a submits the same head again; if one never ends, it fixes it \
+             there and submits again"
         );
     }
 

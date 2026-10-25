@@ -113,10 +113,12 @@ fn a_preview_is_released_after_its_branch_is_gone() {
     assert_eq!(text(&out), "no previews\n");
 }
 
-/// 101: a preview whose checkout is removed by hand is released by the
-/// next `sluice previews`, its release command run and its port freed.
+/// 101, 123: a preview whose checkout is removed by hand has the release
+/// its run stored run once by the next `sluice previews`, with its names
+/// in its environment, and is freed, its port and names let go; no later
+/// listing runs its release again.
 #[test]
-fn a_removed_checkout_is_released_by_the_next_listing() {
+fn a_removed_checkout_is_freed_by_the_next_listing() {
     let s = Setup::new("preview-checkout-gone", 42010, "true");
     let doc = s.preview();
     let checkout = doc["checkout"].as_str().unwrap();
@@ -126,14 +128,19 @@ fn a_removed_checkout_is_released_by_the_next_listing() {
     assert_eq!(
         text(&out),
         format!(
-            "released {}: its checkout no longer exists\nno previews\n",
+            "freed {}: its checkout no longer exists; its release ran once from its scratch directory; its ports and names free\nno previews\n",
             doc["name"].as_str().unwrap()
         )
     );
-    assert!(std::fs::read_to_string(&s.log)
-        .unwrap()
-        .starts_with("released "));
+    let released = format!(
+        "released {}\n",
+        doc["names"]["SLUICE_NAME_WEB"].as_str().unwrap()
+    );
+    assert_eq!(std::fs::read_to_string(&s.log).unwrap(), released);
     assert!(s.held().is_empty());
+    let out = s.sluice(&["previews"]);
+    assert_eq!(text(&out), "no previews\n");
+    assert_eq!(std::fs::read_to_string(&s.log).unwrap(), released);
 }
 
 /// 101, 103, S33: a command that fails is reported with what it printed,

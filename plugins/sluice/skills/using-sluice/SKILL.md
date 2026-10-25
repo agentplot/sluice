@@ -39,10 +39,19 @@ sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
 ```
 
-Exit codes: `0` landed, `1` failed (this submission was blamed), `2` a
-conflict or a refusal, `4` withdrawn, `5` still waiting (`sluice wait
---timeout` ran out), `130` stopped with Ctrl-C (the submission stays
-queued).
+Exit codes: `0` landed, whatever failed after the landing (what failed is
+on stderr, after `sluice: after the landing:`), `1` failed (this
+submission was blamed), `2` a conflict or a refusal, `3` sluice itself
+failed and the submission has not landed, or it could not read the forge
+for five minutes and whether it landed is not known (the cause is on
+stderr), `4` withdrawn, `5` still waiting (`sluice wait --timeout` ran out),
+`130` stopped with Ctrl-C (the submission stays queued).
+
+A waiting submit or `sluice wait` reads again through a forge's 5xx
+answers, a pause apart, for five minutes. Past them it says `could not read
+#12: sluice wait 12` and exits `3`; under `--json`, the error document with
+that command in `next`. That is no outcome: never take it for a failure.
+Run the command it names, which reads the submission's record again.
 
 A waiting submit also runs sluice's rounds, so it is what moves the queue on
 a single machine. Prefer it when your tool call can outlast the verdict,
@@ -75,9 +84,13 @@ Nothing moves while nobody waits and no `sluice run` is going, so a
 `--no-wait` submission with nobody waiting on it sits at `queued`; `sluice
 wait` moves it, as do `sluice step main` (one round) and `sluice run
 --rounds N`. Do not submit again to move it: a second submit from the same
-worktree replaces the first. On a pull-request branch, `sluice wait main`
-follows the pull request already open; while it is open, its `--json`
-document is `{"pull_request","branch","state"}`.
+worktree replaces the first. On a pull-request branch, `--no-wait --json`
+answers `{"id","branch","ahead","pull_request"}` when sluice queued the
+pull request at once, its conditions holding: hand `id` to `sluice wait`.
+Otherwise it answers `{"pull_request","branch","state"}`, `state` what the
+pull request waits for: run `sluice wait main` in the worktree, which
+follows the pull request and, once sluice queues it, its submission, whose
+record it prints under `--json` from then on.
 
 A submission that sits at `queued` while another is testing is waiting its
 turn. `sluice status <branch>` says `testing N at once (up to M)`. N is one
