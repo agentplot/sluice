@@ -37,6 +37,18 @@ through nix where nix is present, else the release binary for your platform,
 else `cargo install`. A sluice that comes from your own flake or
 home-manager is yours to update, and Claude says so rather than touching it.
 
+In a plain clone, the repository's one working copy, Claude next offers
+to lay the repository out with
+[one working copy per branch](/sluice/guides/worktrees/#one-working-copy-per-branch),
+before it reads or writes anything else. It names each process that has
+the folder open, which must let it go and start again from `main/`, the
+sessions' history it will carry to the new paths, and what stays behind.
+It moves nothing while anything but its own session holds the folder.
+Once the folder is laid out, it carries the folder's other sessions and
+its project memory across, and asks you to type `/cd <folder>/main` to
+bring this session along. It keeps the plain clone only on your word,
+and the commit that adds `.config/sluice.toml` then says you chose to.
+
 Then Claude reads what the repository already uses and proposes a
 `.config/sluice.toml` to match:
 
