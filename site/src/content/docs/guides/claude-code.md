@@ -56,10 +56,11 @@ through sluice to prove the setup.
 In a repository with a `.config/sluice.toml`, Claude:
 
 - submits with `sluice submit` or `wt submit` and never merges or pushes to
-  a protected branch. When its tool calls end before a result comes, it
-  submits with `--no-wait` and runs `sluice wait <id> --timeout 9m --json`
-  again for as long as it exits `5`, reading the outcome from the
-  record's `state`;
+  a protected branch. It submits with `--no-wait` and runs `sluice wait
+  <id> --timeout 9m --json` in the background, again for as long as it
+  exits `5`, so you and other agents can reach it while its work lands,
+  and reads the outcome from the record's `state`. It waits in the
+  foreground only where it can run nothing in the background;
 - commits everything first, and checks for a conflict with `--check`;
 - on a failure, reads the blamed tests and their logs, reproduces them with
   `sluice exec`, fixes and submits again;

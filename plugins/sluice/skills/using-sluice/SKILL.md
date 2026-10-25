@@ -45,19 +45,29 @@ conflict or a refusal, `4` withdrawn, `5` still waiting (`sluice wait
 queued).
 
 A waiting submit also runs sluice's rounds, so it is what moves the queue on
-a single machine. Prefer it when your tool call can outlast the verdict,
-which can take most of an hour. When it can't, submit with `--no-wait` and
-wait in steps with `sluice wait`, which runs the rounds the same way:
+a single machine. A verdict takes from a minute to most of an hour, and an
+agent whose submission holds its session hears nothing meanwhile: no
+message, no word from the user. So an agent submits with `--no-wait` and
+waits with `sluice wait`, which runs the rounds the same way, in its
+harness's background:
 
 ```sh
 sluice submit main --no-wait --json        # {"id":12,"branch":"main","ahead":[...]}
-sluice wait 12 --timeout 9m --json         # again for as long as it exits 5
+sluice wait 12 --timeout 9m --json         # in the background, again for as long as it exits 5
 sluice wait main --timeout 9m --json       # this worktree's last submission to main
 ```
 
-Set the timeout a minute under your tool call's limit. Each `sluice wait
---json` prints the submission's record however it ends: read its `state`
-and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`, `passed` or
+Start each `sluice wait` as a background command (in Claude Code, the Bash
+tool's `run_in_background`): it brings you back when it exits, and a
+message or the user reaches you while it runs. Start it again the same way
+for as long as it exits `5`. Only where your harness runs nothing in the
+background, run it in the foreground, its timeout a minute under your tool
+call's limit, and end no turn while the submission is undecided. A
+waiting `sluice submit main` is for a person at a terminal or a script,
+which nothing else needs to reach.
+
+Each `sluice wait --json` prints the submission's record however it ends:
+read its `state` and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`, `passed` or
 `landing`; run `sluice wait` again. Never search `sluice status <branch>`'s
 listing for `landed` or `failed`: a decided submission leaves that listing,
 and a loop waiting for it there never ends. `sluice status 12 --json` reads
@@ -124,8 +134,8 @@ A background agent you start to work in a worktree, with the Agent tool's
 it. Tell it there to commit its work when it is done and submit it through
 sluice from that worktree, with `sluice submit <branch>` naming the branch
 it lands on, waiting as above (`--no-wait --json`, then `sluice wait <id>
---timeout 9m --json`, when its tool calls can't outlast the verdict), and
-to report the outcome to you. The rest of the prompt is yours, written for
+--timeout 9m --json` in its background, again for as long as it exits
+`5`), and to report the outcome to you. The rest of the prompt is yours, written for
 the work.
 
 Work left committed in a worktree whose agent has ended is submitted by an
