@@ -215,7 +215,7 @@ failed: tests:t-batch-cards
   on bolt/concurrent-units + #12 + #13 (e20a6f9)
   #12 passed on its own, so the failure is from this submission
   log of tests:t-batch-cards: .git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log
-fix it in your worktree and submit again
+the agent working in unit/batch-review fixes it there and submits again
 ```
 
 A conflict is found before any test runs:
@@ -225,7 +225,7 @@ $ sluice submit bolt/concurrent-units
 submission 14 to bolt/concurrent-units · 1 queued ahead (#12)
 conflict: plugin/lib/plan.py
   conflicts with #12 (crw-1-unit-1, unit/touches)
-merge or rebase onto bolt/concurrent-units in your worktree and submit again
+the agent working in unit/forecast merges or rebases onto bolt/concurrent-units there and submits again
 ```
 
 And before submitting, an agent can ask whether its work would conflict:

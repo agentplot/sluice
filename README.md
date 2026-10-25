@@ -191,7 +191,7 @@ failed: tests:t-cards
   on main + #2 + #3 (5b81d07)
   #2 passed on its own, so the failure is from this submission
   log of tests:t-cards: /…/sluice/.logs/main/c4/tests:t-cards.log
-fix it in your worktree and submit again
+the agent working in unit/cards fixes it there and submits again
 ```
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
