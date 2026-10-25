@@ -56,7 +56,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   tried, an older document, and the segment's two lines
   (`plugin-herdr:test-sh`); update `tests/docs/board.json` and
   `board.frame` if the popup's fixture gains a held checkout
-- [ ] 2.3 Make `queue_token` end with `N held: release failed`, set with
+- [x] 2.3 Make `queue_token` end with `N held: release failed`, set with
   nothing queued, a checkout two documents list counted once; verify
   with `tests/run.sh` cases for the three `herdr-sidebar` scenarios
   (`plugin-herdr:test-sh`), and `plugin-herdr:test-dash` still passing

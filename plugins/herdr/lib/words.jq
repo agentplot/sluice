@@ -382,9 +382,13 @@ def pane_token($w; $paths; $failed; $check; $now; $named):
       "#\($landed.id) landed \($landed.at | since($now) | minutes)"
     else "" end;
 
-# The `sluice_q` token: every branch's submissions in these documents.
+# The `sluice_q` token: every branch's submissions in these documents, and
+# the places held because their release failed, a checkout two hosts'
+# documents list counted once.
 def queue_token: ([.[].branches[].depth] | add // 0) as $n
-  | if $n > 0 then plural($n; "submission") else "" end;
+  | ([.[] | . as $d | held_all($d)[]] | unique_by(.key) | length) as $held
+  | [if $n > 0 then plural($n; "submission") else empty end, if $held > 0 then held_words($held) else empty end]
+  | join(" · ");
 
 # --- Events ------------------------------------------------------------
 

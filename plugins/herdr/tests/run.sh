@@ -1549,6 +1549,27 @@ has 'workspace report-metadata w1 --source agentplot.sluice'
 has '--clear-token sluice_q'
 pass
 
+fresh 'sidebar: queued and held'
+feed "$(doc ".branches[0].depth = 3 | .branches += [.branches[0] | .branch = \"release\" | .depth = 1] | $held48")"
+tokens
+has '--token sluice_q=4 submissions · 1 held: release failed'
+pass
+
+fresh 'sidebar: held alone'
+feed "$(doc "$held_unit_a")"
+tokens
+has '--token sluice_q=1 held: release failed'
+pass
+
+fresh 'sidebar: a checkout two hosts list is counted once'
+for h in deneb vega; do
+  feed "$(doc "$held48 | .host = \"$h\" | .branches[0].held_checkouts[0].host = \"deneb\"")"
+done
+[ "$(find "$S/docs" -name '*.json' | wc -l)" -eq 2 ] || fail "not two documents: $(ls "$S/docs")"
+tokens
+has '--token sluice_q=1 held: release failed'
+pass
+
 fresh 'sidebar: tokens fade without the watcher'
 feed "$testing95"
 tokens
