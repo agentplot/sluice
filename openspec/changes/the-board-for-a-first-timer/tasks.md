@@ -23,4 +23,4 @@
 
 ## 4. Integration
 
-- [ ] 4.1 Run the gate's checks for the board and the site, `sluice exec main -- moon run plugin-board:validate plugin-board:typecheck plugin-board:test site:prose`, then `sluice exec main` once committed. Verify that every task passes.
+- [x] 4.1 Run the gate's checks for the board and the site, `sluice exec main -- moon run plugin-board:validate plugin-board:typecheck plugin-board:test site:prose`, then `sluice exec main` once committed. Verify that every task passes.
