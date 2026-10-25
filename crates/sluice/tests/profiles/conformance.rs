@@ -20,7 +20,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use sluice::instance::Instance;
+use sluice::instance::{HostCache, Instance};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::checks::Checks;
 use sluice::profiles::places::Places;
@@ -403,6 +403,21 @@ impl Real {
             }
         });
 
+        // 35, design D7: the host shares moon's cache among its worktrees,
+        // in the base checkout's `.moon/cache`: what lets a combination's
+        // place replay what a session's run, or a passed combination, ran
+        // (93).
+        let moon_cache = HostCache {
+            dir: repo.dir().join(".moon/cache"),
+            socket: None,
+            env: [
+                ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true"),
+                ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        };
         let bound = Bound::open_with(
             repo.dir(),
             PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
@@ -414,7 +429,7 @@ impl Real {
                 signing,
                 peers: Default::default(),
                 systems: None,
-                caches: Vec::new(),
+                caches: vec![moon_cache],
             },
         )
         .expect("the profiles bind");
@@ -718,16 +733,6 @@ fn batch() -> String {
     policy(true, "fail", 4)
 }
 
-/// The bolt policy with moon's cache declared, keyed by its workspace:
-/// what lets a combination's place replay what a session's run, or a
-/// passed combination, ran (35, 93).
-fn cached() -> String {
-    bolt().replace(
-        "[checkout]\n",
-        "[checkout]\n\n[[checkout.cache]]\nkey = [\".moon/workspace.yml\"]\npaths = [\".moon/cache\"]\n",
-    )
-}
-
 /// The bolt policy with ports and a preview whose command does nothing.
 fn preview() -> String {
     sluice_conformance::previewed(&bolt(), "true")
@@ -779,7 +784,7 @@ scenarios! {
     deepest_first_the_longest_passes_and_all_land_on_its_verdict: batch();
     a_conflict_names_every_submission_it_is_contested_with: bolt();
     every_record_written_is_the_real_format_and_names_its_schema: bolt();
-    s26_a_clean_session_run_is_replayed_by_its_submission: cached();
+    s26_a_clean_session_run_is_replayed_by_its_submission: bolt();
     s28_a_dirty_session_run_records_nothing: bolt();
     s27_a_sessions_place_stays_until_it_is_released: bolt();
     s30_a_landed_revision_is_previewed_at_its_addresses: preview();
@@ -793,7 +798,7 @@ scenarios! {
     a_release_that_succeeds_on_a_retry_is_listed_no_more: releasing();
     a_held_checkout_never_holds_its_branch: releasing();
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
-    a_last_result_decides_nothing: cached();
+    a_last_result_decides_nothing: bolt();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();
 }
 
