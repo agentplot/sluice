@@ -55,7 +55,7 @@ use sluice_seams::{
 
 use super::moon::Moon;
 use crate::host_count::{self, HostCount};
-use crate::instance::Instance;
+use crate::instance::{HostCache, Instance};
 use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
 
 /// How long `[tests] ready` may take.
@@ -496,9 +496,14 @@ pub fn sets_itself(name: &str) -> bool {
 }
 
 /// The command's environment: what a check may need of sluice's own
-/// (`KEEP`), the place's paths, and nothing that names another place or
-/// tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
-fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
+/// (`KEEP`), the place's paths, the variables the host's `caches` declare,
+/// and nothing else that names another place or tool (35): no `GIT_*`,
+/// other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
+fn environment(
+    request: &RunRequest,
+    jobs: usize,
+    caches: &[HostCache],
+) -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = std::env::vars()
         .filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_"))
         .collect();
@@ -513,6 +518,11 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
     env.insert("SLUICE_JOBS".into(), jobs.to_string());
     // 31: the place's short name and its ports.
     env.extend(request.place.env.clone());
+    // 35: the host's caches, as its config declares them; none of them is
+    // a variable sluice sets itself (`sets_itself`).
+    for cache in caches {
+        env.extend(cache.env.clone());
+    }
     // The container engine's client finds the engine as the user's does.
     if request.limits.docker {
         for k in ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"] {
@@ -619,7 +629,7 @@ pub fn release_request(
         replay: false,
         system: None,
     };
-    let mut env = environment(&request, jobs);
+    let mut env = environment(&request, jobs, &[]);
     if kind == Kind::Sandbox {
         env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
     }
@@ -701,7 +711,7 @@ impl Tests for Checks {
         // 84: refuse before anything runs.
         let kind = choose(&request.limits)?;
         let jobs = self.instance.jobs();
-        let mut env = environment(request, jobs);
+        let mut env = environment(request, jobs, &self.instance.caches);
         // ADR 0014: what the checks export is found beside the round.
         env.extend(crate::telemetry::run_env(&[
             ("sluice.place", &request.place.name),
@@ -1143,7 +1153,7 @@ impl Tests for Checks {
             system: None,
         };
         let jobs = self.instance.jobs();
-        let env = environment(&request, jobs);
+        let env = environment(&request, jobs, &self.instance.caches);
         let script = scratch.0.join("toolchain.sh");
         if let Some(argv) = &tool_argv {
             toolchain(argv, worktree, &env, &script)?;

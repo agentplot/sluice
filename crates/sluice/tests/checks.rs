@@ -8,7 +8,7 @@ mod support;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sluice::instance::Instance;
+use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
     AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
@@ -19,6 +19,11 @@ use support::{Repo, Scratch};
 /// The check profile of `repo`, counting its runs in a registry of the
 /// repository's own, never the host's.
 fn checks(repo: &Repo) -> Checks {
+    caching(repo, Vec::new())
+}
+
+/// The check profile of `repo` on a host that declares `caches`.
+fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
     Checks::new(
         &repo.dir().join(".git"),
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
@@ -30,7 +35,7 @@ fn checks(repo: &Repo) -> Checks {
             signing: None,
             peers: Default::default(),
             systems: None,
-            caches: Vec::new(),
+            caches,
         },
     )
     .with_running(repo.dir().join(".git/host-running"))
@@ -176,6 +181,51 @@ fn a_command_sees_its_place_and_nothing_of_sluices() {
     for leak in ["MOON_FORCE", "GIT_DIR", "DEVENV_ROOT"] {
         assert!(!seen.contains(leak), "{leak} leaked: {seen}");
     }
+}
+
+/// Run in a child of this test binary, on a host that declares a cache's
+/// variables, with sluice's own environment holding one it does not.
+#[test]
+fn hosts_cache_env_probe() {
+    let Ok(out) = std::env::var("SLUICE_TEST_CACHE_ENV_OUT") else {
+        return;
+    };
+    let repo = Repo::new("checks-cache-env");
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: "/caches/sccache".into(),
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    let req = request(&repo, "p1", command("env > \"$SLUICE_TMP/env\""));
+    assert!(finish(&c, &req).tasks[0].outcome == Outcome::Pass);
+    std::fs::copy(req.place.tmp.join("env"), &out).unwrap();
+}
+
+/// 35: every run is given the variables the host's config declares for
+/// its caches, under the open executor too, and nothing of sluice's own
+/// environment that the config does not declare.
+#[test]
+fn every_run_gets_the_hosts_cache_environment() {
+    let out = support::Scratch::new("checks-cache-env-out");
+    let file = out.path().join("seen");
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "hosts_cache_env_probe", "--nocapture"])
+    .env("SLUICE_TEST_CACHE_ENV_OUT", &file)
+    .env("RUSTC_WRAPPER", "sccache")
+    .status()
+    .unwrap();
+    assert!(status.success());
+    let seen = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        seen.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+        "{seen}"
+    );
+    assert!(!seen.contains("RUSTC_WRAPPER"), "{seen}");
 }
 
 /// `[tests] toolchain` runs before the run and what it prints is sourced
