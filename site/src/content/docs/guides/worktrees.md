@@ -18,9 +18,28 @@ gate under `[branches]`. Don't check one out in any worktree: not
 sluice moves the branch under such a worktree. Its index and files stay
 as they were, so after a landing `git status` there shows every landed
 change as undone and staged. A commit from it would undo the landing, and
-the protection hook refuses one. On a host that didn't land, the local
-branch doesn't move at all: a branch that lives on a remote moves only
-as `origin/<branch>` until this host lands on it.
+the protection hook refuses one.
+
+A branch that lives on a remote is the remote's. This host's branch of
+that name is sluice's copy of it, and every round on this host that
+reads a landing sets the copy to that landing, whichever host landed it.
+So it moves under such a worktree on every host, not only the one that
+landed. When a round can't set it, as while git holds its lock, the next
+round tries again, and meanwhile `sluice status <branch>` says so above
+the queue:
+
+```console
+$ sluice status bolt/payments
+bolt/payments at c43609b · 2 in the queue · testing 1 at once (up to 4)
+this host's bolt/payments is at 10e4791, behind the landing c43609b: git holds the lock on refs/heads/bolt/payments
+```
+
+The protection hook judges a write by the branch's own value on this
+host, never by the remote's. A `git reset --hard` to where the branch
+stands, and git's packing of its refs, pass. A write that moves it is
+refused, and git's error starts with sluice's lines naming the command,
+the revision the branch holds and the one the write would set. Bring
+the worktree level with `git merge --abort` or `git reset --hard`.
 
 `sluice status`, `sluice overview` and `sluice protect` warn of such a
 worktree, and nothing else changes: the landing goes through. To fix

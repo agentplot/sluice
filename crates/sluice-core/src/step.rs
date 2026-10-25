@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    AtBound, Contested, Formed, LandingCommit, Moved, Notification, Progress, Rev, RunHandle,
-    RunRequest, Source, TaskLog, Written,
+    AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification, Progress, Rev,
+    RunHandle, RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span};
 
@@ -34,10 +34,11 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    Candidate, CandidateState, ConflictRecord, Event, FailedTask, Held, LandingCommitRecord,
-    LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState, State, SystemRun,
-    Tested, ToldRecord,
+    BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, Event, FailedTask, Held,
+    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState,
+    State, SystemRun, Tested, ToldRecord,
 };
+use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
 
@@ -45,15 +46,24 @@ use crate::{verdict, Serves, Sluice, OUTPUT};
 /// row that leave a check not run and fail none on its own result.
 pub const NOT_RUN_BOUND: u32 = 3;
 
+/// 123: how many more times a checkout's release that failed is tried
+/// when the branch's policy names no `release_retries`.
+pub const RELEASE_RETRIES: u32 = 3;
+
 /// A round: how its step went, the session places it released because
-/// their worktrees no longer exist (session-runs-1 clause 97), and the
+/// their worktrees no longer exist (session-runs-1 clause 97), the
 /// previews it released because nobody can use them (previews-1 clause
-/// 101).
+/// 101), and the combinations' checkouts whose release failed, was held
+/// or found their working copy gone (123).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Round {
     pub step: Step,
     pub released: Vec<crate::session::Abandoned>,
     pub previews: Vec<crate::preview::Dropped>,
+    pub releases: Vec<ReleaseOutcome>,
+    /// 121: the hold, as the records keep it, of a round that held the
+    /// branch.
+    pub held: Option<BranchHold>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +76,29 @@ pub enum Step {
     /// The records were written between this step's read and its write;
     /// nothing was done (62).
     Contended,
+    /// 121: the branch was read at a revision lacking the landing it must
+    /// contain; nothing was formed, started or landed.
+    Held,
     Stepped,
+}
+
+/// What a levelling found of this host's copy of a branch (124).
+enum Levelled {
+    /// The branch has no copy apart from it on this host.
+    Itself,
+    /// The copy holds the landing.
+    Holds,
+    /// The copy is left at `at`, for `why`.
+    Behind { at: Option<Rev>, why: String },
+}
+
+/// What a round's decide step did.
+enum Decided {
+    Written,
+    /// 121: it wrote the hold and nothing else.
+    Held,
+    /// Its write was refused (62).
+    Contended,
 }
 
 impl Sluice<'_> {
@@ -86,15 +118,30 @@ impl Sluice<'_> {
         let released = info_span!("sluice.abandoned").in_scope(|| self.release_abandoned())?;
         let previews =
             info_span!("sluice.previews").in_scope(|| self.release_unusable_previews())?;
-        let step = self.step_locked(branch, &round)?;
+        let mut releases = Vec::new();
+        let step = self.step_locked(branch, &round, &mut releases)?;
+        let held = match step {
+            Step::Held => self.read_line(branch)?.doc.held,
+            _ => None,
+        };
         Ok(Round {
             step,
             released,
             previews,
+            releases,
+            held,
         })
     }
 
-    fn step_locked(&self, branch: &str, round: &tracing::Span) -> Result<Step> {
+    /// The round under the branch's lock; each release it tried that was
+    /// not plainly released goes in `releases`, and no place is tried
+    /// twice in one round (123).
+    fn step_locked(
+        &self,
+        branch: &str,
+        round: &tracing::Span,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<Step> {
         let Some(_lock) = self.seams.state.lock(branch)? else {
             round.record("sluice.step", "busy");
             return Ok(Step::Busy);
@@ -102,16 +149,29 @@ impl Sluice<'_> {
         if !self.keeps(branch)? {
             // 75: another instance keeps the branch; this one takes, runs
             // and reports runs of its own.
-            info_span!("sluice.claim").in_scope(|| self.execute(branch))?;
+            info_span!("sluice.claim").in_scope(|| self.execute(branch, releases))?;
             round.record("sluice.step", "led");
             return Ok(Step::Led);
         }
-        info_span!("sluice.recover").in_scope(|| self.recover(branch))?;
-        if !info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
-            round.record("sluice.step", "contended");
-            return Ok(Step::Contended);
+        info_span!("sluice.recover").in_scope(|| self.recover(branch, releases))?;
+        match info_span!("sluice.decide").in_scope(|| self.decide(branch))? {
+            Decided::Written => {}
+            Decided::Contended => {
+                round.record("sluice.step", "contended");
+                return Ok(Step::Contended);
+            }
+            Decided::Held => {
+                // 121: nothing new to start or land; an earlier round's
+                // outcomes are still told and its places released.
+                info_span!("sluice.perform").in_scope(|| {
+                    self.perform_releases(branch, releases)?;
+                    self.perform_outbox(branch)
+                })?;
+                round.record("sluice.step", "held");
+                return Ok(Step::Held);
+            }
         }
-        info_span!("sluice.perform").in_scope(|| self.perform(branch))?;
+        info_span!("sluice.perform").in_scope(|| self.perform(branch, releases))?;
         round.record("sluice.step", "stepped");
         Ok(Step::Stepped)
     }
@@ -161,9 +221,11 @@ impl Sluice<'_> {
     // 1. Recover
     // -----------------------------------------------------------------------
 
-    fn recover(&self, branch: &str) -> Result<()> {
+    fn recover(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         // A place decided by a step that stopped before confirming its run
-        // started: release it by its name and open the run again.
+        // started: release it by its name and open the run again, whatever
+        // its release did (123); one that failed is tried again by the
+        // rounds after.
         let line = self.read_line(branch)?;
         let stale: Vec<(String, String)> = line
             .doc
@@ -177,8 +239,8 @@ impl Sluice<'_> {
             })
             .collect();
         for (cand, place) in stale {
-            self.seams.checkout.release(&place, false)?;
-            let now = self.now();
+            let outcome = self.release_made(branch, &place, false)?;
+            let retry = matches!(outcome.how, Releasing::Failed { .. });
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
                     for r in &mut c.runs {
@@ -189,54 +251,66 @@ impl Sluice<'_> {
                         }
                     }
                 }
-                l.log(
-                    &now,
-                    Event::Released {
-                        place: place.clone(),
-                        worktree: None,
-                    },
-                );
+                if retry && !l.doc.release.contains(&place) {
+                    l.doc.release.push(place.clone());
+                }
                 Ok(())
             })?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
         }
-        self.perform(branch)
+        self.perform(branch, releases)
     }
 
     // -----------------------------------------------------------------------
     // 3. Perform
     // -----------------------------------------------------------------------
 
-    fn perform(&self, branch: &str) -> Result<()> {
+    fn perform(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         self.perform_landing(branch)?;
-        self.perform_releases(branch)?;
+        self.perform_releases(branch, releases)?;
         self.perform_outbox(branch)?;
-        self.perform_starts(branch)
+        self.perform_starts(branch, releases)
     }
 
     /// 25, 34: release the places of candidates whose verdict was read or
-    /// that were dropped; only places sluice made (rule core.16).
-    fn perform_releases(&self, branch: &str) -> Result<()> {
+    /// that were dropped; only places sluice made (rule core.16). 123: a
+    /// release that fails holds its place, never the round, and is tried
+    /// once a round: a place tried already in this round, held, or made
+    /// by another host is passed over. A held place of this host's whose
+    /// working copy has gone since is released once, as any gone place is.
+    fn perform_releases(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let doc = self.read_line(branch)?.doc;
-        for place in doc.release {
-            let passed = doc.passed.contains(&place);
-            self.seams.checkout.release(&place, passed)?;
-            let now = self.now();
-            self.update(branch, |l| {
-                l.doc.passed.retain(|p| *p != place);
-                if let Some(n) = l.doc.release.iter().position(|p| *p == place) {
-                    l.doc.release.remove(n);
-                    l.log(
-                        &now,
-                        Event::Released {
-                            place: place.clone(),
-                            worktree: None,
-                        },
-                    );
-                }
-                Ok(())
-            })?;
+        let elsewhere = |f: &crate::records::FailedRelease| {
+            f.host.as_deref().is_some_and(|h| h != self.peer.name)
+        };
+        let gone_since = doc
+            .failed_releases
+            .iter()
+            .filter(|f| f.stopped && !elsewhere(f) && self.held_gone(&f.place))
+            .map(|f| &f.place);
+        for place in doc.release.iter().chain(gone_since) {
+            let passed_over = releases.iter().any(|o| o.place == *place)
+                || doc.failed_releases.iter().any(|f| {
+                    f.place == *place && ((f.stopped && !self.held_gone(place)) || elsewhere(f))
+                });
+            if passed_over {
+                continue;
+            }
+            let outcome = self.release_made(branch, place, doc.passed.contains(place))?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
+            }
         }
         Ok(())
+    }
+
+    /// 123: whether the working copy of the held place `place` is gone, so
+    /// it is released once more; a place whose state cannot be read is
+    /// left held.
+    fn held_gone(&self, place: &str) -> bool {
+        self.seams.checkout.gone(place).unwrap_or(false)
     }
 
     /// 24, 45, 46: move the branch from exactly the revision the landing
@@ -328,9 +402,22 @@ impl Sluice<'_> {
                     l.doc.release.extend(release);
                     l.doc.base = Some(intent.to.clone());
                     l.doc.verified = same_gate;
+                    // 121: every later read of the branch must contain it.
+                    l.doc.landed = Some(intent.to.clone());
                     Ok(true)
                 })?;
                 span.record("sluice.outcome", "landed");
+                // 124: the copy follows the landing; one left behind is
+                // recorded beside it and never fails it (122).
+                if confirmed {
+                    match self.level_copy(branch, &intent.to) {
+                        Ok(levelled) => self.record_copy(branch, &intent.to, &levelled)?,
+                        Err(e) => tracing::warn!(
+                            sluice.branch = branch,
+                            "reading this host's copy after a landing failed: {e:#}"
+                        ),
+                    }
+                }
                 if confirmed {
                     for id in &intent.ids {
                         let waited = line
@@ -424,8 +511,10 @@ impl Sluice<'_> {
     /// 33, 37: make each decided run's place and start its checks. 71: a
     /// run the host has no room for, by its count before the place is made
     /// or by the check seam's refusal after, goes back to open for a later
-    /// round, and no further run starts this step.
-    fn perform_starts(&self, branch: &str) -> Result<()> {
+    /// round, and no further run starts this step; a place made for it is
+    /// released as any candidate's is (123), into `releases` when its
+    /// release was not plain.
+    fn perform_starts(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let line = self.read_line(branch)?;
         let starting: Vec<(Candidate, usize)> = line
             .doc
@@ -506,8 +595,12 @@ impl Sluice<'_> {
                 Ok(run) => run,
                 // Refused before anything of it ran: no run, no outcome.
                 Err(e) if e.downcast_ref::<AtBound>().is_some() => {
-                    self.seams.checkout.release(&name, false)?;
-                    self.reopen(branch, &c.id, i, &name, true)?;
+                    let outcome = self.release_made(branch, &name, false)?;
+                    let retry = matches!(outcome.how, Releasing::Failed { .. });
+                    self.reopen(branch, &c.id, i, &name, retry)?;
+                    if outcome.how != Releasing::Released {
+                        releases.push(outcome);
+                    }
                     full = true;
                     continue;
                 }
@@ -530,16 +623,9 @@ impl Sluice<'_> {
 
     /// 71: run `i` of candidate `cand`, decided into `place` and not
     /// started, is open again, its claim given up so any host with room
-    /// may take it; `released` when its place was made and let go.
-    fn reopen(
-        &self,
-        branch: &str,
-        cand: &str,
-        i: usize,
-        place: &str,
-        released: bool,
-    ) -> Result<()> {
-        let now = self.now();
+    /// may take it; `retry` when its place was made and its release
+    /// failed, so the rounds after try it again (123).
+    fn reopen(&self, branch: &str, cand: &str, i: usize, place: &str, retry: bool) -> Result<()> {
         self.update(branch, |l| {
             if let Some(r) = l.candidate_mut(cand).and_then(|c| c.runs.get_mut(i)) {
                 if r.state == RunState::Starting && r.place.as_deref() == Some(place) {
@@ -549,14 +635,8 @@ impl Sluice<'_> {
                     r.host = None;
                 }
             }
-            if released {
-                l.log(
-                    &now,
-                    Event::Released {
-                        place: place.to_string(),
-                        worktree: None,
-                    },
-                );
+            if retry && !l.doc.release.iter().any(|p| p == place) {
+                l.doc.release.push(place.to_string());
             }
             Ok(())
         })
@@ -566,9 +646,8 @@ impl Sluice<'_> {
     // 2. Decide
     // -----------------------------------------------------------------------
 
-    /// Everything a round decides, written in one write. `false` when the
-    /// write was refused.
-    fn decide(&self, branch: &str) -> Result<bool> {
+    /// Everything a round decides, written in one write.
+    fn decide(&self, branch: &str) -> Result<Decided> {
         let mut line = self.read_line(branch)?;
         if line.doc.landing.is_some() {
             bail!("{branch} has a landing left unfinished");
@@ -577,6 +656,52 @@ impl Sluice<'_> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             bail!("{branch} does not exist");
         };
+        // 121: records written before the revision a read must contain take
+        // the log's last landing, or `base` when `base` lacks it: a branch
+        // removed and made again, whose log holds the removed one's
+        // landings, which bind no reading of it.
+        if line.doc.landed.is_none() {
+            line.doc.landed = match (line.last_landed()?, &line.doc.base) {
+                (Some(last), Some(base)) if !self.seams.branch.contains(base, &last)? => {
+                    Some(base.clone())
+                }
+                (last, _) => last,
+            };
+        }
+        // 121: a read lacking the landing the branch must contain is a
+        // branch whose reading and records disagree. Nothing is polled,
+        // formed, started or landed, and `base` stays the revision last
+        // formed on, so a landing put back keeps every candidate (10, 17).
+        if let Some(lacks) = line.doc.landed.clone() {
+            if tip != lacks && !self.seams.branch.contains(&tip, &lacks)? {
+                let hold = line.doc.held.as_ref();
+                if hold.is_none_or(|h| h.read != tip || h.lacks != lacks) {
+                    line.log(
+                        &now,
+                        Event::Held {
+                            read: tip.clone(),
+                            lacks: lacks.clone(),
+                        },
+                    );
+                    line.doc.held = Some(BranchHold {
+                        read: tip,
+                        lacks,
+                        since: now,
+                    });
+                }
+                return Ok(match self.write(&line)? {
+                    Written::Written(_) => Decided::Held,
+                    Written::Refused => Decided::Contended,
+                });
+            }
+        }
+        line.doc.held = None;
+        // 124: the copy follows the landing this read holds, recorded in
+        // this round's write when it is left behind.
+        if let Some(landed) = line.doc.landed.clone() {
+            let levelled = self.level_copy(branch, &landed)?;
+            self.note_copy(&mut line, &landed, &levelled, &now);
+        }
         if line.doc.base.as_ref() != Some(&tip) {
             // Moved by something other than this branch's landing (S8), or
             // never read: every candidate is formed again on it (10, 24).
@@ -646,7 +771,11 @@ impl Sluice<'_> {
                 sluice.branch = branch
             );
         }
-        Ok(written)
+        Ok(if written {
+            Decided::Written
+        } else {
+            Decided::Contended
+        })
     }
 
     /// Design D10: what this host had queued on the branch in its own
@@ -1988,8 +2117,12 @@ impl Sluice<'_> {
     /// 75, 77, 81: what an instance that does not keep `branch` does for
     /// it: shows it is alive, releases the places it made that no claim of
     /// its own holds, reports its runs that ended, and claims open runs it
-    /// may take, earliest first, up to its bound, then starts them.
-    fn execute(&self, branch: &str) -> Result<()> {
+    /// may take, earliest first, up to its bound, then starts them. 81,
+    /// 123: it claims once each place it left has been released, gone or
+    /// held, whatever their releases did: a held place bars no claim, and
+    /// keeps its ports and disk beside the places the claims are run in.
+    /// Only a failure to write the records stops its claims for the round.
+    fn execute(&self, branch: &str, releases: &mut Vec<ReleaseOutcome>) -> Result<()> {
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(());
         };
@@ -2014,6 +2147,15 @@ impl Sluice<'_> {
         });
         self.seams.state.beat(&me, beat.to_string().as_bytes())?;
 
+        // 124: this host's copy follows the landings its rounds read, the
+        // lead's among them, unless the read lacks the last (121).
+        if let Some(landed) = line.doc.landed.clone() {
+            if tip == landed || self.seams.branch.contains(&tip, &landed)? {
+                let levelled = self.level_copy(branch, &landed)?;
+                self.record_copy(branch, &landed, &levelled)?;
+            }
+        }
+
         // 81: a place made here that no claim of this host's holds.
         let held: BTreeSet<String> = line
             .doc
@@ -2025,8 +2167,20 @@ impl Sluice<'_> {
             .collect();
         let prefix = format!("sluice/try/{branch}/");
         for p in self.seams.checkout.made()? {
-            if p.starts_with(&prefix) && !held.contains(&p) {
-                self.seams.checkout.release(&p, false)?;
+            if !p.starts_with(&prefix) || held.contains(&p) {
+                continue;
+            }
+            let stopped = line
+                .doc
+                .failed_releases
+                .iter()
+                .any(|f| f.place == p && f.stopped);
+            if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
+                continue;
+            }
+            let outcome = self.release_made(branch, &p, false)?;
+            if outcome.how != Releasing::Released {
+                releases.push(outcome);
             }
         }
 
@@ -2076,7 +2230,10 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        self.seams.checkout.release(&p, false)?;
+                        let outcome = self.release_made(branch, &p, false)?;
+                        if outcome.how != Releasing::Released {
+                            releases.push(outcome);
+                        }
                     }
                 }
                 Progress::Finished(report) => {
@@ -2113,14 +2270,18 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        self.seams.checkout.release(&p, passed)?;
+                        let outcome = self.release_made(branch, &p, passed)?;
+                        if outcome.how != Releasing::Released {
+                            releases.push(outcome);
+                        }
                     }
                 }
             }
         }
 
         // 75, 76, 71: claims, earliest first, up to this host's bound, of
-        // candidates fetched from the remote (82).
+        // candidates fetched from the remote (82); 81, 123: whatever the
+        // releases above did.
         self.seams.state.fetch_candidates(branch)?;
         let mut room = self.capacity(&self.read_line(branch)?)?;
         while room > 0 {
@@ -2165,7 +2326,95 @@ impl Sluice<'_> {
             }
             room -= 1;
         }
-        self.perform_starts(branch)
+        self.perform_starts(branch, releases)
+    }
+
+    /// 124: level this host's copy of `branch` to `landed`, the landing
+    /// its records hold, from exactly the value the copy holds (rule
+    /// core.5). A levelling that fails, or finds the copy moved meanwhile,
+    /// leaves it behind for the next round to try again; it never fails
+    /// the round (122).
+    fn level_copy(&self, branch: &str, landed: &Rev) -> Result<Levelled> {
+        let HostCopy::At(copy) = self.seams.branch.copy(branch)? else {
+            return Ok(Levelled::Itself);
+        };
+        if copy.as_ref() == Some(landed) {
+            return Ok(Levelled::Holds);
+        }
+        Ok(
+            match self.seams.branch.level(branch, copy.as_ref(), landed) {
+                Ok(Moved::Moved) => Levelled::Holds,
+                Ok(Moved::Elsewhere(at)) => Levelled::Behind {
+                    at,
+                    why: "it moved while sluice levelled it".into(),
+                },
+                Err(e) => Levelled::Behind {
+                    at: copy,
+                    why: format!("{e:#}"),
+                },
+            },
+        )
+    }
+
+    /// 124, S64: what `levelled` says of this host's copy, in `line`: a
+    /// copy left behind is this host's entry in `copies`, logged once for
+    /// each value, landing and why; one that holds the landing takes the
+    /// entry out, logged when there was one. Whether `line` changed.
+    fn note_copy(&self, line: &mut Line, landed: &Rev, levelled: &Levelled, now: &str) -> bool {
+        let host = self.peer.name.clone();
+        match levelled {
+            Levelled::Itself => false,
+            Levelled::Holds => {
+                if line.doc.copies.remove(&host).is_none() {
+                    return false;
+                }
+                line.log(
+                    now,
+                    Event::CopyLevelled {
+                        host,
+                        at: landed.clone(),
+                    },
+                );
+                true
+            }
+            Levelled::Behind { at, why } => {
+                let since = match line.doc.copies.get(&host) {
+                    Some(e) if e.at == *at && e.lacks == *landed && e.why == *why => return false,
+                    Some(e) => e.since.clone(),
+                    None => now.to_string(),
+                };
+                line.log(
+                    now,
+                    Event::CopyBehind {
+                        host: host.clone(),
+                        at: at.clone(),
+                        lacks: landed.clone(),
+                        why: why.clone(),
+                    },
+                );
+                line.doc.copies.insert(
+                    host,
+                    CopyBehind {
+                        at: at.clone(),
+                        lacks: landed.clone(),
+                        why: why.clone(),
+                        since,
+                    },
+                );
+                true
+            }
+        }
+    }
+
+    /// [`Sluice::note_copy`] in a write of its own, made only when it
+    /// changes the records.
+    fn record_copy(&self, branch: &str, landed: &Rev, levelled: &Levelled) -> Result<()> {
+        let now = self.now();
+        if !self.note_copy(&mut self.read_line(branch)?, landed, levelled, &now) {
+            return Ok(());
+        }
+        self.update(branch, |l| Ok(self.note_copy(l, landed, levelled, &now)))?;
+        Ok(())
     }
 
     /// The name of the next place on the branch.
