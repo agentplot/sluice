@@ -560,6 +560,16 @@ export function clearText(branch: string, last: Latest | null): string {
   return `[sluice] Your work no longer conflicts with ${branch} or anything queued.${again}`;
 }
 
+/**
+ * The reply to `/sluice` that opened the pane: how to close it where it
+ * opened, docked beside a full-screen transcript or above the prompt.
+ */
+export function openedText(isFullscreen: boolean): string {
+  return isFullscreen
+    ? "sluice's queue is open in a pane. Its close mark or /sluice again closes it."
+    : "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.";
+}
+
 /** `https://github.com/<owner>/<repo>` from a remote's URL, or null off GitHub. */
 export function githubBase(url: string): string | null {
   const m = url

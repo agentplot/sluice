@@ -22,6 +22,7 @@ import {
   moving,
   namedFirst,
   namedLine,
+  openedText,
   outcomes,
   progress,
   pullOf,
@@ -282,6 +283,17 @@ describe("a branch named for the session", () => {
       "sluice: 3 submissions · yours #13 testing",
     );
     expect(statusLine(withRelease(), ME, null, NOW)).toBe("sluice: 4 submissions");
+  });
+});
+
+describe("the pane", () => {
+  test("the reply to /sluice says how to close it where it opened", () => {
+    expect(openedText(false)).toBe(
+      "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.",
+    );
+    expect(openedText(true)).toBe(
+      "sluice's queue is open in a pane. Its close mark or /sluice again closes it.",
+    );
   });
 });
 
