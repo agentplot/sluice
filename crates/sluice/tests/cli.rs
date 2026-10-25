@@ -2849,6 +2849,59 @@ fn wait_runs_to_the_outcome() {
     assert_eq!(json(&out)["state"], "queued");
 }
 
+/// A report waited on from another worktree names the agent working in
+/// the one the submission came from as who moves it on, and sends its
+/// reader into no worktree; a step that is the operator's, setting a fail
+/// aside, still names the operator.
+#[test]
+fn a_report_waited_on_elsewhere_names_the_agent_in_the_worktree_it_came_from() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "1", "--worktree", "unit/b"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert_eq!(
+        out.lines().last(),
+        Some("the agent working in unit/a fixes it there and submits again"),
+        "{out}"
+    );
+    for word in ["your worktree", "inside"] {
+        assert!(!out.contains(word), "{word}: {out}");
+    }
+
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/a",
+        "agent-a",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let submit = ["submit", BRANCH, "--worktree", "unit/a", "--no-wait"];
+    sluice(&f, &submit);
+    assert_eq!(sluice(&f, &["wait", "1", "--worktree", "unit/b"]).0, FAILED);
+    sluice(&f, &submit);
+    let (code, out) = sluice(&f, &["wait", "2", "--worktree", "unit/b"]);
+    assert_eq!(code, FAILED, "{out}");
+    assert!(
+        out.contains("the operator can set it aside: sluice set-aside tests:t-batch-cards --at "),
+        "{out}"
+    );
+    for word in ["your worktree", "inside"] {
+        assert!(!out.contains(word), "{word}: {out}");
+    }
+}
+
 /// ADR 0041: the exits tell a blame, a conflict and a withdrawal apart,
 /// for `wait` and a waiting submit alike.
 #[test]
