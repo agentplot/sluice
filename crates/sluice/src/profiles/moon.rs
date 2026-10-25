@@ -24,7 +24,7 @@ use sluice_seams::{
     KeptOutTask, NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState,
 };
 
-use super::checks::{not_run_reason, Context, Plan};
+use super::checks::{cold_tests, not_run_reason, Context, Plan};
 
 /// The run report, relative to the place.
 const REPORT: &str = ".moon/cache/runReport.json";
@@ -50,6 +50,7 @@ impl Moon {
     pub fn plan(&self, cx: &Context) -> Result<Plan> {
         let request = cx.request;
         let place = &request.place.path;
+        let cold = cold_tests(&request.tests)?;
         self.install(cx)?;
         self.check_version(cx)?;
 
@@ -110,8 +111,10 @@ impl Moon {
                 holds_processors: true,
                 stamps: Vec::new(),
                 kept_out,
+                cold: false,
             });
         }
+        let cold = holds_cold(&tasks, &targets, &cold);
         // The workspace's toolchains, installed here, outside the executor,
         // where a download and a write to the user's home are allowed: the
         // run inside only uses them.
@@ -137,6 +140,7 @@ impl Moon {
             // proto stamps each toolchain it runs as used.
             stamps: vec![".last-used"],
             kept_out,
+            cold,
         })
     }
 
@@ -405,6 +409,19 @@ fn kept_out(tasks: &BTreeMap<String, Task>, required: &[String]) -> Vec<KeptOutT
             })
         })
         .collect()
+}
+
+/// 35: whether any of `targets` is a test `cold` names, by its own name
+/// or by a tag it carries, as `[tests] cold` names them.
+fn holds_cold(tasks: &BTreeMap<String, Task>, targets: &[String], cold: &[String]) -> bool {
+    targets.iter().any(|target| {
+        cold.iter().any(|c| match c.strip_prefix('#') {
+            Some(tag) => tasks
+                .get(target)
+                .is_some_and(|task| task.tags.iter().any(|t| t == tag)),
+            None => c == target,
+        })
+    })
 }
 
 /// `moon 2.6.1` → `(2, 6)`.
@@ -818,6 +835,51 @@ mod tests {
                     "root:integration".to_string()
                 ),
             ]
+        );
+    }
+
+    /// 35: a run is cold when it holds a test `[tests] cold` names, by
+    /// its name or a tag it carries; tests it does not hold make it warm.
+    #[test]
+    fn a_run_holding_a_cold_test_is_cold() {
+        let task = |tags: &[&str]| Task {
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            in_ci: true,
+        };
+        let tasks = BTreeMap::from([
+            ("app:bench".to_string(), task(&["check-fast", "bench"])),
+            ("app:test".to_string(), task(&["check-fast"])),
+            ("root:timing".to_string(), task(&[])),
+        ]);
+        let s = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let bench = s(&["#bench"]);
+        assert!(holds_cold(&tasks, &s(&["app:bench", "app:test"]), &bench));
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &bench));
+        assert!(holds_cold(
+            &tasks,
+            &s(&["root:timing"]),
+            &s(&["root:timing"])
+        ));
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &s(&["root:timing"])));
+        assert!(!holds_cold(&tasks, &s(&["app:bench"]), &[]));
+        // A tag names no task by its own name.
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &s(&["#app:test"])));
+    }
+
+    /// 35: `[tests] cold` is a list of tests; anything else is refused.
+    #[test]
+    fn a_cold_that_is_no_list_is_refused() {
+        use sluice_seams::{Setting, Settings};
+        assert_eq!(cold_tests(&Settings::new()).unwrap(), Vec::<String>::new());
+        let list = Settings::from([(
+            "cold".to_string(),
+            Setting::List(vec!["#bench".to_string()]),
+        )]);
+        assert_eq!(cold_tests(&list).unwrap(), ["#bench"]);
+        let text = Settings::from([("cold".to_string(), Setting::Text("#bench".into()))]);
+        assert_eq!(
+            cold_tests(&text).unwrap_err().to_string(),
+            "[tests] cold must be a list of tests, named as required names them"
         );
     }
 

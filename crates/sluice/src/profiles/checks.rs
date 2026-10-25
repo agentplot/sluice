@@ -112,6 +112,9 @@ pub struct Plan {
     /// Targets the runner keeps out of its CI mode, so never runs (moon's
     /// `runInCI: false`); each reads missing.
     pub kept_out: Vec<String>,
+    /// Whether the run holds a test `[tests] cold` names, so is given none
+    /// of the host's caches (35).
+    pub cold: bool,
 }
 
 /// What a run's request carries for reading its result.
@@ -432,6 +435,16 @@ fn regex_escape(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// `[tests] cold`: the tests a run holding any of is given no cache, named
+/// as the gate's `required` names them, a target or a `#tag` (35).
+pub fn cold_tests(tests: &Settings) -> Result<Vec<String>> {
+    match tests.get("cold") {
+        None => Ok(Vec::new()),
+        Some(Setting::List(xs)) => Ok(xs.clone()),
+        Some(_) => bail!("[tests] cold must be a list of tests, named as required names them"),
+    }
 }
 
 fn text<'a>(settings: &'a Settings, key: &str) -> Result<Option<&'a str>> {
@@ -884,6 +897,8 @@ impl Tests for Checks {
                     targets: vec![command.to_string()],
                     holds_processors: false,
                     kept_out: Vec::new(),
+                    // The command is the runner's one test.
+                    cold: cold_tests(&request.tests)?.iter().any(|c| c == command),
                     // A command in a checkout that lists proto's tools may
                     // run them, moon among them, and proto stamps each
                     // toolchain it runs as used, as a moon run's does.
