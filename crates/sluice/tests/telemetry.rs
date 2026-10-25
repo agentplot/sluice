@@ -353,9 +353,9 @@ fn a_restored_cache_is_counted_by_its_hit() {
         let place = places.materialize(NAME, &rev, &cached).unwrap();
         std::fs::create_dir_all(place.path.join("target")).unwrap();
         std::fs::write(place.path.join("target/a"), "built\n").unwrap();
-        places.release(NAME, true).unwrap();
+        places.release(NAME).unwrap();
         places.materialize(NAME, &rev, &cached).unwrap();
-        places.release(NAME, false).unwrap();
+        places.release(NAME).unwrap();
     });
     let seen = seen.lines();
     let hits: Vec<&str> = metric(&seen, "monotonic_counter.sluice.cache.restored")

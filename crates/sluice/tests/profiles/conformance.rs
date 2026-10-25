@@ -75,9 +75,9 @@ impl Checkout for RecordedPlaces {
         self.inner.made()
     }
 
-    fn release(&self, name: &str, passed: bool) -> Result<()> {
+    fn release(&self, name: &str) -> Result<()> {
         self.log.borrow_mut().asked.push(name.into());
-        self.inner.release(name, passed)?;
+        self.inner.release(name)?;
         self.log.borrow_mut().released.push(name.into());
         Ok(())
     }
@@ -116,10 +116,6 @@ impl Checkout for RecordedPlaces {
 
     fn checked_out(&self) -> Result<Vec<sluice_seams::CheckedOut>> {
         self.inner.checked_out()
-    }
-
-    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()> {
-        self.inner.save_caches(name, rev, checkout)
     }
 
     fn adopted(&self, worktree: &str) -> Result<Option<sluice_seams::Adopted>> {

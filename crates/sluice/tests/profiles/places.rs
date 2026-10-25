@@ -140,10 +140,10 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
     // The method runs nothing in the place: no post-checkout hook.
     assert!(!repo.dir().join(".git/post-checkout.log").exists());
 
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
     left_behind(&repo, &place);
-    p.release(NAME, false).unwrap();
-    p.release("sluice/try/bolt/x/never", false).unwrap();
+    p.release(NAME).unwrap();
+    p.release("sluice/try/bolt/x/never").unwrap();
     assert_eq!(others(&repo), before);
 }
 
@@ -158,7 +158,7 @@ fn a_git_worktree_place_left_by_a_crash() {
     let again = p.materialize(NAME, &rev, &Settings::new()).unwrap();
     holds_the_candidate(&repo, &again, &rev);
     std::fs::remove_dir_all(&again.path).unwrap();
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
     left_behind(&repo, &again);
 }
 
@@ -194,7 +194,7 @@ fn releasing_a_place_ends_its_run() {
         .trim()
         .parse()
         .unwrap();
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
     assert_eq!(
         nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
         Err(nix::errno::Errno::ESRCH)
@@ -228,7 +228,7 @@ fn a_policy_need_not_name_the_method() {
     for m in [Settings::new(), method("git-worktree")] {
         let place = p.materialize(NAME, &rev, &m).unwrap();
         holds_the_candidate(&repo, &place, &rev);
-        p.release(NAME, false).unwrap();
+        p.release(NAME).unwrap();
         assert!(!place.path.exists());
     }
 }
@@ -292,14 +292,14 @@ fn a_checkout_starts_with_nothing_but_its_revision() {
     assert!(!root.join(".caches").exists(), "the saved caches are gone");
     assert!(root.join("caches/version").exists());
     build(&place);
-    p.release(NAME, true).unwrap();
+    p.release(NAME).unwrap();
     left_behind(&repo, &place);
 
     let next = p.materialize(NAME, &one, &Settings::new()).unwrap();
     holds_the_candidate(&repo, &next, &one);
     assert!(!next.path.join("target").exists());
     assert!(!root.join(".caches").exists());
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
 }
 
 /// 35, core.15: a `[checkout]` that still declares `[[checkout.cache]]`
@@ -313,14 +313,14 @@ fn an_older_policys_checkout_cache_is_read_as_nothing() {
     let place = p.materialize(NAME, &one, &cached()).unwrap();
     holds_the_candidate(&repo, &place, &one);
     build(&place);
-    p.release(NAME, true).unwrap();
+    p.release(NAME).unwrap();
     left_behind(&repo, &place);
     assert!(!repo.dir().join(".git/sluice/.caches").exists());
 
     let next = p.materialize(NAME, &one, &cached()).unwrap();
     holds_the_candidate(&repo, &next, &one);
     assert!(!next.path.join("target").exists());
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
 }
 
 fn ported(names: &[&str], from: &str) -> Settings {
@@ -366,11 +366,11 @@ fn places_alive_at_once_hold_their_own_ports() {
     assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
     assert!(a.env["SLUICE_PLACE"].starts_with("sluice-"));
 
-    p.release("sluice/try/a/1", false).unwrap();
+    p.release("sluice/try/a/1").unwrap();
     let c = p.materialize("sluice/try/c/1", &rev, &settings).unwrap();
     assert_eq!(port(&c, "SLUICE_PORT_WEB"), from, "a's block is free again");
-    p.release("sluice/try/b/1", false).unwrap();
-    p.release("sluice/try/c/1", false).unwrap();
+    p.release("sluice/try/b/1").unwrap();
+    p.release("sluice/try/c/1").unwrap();
     let held: Vec<_> = std::fs::read_dir(blocks.path())
         .unwrap()
         .filter(|e| {
@@ -404,7 +404,7 @@ fn a_block_with_a_port_in_use_is_passed_over() {
         web > from + 1 && (web - from).is_multiple_of(2),
         "not a block's first port: {web}"
     );
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
 }
 
 /// A place's ports are names a check can be given: refused otherwise.
@@ -506,8 +506,8 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
 
     assert_eq!(others(&repo), before, "the session's worktree was touched");
     assert_eq!(worktrees(&repo), listed, "a git worktree was added");
-    p.release(&a.name, false).unwrap();
-    p.release(&b.name, false).unwrap();
+    p.release(&a.name).unwrap();
+    p.release(&b.name).unwrap();
 }
 
 /// 34, 95, core.16: releasing a session's place ends its runs, runs the
@@ -564,7 +564,7 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
         .parse()
         .unwrap();
 
-    p.release(&place.name, false).unwrap();
+    p.release(&place.name).unwrap();
     assert_eq!(
         nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
         Err(nix::errno::Errno::ESRCH)
@@ -591,10 +591,10 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
         port(&next, "SLUICE_PORT_WEB"),
         port(&place, "SLUICE_PORT_WEB")
     );
-    p.release(&next.name, false).unwrap();
+    p.release(&next.name).unwrap();
 
     // Again: nothing to release, and nothing runs.
-    p.release(&place.name, false).unwrap();
+    p.release(&place.name).unwrap();
     assert_eq!(std::fs::read_to_string(&log).unwrap(), web);
     assert!(session.exists());
 }
@@ -807,8 +807,8 @@ fn a_preview_is_made_kept_apart_and_released() {
             );
         }
     }
-    p.release(NAME, false).unwrap();
-    p.release(&adopted.name, false).unwrap();
+    p.release(NAME).unwrap();
+    p.release(&adopted.name).unwrap();
 
     assert!(p.release_preview(&name, None, 3).unwrap());
     left_behind(&repo, &place);
@@ -999,7 +999,7 @@ fn checked_out_lists_the_worktrees_on_a_branch() {
         ]
     );
     assert_eq!(found[0].head.0, repo.rev("main"));
-    p.release(NAME, false).unwrap();
+    p.release(NAME).unwrap();
 }
 
 /// A run of the place `name` in `place` that ends at once, whose release
@@ -1044,7 +1044,7 @@ fn a_deleted_checkout_is_gone_and_freed_with_nothing_run() {
 
     std::fs::remove_dir_all(&place.path).unwrap();
     assert!(p.gone(NAME).unwrap());
-    let e = p.release(NAME, false).unwrap_err();
+    let e = p.release(NAME).unwrap_err();
     assert!(format!("{e:#}").contains("was not run"), "{e:#}");
     p.free(NAME).unwrap();
     assert!(!marker.exists(), "the release command ran");
@@ -1060,7 +1060,7 @@ fn a_deleted_checkout_is_gone_and_freed_with_nothing_run() {
         port(&next, "SLUICE_PORT_WEB"),
         port(&place, "SLUICE_PORT_WEB")
     );
-    p.release("sluice/try/bolt/x/2", false).unwrap();
+    p.release("sluice/try/bolt/x/2").unwrap();
 }
 
 /// 123, core.16: a session's place freed at its failure's acceptance has
@@ -1101,7 +1101,7 @@ fn freeing_a_sessions_place_leaves_its_worktree() {
         port(&next, "SLUICE_PORT_WEB"),
         port(&place, "SLUICE_PORT_WEB")
     );
-    p.release(&next.name, false).unwrap();
+    p.release(&next.name).unwrap();
 }
 
 /// 123: a session's place whose release command fails keeps its record,
@@ -1308,7 +1308,7 @@ fn a_deleted_checkouts_stored_release_runs_once_from_its_scratch_directory() {
         port(&next, "SLUICE_PORT_WEB"),
         port(&place, "SLUICE_PORT_WEB")
     );
-    p.release("sluice/try/bolt/x/2", false).unwrap();
+    p.release("sluice/try/bolt/x/2").unwrap();
 }
 
 /// 123: a gone checkout whose stored release exits 2 is freed all the

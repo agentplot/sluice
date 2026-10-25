@@ -870,7 +870,7 @@ impl Checkout for Places {
         self.remove_saved_caches();
         // A place of this name left by a step that stopped part way.
         if self.read_record(name)?.is_some() {
-            self.release(name, false)?;
+            self.release(name)?;
         }
         let record = self.record(name);
         let mut made = Made::new(Kind::Made, METHOD);
@@ -946,7 +946,7 @@ impl Checkout for Places {
         Ok(out)
     }
 
-    fn release(&self, name: &str, _passed: bool) -> Result<()> {
+    fn release(&self, name: &str) -> Result<()> {
         if crate::runs::is_session(name) {
             self.release_session(name, None)?;
             return Ok(());
@@ -1137,11 +1137,6 @@ impl Checkout for Places {
         };
         made.last_result = Some(last.clone());
         self.write_record(name, &made)
-    }
-
-    /// 35: a place saves nothing; the caches are the host's.
-    fn save_caches(&self, _: &str, _: &Rev, _: &Settings) -> Result<()> {
-        Ok(())
     }
 
     fn checked_out(&self) -> Result<Vec<CheckedOut>> {

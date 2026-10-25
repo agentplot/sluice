@@ -1091,23 +1091,20 @@ hold = "5m"
         assert!(Policy::parse("[branches.main]\ntrust = [\"anyone\"]\n").is_err());
     }
 
-    /// 35: the caches a place may hold reach the place's profile as an
-    /// array of tables, given no meaning here.
+    /// 52: an array of tables in a profile's table reaches the profile as
+    /// it is written, given no meaning here.
     #[test]
     fn reads_an_array_of_tables_for_a_profile() {
-        let p = Policy::parse("[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n")
-            .unwrap();
+        let p = Policy::parse("[[tests.service]]\nname = \"db\"\nports = [\"5432\"]\n").unwrap();
         assert_eq!(
-            p.checkout["cache"],
+            p.tests["service"],
             Setting::Tables(vec![Settings::from([
-                ("key".into(), Setting::List(vec!["Cargo.lock".into()])),
-                ("paths".into(), Setting::List(vec!["target".into()])),
+                ("name".into(), Setting::Text("db".into())),
+                ("ports".into(), Setting::List(vec!["5432".into()])),
             ])])
         );
-        assert!(Policy::parse("[[checkout.cache]]\nkey = 1\n").is_err());
-        assert!(
-            Policy::parse("[[checkout.cache]]\n[[checkout.cache.inner]]\nx = \"y\"\n").is_err()
-        );
+        assert!(Policy::parse("[[tests.service]]\nname = 1\n").is_err());
+        assert!(Policy::parse("[[tests.service]]\n[[tests.service.inner]]\nx = \"y\"\n").is_err());
     }
 
     /// C.7: a branch may name the remote it lives on.

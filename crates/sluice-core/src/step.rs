@@ -239,7 +239,7 @@ impl Sluice<'_> {
             })
             .collect();
         for (cand, place) in stale {
-            let outcome = self.release_made(branch, &place, false)?;
+            let outcome = self.release_made(branch, &place)?;
             let retry = matches!(outcome.how, Releasing::Failed { .. });
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
@@ -298,7 +298,7 @@ impl Sluice<'_> {
             if passed_over {
                 continue;
             }
-            let outcome = self.release_made(branch, place, doc.passed.contains(place))?;
+            let outcome = self.release_made(branch, place)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -595,7 +595,7 @@ impl Sluice<'_> {
                 Ok(run) => run,
                 // Refused before anything of it ran: no run, no outcome.
                 Err(e) if e.downcast_ref::<AtBound>().is_some() => {
-                    let outcome = self.release_made(branch, &name, false)?;
+                    let outcome = self.release_made(branch, &name)?;
                     let retry = matches!(outcome.how, Releasing::Failed { .. });
                     self.reopen(branch, &c.id, i, &name, retry)?;
                     if outcome.how != Releasing::Released {
@@ -1219,9 +1219,6 @@ impl Sluice<'_> {
         x.ran += v.ran;
         x.replayed += v.replayed;
         if let Some(p) = place {
-            if v.passed {
-                line.doc.passed.push(p.clone());
-            }
             line.doc.release.push(p);
         }
         Ok(())
@@ -2152,7 +2149,7 @@ impl Sluice<'_> {
             if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
                 continue;
             }
-            let outcome = self.release_made(branch, &p, false)?;
+            let outcome = self.release_made(branch, &p)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -2204,14 +2201,13 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        let outcome = self.release_made(branch, &p, false)?;
+                        let outcome = self.release_made(branch, &p)?;
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }
                     }
                 }
                 Progress::Finished(report) => {
-                    let mut passed = false;
                     self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
@@ -2233,18 +2229,14 @@ impl Sluice<'_> {
                             home.as_deref(),
                             &now,
                         )?;
-                        passed = l
-                            .candidate(&c.id)
-                            .is_some_and(|y| y.runs[i].state == RunState::Passed);
                         // This host releases its own place below.
                         if let Some(p) = &place {
                             l.doc.release.retain(|q| q != p);
-                            l.doc.passed.retain(|q| q != p);
                         }
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        let outcome = self.release_made(branch, &p, passed)?;
+                        let outcome = self.release_made(branch, &p)?;
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }
