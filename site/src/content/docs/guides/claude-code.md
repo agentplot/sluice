@@ -37,6 +37,18 @@ through nix where nix is present, else the release binary for your platform,
 else `cargo install`. A sluice that comes from your own flake or
 home-manager is yours to update, and Claude says so rather than touching it.
 
+In a plain clone, the repository's one working copy, Claude next offers
+to lay the repository out with
+[one working copy per branch](/sluice/guides/worktrees/#one-working-copy-per-branch),
+before it reads or writes anything else. It names each process that has
+the folder open, which must let it go and start again from `main/`, the
+sessions' history it will carry to the new paths, and what stays behind.
+It moves nothing while anything but its own session holds the folder.
+Once the folder is laid out, it carries the folder's other sessions and
+its project memory across, and asks you to type `/cd <folder>/main` to
+bring this session along. It keeps the plain clone only on your word,
+and the commit that adds `.config/sluice.toml` then says you chose to.
+
 Then Claude reads what the repository already uses and proposes a
 `.config/sluice.toml` to match:
 
@@ -56,10 +68,11 @@ through sluice to prove the setup.
 In a repository with a `.config/sluice.toml`, Claude:
 
 - submits with `sluice submit` or `wt submit` and never merges or pushes to
-  a protected branch. When its tool calls end before a result comes, it
-  submits with `--no-wait` and runs `sluice wait <id> --timeout 9m --json`
-  again for as long as it exits `5`, reading the outcome from the
-  record's `state`;
+  a protected branch. It submits with `--no-wait` and runs `sluice wait
+  <id> --timeout 9m --json` in the background, again for as long as it
+  exits `5`, so you and other agents can reach it while its work lands,
+  and reads the outcome from the record's `state`. It waits in the
+  foreground only where it can run nothing in the background;
 - commits everything first, and checks for a conflict with `--check`;
 - on a failure, reads the blamed tests and their logs, reproduces them with
   `sluice exec`, fixes and submits again;
@@ -68,7 +81,12 @@ In a repository with a `.config/sluice.toml`, Claude:
   while the conflict is small;
 - runs its tests while it works with `sluice exec`, and cleans up with
   `sluice release`;
-- brings up a landed revision with `sluice preview` when you ask to try it.
+- brings up a landed revision with `sluice preview` when you ask to try it;
+- tells each background agent it starts in a worktree, in that agent's
+  prompt, to submit its own work through sluice from there and report the
+  outcome;
+- starts an agent in a worktree to submit work left there by an agent that
+  has ended, and never hands you the submit to run.
 
 ## Kept off protected branches
 
@@ -76,6 +94,8 @@ Two hooks come with the skills.
 
 At the start of a session in a repository whose policy protects branches,
 Claude is told which ones, and that work lands on them only through
+`sluice submit`. It's told too that an agent it starts in a worktree
+submits its own work from there, and that you're never asked to run
 `sluice submit`.
 
 Before Claude runs a shell command, a guard checks it. A `git push` to a
@@ -96,6 +116,9 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 /plugin install sluice-board@sluice
 ```
 
+It needs no herdr: it shows the queue in any Claude Code session, with
+full-screen mode on or off.
+
 <a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 <a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 
@@ -106,6 +129,20 @@ a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
 blamed tests' logs. A branch with nothing queued is left out once a
 quarter hour has passed since its last event.
+
+With full-screen mode on, the pane docks on the right of the transcript
+and the prompt keeps the keyboard; its close mark or `/sluice` again
+closes it. With it off, the pane opens above the prompt and takes the
+keyboard, and Esc, its `close` button (or `x`) or `/sluice` again closes
+it. The reply to `/sluice` says which.
+
+Where nothing has been submitted yet, the pane says so, and that a
+submission shows there from when an agent in a worktree runs `sluice
+submit <branch>` until it lands. Where sluice can't be read, because it
+isn't installed or `sluice overview` failed, the pane says why and to ask
+Claude to set sluice up in the repository. Each `/sluice` that opens the
+pane reads sluice again, so once Claude has set it up, the pane and the
+band show the queue without a new session.
 
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's
@@ -153,8 +190,8 @@ off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 
 It reads everything from `sluice overview --json --watch`, so it needs
-sluice 0.12 or later, and stays silent in a repository with no queue. It is a
-Claude Code mod, a newer and still-changing interface, which is why it is a
+sluice 0.12 or later. The band and the status line stay silent in a
+repository with no queue. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
 ### Naming a session's branch

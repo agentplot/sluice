@@ -17,6 +17,35 @@ None of this needs GitHub Actions. sluice still runs the tests on your
 machine. Your repository's own CI can keep running on pull requests as
 it does now.
 
+## Keeping your team's pull requests
+
+A team that lands its work through pull requests keeps them. sluice
+opens a pull request when an agent submits, and people open theirs by
+hand, as they always have. A draft waits until someone marks it ready
+for review. A ready one waits for the reviews and checks your policy
+names, the ones your team requires today. Then sluice tests it with
+everything ahead of it and lands it with its own push, and GitHub marks
+it merged.
+
+Only who lands it changes: nobody presses merge. Developers open pull
+requests, review them, push fixes and mark drafts ready as before, and
+nothing else about their day changes. When Claude sets sluice up, it
+asks whether your team lands on each branch through pull requests,
+reads the reviews and checks GitHub requires there now, and writes them
+into the policy.
+
+sluice has no mode in which GitHub's merge button lands and sluice only
+tests. What the button lands was never tested with the pull requests
+that landed before it, so two pull requests that each passed alone can
+break `main` together. sluice keeps `main` passing by landing each pull request
+itself, in the combination it tested.
+
+The rest of this page holds the detail: [how a pull request waits, then
+joins the queue](#two-stages-waiting-then-the-queue), [the
+policy](#the-policy), [keeping sluice running](#keep-sluice-running),
+[what sluice posts](#what-sluice-posts) and [GitHub's
+settings](#github-settings).
+
 ## Two stages: waiting, then the queue
 
 A pull request **waits** while it is a draft, or while something your
@@ -374,10 +403,11 @@ sequenceDiagram
   check reads `waiting: a draft` either way.
 - **One of a group closed before the group is taken.** The rest wait,
   and say they wait for it, until a submit names them again.
-- **Merged with GitHub's button.** Don't, on a branch sluice keeps: with
-  the ruleset from the previous guide only the bypass can, and sluice
-  treats it as `main` moving under its queue, retesting everything
-  queued.
+- **Merged with GitHub's button.** Don't, on a branch sluice keeps:
+  sluice has no mode for it, as [keeping your team's pull
+  requests](#keeping-your-teams-pull-requests) says. With the ruleset
+  from the previous guide only the bypass can, and sluice treats it as
+  `main` moving under its queue, retesting everything queued.
 
 ## GitHub settings
 

@@ -92,7 +92,10 @@ repository's **Settings › Rules › Rulesets › New branch ruleset**:
 | bypass list | sluice's GitHub App alone |
 
 Leave GitHub's own merge queue off, and don't require status checks on
-`main`: sluice's gate is the check, and it runs before the push.
+`main`: sluice's gate is the check, and it runs before the push. A team
+that lands through pull requests keeps them, with sluice landing each,
+as [Pull requests](/sluice/guides/pull-requests/) shows, and no setting
+lets the merge button land on `main` instead.
 
 sluice pushes as its own GitHub App, which [Give sluice its own GitHub
 identity](/sluice/guides/github-app/) sets up. Only sluice's own fetches

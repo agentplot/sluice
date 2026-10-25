@@ -8,7 +8,15 @@
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
 
-import type { Forecast, Forecasting, Mine, OpenedTest, Outcome, OverviewTask } from "../types";
+import type {
+  Forecast,
+  Forecasting,
+  Mine,
+  OpenedTest,
+  Outcome,
+  Overview,
+  OverviewTask,
+} from "../types";
 import type { CheckRow } from "./board";
 import {
   bandLines,
@@ -17,6 +25,7 @@ import {
   combination,
   conflictText,
   duration,
+  emptyLines,
   errorLine,
   failedName,
   forecastBranch,
@@ -33,6 +42,7 @@ import {
   limit,
   moving,
   namedFirst,
+  openedText,
   outcomes,
   plural,
   progress,
@@ -46,6 +56,7 @@ import {
   submitted,
   taskLines,
   testing,
+  unreadReason,
   wakeText,
 } from "./board";
 
@@ -80,6 +91,8 @@ const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
 const named = atom({ plugin: "sluice-board", key: "named" } as const, null);
 const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const, NOT_YET);
 const error = atom({ plugin: "sluice-board", key: "error" } as const, null);
+// Why sluice could not be read, while the board has no overview.
+const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
 
 type Detail = OpenedTest;
 
@@ -292,55 +305,91 @@ async function feed($: $, cwd: string, how: How) {
   });
 }
 
+/** `sluice overview --json` once: the overview, or null with why kept in `unread`. */
+async function probe($: $, cwd: string): Promise<Overview | null> {
+  const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
+  // Only a document with branches is an overview.
+  const opening = got && got.exitCode === 0 ? parsed(got.stdout) : null;
+  const ok = isOverview(opening);
+  await update($, unread, () => (ok ? null : unreadReason(got)));
+  return ok ? opening : null;
+}
+
+// The session's directory, kept for /sluice, which carries none; and whether
+// the board follows sluice yet: once a load, however many reads succeed.
+let dir: string | null = null;
+let following = false;
+
+/**
+ * Follow sluice from its first overview: the band, the pane, the wake and
+ * the forecast, as the options turn them on.
+ */
+async function follow($: $, cwd: string, first: Overview, chosen: How) {
+  if (following) return;
+  following = true;
+  const top = await $.process
+    .run(["git", "rev-parse", "--show-toplevel"], { cwd })
+    .catch(() => null);
+  const root = top && top.exitCode === 0 ? top.stdout.trim() : null;
+  await update($, mine, (m) => ({ ...m, root }));
+  // An orchestrator that starts several agents in one checkout names each
+  // one's branch, which the checkout can't say.
+  const hint = await $.env.get("SLUICE_BRANCH").catch(() => undefined);
+  await update($, named, () => (hint ? hint : null));
+  const origin = await $.process
+    .run(["git", "remote", "get-url", "origin"], { cwd })
+    .catch(() => null);
+  const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
+  await update($, repo, () => base);
+  // A session whose orchestrator forecasts for it turns this off.
+  const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
+  const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
+  await take($, first, cwd, how);
+  void feed($, cwd, how);
+  // Elapsed times move while something is under test or an agent's check
+  // goes, and a finished check leaves the pane a quarter hour on.
+  $.clock.every(5000, async () => {
+    const t = await $.clock.now();
+    if (moving(await read($, doc), t)) await update($, now, () => t);
+  });
+}
+
 export const register: Register = (on, options) => {
-  const wake = options.wake !== false;
+  const chosen = { wake: options.wake !== false, forecast: options.forecast !== false };
 
   on("session.start", async ($, e, next) => {
     const started = await next(e);
     await $.command.register({ name: "sluice", description: "Show sluice's queue in a pane" });
-    const cwd = e.cwd;
-    // Only in a repository with sluice's records.
-    const probe = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    const opening = probe && probe.exitCode === 0 ? parsed(probe.stdout) : null;
-    if (!isOverview(opening)) return started;
-    const top = await $.process
-      .run(["git", "rev-parse", "--show-toplevel"], { cwd })
-      .catch(() => null);
-    const root = top && top.exitCode === 0 ? top.stdout.trim() : null;
-    await update($, mine, (m) => ({ ...m, root }));
-    // An orchestrator that starts several agents in one checkout names each
-    // one's branch, which the checkout can't say.
-    const hint = await $.env.get("SLUICE_BRANCH").catch(() => undefined);
-    await update($, named, () => (hint ? hint : null));
-    const origin = await $.process
-      .run(["git", "remote", "get-url", "origin"], { cwd })
-      .catch(() => null);
-    const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
-    await update($, repo, () => base);
-    // A session whose orchestrator forecasts for it turns this off.
-    const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
-    const how = { wake, forecast: options.forecast !== false && env !== "0" };
-    await take($, opening, cwd, how);
-    void feed($, cwd, how);
-    // Elapsed times move while something is under test or an agent's check
-    // goes, and a finished check leaves the pane a quarter hour on.
-    $.clock.every(5000, async () => {
-      const t = await $.clock.now();
-      if (moving(await read($, doc), t)) await update($, now, () => t);
-    });
+    dir = e.cwd;
+    // Only where sluice can be read; /sluice tries again where it can't.
+    const first = await probe($, e.cwd);
+    if (first) await follow($, e.cwd, first, chosen);
     return started;
   });
 
   // /sluice opens the pane, and closes it when it is open; Escape closes it too.
-  on("command.run", { command: "sluice" }, async ($) => {
+  // Above the prompt it asks for the keyboard, so Escape is the pane's; docked,
+  // the prompt keeps it.
+  on("command.run", { command: "sluice" }, async ($, e) => {
     if ((await $.ui.panes()).some((p) => p.id === PANE)) {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };
     }
-    const opened = await $.ui.open({ id: PANE, title: "sluice", closeOnEscape: true });
+    // Where sluice could not be read, read it again: it may be set up now.
+    if (!following && dir !== null && (await read($, doc)) === null) {
+      const first = await probe($, dir);
+      if (first) await follow($, dir, first, chosen);
+    }
+    const inline = !e.presentation.isFullscreen;
+    const opened = await $.ui.open({
+      id: PANE,
+      title: "sluice",
+      closeOnEscape: true,
+      ...(inline ? { focus: true as const } : {}),
+    });
     return {
       text: opened.isPlaced
-        ? "sluice's queue is open in a pane."
+        ? openedText(e.presentation.isFullscreen)
         : "Widen the terminal to see the sluice pane.",
     };
   });
@@ -393,17 +442,52 @@ export const register: Register = (on, options) => {
 
   on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
     const { Box, Button, Link, Text } = $.ui.resolve(e);
+    // Above the prompt the board draws its own close; docked, the engine's
+    // close mark is there already.
+    const close =
+      e.props.placement === "inline" ? (
+        // biome-ignore lint/a11y/useValidAriaRole: the engine's Button role, a drawing hint, not ARIA's
+        <Button
+          key="close"
+          role="dismiss"
+          hotkey="x"
+          label="close"
+          onPress={() => $.ui.close({ id: PANE })}
+        />
+      ) : null;
     const d = await read($, doc);
     const m = await read($, mine);
     const base = await read($, repo);
     await read($, now);
-    if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
+    if (!d) {
+      // No overview: why sluice could not be read, and what to do; or the
+      // session's first read is still under way.
+      const why = await read($, unread);
+      if (why === null)
+        return (
+          <Box gap={1}>
+            <Text dimColor>Reading sluice…</Text>
+            {close}
+          </Box>
+        );
+      return (
+        <Box flexDirection="column">
+          <Box gap={1}>
+            <Text>sluice could not be read here: {why}</Text>
+            {close}
+          </Box>
+          <Text>Ask Claude to set sluice up in this repository.</Text>
+        </Box>
+      );
+    }
     const at = await $.clock.now();
     // The session's named branch first, shown when idle too.
     const first = await read($, named);
     const visible = namedFirst(d.branches, first).filter((b) => b.branch === first || shown(b, at));
     const quiet = d.branches.length - visible.length;
     const unknown = first !== null && !d.branches.some((b) => b.branch === first);
+    // sluice has records of no branch: how a submission gets here.
+    const empty = emptyLines(d, first);
     const checks = checkRows(d, at);
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
@@ -439,15 +523,25 @@ export const register: Register = (on, options) => {
     );
     return (
       <Box flexDirection="column">
-        <Text dimColor>
-          {d.repository} on {d.host}
-        </Text>
+        <Box gap={1}>
+          <Text dimColor>
+            {d.repository} on {d.host}
+          </Text>
+          {close}
+        </Box>
         {unknown && (
           <Box marginTop={1}>
             <Text bold>{first} · no records</Text>
           </Box>
         )}
-        {visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
+        {empty.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {empty.map((line) => (
+              <Text key={line}>{line}</Text>
+            ))}
+          </Box>
+        )}
+        {empty.length === 0 && visible.length === 0 && <Text dimColor>No branch has a queue.</Text>}
         {visible.map((b) => (
           <Box key={`branch-${b.branch}`} flexDirection="column" marginTop={1}>
             <Text bold>

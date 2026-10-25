@@ -1,4 +1,5 @@
 import type { On } from "claude-code";
+import type { Engine } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Overview } from "../types";
@@ -123,6 +124,7 @@ function host(
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120 } as never;
 const PANE = { title: "sluice", isFocused: false, bodyColumns: 80, placement: "dock" } as never;
+const INLINE = { title: "sluice", isFocused: true, bodyColumns: 100, placement: "inline" } as never;
 
 test("the band and the pane show the queue on every surface", async ($, on) => {
   const clock = mock.clock(on);
@@ -514,22 +516,18 @@ test("an overview's error is one line in the band, from --watch or a poll, until
   expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
 });
 
-test("/sluice opens the pane to close on Escape, and closes it when open", async ($, on) => {
-  const seen = {
-    prompts: [] as string[],
-    toasts: [] as string[],
-    status: [] as (string | undefined)[],
-  };
-  host(on, [overview()], seen);
-  // The engine's record of the open panes.
+/** The engine's record of the open panes, and of each open the board asked for. */
+function panes(on: On) {
   const open = new Set<string>();
-  const opens: { closeOnEscape?: true }[] = [];
+  const opens: { closeOnEscape?: true; focus?: true }[] = [];
+  const closes: string[] = [];
   on("ui.open", ($, e) => {
     opens.push(e);
     open.add(e.id);
     return { value: { isPlaced: true as const } };
   });
   on("ui.close", ($, e) => {
+    closes.push(e.id);
     open.delete(e.id);
     return { value: undefined };
   });
@@ -542,22 +540,289 @@ test("/sluice opens the pane to close on Escape, and closes it when open", async
       isPlaced: true,
     })),
   }));
-  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  const slash = {
+  return { open, opens, closes };
+}
+
+/** `/sluice` typed in the composer, full-screen or not. */
+function slash(isFullscreen: boolean) {
+  return {
     command: "sluice",
     args: "",
     origin: { kind: "composer" as const },
-    presentation: { isFullscreen: true, columns: 200 },
+    presentation: { isFullscreen, columns: isFullscreen ? 200 : 100 },
   };
+}
 
-  expect((await $.command.run(slash)).text).toBe("sluice's queue is open in a pane.");
+test("/sluice opens the pane to close on Escape, and closes it when open", async ($, on) => {
+  host(on, [overview()], nothingSeen());
+  const { open, opens } = panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+
+  expect((await $.command.run(slash(true))).text).toBe(
+    "sluice's queue is open in a pane. Its close mark or /sluice again closes it.",
+  );
   expect([...open]).toEqual(["sluice"]);
   expect(opens.map((o) => o.closeOnEscape)).toEqual([true]);
-  expect((await $.command.run(slash)).text).toBe("sluice's pane is closed.");
+  // Docked, the prompt keeps the keyboard.
+  expect(opens.map((o) => o.focus)).toEqual([undefined]);
+  expect((await $.command.run(slash(true))).text).toBe("sluice's pane is closed.");
   expect([...open]).toEqual([]);
-  await $.command.run(slash);
+  await $.command.run(slash(true));
   expect([...open]).toEqual(["sluice"]);
   expect(opens.length).toBe(2);
+});
+
+test("/sluice above the prompt asks for the keyboard and says how to close the pane", async ($, on) => {
+  host(on, [overview()], nothingSeen());
+  const { open, opens } = panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+
+  expect((await $.command.run(slash(false))).text).toBe(
+    "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.",
+  );
+  expect([...open]).toEqual(["sluice"]);
+  expect(opens.map((o) => [o.focus, o.closeOnEscape])).toEqual([[true, true]]);
+  expect((await $.command.run(slash(false))).text).toBe("sluice's pane is closed.");
+  expect([...open]).toEqual([]);
+});
+
+test("a pane above the prompt has a close button, a docked one none of the board's", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [overview()], nothingSeen());
+  const { closes } = panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+
+  const inline = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: INLINE,
+    requestId: "sluice",
+  });
+  const button = await inline.find({ type: "Button", key: "close" });
+  expect(button?.props).toMatchObject({ role: "dismiss", hotkey: "x", label: "close" });
+  await inline.press({ key: "close" });
+  expect(closes).toEqual(["sluice"]);
+  await inline.unmount();
+
+  const docked = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(await docked.find({ key: "close" })).toBeUndefined();
+  await docked.unmount();
+});
+
+/** main with #3 queued and nothing else: a repository just set up, with one submission. */
+function justSetUp(): Overview {
+  const d = overview();
+  d.branches = [
+    {
+      ...d.branches[0]!,
+      depth: 1,
+      candidates: [],
+      recent: [],
+      submissions: [{ id: 3, state: "queued", from: { agent: "claude", worktree: "w3" } }],
+    },
+  ];
+  return d;
+}
+
+/** What one `sluice overview --json` answers: an overview, a failed run, or no sluice to start. */
+type Read = Overview | { exitCode: number; stderr: string } | "missing";
+
+/**
+ * A host whose `sluice overview --json` answers each read with the next of
+ * `reads`, the last again once they run out, and whose watch streams the
+ * last overview read; it counts the reads and the watches.
+ */
+function readsHost(on: On, reads: Read[]) {
+  const n = { reads: 0, watches: 0 };
+  let last: Overview | null = null;
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e, next) => {
+    const argv = e.argv.join(" ");
+    if (argv !== "sluice overview --json")
+      return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+    const r = reads[Math.min(n.reads, reads.length - 1)]!;
+    n.reads += 1;
+    // Nothing beneath answers: the run rejects, as for a command not found.
+    if (r === "missing") return next(e);
+    if ("schema" in r) {
+      last = r;
+      return { value: { exitCode: 0, stdout: JSON.stringify(r), stderr: "", ...WHOLE } };
+    }
+    return { value: { exitCode: r.exitCode, stdout: "", stderr: r.stderr, ...WHOLE } };
+  });
+  on("process.spawn", async function* () {
+    n.watches += 1;
+    if (last) yield { stream: "stdout" as const, text: `${JSON.stringify(last)}\n` };
+    return { value: { code: 0, signal: null } };
+  });
+  on("ui.status", () => ({ value: undefined }));
+  on("ui.toast", () => ({ value: undefined }));
+  return n;
+}
+
+test("/sluice reads sluice again where the session could not, and follows it once it can", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const n = readsHost(on, [{ exitCode: 3, stderr: "sluice: no policy here\n" }, justSetUp()]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(n.reads).toBe(1);
+  expect(n.watches).toBe(0);
+
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(n.reads).toBe(2);
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["QUEUED"]);
+  expect(await pane.find({ type: "Text", text: /#3 queued\s+w3 claude/ })).toBeDefined();
+  await pane.unmount();
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: "sluice main · 1 submission · #3 waiting" }),
+  ).toBeDefined();
+  await band.unmount();
+});
+
+/** The pane as `/sluice` drew it, docked unless `props` says otherwise. */
+function mountPane($: Engine, props = PANE) {
+  return $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props,
+    requestId: "sluice",
+  });
+}
+
+const ASK = "Ask Claude to set sluice up in this repository.";
+
+test("/sluice reads sluice again where it still cannot be started, and says so", async ($, on) => {
+  const n = readsHost(on, ["missing"]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await $.command.run(slash(false));
+  expect(n.reads).toBe(2);
+  expect(n.watches).toBe(0);
+  const pane = await mountPane($, INLINE);
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "sluice could not be read here: the sluice command was not found",
+    }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Text", text: ASK })).toBeDefined();
+  expect(await pane.find({ type: "Button", key: "close" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a pane whose sluice overview failed gives sluice's words and what to do", async ($, on) => {
+  readsHost(on, [{ exitCode: 3, stderr: "sluice: not a git repository\n" }]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await $.command.run(slash(true));
+  const pane = await mountPane($);
+  const lines = await pane.findAll({ type: "Text" });
+  expect(lines.map((l) => l.text)).toEqual([
+    "sluice could not be read here: sluice: not a git repository",
+    ASK,
+  ]);
+  await pane.unmount();
+});
+
+test("a pane with no branch says how a submission gets there", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const none = overview();
+  none.branches = [];
+  readsHost(on, [none]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeDefined();
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "When an agent in a worktree runs sluice submit <branch>, its submission shows here until it lands.",
+    }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a pane whose branches have nothing to show says no branch has a queue", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const quiet = overview();
+  quiet.branches[0] = {
+    ...quiet.branches[0]!,
+    depth: 0,
+    candidates: [],
+    submissions: [],
+    recent: [{ schema: "sluice/log@1", at: "2026-10-16T19:20:00Z", event: "landed", ids: [11] }],
+  };
+  readsHost(on, [quiet]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a named branch with no records keeps its line, and no 'Nothing submitted yet'", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  mock.env(on, { SLUICE_BRANCH: "hotfix" });
+  const none = overview();
+  none.branches = [];
+  readsHost(on, [none]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await mountPane($);
+  expect(await pane.find({ type: "Text", text: "hotfix · no records" })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "Nothing submitted yet." })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("two good reads of sluice start one watch between them", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const n = readsHost(on, ["missing", justSetUp()]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  // Two /sluice at once, each finding no overview yet, each reading it.
+  await Promise.all([$.command.run(slash(true)), $.command.run(slash(true))]);
+  await clock.settle();
+  expect(n.reads).toBe(3);
+  expect(n.watches).toBe(1);
 });
 
 test("a failure opens in place, folds, and moves no one", async ($, on) => {

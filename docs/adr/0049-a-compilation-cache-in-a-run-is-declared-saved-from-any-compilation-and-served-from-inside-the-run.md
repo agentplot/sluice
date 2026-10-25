@@ -54,3 +54,20 @@ Considered and not taken: accepting the race and measuring it (35's last sentenc
 - Good: a confined run never compiles outside its confinement; at worst it compiles cold.
 - Bad: confined runs on one host share the cache one at a time.
 - Neutral: the keeper's server is a host service for swancloud to run, as it runs the container engine.
+
+## Amendment: the caches are the host's, declared by its keeper; sluice opens them and knows no tool
+
+Deciders: the user, who held the bolt built from this record on 2026-10-25 ("I want to hold the bolt and do an exploration design session on it") and settled the design across sluice and tailrace in madswan-design's pane and its review page, choosing "in the keeper's host settings, beside the run bound and cores" and "drop it; the runner's cache is the task cache"; the record's other words are madswan-design's. Status: accepted by the user on 2026-10-25, on their card ("Approved"). This record as decided and first amended put a compiler cache's shape into sluice: a cache the branch's policy declares, one server per directory with a lock, a confined run starting a server of its own. The shape was sccache's, the only instance in view, and the options weighed no runner cache and not tailrace, whose statement already owns the task cache: entries by build identity, shared by every checkout on a host and carried between hosts through the store (tailrace 52 to 55, C.3). The decision is amended as follows, and what it rests on is unchanged: a place holds nothing of another place but what is declared, and a cache changes how fast a check runs, never what it reports.
+
+1. **The host's shared caches are the keeper's to declare**, in the host's own settings beside the bound and the cores (71): each a directory outside every place, a socket its clients reach where the cache has a server, and the environment its clients read. The repository's policy declares no cache and names no tool; it may mark a check cold, and a cold check is given none of the host's caches.
+2. **sluice opens and passes, and nothing more.** A confined run may write the declared directories and reach the declared sockets, and nothing else outside its place and its scratch; every run is given the declared environment from the host's. sluice starts and ends no server and holds no lock: the keeper runs a cache's server as it runs the container engine. The one-server-per-directory rule and the confined run's own server go with the tool they described.
+3. **sluice's checkout cache goes.** The runner's cache, shared by every checkout on the host and filled by tailrace from landings, is the task cache; a second task cache in sluice with its own key and fill rule would be the duplication this record was faulted for.
+
+Considered and not taken: keeping the policy's declaration as an opt-in per repository, which puts a tool's name in every repository for a server only the host can run; keeping both task caches; and a cross-host compiler cache, which is a later question of its own and not tailrace's today.
+
+### Consequences
+
+- Clause 35 reads as amended; clause 71 says the keeper declares the caches; the sandbox row of C.2 allows the declared directories and sockets.
+- The unit `a-run-compiles-through-a-declared-compilation-cache` is withdrawn; a unit in its place has sluice read the host's declared caches, open them to a run, pass their environment, honour a cold check, and drop the checkout cache.
+- Tailrace's clause 124 says a compilation's cache is below it; swancloud, the fleet's keeper, writes the host's cache table and runs the servers (its record 0036).
+- The chore giving agents' shells sccache stands.

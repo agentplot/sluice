@@ -53,7 +53,10 @@ trust = ["confined", "sandbox"]
 | `ready` | a command | Shows that the host can run the tests, e.g. `["docker", "info"]` for tests that need a container engine. It runs in the checkout under the same executor, toolchain and environment as the tests, within 60 seconds. When it fails before a run, the run is refused and nothing is recorded. When it fails after a run in which a test did not pass, those tests could not run: they have no result, and the combination is tested again. A list, the command first, or a string run by `sh -c`. |
 | `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result, as with `ready`. Unset, every exit but `0` is a fail. |
 
-Which tasks must pass is not here: it is set per branch.
+Nothing in `[tests]` chooses what runs on a branch. With
+`runner = "command"`, its command runs on every gated branch; with
+`runner = "moon"`, each branch's [`required`](#required) names the tasks
+that must pass there.
 
 ### moon, as your CI runs it
 
@@ -267,6 +270,11 @@ run only where the combination affects them. A repository that tags
 every test `suite` requires `#suite`; a slower tag such as `#live` can be
 required on `main` and not on bolts. With `runner = "command"` the
 command is the only test and `required` is left out.
+
+With `runner = "moon"`, a branch with no `required`, or one whose tags no
+task carries, runs no tests: every submission to it lands untested. The
+[Claude Code plugin](/sluice/guides/claude-code/)'s setup skill warns of
+such a branch when it reads the policy back.
 
 ### `parallel`
 
