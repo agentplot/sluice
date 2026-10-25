@@ -140,6 +140,11 @@ struct Meta {
     /// `Plan::kept_out`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kept_out: Vec<String>,
+    /// Where moon keeps the run's manifests, found as the run started
+    /// (design D8); a run recorded without it keeps them in its place's
+    /// `.moon/cache`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    store: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -931,6 +936,9 @@ impl Tests for Checks {
             &self.instance.caches
         };
         let env = if plan.cold { run_env(caches) } else { env };
+        // Design D8: where moon keeps this run's manifests, from what its
+        // command is given, as moon finds it when it starts.
+        let store = (runner == "moon").then(|| super::moon::store(&request.place.path, &env));
         let docker = request.limits.docker;
         let executor = match kind {
             Kind::Open => Enforced {
@@ -980,6 +988,7 @@ impl Tests for Checks {
             ready,
             not_run,
             kept_out: plan.kept_out,
+            store,
         };
         self.runs.start(
             name,
@@ -1156,7 +1165,10 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
         }
-        let store = meta.place.join(".moon/cache");
+        let store = meta
+            .store
+            .clone()
+            .unwrap_or_else(|| meta.place.join(".moon/cache"));
         let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         let mut out = Vec::new();
