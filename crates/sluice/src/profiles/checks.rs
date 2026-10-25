@@ -7,10 +7,11 @@
 //! - `"open"`: the process group alone; holds nothing else, confines
 //!   nothing;
 //! - `"sandbox"`: on macOS, Seatbelt (`sandbox-exec`) with writes allowed
-//!   only to the place, its scratch directory and what the runner names,
-//!   and the network only as the policy says; with `[executor] docker =
-//!   true`, the container engine's socket too. Not confined: a session on
-//!   the host can still write the place.
+//!   only to the place, its scratch directory, the host's cache
+//!   directories and what the runner names, and the network only as the
+//!   policy says, the host's cache sockets whatever it says; with
+//!   `[executor] docker = true`, the container engine's socket too. Not
+//!   confined: a session on the host can still write the place.
 //!
 //! `[tests] release`, when set, is the release command (ADR 0016): a list,
 //! the command first, or a string run by `sh -c`. It runs when the place
@@ -567,6 +568,52 @@ fn docker_sockets() -> Vec<PathBuf> {
     all
 }
 
+/// A path by the path given and, where it resolves, the path it resolves
+/// to: Seatbelt matches resolved paths, and `/var` is `/private/var`.
+fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![path.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(path) {
+        if real != path {
+            paths.push(real);
+        }
+    }
+    paths
+}
+
+/// The Seatbelt profile of a run in `place`: its checkout and scratch
+/// directory writable, and each `dir` of the host's `caches`; the
+/// container engine's sockets reachable when `limits` allow it (ADR 0016),
+/// and each `socket` of the caches, whatever the network (35; design D4).
+fn sandbox_profile(
+    place: &Place,
+    limits: &Limits,
+    stamps: &[&str],
+    caches: &[HostCache],
+) -> String {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut writable = vec![canon(&place.path), canon(&place.tmp)];
+    let mut sockets = if limits.docker {
+        docker_sockets()
+    } else {
+        Vec::new()
+    };
+    for cache in caches {
+        writable.extend(given_and_resolved(&cache.dir));
+        if let Some(s) = &cache.socket {
+            sockets.extend(given_and_resolved(s));
+        }
+    }
+    sockets.sort();
+    sockets.dedup();
+    seatbelt(
+        &writable,
+        stamps,
+        limits.network,
+        &sockets,
+        user_tmp().as_deref(),
+    )
+}
+
 /// `[tests] release`: the command, or `None`.
 fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
     command_setting(tests, "release")
@@ -647,22 +694,8 @@ pub fn release_request(
     let r: Vec<&str> = release.iter().map(String::as_str).collect();
     let mut argv = cx.argv(&r);
     if kind == Kind::Sandbox {
-        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let profile = dir.join("sandbox.sb");
-        std::fs::write(
-            &profile,
-            seatbelt(
-                &[canon(&place.path), canon(&place.tmp)],
-                &[],
-                limits.network,
-                &if limits.docker {
-                    docker_sockets()
-                } else {
-                    Vec::new()
-                },
-                user_tmp().as_deref(),
-            ),
-        )?;
+        std::fs::write(&profile, sandbox_profile(place, limits, &[], &[]))?;
         argv.splice(
             0..0,
             [
@@ -764,21 +797,14 @@ impl Tests for Checks {
                 let r: Vec<&str> = r.iter().map(String::as_str).collect();
                 let mut argv = cx.argv(&r);
                 if kind == Kind::Sandbox {
-                    let canon =
-                        |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                     let profile = dir.join("ready.sb");
                     std::fs::write(
                         &profile,
-                        seatbelt(
-                            &[canon(&request.place.path), canon(&request.place.tmp)],
+                        sandbox_profile(
+                            &request.place,
+                            &request.limits,
                             &[],
-                            request.limits.network,
-                            &if request.limits.docker {
-                                docker_sockets()
-                            } else {
-                                Vec::new()
-                            },
-                            user_tmp().as_deref(),
+                            &self.instance.caches,
                         ),
                     )?;
                     argv.splice(
@@ -841,17 +867,15 @@ impl Tests for Checks {
                 docker,
             },
             Kind::Sandbox => {
-                let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                 let network = request.limits.network;
                 let profile = dir.join("sandbox.sb");
                 std::fs::write(
                     &profile,
-                    seatbelt(
-                        &[canon(&request.place.path), canon(&request.place.tmp)],
+                    sandbox_profile(
+                        &request.place,
+                        &request.limits,
                         &plan.stamps,
-                        network,
-                        &if docker { docker_sockets() } else { Vec::new() },
-                        user_tmp().as_deref(),
+                        &self.instance.caches,
                     ),
                 )?;
                 let sandbox = [

@@ -468,6 +468,71 @@ fn the_sandbox_holds_writes_and_the_network() {
     drop(listener);
 }
 
+/// 35, C.2: a sandboxed run may write the host's declared cache directory
+/// and reach its declared socket with no network, and write nothing
+/// beside them; a declared socket nobody listens on changes nothing, and
+/// sluice makes nothing of a cache.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_opens_the_hosts_caches() {
+    let repo = Repo::new("checks-sandbox-caches");
+    // A short name, so the socket's path fits a Unix socket's address.
+    let host = Scratch::new("sk");
+    let (dir, beside) = (host.path().join("c"), host.path().join("b"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&beside).unwrap();
+    let socket = host.path().join("s");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let cache = |dir: &std::path::Path, socket: &std::path::Path| HostCache {
+        dir: dir.to_path_buf(),
+        socket: Some(socket.to_path_buf()),
+        env: Default::default(),
+    };
+    let sandboxed = |c: &Checks, name: &str, cmd: &str, network: Option<Network>| {
+        let mut req = request(&repo, name, command(cmd));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network,
+            memory: None,
+            docker: false,
+        };
+        finish(c, &req).tasks[0].outcome
+    };
+    let c = caching(&repo, vec![cache(&dir, &socket)]);
+
+    let write = |d: &std::path::Path| format!("touch {}/built", d.display());
+    assert_eq!(
+        sandboxed(&c, "p1", &write(&dir), Some(Network::Denied)),
+        Outcome::Pass
+    );
+    assert!(dir.join("built").exists());
+    assert_eq!(sandboxed(&c, "p2", &write(&beside), None), Outcome::Fail);
+    assert!(!beside.join("built").exists());
+
+    let connect = format!(
+        "/usr/bin/perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Peer => \"{}\") or exit 1'",
+        socket.display()
+    );
+    assert_eq!(
+        sandboxed(&c, "p3", &connect, Some(Network::Denied)),
+        Outcome::Pass
+    );
+    // The declaration opens it: with no cache, no network reaches nothing.
+    assert_eq!(
+        sandboxed(&checks(&repo), "p4", &connect, Some(Network::Denied)),
+        Outcome::Fail
+    );
+    drop(listener);
+
+    // A server that is down: the run is as one with no cache, and nothing
+    // of the cache is made or left.
+    let (gone, quiet) = (host.path().join("none"), host.path().join("q"));
+    let down = caching(&repo, vec![cache(&gone, &quiet)]);
+    assert_eq!(sandboxed(&down, "p5", "true", None), Outcome::Pass);
+    assert_eq!(sandboxed(&checks(&repo), "p6", "true", None), Outcome::Pass);
+    assert!(!gone.exists() && !quiet.exists());
+}
+
 /// `tests` with `key` set to `value`.
 fn with(mut tests: Settings, key: &str, value: Setting) -> Settings {
     tests.insert(key.into(), value);
