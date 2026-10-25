@@ -52,6 +52,7 @@ trust = ["confined", "sandbox"]
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
 | `ready` | a command | Shows that the host can run the tests, e.g. `["docker", "info"]` for tests that need a container engine. It runs in the checkout under the same executor, toolchain and environment as the tests, within 60 seconds. When it fails before a run, the run is refused and nothing is recorded. When it fails after a run in which a test did not pass, those tests could not run: they have no result, and the combination is tested again. A list, the command first, or a string run by `sh -c`. |
 | `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result, as with `ready`. Unset, every exit but `0` is a fail. |
+| `cold` | a list of tests | Tests that run with none of the host's [caches](#caches), e.g. `["#bench"]` for timings a warm cache would skew. Each is named as `required` names it: a moon target or a `#tag`, or the command with `runner = "command"`. A run that holds one gets no cache directory, no cache socket and none of the caches' variables, and its other tests lose only speed. |
 
 Which tasks must pass is not here: it is set per branch.
 
@@ -610,7 +611,8 @@ env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true", MOON_EXPERIMENT_CAS_OUTPUTS_C
 | `env` | The variables the cache's clients read, each a string. Every run gets them exactly as written: sluice expands nothing in them, so write the same values into the agents' shells. |
 
 A repository's policy declares no cache. The caches are the host's, and
-every repository on the host shares them.
+every repository on the host shares them. A run that holds a test the
+policy marks [`cold`](#tests-how-tests-run) gets none of them.
 
 sluice starts, ends and locks nothing of a cache, and names no cache's
 tool. You run a cache's server, as you run the container engine. When

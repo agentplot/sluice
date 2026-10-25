@@ -14,6 +14,7 @@ toolchain = ["devenv", "print-dev-env"]   # optional: the shell the tasks run in
 release = "scripts/stack-down"            # optional: removes what tasks hand off
 ready = ["docker", "info"]                # optional: the host can run the tasks
 not_run = [77]                            # optional: exits meaning "could not run here"
+cold = ["#bench"]                         # optional: tests run with none of the host's caches
 
 [branches."bolt/*"]
 required = ["#check-fast"]                # moon targets: a tag (#tag) or project:task
@@ -32,6 +33,10 @@ trust = ["confined", "sandbox"]           # no "cache": every required task real
   each task's outcome and hash.
 - With a `.prototools`, sluice runs `proto install` in the checkout before
   moon, outside the executor, so the pinned moon is there.
+- `cold` names tests, as `required` does, that a cache must not warm (a
+  benchmark, a timing). A run holding one gets none of the host's
+  `[[caches]]`: no cache directory, socket or variable. The run's other
+  tasks lose only speed.
 
 ## Make moon's affected query right
 

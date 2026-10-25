@@ -94,6 +94,7 @@ fn every_policy_key_is_named_in_the_setup_references() {
         "command",
         "release",
         "toolchain",
+        "cold",
         "ports",
         "ports_from",
         "key",
