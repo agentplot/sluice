@@ -7,7 +7,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
 
 ## 1. The overview's document and text
 
-- [ ] 1.1 Give `BranchView` its `held_checkouts`, cloned from the
+- [x] 1.1 Give `BranchView` its `held_checkouts`, cloned from the
   branch's `failed_releases` in `branch_view`, always serialized, and
   update the core's own `view` test helper; verify with a unit test in
   `crates/sluice-core/src/overview.rs` that a branch with one stopped and
