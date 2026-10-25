@@ -13,7 +13,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   `crates/sluice-core/src/overview.rs` that a branch with one stopped and
   one retrying failed release lists both, and one with none an empty
   list (`core:test`)
-- [ ] 1.2 Add a conformance test to
+- [x] 1.2 Add a conformance test to
   `crates/sluice-conformance/tests/places.rs`, using `held_checkout`,
   that `branch_view_of(BRANCH)` lists the held checkout with `stopped`
   and its `failed`, and that reading the overview ten times leaves the
