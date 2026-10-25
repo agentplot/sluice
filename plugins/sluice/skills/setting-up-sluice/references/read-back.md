@@ -34,6 +34,9 @@ later: this host has moon 2.7.1, and the repository's workspace is
 .moon/workspace.yml.
 ```
 
+Every pattern, task and version above is the example's: read each from the
+policy, from moon and from this host before saying it.
+
 ## `[tests]`, in one sentence
 
 Always say it, since nothing in `[tests]` chooses what runs on a branch:
@@ -113,6 +116,10 @@ Then stop, and commit nothing until the user answers:
   policy back again.
 - They say it is meant: write this comment on the branch's table header,
   and commit.
+
+Only an answer to the warning counts. When the user said before the
+read-back that a branch needs no tests, still write no comment, show the
+warning and ask: they may not have known what leaving it out does.
 
   ```toml
   [branches."dev/*"] # no checks: lands untested, by choice
