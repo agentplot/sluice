@@ -12,7 +12,7 @@
 ## 2. The guides say it in one place
 
 - [x] 2.1 In `site/src/content/docs/guides/pull-requests.md`, add a first section, "Keeping your team's pull requests", readable alone: the team keeps its pull requests; sluice opens one when an agent submits, and people open theirs by hand as always; a draft waits until it is marked ready for review, and a ready one waits for the reviews and checks the policy names; then sluice tests it with what is ahead of it and lands it with its own push, and GitHub marks it merged; nobody presses merge, and nothing else about a developer's day changes; the setup asks and writes the conditions. Say there is no mode in which GitHub's button lands and sluice only tests, and why, and make the "Merged with GitHub's button" line under "When things change" point to it. Link down to the sections that hold the detail. Verify `sluice exec main -- moon run site:prose` passes with no Vale warning.
-- [ ] 2.2 In `site/src/content/docs/guides/github.md`'s "Set up GitHub", add one sentence after "Leave GitHub's own merge queue off": a team that lands through pull requests keeps them, with sluice landing each, as [Pull requests](/sluice/guides/pull-requests/) shows, and no setting lets the merge button land on `main` instead. Verify `sluice exec main -- moon run site:prose` passes with no Vale warning.
+- [x] 2.2 In `site/src/content/docs/guides/github.md`'s "Set up GitHub", add one sentence after "Leave GitHub's own merge queue off": a team that lands through pull requests keeps them, with sluice landing each, as [Pull requests](/sluice/guides/pull-requests/) shows, and no setting lets the merge button land on `main` instead. Verify `sluice exec main -- moon run site:prose` passes with no Vale warning.
 
 ## 3. The gate
 
