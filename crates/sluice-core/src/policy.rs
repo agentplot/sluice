@@ -952,47 +952,84 @@ hold = "5m"
         assert_eq!(main.required_lines, [6, 7]);
     }
 
-    /// The Claude Code plugin's example policies read, and gate the
-    /// branches their comments say.
+    /// The branch patterns that name no check under the moon runner: a
+    /// branch with no `required` plans no task, so every submission to it
+    /// lands untested.
+    fn unchecked_under_moon(p: &Policy) -> Vec<&str> {
+        if p.tests.get("runner") != Some(&Setting::Text("moon".into())) {
+            return Vec::new();
+        }
+        p.branches
+            .iter()
+            .filter(|(_, rules)| rules.required.is_empty())
+            .map(|(pattern, _)| pattern.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_moon_branch_that_requires_nothing_is_unchecked() {
+        let p = Policy::parse(
+            "[tests]\nrunner = \"moon\"\n\n\
+             [branches.\"dev/*\"]\nparallel = 2\n\n\
+             [branches.main]\nrequired = [\"#test\"]\n",
+        )
+        .unwrap();
+        assert_eq!(unchecked_under_moon(&p), ["dev/*"]);
+    }
+
+    /// The Claude Code plugin's example policies read, gate the branches
+    /// their comments say, and hold every branch under moon to a check.
     #[test]
     fn the_plugins_example_policies_read() {
         const DIR: &str = "../../plugins/sluice/skills/setting-up-sluice/references/examples";
         let examples = [
             (
+                "moon-minimal.sluice.toml",
                 include_str!(
                     "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-minimal.sluice.toml"
                 ),
                 "main",
             ),
             (
+                "moon-worktrunk-github.sluice.toml",
                 include_str!(
                     "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-worktrunk-github.sluice.toml"
                 ),
                 "main",
             ),
             (
+                "command-only.sluice.toml",
                 include_str!(
                     "../../../plugins/sluice/skills/setting-up-sluice/references/examples/command-only.sluice.toml"
                 ),
                 "main",
             ),
             (
+                "moon-peers-github.sluice.toml",
                 include_str!(
                     "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-peers-github.sluice.toml"
                 ),
                 "main",
             ),
         ];
-        for (text, branch) in examples {
-            let p = Policy::parse(text).unwrap_or_else(|e| panic!("an example in {DIR}: {e:#}"));
-            assert!(p.rules_for(branch).unwrap().is_some(), "{DIR}: {branch}");
+        for (name, text, branch) in examples {
+            let p = Policy::parse(text).unwrap_or_else(|e| panic!("{DIR}/{name}: {e:#}"));
+            assert!(
+                p.rules_for(branch).unwrap().is_some(),
+                "{DIR}/{name}: {branch}"
+            );
+            let unchecked = unchecked_under_moon(&p);
+            assert!(
+                unchecked.is_empty(),
+                "{DIR}/{name}: {unchecked:?} name no check, so they land untested"
+            );
         }
-        let full = Policy::parse(examples[1].0).unwrap();
+        let full = Policy::parse(examples[1].1).unwrap();
         assert!(full.rules_for("bolt/x").unwrap().is_some());
         let main = full.rules_for("main").unwrap().unwrap();
         assert_eq!(main.remote.as_deref(), Some("origin"));
         assert!(main.pull_requests.is_some());
-        let peers = Policy::parse(examples[3].0).unwrap();
+        let peers = Policy::parse(examples[3].1).unwrap();
         let main = peers.rules_for("main").unwrap().unwrap();
         assert!(main.signed && main.confined);
         assert_eq!(main.systems_of("cli:build").len(), 3);

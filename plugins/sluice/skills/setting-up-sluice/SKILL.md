@@ -1,6 +1,6 @@
 ---
 name: setting-up-sluice
-description: Install sluice and set it up in a repository. Use when the user asks to install, set up, configure or adopt sluice, write or change `.config/sluice.toml`, gate a branch, move from `wt merge` or direct merges to a merge queue, land on GitHub through sluice, give sluice a GitHub App, or take pull requests through it; also when `sluice` is not installed or is too old. Chooses the runner, executor, worktree driver and forge for the tools the repository already uses (moon, worktrunk, devenv, GitHub) and shows a reference example for each.
+description: Install sluice and set it up in a repository. Use when the user asks to install, set up, configure or adopt sluice, write or change `.config/sluice.toml`, explain or read back `.config/sluice.toml`, gate a branch, move from `wt merge` or direct merges to a merge queue, land on GitHub through sluice, give sluice a GitHub App, or take pull requests through it; also when `sluice` is not installed or is too old. Chooses the runner, executor, worktree driver and forge for the tools the repository already uses (moon, worktrunk, devenv, GitHub) and shows a reference example for each.
 ---
 
 # Setting up sluice
@@ -54,8 +54,25 @@ Find out what the repository already uses before writing anything:
 | a stack a person should try after each landing | previews ([profiles/previews.md](references/profiles/previews.md)) |
 | a bare repo with worktrees, or none yet | the `worktrees` skill |
 
-Then ask the user which branches sluice should gate (`main`; a family like
-`bolt/*` for small fast landings) and what must pass on each.
+Then ask the user, before writing anything:
+
+1. **Which branches agents will submit to.** A name (`main`), or a family
+   of them (`dev/*`, `bolt/*` for small fast landings). Each becomes a
+   `[branches."<pattern>"]` table, and only sluice moves those branches.
+2. **For each, what must pass before work lands there.** In a moon
+   repository, offer the tags its tasks carry:
+
+   ```sh
+   moon query tasks | jq -r '[.tasks[][].tags[]?] | unique | .[]'   # every tag; then --tags <tag> for its tasks
+   ```
+
+   A fast tag such as `#check-fast` suits a family of bolts, and a slower
+   one such as `#e2e` can be added on `main` only.
+
+Tell the user what their answer means. `[tests]` picks how checks run;
+each branch's `required` picks which. Under the command runner the one
+command runs in full on every gated branch, so a quick suite on `dev/*`
+and the full one on `main` need moon, whose tasks each branch names.
 
 ## 3. Choose, per part
 
@@ -137,12 +154,20 @@ Complete starting points:
 [command-only](references/examples/command-only.sluice.toml).
 Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
 
-## 4. Write and commit the policy
+## 4. Write, read back and commit the policy
 
 Write `.config/sluice.toml`. sluice reads it **from the branch it gates**,
 never from a submission, so it takes effect once it is committed on that
-branch. Commit it there the way the repository lands work today, before
-protecting the branch. That one change is the last one landed by hand.
+branch.
+
+Before committing it, read it back to the user by
+[read-back](references/read-back.md): each branch pattern, what it matches
+and what must pass there. A branch on which no test will run leads its
+part with the warning, in that page's words; stop there until the user
+names a check for it or says it is meant to land untested.
+
+Then commit it the way the repository lands work today, before protecting
+the branch. That one change is the last one landed by hand.
 
 ## 5. Protect the branch and set up the host
 
@@ -200,3 +225,10 @@ ruleset restricts creations and deletions as well as updates.
 Then tell the agents: they submit, never merge (the `using-sluice` skill).
 Remove any merge step, pre-merge test hook or post-merge check from their
 scripts: sluice runs the gate on the exact combination that lands.
+
+## What does my policy do?
+
+When the user asks what an existing `.config/sluice.toml` does, or why a
+branch landed something untested, give the same read-back
+([read-back](references/read-back.md)), warnings first for their
+branches.
