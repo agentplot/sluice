@@ -797,10 +797,13 @@ pub fn blob_in(store: &Path, key: &str) -> Option<Vec<u8>> {
     std::fs::read(store.join("blobs").join(&key[..2]).join(&key[2..])).ok()
 }
 
-/// Design D8 (C.2 moon row): where moon keeps the blobs and hash manifests
-/// of a run in `checkout` whose command is given `env`, found as moon 2.6.1
-/// finds it (`crates/app/src/session.rs`, `get_cache_engine`), and never
-/// from where the host's `[[caches]]` says. With moon's shared worktree
+/// Design D8 (C.2 moon row, 35): where moon keeps the blobs and hash
+/// manifests of a run in `checkout` whose command starts in `env`, found as
+/// moon 2.6.1 finds it (`crates/app/src/session.rs`, `get_cache_engine`),
+/// and never from where the host's `[[caches]]` says. `env` is the
+/// environment as the command sees it, `[tests] toolchain` sourced
+/// ([`super::checks::Context::command_env`]): a toolchain that sets
+/// `MOON_HOME` moves moon's home, as sluice's own devenv does. With moon's shared worktree
 /// setting on in a linked worktree, it is the repository's base checkout's
 /// `.moon/cache` when the base holds `.moon`, else `cache/shared` under
 /// moon's home; otherwise, the base checkout itself among it, the

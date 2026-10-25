@@ -625,10 +625,11 @@ and keeps each worktree's run report and task states in the worktree,
 where sluice reads them. Where it keeps what it shares is moon's to
 say: in the base checkout's `.moon/cache` when the repository has a
 base checkout holding `.moon`, otherwise in `cache/shared` under moon's
-home, `MOON_HOME` or `~/.moon`. Declare that directory as the cache's
-`dir`, so a sandboxed run may write it. sluice reads the manifest by
-which a host proves a task's key where moon keeps it, whatever `dir`
-says.
+home, `MOON_HOME` or `~/.moon`. moon's home is the one moon's command
+sees in a run, with `[tests] toolchain` sourced: a toolchain that sets
+`MOON_HOME` moves it. Declare that directory as the cache's `dir`, so a
+sandboxed run may write it. sluice reads the manifest by which a host
+proves a task's key where moon keeps it, whatever `dir` says.
 
 `MOON_CACHE_DIR` moves nothing of moon's. moon 2.6.1 reads no such
 variable: it sets it for the tasks it runs, naming the workspace's own
