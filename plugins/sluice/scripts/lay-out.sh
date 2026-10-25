@@ -4,22 +4,28 @@
 # registered as a worktree; then carries Claude Code's history to the keys
 # of the new paths (126, S61).
 #
-#   lay-out.sh plan <folder>                  print the plan, change nothing
-#   lay-out.sh go <folder> [--session <id>]   check again, lay out, carry
+#   lay-out.sh plan <folder> [--session-pid <pid>]
+#       print the plan, change nothing
+#   lay-out.sh go <folder> [--session <id>] [--session-pid <pid>]
+#       check again, lay out, carry
 #
 # Exit 0: done (plan: go would go). 1: refused, nothing moved (plan: go
 # would refuse, and why). 2: a step failed after the move began; every
 # file is still on disk and nothing was deleted.
 #
-# It moves nothing while a process other than itself and its ancestors
-# (the shell and the session that run it) has its working directory or a
-# file open at or under the folder, and refuses when it cannot tell.
-# It overwrites and deletes nothing. bash 3.2 (macOS's own).
+# The session is the process --session-pid names, and, named none, the
+# process that started this script; --session names the session's
+# transcript, left for the session to carry itself. It moves nothing while
+# a process has its working directory or a file open at or under the
+# folder, other than this script, the session, the session's ancestors and
+# every process whose parent chain reaches the session (126, record 0057),
+# and refuses when it cannot tell. It overwrites and deletes nothing.
+# bash 3.2 (macOS's own).
 
 set -u
 
 usage() {
-  echo "usage: lay-out.sh plan <folder> | lay-out.sh go <folder> [--session <id>]" >&2
+  echo "usage: lay-out.sh plan <folder> [--session-pid <pid>] | lay-out.sh go <folder> [--session <id>] [--session-pid <pid>]" >&2
   exit 1
 }
 
@@ -28,22 +34,28 @@ form=$1
 given=$2
 shift 2
 session=
+session_pid=$PPID
 case $form in
-plan) [ $# -eq 0 ] || usage ;;
-go)
-  while [ $# -gt 0 ]; do
-    case $1 in
-    --session)
-      [ $# -ge 2 ] || usage
-      session=$2
-      shift 2
-      ;;
-    *) usage ;;
-    esac
-  done
-  ;;
+plan | go) ;;
 *) usage ;;
 esac
+while [ $# -gt 0 ]; do
+  case $1 in
+  --session)
+    [ "$form" = go ] || usage
+    [ $# -ge 2 ] || usage
+    session=$2
+    shift 2
+    ;;
+  --session-pid)
+    [ $# -ge 2 ] || usage
+    case $2 in '' | *[!0-9]*) usage ;; esac
+    session_pid=$2
+    shift 2
+    ;;
+  *) usage ;;
+  esac
+done
 
 refuse() {
   echo "refused: $1" >&2
@@ -140,9 +152,10 @@ EOF
 
 # What holds the folder: every process's working directory and open files,
 # listed once, kept where the path is the folder or under it, leaving out
-# this process and its ancestors. The ancestors are found by walking the
-# parent ids the same listing gives: `ps` is setuid on macOS, and a
-# sandbox may refuse to run it.
+# this process, the session, its ancestors and every process whose parent
+# chain reaches it. Both are found by walking the parent ids the same
+# listing gives: `ps` is setuid on macOS, and a sandbox may refuse to run
+# it.
 held=
 blind=
 if ! command -v lsof >/dev/null 2>&1; then
@@ -152,7 +165,7 @@ elif ! listing=$(lsof -n -P -w +c 0 -F pRcfn 2>/dev/null); then
   blind="lsof failed"
   stop "cannot tell what holds the folder: $blind"
 else
-  held=$(printf '%s\n' "$listing" | awk -v self=$$ -v up="$PPID" -v a="$folder" -v b="$real" '
+  held=$(printf '%s\n' "$listing" | awk -v self=$$ -v session="$session_pid" -v a="$folder" -v b="$real" '
     /^p/ { pid = substr($0, 2); next }
     /^R/ { parent[pid] = substr($0, 2); next }
     /^c/ { cmd[pid] = substr($0, 2); next }
@@ -167,14 +180,24 @@ else
     }
     END {
       skip[self] = 1
-      p = up
+      p = session
       for (i = 0; i < 64 && p != "" && p != "0" && !(p in skip); i++) {
         skip[p] = 1
         p = parent[p]
       }
       for (i = 1; i <= count; i++) {
         q = order[i]
-        if (!(q in skip)) printf "    %s  %s  %s\n", q, cmd[q], how[q]
+        if (q in skip) continue
+        mine = 0
+        p = parent[q]
+        for (j = 0; j < 64 && p != "" && p != "0"; j++) {
+          if (p == session) {
+            mine = 1
+            break
+          }
+          p = parent[p]
+        }
+        if (!mine) printf "    %s  %s  %s\n", q, cmd[q], how[q]
       }
     }')
   if [ -n "$held" ]; then
@@ -229,7 +252,7 @@ print_plan() {
   elif [ -n "$blind" ]; then
     echo "  holds the folder: cannot tell ($blind)"
   else
-    echo "  holds the folder: nothing but this session"
+    echo "  holds the folder: nothing but this session and what it started"
   fi
   echo "  Claude Code history, carried, overwriting nothing"
   if [ -n "$long" ]; then
