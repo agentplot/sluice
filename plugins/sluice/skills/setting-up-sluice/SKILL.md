@@ -142,11 +142,91 @@ Then ask the user, before writing anything:
 
    A fast tag such as `#check-fast` suits a family of bolts, and a slower
    one such as `#e2e` can be added on `main` only.
+3. **For each that lives on GitHub, whether the team lands on it through
+   pull requests today.** Ask only for a branch whose policy will name a
+   remote on GitHub: one kept on this host has no pull requests, and
+   sluice refuses the table without `remote`. Ask per branch, since a team
+   often reviews everything into `main` and lets agents land on `bolt/*`
+   straight from their worktrees. On no, write no `pull_requests` table
+   for it; on yes, see [a branch the team lands by pull
+   request](#a-branch-the-team-lands-by-pull-request).
 
 Tell the user what their answer means. `[tests]` picks how checks run;
 each branch's `required` picks which. Under the command runner the one
 command runs in full on every gated branch, so a quick suite on `dev/*`
 and the full one on `main` need moon, whose tasks each branch names.
+
+### A branch the team lands by pull request
+
+Read what GitHub requires of the branch now, from its rulesets and from
+classic branch protection; for a pattern, read an existing branch that
+matches it. `gh` fills in `{owner}` and `{repo}` from the remote:
+
+```sh
+gh api repos/{owner}/{repo}/rules/branches/main --jq '.[] | {type, parameters}'
+gh api repos/{owner}/{repo}/branches/main/protection   # 404: no classic protection
+```
+
+- From the rules: the `pull_request` rule's `required_approving_review_count`
+  and `require_code_owner_review`, the `required_status_checks` rule's
+  `required_status_checks[].context`, and whether there is a
+  `merge_queue` rule.
+- From protection: `required_pull_request_reviews.required_approving_review_count`
+  and `require_code_owners_review`, and `required_status_checks.checks[].context`.
+
+Show the user what was read, and from where, then offer:
+
+- `reviews`: the highest approving review count of them all;
+- `checks`: each check's name, once, leaving out `sluice` and every name
+  starting `sluice / `. Those are sluice's own, posted on what it tests,
+  and a pull request never waits for them.
+
+Where `gh` is missing or signed out, or a read is refused (protection
+needs admin rights), say which read failed and ask the user how many
+approving reviews and which checks the team requires.
+
+Then say plainly what the policy can't hold. The table has `reviews` and
+`checks` alone, so a review from code owners has no condition there, nor
+has the approval of the latest push, resolved conversations, a
+deployment or code scanning. For each the branch requires, say: "sluice's
+policy has no condition for a review from code owners, so sluice will not
+wait for one: a pull request lands once it has its reviews and checks and
+its combination passes." Never stand in for one, such as by counting code
+owners into `reviews`: sluice would land a pull request the team's own
+rule would have held.
+
+Write what the user confirms:
+
+```toml
+[branches.main.pull_requests]
+reviews = 1
+checks = ["ci/test"]
+```
+
+Before the policy is committed, tell the user what keeping their pull
+requests means on that branch:
+
+- Pull requests are opened as always: by an agent's `sluice submit` or
+  `wt submit`, or by hand.
+- A draft waits until it is marked ready for review; a ready one waits
+  for the reviews and checks the table names.
+- Then sluice tests it with what is ahead of it and lands it with its own
+  push, and GitHub marks it merged.
+- Nobody presses merge, uses GitHub's merge queue or merges by hand on
+  that branch. Only who lands a pull request changes, from the merge
+  button to sluice's push.
+- Keep `sluice run` going (a terminal, a login item, a service manager):
+  a pull request opened by hand has no submit waiting on it, and sluice
+  starts no service itself.
+
+sluice has no mode in which GitHub's button lands and sluice only tests.
+Whenever the user asks for one (keep the merge button, have sluice only
+check pull requests, require its check in the ruleset), say there is
+none, and why: what the button lands was never tested with what landed
+just before it, so two pull requests that each passed alone can break
+the branch together. Offer the pull request conditions instead, and
+never improvise such a mode, such as sluice's checks required in a
+ruleset with the button left on.
 
 ## 4. Choose, per part
 
@@ -242,10 +322,11 @@ never from a submission, so it takes effect once it is committed on that
 branch.
 
 Before committing it, read it back to the user by
-[read-back](references/read-back.md): each branch pattern, what it matches
-and what must pass there. A branch on which no test will run leads its
-part with the warning, in that page's words; stop there until the user
-names a check for it or says it is meant to land untested.
+[read-back](references/read-back.md): each branch pattern, what it matches,
+what must pass there and what a pull request into it waits for. A branch
+on which no test will run leads its part with the warning, in that page's
+words; stop there until the user names a check for it or says it is meant
+to land untested.
 
 Then commit it the way the repository lands work today, before protecting
 the branch. That one change is the last one landed by hand. When the user
@@ -289,8 +370,15 @@ For a branch on GitHub, do these in this order, or a step is refused:
 2. Add the branch's ruleset with the user's own account in its bypass list.
 3. Create and install the GitHub App, and name it in `[forge]`
    ([github-app](references/profiles/github-app.md)).
-4. Put the app in the bypass list, then remove every other entry.
-5. `sluice forge check <branch>`.
+4. For a branch with a `pull_requests` table, now that the policy holds
+   its conditions: propose removing the required approvals and status
+   checks from its ruleset, or its classic branch protection, and turning
+   GitHub's merge queue off. The conditions belong to the policy, read
+   from the branch so a pull request can't loosen them, and sluice is the
+   queue: GitHub's would land what sluice never tested. Make each change
+   only on the user's word.
+5. Put the app in the bypass list, then remove every other entry.
+6. `sluice forge check <branch>`.
 
 For more than one host or system, follow [peers](references/profiles/peers.md)'s
 "Set it up, in order": a signing key per host, `[signing]` in each host's
