@@ -16,7 +16,7 @@
 ## 3. The setup offers the layout first
 
 - [x] 3.1 Add step 2, "A working copy per branch", to `plugins/sluice/skills/setting-up-sluice/SKILL.md` before the survey, as the design's "When the setup offers the layout" and "Where the offer sits in the skill" say: the check, `plan` shown with its costs first, one question, `go` on the word with a refusal named and waited on, then `/cd <folder>/main` and the survey there; renumber the steps after it and drop the survey row that sends "none yet" to the `worktrees` skill; verify `moon run plugin-sluice:validate` passes and the skill reads through against each `plugin-setup` delta scenario
-- [ ] 3.2 In the policy step of the same skill, say that when the operator kept the plain clone the commit adding `.config/sluice.toml` carries the line the design's "The setup's record of a kept plain clone" gives, and that without an answer to the offer no policy is written; verify against the "The operator keeps the plain clone" and "No answer yet" scenarios
+- [x] 3.2 In the policy step of the same skill, say that when the operator kept the plain clone the commit adding `.config/sluice.toml` carries the line the design's "The setup's record of a kept plain clone" gives, and that without an answer to the offer no policy is written; verify against the "The operator keeps the plain clone" and "No answer yet" scenarios
 
 ## 4. The newcomer's way in
 
