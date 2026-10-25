@@ -136,7 +136,15 @@ else
   fail "go with an open file (exit $status): $out"
 fi
 
-# go refuses when it cannot tell what holds the folder.
+# When it cannot tell what holds the folder, the plan says so, never that
+# nothing does, and go refuses.
+run env FAKE_LSOF_FAIL=1 bash "$lay_out" plan "$p"
+if [ $status = 1 ] && has "$out" "holds the folder: cannot tell (lsof failed)" &&
+  ! has "$out" "nothing but this session" && [ "$(snapshot "$p")" = "$before" ]; then
+  ok "the plan says it cannot tell what holds the folder when lsof fails"
+else
+  fail "plan with a failing lsof (exit $status): $out"
+fi
 run env FAKE_LSOF_FAIL=1 bash "$lay_out" go "$p"
 if [ $status = 1 ] && has "$out" "lsof failed" && [ "$(snapshot "$p")" = "$before" ]; then
   ok "go refuses when lsof fails"

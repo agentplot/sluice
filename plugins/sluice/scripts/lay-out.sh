@@ -144,10 +144,13 @@ EOF
 # parent ids the same listing gives: `ps` is setuid on macOS, and a
 # sandbox may refuse to run it.
 held=
+blind=
 if ! command -v lsof >/dev/null 2>&1; then
-  stop "cannot tell what holds the folder: lsof is not on PATH"
+  blind="lsof is not on PATH"
+  stop "cannot tell what holds the folder: $blind"
 elif ! listing=$(lsof -n -P -w +c 0 -F pRcfn 2>/dev/null); then
-  stop "cannot tell what holds the folder: lsof failed"
+  blind="lsof failed"
+  stop "cannot tell what holds the folder: $blind"
 else
   held=$(printf '%s\n' "$listing" | awk -v self=$$ -v up="$PPID" -v a="$folder" -v b="$real" '
     /^p/ { pid = substr($0, 2); next }
@@ -223,6 +226,8 @@ print_plan() {
   if [ -n "$held" ]; then
     echo "  holds the folder, to stop, or to close the folder in, and start again from $folder/main"
     printf '%s\n' "$held"
+  elif [ -n "$blind" ]; then
+    echo "  holds the folder: cannot tell ($blind)"
   else
     echo "  holds the folder: nothing but this session"
   fi
