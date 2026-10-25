@@ -1,7 +1,7 @@
 ---
 number: 57
 title: The layout move counts its own session, and what it started, as no holder of the folder
-status: proposed
+status: accepted
 date: 2026-10-25
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # The layout move counts its own session, and what it started, as no holder of the folder
 
-Status: proposed to the user on 2026-10-25, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-25, on their card ("Approved").
 
 Deciders: madswan-design, 2026-10-25, on the question of slc-2's unit `setup-offers-the-layout-in-a-plain-clone` (bolt sluice-onboards-a-newcomer), whose coder found the move refusing on the session's own children; for the user to accept on this record's card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 126 as amended 2026-10-25; rule core.1; the unit's design ("What holds the folder") and the plugin-setup and plugin-worktrees specs; the coder's reading of `lsof` on deneb: an MCP server, a sluice watcher and `caffeinate`, each a child of the session process and a sibling of the command's shell, with their working directory in the worktree.
