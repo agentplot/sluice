@@ -570,6 +570,31 @@ export function openedText(isFullscreen: boolean): string {
     : "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.";
 }
 
+/**
+ * Why `sluice overview --json` gave no overview: the command could not be
+ * started (`got` null), else sluice's first line on stderr, else its exit.
+ */
+export function unreadReason(got: { exitCode: number; stderr: string } | null): string {
+  if (!got) return "the sluice command was not found";
+  const line = got.stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  return line ?? `sluice overview exited ${got.exitCode}`;
+}
+
+/**
+ * What the pane says under its first line when sluice has records of no
+ * branch and the session names none: how a submission gets there.
+ */
+export function emptyLines(doc: Overview, named: string | null): string[] {
+  if (doc.branches.length > 0 || named !== null) return [];
+  return [
+    "Nothing submitted yet.",
+    "When an agent in a worktree runs sluice submit <branch>, its submission shows here until it lands.",
+  ];
+}
+
 /** `https://github.com/<owner>/<repo>` from a remote's URL, or null off GitHub. */
 export function githubBase(url: string): string | null {
   const m = url
