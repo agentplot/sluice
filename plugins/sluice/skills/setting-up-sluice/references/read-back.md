@@ -3,8 +3,9 @@
 Say what `.config/sluice.toml` does in plain words, the same way every time:
 after writing or changing it, before it is committed, and whenever the user
 asks what their policy does. Read back only the checks: what each branch
-pattern matches and what must pass there. `parallel`, `batch`, `trust` and
-the rest were explained when they were chosen.
+pattern matches, what must pass there, and what a pull request into it
+waits for. `parallel`, `batch`, `trust` and the rest were explained when
+they were chosen.
 
 What sluice does with each key is the configuration reference's:
 [`[tests]`](https://agentplot.github.io/sluice/reference/configuration/#tests-how-tests-run)
@@ -15,7 +16,9 @@ This page says only how to put it.
 
 1. One sentence on `[tests]`.
 2. One block per `[branches."<pattern>"]` table, in the order the file lists
-   them. A block whose branch runs no check leads with the warning (below).
+   them. A block whose branch runs no check leads with the warning (below),
+   and one whose branch has a `pull_requests` table ends with what a pull
+   request into it waits for (below).
 3. The moon notice, when any branch's checks are moon tasks.
 
 ```text
@@ -28,6 +31,9 @@ dev/*  every branch whose name starts dev/, with no further / (dev/login)
 main
   must pass: the moon tasks tagged check-fast and e2e (web:lint, web:test,
   api:test, web:e2e)
+  a pull request into main waits until it is out of draft, has one
+  approving review and the check qa/approved passes; then sluice tests it
+  with what is ahead of it and lands it
 
 These checks are moon tasks. Every host that runs them needs moon 2.6 or
 later: this host has moon 2.7.1, and the repository's workspace is
@@ -84,6 +90,29 @@ each block's `must pass:` line: "`<command>` runs in full on every
 submission to each of these branches." A `required` there gets its own
 line on its branch: "`#test` is a moon target, which the command runner
 never reads: only `<command>` runs."
+
+## Pull requests
+
+When the branch has a `[branches."<pattern>".pull_requests]` table, end its
+block with one line, the branch's pattern in place of `main`:
+
+```text
+  a pull request into main waits until it is out of draft, <its
+  conditions>; then sluice tests it with what is ahead of it and lands it
+```
+
+Its conditions follow "out of draft" as a list, the last joined by "and":
+
+- `reviews`: "has one approving review", "has 2 approving reviews"; none
+  when `reviews` is 0 or absent;
+- `checks`: each by the name GitHub shows, "the check qa/approved
+  passes", "the checks ci/test and qa/approved pass"; none when there are
+  no checks.
+
+With neither, the line is "a pull request into main waits until it is
+out of draft; then sluice tests it with what is ahead of it and lands
+it". A branch with no table gets no such line: work reaches it straight
+from a worktree.
 
 ## When a branch runs no check
 

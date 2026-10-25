@@ -322,10 +322,11 @@ never from a submission, so it takes effect once it is committed on that
 branch.
 
 Before committing it, read it back to the user by
-[read-back](references/read-back.md): each branch pattern, what it matches
-and what must pass there. A branch on which no test will run leads its
-part with the warning, in that page's words; stop there until the user
-names a check for it or says it is meant to land untested.
+[read-back](references/read-back.md): each branch pattern, what it matches,
+what must pass there and what a pull request into it waits for. A branch
+on which no test will run leads its part with the warning, in that page's
+words; stop there until the user names a check for it or says it is meant
+to land untested.
 
 Then commit it the way the repository lands work today, before protecting
 the branch. That one change is the last one landed by hand. When the user
