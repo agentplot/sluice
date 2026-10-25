@@ -258,21 +258,30 @@ moon 2.6.1 resolves it as follows (tag `v2.6.1`, read for this design):
    the root is not the checkout, the store is `<root>/.moon/cache`.
    Otherwise it is `<moon home>/cache/shared` (`crates/app/src/session.rs`).
 4. moon's home is `MOON_HOME`, else `$XDG_DATA_HOME/moon`, else
-   `~/.moon` (`crates/env/src/lib.rs`). A run is given `MOON_HOME` and
-   `HOME` from sluice's own environment and no `XDG_DATA_HOME`.
+   `~/.moon` (`crates/env/src/lib.rs`), each read from the run's
+   environment: the environment the check command runs in, with the
+   repository's `[tests] toolchain` sourced on top. The toolchain may set
+   `MOON_HOME` freely, as sluice's own devenv does
+   (`<common>/moon-home`), so moon's home is read as that command sees
+   it, never as sluice's own process has it (C.2 moon, 35).
 5. Manifests are blobs of the local store: `<store>/blobs/<2>/<62>`
    (`crates/cache-local/src/local_storage.rs`, `crates/cas/src/cas.rs`;
    `store_hash_manifest_with_hasher` writes to the local backends).
 
 On the fleet's layout, a bare `<repo>.git` with worktrees beside it,
 the common directory's last component is `<repo>.git`, not `.git`, so
-the root has no `.moon` and the store is `~/.moon/cache/shared`. A
-repository with an ordinary base checkout shares `<base>/.moon/cache`,
-which is what the real rig uses.
+the root has no `.moon` and the store is `cache/shared` under moon's
+home as the run's command sees it: `<common>/moon-home/cache/shared` for
+sluice's own checks, whose toolchain sets `MOON_HOME`, and
+`~/.moon/cache/shared` where nothing sets it. A repository with an
+ordinary base checkout shares `<base>/.moon/cache`, which is what the
+real rig uses.
 
 The profile follows those steps in one function of `moon.rs`, given the
 checkout and the run's command environment, which already says
-whether the run is cold. The coder confirms, against the tag's source,
+whether the run is cold. That environment is resolved after the
+toolchain: the run's, cold or not, as the toolchain's script leaves it
+once sourced in the place. The coder confirms, against the tag's source,
 which of the variable and the workspace file wins when both are set,
 and how `MOON_HOME` is read. `Checks::start` resolves the store when it
 builds a moon run, and records it on the run's request. `proven` reads
