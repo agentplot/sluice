@@ -24,4 +24,4 @@ Commit by pathspec after each group, Conventional Commits, scope `cli`,
 
 ## 3. The gate
 
-- [ ] 3.1 Commit, then run the gate's checks with `sluice exec main`; verify it passes.
+- [x] 3.1 Commit, then run the gate's checks with `sluice exec main`; verify it passes.
