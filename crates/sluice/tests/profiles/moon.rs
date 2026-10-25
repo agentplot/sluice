@@ -1071,17 +1071,20 @@ fn a_key_run_in_a_bare_repositorys_worktree_is_proven() {
     ]);
 
     // Everything moon is given, on its process alone: no `MOON_*` of the
-    // test's own, nor its home.
-    let env: std::collections::BTreeMap<String, String> = [
-        ("PATH", std::env::var("PATH").unwrap()),
-        ("HOME", scratch.path().join("home").display().to_string()),
-        ("MOON_HOME", home.display().to_string()),
-        ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true".into()),
-        ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true".into()),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
+    // test's own, nor its home. The path, `HOME` and `PROTO_HOME` are kept,
+    // as a run keeps them, so proto's shim finds the moon installed.
+    let mut env: std::collections::BTreeMap<String, String> = ["PATH", "HOME", "PROTO_HOME"]
+        .into_iter()
+        .filter_map(|k| Some((k.to_string(), std::env::var(k).ok()?)))
+        .collect();
+    env.extend(
+        [
+            ("MOON_HOME", home.display().to_string()),
+            ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true".into()),
+            ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true".into()),
+        ]
+        .map(|(k, v)| (k.to_string(), v)),
+    );
     let out = support::isolated(std::process::Command::new("moon").env_clear())
         .current_dir(&worktree)
         .envs(&env)
