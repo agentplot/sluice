@@ -350,6 +350,11 @@ export const register: Register = (on, options) => {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };
     }
+    // Where sluice could not be read, read it again: it may be set up now.
+    if (!following && dir !== null && (await read($, doc)) === null) {
+      const first = await probe($, dir);
+      if (first) await follow($, dir, first, chosen);
+    }
     const inline = !e.presentation.isFullscreen;
     const opened = await $.ui.open({
       id: PANE,

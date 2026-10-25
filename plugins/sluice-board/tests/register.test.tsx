@@ -563,6 +563,116 @@ test("a pane above the prompt has a close button, a docked one none of the board
   await docked.unmount();
 });
 
+/** main with #3 queued and nothing else: a repository just set up, with one submission. */
+function justSetUp(): Overview {
+  const d = overview();
+  d.branches = [
+    {
+      ...d.branches[0]!,
+      depth: 1,
+      candidates: [],
+      recent: [],
+      submissions: [{ id: 3, state: "queued", from: { agent: "claude", worktree: "w3" } }],
+    },
+  ];
+  return d;
+}
+
+/** What one `sluice overview --json` answers: an overview, a failed run, or no sluice to start. */
+type Read = Overview | { exitCode: number; stderr: string } | "missing";
+
+/**
+ * A host whose `sluice overview --json` answers each read with the next of
+ * `reads`, the last again once they run out, and whose watch streams the
+ * last overview read; it counts the reads and the watches.
+ */
+function readsHost(on: On, reads: Read[]) {
+  const n = { reads: 0, watches: 0 };
+  let last: Overview | null = null;
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e, next) => {
+    const argv = e.argv.join(" ");
+    if (argv !== "sluice overview --json")
+      return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+    const r = reads[Math.min(n.reads, reads.length - 1)]!;
+    n.reads += 1;
+    // Nothing beneath answers: the run rejects, as for a command not found.
+    if (r === "missing") return next(e);
+    if ("schema" in r) {
+      last = r;
+      return { value: { exitCode: 0, stdout: JSON.stringify(r), stderr: "", ...WHOLE } };
+    }
+    return { value: { exitCode: r.exitCode, stdout: "", stderr: r.stderr, ...WHOLE } };
+  });
+  on("process.spawn", async function* () {
+    n.watches += 1;
+    if (last) yield { stream: "stdout" as const, text: `${JSON.stringify(last)}\n` };
+    return { value: { code: 0, signal: null } };
+  });
+  on("ui.status", () => ({ value: undefined }));
+  on("ui.toast", () => ({ value: undefined }));
+  return n;
+}
+
+test("/sluice reads sluice again where the session could not, and follows it once it can", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const n = readsHost(on, [{ exitCode: 3, stderr: "sluice: no policy here\n" }, justSetUp()]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(n.reads).toBe(1);
+  expect(n.watches).toBe(0);
+
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(n.reads).toBe(2);
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["QUEUED"]);
+  expect(await pane.find({ type: "Text", text: /#3 queued\s+w3 claude/ })).toBeDefined();
+  await pane.unmount();
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: "sluice main · 1 submission · #3 waiting" }),
+  ).toBeDefined();
+  await band.unmount();
+});
+
+test("/sluice reads sluice again where it still cannot be started", async ($, on) => {
+  const n = readsHost(on, ["missing"]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await $.command.run(slash(false));
+  expect(n.reads).toBe(2);
+  expect(n.watches).toBe(0);
+});
+
+test("two good reads of sluice start one watch between them", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const n = readsHost(on, ["missing", justSetUp()]);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  // Two /sluice at once, each finding no overview yet, each reading it.
+  await Promise.all([$.command.run(slash(true)), $.command.run(slash(true))]);
+  await clock.settle();
+  expect(n.reads).toBe(3);
+  expect(n.watches).toBe(1);
+});
+
 test("a failure opens in place, folds, and moves no one", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
