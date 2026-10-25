@@ -518,7 +518,28 @@ fn a_dirty_place_is_refused_with_exit_two() {
     assert_eq!(
         out,
         "refused: unit/a holds changes beyond its commits:\n  plugin/scratch.py\n\
-         commit or remove them and submit again\n"
+         the agent working in unit/a commits or removes them and submits again\n"
+    );
+}
+
+/// A refusal's way on names the agent working in the worktree under
+/// `--json` as in text, and what moves it on is the same command.
+#[test]
+fn a_refusal_under_json_names_the_agent_and_keeps_its_next() {
+    let f = setup();
+    work(&f, "unit/a", "agent", &[("plugin/x", Some("x"))]);
+    f.world.dirty("unit/a", &["plugin/scratch.py"]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--json"]);
+    assert_eq!(code, CONFLICT, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["error"]["message"],
+        "unit/a holds changes beyond its commits:\n  plugin/scratch.py\n\
+         the agent working in unit/a commits or removes them and submits again"
+    );
+    assert_eq!(
+        v["error"]["next"],
+        serde_json::json!([format!("sluice submit {BRANCH}")])
     );
 }
 
@@ -3120,7 +3141,7 @@ fn a_group_is_queued_whole_or_not_at_all() {
     assert_eq!(
         out,
         "refused: unit/b2 holds changes beyond its commits:\n  plugin/scratch.py\n\
-         commit or remove them and submit again\n\
+         the agent working in unit/b2 commits or removes them and submits again\n\
          nothing submitted: the 2 worktrees are submitted together or not at all\n"
     );
     assert!(queued(&f).is_empty());

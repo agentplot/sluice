@@ -1349,11 +1349,16 @@ fn refusal(
             for p in paths {
                 s.push_str(&format!("\n  {p}"));
             }
-            s.push_str("\ncommit or remove them and submit again");
+            s.push_str(&format!(
+                "\n{} commits or removes them and submits again",
+                words::agent_in(named)
+            ));
             s
         }
         SubmitRefusal::Detached => {
-            format!("refused: submit from a branch: {worktree} is detached")
+            format!(
+                "refused: {worktree} is detached: the agent working in it submits from a branch"
+            )
         }
         SubmitRefusal::NoBranch => return no_branch(branch, pushers),
         SubmitRefusal::NotManaged => {
