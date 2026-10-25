@@ -583,6 +583,56 @@ sets either is refused.
 | `alive` | How often this host rewrites its sign of life. A claim on a run lapses once its host's sign of life has stood unchanged this long, and another host runs it. It must be shorter than `lease`. The default is `"2m"`. |
 | `name` | What this host is called among the hosts that share a remote: in a branch's state as its lead, and on the runs it claims. The default is the host's own name; give two instances on one machine a name each. |
 
+### `[[caches]]`
+
+The caches the host keeps for every build on it: a compile server's
+cache, or the task runner's cache shared by every worktree. Every run
+sluice starts on the host is given them, under any executor: a
+submission's run, an agent's `sluice exec` and a preview's command
+alike. An agent's shell and a run on the host then reach the same
+caches.
+
+```toml
+[[caches]]                       # a compile server's cache
+dir = "~/.cache/sccache"
+socket = "~/.cache/sccache/server.sock"
+env = { RUSTC_WRAPPER = "sccache", SCCACHE_DIR = "/Users/me/.cache/sccache", SCCACHE_SERVER_UDS = "/Users/me/.cache/sccache/server.sock" }
+
+[[caches]]                       # moon's shared worktree cache
+dir = "~/.moon/cache/shared"
+env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true", MOON_EXPERIMENT_CAS_OUTPUTS_CACHE = "true" }
+```
+
+| key | meaning |
+|---|---|
+| `dir` | The directory the cache keeps, outside every checkout: an absolute path, or one under `~/`. A sandboxed run may write it. |
+| `socket` | The socket of the cache's server, where it has one, written the same way. A sandboxed run may connect to it whatever the policy's `network` says. |
+| `env` | The variables the cache's clients read, each a string. Every run gets them exactly as written: sluice expands nothing in them, so write the same values into the agents' shells. |
+
+A repository's policy declares no cache. The caches are the host's, and
+every repository on the host shares them.
+
+sluice starts, ends and locks nothing of a cache, and names no cache's
+tool. You run a cache's server, as you run the container engine. When
+the server is down, a run goes on without it, and what the run's tools
+do then is theirs.
+
+sluice refuses to start when a cache has no `dir`, a key it does not
+know, a `dir` or `socket` that is neither absolute nor under `~/`, or an
+`env` value that is not a string. It names the cache by its place among
+the `[[caches]]`, and the key. It refuses a variable it sets for every
+run itself: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
+`LANG`, `TERM`, `PROTO_HOME`, `MOON_HOME`, `LC_*` and `SLUICE_*`. It
+refuses one variable set by two caches.
+
+Share moon's cache through its shared worktree cache, as above. moon
+then shares what it built among every worktree on the host, and keeps
+each worktree's run report and task states in the worktree, where
+sluice reads them. Leave `MOON_CACHE_DIR` alone. moon writes the run report and
+the task states under that directory too, so sluice would find neither
+in the checkout, and two runs at once would write over each other's
+report.
+
 ## Environment
 
 | variable | set by | meaning |
