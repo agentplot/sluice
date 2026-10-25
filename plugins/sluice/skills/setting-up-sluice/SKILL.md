@@ -54,8 +54,25 @@ Find out what the repository already uses before writing anything:
 | a stack a person should try after each landing | previews ([profiles/previews.md](references/profiles/previews.md)) |
 | a bare repo with worktrees, or none yet | the `worktrees` skill |
 
-Then ask the user which branches sluice should gate (`main`; a family like
-`bolt/*` for small fast landings) and what must pass on each.
+Then ask the user, before writing anything:
+
+1. **Which branches agents will submit to.** A name (`main`), or a family
+   of them (`dev/*`, `bolt/*` for small fast landings). Each becomes a
+   `[branches."<pattern>"]` table, and only sluice moves those branches.
+2. **For each, what must pass before work lands there.** In a moon
+   repository, offer the tags its tasks carry:
+
+   ```sh
+   moon query tasks | jq -r '[.tasks[][].tags[]?] | unique | .[]'   # every tag; then --tags <tag> for its tasks
+   ```
+
+   A fast tag such as `#check-fast` suits a family of bolts, and a slower
+   one such as `#e2e` can be added on `main` only.
+
+Tell the user what their answer means. `[tests]` picks how checks run;
+each branch's `required` picks which. Under the command runner the one
+command runs in full on every gated branch, so a quick suite on `dev/*`
+and the full one on `main` need moon, whose tasks each branch names.
 
 ## 3. Choose, per part
 
