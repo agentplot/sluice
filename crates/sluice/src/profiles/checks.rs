@@ -1156,8 +1156,8 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
         }
-        let place = meta.place.clone();
-        let blob = |k: &str| super::moon::blob_in(&place, k);
+        let store = meta.place.join(".moon/cache");
+        let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         let mut out = Vec::new();
         for t in &report.tasks {
