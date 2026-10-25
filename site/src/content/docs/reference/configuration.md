@@ -619,13 +619,20 @@ A shared cache lies outside every checkout, so one checkout never
 writes another's. sluice refuses a run whose checkout is a cache's
 `dir`, lies inside one or holds one, before anything of the run starts.
 
-Share moon's cache through its shared worktree cache, as above. moon
-then shares what it built among every worktree on the host, and keeps
-each worktree's run report and task states in the worktree, where
-sluice reads them. Leave `MOON_CACHE_DIR` alone. moon writes the run report and
-the task states under that directory too, so sluice would find neither
-in the checkout, and two runs at once would write over each other's
-report.
+Share moon's cache through moon's own shared worktree setting, as
+above. moon then shares what it built among every worktree on the host,
+and keeps each worktree's run report and task states in the worktree,
+where sluice reads them. Where it keeps what it shares is moon's to
+say: in the base checkout's `.moon/cache` when the repository has a
+base checkout holding `.moon`, otherwise in `cache/shared` under moon's
+home, `MOON_HOME` or `~/.moon`. Declare that directory as the cache's
+`dir`, so a sandboxed run may write it. sluice reads the manifest by
+which a host proves a task's key where moon keeps it, whatever `dir`
+says.
+
+`MOON_CACHE_DIR` moves nothing of moon's. moon 2.6.1 reads no such
+variable: it sets it for the tasks it runs, naming the workspace's own
+cache.
 
 ## Environment
 

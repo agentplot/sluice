@@ -53,10 +53,12 @@ trust = ["confined", "sandbox"]           # no "cache": every required task real
   real.
 - With the cache off a branch's `trust`, every required task runs every time.
   For warm builds, declare the host's caches in the host's config
-  (`[[caches]]`, see the checkout reference): share moon's cache through its
-  shared worktree cache, never `MOON_CACHE_DIR`, which moves the run report
-  sluice reads out of the checkout. A cache only spares work and never
-  decides a result.
+  (`[[caches]]`, see the checkout reference): share moon's cache through
+  moon's own shared worktree setting (`MOON_CACHE_SHARED_WORKTREE_CACHE`).
+  sluice reads a key's manifest where moon keeps it, whatever the cache's
+  `dir` says. `MOON_CACHE_DIR` moves nothing: moon 2.6.1 reads no such
+  variable, and sets it for the tasks it runs, naming the workspace's own
+  cache. A cache only spares work and never decides a result.
 - moon reads `MOON_*` from the environment; sluice gives moon the run's
   environment only, so set what tasks need through the toolchain.
 
