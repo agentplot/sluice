@@ -30,7 +30,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   `branches[].held_checkouts` in `--json`), a held worktree with
   `--worktree <path>`, a checkout still being retried printing nothing,
   and a branch with no records
-- [ ] 1.4 Document it on the commands page: the `sluice overview`
+- [x] 1.4 Document it on the commands page: the `sluice overview`
   example and text gain a held checkout's two lines, the field table
   gains `branches[].held_checkouts` (as `sluice status --json` lists
   them), and the section on checkouts held because their release failed
