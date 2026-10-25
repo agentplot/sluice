@@ -16,7 +16,7 @@ Sources: `agentplot/blueprints:design/sluice/requirements.md` clause 126 as amen
 
 ## Context and problem statement
 
-The setup's move of a plain clone into the split layout refuses while anything else holds the folder, so that it moves nothing an agent or an editor has open (126). The design meant the move to be safe from the very session that offers it, and said a holder is any process but the caller and the caller's ancestors. A session's harness starts helpers of its own in the worktree, a tool server, a watcher, a sleep inhibitor, each a sibling of the shell the command runs in, so the move always refused on the session that asked for it. Two questions: do a session's descendants count as the session, and how is the session found without the core naming a harness (core.1)?
+Where this comes from: sluice is set up in a repository whose working copies stand apart from its git directory, one per branch. When someone runs the setup in an ordinary one-folder clone, the setup offers to move the folder into that layout, and before moving anything it checks that no other program has the folder open, so it never moves a folder out from under an editor or another session (clause 126). The slc-2 team, building that check, found it refusing every time it ran from a coding agent's session: the agent's own helper programs, such as a tool server and a queue watcher, sit in the folder too, and the check counted them as outsiders. The question put to the design agent on 2026-10-25 was small: do a session's own helpers count as the session, and how does the setup tell which process the session is without naming any particular coding harness in sluice's core (core.1)?
 
 ## Considered options
 
