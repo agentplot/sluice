@@ -699,7 +699,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
     let p = places(&repo)
         .with_blocks(blocks.path().to_path_buf())
         .with_release(Box::new(move |place, tests, limits, dir| {
-            sluice::profiles::checks::release_request(place, tests, limits, jobs, dir)
+            sluice::profiles::checks::release_request(place, tests, limits, jobs, &[], dir)
         }));
     let session = repo.dir().with_extension("session");
     let settings = ported(&["web"], "41600");

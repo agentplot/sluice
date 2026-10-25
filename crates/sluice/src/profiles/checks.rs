@@ -690,14 +690,15 @@ fn not_run_exits(tests: &Settings) -> Result<Vec<i32>> {
 
 /// Session-runs-1 clause 95: the release command of `place` as the
 /// policy's `[tests]` and limits state it now, under the same executor,
-/// toolchain and environment its runs had, ports included; `None` when
-/// the policy names no release command. What the toolchain and the
-/// executor write goes in `dir`.
+/// toolchain and environment its runs had, ports and the host's `caches`
+/// included; `None` when the policy names no release command. What the
+/// toolchain and the executor write goes in `dir`.
 pub fn release_request(
     place: &Place,
     tests: &Settings,
     limits: &Limits,
     jobs: usize,
+    caches: &[HostCache],
     dir: &Path,
 ) -> Result<Option<Request>> {
     let Some(release) = release_argv(tests)? else {
@@ -720,7 +721,7 @@ pub fn release_request(
         replay: false,
         system: None,
     };
-    let mut env = environment(&request, jobs, &[]);
+    let mut env = environment(&request, jobs, caches);
     if kind == Kind::Sandbox {
         env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
     }
@@ -739,7 +740,7 @@ pub fn release_request(
     let mut argv = cx.argv(&r);
     if kind == Kind::Sandbox {
         let profile = dir.join("sandbox.sb");
-        std::fs::write(&profile, sandbox_profile(place, limits, &[], &[]))?;
+        std::fs::write(&profile, sandbox_profile(place, limits, &[], caches))?;
         argv.splice(
             0..0,
             [
