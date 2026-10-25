@@ -136,7 +136,7 @@ never decides a result.
 | key | values | meaning |
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
-| | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
+| | `"sandbox"` | The tests may write only their checkout, their scratch directory and the host's declared [cache directories](#caches), and may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
@@ -625,6 +625,10 @@ run itself: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
 `LANG`, `TERM`, `PROTO_HOME`, `MOON_HOME`, `LC_*` and `SLUICE_*`. It
 refuses one variable set by two caches.
 
+A shared cache lies outside every checkout, so one checkout never
+writes another's. sluice refuses a run whose checkout is a cache's
+`dir`, lies inside one or holds one, before anything of the run starts.
+
 Share moon's cache through its shared worktree cache, as above. moon
 then shares what it built among every worktree on the host, and keeps
 each worktree's run report and task states in the worktree, where
@@ -646,5 +650,6 @@ report.
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`, the bound every repository on the host shares. |
+| each `[[caches]]` `env` | the host's config, for every run | The variables a cache's clients read, exactly as the host's [`[[caches]]`](#caches) declares them: for a submission's run, an agent's `sluice exec` and a preview's command, under any executor. Nothing else of sluice's own environment reaches a run. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |
