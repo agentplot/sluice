@@ -14,8 +14,12 @@ sluice's queue inside a Claude Code session.
 
 - **Band** above the prompt, while a branch has a queue:
   `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`
-- **`/sluice`** opens a pane, and Esc or `/sluice` again closes it: each
-  branch's combinations under test, its submissions with this session's
+- **`/sluice`** opens a pane. With full-screen mode off it opens above the
+  prompt holding the keyboard, and Esc, its `close` button (or `x`) or
+  `/sluice` again closes it; with full-screen mode on it docks beside the
+  transcript, leaving the keyboard with the prompt, and its close mark or
+  `/sluice` again closes it. The pane shows each branch's combinations
+  under test, its submissions with this session's
   marked and each pull request linked to GitHub, and recent landings,
   blames and conflicts with the blamed tests' logs (press one to copy its
   path). A branch with nothing queued is left out once a quarter hour has
