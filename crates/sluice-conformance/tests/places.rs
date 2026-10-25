@@ -1,9 +1,12 @@
 //! Places: A.7 and B.1.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
-use sluice_conformance::{Harness, Rig, BRANCH};
-use sluice_core::records::State;
+use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
+use sluice_core::records::{Event, State};
+use sluice_core::release::Releasing;
+use sluice_core::{Peer, Sluice};
 
 /// satisfies: 25, 31, 32, 33, 34, 35
 #[test]
@@ -110,4 +113,327 @@ fn a_place_made_by_a_step_that_stopped_before_its_run_started_is_released() {
     assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(h.w().made_places().len(), 2);
     assert!(h.w().live_places().is_empty());
+}
+
+/// The bolt policy with `release_retries = 1`.
+fn one_retry() -> Harness {
+    Harness::new(&policy(false, "fail", 4).replace(
+        "timeout = \"20m\"\n",
+        "timeout = \"20m\"\nrelease_retries = 1\n",
+    ))
+}
+
+/// satisfies: 123, 122
+#[test]
+fn a_failed_release_is_held_with_what_failed() {
+    shared::a_failed_release_is_held_with_what_failed(&Harness::bolt());
+}
+
+/// satisfies: 123
+#[test]
+fn a_failed_release_is_tried_a_bounded_number_of_times() {
+    shared::a_failed_release_is_tried_a_bounded_number_of_times(&Harness::bolt());
+}
+
+/// satisfies: 123, 56
+#[test]
+fn a_failed_release_is_held_after_the_retries_its_branch_names() {
+    shared::a_failed_release_is_held_after_the_retries_its_branch_names(&one_retry());
+}
+
+/// satisfies: 123
+#[test]
+fn a_release_that_succeeds_on_a_retry_is_listed_no_more() {
+    shared::a_release_that_succeeds_on_a_retry_is_listed_no_more(&Harness::bolt());
+}
+
+/// satisfies: 123, 122
+#[test]
+fn a_held_checkout_never_holds_its_branch() {
+    shared::a_held_checkout_never_holds_its_branch(&Harness::bolt());
+}
+
+/// satisfies: 123, 59: a checkout left by a step that stopped before its
+/// run started, whose release fails, is held as any other, and its run
+/// is opened again and started in another checkout
+#[test]
+fn a_stale_checkout_whose_release_fails_has_its_run_opened_again() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.w().crash_next_start();
+    assert!(h.sluice().step(BRANCH).is_err());
+    let stale = h.w().live_places()[0].clone();
+    h.w()
+        .place_release_fails(&stale, Some(shared::RELEASE_FAILS));
+    h.step();
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!((held[0].place.as_str(), held[0].tries), (stale.as_str(), 1));
+    let started: Vec<String> = h.w().requests().into_iter().map(|r| r.place.name).collect();
+    assert_eq!(started.len(), 1);
+    assert_ne!(started[0], stale, "started in another checkout");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    // Tried again by the rounds after, then held.
+    assert!(h.releases_of(&stale) > 1);
+    assert!(h.w().live_places().contains(&stale));
+}
+
+/// The bolt policy with its records on `origin`, trusting the signer
+/// `box` every host signs as.
+fn peers() -> Harness {
+    let p = policy(false, "fail", 4).replace(
+        "trust = [\"open\", \"sandbox\", \"container\"]\n",
+        "trust = [\"box\"]\nremote = \"origin\"\n",
+    ) + "\n[signers.box]\nssh = \"box ssh-ed25519 AAAA\"\n";
+    let h = Harness::new(&p);
+    h.w().signs_as("box");
+    h
+}
+
+/// Host `name`, signing as `signer`.
+fn on<'a>(h: &'a Harness, name: &str, signer: Option<&str>) -> Sluice<'a> {
+    h.w().be_host(name);
+    h.sluice().as_peer(Peer {
+        name: name.into(),
+        lease: Duration::from_secs(300),
+        alive: Duration::from_secs(120),
+        signer: signer.map(str::to_string),
+        systems: None,
+    })
+}
+
+fn claims(h: &Harness) -> Vec<String> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Claimed { host, .. } => Some(host),
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 123, 81: a host back with a checkout from a lapsed claim
+/// whose release fails names it with what failed and, in the same round,
+/// claims the branch's open run in another checkout and reports its
+/// result; the checkout is tried again and held, and never bars a claim
+#[test]
+fn a_host_whose_leftover_checkout_will_not_release_claims_all_the_same() {
+    let h = peers();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    on(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let left = h.w().live_places()[0].clone();
+    // b stops; its claim lapses, and c takes the run.
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().advance(chrono::Duration::minutes(3));
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    h.w().hold_runs(false);
+    on(&h, "c", Some("box")).step(BRANCH).unwrap();
+    assert_eq!(claims(&h), ["b", "c"]);
+    for _ in 0..3 {
+        on(&h, "c", Some("box")).step(BRANCH).unwrap();
+        on(&h, "lead", None).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+
+    // b returns, and its leftover checkout will not release.
+    h.w()
+        .place_release_fails(&left, Some(shared::RELEASE_FAILS));
+    h.work("unit/b", "agent-b", &[("b/lib", Some("b2"))]);
+    let two = h.submit("unit/b");
+    on(&h, "lead", None).step(BRANCH).unwrap();
+    on(&h, "b", Some("box")).step(BRANCH).unwrap();
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].place, left);
+    assert!(held[0].failed.contains(shared::RELEASE_FAILS), "{held:?}");
+    assert_eq!(held[0].host.as_deref(), Some("b"));
+    assert_eq!(claims(&h)[2..], ["b"], "b claimed #{two}'s run at once");
+    let claimed = h.w().live_places();
+    assert!(claimed.len() == 2 && claimed.contains(&left), "{claimed:?}");
+
+    for _ in 0..6 {
+        on(&h, "lead", None).step(BRANCH).unwrap();
+        on(&h, "b", Some("box")).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(two).state, State::Landed);
+    // #1's run lapsed under b, so a result of b's is #2's.
+    assert!(
+        h.results().iter().any(|r| r.host.as_deref() == Some("b")),
+        "b reported #{two}'s result: {:?}",
+        h.results()
+    );
+    assert!(h.w().live_places().contains(&left));
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert!(held[0].stopped, "held once its retries are spent: {held:?}");
+    assert_eq!(h.releases_of(&left), 4);
+}
+
+/// A submission landed while every release fails, and rounds until its
+/// checkout is held; the checkout's name.
+fn held_checkout(h: &Harness) -> String {
+    h.release_fails(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+    let place = h.made_places()[0].clone();
+    let held = h.sluice().status(BRANCH).unwrap().failed_releases;
+    assert!(
+        held.iter().any(|f| f.place == place && f.stopped),
+        "{held:?}"
+    );
+    place
+}
+
+/// satisfies: 123: the operator releases a held checkout by its name,
+/// running its release once more whatever its tries: still failing, it
+/// stays held with what failed; once it succeeds, it is gone, its
+/// branch's state no longer lists it, and the log holds `released`
+#[test]
+fn a_held_checkout_is_released_by_its_name() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let s = h.sluice();
+    // The operator's release holds the branch's lock, as `sluice release`
+    // takes it.
+    let _lock = s.seams().state.wait_lock(BRANCH).unwrap();
+    let again = s.release_held(BRANCH, &place, false).unwrap().unwrap();
+    assert!(
+        matches!(&again.how, Releasing::Held { failed, tries: 5 } if failed.contains(shared::RELEASE_FAILS)),
+        "{again:?}"
+    );
+    assert_eq!(h.releases_of(&place), 5);
+    assert!(h.w().live_places().contains(&place));
+    let held = s.status(BRANCH).unwrap().failed_releases;
+    assert_eq!((held[0].tries, held[0].stopped), (5, true), "{held:?}");
+
+    h.release_fails(false);
+    let done = s.release_held(BRANCH, &place, false).unwrap().unwrap();
+    assert_eq!(done.how, Releasing::Released);
+    assert!(!h.w().live_places().contains(&place));
+    assert!(s.status(BRANCH).unwrap().failed_releases.is_empty());
+    assert!(matches!(
+        h.events().last(),
+        Some(Event::Released { place: p, accepted: None, .. }) if *p == place
+    ));
+    // Nothing more of that name to release.
+    assert_eq!(s.release_held(BRANCH, &place, false).unwrap(), None);
+}
+
+/// satisfies: 123: the operator accepts a held checkout's failure: it is
+/// freed with no release run, its branch's state no longer lists it, and
+/// the log holds `released` with the failure accepted
+#[test]
+fn a_held_checkouts_failure_is_accepted() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let s = h.sluice();
+    // The operator's release holds the branch's lock, as `sluice release`
+    // takes it.
+    let _lock = s.seams().state.wait_lock(BRANCH).unwrap();
+    let accepted = s.release_held(BRANCH, &place, true).unwrap().unwrap();
+    assert!(
+        matches!(&accepted.how, Releasing::Accepted(Some(f)) if f.contains(shared::RELEASE_FAILS)),
+        "{accepted:?}"
+    );
+    assert_eq!(h.releases_of(&place), 4, "its release ran again");
+    assert_eq!(h.w().freed_places(), vec![place.clone()]);
+    assert!(!h.w().live_places().contains(&place));
+    assert!(s.status(BRANCH).unwrap().failed_releases.is_empty());
+    assert!(matches!(
+        h.events().last(),
+        Some(Event::Released { place: p, accepted: Some(f), .. })
+            if *p == place && f.contains(shared::RELEASE_FAILS)
+    ));
+    assert_eq!(
+        s.release_held(BRANCH, "sluice/try/bolt/x/99", true)
+            .unwrap(),
+        None
+    );
+}
+
+/// How each `gone` line of the log names `place`: whether its release
+/// ran, and what it printed when it failed.
+fn gone_lines(h: &Harness, place: &str) -> Vec<(bool, Option<String>)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Gone {
+                place: p,
+                worktree: None,
+                ran,
+                failed,
+            } if p == place => Some((ran, failed)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 123: a combination's checkout deleted before its result is
+/// read has the release its run stored run once when the round releases
+/// it, and is freed and logged `gone`; its submission lands, and no round
+/// runs its release again
+#[test]
+fn a_deleted_checkouts_stored_release_runs_once_and_it_is_freed() {
+    let h = Harness::bolt();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let place = h.w().live_places()[0].clone();
+    h.w().delete_checkout(&place);
+    h.w().complete(&h.w().requests()[0].revision);
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+    assert!(!h.w().live_places().contains(&place));
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert_eq!(h.releases_of(&place), 0, "a release was asked of it");
+    assert_eq!(gone_lines(&h, &place), [(true, None)]);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+}
+
+/// satisfies: 123: a held checkout whose working copy is deleted since is
+/// released once by the next round, from what sluice holds, and freed
+/// whatever its release does; its branch's state no longer lists it, and
+/// no round runs its release again
+#[test]
+fn a_held_checkout_deleted_since_is_released_once_and_freed() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    h.w().delete_checkout(&place);
+    h.step();
+    assert!(!h.w().live_places().contains(&place));
+    assert_eq!(h.gone_releases_of(&place), 1);
+    let gone = gone_lines(&h, &place);
+    assert!(
+        matches!(&gone[..], [(true, Some(f))] if f.contains(shared::RELEASE_FAILS)),
+        "{gone:?}"
+    );
+    assert!(h
+        .sluice()
+        .status(BRANCH)
+        .unwrap()
+        .failed_releases
+        .is_empty());
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.gone_releases_of(&place), 1);
+    assert_eq!(h.releases_of(&place), 4);
 }

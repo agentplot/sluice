@@ -12,7 +12,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request; `{branch,submissions}` for several worktrees. |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions; `{branch,submissions}` for several worktrees. |
 
 ## Refused: a required task kept out of CI
 
@@ -114,7 +114,14 @@ passed · landed as b7d2e94
 
 - The pull request waits while it is a draft or misses a review or a check
   the policy names, then joins the queue.
-- New commits send it back to waiting.
+- A submit of new commits replaces its submission in the queue
+  (`withdrew its submission 12`), and the new commits wait for their
+  conditions.
+- Sent back (blamed, timed out, in conflict, withdrawn), or moved by
+  commits no submit pushed, it is a draft until your next submit, whose
+  line ends `marked ready for review`; the check reads
+  `waiting: the next submit`. The same commits submitted again are
+  tested again.
 - sluice posts a `sluice` check on its latest commit with the state, and a
   comment when it sends one back.
 - A submit following a pull request exits `1` when it is closed without

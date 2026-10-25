@@ -31,8 +31,8 @@ use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
-    Branch, Checkout, Driver, Formed, LandingCommit, Moved, Notification, Place, Progress, Rev,
-    RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
+    Branch, Checkout, Driver, Formed, HostCopy, LandingCommit, Moved, Notification, Place,
+    Progress, Rev, RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -48,11 +48,15 @@ while IFS="$tab" read -r task path content; do
 done <RULES
 "#;
 
-/// The places the core made and released.
+/// The places the core made and released, and each release it asked for.
 #[derive(Default)]
 struct Made {
     made: Vec<String>,
     released: Vec<String>,
+    asked: Vec<String>,
+    /// Each place whose working copy was gone and whose stored release
+    /// ran (123).
+    gone: Vec<String>,
 }
 
 struct RecordedPlaces {
@@ -72,9 +76,30 @@ impl Checkout for RecordedPlaces {
     }
 
     fn release(&self, name: &str, passed: bool) -> Result<()> {
+        self.log.borrow_mut().asked.push(name.into());
         self.inner.release(name, passed)?;
         self.log.borrow_mut().released.push(name.into());
         Ok(())
+    }
+
+    fn gone(&self, name: &str) -> Result<bool> {
+        self.inner.gone(name)
+    }
+
+    fn free(&self, name: &str) -> Result<()> {
+        self.inner.free(name)?;
+        self.log.borrow_mut().released.push(name.into());
+        Ok(())
+    }
+
+    fn release_gone(&self, name: &str) -> Result<sluice_seams::GoneRelease> {
+        let gone = self.inner.release_gone(name)?;
+        let mut log = self.log.borrow_mut();
+        log.released.push(name.into());
+        if gone.ran {
+            log.gone.push(name.into());
+        }
+        Ok(gone)
     }
 
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
@@ -106,6 +131,7 @@ impl Checkout for RecordedPlaces {
         name: &str,
         policy: Option<&sluice_seams::ReleasePolicy>,
     ) -> Result<sluice_seams::Released> {
+        self.log.borrow_mut().asked.push(name.into());
         self.inner.release_session(name, policy)
     }
 
@@ -130,8 +156,9 @@ impl Checkout for RecordedPlaces {
         self.inner.previews()
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
-        self.inner.release_preview(name, failed)
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
+        self.log.borrow_mut().asked.push(name.into());
+        self.inner.release_preview(name, failed, retries)
     }
 }
 
@@ -191,6 +218,14 @@ struct RecordedRefs {
 impl Branch for RecordedRefs {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.inner.read(branch)
+    }
+
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        self.inner.copy(branch)
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        self.inner.level(branch, expected, to)
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
@@ -261,6 +296,9 @@ struct Real {
     _host: Scratch,
     _running: Scratch,
     rules: PathBuf,
+    /// While it exists, a release command written to test for its path,
+    /// `RELEASE_OK` in the policy, succeeds; without it, it exits 2 (123).
+    release_ok: PathBuf,
     checkout: RecordedPlaces,
     tests: RecordedChecks,
     branch: RecordedRefs,
@@ -327,7 +365,12 @@ impl Real {
         let policy = policy.as_str();
         let rules = repo.dir().join(".git/rig-rules");
         std::fs::write(&rules, "").unwrap();
-        repo.write(".config/sluice.toml", &real_policy(policy));
+        let release_ok = repo.dir().join(".git/rig-release-ok");
+        std::fs::write(&release_ok, "").unwrap();
+        repo.write(
+            ".config/sluice.toml",
+            &real_policy(policy).replace("RELEASE_OK", &release_ok.display().to_string()),
+        );
         repo.write(
             ".moon/workspace.yml",
             "projects:\n  a: 'a'\n  b: 'b'\n  c: 'c'\n\
@@ -393,6 +436,7 @@ impl Real {
             sessions: Scratch::new(&format!("{name}-sessions")),
             repo,
             rules,
+            release_ok,
             checkout: RecordedPlaces {
                 inner: checkout.with_blocks(blocks.path().to_path_buf()),
                 log: RefCell::default(),
@@ -547,6 +591,23 @@ impl Rig for Real {
         real_policy(policy)
     }
 
+    fn release_fails(&self, fails: bool) {
+        match fails {
+            true => std::fs::remove_file(&self.release_ok).unwrap(),
+            false => std::fs::write(&self.release_ok, "").unwrap(),
+        }
+    }
+
+    fn releases_of(&self, name: &str) -> usize {
+        let log = self.checkout.log.borrow();
+        log.asked.iter().filter(|p| *p == name).count()
+    }
+
+    fn gone_releases_of(&self, name: &str) -> usize {
+        let log = self.checkout.log.borrow();
+        log.gone.iter().filter(|p| *p == name).count()
+    }
+
     fn host(&self) -> String {
         sluice::profiles::checks::hostname()
     }
@@ -679,6 +740,26 @@ fn narrow() -> String {
     bolt().replace("[\"#gate\"]", "[\"a:test\"]")
 }
 
+/// The bolt policy with a release command that exits 2, printing what a
+/// failing release prints, while the rig's `RELEASE_OK` is gone (123).
+fn releasing() -> String {
+    bolt().replace(
+        "[tests]\n",
+        &format!(
+            "[tests]\nrelease = \"test -e RELEASE_OK || {{ echo {}; exit 2; }}\"\n",
+            shared::RELEASE_FAILS
+        ),
+    )
+}
+
+/// [`releasing`], trying a failed release once more before it is held.
+fn releasing_once() -> String {
+    releasing().replace(
+        "timeout = \"20m\"\n",
+        "timeout = \"20m\"\nrelease_retries = 1\n",
+    )
+}
+
 scenarios! {
     s1_two_heads_pass_and_land_in_order: bolt();
     s2_a_conflict_is_told_before_any_check_runs: bolt();
@@ -707,7 +788,13 @@ scenarios! {
     s30_a_landed_revision_is_previewed_at_its_addresses: preview();
     s31_the_next_landings_preview_replaces_the_last: preview();
     s32_asking_again_gives_back_the_same_preview: preview();
-    a_removed_worktrees_place_is_released_by_the_next_round: bolt();
+    a_removed_worktrees_place_is_freed_by_the_next_round: releasing();
+    a_removed_worktrees_failing_release_is_freed_and_never_run_again: releasing();
+    a_failed_release_is_held_with_what_failed: releasing();
+    a_failed_release_is_tried_a_bounded_number_of_times: releasing();
+    a_failed_release_is_held_after_the_retries_its_branch_names: releasing_once();
+    a_release_that_succeeds_on_a_retry_is_listed_no_more: releasing();
+    a_held_checkout_never_holds_its_branch: releasing();
     a_session_runs_last_result_says_whether_it_was_recorded: bolt();
     a_last_result_decides_nothing: cached();
     a_worktree_that_changes_while_its_run_runs_records_nothing: bolt();

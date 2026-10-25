@@ -131,10 +131,13 @@ In JSON, such a test's `failed[].flaky` holds `here`, this run's outcome,
 and `other`, the result that contradicts it: its `outcome`, `at`,
 `branch`, `combination` and, when kept, `log`.
 
-A pull request sent back is tested again only on new commits, or once it
-is marked a draft and then ready for review. A submit with no new commits
-says it ran nothing: `#63's head bd85bd4 was tested and blamed at …:
-nothing was queued or run again`, then the failure it was sent back for.
+A pull request your submit opened, sent back (blamed, timed out, in
+conflict or withdrawn), is marked a draft and waits for your next
+submit: nothing else takes it again in your name. Submit again from its
+worktree, with a fix or with the same commits after a time-out, and
+sluice marks it ready for review and tests it again like any other
+submission. A pull request a person opened is tested again only on new
+commits, or once it is marked a draft and then ready for review.
 
 On GitHub, the pull request carries the same verdict as a report: one
 comment in its conversation, the `sluice` check's details, and a check per

@@ -3,10 +3,20 @@
 //! the app makes, answered from a [`FileForge`]. Given the bare
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
-//! GitHub does.
+//! GitHub does. It marks a pull request a draft or ready for review
+//! through GraphQL, as GitHub alone does, unless told to refuse. It
+//! answers an error for a pull request's reviews, or for the list of pull
+//! requests, while told to fail them, and answers a read of a pull
+//! request 503 as often as told to. It refuses a pull request whose body
+//! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
+//! it. Each test crate that includes it uses a part.
 
+#![allow(dead_code)]
+
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use sluice::profiles::github::fake::FileForge;
@@ -19,6 +29,8 @@ pub const APP: u64 = 4242;
 pub const INSTALLATION: u64 = 7;
 /// The pull request calls' prefix.
 const REPO: &str = "/repos/o/r";
+/// The characters GitHub holds in a pull request's body.
+const BODY_LIMIT: usize = 65_536;
 
 pub fn repo() -> Repo {
     Repo::from_url("https://github.com/o/r.git").unwrap()
@@ -27,6 +39,21 @@ pub fn repo() -> Repo {
 pub struct GitHub {
     pub forge: Arc<FileForge>,
     pub fake: Fake,
+    /// While set, GraphQL refuses to mark a pull request a draft or ready.
+    refuse: Arc<AtomicBool>,
+    /// The calls answered with an error.
+    failing: Arc<Mutex<Failing>>,
+    /// How many reads of a pull request from now are answered 503.
+    unavailable: Arc<AtomicUsize>,
+}
+
+/// The calls the fake answers with an error while a test asks it to.
+#[derive(Default)]
+struct Failing {
+    /// The pull requests whose reviews it gives no list of.
+    reviews: BTreeSet<u64>,
+    /// Whether it gives no list of pull requests.
+    pulls: bool,
 }
 
 impl GitHub {
@@ -36,18 +63,119 @@ impl GitHub {
         let forge = Arc::new(FileForge::new(file, &repo()));
         let held = forge.clone();
         let bare = bare.map(Path::to_path_buf);
+        let refuse = Arc::new(AtomicBool::new(false));
+        let refusing = refuse.clone();
+        let failing = Arc::new(Mutex::new(Failing::default()));
+        let fails = failing.clone();
+        let unavailable = Arc::new(AtomicUsize::new(0));
+        let left = unavailable.clone();
         let fake = Fake::start(move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
             }
-            answer(&held, bare.as_deref(), r)
+            let a_pull = r.method == "GET"
+                && r.path
+                    .strip_prefix(&format!("{REPO}/pulls/"))
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            if a_pull
+                && left
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+            {
+                return json(503, json!({ "message": "Service Unavailable" }));
+            }
+            if r.method == "POST" && r.path == "/graphql" {
+                return graphql(&held, refusing.load(Ordering::SeqCst), r);
+            }
+            answer(&held, bare.as_deref(), &fails.lock().unwrap(), r)
         });
-        GitHub { forge, fake }
+        GitHub {
+            forge,
+            fake,
+            refuse,
+            failing,
+            unavailable,
+        }
     }
 
     pub fn url(&self) -> &str {
         self.fake.url()
     }
+
+    /// Refuse, or take again, a request to mark a pull request a draft or
+    /// ready for review.
+    pub fn refuse_drafts(&self, refuse: bool) {
+        self.refuse.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Answer an error for pull request `n`'s reviews, or give them again.
+    pub fn fail_reviews(&self, n: u64, fail: bool) {
+        let mut f = self.failing.lock().unwrap();
+        if fail {
+            f.reviews.insert(n);
+        } else {
+            f.reviews.remove(&n);
+        }
+    }
+
+    /// Answer an error for the list of pull requests, or give it again.
+    pub fn fail_pulls(&self, fail: bool) {
+        self.failing.lock().unwrap().pulls = fail;
+    }
+
+    /// Answer the next `n` reads of a pull request 503, as GitHub does
+    /// while it cannot answer.
+    pub fn unavailable(&self, n: usize) {
+        self.unavailable.store(n, Ordering::SeqCst);
+    }
+
+    /// How many of those are still to be answered.
+    pub fn unavailable_left(&self) -> usize {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// GitHub's GraphQL API, for the two mutations sluice makes: a pull
+/// request, by its node id, marked a draft or ready for review. GraphQL
+/// answers a request it refuses with 200 and `errors`.
+fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
+    let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    let query = body["query"].as_str().unwrap_or_default();
+    let error = |kind: &str, message: &str| {
+        json(
+            200,
+            json!({ "data": null, "errors": [{ "type": kind, "message": message }] }),
+        )
+    };
+    let (mutation, draft) = if query.contains("convertPullRequestToDraft") {
+        ("convertPullRequestToDraft", true)
+    } else if query.contains("markPullRequestReadyForReview") {
+        ("markPullRequestReadyForReview", false)
+    } else {
+        return error("UNKNOWN", &format!("the fake answers no {query}"));
+    };
+    if refuse {
+        return error("FORBIDDEN", "Resource not accessible by integration");
+    }
+    let id = body["variables"]["id"].as_str().unwrap_or_default();
+    let Some(n) = forge
+        .held()
+        .unwrap()
+        .pulls
+        .iter()
+        .find(|p| p.node_id == id)
+        .map(|p| p.number)
+    else {
+        return error(
+            "NOT_FOUND",
+            &format!("Could not resolve to a node with the global id of '{id}'"),
+        );
+    };
+    forge.set_draft(n, draft).unwrap();
+    json(
+        200,
+        json!({ "data": { mutation: { "pullRequest": { "isDraft": draft } } } }),
+    )
 }
 
 /// GitHub's pull requests follow their branches.
@@ -91,6 +219,21 @@ pub fn rev(bare: &Path, name: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Remove the ref `name` from `bare`.
+pub fn delete_ref(bare: &Path, name: &str) {
+    let out = crate::support::git_command()
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["update-ref", "-d", name])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 pub fn set_ref(bare: &Path, name: &str, to: &str) {
     let out = crate::support::git_command()
         .arg("--git-dir")
@@ -108,6 +251,7 @@ pub fn set_ref(bare: &Path, name: &str, to: &str) {
 fn pull_json(p: &Pull) -> Value {
     json!({
         "number": p.number,
+        "node_id": p.node_id,
         "title": p.title,
         "body": p.body,
         "user": { "login": p.author },
@@ -167,7 +311,26 @@ fn not_found() -> Answer {
     json(404, json!({ "message": "Not Found" }))
 }
 
-fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
+/// GitHub failing a call of its own.
+fn server_error() -> Answer {
+    json(500, json!({ "message": "Server Error" }))
+}
+
+/// GitHub refusing a pull request's body longer than it holds.
+fn too_long() -> Answer {
+    json(
+        422,
+        json!({
+            "message": "Validation Failed",
+            "errors": [{
+                "resource": "PullRequest", "field": "body", "code": "custom",
+                "message": format!("body is too long (maximum is {BODY_LIMIT} characters)"),
+            }],
+        }),
+    )
+}
+
+fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request) -> Answer {
     let (path, query) = r.path.split_once('?').unwrap_or((&r.path, ""));
     let param = |k: &str| {
         query
@@ -205,10 +368,23 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
     let rest: Vec<&str> = rest.split('/').skip(1).collect();
     let repo = repo();
     match (m, rest.as_slice()) {
+        ("GET", ["pulls"]) if failing.pulls => server_error(),
+        ("GET", ["pulls", n, "reviews"])
+            if n.parse().is_ok_and(|n| failing.reviews.contains(&n)) =>
+        {
+            server_error()
+        }
         ("GET", ["pulls"]) => {
             let base = param("base").unwrap_or_default();
             let ps = forge.pulls(&repo, &base).unwrap();
             json(200, Value::Array(ps.iter().map(pull_json).collect()))
+        }
+        ("POST", ["pulls"]) | ("PATCH", ["pulls", _])
+            if body["body"]
+                .as_str()
+                .is_some_and(|b| b.chars().count() > BODY_LIMIT) =>
+        {
+            too_long()
         }
         ("POST", ["pulls"]) => {
             let p = forge
@@ -218,6 +394,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, r: &Request) -> Answer {
                     body["head"].as_str().unwrap(),
                     body["title"].as_str().unwrap_or_default(),
                     body["body"].as_str().unwrap_or_default(),
+                    body["draft"].as_bool().unwrap_or(false),
                 )
                 .unwrap();
             if let Some(b) = bare {

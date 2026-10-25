@@ -201,7 +201,8 @@ the agent working in unit/cards fixes it there and submits again
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
 refusal, `130` stopped with Ctrl-C (the submission stays queued). Any
-command exits `3` when sluice itself fails and `64` on a command line it
+command exits `3` when sluice itself fails, as a waiting submit does when
+it could not read the forge for five minutes, and `64` on a command line it
 cannot read.
 
 A complete setup, with moon, a sandbox, a build cache and two tiers of
@@ -235,7 +236,7 @@ sets it up.
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
 | `sluice previews` | Every preview on the host, with its addresses and state. |
 | `sluice release <preview>` | Release a preview, by its name or its revision. `--json` for scripts. |
-| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`. |
+| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`; `sluice branch accept <branch> <revision>` accepts the revision a held branch is read at, which lacks its last landing. |
 
 An agent names itself with `SLUICE_AGENT`. How many runs a host tests at
 once is the host's own setting, in `~/.config/sluice/config.toml`:

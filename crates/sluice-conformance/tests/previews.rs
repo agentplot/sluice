@@ -2,7 +2,7 @@
 
 use sluice_conformance::{policy, previewed, shared, Harness, Rig, BRANCH};
 use sluice_core::preview::{PreviewRefusal, PreviewState};
-use sluice_core::records::State;
+use sluice_core::records::{Event, State};
 use sluice_core::Sluice;
 use sluice_seams::Setting;
 
@@ -244,19 +244,92 @@ fn a_round_never_releases_a_preview_that_is_up() {
     assert!(h.w().preview_releases().is_empty());
 }
 
-/// satisfies: previews-1 101
+/// satisfies: previews-1 101, 123: a preview whose checkout is gone has
+/// the release its run stored run once, is freed and logged `gone` with
+/// its release run, and is never released or run again, even when that
+/// release failed
 #[test]
-fn a_preview_whose_checkout_is_gone_is_released() {
+fn a_preview_whose_checkout_is_gone_is_freed() {
+    for fails in [false, true] {
+        let h = harness();
+        let s = h.sluice();
+        // A branch with records, where its log is kept.
+        h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
+        h.submit("unit/1");
+        h.settle();
+        let rev = h.tip();
+        let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
+        let (place, made) = s.make_preview(&plan).unwrap();
+        s.start_preview(&plan, place).unwrap();
+        h.w().remove_preview_checkout(&made.name);
+        if fails {
+            h.w()
+                .place_release_fails(&made.name, Some(shared::RELEASE_FAILS));
+        }
+        let round = s.round(BRANCH).unwrap();
+        assert_eq!(round.previews.len(), 1);
+        assert_eq!(round.previews[0].failed, None);
+        let gone = round.previews[0].gone.clone().expect("it was gone");
+        assert!(gone.ran);
+        assert_eq!(gone.failed.is_some(), fails, "{gone:?}");
+        assert!(s.preview_of(&rev).unwrap().is_none());
+        assert!(
+            h.w().preview_releases().is_empty(),
+            "a release was asked of it"
+        );
+        assert_eq!(h.w().freed_places(), vec![made.name.clone()]);
+        assert_eq!(h.gone_releases_of(&made.name), 1);
+        assert!(h.events().iter().any(|e| matches!(
+            e,
+            Event::Gone { place, ran: true, failed, .. }
+                if *place == made.name && failed.is_some() == fails
+        )));
+        assert!(s.round(BRANCH).unwrap().previews.is_empty());
+        assert!(s.previews().unwrap().is_empty());
+        assert_eq!(h.gone_releases_of(&made.name), 1);
+    }
+}
+
+/// satisfies: previews-1 101, 123: a preview whose command failed and
+/// whose release fails is kept with what failed and tried again once a
+/// round, as a combination's checkout is, then held: listed with its
+/// failure, and released only when asked by name
+#[test]
+fn a_preview_whose_release_fails_is_tried_a_bounded_number_of_times() {
     let h = harness();
     let s = h.sluice();
+    h.work("unit/1", "agent-1", &[("a/one", Some("1"))]);
+    h.submit("unit/1");
+    h.settle();
     let rev = h.tip();
+    h.w().preview_fails(true);
     let plan = s.preview_plan(BRANCH, &rev).unwrap().unwrap();
     let (place, made) = s.make_preview(&plan).unwrap();
     s.start_preview(&plan, place).unwrap();
-    h.w().remove_preview_checkout(&made.name);
-    let round = s.round(BRANCH).unwrap();
-    assert_eq!(round.previews.len(), 1);
-    assert_eq!(round.previews[0].failed, None);
+    h.w()
+        .place_release_fails(&made.name, Some(shared::RELEASE_FAILS));
+    let mut dropped = Vec::new();
+    for _ in 0..6 {
+        dropped.extend(s.round(BRANCH).unwrap().previews);
+    }
+    assert_eq!(h.releases_of(&made.name), 4);
+    assert_eq!(dropped.len(), 4, "{dropped:?}");
+    assert!(dropped.iter().all(|d| d.error.is_some()));
+    let held: Vec<bool> = dropped.iter().map(|d| d.held).collect();
+    assert_eq!(held, [false, false, false, true]);
+    let kept = s.preview_of(&rev).unwrap().unwrap();
+    let failure = kept.release_failed.expect("what failed is kept");
+    assert!(
+        failure.failed.contains(shared::RELEASE_FAILS),
+        "{failure:?}"
+    );
+    assert_eq!((failure.tries, failure.stopped), (4, true));
+    assert!(h.events().iter().any(|e| matches!(
+        e,
+        Event::ReleaseFailed { place, tries: 4, held: true, .. } if *place == made.name
+    )));
+
+    h.w().place_release_fails(&made.name, None);
+    assert!(s.release_preview(&made.name).unwrap());
     assert!(s.preview_of(&rev).unwrap().is_none());
-    assert_eq!(h.w().preview_releases(), vec![(made.name, false)]);
 }

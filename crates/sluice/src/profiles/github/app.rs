@@ -11,6 +11,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::Serialize;
 use serde_json::Value;
+use sluice_seams::Unanswered;
 
 use crate::instance::Forge;
 
@@ -224,8 +225,7 @@ impl App {
     fn send(&self, method: &str, path: &str, bearer: &str, body: Option<&str>) -> Result<Value> {
         let (status, v, text) = self.call(method, path, bearer, body)?;
         if !(200..300).contains(&status) {
-            let why = v["message"].as_str().unwrap_or(text.trim());
-            bail!("{method} {path}: {status} {why}");
+            return Err(failed(method, path, status, &v, &text));
         }
         Ok(v)
     }
@@ -236,10 +236,7 @@ impl App {
         match status {
             404 => Ok(None),
             200..=299 => Ok(Some(v)),
-            _ => {
-                let why = v["message"].as_str().unwrap_or(text.trim());
-                bail!("GET {path}: {status} {why}");
-            }
+            _ => Err(failed("GET", path, status, &v, &text)),
         }
     }
 
@@ -285,6 +282,18 @@ impl App {
     }
 }
 
+/// A call GitHub answered with `status`, not a success, in its words: a
+/// 5xx is [`Unanswered`], GitHub unable to answer just then.
+fn failed(method: &str, path: &str, status: u16, v: &Value, text: &str) -> anyhow::Error {
+    let why = v["message"].as_str().unwrap_or(text.trim());
+    let said = format!("{method} {path}: {status} {why}");
+    if (500..600).contains(&status) {
+        Unanswered(said).into()
+    } else {
+        anyhow!(said)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +323,30 @@ mod tests {
         let (iat, exp) = (c["iat"].as_i64().unwrap(), c["exp"].as_i64().unwrap());
         assert_eq!(exp - iat, 600);
         assert!(iat <= at.timestamp() && exp > at.timestamp());
+    }
+
+    /// A 5xx is GitHub unable to answer just then, told apart from any
+    /// other failure; the words are GitHub's either way.
+    #[test]
+    fn a_5xx_is_unanswered_and_a_4xx_is_not() {
+        let path = "/repos/o/r/pulls/7";
+        let e = failed("GET", path, 503, &Value::Null, "Service Unavailable\n");
+        assert!(sluice_seams::unanswered(&e));
+        assert!(sluice_seams::unanswered(&e.context("following #7")));
+        let e = failed("GET", path, 503, &Value::Null, "Service Unavailable\n");
+        assert_eq!(
+            e.to_string(),
+            format!("GET {path}: 503 Service Unavailable")
+        );
+        let e = failed(
+            "GET",
+            path,
+            404,
+            &serde_json::json!({"message": "Not Found"}),
+            "",
+        );
+        assert!(!sluice_seams::unanswered(&e));
+        assert_eq!(e.to_string(), format!("GET {path}: 404 Not Found"));
     }
 
     #[test]
