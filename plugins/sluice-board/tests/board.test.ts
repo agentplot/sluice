@@ -7,6 +7,7 @@ import {
   clearText,
   conflictText,
   duration,
+  emptyLines,
   finishedWords,
   forecastBranch,
   forecastKey,
@@ -22,6 +23,7 @@ import {
   moving,
   namedFirst,
   namedLine,
+  openedText,
   outcomes,
   progress,
   pullOf,
@@ -31,6 +33,7 @@ import {
   statusLine,
   submitted,
   taskLines,
+  unreadReason,
   wakeText,
 } from "../hooks/board";
 import type { Mine, Overview } from "../types";
@@ -282,6 +285,39 @@ describe("a branch named for the session", () => {
       "sluice: 3 submissions · yours #13 testing",
     );
     expect(statusLine(withRelease(), ME, null, NOW)).toBe("sluice: 4 submissions");
+  });
+});
+
+describe("the pane", () => {
+  test("the reply to /sluice says how to close it where it opened", () => {
+    expect(openedText(false)).toBe(
+      "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.",
+    );
+    expect(openedText(true)).toBe(
+      "sluice's queue is open in a pane. Its close mark or /sluice again closes it.",
+    );
+  });
+
+  test("why sluice could not be read: not started, its stderr, else its exit", () => {
+    const got = (exitCode: number, stderr: string) => ({ exitCode, stderr });
+    expect(unreadReason(null)).toBe("the sluice command was not found");
+    expect(unreadReason(got(3, "sluice: not a git repository\n"))).toBe(
+      "sluice: not a git repository",
+    );
+    expect(unreadReason(got(2, "\n  \nsluice: no policy\nmore\n"))).toBe("sluice: no policy");
+    expect(unreadReason(got(1, ""))).toBe("sluice overview exited 1");
+    expect(unreadReason(got(4, " \n"))).toBe("sluice overview exited 4");
+  });
+
+  test("with no branch and none named, how a submission gets there", () => {
+    const none = overview();
+    none.branches = [];
+    expect(emptyLines(none, null)).toEqual([
+      "Nothing submitted yet.",
+      "When an agent in a worktree runs sluice submit <branch>, its submission shows here until it lands.",
+    ]);
+    expect(emptyLines(none, "release")).toEqual([]);
+    expect(emptyLines(overview(), null)).toEqual([]);
   });
 });
 

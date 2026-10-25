@@ -43,9 +43,12 @@ through the queue from then on. [The Claude Code
 plugin](https://agentplot.github.io/sluice/guides/claude-code/) says what it
 does.
 
-**With herdr.** [The herdr
-plugin](https://agentplot.github.io/sluice/guides/herdr/) shows the queue
-beside your agents' panes. It is not released yet.
+**With herdr.** herdr is optional for seeing the queue. The Claude Code
+board (`sluice-board`) shows it in any Claude Code session, with
+full-screen mode on or off: [the queue in your
+session](https://agentplot.github.io/sluice/guides/claude-code/#the-queue-in-your-session).
+[The herdr plugin](https://agentplot.github.io/sluice/guides/herdr/) adds a
+view beside your agents' panes. It is not released yet.
 
 **By hand.** [Install](#install) the binary and follow the
 [walkthrough](https://agentplot.github.io/sluice/guides/walkthrough/).

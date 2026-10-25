@@ -193,6 +193,8 @@ declare module "claude-code" {
       named: string | null;
       /** The session's worktree's last forecast. */
       forecasting: Forecasting;
+      /** Why the last `sluice overview --json` gave no overview, or null when it did. */
+      unread: string | null;
     };
   }
 }
