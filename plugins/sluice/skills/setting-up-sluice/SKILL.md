@@ -203,6 +203,31 @@ reviews = 1
 checks = ["ci/test"]
 ```
 
+Before the policy is committed, tell the user what keeping their pull
+requests means on that branch:
+
+- Pull requests are opened as always: by an agent's `sluice submit` or
+  `wt submit`, or by hand.
+- A draft waits until it is marked ready for review; a ready one waits
+  for the reviews and checks the table names.
+- Then sluice tests it with what is ahead of it and lands it with its own
+  push, and GitHub marks it merged.
+- Nobody presses merge, uses GitHub's merge queue or merges by hand on
+  that branch. Only who lands a pull request changes, from the merge
+  button to sluice's push.
+- Keep `sluice run` going (a terminal, a login item, a service manager):
+  a pull request opened by hand has no submit waiting on it, and sluice
+  starts no service itself.
+
+sluice has no mode in which GitHub's button lands and sluice only tests.
+Whenever the user asks for one (keep the merge button, have sluice only
+check pull requests, require its check in the ruleset), say there is
+none, and why: what the button lands was never tested with what landed
+just before it, so two pull requests that each passed alone can break
+the branch together. Offer the pull request conditions instead, and
+never improvise such a mode, such as sluice's checks required in a
+ruleset with the button left on.
+
 ## 4. Choose, per part
 
 | part | choices today | reference |
