@@ -18,15 +18,36 @@
 //! a branch found elsewhere, a records write refused) is a value, never an
 //! error, because the core acts on it. One refusal is an error the core
 //! finds by its type: a start at the host's bound, [`AtBound`], refused
-//! before the check seam runs anything (71).
+//! before the check seam runs anything (71). Another error is told apart,
+//! [`Unanswered`]: a remote that could not answer just then, which a
+//! waiting command reads again through.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+/// A remote's or a forge's 5xx answer to a call, in the profile's words:
+/// its server could not answer just then, which says nothing of what it
+/// holds.
+#[derive(Debug)]
+pub struct Unanswered(pub String);
+
+impl fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unanswered {}
+
+/// Whether `e`, or anything that caused it, is an [`Unanswered`].
+pub fn unanswered(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<Unanswered>())
+}
 
 /// A git revision, as the branch seam names it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -116,6 +137,25 @@ pub struct SessionPlace {
     /// How its last run ended, once one has and none has started since
     /// (97).
     pub last_result: Option<LastResult>,
+    /// Its release at its session's or driver's asking failed, and how
+    /// (123).
+    pub release_failed: Option<ReleaseFailure>,
+}
+
+/// A release of a preview or of a session's place that failed, kept on
+/// the place's record until the place is released or freed (123).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseFailure {
+    /// What failed, the end of what the release command printed included.
+    pub failed: String,
+    /// How many times its release was tried, the first included.
+    pub tries: u32,
+    /// When it last failed.
+    pub at: String,
+    /// It is tried no more on its own: held until its release is asked
+    /// for by name, or its failure accepted.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// How a session's last run ended, kept on its place until the place's
@@ -214,6 +254,17 @@ pub struct PreviewPlace {
     /// It was released because its command failed: the end of what the
     /// command printed. Such a preview holds nothing (101).
     pub failed: Option<String>,
+    /// Its release failed, and how (123).
+    pub release_failed: Option<ReleaseFailure>,
+}
+
+/// How the release of a place whose working copy was gone went (123).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoneRelease {
+    /// A release command its runs stored was run.
+    pub ran: bool,
+    /// It failed, and how: the end of what it printed included.
+    pub failed: Option<String>,
 }
 
 /// How a session's place was released.
@@ -240,6 +291,30 @@ pub trait Checkout {
     /// `passed` says the place's candidate passed, by the verdict the core
     /// read: only such a place's declared caches are saved (35).
     fn release(&self, name: &str, passed: bool) -> Result<()>;
+
+    /// 123: whether the working copy of the place `name` is gone: its
+    /// record names one, and that path is no directory. A place with no
+    /// record, or one recorded before its checkout was made, is not gone:
+    /// `release` handles it. A read: nothing is written or released.
+    fn gone(&self, name: &str) -> Result<bool>;
+
+    /// 123: free what sluice itself holds for the place `name`, running
+    /// nothing in its name: its runs' groups ended and their directories
+    /// removed, the checkout sluice made removed, its scratch directory,
+    /// its ports and its record let go, and a preview's names. No release
+    /// command runs and no cache is saved; a session's worktree is left as
+    /// it is (25, rule core.16). Nothing when there is no such place.
+    fn free(&self, name: &str) -> Result<()>;
+
+    /// 123: release the place `name`, whose working copy is gone, from
+    /// what sluice itself holds for it: the release command its last run
+    /// stored, run once with the environment and ports stored with it, in
+    /// the place's scratch directory, entering no toolchain and reading no
+    /// policy; then free it as [`Checkout::free`] does, whatever the command
+    /// did. A place whose gone release has started once is freed with
+    /// nothing run, so the command never runs twice. Only a failure to free
+    /// is an error; the command's failure is in what is returned.
+    fn release_gone(&self, name: &str) -> Result<GoneRelease>;
 
     /// 81: every candidate's place this host made and has not released,
     /// by name: what a returning host releases before it claims again.
@@ -269,7 +344,8 @@ pub trait Checkout {
     /// session's or driver's asking: end every run in it, run the release
     /// command once, as `policy` states it or, given none, as its last run
     /// carried it, remove its scratch directory and let its ports go. The
-    /// worktree is left as it is (25, rule core.16).
+    /// worktree is left as it is (25, rule core.16). A release that fails
+    /// keeps the place with what failed, held: no round releases it (123).
     fn release_session(&self, name: &str, policy: Option<&ReleasePolicy>) -> Result<Released>;
 
     /// Session-runs-1 clause 97: every session's place the repository
@@ -314,8 +390,10 @@ pub trait Checkout {
     /// run ended, the release command run, its checkout removed, its ports
     /// and names let go. With `failed`, a record of it is kept, holding
     /// nothing, with what its command printed. `false` when there is no
-    /// such preview.
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool>;
+    /// such preview. A release that fails keeps the preview with what
+    /// failed, and holds it once it has been tried more than `retries`
+    /// times, the bound the core read for its branch (123).
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool>;
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +652,17 @@ pub struct RunReport {
     pub kept_out: Vec<String>,
 }
 
+/// ADR 0050: a task a branch's gate requires that the runner keeps out
+/// of its CI mode, so never runs, as the submitting worktree has it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptOutTask {
+    /// The task, as the runner names it.
+    pub task: String,
+    /// The gate's required entry that names it, as the policy writes it:
+    /// the task itself, or a tag it carries.
+    pub entry: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
     Running,
@@ -696,6 +785,21 @@ pub trait Tests {
     /// person to read; empty when the runner says nothing until the run
     /// ends. Never a result (37, 38).
     fn tasks(&self, run: &RunHandle) -> Result<Vec<TaskProgress>>;
+
+    /// ADR 0050: which of `required`, the branch's required checks as its
+    /// policy names them, the runner keeps out of its CI mode in
+    /// `worktree`, by the runner's settings in `tests`: each such task
+    /// with the required entry that names it. A query, run in the
+    /// worktree outside any executor; it runs no check. A runner with no
+    /// CI mode keeps nothing out.
+    fn kept_out(
+        &self,
+        _worktree: &Path,
+        _tests: &Settings,
+        _required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        Ok(Vec::new())
+    }
 }
 
 /// The checks running on the host, every repository's (71).
@@ -800,9 +904,29 @@ pub enum Moved {
     Elsewhere(Option<Rev>),
 }
 
+/// What this host holds of a branch apart from the branch itself (124).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostCopy {
+    /// The host's ref is the branch: there is no copy apart from it.
+    Itself,
+    /// The branch is kept elsewhere; this is the host's ref of it, sluice's
+    /// copy, and its value, `None` when the host has none.
+    At(Option<Rev>),
+}
+
 pub trait Branch {
     /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
+
+    /// 124: what this host holds of the branch apart from it, read on the
+    /// host alone, with no fetch.
+    fn copy(&self, branch: &str) -> Result<HostCopy>;
+
+    /// 124: set the host's copy of the branch to `to`, only while it holds
+    /// `expected`, or is absent when `expected` is `None`; a copy found
+    /// elsewhere is reported, never forced (rule core.5). Called only for a
+    /// branch whose copy is [`HostCopy::At`].
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved>;
 
     /// 56: a file of a revision's tree, for the policy read from the
     /// branch's revision.

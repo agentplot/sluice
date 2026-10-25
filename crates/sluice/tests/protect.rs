@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 
 use sluice::profiles::local_refs::LocalRefs;
 use sluice_seams::{Branch, Moved, Rev};
-use support::Repo;
+use support::{Repo, Scratch};
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
 [branches.\"bolt/*\"]\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
@@ -421,4 +421,305 @@ fn protect_names_a_worktree_holding_a_protected_branch() {
         "{}",
         text(&out)
     );
+}
+
+/// A protected repository whose `bolt/x` names `origin`, a bare
+/// repository, where another host has moved `bolt/x` on: this host's
+/// `bolt/x`, its copy, stands apart from origin's, which is fetched here.
+/// Returns the repository, the worktree on `bolt/x`, the copy's revision,
+/// origin's, and the bare repository.
+fn copy_apart(name: &str) -> (Repo, PathBuf, String, String, Scratch) {
+    let repo = Repo::new(name);
+    repo.write(
+        ".config/sluice.toml",
+        &POLICY.replace("trust = ", "remote = \"origin\"\ntrust = "),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    repo.branch("unit/a", "main", &[("a.txt", Some("a\n"))]);
+    let bare = repo.bare_origin();
+    let other = Repo::clone_of(bare.path(), &format!("{name}-other"));
+    other.git(&["switch", "-q", "bolt/x"]);
+    other.write("o.txt", "o\n");
+    other.git(&["add", "-A"]);
+    other.git(&["commit", "-q", "-m", "on origin"]);
+    other.git(&["push", "-q", "origin", "bolt/x"]);
+    let remote = other.rev("bolt/x");
+    let out = sl(&repo, &["protect"]);
+    assert!(out.status.success(), "{}", text(&out));
+    repo.git(&["fetch", "-q", "origin"]);
+    let held = repo.dir().with_extension("bolt");
+    let _ = std::fs::remove_dir_all(&held);
+    repo.git(&["worktree", "add", "-q", held.to_str().unwrap(), "bolt/x"]);
+    let copy = repo.rev("bolt/x");
+    assert_ne!(copy, remote);
+    (repo, held, copy, remote, bare)
+}
+
+/// 124: on a branch kept on a remote, the protection judges a write by
+/// this host's own `bolt/x`, fetching nothing: a reset to where it stands
+/// and git's packing pass, and a move to origin's revision is refused
+/// from the copy's value.
+#[test]
+fn a_copy_apart_from_its_remote_is_judged_by_its_own_value() {
+    let (repo, held, copy, remote, _bare) = copy_apart("protect-copy");
+    let out = git_in(&repo, &held, &["reset", "-q", "--hard"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = repo.git_raw(&["pack-refs", "--all", "--prune"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!repo.dir().join(".git/refs/heads/bolt/x").exists());
+    assert_eq!(repo.rev("bolt/x"), copy);
+    assert!(protected_events(&repo).is_empty());
+
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &remote]);
+    assert_eq!(out.status.code(), Some(128), "{}", text(&out));
+    assert_eq!(repo.rev("bolt/x"), copy);
+    let events = protected_events(&repo);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        (&events[0]["from"], &events[0]["to"]),
+        (&serde_json::json!(copy), &serde_json::json!(remote))
+    );
+    assert!(
+        events[0]["by"]
+            .as_str()
+            .unwrap()
+            .contains("update-ref refs/heads/bolt/x"),
+        "{events:?}"
+    );
+}
+
+/// 1, 124: a refusal tells whoever ran it, before git's own error, that
+/// the branch is protected, the command, both revisions, that sluice
+/// levels this host's copy itself, and how to bring the worktree level.
+#[test]
+fn a_refusal_names_the_command_and_both_revisions() {
+    let (repo, held, copy, remote, _bare) = copy_apart("protect-words");
+    let said = |out: &Output, command: &str, to: &str| {
+        let t = text(out);
+        assert_eq!(out.status.code(), Some(128), "{t}");
+        let ours = t
+            .find("error: bolt/x is protected by sluice; submit the change to sluice instead")
+            .unwrap_or_else(|| panic!("{t}"));
+        let theirs = t.find("fatal:").unwrap_or(t.len());
+        assert!(ours < theirs, "sluice's lines come first: {t}");
+        assert!(
+            t.contains(&format!(
+                "{command}` would move it from {} to {}",
+                &copy[..7],
+                &to[..7]
+            )),
+            "{t}"
+        );
+        assert!(
+            t.contains("sluice levels this host's bolt/x to each landing itself"),
+            "{t}"
+        );
+        assert!(
+            t.contains(
+                "the worktree may hold the attempted change: git merge --abort or git reset --hard"
+            ),
+            "{t}"
+        );
+    };
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &remote]);
+    said(
+        &out,
+        &format!("update-ref refs/heads/bolt/x {remote}"),
+        &remote,
+    );
+    let head = repo.rev("unit/a");
+    let out = git_in(&repo, &held, &["reset", "-q", "--hard", &head]);
+    said(&out, &format!("reset -q --hard {head}"), &head);
+    assert_eq!(repo.rev("bolt/x"), copy);
+}
+
+/// 1: a branch kept in this host's own refs is told the command and both
+/// revisions too, without the copy's line; a deletion's refusal names
+/// what still needs the branch.
+#[test]
+fn a_local_branchs_refusals_say_the_command() {
+    let repo = queued("protect-local-words");
+    let tip = repo.rev("bolt/x");
+    let head = repo.rev("unit/a");
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &head]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains(&format!(
+            "update-ref refs/heads/bolt/x {head}` would move it from {} to {}",
+            &tip[..7],
+            &head[..7]
+        )),
+        "{t}"
+    );
+    assert!(!t.contains("levels this host's"), "{t}");
+    let out = repo.git_raw(&["branch", "-D", "bolt/x"]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains(&format!(
+            "branch -D bolt/x` would delete it at {}; it still holds #1",
+            &tip[..7]
+        )),
+        "{t}"
+    );
+}
+
+/// git in `dir` naming the repository `git_dir`, as a fetch into a bare
+/// repository run from elsewhere does.
+fn git_named(git_dir: &Path, dir: &Path, args: &[&str]) -> Output {
+    support::git_command()
+        .current_dir(dir)
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// The `protected` lines of `bolt/x`'s log in the repository whose
+/// common directory is `common`.
+fn protected_in(common: &Path, branch: &str) -> usize {
+    std::fs::read_to_string(common.join(format!("sluice/{branch}/log.jsonl")))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("\"event\":\"protected\""))
+        .count()
+}
+
+/// 124: the protection installed in a bare repository judges the
+/// repository git names, wherever the command runs: a fetch from a folder
+/// that is no repository passes, a write to a protected branch through
+/// `--git-dir` from there is refused, and run from inside another
+/// repository, only the named one's policy counts.
+#[test]
+fn the_protection_judges_the_repository_git_names() {
+    let src = Repo::new("protect-named-src");
+    src.write(".config/sluice.toml", POLICY);
+    src.git(&["add", "-A"]);
+    src.git(&["commit", "-q", "-m", "policy"]);
+    src.git(&["branch", "bolt/x", "main"]);
+    src.branch("unit/a", "main", &[("a.txt", Some("a\n"))]);
+    let x = Scratch::new("protect-named-x.git");
+    src.git(&["clone", "-q", "--bare", ".", x.path().to_str().unwrap()]);
+    let out = support::isolated(&mut Command::new(sluice()))
+        .current_dir(x.path())
+        .arg("protect")
+        .env("XDG_CONFIG_HOME", x.path().join("no-config"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let tip = src.rev("bolt/x");
+    // Work on origin, x's source, for the fetch to bring.
+    src.git(&["switch", "-q", "unit/a"]);
+    src.git(&["commit", "-q", "--allow-empty", "-m", "more"]);
+    let more = src.rev("unit/a");
+    src.git(&["switch", "-q", "main"]);
+    src.git(&["commit", "-q", "--allow-empty", "-m", "main more"]);
+    let main = src.rev("main");
+
+    let outside = Scratch::new("protect-named-outside");
+    let out = git_named(
+        x.path(),
+        outside.path(),
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+            "+refs/heads/unit/a:refs/heads/unit/a",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains("sluice"), "{}", text(&out));
+    let rev = |name: &str| {
+        let out = git_named(x.path(), outside.path(), &["rev-parse", name]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(rev("refs/remotes/origin/main"), main);
+    assert_eq!(rev("refs/heads/unit/a"), more);
+    assert_eq!(protected_in(x.path(), "bolt/x"), 0);
+
+    let out = git_named(
+        x.path(),
+        outside.path(),
+        &["update-ref", "refs/heads/bolt/x", &more],
+    );
+    assert_eq!(out.status.code(), Some(128), "{}", text(&out));
+    assert_eq!(rev("refs/heads/bolt/x"), tip);
+    assert_eq!(protected_in(x.path(), "bolt/x"), 1);
+
+    // A second repository, whose policy protects `main`, holds the folder.
+    let y = Repo::new("protect-named-y");
+    y.write(
+        ".config/sluice.toml",
+        "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n[branches.main]\n",
+    );
+    y.git(&["add", "-A"]);
+    y.git(&["commit", "-q", "-m", "policy"]);
+    let out = sl(&y, &["protect"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let y_main = y.rev("main");
+    let out = git_named(x.path(), y.dir(), &["update-ref", "refs/heads/main", &more]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(rev("refs/heads/main"), more);
+    assert_eq!(y.rev("main"), y_main);
+    assert_eq!(protected_in(x.path(), "main"), 0);
+    assert_eq!(protected_in(&y.dir().join(".git"), "main"), 0);
+}
+
+/// 124: a transaction the protection cannot read for a reason of its own,
+/// here two branches whose policy cannot be parsed, passes with exactly
+/// one warning saying why.
+#[test]
+fn a_transaction_the_protection_cannot_read_passes_said_once() {
+    let (repo, _) = protected("protect-unread");
+    let broken = repo.branch(
+        "broken",
+        "main",
+        &[(
+            ".config/sluice.toml",
+            Some("[branches.\"bolt/*\"\nnot toml"),
+        )],
+    );
+    repo.git(&["branch", "bolt/p", &broken]);
+    repo.git(&["branch", "bolt/q", &broken]);
+    let head = repo.rev("unit/a");
+    let out = support::git_command()
+        .current_dir(repo.dir())
+        .args(["update-ref", "--stdin"])
+        .env_remove("GIT_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write as _;
+            c.stdin.take().unwrap().write_all(
+                format!("update refs/heads/bolt/p {head}\nupdate refs/heads/bolt/q {head}\n")
+                    .as_bytes(),
+            )?;
+            c.wait_with_output()
+        })
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(repo.rev("bolt/p"), head);
+    assert_eq!(repo.rev("bolt/q"), head);
+    let t = text(&out);
+    assert_eq!(
+        t.matches("warning: sluice's branch protection let this through unread: ")
+            .count(),
+        1,
+        "{t}"
+    );
+    assert!(!t.contains("protected by sluice"), "{t}");
+    for b in ["bolt/p", "bolt/q"] {
+        assert_eq!(protected_in(&repo.dir().join(".git"), b), 0);
+    }
 }

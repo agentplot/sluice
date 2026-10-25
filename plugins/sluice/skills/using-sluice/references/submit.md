@@ -12,7 +12,25 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request; `{branch,submissions}` for several worktrees. |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions; `{branch,submissions}` for several worktrees. |
+
+## Refused: a required task kept out of CI
+
+```
+refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
+let it run in CI in this worktree, or drop it from main's policy in the same submission that lets it run, and submit again
+```
+
+The branch requires a task the task runner, in your worktree, never runs
+in CI (moon's `runInCI: false` or `skip`), so no combination can pass.
+Nothing was queued, and on a pull-request branch nothing was pushed. A task
+required through a tag names it: `requires app:serve through #check-fast`.
+The way on is a commit in your worktree that lets the task run in CI, or
+that drops it from the policy together with such a commit; the submission
+that does is taken. Submitting again unchanged is refused again. When the
+runner can't be asked (its toolchain fails), the submission is taken with a
+`warning:` line, `warnings` under `--json --no-wait`, and the run reads the
+task missing as before.
 
 ## What a waiting submit prints
 
@@ -96,7 +114,14 @@ passed · landed as b7d2e94
 
 - The pull request waits while it is a draft or misses a review or a check
   the policy names, then joins the queue.
-- New commits send it back to waiting.
+- A submit of new commits replaces its submission in the queue
+  (`withdrew its submission 12`), and the new commits wait for their
+  conditions.
+- Sent back (blamed, timed out, in conflict, withdrawn), or moved by
+  commits no submit pushed, it is a draft until your next submit, whose
+  line ends `marked ready for review`; the check reads
+  `waiting: the next submit`. The same commits submitted again are
+  tested again.
 - sluice posts a `sluice` check on its latest commit with the state, and a
   comment when it sends one back.
 - A submit following a pull request exits `1` when it is closed without

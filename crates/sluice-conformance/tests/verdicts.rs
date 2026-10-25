@@ -1,7 +1,10 @@
 //! Verdicts, attribution and the window: A.3 and A.4.
 
+use std::path::PathBuf;
+
 use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultKind, ResultLine, State};
+use sluice_core::{KeptOut, SubmitRefusal};
 use sluice_seams::{Outcome, Told};
 
 fn results(h: &Harness) -> Vec<ResultLine> {
@@ -479,9 +482,12 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
 #[test]
 fn a_required_check_kept_out_of_ci_is_missing_and_named() {
     let h = Harness::bolt();
-    h.w().keeps_out("b:test");
     h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+    h.w().at_path("unit/a", "/work/unit-a");
     let one = h.submit("unit/a");
+    // Kept out only once the submission is taken, as an entry ahead of it
+    // changing the runner's settings would.
+    h.w().keeps_out("b:test");
     h.settle();
     assert_eq!(h.sub(one).state, State::Failed);
     assert!(results(&h).iter().all(|r| r.task != "b:test"));
@@ -494,6 +500,71 @@ fn a_required_check_kept_out_of_ci_is_missing_and_named() {
         "{:?}",
         status.warnings
     );
+}
+
+/// satisfies: 2, 27, 56 (ADR 0050)
+#[test]
+fn a_submission_whose_gate_requires_a_check_kept_out_of_ci_is_refused() {
+    let h = Harness::bolt();
+    h.w().keeps_out("b:test");
+    // Refused whatever the submission affects: the policy is what is wrong.
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.w().at_path("unit/a", "/work/unit-a");
+    match h.try_submit("unit/a", &[], 0) {
+        Err(SubmitRefusal::KeptOut(kept)) => assert_eq!(
+            kept,
+            [KeptOut {
+                task: "b:test".into(),
+                entry: "#gate".into(),
+                line: 7,
+            }]
+        ),
+        other => panic!("submitted: {other:?}"),
+    }
+    // Asked in the submitting worktree; nothing queued, nothing published.
+    assert_eq!(h.w().asked_kept_out(), [PathBuf::from("/work/unit-a")]);
+    assert_eq!(h.version(), 0);
+    assert!(h.w().published().is_empty());
+    assert!(h.sluice().status(BRANCH).unwrap().submissions.is_empty());
+}
+
+/// satisfies: 2, 27, 56 (ADR 0050)
+#[test]
+fn a_submission_that_lets_the_check_run_is_taken() {
+    let h = Harness::bolt();
+    h.w().keeps_out("b:test");
+    h.work("unit/a", "agent-a", &[("b/lib", Some("b2"))]);
+    h.w().at_path("unit/a", "/work/unit-a");
+    assert!(matches!(
+        h.try_submit("unit/a", &[], 0),
+        Err(SubmitRefusal::KeptOut(_))
+    ));
+    // The worktree's head now lets it run in CI.
+    h.w().lets_run("b:test");
+    let accepted = h.try_submit("unit/a", &[], 0).expect("accepted");
+    assert!(accepted.warnings.is_empty(), "{:?}", accepted.warnings);
+    h.settle();
+    assert_eq!(h.sub(accepted.id).state, State::Landed);
+    assert!(results(&h).iter().any(|r| r.task == "b:test"));
+}
+
+/// satisfies: 27 (ADR 0050)
+#[test]
+fn a_runner_that_cannot_be_asked_takes_the_submission_with_a_warning() {
+    let h = Harness::bolt();
+    h.w()
+        .kept_out_fails(Some("[tests] toolchain exited 1: no devenv"));
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.w().at_path("unit/a", "/work/unit-a");
+    let accepted = h.try_submit("unit/a", &[], 0).expect("accepted");
+    match accepted.warnings.as_slice() {
+        [w] => assert!(
+            w.contains("could not check") && w.contains("no devenv"),
+            "{w}"
+        ),
+        other => panic!("warned {other:?}"),
+    }
+    assert_eq!(h.sub(accepted.id).state, State::Queued);
 }
 
 /// satisfies: 27, 29

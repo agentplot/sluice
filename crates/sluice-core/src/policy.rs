@@ -118,6 +118,9 @@ pub enum Flaky {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
     pub required: Vec<String>,
+    /// ADR 0050: the line of `.config/sluice.toml` each of `required` is
+    /// written on, in the same order, so a refusal can name it.
+    pub required_lines: Vec<usize>,
     /// The window's upper bound; its lower bound is one (13).
     pub parallel: usize,
     /// Deepest first, or every candidate (14).
@@ -128,6 +131,9 @@ pub struct Rules {
     /// How long a passed candidate may wait to land while a deeper one
     /// holding it is under test (117). `None` holds nothing.
     pub hold: Option<Duration>,
+    /// How many more times a checkout's release that failed is tried, one
+    /// a round, before it is held (123).
+    pub release_retries: u32,
     /// Which results satisfy the gate (27 to 29): on a branch whose
     /// records are on its remote, signer names (78); otherwise
     /// `confined` and executor kinds.
@@ -223,11 +229,13 @@ impl Default for Rules {
     fn default() -> Self {
         Rules {
             required: Vec::new(),
+            required_lines: Vec::new(),
             parallel: 4,
             batch: false,
             flaky: Flaky::Fail,
             timeout: Some(Duration::from_secs(3600)),
             hold: None,
+            release_retries: crate::step::RELEASE_RETRIES,
             trust: vec!["open".into(), "sandbox".into(), "container".into()],
             signed: false,
             confined: false,
@@ -298,13 +306,16 @@ struct ExecutorForm {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RulesForm {
+    /// Each entry with where it is written, so a refusal can name its
+    /// line (ADR 0050).
     #[serde(default)]
-    required: Vec<String>,
+    required: Vec<toml::Spanned<String>>,
     parallel: Option<i64>,
     batch: Option<bool>,
     flaky: Option<String>,
     timeout: Option<String>,
     hold: Option<String>,
+    release_retries: Option<i64>,
     trust: Option<Vec<String>>,
     remote: Option<String>,
     pull_requests: Option<PullRequestsForm>,
@@ -478,6 +489,11 @@ impl Policy {
                 Some(t) => Some(parse_duration(t).with_context(|| format!("{at} hold"))?)
                     .filter(|h| !h.is_zero()),
             };
+            let release_retries = match r.release_retries {
+                None => d.release_retries,
+                Some(n) if (0..=u32::MAX as i64).contains(&n) => n as u32,
+                Some(n) => bail!("{at} release_retries must be at least 0, not {n}"),
+            };
             let mut trust = match r.trust {
                 Some(t) => t,
                 None if signed => Vec::new(),
@@ -559,15 +575,22 @@ impl Policy {
             } else {
                 BTreeMap::new()
             };
+            let required_lines = r
+                .required
+                .iter()
+                .map(|e| line_at(text, e.span().start))
+                .collect();
             branches.push((
                 pattern,
                 Rules {
-                    required: r.required,
+                    required: r.required.into_iter().map(|e| e.into_inner()).collect(),
+                    required_lines,
                     parallel,
                     batch: r.batch.unwrap_or(d.batch),
                     flaky,
                     timeout,
                     hold,
+                    release_retries,
                     trust,
                     signed,
                     confined,
@@ -787,6 +810,11 @@ fn listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
     }
 }
 
+/// The line, counted from one, that byte `at` of `text` is on.
+fn line_at(text: &str, at: usize) -> usize {
+    text[..at.min(text.len())].matches('\n').count() + 1
+}
+
 /// `"512M"`, `"8G"`: bytes, in powers of 1024.
 pub fn parse_size(text: &str) -> Result<u64> {
     let t = text.trim();
@@ -902,9 +930,38 @@ hold = "5m"
         assert_eq!(main.timeout, Some(Duration::from_secs(3600)));
         assert_eq!(main.hold, Some(Duration::from_secs(300)));
         assert_eq!(bolt.hold, None);
+        assert_eq!(bolt.release_retries, 3);
         assert!(p.rules_for("unit/x").unwrap().is_none());
         assert!(p.rules_for("bolt/a/b").unwrap().is_none());
         assert_eq!(main.trust, ["open", "sandbox", "container"]);
+    }
+
+    /// ADR 0050: each required entry keeps the line it is written on.
+    #[test]
+    fn keeps_the_line_of_a_required_entry_on_one_line() {
+        let p = Policy::parse(POLICY).unwrap();
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert_eq!(bolt.required_lines, [10]);
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.required_lines, [17, 17]);
+    }
+
+    /// ADR 0050: a `required` array written across lines keeps each
+    /// entry's own line, as switchboard-kit writes it.
+    #[test]
+    fn keeps_the_line_of_each_entry_of_a_required_array_across_lines() {
+        let p = Policy::parse(
+            "[tests]\nrunner = \"moon\"\n\n\
+             [branches.main]\n\
+             required = [\n\
+             \x20 \"#check-fast\",\n\
+             \x20 \"root:integration\",\n\
+             ]\n",
+        )
+        .unwrap();
+        let main = p.rules_for("main").unwrap().unwrap();
+        assert_eq!(main.required, ["#check-fast", "root:integration"]);
+        assert_eq!(main.required_lines, [6, 7]);
     }
 
     /// The Claude Code plugin's example policies read, and gate the
@@ -1138,6 +1195,23 @@ hold = "5m"
         assert!(Policy::parse("[branches.main]\nparallel = 0\n").is_err());
         assert!(Policy::parse("[branches.main]\nflaky = \"retry\"\n").is_err());
         assert!(Policy::parse("[branches.main]\ntimeout = \"soon\"\n").is_err());
+    }
+
+    /// 123: how many more times a failed release is tried, 3 where the
+    /// table names none; a negative number is refused, naming the table.
+    #[test]
+    fn reads_and_refuses_release_retries() {
+        let rules = |text: &str| Policy::parse(text).map(|p| p.rules_for("main").unwrap().cloned());
+        let retries = |text: &str| rules(text).unwrap().unwrap().release_retries;
+        assert_eq!(retries("[branches.main]\n"), 3);
+        assert_eq!(retries("[branches.main]\nrelease_retries = 1\n"), 1);
+        assert_eq!(retries("[branches.main]\nrelease_retries = 0\n"), 0);
+        let e = rules("[branches.main]\nrelease_retries = -1\n").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "[branches.\"main\"] release_retries must be at least 0, not -1"
+        );
+        assert!(Policy::parse("[branches.main]\nrelease_retries = \"3\"\n").is_err());
     }
 
     /// 83: the limits a run is held to, and the settings passed on.

@@ -13,7 +13,7 @@ use std::rc::Rc;
 use sluice::identity::{Credentials, Identity};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::pushed_refs::PushedRefs;
-use sluice_seams::{Branch, LandingCommit, Moved, Rev};
+use sluice_seams::{Branch, HostCopy, LandingCommit, Moved, Rev};
 use support::http::Fake;
 use support::Repo;
 
@@ -51,10 +51,10 @@ fn a_read_sees_what_another_clone_pushed() {
     assert_eq!(p.read("none").unwrap(), None);
 }
 
-/// 45, 46: a push the lease allows lands on the remote, and the local
-/// branch is set to it.
+/// 45, 46, 124: a push the lease allows lands on the remote, and leaves
+/// the host's copy where it was, for a round to level.
 #[test]
-fn a_push_lands_and_the_local_branch_follows() {
+fn a_push_lands_and_leaves_the_copy() {
     let repo = Repo::new("push");
     let bare = repo.bare_origin();
     let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
@@ -64,7 +64,26 @@ fn a_push_lands_and_the_local_branch_follows() {
     assert_eq!(p.move_to("main", &base, &to).unwrap(), Moved::Moved);
     let remote = Repo::clone_of(bare.path(), "check");
     assert_eq!(remote.rev("origin/main"), to.as_str());
-    assert_eq!(repo.rev("main"), to.as_str());
+    assert_eq!(repo.rev("main"), base.as_str());
+}
+
+/// 122, 124: a push accepted while git holds the copy's lock is a
+/// landing all the same; the copy is left where it was.
+#[test]
+fn a_push_accepted_under_the_copys_lock_is_moved() {
+    let repo = Repo::new("push-locked");
+    let bare = repo.bare_origin();
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let base = p.read("main").unwrap().unwrap();
+    let to = landing(&p, &base, &head);
+    let lock = repo.dir().join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert_eq!(p.move_to("main", &base, &to).unwrap(), Moved::Moved);
+    std::fs::remove_file(&lock).unwrap();
+    let remote = Repo::clone_of(bare.path(), "check");
+    assert_eq!(remote.rev("origin/main"), to.as_str());
+    assert_eq!(repo.rev("main"), base.as_str());
 }
 
 /// 24, rule core.5: a push after another clone moved the branch is
@@ -130,6 +149,98 @@ fn a_refused_push_names_the_remotes_reason() {
     let err = p.move_to("main", &base, &to).unwrap_err().to_string();
     assert!(err.contains("pre-receive hook declined"), "{err}");
     assert_eq!(repo.rev("main"), base.as_str());
+}
+
+/// 124: the host's copy is its own `refs/heads/<branch>`, read with no
+/// fetch, so with the remote unreachable.
+#[test]
+fn the_copy_is_read_with_the_remote_unreachable() {
+    let repo = Repo::new("copy-read");
+    let bare = repo.bare_origin();
+    let base = rev(repo.rev("main"));
+    let other = Repo::clone_of(bare.path(), "other");
+    other.push_change("b", "2\n");
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let aside = bare.path().with_extension("aside");
+    std::fs::rename(bare.path(), &aside).unwrap();
+    assert_eq!(p.copy("main").unwrap(), HostCopy::At(Some(base)));
+    assert_eq!(p.copy("none").unwrap(), HostCopy::At(None));
+    std::fs::rename(&aside, bare.path()).unwrap();
+}
+
+/// 124, rule core.5: a levelling from the value the copy holds sets it,
+/// with sluice's reflog line; one from any other value, or from none
+/// while the copy exists, is reported with what it holds and moves
+/// nothing.
+#[test]
+fn a_copy_is_levelled_only_from_the_value_it_holds() {
+    let repo = Repo::new("copy-level");
+    let bare = repo.bare_origin();
+    let base = rev(repo.rev("main"));
+    let stale = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let other = Repo::clone_of(bare.path(), "other");
+    let pushed = rev(other.push_change("b", "2\n"));
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    assert_eq!(p.read("main").unwrap(), Some(pushed.clone()));
+    assert_eq!(
+        p.level("main", Some(&stale), &pushed).unwrap(),
+        Moved::Elsewhere(Some(base.clone()))
+    );
+    assert_eq!(
+        p.level("main", None, &pushed).unwrap(),
+        Moved::Elsewhere(Some(base.clone()))
+    );
+    assert_eq!(repo.rev("main"), base.as_str());
+    assert_eq!(p.level("main", Some(&base), &pushed).unwrap(), Moved::Moved);
+    assert_eq!(repo.rev("main"), pushed.as_str());
+    assert_eq!(
+        repo.git(&["reflog", "show", "-1", "--format=%gs", "refs/heads/main"]),
+        "sluice: level main to its landing"
+    );
+    assert_eq!(p.level("bolt/y", None, &pushed).unwrap(), Moved::Moved);
+    assert_eq!(repo.rev("bolt/y"), pushed.as_str());
+}
+
+/// 124: a levelling while git holds the copy's lock fails, saying so, and
+/// moves nothing.
+#[test]
+fn a_levelling_fails_on_the_copys_lock() {
+    let repo = Repo::new("copy-lock");
+    let bare = repo.bare_origin();
+    let base = rev(repo.rev("main"));
+    let other = Repo::clone_of(bare.path(), "other");
+    let pushed = rev(other.push_change("b", "2\n"));
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    p.read("main").unwrap();
+    let lock = repo.dir().join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+    let err = format!("{:#}", p.level("main", Some(&base), &pushed).unwrap_err());
+    assert!(
+        err.contains("git holds the lock on refs/heads/main"),
+        "{err}"
+    );
+    assert_eq!(repo.rev("main"), base.as_str());
+    std::fs::remove_file(&lock).unwrap();
+    assert_eq!(p.level("main", Some(&base), &pushed).unwrap(), Moved::Moved);
+}
+
+/// C.7, 124: the router sends `copy` and `level` where it sends `read`.
+#[test]
+fn the_router_sends_the_copy_to_the_branchs_profile() {
+    let repo = Repo::new("router-copy");
+    repo.write(
+        ".config/sluice.toml",
+        "[branches.main]\nremote = \"origin\"\n[branches.\"bolt/*\"]\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x"]);
+    let _bare = repo.bare_origin();
+    let base = rev(repo.rev("main"));
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(b.copy("main").unwrap(), HostCopy::At(Some(base.clone())));
+    assert_eq!(b.copy("bolt/x").unwrap(), HostCopy::Itself);
+    assert!(b.level("bolt/x", Some(&base), &base).is_err());
 }
 
 /// C.7: a branch with no `remote` is local refs, exactly as before.

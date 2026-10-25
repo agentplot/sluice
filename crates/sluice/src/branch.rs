@@ -1,11 +1,13 @@
 //! `sluice branch create` and `sluice branch delete` (branches-1 104 to
 //! 106): sluice makes and removes the branches it lands on, on their
 //! remote when their policy names one and in local refs otherwise.
+//! `sluice branch accept` (121): the operator accepts the revision a held
+//! branch is read at.
 
 use std::io::Write;
 
 use anyhow::Result;
-use sluice_core::branches::{MakeRefusal, RemoveRefusal};
+use sluice_core::branches::{AcceptRefusal, MakeRefusal, RemoveRefusal};
 use sluice_core::Sluice;
 
 use crate::told::{self, Kind};
@@ -15,6 +17,11 @@ pub fn run(s: &Sluice<'_>, command: BranchCommand, out: &mut dyn Write) -> Resul
     match command {
         BranchCommand::Create { branch, from, json } => create(s, &branch, &from, json, out),
         BranchCommand::Delete { branch, into, json } => delete(s, &branch, &into, json, out),
+        BranchCommand::Accept {
+            branch,
+            revision,
+            json,
+        } => accept(s, &branch, &revision, json, out),
     }
 }
 
@@ -120,6 +127,58 @@ fn delete(
                 Some(at) => format!("refused: {branch} moved to {at} while it was being deleted"),
                 None => format!("refused: {branch} went while it was being deleted"),
             },
+        ),
+    };
+    told::tell(out, json, kind, &text, &[format!("sluice status {branch}")])?;
+    Ok(exit(kind))
+}
+
+fn accept(
+    s: &Sluice<'_>,
+    branch: &str,
+    revision: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let refusal = match s.accept_branch(branch, revision)? {
+        Ok(a) => {
+            if json {
+                let doc = serde_json::json!({
+                    "branch": branch, "accepted": a.revision, "lacked": a.lacked,
+                });
+                writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+            } else {
+                writeln!(
+                    out,
+                    "accepted {branch} at {}, which lacks the landing {}; \
+                     the next round forms the queue on it",
+                    a.revision, a.lacked
+                )?;
+            }
+            return Ok(0);
+        }
+        Err(r) => r,
+    };
+    let (kind, text) = match refusal {
+        AcceptRefusal::Busy => (
+            Kind::Refused,
+            format!("refused: a step holds {branch}; ask again"),
+        ),
+        AcceptRefusal::Absent => (Kind::NotFound, format!("no branch {branch}")),
+        AcceptRefusal::NotHeld(read) => (
+            Kind::Refused,
+            format!("refused: {branch} is not held; it reads {read}, which holds its last landing"),
+        ),
+        AcceptRefusal::NotHeldAt { held, read } if held == read => (
+            Kind::Refused,
+            format!("refused: {branch} is held at {held}, not at {revision}"),
+        ),
+        AcceptRefusal::NotHeldAt { held, read } => (
+            Kind::Refused,
+            format!(
+                "refused: {branch} is held at {held} and now reads {read}; \
+                 the next round holds it there or forms on it"
+            ),
         ),
     };
     told::tell(out, json, kind, &text, &[format!("sluice status {branch}")])?;

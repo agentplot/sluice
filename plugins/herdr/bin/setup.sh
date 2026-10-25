@@ -55,10 +55,12 @@ rows = [
 ]
 
 # The focused repository's queue at the right of the tab bar: one entry
-# for the tab_bar_right list in your [ui] table.
+# for the tab_bar_right list in your [ui] table. herdr keeps the last line
+# until a run ends and clears it when a run outlasts its timeout, so the
+# timeout is what a loaded host must meet: a slow run is late, never blank.
 [ui]
 tab_bar_right = [
-  { type = "command", command = $segment, interval_seconds = 5, timeout_seconds = 2 },
+  { type = "command", command = $segment, interval_seconds = 5, timeout_seconds = 30 },
 ]
 
 Toasts need herdr's own to be on:

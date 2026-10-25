@@ -1,7 +1,9 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
-//! a pull request (ADR 0044).
+//! a pull request (ADR 0044), and a required check that can never pass
+//! (ADR 0050).
 
 use sluice_core::records::{FlakyKey, Recorded};
+use sluice_core::KeptOut;
 use sluice_seams::Outcome;
 
 /// `passed` or `failed`.
@@ -68,8 +70,9 @@ pub fn cut_off(tasks: &[&str]) -> String {
 }
 
 /// Time-limit-1 66: the way on after a run its time limit ended. Nothing
-/// was recorded for a test it cut off, so the same head is tested afresh.
-pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
+/// was recorded for a test it cut off, so the same head is tested afresh,
+/// a pull request's too (120).
+pub fn timed_out_way_on(tasks: &[&str]) -> String {
     let (recorded, which) = match tasks {
         [] => (String::new(), "a test".to_string()),
         [one] => (format!("nothing was recorded for {one}: "), one.to_string()),
@@ -79,12 +82,93 @@ pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
         ),
     };
     format!(
-        "{recorded}if the host was slow, submit the same head again{same_commits}; \
+        "{recorded}if the host was slow, submit the same head again; \
          if {which} never ends, fix it in your worktree and submit again"
     )
+}
+
+/// The way on after a check failed on this submission.
+pub fn fix_way_on() -> &'static str {
+    "fix it in your worktree and submit again"
+}
+
+/// Could-not-run-1 115: the way on after the host could not run `tasks`.
+pub fn could_not_run_way_on(tasks: &[&str]) -> String {
+    format!(
+        "the host could not run {}: once it can, submit again",
+        tasks.join(", ")
+    )
+}
+
+/// The way on after a conflict with what is ahead of it on `branch`.
+pub fn conflict_way_on(branch: &str) -> String {
+    format!("merge or rebase onto {branch} in your worktree and submit again")
 }
 
 /// Could-not-run-1 115: a check that could not run, and why.
 pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
+}
+
+/// ADR 0050: a submission refused because `branch` requires checks the
+/// task runner in the submitting worktree keeps out of CI: each, through
+/// the tag that names it, with its line of the policy, and the way on.
+pub fn kept_out_refusal(branch: &str, kept: &[KeptOut]) -> String {
+    let mut s = String::from("refused: ");
+    for k in kept {
+        let through = if k.entry == k.task {
+            String::new()
+        } else {
+            format!(" through {}", k.entry)
+        };
+        s.push_str(&format!(
+            "{branch} requires {}{through} (.config/sluice.toml line {}), which the task runner \
+             in this worktree keeps out of CI, so it is never run and {branch} cannot pass while \
+             it is required\n",
+            k.task, k.line
+        ));
+    }
+    let which = if kept.len() == 1 { "it" } else { "each" };
+    s.push_str(&format!(
+        "let {which} run in CI in this worktree, or drop it from {branch}'s policy in the same \
+         submission that lets it run, and submit again"
+    ));
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 120, pull-request-submit: the way on after a time-out, a blame, a
+    /// check the host could not run or a conflict is a submit, which
+    /// sluice takes, a pull request's included; none names a draft.
+    #[test]
+    fn the_ways_on_name_a_submit_and_no_draft() {
+        let ways = [
+            timed_out_way_on(&[]),
+            timed_out_way_on(&["cli:test"]),
+            timed_out_way_on(&["cli:test", "cli:tools"]),
+            fix_way_on().to_string(),
+            could_not_run_way_on(&["cli:tools"]),
+            conflict_way_on("main"),
+        ];
+        for w in &ways {
+            assert!(w.contains("submit"), "{w}");
+            assert!(
+                !w.contains("draft") && !w.contains("ready for review"),
+                "{w}"
+            );
+        }
+        assert_eq!(
+            timed_out_way_on(&["cli:test"]),
+            "nothing was recorded for cli:test: if the host was slow, submit the same head \
+             again; if cli:test never ends, fix it in your worktree and submit again"
+        );
+        assert_eq!(fix_way_on(), "fix it in your worktree and submit again");
+        assert_eq!(
+            conflict_way_on("main"),
+            "merge or rebase onto main in your worktree and submit again"
+        );
+    }
 }

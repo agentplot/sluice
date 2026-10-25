@@ -107,6 +107,7 @@ impl FileForge {
             h.next += 1;
             h.pulls.push(Pull {
                 number,
+                node_id: format!("PR_{number}"),
                 title: head_ref.into(),
                 body: String::new(),
                 author: author.into(),
@@ -280,10 +281,11 @@ impl Forge for FileForge {
         head_ref: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<Pull> {
         // GitHub reads the head from the branch as pushed; the test's push
         // is to a bare remote this fake cannot see, so it is named after.
-        let number = self.open_by("sluice", base, head_ref, "", false, None)?;
+        let number = self.open_by("sluice", base, head_ref, "", draft, None)?;
         self.with_pull(number, |p| {
             p.title = title.into();
             p.body = body.into();
@@ -294,6 +296,10 @@ impl Forge for FileForge {
 
     fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
         self.with_pull(number, |p| p.body = body.into())
+    }
+
+    fn set_draft(&self, _: &Repo, number: u64, draft: bool) -> Result<()> {
+        FileForge::set_draft(self, number, draft)
     }
 }
 
@@ -383,6 +389,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Through the forge interface, as sluice marks it: a draft and then
+    /// ready again is one new ready time on the timeline.
+    #[test]
+    fn a_draft_then_ready_is_one_ready_time() {
+        let (f, repo, dir) = forge("draft-ready");
+        let n = f
+            .open_by("ann", "main", "unit/a", "aaa", false, None)
+            .unwrap();
+        let forge: &dyn Forge = &f;
+        forge.set_draft(&repo, n, true).unwrap();
+        assert!(forge.pull(&repo, n).unwrap().unwrap().draft);
+        assert!(forge.readied(&repo, n).unwrap().is_empty());
+        forge.set_draft(&repo, n, false).unwrap();
+        let p = forge.pull(&repo, n).unwrap().unwrap();
+        assert!(!p.draft);
+        assert_eq!(p.node_id, format!("PR_{n}"));
+        assert_eq!(forge.readied(&repo, n).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// sluice's check run is found by its head and updated in place; every
     /// post is kept, for a test to count.
     #[test]
@@ -423,9 +449,13 @@ mod tests {
         let c = f.comment_list(&repo, n).unwrap().remove(0);
         f.edit_comment(&repo, c.id, "edited").unwrap();
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
-        let opened = f.open(&repo, "main", "unit/b", "B", "body").unwrap();
+        let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
+        assert!(!opened.draft);
         f.edit(&repo, opened.number, "new body").unwrap();
         assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");
+        let drafted = f.open(&repo, "main", "unit/c", "C", "", true).unwrap();
+        assert!(drafted.draft && f.by_ref("unit/c").unwrap().unwrap().draft);
+        assert!(f.readied(&repo, drafted.number).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

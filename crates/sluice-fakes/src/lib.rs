@@ -10,17 +10,18 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, Guard,
-    HostRun, LandingCommit, LastResult, Moved, Network, NotRun, Notification, Outcome, Place,
-    PreviewPlace, Progress, ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest,
-    Running, Session, SessionPlace, Settings, Snapshot, Source, State, Submitter, TaskLog,
-    TaskProgress, TaskResult, Tests, Written,
+    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
+    Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network, NotRun,
+    Notification, Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released,
+    Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot,
+    Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -100,6 +101,18 @@ struct Inner {
     /// The repository's HEAD: the first branch made, as `git init` names it.
     head: Option<String>,
     moves: Vec<MoveRecord>,
+    /// Each branch kept on a remote, and the value every host's copy of it
+    /// starts at (124). A branch absent here is kept in the host's own
+    /// refs, which are the branch.
+    remote: BTreeMap<String, Option<Rev>>,
+    /// Each host's copy of a branch kept on a remote, by host and branch,
+    /// once it differs from where it started: its value, `None` when the
+    /// host has none.
+    copies: BTreeMap<(String, String), Option<Rev>>,
+    /// The next levellings fail with this error, as many as the count.
+    level_fails: Option<(usize, String)>,
+    /// How many levellings set a copy.
+    levels: usize,
     /// How many merges were formed.
     forms: usize,
     crash: Option<Crash>,
@@ -110,6 +123,13 @@ struct Inner {
     hang: BTreeSet<String>,
     skip: BTreeSet<String>,
     kept_out: BTreeSet<String>,
+    /// Asking the runner which required checks it keeps out of CI fails,
+    /// with why (ADR 0050).
+    kept_out_fails: Option<String>,
+    /// Every worktree the runner was asked in, in order (ADR 0050).
+    asked_kept_out: Vec<PathBuf>,
+    /// Every head published for its submission, in order (82).
+    published: Vec<Rev>,
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
@@ -123,6 +143,9 @@ struct Inner {
     tasks_fail: bool,
     hold: bool,
     crash_start: bool,
+    /// How many starts from now the forge a pool starts runs on answers
+    /// 5xx.
+    unanswered_starts: usize,
     /// The next start finds the host at its bound (71).
     refuse_start: bool,
     host_limit: Option<usize>,
@@ -177,6 +200,8 @@ struct Inner {
     /// Each session place released, and the `[tests] release` it was
     /// released with, or `None` for its last run's.
     session_releases: Vec<(String, Option<String>)>,
+    /// The next release of a candidate's place fails, its place kept.
+    fail_release: bool,
     saved: Vec<String>,
     /// Previews made and not yet released, by name.
     previews: BTreeMap<String, PreviewPlace>,
@@ -184,6 +209,24 @@ struct Inner {
     preview_releases: Vec<(String, bool)>,
     /// Preview commands started from now fail.
     preview_fails: bool,
+    /// Every release from now fails, with this (123).
+    release_fails: Option<String>,
+    /// The release of these places fails, each with what it says.
+    place_release_fails: BTreeMap<String, String>,
+    /// Every release asked of the place seam, by place, in order: what
+    /// would run a release command.
+    release_attempts: Vec<String>,
+    /// Places freed with nothing run (123).
+    freed: Vec<String>,
+    /// Each place whose working copy was gone and whose stored release
+    /// ran, in order (123).
+    gone_releases: Vec<String>,
+    /// Places whose runs stored no release command.
+    stored_none: BTreeSet<String>,
+    /// Candidates' places whose checkout was deleted by hand.
+    deleted: BTreeSet<String>,
+    /// How each session place's release at its asking failed.
+    session_release_failed: BTreeMap<String, ReleaseFailure>,
     // the records' kept logs, by where
     logs: BTreeMap<String, String>,
     // the driver
@@ -448,6 +491,47 @@ impl World {
         self.0.borrow_mut().refs.insert(branch.into(), at.clone());
     }
 
+    /// `branch` is kept on a remote, `refs` holding the remote's revision;
+    /// every host's copy of it starts at that revision (124).
+    pub fn on_remote(&self, branch: &str) {
+        let mut inner = self.0.borrow_mut();
+        let at = inner.refs.get(branch).cloned();
+        inner.remote.insert(branch.into(), at);
+    }
+
+    /// This host's copy of `branch`, set by hand.
+    pub fn set_copy(&self, branch: &str, at: Option<&Rev>) {
+        let mut inner = self.0.borrow_mut();
+        assert!(
+            inner.remote.contains_key(branch),
+            "{branch} is on no remote"
+        );
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, at.cloned());
+    }
+
+    /// This host's copy of `branch`, `None` when it has none.
+    pub fn copy_of(&self, branch: &str) -> Option<Rev> {
+        World::copy_here(&self.0.borrow(), branch).flatten()
+    }
+
+    /// This host's copy of `branch`: `None` for a branch on no remote.
+    fn copy_here(inner: &Inner, branch: &str) -> Option<Option<Rev>> {
+        let start = inner.remote.get(branch)?;
+        let key = (inner.host.clone(), branch.to_string());
+        Some(inner.copies.get(&key).unwrap_or(start).clone())
+    }
+
+    /// The next `n` levellings of any copy fail with `why`, as on git's lock.
+    pub fn fail_levels(&self, n: usize, why: &str) {
+        self.0.borrow_mut().level_fails = Some((n, why.into()));
+    }
+
+    /// How many levellings set a copy.
+    pub fn levels(&self) -> usize {
+        self.0.borrow().levels
+    }
+
     pub fn crash(&self, crash: Crash) {
         self.0.borrow_mut().crash = Some(crash);
     }
@@ -508,9 +592,33 @@ impl World {
     }
 
     /// The runner keeps `task` out of its CI mode: never run, missing, and
-    /// named kept out (ADR 0044).
+    /// named kept out (ADR 0044); and a submission whose gate requires it
+    /// is refused (ADR 0050).
     pub fn keeps_out(&self, task: &str) {
         self.0.borrow_mut().kept_out.insert(task.into());
+    }
+
+    /// The runner lets `task` run in its CI mode again, as a submission
+    /// that changes its setting does.
+    pub fn lets_run(&self, task: &str) {
+        self.0.borrow_mut().kept_out.remove(task);
+    }
+
+    /// Asking the runner which required checks it keeps out of CI fails
+    /// from now, for `why`; `None` lets it answer again (ADR 0050).
+    pub fn kept_out_fails(&self, why: Option<&str>) {
+        self.0.borrow_mut().kept_out_fails = why.map(String::from);
+    }
+
+    /// Every worktree the runner was asked in which required checks it
+    /// keeps out of CI, in order.
+    pub fn asked_kept_out(&self) -> Vec<PathBuf> {
+        self.0.borrow().asked_kept_out.clone()
+    }
+
+    /// Every head published for its submission, in order (82).
+    pub fn published(&self) -> Vec<Rev> {
+        self.0.borrow().published.clone()
     }
 
     /// The runner says `task` took `ms` in `attempts` tries, and the run
@@ -538,6 +646,12 @@ impl World {
     /// The next start finds its place made and stops before starting.
     pub fn crash_next_start(&self) {
         self.0.borrow_mut().crash_start = true;
+    }
+
+    /// The next `n` starts fail as a forge's 5xx answer, as a pool's
+    /// would whose forge could not answer, before anything starts.
+    pub fn unanswer_starts(&self, n: usize) {
+        self.0.borrow_mut().unanswered_starts = n;
     }
 
     /// The next start is refused at the host's bound, as when another
@@ -878,6 +992,12 @@ impl World {
         self.0.borrow().released.clone()
     }
 
+    /// The next release of a candidate's place fails and keeps the place,
+    /// as a release command that fails does.
+    pub fn fail_next_release(&self) {
+        self.0.borrow_mut().fail_release = true;
+    }
+
     /// A kept log's text, by where the records seam said it is (20).
     pub fn kept_log(&self, at: &str) -> Option<String> {
         self.0.borrow().logs.get(at).cloned()
@@ -903,6 +1023,49 @@ impl World {
         if let Some(p) = self.0.borrow_mut().previews.get_mut(name) {
             p.gone = true;
         }
+    }
+
+    /// Every release from now fails, saying `message`; `None` lets them
+    /// succeed again.
+    pub fn release_fails(&self, message: Option<&str>) {
+        self.0.borrow_mut().release_fails = message.map(str::to_string);
+    }
+
+    /// The release of the place `name` fails from now, saying `message`;
+    /// `None` lets it succeed again.
+    pub fn place_release_fails(&self, name: &str, message: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match message {
+            Some(m) => inner.place_release_fails.insert(name.into(), m.into()),
+            None => inner.place_release_fails.remove(name),
+        };
+    }
+
+    /// A candidate's place's checkout is deleted by hand, with nothing
+    /// released: its record stays.
+    pub fn delete_checkout(&self, name: &str) {
+        self.0.borrow_mut().deleted.insert(name.into());
+    }
+
+    /// Every release asked of the place seam, by place, in order.
+    pub fn release_attempts(&self) -> Vec<String> {
+        self.0.borrow().release_attempts.clone()
+    }
+
+    /// The places freed with nothing run, in order.
+    pub fn freed_places(&self) -> Vec<String> {
+        self.0.borrow().freed.clone()
+    }
+
+    /// Each place whose working copy was gone and whose stored release
+    /// ran, in order: a release command run from what sluice held (123).
+    pub fn gone_releases(&self) -> Vec<String> {
+        self.0.borrow().gone_releases.clone()
+    }
+
+    /// The runs of the place `name` stored no release command.
+    pub fn stores_no_release(&self, name: &str) {
+        self.0.borrow_mut().stored_none.insert(name.into());
     }
 
     /// The released places whose candidate passed, so whose caches were
@@ -1126,6 +1289,35 @@ impl Branch for FakeBranch {
         Ok(self.0 .0.borrow().refs.get(branch).cloned())
     }
 
+    fn copy(&self, branch: &str) -> Result<HostCopy> {
+        Ok(match World::copy_here(&self.0 .0.borrow(), branch) {
+            Some(at) => HostCopy::At(at),
+            None => HostCopy::Itself,
+        })
+    }
+
+    fn level(&self, branch: &str, expected: Option<&Rev>, to: &Rev) -> Result<Moved> {
+        let mut inner = self.0 .0.borrow_mut();
+        let Some(found) = World::copy_here(&inner, branch) else {
+            bail!("{branch} is kept in this host's own refs, which have no copy of it to level");
+        };
+        if let Some((n, why)) = inner.level_fails.take() {
+            if n > 1 {
+                inner.level_fails = Some((n - 1, why.clone()));
+            }
+            if n > 0 {
+                bail!("{why}");
+            }
+        }
+        if found.as_ref() != expected {
+            return Ok(Moved::Elsewhere(found));
+        }
+        let key = (inner.host.clone(), branch.to_string());
+        inner.copies.insert(key, Some(to.clone()));
+        inner.levels += 1;
+        Ok(Moved::Moved)
+    }
+
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
         let inner = self.0 .0.borrow();
         let c = inner
@@ -1291,6 +1483,14 @@ impl Tests for FakeTests {
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
         }
+        if inner.unanswered_starts > 0 {
+            inner.unanswered_starts -= 1;
+            return Err(Unanswered(format!(
+                "starting a run in {}: 503 Service Unavailable",
+                request.place.name
+            ))
+            .into());
+        }
         let complete = !inner.hold;
         let host = inner.host.clone();
         inner.runs.push(RunState {
@@ -1414,18 +1614,60 @@ impl Tests for FakeTests {
             .ok_or_else(|| anyhow!("no run {}", run.0))?;
         Ok(inner.run_tasks.get(&n).cloned().unwrap_or_default())
     }
+
+    fn kept_out(
+        &self,
+        worktree: &Path,
+        _tests: &Settings,
+        required: &[String],
+    ) -> Result<Vec<KeptOutTask>> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.asked_kept_out.push(worktree.to_path_buf());
+        if let Some(why) = &inner.kept_out_fails {
+            bail!("{why}");
+        }
+        // The entry naming the task itself, else the first tag it carries.
+        Ok(inner
+            .tasks
+            .iter()
+            .filter(|t| inner.kept_out.contains(&t.name))
+            .filter_map(|t| {
+                let entry = required.iter().find(|q| **q == t.name).or_else(|| {
+                    required
+                        .iter()
+                        .find(|q| q.strip_prefix('#').is_some_and(|tag| t.tags.contains(tag)))
+                })?;
+                Some(KeptOutTask {
+                    task: t.name.clone(),
+                    entry: entry.clone(),
+                })
+            })
+            .collect())
+    }
 }
 
 impl FakeCheckout {
     /// A place's removal, with everything started in it ended.
     fn drop_place(&self, name: &str, passed: bool) {
+        self.drop_place_as(name, passed, false);
+    }
+
+    /// A place's removal, released or, when `freed`, freed with nothing
+    /// run.
+    fn drop_place_as(&self, name: &str, passed: bool, freed: bool) {
         let mut inner = self.0 .0.borrow_mut();
         inner.adopted.retain(|a| a != name);
         inner.adopted_for.remove(name);
         inner.adopted_at.remove(name);
         inner.last_results.remove(name);
+        inner.session_release_failed.remove(name);
+        inner.deleted.remove(name);
         if inner.places.remove(name).is_some() {
-            inner.released.push(name.into());
+            if freed {
+                inner.freed.push(name.into());
+            } else {
+                inner.released.push(name.into());
+            }
             if passed {
                 inner.saved.push(name.into());
             }
@@ -1436,6 +1678,42 @@ impl FakeCheckout {
                 }
             }
         }
+    }
+
+    /// A release asked of the place `name`: counted, and refused with
+    /// what the world says its release fails with.
+    fn attempt(&self, name: &str) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.release_attempts.push(name.into());
+        match inner
+            .place_release_fails
+            .get(name)
+            .or(inner.release_fails.as_ref())
+        {
+            Some(m) => bail!("the release command of {name} ended exit status: 2: {m}"),
+            None => Ok(()),
+        }
+    }
+
+    /// When the world's clock says it is.
+    fn now(&self) -> String {
+        self.0 .0.borrow().now.to_rfc3339()
+    }
+}
+
+/// `failure` with one more try, failing now with `e`, held when `stop`.
+fn failed_again(
+    failure: Option<&ReleaseFailure>,
+    e: &anyhow::Error,
+    at: String,
+    stop: impl Fn(u32) -> bool,
+) -> ReleaseFailure {
+    let tries = failure.map_or(0, |f| f.tries) + 1;
+    ReleaseFailure {
+        failed: format!("{e:#}"),
+        tries,
+        at,
+        stopped: failure.is_some_and(|f| f.stopped) || stop(tries),
     }
 }
 
@@ -1532,6 +1810,14 @@ impl Checkout for FakeCheckout {
         if !self.0 .0.borrow().adopted.iter().any(|a| a == name) {
             return Ok(Released::Nothing);
         }
+        if let Err(e) = self.attempt(name) {
+            // 123: kept, held: no round releases a session's place.
+            let at = self.now();
+            let mut inner = self.0 .0.borrow_mut();
+            let failure = failed_again(inner.session_release_failed.get(name), &e, at, |_| true);
+            inner.session_release_failed.insert(name.into(), failure);
+            return Err(e);
+        }
         self.drop_place(name, false);
         let release = policy.and_then(|p| match p.tests.get("release") {
             Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
@@ -1564,6 +1850,7 @@ impl Checkout for FakeCheckout {
                     last_run: inner.adopted_at.get(name).cloned(),
                     gone: !inner.worktrees.contains_key(worktree),
                     last_result: inner.last_results.get(name).cloned(),
+                    release_failed: inner.session_release_failed.get(name).cloned(),
                 }
             })
             .collect())
@@ -1626,8 +1913,59 @@ impl Checkout for FakeCheckout {
             !self.0 .0.borrow().worktrees.contains_key(name) && !name.starts_with("session/"),
             "sluice released a session's place {name}"
         );
+        if self.0 .0.borrow().places.contains_key(name) {
+            self.attempt(name)?;
+        }
+        if std::mem::take(&mut self.0 .0.borrow_mut().fail_release) {
+            bail!("the release command of {name} failed");
+        }
         self.drop_place(name, passed);
         Ok(())
+    }
+
+    fn gone(&self, name: &str) -> Result<bool> {
+        let inner = self.0 .0.borrow();
+        if let Some(p) = inner.previews.get(name) {
+            return Ok(p.gone);
+        }
+        if let Some(worktree) = name.strip_prefix("session/") {
+            return Ok(
+                inner.adopted.iter().any(|a| a == name) && !inner.worktrees.contains_key(worktree)
+            );
+        }
+        Ok(inner.places.contains_key(name) && inner.deleted.contains(name))
+    }
+
+    fn free(&self, name: &str) -> Result<()> {
+        // Rule core.16: the worktree of a session's place is left as it is.
+        self.drop_place_as(name, false, true);
+        let mut inner = self.0 .0.borrow_mut();
+        inner.previews.remove(name);
+        inner.stored_none.remove(name);
+        Ok(())
+    }
+
+    fn release_gone(&self, name: &str) -> Result<GoneRelease> {
+        let mut gone = GoneRelease::default();
+        {
+            let mut inner = self.0 .0.borrow_mut();
+            let held = inner.places.contains_key(name)
+                || inner.adopted.iter().any(|a| a == name)
+                || inner.previews.contains_key(name);
+            if held && !inner.stored_none.contains(name) {
+                // 123: the release its runs stored, once, failing as the
+                // world says its release fails.
+                inner.gone_releases.push(name.into());
+                gone.ran = true;
+                gone.failed = inner
+                    .place_release_fails
+                    .get(name)
+                    .or(inner.release_fails.as_ref())
+                    .map(|m| format!("the release command of {name} ended exit status: 2: {m}"));
+            }
+        }
+        self.free(name)?;
+        Ok(gone)
     }
 
     fn preview(
@@ -1685,6 +2023,7 @@ impl Checkout for FakeCheckout {
             run: None,
             gone: false,
             failed: None,
+            release_failed: None,
         };
         inner.places.insert(name.into(), rev.clone());
         inner.made.push(name.into());
@@ -1706,10 +2045,18 @@ impl Checkout for FakeCheckout {
         Ok(self.0 .0.borrow().previews.values().cloned().collect())
     }
 
-    fn release_preview(&self, name: &str, failed: Option<&str>) -> Result<bool> {
+    fn release_preview(&self, name: &str, failed: Option<&str>, retries: u32) -> Result<bool> {
         let Some(p) = self.0 .0.borrow().previews.get(name).cloned() else {
             return Ok(false);
         };
+        if let Err(e) = self.attempt(name) {
+            // 123: kept with what failed, held once its tries are spent.
+            let failure = failed_again(p.release_failed.as_ref(), &e, self.now(), |t| t > retries);
+            if let Some(q) = self.0 .0.borrow_mut().previews.get_mut(name) {
+                q.release_failed = Some(failure);
+            }
+            return Err(e);
+        }
         self.drop_place(name, false);
         let mut inner = self.0 .0.borrow_mut();
         inner.preview_releases.push((name.into(), failed.is_some()));
@@ -1722,6 +2069,7 @@ impl Checkout for FakeCheckout {
                         run: None,
                         gone: false,
                         failed: Some(output.into()),
+                        release_failed: None,
                         ..p
                     },
                 );
@@ -1947,6 +2295,11 @@ impl State for FakeState {
             .collect())
     }
 
+    fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
+        self.0 .0.borrow_mut().published.push(head.clone());
+        Ok(())
+    }
+
     fn allocate_id(&self) -> Result<u64> {
         let mut inner = self.0 .0.borrow_mut();
         let id = inner.next_id;
@@ -2108,6 +2461,51 @@ mod tests {
         f.world.other_runs(0);
         f.tests.start(&second).unwrap();
         assert_eq!(f.tests.running().unwrap().queue, 2);
+    }
+
+    /// 124: a branch on a remote has a host copy, levelled only from the
+    /// value it holds, and failing as many times as it is told; any other
+    /// branch is its own copy and is never levelled.
+    #[test]
+    fn a_branch_on_a_remote_has_a_copy_levelled_from_its_value() {
+        let f = Fakes::new();
+        let base = f.world.init("main", &[("a", "1")]);
+        let bolt = f.world.init("bolt/x", &[("b", "1")]);
+        f.world.on_remote("bolt/x");
+        assert_eq!(f.branch.copy("main").unwrap(), HostCopy::Itself);
+        assert!(f.branch.level("main", Some(&base), &base).is_err());
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(bolt.clone()))
+        );
+        let landed = f.world.hand_commit("bolt/x", &[("b", Some("2"))]);
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&base), &landed).unwrap(),
+            Moved::Elsewhere(Some(bolt.clone()))
+        );
+        f.world
+            .fail_levels(2, "git holds the lock on refs/heads/bolt/x");
+        for _ in 0..2 {
+            let err = f.branch.level("bolt/x", Some(&bolt), &landed).unwrap_err();
+            assert_eq!(err.to_string(), "git holds the lock on refs/heads/bolt/x");
+        }
+        assert_eq!(f.world.copy_of("bolt/x"), Some(bolt.clone()));
+        assert_eq!(f.world.levels(), 0);
+        assert_eq!(
+            f.branch.level("bolt/x", Some(&bolt), &landed).unwrap(),
+            Moved::Moved
+        );
+        assert_eq!(
+            f.branch.copy("bolt/x").unwrap(),
+            HostCopy::At(Some(landed.clone()))
+        );
+        assert_eq!(f.world.levels(), 1);
+        f.world.set_copy("bolt/x", None);
+        assert_eq!(
+            f.branch.level("bolt/x", None, &landed).unwrap(),
+            Moved::Moved
+        );
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {
