@@ -449,6 +449,7 @@ fn telemetry_is_off_unless_asked() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

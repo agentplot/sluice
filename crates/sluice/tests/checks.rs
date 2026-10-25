@@ -30,6 +30,7 @@ fn checks(repo: &Repo) -> Checks {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(repo.dir().join(".git/host-running"))
@@ -295,6 +296,7 @@ fn a_second_repositorys_start_waits_for_the_hosts_bound() {
                 signing: None,
                 peers: Default::default(),
                 systems: None,
+                caches: Vec::new(),
             },
         )
         .with_running(host.path().to_path_buf())

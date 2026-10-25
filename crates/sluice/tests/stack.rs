@@ -337,6 +337,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(running.path().to_path_buf());

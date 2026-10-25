@@ -35,6 +35,15 @@
 //! [peers]
 //! lease = "5m"
 //! alive = "2m"
+//!
+//! [[caches]]                       # a compile server's cache
+//! dir = "~/.cache/sccache"
+//! socket = "~/.cache/sccache/server.sock"
+//! env = { RUSTC_WRAPPER = "sccache", SCCACHE_DIR = "/Users/me/.cache/sccache" }
+//!
+//! [[caches]]                       # the task runner's shared cache
+//! dir = "~/.moon/cache/shared"
+//! env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true" }
 //! ```
 //!
 //! `reserved` keeps that many runs of the bound for submissions, which
@@ -43,7 +52,17 @@
 //! policy names (85, 87); `[signing]` the signer it signs its runs as
 //! and its SSH key (78); `[peers]` the lease and the bound on a host's
 //! sign of life, the host's and never a branch's (74).
+//!
+//! `[[caches]]` are the host's shared caches, as its keeper declares them
+//! (35, 71; ADR 0049): each a directory outside every checkout, `dir`,
+//! with `~/` expanded; the socket of the cache's server where it has one,
+//! `socket`, written the same way; and the variables the cache's clients
+//! read, `env`, each taken exactly as written. Every run sluice starts on
+//! the host is given them, and a sandboxed run may write each `dir` and
+//! reach each `socket`. sluice names no cache's tool and runs no cache's
+//! server: the keeper does, as it runs the container engine.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -71,6 +90,18 @@ pub struct Instance {
     /// The systems this host runs, by the policy's names; `None` for the
     /// one system it is (87).
     pub systems: Option<Vec<String>>,
+    /// The host's shared caches, which every run is given (35, 71).
+    pub caches: Vec<HostCache>,
+}
+
+/// One of the host's `[[caches]]`: a directory outside every checkout,
+/// the socket of its server where it has one, and the variables its
+/// clients read (35).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostCache {
+    pub dir: PathBuf,
+    pub socket: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
 }
 
 /// The host's `[signing]` table: the policy's name for this host's key,
@@ -128,6 +159,19 @@ struct ConfigForm {
     signing: Option<SigningForm>,
     #[serde(default)]
     peers: PeersForm,
+    /// Each read on its own, so what is wrong with one is named by its
+    /// place among them.
+    #[serde(default)]
+    caches: Vec<toml::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CacheForm {
+    dir: String,
+    socket: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -263,6 +307,7 @@ impl Instance {
             }
             s => s,
         };
+        let caches = caches(form.caches, home().as_deref())?;
         Ok(Instance {
             bound,
             reserved,
@@ -271,6 +316,7 @@ impl Instance {
             signing,
             peers,
             systems,
+            caches,
         })
     }
 
@@ -279,6 +325,53 @@ impl Instance {
     /// more (71).
     pub fn jobs(&self) -> usize {
         (self.processors / self.bound).max(1)
+    }
+}
+
+/// The host's `[[caches]]`, `~` expanded in each `dir` and `socket` (35).
+fn caches(forms: Vec<toml::Value>, home: Option<&Path>) -> Result<Vec<HostCache>> {
+    let mut out = Vec::new();
+    for (i, form) in forms.into_iter().enumerate() {
+        let which = format!("the {} [[caches]]", ordinal(i + 1));
+        let form: CacheForm = form.try_into().with_context(|| which.clone())?;
+        let path = |key: &str, p: &str| -> Result<PathBuf> {
+            match (p.strip_prefix("~/"), home) {
+                (Some(rest), Some(home)) => Ok(home.join(rest)),
+                (Some(_), None) => bail!("{which} {key} {p}: no home directory to expand ~ in"),
+                (None, _) => Ok(PathBuf::from(p)),
+            }
+        };
+        out.push(HostCache {
+            dir: path("dir", &form.dir)?,
+            socket: form
+                .socket
+                .as_deref()
+                .map(|s| path("socket", s))
+                .transpose()?,
+            env: form.env,
+        });
+    }
+    Ok(out)
+}
+
+/// `1` → `first`: an entry named by its place among the others.
+fn ordinal(n: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+        "tenth",
+    ];
+    match WORDS.get(n.wrapping_sub(1)) {
+        Some(w) => w.to_string(),
+        None => {
+            let suffix = match (n % 10, n % 100) {
+                (_, 11..=13) => "th",
+                (1, _) => "st",
+                (2, _) => "nd",
+                (3, _) => "rd",
+                _ => "th",
+            };
+            format!("{n}{suffix}")
+        }
     }
 }
 
@@ -546,5 +639,54 @@ mod tests {
         assert!(["macos", "linux"].contains(&os), "{os}");
         assert!(["aarch64", "x86_64"].contains(&arch), "{arch}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 35, 71: the host's `[[caches]]`, `~` expanded in `dir` and `socket`
+    /// and each `env` value taken as written; none declared, none given.
+    #[test]
+    fn the_hosts_caches_are_read_from_its_config() {
+        let home = home().expect("a home directory");
+        let i = with(
+            r#"
+[runs]
+max = 2
+
+[[caches]]
+dir = "~/.cache/sccache"
+socket = "~/.cache/sccache/server.sock"
+env = { RUSTC_WRAPPER = "sccache", SCCACHE_DIR = "~/not expanded $HOME" }
+
+[[caches]]
+dir = "/caches/moon"
+"#,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            i.caches,
+            vec![
+                HostCache {
+                    dir: home.join(".cache/sccache"),
+                    socket: Some(home.join(".cache/sccache/server.sock")),
+                    env: BTreeMap::from([
+                        ("RUSTC_WRAPPER".to_string(), "sccache".to_string()),
+                        (
+                            "SCCACHE_DIR".to_string(),
+                            "~/not expanded $HOME".to_string()
+                        ),
+                    ]),
+                },
+                HostCache {
+                    dir: PathBuf::from("/caches/moon"),
+                    socket: None,
+                    env: BTreeMap::new(),
+                },
+            ]
+        );
+        assert_eq!(with("[runs]\nmax = 2\n", 4).unwrap().caches, Vec::new());
+        assert_eq!(Instance::from_file(None, 4).unwrap().caches, Vec::new());
+        assert_eq!(ordinal(2), "second");
+        assert_eq!(ordinal(12), "12th");
+        assert_eq!(ordinal(22), "22nd");
     }
 }
