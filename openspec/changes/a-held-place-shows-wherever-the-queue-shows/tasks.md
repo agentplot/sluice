@@ -70,7 +70,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   `OverviewBranch.held_checkouts?`, `OverviewSession.release_failed?`
   and a preview's `branch` and `release_failed?`; verify with
   `plugin-board:typecheck`
-- [ ] 3.2 In `plugins/sluice-board/hooks/board.ts`, add the held places
+- [x] 3.2 In `plugins/sluice-board/hooks/board.ts`, add the held places
   of a branch and their rows' words (design D2), count them in `shown`,
   `busy`, `branchLine` and `statusLine` (design D3, D5); verify with
   `tests/board.test.ts` cases for each `plugin-board` scenario of this
