@@ -535,6 +535,50 @@ fn environment(
     env
 }
 
+/// 35: a cache whose `dir` is the run's checkout, holds it or lies inside
+/// it would let one checkout write another's; the run is refused before
+/// anything of it runs (design D2).
+fn outside_checkout(checkout: &Path, caches: &[HostCache]) -> Result<()> {
+    let checkout = resolved(checkout);
+    for cache in caches {
+        let dir = resolved(&cache.dir);
+        let how = if dir == checkout {
+            "is"
+        } else if checkout.starts_with(&dir) {
+            "holds"
+        } else if dir.starts_with(&checkout) {
+            "lies inside"
+        } else {
+            continue;
+        };
+        bail!(
+            "the host's [[caches]] dir {} {how} this run's checkout {}: a shared cache lies \
+             outside every checkout",
+            cache.dir.display(),
+            checkout.display()
+        );
+    }
+    Ok(())
+}
+
+/// `path` with its longest part that exists resolved, the rest as given.
+fn resolved(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, c| p.join(c));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// The container engine's sockets a run with `docker = true` may reach:
 /// `DOCKER_HOST`'s, and the usual places engines on macOS put theirs, by
 /// the path given and the path it resolves to.
@@ -743,6 +787,7 @@ impl Tests for Checks {
         };
         // 84: refuse before anything runs.
         let kind = choose(&request.limits)?;
+        outside_checkout(&request.place.path, &self.instance.caches)?;
         let jobs = self.instance.jobs();
         let mut env = environment(request, jobs, &self.instance.caches);
         // ADR 0014: what the checks export is found beside the round.

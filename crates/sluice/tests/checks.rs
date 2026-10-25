@@ -228,6 +228,40 @@ fn every_run_gets_the_hosts_cache_environment() {
     assert!(!seen.contains("RUSTC_WRAPPER"), "{seen}");
 }
 
+/// 35: a declared cache that is the run's checkout, holds it or lies
+/// inside it refuses the run before anything of it runs, naming the cache.
+#[test]
+fn a_cache_holding_the_checkout_is_refused() {
+    let repo = Repo::new("checks-cache-checkout");
+    let parent = repo.dir().parent().unwrap().to_path_buf();
+    for (name, dir, how) in [
+        ("p1", parent, "holds"),
+        ("p2", repo.dir().to_path_buf(), "is"),
+        ("p3", repo.dir().join(".cache/sccache"), "lies inside"),
+    ] {
+        let c = caching(
+            &repo,
+            vec![HostCache {
+                dir: dir.clone(),
+                socket: None,
+                env: Default::default(),
+            }],
+        );
+        let err = format!(
+            "{:#}",
+            c.start(&request(&repo, name, command("touch ran")))
+                .unwrap_err()
+        );
+        assert!(
+            err.contains(&format!("dir {} {how} this run's checkout", dir.display())),
+            "{err}"
+        );
+        assert!(err.contains("outside every checkout"), "{err}");
+        assert!(!c.runs().dir(name).join("request.json").exists());
+    }
+    assert!(!repo.dir().join("ran").exists());
+}
+
 /// `[tests] toolchain` runs before the run and what it prints is sourced
 /// before the command; anything else the script prints never reaches the
 /// command's output.
