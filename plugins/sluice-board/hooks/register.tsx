@@ -39,6 +39,7 @@ import {
   limit,
   moving,
   namedFirst,
+  openedText,
   outcomes,
   plural,
   progress,
@@ -317,15 +318,23 @@ export const register: Register = (on, options) => {
   });
 
   // /sluice opens the pane, and closes it when it is open; Escape closes it too.
-  on("command.run", { command: "sluice" }, async ($) => {
+  // Above the prompt it asks for the keyboard, so Escape is the pane's; docked,
+  // the prompt keeps it.
+  on("command.run", { command: "sluice" }, async ($, e) => {
     if ((await $.ui.panes()).some((p) => p.id === PANE)) {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };
     }
-    const opened = await $.ui.open({ id: PANE, title: "sluice", closeOnEscape: true });
+    const inline = !e.presentation.isFullscreen;
+    const opened = await $.ui.open({
+      id: PANE,
+      title: "sluice",
+      closeOnEscape: true,
+      ...(inline ? { focus: true as const } : {}),
+    });
     return {
       text: opened.isPlaced
-        ? "sluice's queue is open in a pane."
+        ? openedText(e.presentation.isFullscreen)
         : "Widen the terminal to see the sluice pane.",
     };
   });
