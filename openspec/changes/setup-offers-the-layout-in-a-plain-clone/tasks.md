@@ -11,7 +11,7 @@
 ## 2. The worktrees skill runs the script
 
 - [x] 2.1 Rewrite `plugins/sluice/skills/worktrees/references/convert-from-plain-clone.md` around `${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh`: show `plan`, wait for the user's go, run `go` (with `--session ${CLAUDE_SESSION_ID}` when run from Claude Code), then `/cd` into `main/`; keep its Verify section; verify `moon run plugin-sluice:validate` passes
-- [ ] 2.2 In `plugins/sluice/skills/worktrees/SKILL.md`, say under "Rules that hold everywhere" that a conversion's history is carried by the script and the running session by `/cd`, and under "With sluice" replace "A repository without worktrees can still use sluice" with the setup's offer and its record of a kept plain clone; verify `moon run plugin-sluice:validate` passes
+- [x] 2.2 In `plugins/sluice/skills/worktrees/SKILL.md`, say under "Rules that hold everywhere" that a conversion's history is carried by the script and the running session by `/cd`, and under "With sluice" replace "A repository without worktrees can still use sluice" with the setup's offer and its record of a kept plain clone; verify `moon run plugin-sluice:validate` passes
 
 ## 3. The setup offers the layout first
 
