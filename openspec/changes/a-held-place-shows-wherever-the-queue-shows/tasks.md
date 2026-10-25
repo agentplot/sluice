@@ -76,7 +76,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   `tests/board.test.ts` cases for each `plugin-board` scenario of this
   change, the herdr popup's words matched line for line
   (`plugin-board:test`)
-- [ ] 3.3 In `plugins/sluice-board/hooks/register.tsx`, draw RELEASE
+- [x] 3.3 In `plugins/sluice-board/hooks/register.tsx`, draw RELEASE
   FAILED first under a branch's heading, each place in red with its
   command dimmed beneath, no row pressable; verify with a
   `tests/register.test.tsx` case over a fixture with a held checkout

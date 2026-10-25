@@ -8,6 +8,7 @@ import {
   overview,
   withChecks,
   withConflict,
+  withHeld,
   withLinks,
   withPreviews,
   withRelease,
@@ -689,6 +690,90 @@ test("the pane shows a named branch first even when idle", async ($, on) => {
   const heads = await pane.findAll({ type: "Text", text: /^\S+ at / });
   expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["bolt/a", "release", "main"]);
   expect(await pane.find({ type: "Text", text: /with nothing queued/ })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("RELEASE FAILED: each held place first under its branch, its command beneath, nothing to press", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  host(on, [withHeld()], seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(seen.status).toContain(
+    "sluice: 3 submissions · yours #13 testing · 2 held: release failed",
+  );
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: /#14 waiting · .* · 2 held: release failed$/ }),
+  ).toBeDefined();
+  await band.unmount();
+
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const heads = await pane.findAll({
+    type: "Text",
+    text: /^(RELEASE FAILED|TESTING|QUEUED|RECENT)$/,
+  });
+  expect(heads.map((h) => h.text)).toEqual(["RELEASE FAILED", "TESTING", "QUEUED", "RECENT"]);
+  // The herdr popup's words, line for line.
+  const rows = [
+    [
+      "✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up",
+      "sluice release sluice/try/main/48 · --accept-failure frees it without",
+    ],
+    [
+      "✗ worktree unit-a held · failed once · rm: cannot remove .stack",
+      "sluice release --worktree /work/sluice/unit-a · --accept-failure frees it without",
+    ],
+  ];
+  for (const [what, how] of rows) {
+    expect((await pane.find({ type: "Text", text: `  ${what}` }))?.props.color).toBe("red");
+    expect((await pane.find({ type: "Text", text: `    ${how}` }))?.props.dimColor).toBe(true);
+  }
+  // One still being tried is not shown.
+  expect(await pane.find({ type: "Text", text: /sluice\/try\/main\/51/ })).toBeUndefined();
+  // Rows that open are buttons; a held place's are not.
+  expect(await pane.find({ type: "Button", text: /blamed on 4f1c2aa/ })).toBeDefined();
+  expect(await pane.find({ type: "Button", text: /held|--accept-failure/ })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("an idle branch with a held place is shown, and one with no records after the rest", async ($, on) => {
+  const d = withHeld();
+  d.branches[0] = { ...d.branches[0]!, depth: 0, candidates: [], submissions: [], recent: [] };
+  d.sessions[0]!.branch = "release";
+  const pane = await paneOf($, on, d);
+  const heads = await pane.findAll({ type: "Text", text: /^\S+ (at|·) / });
+  expect(heads.map((h) => h.text)).toEqual([
+    expect.stringMatching(/^main at /),
+    "release · no records",
+  ]);
+  expect(await pane.find({ type: "Text", text: "No branch has a queue." })).toBeUndefined();
+  expect(await pane.findAll({ type: "Text", text: "RELEASE FAILED" })).toHaveLength(2);
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "  ✗ worktree unit-a held · failed once · rm: cannot remove .stack",
+    }),
+  ).toBeDefined();
+  await pane.unmount();
+});
+
+test("an overview from before held places draws no RELEASE FAILED", async ($, on) => {
+  const pane = await paneOf($, on, overview());
+  expect(await pane.find({ type: "Text", text: "RELEASE FAILED" })).toBeUndefined();
+  expect(await pane.find({ type: "Text", text: /held · failed/ })).toBeUndefined();
   await pane.unmount();
 });
 
