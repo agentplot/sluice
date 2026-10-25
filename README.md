@@ -12,6 +12,8 @@
 Agents submit. sluice tests each submission exactly as it would land,<br>
 names the one that broke the build, and moves the branch only to code that passed.
 
+**New to sluice?** [What it is, and what it leaves to other tools](https://agentplot.github.io/sluice/guides/new-to-sluice/).
+
 [![ci](https://github.com/agentplot/sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/agentplot/sluice/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/agentplot/sluice?sort=semver)](https://github.com/agentplot/sluice/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)

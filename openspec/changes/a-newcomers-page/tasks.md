@@ -8,4 +8,4 @@
 
 ## 2. The README
 
-- [ ] 2.1 Add to `README.md`, inside the centred block, after the "Agents submit…" paragraph and above the badges: `**New to sluice?** [What it is, and what it leaves to other tools](https://agentplot.github.io/sluice/guides/new-to-sluice/).` Verify by reading: the line is the README's first link after the heading and tagline, and its URL is the page's URL from 1.3's build (`dist/guides/new-to-sluice/index.html` exists). No gate reads the README (core.21), so this check is by hand.
+- [x] 2.1 Add to `README.md`, inside the centred block, after the "Agents submit…" paragraph and above the badges: `**New to sluice?** [What it is, and what it leaves to other tools](https://agentplot.github.io/sluice/guides/new-to-sluice/).` Verify by reading: the line is the README's first link after the heading and tagline, and its URL is the page's URL from 1.3's build (`dist/guides/new-to-sluice/index.html` exists). No gate reads the README (core.21), so this check is by hand.
