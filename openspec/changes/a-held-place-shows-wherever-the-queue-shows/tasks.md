@@ -46,7 +46,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   characters are stripped (design D4); verify with a `tests/run.sh` case
   feeding a document with a three-line `failed` and one with no
   `held_checkouts` (`plugin-herdr:test-sh`)
-- [ ] 2.2 In `plugins/herdr/lib/words.jq`, add the held places of a
+- [x] 2.2 In `plugins/herdr/lib/words.jq`, add the held places of a
   branch (design D2), the RELEASE FAILED rows first under the branch's
   heading in `rows`, a branch with held places counted as shown, and
   the `N held: release failed` clause on `branch_line` (with a line for
