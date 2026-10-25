@@ -123,6 +123,7 @@ function host(
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120 } as never;
 const PANE = { title: "sluice", isFocused: false, bodyColumns: 80, placement: "dock" } as never;
+const INLINE = { title: "sluice", isFocused: true, bodyColumns: 100, placement: "inline" } as never;
 
 test("the band and the pane show the queue on every surface", async ($, on) => {
   const clock = mock.clock(on);
@@ -528,6 +529,38 @@ test("/sluice above the prompt asks for the keyboard and says how to close the p
   expect(opens.map((o) => [o.focus, o.closeOnEscape])).toEqual([[true, true]]);
   expect((await $.command.run(slash(false))).text).toBe("sluice's pane is closed.");
   expect([...open]).toEqual([]);
+});
+
+test("a pane above the prompt has a close button, a docked one none of the board's", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [overview()], nothingSeen());
+  const { closes } = panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+
+  const inline = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: INLINE,
+    requestId: "sluice",
+  });
+  const button = await inline.find({ type: "Button", key: "close" });
+  expect(button?.props).toMatchObject({ role: "dismiss", hotkey: "x", label: "close" });
+  await inline.press({ key: "close" });
+  expect(closes).toEqual(["sluice"]);
+  await inline.unmount();
+
+  const docked = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(await docked.find({ key: "close" })).toBeUndefined();
+  await docked.unmount();
 });
 
 test("a failure opens in place, folds, and moves no one", async ($, on) => {

@@ -386,11 +386,30 @@ export const register: Register = (on, options) => {
 
   on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
     const { Box, Button, Link, Text } = $.ui.resolve(e);
+    // Above the prompt the board draws its own close; docked, the engine's
+    // close mark is there already.
+    const close =
+      e.props.placement === "inline" ? (
+        // biome-ignore lint/a11y/useValidAriaRole: the engine's Button role, a drawing hint, not ARIA's
+        <Button
+          key="close"
+          role="dismiss"
+          hotkey="x"
+          label="close"
+          onPress={() => $.ui.close({ id: PANE })}
+        />
+      ) : null;
     const d = await read($, doc);
     const m = await read($, mine);
     const base = await read($, repo);
     await read($, now);
-    if (!d) return <Text dimColor>No sluice records in this repository.</Text>;
+    if (!d)
+      return (
+        <Box gap={1}>
+          <Text dimColor>No sluice records in this repository.</Text>
+          {close}
+        </Box>
+      );
     const at = await $.clock.now();
     // The session's named branch first, shown when idle too.
     const first = await read($, named);
@@ -432,9 +451,12 @@ export const register: Register = (on, options) => {
     );
     return (
       <Box flexDirection="column">
-        <Text dimColor>
-          {d.repository} on {d.host}
-        </Text>
+        <Box gap={1}>
+          <Text dimColor>
+            {d.repository} on {d.host}
+          </Text>
+          {close}
+        </Box>
         {unknown && (
           <Box marginTop={1}>
             <Text bold>{first} · no records</Text>
