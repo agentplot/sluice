@@ -374,6 +374,10 @@ impl crate::exec::Host for Bound {
         Ok(self.branch.common_dir()?.to_string_lossy().into_owned())
     }
 
+    fn readers(&self) -> Result<PathBuf> {
+        Ok(crate::instance::state_dir()?.join("readers"))
+    }
+
     fn default_branch(&self) -> Result<Option<sluice_core::overview::OrderFrom>> {
         let common = self.branch.common_dir()?;
         let Some(branch) = default_branch(&common)? else {

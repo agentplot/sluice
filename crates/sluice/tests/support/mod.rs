@@ -5,6 +5,7 @@
 
 pub mod http;
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -197,8 +198,33 @@ impl Repo {
     }
 }
 
+thread_local! {
+    /// This thread's readers directory, made on first use, or the one
+    /// [`share_readers`] gave it.
+    static READERS: RefCell<Option<(PathBuf, Option<Scratch>)>> = const { RefCell::new(None) };
+}
+
+/// The fakes' host's readers directory (129), the test's own: each test
+/// runs on a thread of its own, and so finds no reader but its own.
+pub fn readers() -> PathBuf {
+    READERS.with(|r| {
+        let mut r = r.borrow_mut();
+        let (dir, _) = r.get_or_insert_with(|| {
+            let own = Scratch::new("readers");
+            (own.path().to_path_buf(), Some(own))
+        });
+        dir.clone()
+    })
+}
+
+/// Give this thread the readers directory `dir`: a thread of the test's
+/// that is another process on the same host.
+pub fn share_readers(dir: PathBuf) {
+    READERS.with(|r| *r.borrow_mut() = Some((dir, None)));
+}
+
 /// The host over the fakes: session runs counted by the fake check seam,
-/// a reserve, and no run directories.
+/// a reserve, no run directories, and the test's own [`readers`].
 pub struct FakeHost {
     pub world: sluice_fakes::World,
     pub reserved: usize,
@@ -265,6 +291,10 @@ impl sluice::exec::Host for FakeHost {
 
     fn repository(&self) -> anyhow::Result<String> {
         Ok("/fake/repo.git".into())
+    }
+
+    fn readers(&self) -> anyhow::Result<PathBuf> {
+        Ok(readers())
     }
 
     fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
