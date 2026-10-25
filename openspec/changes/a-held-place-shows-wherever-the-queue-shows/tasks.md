@@ -88,6 +88,6 @@ FailedRelease" crates/sluice-core/src/records.rs`.
 
 ## 4. The whole
 
-- [ ] 4.1 Run the gate's checks with `sluice exec main` once the work is
+- [x] 4.1 Run the gate's checks with `sluice exec main` once the work is
   committed, and confirm every task of `core`, `conformance`, `cli`,
   `plugin-herdr`, `plugin-board`, `site` and `root` passes
