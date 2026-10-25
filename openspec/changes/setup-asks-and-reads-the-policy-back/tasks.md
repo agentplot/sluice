@@ -15,4 +15,4 @@
 
 ## 3. The gate
 
-- [ ] 3.1 Commit, then run the gate's checks on the result; verify `sluice exec main` passes.
+- [x] 3.1 Commit, then run the gate's checks on the result; verify `sluice exec main` passes.
