@@ -69,9 +69,17 @@ pub fn cut_off(tasks: &[&str]) -> String {
     )
 }
 
-/// Time-limit-1 66: the way on after a run its time limit ended. Nothing
-/// was recorded for a test it cut off, so the same head is tested afresh.
-pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
+/// Who moves a submission on: the agent working in the worktree it came
+/// from, named by that worktree's branch, since the session that built
+/// the work submits it (statement preamble; section 2, actors).
+pub fn agent_in(branch: &str) -> String {
+    format!("the agent working in {branch}")
+}
+
+/// Time-limit-1 66: the way on after a run its time limit ended, for the
+/// agent working in `worktree`. Nothing was recorded for a test it cut
+/// off, so the same head is tested afresh.
+pub fn timed_out_way_on(worktree: &str, tasks: &[&str], same_commits: &str) -> String {
     let (recorded, which) = match tasks {
         [] => (String::new(), "a test".to_string()),
         [one] => (format!("nothing was recorded for {one}: "), one.to_string()),
@@ -81,8 +89,9 @@ pub fn timed_out_way_on(tasks: &[&str], same_commits: &str) -> String {
         ),
     };
     format!(
-        "{recorded}if the host was slow, submit the same head again{same_commits}; \
-         if {which} never ends, fix it in your worktree and submit again"
+        "{recorded}if the host was slow, {} submits the same head again{same_commits}; \
+         if {which} never ends, it fixes it there and submits again",
+        agent_in(worktree)
     )
 }
 
@@ -93,8 +102,9 @@ pub fn could_not_run(task: &str, why: &str) -> String {
 
 /// ADR 0050: a submission refused because `branch` requires checks the
 /// task runner in the submitting worktree keeps out of CI: each, through
-/// the tag that names it, with its line of the policy, and the way on.
-pub fn kept_out_refusal(branch: &str, kept: &[KeptOut]) -> String {
+/// the tag that names it, with its line of the policy, and the way on for
+/// the agent working in `worktree`.
+pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> String {
     let mut s = String::from("refused: ");
     for k in kept {
         let through = if k.entry == k.task {
@@ -111,8 +121,59 @@ pub fn kept_out_refusal(branch: &str, kept: &[KeptOut]) -> String {
     }
     let which = if kept.len() == 1 { "it" } else { "each" };
     s.push_str(&format!(
-        "let {which} run in CI in this worktree, or drop it from {branch}'s policy in the same \
-         submission that lets it run, and submit again"
+        "{} lets {which} run in CI there, or drops it from {branch}'s policy in the same \
+         submission that lets it run, and submits again",
+        agent_in(worktree)
     ));
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kept(task: &str, line: usize) -> KeptOut {
+        KeptOut {
+            task: task.into(),
+            entry: task.into(),
+            line,
+        }
+    }
+
+    #[test]
+    fn a_time_limit_names_the_agent_in_the_worktree() {
+        assert_eq!(
+            timed_out_way_on("unit/a", &["tests:t-cards"], ""),
+            "nothing was recorded for tests:t-cards: if the host was slow, the agent working \
+             in unit/a submits the same head again; if tests:t-cards never ends, it fixes it \
+             there and submits again"
+        );
+        assert_eq!(
+            timed_out_way_on("unit/a", &["tests:a", "tests:b"], ", or marks #4 a draft"),
+            "nothing was recorded for tests:a, tests:b: if the host was slow, the agent \
+             working in unit/a submits the same head again, or marks #4 a draft; if one never \
+             ends, it fixes it there and submits again"
+        );
+    }
+
+    #[test]
+    fn a_check_kept_out_of_ci_names_the_agent_in_the_worktree() {
+        let one = kept_out_refusal("main", "unit/a", &[kept("cli:e2e", 7)]);
+        assert!(
+            one.ends_with(
+                "\nthe agent working in unit/a lets it run in CI there, or drops it from \
+                 main's policy in the same submission that lets it run, and submits again"
+            ),
+            "{one}"
+        );
+        let two = kept_out_refusal("main", "unit/a", &[kept("cli:e2e", 7), kept("site:e2e", 8)]);
+        assert!(
+            two.ends_with(
+                "\nthe agent working in unit/a lets each run in CI there, or drops it from \
+                 main's policy in the same submission that lets it run, and submits again"
+            ),
+            "{two}"
+        );
+        assert!(!two.contains("your worktree"), "{two}");
+    }
 }
