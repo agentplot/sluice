@@ -54,10 +54,17 @@ sluice's queue inside a Claude Code session.
   forecasts for it.
 
 It reads everything from `sluice overview --json --watch` (sluice 0.12 or
-later), in a repository with sluice's records, and is silent elsewhere. A
-submission is this session's when its `from.path` is the session's worktree,
-or the session's own `sluice submit` / `wt submit` printed its number or its
-pull request.
+later). Where sluice has records of no branch, the pane says nothing has
+been submitted yet, and that a submission shows there from when an agent
+in a worktree runs `sluice submit <branch>` until it lands. Where sluice
+can't be read, because it isn't installed or `sluice overview` failed, the
+pane says why, in sluice's own words where it gave any, and to ask Claude
+to set sluice up in the repository. Each `/sluice` that opens the pane
+then reads sluice again, so a session that sets sluice up partway through
+shows the queue from then on. Where sluice can't be read, the band and
+the status line stay silent. A submission is this session's when its
+`from.path` is the session's worktree, or the session's own `sluice
+submit` / `wt submit` printed its number or its pull request.
 
 ## Naming a session's branch
 
