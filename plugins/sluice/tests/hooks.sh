@@ -131,8 +131,8 @@ allows "$plain" 'git merge topic'
 # The session note.
 out=$(jq -n --arg d "$wt" '{cwd: $d}' | "$note")
 # shellcheck disable=SC2016 # backticks are the text
-if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`bolt/\*`, `main` only move through it.*`sluice submit main`.*`sluice wait <id> --timeout 9m --json`.*An agent this session starts to work in a worktree submits its own work through sluice from there, told so in the prompt it is given; never ask the user to run `sluice submit`'; then
-  echo "ok    the session note names the protected branches, how to wait in steps, and who submits an agent's work"
+if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`bolt/\*`, `main` only move through it.*`sluice submit main --no-wait --json`.*start `sluice wait <id> --timeout 9m --json` as a background command.*again the same way for as long as it exits 5.*Wait in the foreground only where your harness runs nothing in the background.*An agent this session starts to work in a worktree submits its own work through sluice from there, told so in the prompt it is given; never ask the user to run `sluice submit`'; then
+  echo "ok    the session note names the protected branches, has a submission watched from the background, and says who submits an agent's work"
 else
   echo "FAIL  session note: ${out:-nothing}"
   failures=$((failures + 1))
