@@ -803,15 +803,19 @@ impl Tests for Checks {
         let kind = choose(&request.limits)?;
         outside_checkout(&request.place.path, &self.instance.caches)?;
         let jobs = self.instance.jobs();
-        let mut env = environment(request, jobs, &self.instance.caches);
-        // ADR 0014: what the checks export is found beside the round.
-        env.extend(crate::telemetry::run_env(&[
-            ("sluice.place", &request.place.name),
-            ("sluice.revision", request.revision.as_str()),
-        ]));
-        if kind == Kind::Sandbox {
-            env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
-        }
+        let run_env = |caches: &[HostCache]| {
+            let mut env = environment(request, jobs, caches);
+            // ADR 0014: what the checks export is found beside the round.
+            env.extend(crate::telemetry::run_env(&[
+                ("sluice.place", &request.place.name),
+                ("sluice.revision", request.revision.as_str()),
+            ]));
+            if kind == Kind::Sandbox {
+                env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
+            }
+            env
+        };
+        let env = run_env(&self.instance.caches);
         // A session's place takes a new run each time, and keeps the last
         // (session-runs-1 clause 94).
         let session = crate::runs::is_session(&request.place.name);
@@ -917,6 +921,16 @@ impl Tests for Checks {
             let r: Vec<&str> = r.iter().map(String::as_str).collect();
             cx.argv(&r)
         });
+        // 35: a run holding a cold test, and its release, are given none of
+        // the host's caches. What ran to set it up, the toolchain, `ready`
+        // and the runner's own queries, had them and ran no test (design
+        // D5).
+        let caches: &[HostCache] = if plan.cold {
+            &[]
+        } else {
+            &self.instance.caches
+        };
+        let env = if plan.cold { run_env(caches) } else { env };
         let docker = request.limits.docker;
         let executor = match kind {
             Kind::Open => Enforced {
@@ -932,12 +946,7 @@ impl Tests for Checks {
                 let profile = dir.join("sandbox.sb");
                 std::fs::write(
                     &profile,
-                    sandbox_profile(
-                        &request.place,
-                        &request.limits,
-                        &plan.stamps,
-                        &self.instance.caches,
-                    ),
+                    sandbox_profile(&request.place, &request.limits, &plan.stamps, caches),
                 )?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),

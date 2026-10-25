@@ -11,7 +11,7 @@ mod support;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sluice::instance::Instance;
+use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
     Limits, Network, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Setting,
@@ -66,6 +66,11 @@ fn change(repo: &Repo, changes: &[(&str, &str)]) -> String {
 }
 
 fn checks(repo: &Repo) -> Checks {
+    caching(repo, Vec::new())
+}
+
+/// The check profile of `repo` on a host that declares `caches`.
+fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
     Checks::new(
         &repo.dir().join(".git"),
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
@@ -77,7 +82,7 @@ fn checks(repo: &Repo) -> Checks {
             signing: None,
             peers: Default::default(),
             systems: None,
-            caches: Vec::new(),
+            caches,
         },
     )
     .with_running(repo.dir().join(".git/host-running"))
@@ -760,6 +765,122 @@ fn a_sandboxed_run_reads_as_an_open_one() {
     req.place.name = "p2".into();
     let second = finish(&c, &req);
     assert!(tasks(&second).iter().all(|t| t.2), "{:?}", tasks(&second));
+}
+
+/// A workspace whose `app:bench`, tagged `bench`, and `app:test`, tagged
+/// `check-fast`, each keep their environment in the run's scratch
+/// directory and try to write in `cache`; and a host that declares
+/// `cache` with one variable.
+fn cold_workspace(name: &str) -> (Repo, support::Scratch, Checks) {
+    let repo = Repo::new(name);
+    let host = support::Scratch::new(&format!("{name}-host"));
+    let cache = host.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    repo.write(
+        ".moon/workspace.yml",
+        "projects:\n  app: 'app'\nvcs:\n  client: 'git'\n  defaultBranch: 'main'\ntelemetry: false\n",
+    );
+    repo.write(
+        "app/moon.yml",
+        "tasks:\n  bench:\n    command: 'sh probe.sh bench'\n    tags: [bench]\n\
+         \x20 test:\n    command: 'sh probe.sh test'\n    tags: [check-fast]\n",
+    );
+    repo.write(
+        "app/probe.sh",
+        &format!(
+            "env > \"$SLUICE_TMP/$1.env\"\ntouch {}/$1 2>/dev/null\nexit 0\n",
+            cache.display()
+        ),
+    );
+    repo.write(".gitignore", ".moon/cache/\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "workspace"]);
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: cache,
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    (repo, host, c)
+}
+
+/// Whether each of `names`, tasks of run `req`, was given the host's
+/// variable, and whether it wrote in the host's cache.
+fn cold_probe(
+    c: &Checks,
+    req: &RunRequest,
+    host: &support::Scratch,
+    names: &[&str],
+) -> Vec<(bool, bool)> {
+    let r = finish(c, req);
+    assert!(
+        r.tasks.iter().all(|t| t.outcome == Outcome::Pass),
+        "{:?}",
+        tasks(&r)
+    );
+    names
+        .iter()
+        .map(|task| {
+            let env = std::fs::read_to_string(req.place.tmp.join(format!("{task}.env"))).unwrap();
+            let written = host.path().join("cache").join(task);
+            let wrote = written.exists();
+            let _ = std::fs::remove_file(&written);
+            (
+                env.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+                wrote,
+            )
+        })
+        .collect()
+}
+
+/// The moon runs of `cold_workspace` under `[tests] cold = ["#bench"]`.
+fn cold_request(repo: &Repo, name: &str, required: &[&str]) -> RunRequest {
+    let mut req = request(repo, name, required, None);
+    req.tests
+        .insert("cold".into(), Setting::List(vec!["#bench".into()]));
+    req.replay = false;
+    req
+}
+
+/// 35: a run holding a task `[tests] cold` names by its tag is given
+/// none of the host's declared variables; a run holding none of them is
+/// given every one.
+#[test]
+fn a_cold_test_gets_no_cache() {
+    let (repo, host, c) = cold_workspace("moon-cold");
+    let both = cold_request(&repo, "p1", &["#bench", "#check-fast"]);
+    let cold = cold_probe(&c, &both, &host, &["bench", "test"]);
+    assert!(
+        cold.iter().all(|(env, _)| !env),
+        "every test of a cold run is run cold: {cold:?}"
+    );
+    let fast = cold_request(&repo, "p2", &["#check-fast"]);
+    let warm = cold_probe(&c, &fast, &host, &["test"]);
+    assert!(warm[0].0, "a run with no cold test got no cache");
+}
+
+/// 35: under the sandbox, a run holding a cold task cannot write the
+/// host's declared cache directory; a run holding none of them can.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_cold_test_gets_no_cache_in_the_sandbox() {
+    let (repo, host, c) = cold_workspace("moon-cold-sandbox");
+    let sandboxed = |name: &str, required: &[&str]| {
+        let mut req = cold_request(&repo, name, required);
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network: Some(Network::Denied),
+            memory: None,
+            docker: false,
+        };
+        req
+    };
+    let cold = cold_probe(&c, &sandboxed("p1", &["#bench"]), &host, &["bench"]);
+    assert_eq!(cold, [(false, false)]);
+    let warm = cold_probe(&c, &sandboxed("p2", &["#check-fast"]), &host, &["test"]);
+    assert_eq!(warm, [(true, true)]);
 }
 
 /// Design D9 of the change `peers` (C.6): a task's key is the sha256 of

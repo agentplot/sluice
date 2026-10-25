@@ -228,6 +228,37 @@ fn every_run_gets_the_hosts_cache_environment() {
     assert!(!seen.contains("RUSTC_WRAPPER"), "{seen}");
 }
 
+/// 35: a command `[tests] cold` lists is given none of the host's
+/// declared variables; a command it does not list is given them.
+#[test]
+fn a_cold_command_gets_no_cache() {
+    let repo = Repo::new("checks-cold");
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: "/caches/sccache".into(),
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    let probe = "env > \"$SLUICE_TMP/env\"";
+    let seen = |name: &str, cold: &str| {
+        let tests = with(
+            command(probe),
+            "cold",
+            Setting::List(vec![cold.to_string()]),
+        );
+        let req = request(&repo, name, tests);
+        assert_eq!(finish(&c, &req).tasks[0].outcome, Outcome::Pass);
+        std::fs::read_to_string(req.place.tmp.join("env"))
+            .unwrap()
+            .lines()
+            .any(|l| l == "SCCACHE_DIR=/caches/sccache")
+    };
+    assert!(!seen("p1", probe), "a cold command got the cache");
+    assert!(seen("p2", "tests/bench"), "a warm command got no cache");
+}
+
 /// 35: a declared cache that is the run's checkout, holds it or lies
 /// inside it refuses the run before anything of it runs, naming the cache.
 #[test]
