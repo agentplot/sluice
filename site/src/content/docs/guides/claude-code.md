@@ -96,6 +96,9 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 /plugin install sluice-board@sluice
 ```
 
+It needs no herdr: it shows the queue in any Claude Code session, with
+full-screen mode on or off.
+
 <a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 <a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 
@@ -106,6 +109,20 @@ a pane with each branch's combinations under test, its queue with your
 submissions marked and each pull request linked to GitHub, and its recent landings, blames and conflicts, with the
 blamed tests' logs. A branch with nothing queued is left out once a
 quarter hour has passed since its last event.
+
+With full-screen mode on, the pane docks on the right of the transcript
+and the prompt keeps the keyboard; its close mark or `/sluice` again
+closes it. With it off, the pane opens above the prompt and takes the
+keyboard, and Esc, its `close` button (or `x`) or `/sluice` again closes
+it. The reply to `/sluice` says which.
+
+Where nothing has been submitted yet, the pane says so, and that a
+submission shows there from when an agent in a worktree runs `sluice
+submit <branch>` until it lands. Where sluice can't be read, because it
+isn't installed or `sluice overview` failed, the pane says why and to ask
+Claude to set sluice up in the repository. Each `/sluice` that opens the
+pane reads sluice again, so once Claude has set it up, the pane and the
+band show the queue without a new session.
 
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's
@@ -153,8 +170,8 @@ off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 
 It reads everything from `sluice overview --json --watch`, so it needs
-sluice 0.12 or later, and stays silent in a repository with no queue. It is a
-Claude Code mod, a newer and still-changing interface, which is why it is a
+sluice 0.12 or later. The band and the status line stay silent in a
+repository with no queue. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
 ### Naming a session's branch
