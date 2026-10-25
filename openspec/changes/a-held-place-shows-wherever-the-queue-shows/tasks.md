@@ -82,7 +82,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
   `tests/register.test.tsx` case over a fixture with a held checkout
   and a held worktree, and one over an older document
   (`plugin-board:test`)
-- [ ] 3.4 Document it in `plugins/sluice-board/README.md` and
+- [x] 3.4 Document it in `plugins/sluice-board/README.md` and
   `site/src/content/docs/guides/claude-code.md`; verify with
   `site:prose`
 
