@@ -138,7 +138,11 @@ fn write_home(
             f.agent,
             f.path.as_deref().unwrap_or("an unknown path")
         )?,
-        None => writeln!(out, "not in a worktree sluice can submit from")?,
+        None => writeln!(
+            out,
+            "not in a worktree sluice can submit from: the agent working in a worktree submits \
+             its work from there"
+        )?,
     }
     match sub {
         Some(s) => {

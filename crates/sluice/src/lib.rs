@@ -1326,9 +1326,20 @@ pub(crate) fn no_branch(branch: &str, pushers: &dyn Pushers) -> Result<String> {
     })
 }
 
+/// The branch the driver reads for `worktree`, by which a way on names
+/// the agent working there; the worktree as given when it reads none.
+fn worktree_name(s: &Sluice<'_>, worktree: &str) -> String {
+    match s.seams().driver.session(worktree) {
+        Ok(x) if !x.from.worktree.is_empty() => x.from.worktree,
+        _ => worktree.to_string(),
+    }
+}
+
+/// `named` is `worktree` as [`worktree_name`] names it.
 fn refusal(
     r: &SubmitRefusal,
     worktree: &str,
+    named: &str,
     branch: &str,
     pushers: &dyn Pushers,
 ) -> Result<String> {
@@ -1338,11 +1349,16 @@ fn refusal(
             for p in paths {
                 s.push_str(&format!("\n  {p}"));
             }
-            s.push_str("\ncommit or remove them and submit again");
+            s.push_str(&format!(
+                "\n{} commits or removes them and submits again",
+                words::agent_in(named)
+            ));
             s
         }
         SubmitRefusal::Detached => {
-            format!("refused: submit from a branch: {worktree} is detached")
+            format!(
+                "refused: {worktree} is detached: the agent working in it submits from a branch"
+            )
         }
         SubmitRefusal::NoBranch => return no_branch(branch, pushers),
         SubmitRefusal::NotManaged => {
@@ -1361,7 +1377,7 @@ fn refusal(
         SubmitRefusal::NamedTwice(earlier) => {
             format!("refused: {worktree} is {earlier}'s worktree, named twice")
         }
-        SubmitRefusal::KeptOut(kept) => words::kept_out_refusal(branch, kept),
+        SubmitRefusal::KeptOut(kept) => words::kept_out_refusal(branch, named, kept),
     })
 }
 
@@ -1400,7 +1416,7 @@ fn forecast(
     let f = match got {
         Ok(f) => f,
         Err(r) => {
-            let text = refusal(&r, worktree, branch, pushers)?;
+            let text = refusal(&r, worktree, &worktree_name(s, worktree), branch, pushers)?;
             told::tell(out, json, Kind::Refused, &text, &refusal_next(&r, branch))?;
             return Ok(CONFLICT);
         }
@@ -1463,7 +1479,8 @@ fn submit(
     let accepted = match s.submit(&req)? {
         Ok(a) => a,
         Err(r) => {
-            let text = refusal(&r, &req.worktree, &req.branch, pushers)?;
+            let named = worktree_name(s, &req.worktree);
+            let text = refusal(&r, &req.worktree, &named, &req.branch, pushers)?;
             let next = refusal_next(&r, &req.branch);
             told::tell(out, json, Kind::Refused, &text, &next)?;
             return Ok(CONFLICT);
@@ -1530,7 +1547,7 @@ fn submit_group(
     let branch = &req.branch;
     let accepted = match s.submit_group(&req)? {
         Ok(a) => a,
-        Err(refused) => return refused_group(&req, &refused, pushers, json, out),
+        Err(refused) => return refused_group(s, &req, &refused, pushers, json, out),
     };
     let items: Vec<(&String, Accepted)> = req.worktrees.iter().zip(accepted).collect();
     if json && no_wait {
@@ -1620,6 +1637,7 @@ fn submit_group(
 /// A refused act: each refused worktree with why, said once each, and
 /// nothing submitted.
 fn refused_group(
+    s: &Sluice<'_>,
     req: &GroupRequest,
     refused: &[(String, SubmitRefusal)],
     pushers: &dyn Pushers,
@@ -1637,7 +1655,7 @@ fn refused_group(
     );
     let (mut texts, mut next, mut worktrees) = (Vec::new(), Vec::new(), Vec::new());
     for (w, r) in refused {
-        let text = refusal(r, w, branch, pushers)?;
+        let text = refusal(r, w, &worktree_name(s, w), branch, pushers)?;
         if !texts.contains(&text) {
             texts.push(text);
         }
@@ -1885,9 +1903,13 @@ fn report(
     let same_commits = match reached {
         Reached::Now => String::new(),
         Reached::Before(n) => format!(
-            ", or mark #{n} a draft and then ready for review to test the same commits again"
+            ", or marks #{n} a draft and then ready for review to test the same commits again"
         ),
     };
+    // Who moves it on: the agent working in the worktree it came from, by
+    // that worktree's branch, a pull request's the one it was opened from.
+    let from = sub.from.head.as_deref().unwrap_or(&sub.from.worktree);
+    let agent = words::agent_in(from);
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
@@ -2011,7 +2033,7 @@ fn report(
             if !could_not.is_empty() {
                 writeln!(
                     out,
-                    "the host could not run {}: once it can, submit again{same_commits}",
+                    "the host could not run {}: once it can, {agent} submits again{same_commits}",
                     could_not
                         .iter()
                         .map(|f| f.task.as_str())
@@ -2020,12 +2042,16 @@ fn report(
                 )?;
             }
             if timed_out {
-                writeln!(out, "{}", words::timed_out_way_on(&cut, &same_commits))?;
+                writeln!(
+                    out,
+                    "{}",
+                    words::timed_out_way_on(from, &cut, &same_commits)
+                )?;
             }
             if not_run.len() > could_not.len() || ran.len() > flaky.len() {
                 writeln!(
                     out,
-                    "fix it in your worktree and submit again{same_commits}"
+                    "{agent} fixes it there and submits again{same_commits}"
                 )?;
             }
             if !flaky.is_empty() {
@@ -2050,8 +2076,7 @@ fn report(
             }
             writeln!(
                 out,
-                "merge or rebase onto {} in your worktree and submit again{same_commits}",
-                branch
+                "{agent} merges or rebases onto {branch} there and submits again{same_commits}"
             )?;
         }
         _ => writeln!(out, "{}", sub.state.word())?,
@@ -2201,7 +2226,8 @@ fn submit_pull(
                 o.number
             }
             Err(r) => {
-                writeln!(out, "{}", refusal(&r, worktree, branch, &())?)?;
+                let named = worktree_name(s, worktree);
+                writeln!(out, "{}", refusal(&r, worktree, &named, branch, &())?)?;
                 return Ok(CONFLICT);
             }
         }
@@ -2347,7 +2373,7 @@ fn submit_pull_group(
     let branch = &req.branch;
     let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
         Ok(o) => o,
-        Err(refused) => return refused_group(&req, &refused, &(), json, out),
+        Err(refused) => return refused_group(s, &req, &refused, &(), json, out),
     };
     if !json {
         for o in &opened {

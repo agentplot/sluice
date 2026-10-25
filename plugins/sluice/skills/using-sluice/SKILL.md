@@ -117,6 +117,26 @@ branch and opens or updates its pull request instead; the pull request joins
 the queue once its reviews and checks hold. See
 [references/submit.md](references/submit.md).
 
+## Agents you start in worktrees
+
+A background agent you start to work in a worktree, with the Agent tool's
+`isolation: "worktree"` or in one you made, knows only the prompt you give
+it. Tell it there to commit its work when it is done and submit it through
+sluice from that worktree, with `sluice submit <branch>` naming the branch
+it lands on, waiting as above (`--no-wait --json`, then `sluice wait <id>
+--timeout 9m --json`, when its tool calls can't outlast the verdict), and
+to report the outcome to you. The rest of the prompt is yours, written for
+the work.
+
+Work left committed in a worktree whose agent has ended is submitted by an
+agent you start in that worktree, told the same. It is the one that can
+fix a failure or a conflict there. Never ask the user to run `sluice
+submit`, in that worktree or any other.
+
+A way on that sluice prints, such as `the agent working in unit/a fixes it
+there and submits again`, is for the agent it names: tell that agent, or
+start one in that worktree, and never hand it to the user.
+
 ## When it fails
 
 Read what sluice printed, then the log it names. `failed: <task>` means
