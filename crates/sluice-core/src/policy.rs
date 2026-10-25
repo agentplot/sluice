@@ -1020,7 +1020,7 @@ hold = "5m"
         let p = Policy::parse(include_str!("../../../.config/sluice.toml")).unwrap();
         assert_eq!(p.limits.executor.as_deref(), Some("sandbox"));
         assert_eq!(p.limits.network, Some(Network::Localhost));
-        assert!(matches!(&p.checkout["cache"], Setting::Tables(t) if t.len() == 1));
+        assert!(p.checkout.is_empty(), "{:?}", p.checkout);
         let bolt = p.rules_for("bolt/x").unwrap().unwrap();
         assert_eq!(bolt.required, ["#check-fast"]);
         assert!(bolt.satisfiable_by("sandbox") && !bolt.trusts("cache"));
