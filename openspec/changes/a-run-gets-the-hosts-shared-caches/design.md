@@ -213,8 +213,9 @@ and needs the `casOutputsCache` experiment
 checkout's `.moon/cache`, or `~/.moon/cache/shared` for a bare
 repository (moonrepo.dev/docs/config/workspace). The repository pins
 moon 2.6.1. This is the runner's cache shared by every checkout on a
-host, which record 0049 calls the task cache. Run reports and task
-states stay in each checkout, where the moon profile reads them.
+host, which record 0049 calls the task cache. The moon profile reads
+run reports and task states from each checkout, where moon keeps them,
+and the manifests of keys where moon keeps those (D8).
 
 The real rig's `Instance` declares one host cache: `dir` is the rig
 repository's `.moon/cache`, and `env` sets both variables. `cached()`
@@ -223,9 +224,73 @@ policy with that host cache. The fakes' S26 is unchanged: the fakes'
 runner cache already plays this part.
 
 *Alternative:* `MOON_CACHE_DIR` aimed at a shared directory. Not
-taken. moon writes `runReport.json` and the task states under its
-cache directory, which the moon profile reads from the checkout, and
-two runs at once would overwrite each other's report.
+possible. moon 2.6.1 reads no such variable: its cache is always the
+workspace's `.moon/cache` (`crates/app/src/session.rs`,
+`config_dir.join("cache")`), and `MOON_CACHE_DIR` is a variable moon
+sets for the tasks it runs, naming that directory
+(`crates/task-runner/src/command_builder.rs`). A keeper who declares it
+moves nothing of moon's.
+
+### D8. The moon profile reads a key's manifest where moon keeps it
+
+The signer proves a key by the manifest moon stored under it (peers
+design D9, `check_key`). `blob_in` reads it from the checkout's
+`.moon/cache/blobs/<2>/<62>`. With moon's shared worktree cache on,
+moon stores manifests and blobs in the shared store, so the checkout
+holds none and every key is refused. Clause C.2's moon row, as the
+design agent ruled on this unit (blueprints 047689e), says the profile
+reads the manifest where moon keeps it, resolved as moon resolves it
+from the run's environment, and never from where the host's
+`[[caches]]` says.
+
+moon 2.6.1 resolves it as follows (tag `v2.6.1`, read for this design):
+
+1. The setting is `cache.unstable_sharedWorktreeCache` in the
+   workspace's `.moon/workspace.yml`, or `MOON_CACHE_SHARED_WORKTREE_CACHE`
+   in the environment, parsed as a boolean
+   (`crates/config/src/workspace/cache_config.rs`).
+2. With the setting off, the store is the checkout's `.moon/cache`.
+3. With it on, and only when the checkout is a linked git worktree
+   (`vcs.is_worktree()`), moon takes the repository's root from git's
+   common directory: that directory itself, or its parent when its last
+   component is `.git` (`get_repository_root` in
+   `crates/vcs/src/git/git_client.rs`). When `<root>/.moon` exists and
+   the root is not the checkout, the store is `<root>/.moon/cache`.
+   Otherwise it is `<moon home>/cache/shared` (`crates/app/src/session.rs`).
+4. moon's home is `MOON_HOME`, else `$XDG_DATA_HOME/moon`, else
+   `~/.moon` (`crates/env/src/lib.rs`). A run is given `MOON_HOME` and
+   `HOME` from sluice's own environment and no `XDG_DATA_HOME`.
+5. Manifests are blobs of the local store: `<store>/blobs/<2>/<62>`
+   (`crates/cache-local/src/local_storage.rs`, `crates/cas/src/cas.rs`;
+   `store_hash_manifest_with_hasher` writes to the local backends).
+
+On the fleet's layout, a bare `<repo>.git` with worktrees beside it,
+the common directory's last component is `<repo>.git`, not `.git`, so
+the root has no `.moon` and the store is `~/.moon/cache/shared`. A
+repository with an ordinary base checkout shares `<base>/.moon/cache`,
+which is what the real rig uses.
+
+The profile follows those steps in one function of `moon.rs`, given the
+checkout and the run's command environment, which already says
+whether the run is cold. The coder confirms, against the tag's source,
+which of the variable and the workspace file wins when both are set,
+and how `MOON_HOME` is read. `Checks::start` resolves the store when it
+builds a moon run, and records it on the run's request. `proven` reads
+the manifests there. A run recorded before this has no store recorded
+and reads the checkout's `.moon/cache`, as before. The store is
+resolved at the run's start, when moon resolves it, so a keeper who
+changes the host's config while a run goes does not move where its
+manifests are read.
+
+Naming moon's variable inside the moon profile is what a profile is
+for (core.1). Clause 35's "sluice names no cache's tool" binds the core
+and the host's table, not a runner's profile.
+
+*Alternatives:* reading the store from the host's `[[caches]]` entry
+that looks like moon's. Not taken: it guesses which declared cache is
+moon's, and breaks the moment the table and moon disagree. Signing
+nothing when the cache is shared was also considered. Not taken: every
+host with signers would lose its shared cache.
 
 ## Risks / Trade-offs
 
@@ -234,15 +299,12 @@ two runs at once would overwrite each other's report.
   for every combination. → Mitigation: the keeper's unit in swancloud
   declares sccache on deneb and the Mac. Until then, sluice's gate is
   slower and no less right.
-- **moon's shared worktree cache is `unstable_`.** Its name or its
-  variable may change in a moon release. → The rig names it only in a
-  test's host config. sluice's code names it nowhere (core.1), and the
-  pin keeps every host on one moon (core.24).
-- **A keeper who declares `MOON_CACHE_DIR`** would move the run report
-  away from where the moon profile reads it. → The site's
-  configuration page says to share moon's cache through its shared
-  worktree cache, and why. Whether the moon profile should also refuse
-  such a run is the open question below.
+- **moon's shared worktree cache is `unstable_`.** Its name, its
+  variable or where it keeps its store may change in a moon release.
+  → Only the moon profile names it (core.1), following moon 2.6.1 (D8).
+  The pin keeps every host on one moon (core.24), and the
+  bare-repository test runs real moon, so an upgrade that moves the
+  store fails that test before the gate trusts the new moon.
 - **The open executor confines nothing.** A cold run under it gets no
   declared variable, but a tool may still find a cache by its own
   default path. → That is what open means (C.2 open row: "never
@@ -267,8 +329,4 @@ starts cold once, then saves caches again.
 
 ## Open Questions
 
-- Should the moon profile refuse a run whose declared environment sets
-  `MOON_CACHE_DIR`? It names moon, which a profile may (core.1). It
-  needs a reading of what `MOON_CACHE_DIR` relocates in moon 2.6.1,
-  which moon's docs do not describe. Without it, the site's warning
-  stands. Answering either way changes no spec here.
+None.

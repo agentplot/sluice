@@ -192,3 +192,49 @@ for its key.
   and lands without running them again
   (`s26_a_clean_session_run_is_replayed_by_its_submission` in
   `crates/sluice/tests/profiles/conformance.rs`)
+
+### Requirement: The moon profile proves a key by moon's manifest where moon keeps it
+
+When it proves a key a moon run reported, the moon profile SHALL read
+moon's manifest of that key where moon keeps it: in the checkout's
+`.moon/cache`, or, when moon's shared worktree setting is on for the
+run, in the store moon shares among the repository's worktrees, found
+from the checkout and the run's environment as moon 2.6.1 finds it. It
+SHALL NOT read it from where the host's `[[caches]]` says (C.2 moon
+row, 35).
+
+#### Scenario: A repository with a base checkout
+
+- **WHEN** the host declares moon's shared worktree cache, and a
+  combination's run in a worktree of a repository whose base checkout
+  holds `.moon` reports a key
+- **THEN** the profile reads the key's manifest from the base
+  checkout's `.moon/cache`, and the key is signed when the tree bears
+  it out (`a_key_is_read_where_moon_keeps_it` in
+  `crates/sluice/src/profiles/moon.rs`; the real rig's signed
+  scenarios in `crates/sluice/tests/profiles/conformance.rs`)
+
+#### Scenario: A bare repository with worktrees beside it
+
+- **WHEN** the repository is a bare `<repo>.git` with its worktrees
+  beside it, and a run with moon's shared worktree setting on reports a
+  key
+- **THEN** the profile reads the key's manifest from `cache/shared`
+  under moon's home, which is where moon wrote it, and not from the
+  worktree's `.moon/cache`
+  (`a_key_run_in_a_bare_repositorys_worktree_is_proven` in
+  `crates/sluice/tests/profiles/moon.rs`)
+
+#### Scenario: A run with the setting off
+
+- **WHEN** a run is cold, or the host declares no moon cache, so moon's
+  shared worktree setting is off for it
+- **THEN** the profile reads the key's manifest from the checkout's own
+  `.moon/cache` (`a_key_is_read_where_moon_keeps_it`)
+
+#### Scenario: The host's table names another directory
+
+- **WHEN** the host's `[[caches]]` declares a `dir` that is not where
+  moon keeps its store
+- **THEN** the profile still reads the manifest where moon keeps it
+  (`a_key_is_read_where_moon_keeps_it`)

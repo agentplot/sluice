@@ -39,6 +39,13 @@ checkout cache goes.
 - **sluice names no cache's tool, and starts, ends and locks no cache
   server.** The keeper runs a cache's server, as it runs the container
   engine (35).
+- **The moon profile proves a key ran by moon's own manifest, read
+  where moon keeps it.** That is the checkout's `.moon/cache`, or the
+  store moon shares among a repository's worktrees when moon's shared
+  worktree setting is on for the run, found the way moon 2.6.1 finds
+  it. It is never read from where the host's `[[caches]]` says (C.2
+  moon row). Without this, a run that shares moon's cache leaves its
+  manifests outside the checkout, and the signer refuses every key.
 - **BREAKING: sluice's checkout cache is gone.** `[[checkout.cache]]`
   is no longer read. A policy that still declares it gets a checkout
   with nothing restored, and no error, since a branch's policy comes
@@ -69,7 +76,8 @@ Out of scope:
 - `host-caches`: the host's shared caches as the keeper declares them
   in the host's config, and how each run is given them: the sandbox
   opens the directories and sockets, every run gets the environment, a
-  cold test gets nothing, and sluice runs no server.
+  cold test gets nothing, sluice runs no server, and the moon profile
+  reads a key's manifest where moon keeps it.
 
 ### Modified Capabilities
 
@@ -89,7 +97,9 @@ Out of scope:
   Seatbelt profile with the declared directories and sockets, and the
   run's environment with the declared variables. It also reads
   `[tests] cold`. `crates/sluice/src/profiles/moon.rs` says whether a
-  moon run holds a cold test.
+  moon run holds a cold test, and finds where moon keeps a run's
+  manifests; `checks.rs` records that with the run and reads a key's
+  manifest there.
 - Place seam: `crates/sluice/src/profiles/places.rs` loses the checkout
   cache. `crates/sluice-seams` loses `Checkout::save_caches` and the
   `passed` argument of `Checkout::release`. The core
@@ -99,8 +109,9 @@ Out of scope:
 - The real-profile run of S26 rests on moon's shared worktree cache,
   declared as a host cache in the rig's host config, in place of
   `[[checkout.cache]]`.
-- Docs: the site's configuration, state, commands and walkthrough
-  pages, `docs/telemetry.md`, `docs/examples/README.md`, the
+- Docs: the site's configuration, state, commands, telemetry,
+  roadmap and walkthrough pages and its home page,
+  `docs/telemetry.md`, `docs/examples/README.md`, the
   setting-up-sluice skill's checkout, moon, sandbox and worktrunk
   references and its example policies, and `.worktreeinclude`'s
   comment.
@@ -125,6 +136,9 @@ docs/examples/README.md
 site/src/content/docs/reference/configuration.md
 site/src/content/docs/reference/state.md
 site/src/content/docs/reference/commands.md
+site/src/content/docs/reference/telemetry.md
+site/src/content/docs/roadmap.md
+site/src/content/docs/index.mdx
 site/src/content/docs/guides/walkthrough.md
 site/src/content/docs/guides/claude-code.md
 plugins/sluice/skills/setting-up-sluice/**
