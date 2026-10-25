@@ -1,7 +1,6 @@
 //! What a round reports while telemetry is on (ADRs 0014, 0022): its
-//! spans, its metric events and a failure's output, over the fakes; a
-//! place's restored cache; and nothing at all unless telemetry is asked
-//! for. What it decides is the same with telemetry on or off, which the
+//! spans, its metric events and a failure's output, over the fakes; and
+//! nothing at all unless telemetry is asked for. What it decides is the same with telemetry on or off, which the
 //! CLI's tests show with it off.
 
 mod support;
@@ -14,15 +13,11 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use sluice::instance::Instance;
 use sluice::profiles::checks::Checks;
-use sluice::profiles::places::Places;
-use sluice::runs::Runs;
 use sluice::telemetry::Logs;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_core::OUTPUT;
 use sluice_fakes::{Crash, Fakes};
-use sluice_seams::{
-    Checkout, Limits, Outcome, Place, Progress, Rev, RunRequest, Setting, Settings, Tests,
-};
+use sluice_seams::{Limits, Outcome, Place, Progress, Rev, RunRequest, Setting, Settings, Tests};
 use tracing::field::{Field, Visit};
 use tracing::span::Attributes;
 use tracing::{Event, Id, Subscriber};
@@ -320,51 +315,6 @@ fn a_refused_landing_is_counted() {
     assert!(!has(&seen, "monotonic_counter.sluice.landed"), "{seen:?}");
 }
 
-/// A place's cache is counted as it is restored, by what it was found
-/// by: none for a cold place, its key once one of that key was saved.
-#[test]
-fn a_restored_cache_is_counted_by_its_hit() {
-    const NAME: &str = "sluice/try/bolt/x/1";
-    let repo = support::Repo::new("telemetry-cache");
-    let rev = Rev::new(repo.branch(
-        "cand",
-        "main",
-        &[
-            ("Cargo.lock", Some("one\n")),
-            (".gitignore", Some("target\n")),
-        ],
-    ));
-    repo.git(&["branch", "-D", "cand"]);
-    let common = repo.dir().join(".git");
-    let places = Places::new(
-        &common,
-        Runs::new(&common, PathBuf::from(env!("CARGO_BIN_EXE_sluice"))),
-    );
-    let cached = Settings::from([(
-        "cache".into(),
-        Setting::Tables(vec![Settings::from([
-            ("key".into(), Setting::List(vec!["Cargo.lock".into()])),
-            ("paths".into(), Setting::List(vec!["target".into()])),
-        ])]),
-    )]);
-    let seen = Seen::default();
-    let subscriber = tracing_subscriber::registry().with(seen.clone());
-    tracing::subscriber::with_default(subscriber, || {
-        let place = places.materialize(NAME, &rev, &cached).unwrap();
-        std::fs::create_dir_all(place.path.join("target")).unwrap();
-        std::fs::write(place.path.join("target/a"), "built\n").unwrap();
-        places.release(NAME, true).unwrap();
-        places.materialize(NAME, &rev, &cached).unwrap();
-        places.release(NAME, false).unwrap();
-    });
-    let seen = seen.lines();
-    let hits: Vec<&str> = metric(&seen, "monotonic_counter.sluice.cache.restored")
-        .into_iter()
-        .map(|m| m.rsplit(' ').next().unwrap())
-        .collect();
-    assert_eq!(hits, ["sluice.hit=none", "sluice.hit=key"], "{seen:?}");
-}
-
 /// Telemetry is on only when `--otel` or `SLUICE_OTEL` asks; it is
 /// reported as `sluice` unless named, sends a summary of a failure unless
 /// asked for more or none, and while it is off a run's checks get none of
@@ -449,6 +399,7 @@ fn telemetry_is_off_unless_asked() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

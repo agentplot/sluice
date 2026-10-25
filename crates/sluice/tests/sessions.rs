@@ -256,6 +256,7 @@ fn the_check_seam_counts_the_hosts_running_checks() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_sessions(dir.path().join("sessions"))

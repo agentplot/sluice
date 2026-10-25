@@ -42,7 +42,7 @@ Then Claude reads what the repository already uses and proposes a
 
 - moon, or one test command;
 - a sandbox for the tests, on macOS;
-- ports and build caches for the checkouts;
+- ports for the checkouts, and the host's shared caches in its own config;
 - worktrunk's `wt submit` in place of `wt merge`;
 - a branch on GitHub, sluice's own GitHub App, and pull requests.
 

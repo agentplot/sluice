@@ -1356,7 +1356,7 @@ mod tests {
             unreachable!("a submit makes no place")
         }
 
-        fn release(&self, _: &str, _: bool) -> Result<()> {
+        fn release(&self, _: &str) -> Result<()> {
             unreachable!("a submit releases no place")
         }
 
@@ -1378,10 +1378,6 @@ mod tests {
 
         fn adopt(&self, _: &str, _: &str, _: &Settings, _: &str) -> Result<Place> {
             unreachable!("a submit adopts no place")
-        }
-
-        fn save_caches(&self, _: &str, _: &Rev, _: &Settings) -> Result<()> {
-            unreachable!("a submit saves no cache")
         }
 
         fn adopted(&self, _: &str) -> Result<Option<Adopted>> {

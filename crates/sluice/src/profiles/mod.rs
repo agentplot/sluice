@@ -100,6 +100,7 @@ impl Bound {
             instance.signing.clone(),
         );
         let jobs = instance.jobs();
+        let caches = instance.caches.clone();
         Ok(Bound {
             // A session's place's release command is the check seam's to
             // build; the binding hands the builder over (rule core.2).
@@ -108,7 +109,7 @@ impl Bound {
                 crate::runs::Runs::new(&common, program.clone()),
             )
             .with_release(Box::new(move |place, tests, limits, dir| {
-                checks::release_request(place, tests, limits, jobs, dir)
+                checks::release_request(place, tests, limits, jobs, &caches, dir)
             })),
             tests: {
                 let checks = checks::Checks::new(&common, program, instance);

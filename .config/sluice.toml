@@ -10,12 +10,6 @@ toolchain = ["devenv", "print-dev-env"]
 # its fails unjudged rather than recorded (could-not-run-1 114; ADR 0031).
 ready = ["docker", "info"]
 
-# A place starts from the build of the last candidate that passed with the
-# same lock file and compiler (35; section 5, Caches).
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 # The integration tests listen on localhost; nothing reaches further.

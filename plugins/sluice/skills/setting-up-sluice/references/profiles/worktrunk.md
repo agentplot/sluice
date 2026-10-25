@@ -27,8 +27,9 @@ wt submit bolt/x                          # after
   that lands.
 - Keep `pre-start` and `post-start`: they still set up agents' worktrees.
   sluice's own checkouts run no worktrunk hook, so `wt step copy-ignored`
-  and `.worktreeinclude` stay for the worktrees people make; use
-  `[[checkout.cache]]` to warm sluice's checkouts.
+  and `.worktreeinclude` stay for the worktrees people make. sluice's
+  checkouts share only the host's `[[caches]]`, which the host's config
+  declares.
 - Keep in `post-remove` only what is not a run's: `sluice release` has
   already ended the agent's runs and freed its ports.
 

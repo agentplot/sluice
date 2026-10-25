@@ -8,7 +8,7 @@ mod support;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sluice::instance::Instance;
+use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
     AtBound, Limits, Network, Outcome, Place, Progress, RunReport, RunRequest, Setting, Settings,
@@ -19,6 +19,11 @@ use support::{Repo, Scratch};
 /// The check profile of `repo`, counting its runs in a registry of the
 /// repository's own, never the host's.
 fn checks(repo: &Repo) -> Checks {
+    caching(repo, Vec::new())
+}
+
+/// The check profile of `repo` on a host that declares `caches`.
+fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
     Checks::new(
         &repo.dir().join(".git"),
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
@@ -30,6 +35,7 @@ fn checks(repo: &Repo) -> Checks {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches,
         },
     )
     .with_running(repo.dir().join(".git/host-running"))
@@ -177,6 +183,116 @@ fn a_command_sees_its_place_and_nothing_of_sluices() {
     }
 }
 
+/// Run in a child of this test binary, on a host that declares a cache's
+/// variables, with sluice's own environment holding one it does not.
+#[test]
+fn hosts_cache_env_probe() {
+    let Ok(out) = std::env::var("SLUICE_TEST_CACHE_ENV_OUT") else {
+        return;
+    };
+    let repo = Repo::new("checks-cache-env");
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: "/caches/sccache".into(),
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    let req = request(&repo, "p1", command("env > \"$SLUICE_TMP/env\""));
+    assert!(finish(&c, &req).tasks[0].outcome == Outcome::Pass);
+    std::fs::copy(req.place.tmp.join("env"), &out).unwrap();
+}
+
+/// 35: every run is given the variables the host's config declares for
+/// its caches, under the open executor too, and nothing of sluice's own
+/// environment that the config does not declare.
+#[test]
+fn every_run_gets_the_hosts_cache_environment() {
+    let out = support::Scratch::new("checks-cache-env-out");
+    let file = out.path().join("seen");
+    let status = support::isolated(&mut std::process::Command::new(
+        std::env::current_exe().unwrap(),
+    ))
+    .args(["--exact", "hosts_cache_env_probe", "--nocapture"])
+    .env("SLUICE_TEST_CACHE_ENV_OUT", &file)
+    .env("RUSTC_WRAPPER", "sccache")
+    .status()
+    .unwrap();
+    assert!(status.success());
+    let seen = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        seen.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+        "{seen}"
+    );
+    assert!(!seen.contains("RUSTC_WRAPPER"), "{seen}");
+}
+
+/// 35: a command `[tests] cold` lists is given none of the host's
+/// declared variables; a command it does not list is given them.
+#[test]
+fn a_cold_command_gets_no_cache() {
+    let repo = Repo::new("checks-cold");
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: "/caches/sccache".into(),
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    let probe = "env > \"$SLUICE_TMP/env\"";
+    let seen = |name: &str, cold: &str| {
+        let tests = with(
+            command(probe),
+            "cold",
+            Setting::List(vec![cold.to_string()]),
+        );
+        let req = request(&repo, name, tests);
+        assert_eq!(finish(&c, &req).tasks[0].outcome, Outcome::Pass);
+        std::fs::read_to_string(req.place.tmp.join("env"))
+            .unwrap()
+            .lines()
+            .any(|l| l == "SCCACHE_DIR=/caches/sccache")
+    };
+    assert!(!seen("p1", probe), "a cold command got the cache");
+    assert!(seen("p2", "tests/bench"), "a warm command got no cache");
+}
+
+/// 35: a declared cache that is the run's checkout, holds it or lies
+/// inside it refuses the run before anything of it runs, naming the cache.
+#[test]
+fn a_cache_holding_the_checkout_is_refused() {
+    let repo = Repo::new("checks-cache-checkout");
+    let parent = repo.dir().parent().unwrap().to_path_buf();
+    for (name, dir, how) in [
+        ("p1", parent, "holds"),
+        ("p2", repo.dir().to_path_buf(), "is"),
+        ("p3", repo.dir().join(".cache/sccache"), "lies inside"),
+    ] {
+        let c = caching(
+            &repo,
+            vec![HostCache {
+                dir: dir.clone(),
+                socket: None,
+                env: Default::default(),
+            }],
+        );
+        let err = format!(
+            "{:#}",
+            c.start(&request(&repo, name, command("touch ran")))
+                .unwrap_err()
+        );
+        assert!(
+            err.contains(&format!("dir {} {how} this run's checkout", dir.display())),
+            "{err}"
+        );
+        assert!(err.contains("outside every checkout"), "{err}");
+        assert!(!c.runs().dir(name).join("request.json").exists());
+    }
+    assert!(!repo.dir().join("ran").exists());
+}
+
 /// `[tests] toolchain` runs before the run and what it prints is sourced
 /// before the command; anything else the script prints never reaches the
 /// command's output.
@@ -295,6 +411,7 @@ fn a_second_repositorys_start_waits_for_the_hosts_bound() {
                 signing: None,
                 peers: Default::default(),
                 systems: None,
+                caches: Vec::new(),
             },
         )
         .with_running(host.path().to_path_buf())
@@ -414,6 +531,71 @@ fn the_sandbox_holds_writes_and_the_network() {
         Outcome::Pass
     );
     drop(listener);
+}
+
+/// 35, C.2: a sandboxed run may write the host's declared cache directory
+/// and reach its declared socket with no network, and write nothing
+/// beside them; a declared socket nobody listens on changes nothing, and
+/// sluice makes nothing of a cache.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_opens_the_hosts_caches() {
+    let repo = Repo::new("checks-sandbox-caches");
+    // A short name, so the socket's path fits a Unix socket's address.
+    let host = Scratch::new("sk");
+    let (dir, beside) = (host.path().join("c"), host.path().join("b"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&beside).unwrap();
+    let socket = host.path().join("s");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let cache = |dir: &std::path::Path, socket: &std::path::Path| HostCache {
+        dir: dir.to_path_buf(),
+        socket: Some(socket.to_path_buf()),
+        env: Default::default(),
+    };
+    let sandboxed = |c: &Checks, name: &str, cmd: &str, network: Option<Network>| {
+        let mut req = request(&repo, name, command(cmd));
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network,
+            memory: None,
+            docker: false,
+        };
+        finish(c, &req).tasks[0].outcome
+    };
+    let c = caching(&repo, vec![cache(&dir, &socket)]);
+
+    let write = |d: &std::path::Path| format!("touch {}/built", d.display());
+    assert_eq!(
+        sandboxed(&c, "p1", &write(&dir), Some(Network::Denied)),
+        Outcome::Pass
+    );
+    assert!(dir.join("built").exists());
+    assert_eq!(sandboxed(&c, "p2", &write(&beside), None), Outcome::Fail);
+    assert!(!beside.join("built").exists());
+
+    let connect = format!(
+        "/usr/bin/perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Peer => \"{}\") or exit 1'",
+        socket.display()
+    );
+    assert_eq!(
+        sandboxed(&c, "p3", &connect, Some(Network::Denied)),
+        Outcome::Pass
+    );
+    // The declaration opens it: with no cache, no network reaches nothing.
+    assert_eq!(
+        sandboxed(&checks(&repo), "p4", &connect, Some(Network::Denied)),
+        Outcome::Fail
+    );
+    drop(listener);
+
+    // A server that is down: the run is as one with no cache, and nothing
+    // of the cache is made or left.
+    let (gone, quiet) = (host.path().join("none"), host.path().join("q"));
+    let down = caching(&repo, vec![cache(&gone, &quiet)]);
+    assert_eq!(sandboxed(&down, "p5", "true", None), Outcome::Pass);
+    assert_eq!(sandboxed(&checks(&repo), "p6", "true", None), Outcome::Pass);
+    assert!(!gone.exists() && !quiet.exists());
 }
 
 /// `tests` with `key` set to `value`.

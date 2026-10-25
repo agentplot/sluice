@@ -186,9 +186,8 @@ impl Sluice<'_> {
     /// hit its time limit, or of a worktree holding more or moved while it
     /// ran. The result names the head the run started on.
     ///
-    /// A recorded run that passed saves the caches the policy declares from
-    /// the place, as a passed candidate's place does (35), so a later
-    /// candidate's place restores them and its runner replays (93).
+    /// The run saves nothing of its place: what its tools built is shared
+    /// through the host's caches, which its runs are given (35).
     ///
     /// Every finished run, recorded or not, then leaves how it ended on its
     /// place (97), after its results, so a reader that finds it recorded
@@ -314,13 +313,6 @@ impl Sluice<'_> {
             }
         }
         let n = self.record_session(plan, &session.head, &worktree, report)?;
-        if passed(report) {
-            self.seams.checkout.save_caches(
-                &started.place.name,
-                &session.head,
-                &plan.policy.checkout,
-            )?;
-        }
         Ok(Recorded::Written(n))
     }
 

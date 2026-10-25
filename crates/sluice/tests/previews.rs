@@ -54,6 +54,69 @@ fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
     sluice_with(f, 0, &Then(Cell::new(0), |_| true), args)
 }
 
+/// 35, 98: a preview's command is given the host's caches as any run is:
+/// the binary on a scratch repository, its host's config declaring one
+/// cache's variable.
+#[test]
+fn a_preview_gets_the_hosts_cache_environment() {
+    let repo = support::Repo::new("preview-cache-env");
+    let seen = repo.dir().with_extension("seen");
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+             [branches.\"bolt/*\"]\ntimeout = \"1m\"\n\n\
+             [preview]\ncommand = \"env > {}\"\n",
+            seen.display()
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "a preview"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let config = support::Scratch::new("preview-cache-env-config");
+    let state = support::Scratch::new("preview-cache-env-state");
+    std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+    std::fs::write(
+        config.path().join("sluice/config.toml"),
+        format!(
+            "[[caches]]\ndir = {:?}\nenv = {{ SCCACHE_DIR = \"/caches/sccache\" }}\n",
+            config.path().join("cache").display().to_string()
+        ),
+    )
+    .unwrap();
+    let sluice = |args: &[&str]| {
+        support::isolated(&mut std::process::Command::new(env!(
+            "CARGO_BIN_EXE_sluice"
+        )))
+        .args(args)
+        .current_dir(repo.dir())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env_remove("SLUICE_AGENT")
+        .env_remove("SLUICE_OTEL")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+    };
+    let out = sluice(&["preview", "bolt/x", &repo.rev("bolt/x"), "--wait", "--json"]);
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    assert_eq!(doc["state"], "up", "{doc}");
+    let env = std::fs::read_to_string(&seen).unwrap();
+    assert!(
+        env.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+        "{env}"
+    );
+    let out = sluice(&["release", doc["name"].as_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// The arguments: a branch and a revision; `previews`; `release` with a
 /// preview or none.
 #[test]

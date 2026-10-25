@@ -1,5 +1,6 @@
 # What a new worktree people make takes from the main one at post-start, via
-# `wt step copy-ignored`: the build cache, and nothing else. sluice's places
-# never read this file: they take [[checkout.cache]] (.config/sluice.toml). .devenv/ holds
-# absolute paths into the worktree that built it; .moon/cache likewise.
+# `wt step copy-ignored`: the build cache, and nothing else. sluice's
+# checkouts never read this file: they share only the host's [[caches]]
+# (~/.config/sluice/config.toml). .devenv/ holds absolute paths into the
+# worktree that built it; .moon/cache likewise.
 target

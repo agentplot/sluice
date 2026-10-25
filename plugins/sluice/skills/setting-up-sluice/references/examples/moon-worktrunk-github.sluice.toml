@@ -12,10 +12,6 @@ release = "docker compose -p \"$SLUICE_PLACE\" down -v" # what the tests hand of
 [checkout]
 ports = ["db"] # SLUICE_PORT_DB, held per checkout
 
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"      # writes only the checkout and SLUICE_TMP (macOS)
 network = "localhost"

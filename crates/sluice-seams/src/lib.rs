@@ -273,9 +273,7 @@ pub trait Checkout {
     /// its checks handed to another process included (ADR 0016). The
     /// core calls this only with names it chose (rule core.16); releasing
     /// a name that was chosen but never materialized does nothing.
-    /// `passed` says the place's candidate passed, by the verdict the core
-    /// read: only such a place's declared caches are saved (35).
-    fn release(&self, name: &str, passed: bool) -> Result<()>;
+    fn release(&self, name: &str) -> Result<()>;
 
     /// 123: whether the working copy of the place `name` is gone: its
     /// record names one, and that path is no directory. A place with no
@@ -287,8 +285,8 @@ pub trait Checkout {
     /// nothing in its name: its runs' groups ended and their directories
     /// removed, the checkout sluice made removed, its scratch directory,
     /// its ports and its record let go, and a preview's names. No release
-    /// command runs and no cache is saved; a session's worktree is left as
-    /// it is (25, rule core.16). Nothing when there is no such place.
+    /// command runs; a session's worktree is left as it is (25, rule
+    /// core.16). Nothing when there is no such place.
     fn free(&self, name: &str) -> Result<()>;
 
     /// 123: release the place `name`, whose working copy is gone, from
@@ -314,13 +312,6 @@ pub trait Checkout {
     /// starts, kept as the place's last run (97); the result of the run
     /// before is dropped, so a run that never ends shows none.
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place>;
-
-    /// 35, session-runs-1 clause 93: after a session's recorded run that
-    /// passed, the caches `checkout` declares, keyed by their files at
-    /// `rev`, saved from the session's place `name` as a passed
-    /// candidate's are, and copied, never moved, so the session keeps
-    /// what it built.
-    fn save_caches(&self, name: &str, rev: &Rev, checkout: &Settings) -> Result<()>;
 
     /// The session's place sluice equips for `worktree`, if any.
     fn adopted(&self, worktree: &str) -> Result<Option<Adopted>>;
@@ -391,7 +382,8 @@ pub trait Checkout {
 pub enum Setting {
     Text(String),
     List(Vec<String>),
-    /// An array of tables, such as `[[checkout.cache]]`.
+    /// An array of tables in a profile's table, such as `[[tests.service]]`,
+    /// or one table, such as a pool's `github = { workflow = "…" }`.
     Tables(Vec<Settings>),
 }
 

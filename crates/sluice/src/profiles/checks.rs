@@ -7,10 +7,11 @@
 //! - `"open"`: the process group alone; holds nothing else, confines
 //!   nothing;
 //! - `"sandbox"`: on macOS, Seatbelt (`sandbox-exec`) with writes allowed
-//!   only to the place, its scratch directory and what the runner names,
-//!   and the network only as the policy says; with `[executor] docker =
-//!   true`, the container engine's socket too. Not confined: a session on
-//!   the host can still write the place.
+//!   only to the place, its scratch directory, the host's cache
+//!   directories and what the runner names, and the network only as the
+//!   policy says, the host's cache sockets whatever it says; with
+//!   `[executor] docker = true`, the container engine's socket too. Not
+//!   confined: a session on the host can still write the place.
 //!
 //! `[tests] release`, when set, is the release command (ADR 0016): a list,
 //! the command first, or a string run by `sh -c`. It runs when the place
@@ -55,7 +56,7 @@ use sluice_seams::{
 
 use super::moon::Moon;
 use crate::host_count::{self, HostCount};
-use crate::instance::Instance;
+use crate::instance::{HostCache, Instance};
 use crate::runs::{run_to_end, Ended, Request, RunState, Runs};
 
 /// How long `[tests] ready` may take.
@@ -94,6 +95,41 @@ impl Context<'_> {
             .collect(),
         }
     }
+
+    /// The environment a command run by [`Context::argv`] starts in: `env`
+    /// as the toolchain's script leaves it once sourced, which may set
+    /// variables of the runner's own (devenv's `MOON_HOME`).
+    pub fn command_env(&self) -> Result<BTreeMap<String, String>> {
+        if self.toolchain.is_none() {
+            return Ok(self.env.clone());
+        }
+        let argv = self.argv(&["env", "-0"]);
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(&self.request.place.path)
+            .env_clear()
+            .envs(self.env)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("running {}", argv.join(" ")))?;
+        if !out.status.success() {
+            bail!(
+                "{} exited {}: {}",
+                argv.join(" "),
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(out
+            .stdout
+            .split(|b| *b == 0)
+            .filter_map(|entry| {
+                let entry = String::from_utf8_lossy(entry);
+                let (k, v) = entry.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect())
+    }
 }
 
 /// What a runner decided to run.
@@ -111,6 +147,9 @@ pub struct Plan {
     /// Targets the runner keeps out of its CI mode, so never runs (moon's
     /// `runInCI: false`); each reads missing.
     pub kept_out: Vec<String>,
+    /// Whether the run holds a test `[tests] cold` names, so is given none
+    /// of the host's caches (35).
+    pub cold: bool,
 }
 
 /// What a run's request carries for reading its result.
@@ -136,6 +175,11 @@ struct Meta {
     /// `Plan::kept_out`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kept_out: Vec<String>,
+    /// Where moon keeps the run's manifests, found as the run started
+    /// (design D8); a run recorded without it keeps them in its place's
+    /// `.moon/cache`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    store: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -433,6 +477,16 @@ fn regex_escape(s: &str) -> String {
         .collect()
 }
 
+/// `[tests] cold`: the tests a run holding any of is given no cache, named
+/// as the gate's `required` names them, a target or a `#tag` (35).
+pub fn cold_tests(tests: &Settings) -> Result<Vec<String>> {
+    match tests.get("cold") {
+        None => Ok(Vec::new()),
+        Some(Setting::List(xs)) => Ok(xs.clone()),
+        Some(_) => bail!("[tests] cold must be a list of tests, named as required names them"),
+    }
+}
+
 fn text<'a>(settings: &'a Settings, key: &str) -> Result<Option<&'a str>> {
     match settings.get(key) {
         None => Ok(None),
@@ -472,24 +526,38 @@ fn toolchain(
     Ok(())
 }
 
+/// What a check may need of sluice's own environment: paths, the user,
+/// the locale, the terminal, and the tool homes `PATH` points into.
+const KEEP: [&str; 10] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "TERM",
+    // A proto shim on PATH resolves its tool under its home.
+    "PROTO_HOME",
+    "MOON_HOME",
+];
+
+/// Whether sluice sets `name` for every run itself: what it keeps of its
+/// own environment, the locale's `LC_*` and its own `SLUICE_*`. A host's
+/// cache declares none of them, so none is silently replaced (35).
+pub fn sets_itself(name: &str) -> bool {
+    KEEP.contains(&name) || name.starts_with("LC_") || name.starts_with("SLUICE_")
+}
+
 /// The command's environment: what a check may need of sluice's own
-/// (paths, the user, the locale, the terminal, and the tool homes `PATH`
-/// points into), the place's paths, and nothing that names another place
-/// or tool (35): no `GIT_*`, other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
-fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
-    const KEEP: [&str; 10] = [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "TMPDIR",
-        "LANG",
-        "TERM",
-        // A proto shim on PATH resolves its tool under its home.
-        "PROTO_HOME",
-        "MOON_HOME",
-    ];
+/// (`KEEP`), the place's paths, the variables the host's `caches` declare,
+/// and nothing else that names another place or tool (35): no `GIT_*`,
+/// other `MOON_*`, `DEVENV_*` or `DIRENV_*`.
+fn environment(
+    request: &RunRequest,
+    jobs: usize,
+    caches: &[HostCache],
+) -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = std::env::vars()
         .filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_"))
         .collect();
@@ -504,6 +572,11 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
     env.insert("SLUICE_JOBS".into(), jobs.to_string());
     // 31: the place's short name and its ports.
     env.extend(request.place.env.clone());
+    // 35: the host's caches, as its config declares them; none of them is
+    // a variable sluice sets itself (`sets_itself`).
+    for cache in caches {
+        env.extend(cache.env.clone());
+    }
     // The container engine's client finds the engine as the user's does.
     if request.limits.docker {
         for k in ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"] {
@@ -513,6 +586,50 @@ fn environment(request: &RunRequest, jobs: usize) -> BTreeMap<String, String> {
         }
     }
     env
+}
+
+/// 35: a cache whose `dir` is the run's checkout, holds it or lies inside
+/// it would let one checkout write another's; the run is refused before
+/// anything of it runs (design D2).
+fn outside_checkout(checkout: &Path, caches: &[HostCache]) -> Result<()> {
+    let checkout = resolved(checkout);
+    for cache in caches {
+        let dir = resolved(&cache.dir);
+        let how = if dir == checkout {
+            "is"
+        } else if checkout.starts_with(&dir) {
+            "holds"
+        } else if dir.starts_with(&checkout) {
+            "lies inside"
+        } else {
+            continue;
+        };
+        bail!(
+            "the host's [[caches]] dir {} {how} this run's checkout {}: a shared cache lies \
+             outside every checkout",
+            cache.dir.display(),
+            checkout.display()
+        );
+    }
+    Ok(())
+}
+
+/// `path` with its longest part that exists resolved, the rest as given.
+fn resolved(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, c| p.join(c));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// The container engine's sockets a run with `docker = true` may reach:
@@ -548,6 +665,52 @@ fn docker_sockets() -> Vec<PathBuf> {
     all
 }
 
+/// A path by the path given and, where it resolves, the path it resolves
+/// to: Seatbelt matches resolved paths, and `/var` is `/private/var`.
+fn given_and_resolved(path: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![path.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(path) {
+        if real != path {
+            paths.push(real);
+        }
+    }
+    paths
+}
+
+/// The Seatbelt profile of a run in `place`: its checkout and scratch
+/// directory writable, and each `dir` of the host's `caches`; the
+/// container engine's sockets reachable when `limits` allow it (ADR 0016),
+/// and each `socket` of the caches, whatever the network (35; design D4).
+fn sandbox_profile(
+    place: &Place,
+    limits: &Limits,
+    stamps: &[&str],
+    caches: &[HostCache],
+) -> String {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut writable = vec![canon(&place.path), canon(&place.tmp)];
+    let mut sockets = if limits.docker {
+        docker_sockets()
+    } else {
+        Vec::new()
+    };
+    for cache in caches {
+        writable.extend(given_and_resolved(&cache.dir));
+        if let Some(s) = &cache.socket {
+            sockets.extend(given_and_resolved(s));
+        }
+    }
+    sockets.sort();
+    sockets.dedup();
+    seatbelt(
+        &writable,
+        stamps,
+        limits.network,
+        &sockets,
+        user_tmp().as_deref(),
+    )
+}
+
 /// `[tests] release`: the command, or `None`.
 fn release_argv(tests: &Settings) -> Result<Option<Vec<String>>> {
     command_setting(tests, "release")
@@ -580,14 +743,15 @@ fn not_run_exits(tests: &Settings) -> Result<Vec<i32>> {
 
 /// Session-runs-1 clause 95: the release command of `place` as the
 /// policy's `[tests]` and limits state it now, under the same executor,
-/// toolchain and environment its runs had, ports included; `None` when
-/// the policy names no release command. What the toolchain and the
-/// executor write goes in `dir`.
+/// toolchain and environment its runs had, ports and the host's `caches`
+/// included; `None` when the policy names no release command. What the
+/// toolchain and the executor write goes in `dir`.
 pub fn release_request(
     place: &Place,
     tests: &Settings,
     limits: &Limits,
     jobs: usize,
+    caches: &[HostCache],
     dir: &Path,
 ) -> Result<Option<Request>> {
     let Some(release) = release_argv(tests)? else {
@@ -610,7 +774,7 @@ pub fn release_request(
         replay: false,
         system: None,
     };
-    let mut env = environment(&request, jobs);
+    let mut env = environment(&request, jobs, caches);
     if kind == Kind::Sandbox {
         env.insert("TMPDIR".into(), place.tmp.to_string_lossy().into());
     }
@@ -628,22 +792,8 @@ pub fn release_request(
     let r: Vec<&str> = release.iter().map(String::as_str).collect();
     let mut argv = cx.argv(&r);
     if kind == Kind::Sandbox {
-        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let profile = dir.join("sandbox.sb");
-        std::fs::write(
-            &profile,
-            seatbelt(
-                &[canon(&place.path), canon(&place.tmp)],
-                &[],
-                limits.network,
-                &if limits.docker {
-                    docker_sockets()
-                } else {
-                    Vec::new()
-                },
-                user_tmp().as_deref(),
-            ),
-        )?;
+        std::fs::write(&profile, sandbox_profile(place, limits, &[], caches))?;
         argv.splice(
             0..0,
             [
@@ -691,16 +841,21 @@ impl Tests for Checks {
         };
         // 84: refuse before anything runs.
         let kind = choose(&request.limits)?;
+        outside_checkout(&request.place.path, &self.instance.caches)?;
         let jobs = self.instance.jobs();
-        let mut env = environment(request, jobs);
-        // ADR 0014: what the checks export is found beside the round.
-        env.extend(crate::telemetry::run_env(&[
-            ("sluice.place", &request.place.name),
-            ("sluice.revision", request.revision.as_str()),
-        ]));
-        if kind == Kind::Sandbox {
-            env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
-        }
+        let run_env = |caches: &[HostCache]| {
+            let mut env = environment(request, jobs, caches);
+            // ADR 0014: what the checks export is found beside the round.
+            env.extend(crate::telemetry::run_env(&[
+                ("sluice.place", &request.place.name),
+                ("sluice.revision", request.revision.as_str()),
+            ]));
+            if kind == Kind::Sandbox {
+                env.insert("TMPDIR".into(), request.place.tmp.to_string_lossy().into());
+            }
+            env
+        };
+        let env = run_env(&self.instance.caches);
         // A session's place takes a new run each time, and keeps the last
         // (session-runs-1 clause 94).
         let session = crate::runs::is_session(&request.place.name);
@@ -726,10 +881,11 @@ impl Tests for Checks {
         if let Some(argv) = &tool_argv {
             toolchain(argv, &request.place.path, &env, &script)?;
         }
+        let sourced = tool_argv.is_some().then_some(script.as_path());
         let cx = Context {
             request,
             env: &env,
-            toolchain: tool_argv.is_some().then_some(script.as_path()),
+            toolchain: sourced,
             jobs,
         };
         let not_run = not_run_exits(&request.tests)?;
@@ -745,21 +901,14 @@ impl Tests for Checks {
                 let r: Vec<&str> = r.iter().map(String::as_str).collect();
                 let mut argv = cx.argv(&r);
                 if kind == Kind::Sandbox {
-                    let canon =
-                        |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                     let profile = dir.join("ready.sb");
                     std::fs::write(
                         &profile,
-                        seatbelt(
-                            &[canon(&request.place.path), canon(&request.place.tmp)],
+                        sandbox_profile(
+                            &request.place,
+                            &request.limits,
                             &[],
-                            request.limits.network,
-                            &if request.limits.docker {
-                                docker_sockets()
-                            } else {
-                                Vec::new()
-                            },
-                            user_tmp().as_deref(),
+                            &self.instance.caches,
                         ),
                     )?;
                     argv.splice(
@@ -793,6 +942,8 @@ impl Tests for Checks {
                     targets: vec![command.to_string()],
                     holds_processors: false,
                     kept_out: Vec::new(),
+                    // The command is the runner's one test.
+                    cold: cold_tests(&request.tests)?.iter().any(|c| c == command),
                     // A command in a checkout that lists proto's tools may
                     // run them, moon among them, and proto stamps each
                     // toolchain it runs as used, as a moon run's does.
@@ -811,6 +962,34 @@ impl Tests for Checks {
             let r: Vec<&str> = r.iter().map(String::as_str).collect();
             cx.argv(&r)
         });
+        // 35: a run holding a cold test, and its release, are given none of
+        // the host's caches. What ran to set it up, the toolchain, `ready`
+        // and the runner's own queries, had them and ran no test (design
+        // D5).
+        let caches: &[HostCache] = if plan.cold {
+            &[]
+        } else {
+            &self.instance.caches
+        };
+        let env = if plan.cold { run_env(caches) } else { env };
+        // Design D8 (C.2 moon, 35): where moon keeps this run's manifests,
+        // as moon finds it when it starts, from the environment its command
+        // starts in: the run's, cold or not, with the toolchain sourced.
+        let store = match runner.as_str() {
+            "moon" => {
+                let command = Context {
+                    request,
+                    env: &env,
+                    toolchain: sourced,
+                    jobs,
+                };
+                Some(super::moon::store(
+                    &request.place.path,
+                    &command.command_env()?,
+                ))
+            }
+            _ => None,
+        };
         let docker = request.limits.docker;
         let executor = match kind {
             Kind::Open => Enforced {
@@ -822,18 +1001,11 @@ impl Tests for Checks {
                 docker,
             },
             Kind::Sandbox => {
-                let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                 let network = request.limits.network;
                 let profile = dir.join("sandbox.sb");
                 std::fs::write(
                     &profile,
-                    seatbelt(
-                        &[canon(&request.place.path), canon(&request.place.tmp)],
-                        &plan.stamps,
-                        network,
-                        &if docker { docker_sockets() } else { Vec::new() },
-                        user_tmp().as_deref(),
-                    ),
+                    sandbox_profile(&request.place, &request.limits, &plan.stamps, caches),
                 )?;
                 let sandbox = [
                     "/usr/bin/sandbox-exec".to_string(),
@@ -867,6 +1039,7 @@ impl Tests for Checks {
             ready,
             not_run,
             kept_out: plan.kept_out,
+            store,
         };
         self.runs.start(
             name,
@@ -1043,8 +1216,11 @@ impl Tests for Checks {
         if meta.runner != "moon" {
             return Ok(report.tasks.iter().map(|t| t.task.clone()).collect());
         }
-        let place = meta.place.clone();
-        let blob = |k: &str| super::moon::blob_in(&place, k);
+        let store = meta
+            .store
+            .clone()
+            .unwrap_or_else(|| meta.place.join(".moon/cache"));
+        let blob = |k: &str| super::moon::blob_in(&store, k);
         let tree = |p: &str| super::moon::file_at(&meta.place, &meta.revision, p);
         let mut out = Vec::new();
         for t in &report.tasks {
@@ -1134,7 +1310,7 @@ impl Tests for Checks {
             system: None,
         };
         let jobs = self.instance.jobs();
-        let env = environment(&request, jobs);
+        let env = environment(&request, jobs, &self.instance.caches);
         let script = scratch.0.join("toolchain.sh");
         if let Some(argv) = &tool_argv {
             toolchain(argv, worktree, &env, &script)?;

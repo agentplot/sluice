@@ -56,8 +56,8 @@ gauges `sluice.queue.depth` (submissions not yet out of the queue) and
 `sluice.window` (combinations tested at once), and the counters
 `sluice.verdicts` by `sluice.outcome`, `sluice.tasks.ran`,
 `sluice.tasks.replayed`, `sluice.culprits` (submissions blamed),
-`sluice.conflicts`, `sluice.landed`, `sluice.refused` (landings refused
-because the branch moved) and `sluice.cache.restored` by `sluice.hit`.
+`sluice.conflicts`, `sluice.landed` and `sluice.refused` (landings
+refused because the branch moved).
 
 #### Scenario: A landing's metrics
 
