@@ -66,7 +66,7 @@ FailedRelease" crates/sluice-core/src/records.rs`.
 
 ## 3. The Claude Code board
 
-- [ ] 3.1 In `plugins/sluice-board/types/index.d.ts`, add
+- [x] 3.1 In `plugins/sluice-board/types/index.d.ts`, add
   `OverviewBranch.held_checkouts?`, `OverviewSession.release_failed?`
   and a preview's `branch` and `release_failed?`; verify with
   `plugin-board:typecheck`
