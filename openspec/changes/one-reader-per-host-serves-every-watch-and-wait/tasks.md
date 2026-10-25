@@ -7,7 +7,7 @@ run alone while iterating with `sluice exec main -- cargo test -p sluice
 
 ## 1. The reader's lock and document
 
-- [ ] 1.1 Add `crates/sluice/src/reader.rs`: the lock `readers/<repository>.lock` taken with `File::try_lock`, the repository's common git directory named by `runs::flat_name`; the lead's `write`, to a temporary file renamed over `readers/<repository>.json`; the follower's `read`, which returns no document for a file absent or not whole, and `try_lead` (design: the lease, the document). Verify with unit tests in the module: a second take of a held lock follows, the lock taken again once the first holder is dropped, a document written is read back whole, and a half-written temporary file is never read.
+- [x] 1.1 Add `crates/sluice/src/reader.rs`: the lock `readers/<repository>.lock` taken with `File::try_lock`, the repository's common git directory named by `runs::flat_name`; the lead's `write`, to a temporary file renamed over `readers/<repository>.json`; the follower's `read`, which returns no document for a file absent or not whole, and `try_lead` (design: the lease, the document). Verify with unit tests in the module: a second take of a held lock follows, the lock taken again once the first holder is dropped, a document written is read back whole, and a half-written temporary file is never read.
 - [ ] 1.2 Add `readers(&self) -> Result<PathBuf>` to `exec::Host`: `state_dir()?.join("readers")` for the real host in `crates/sluice/src/profiles/mod.rs`, a directory of the test's own for the fake host in `crates/sluice/tests/support/`. Verify `cargo check -p sluice --tests` builds and `cli:test` passes unchanged.
 
 ## 2. A watch leads or follows
