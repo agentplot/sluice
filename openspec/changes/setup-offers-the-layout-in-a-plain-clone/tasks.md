@@ -22,7 +22,7 @@
 
 - [x] 4.1 Rewrite Get started in `README.md`: the Claude Code path says Claude offers the layout first in a plain clone and goes on there only if told to; the by-hand path starts from the layout via the worktrees guide's new section, then the install and the walkthrough; no sentence sends a newcomer into a plain clone. Verify by reading, since no gate reads the README (core.21): no path in Get started sets sluice up in a plain clone unasked, and each site link names a page or section 4.2 and 4.3 make, as 5.2's build confirms
 - [x] 4.2 Add a first section to `site/src/content/docs/guides/worktrees.md`, one working copy per branch: the layout, the fresh-clone commands of `references/layout.md`, and what the setup offers for an existing clone, what it costs and what it carries; verify `moon run site:prose` passes with no Vale warning
-- [ ] 4.3 In `site/src/content/docs/guides/claude-code.md`, "Set up a repository", say that in a plain clone Claude first offers the layout, names what holds the folder, and carries the sessions' history, and that the plain clone is kept only on the user's word; verify `moon run site:prose` passes with no Vale warning
+- [x] 4.3 In `site/src/content/docs/guides/claude-code.md`, "Set up a repository", say that in a plain clone Claude first offers the layout, names what holds the folder, and carries the sessions' history, and that the plain clone is kept only on the user's word; verify `moon run site:prose` passes with no Vale warning
 
 ## 5. Integration
 
