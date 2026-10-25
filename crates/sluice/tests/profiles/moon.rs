@@ -1044,3 +1044,110 @@ fn asking_moon_leaves_the_worktree_clean() {
         .unwrap_or_default();
     assert!(left.is_empty(), "{left:?}");
 }
+
+/// Design D8 on the fleet's layout: a bare `<repo>.git` with its worktree
+/// beside it. moon itself, with its shared worktree setting on and a
+/// home of the test's own, keeps the task's manifest in `cache/shared`
+/// under that home and not in the worktree, which is where `store` finds
+/// it, and the key is proven reading it there.
+#[test]
+fn a_key_run_in_a_bare_repositorys_worktree_is_proven() {
+    use sluice::profiles::moon::{blob_in, check_key, file_at, store};
+
+    let src = workspace("moon-bare-src");
+    let scratch = support::Scratch::new("moon-bare");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+
+    // Everything moon is given, on its process alone: no `MOON_*` of the
+    // test's own, nor its home.
+    let env: std::collections::BTreeMap<String, String> = [
+        ("PATH", std::env::var("PATH").unwrap()),
+        ("HOME", scratch.path().join("home").display().to_string()),
+        ("MOON_HOME", home.display().to_string()),
+        ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true".into()),
+        ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true".into()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let out = support::isolated(std::process::Command::new("moon").env_clear())
+        .current_dir(&worktree)
+        .envs(&env)
+        .args(["exec", "alpha:test", "--ci"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "moon: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(worktree.join(".moon/cache/runReport.json")).unwrap(),
+    )
+    .unwrap();
+    let key = report["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["node"]["params"]["target"] == "alpha:test")
+        .flat_map(|a| a["operations"].as_array().unwrap())
+        .find(|o| o["meta"]["type"] == "hash-generation")
+        .and_then(|o| o["meta"]["hash"].as_str())
+        .expect("the task's key in the run report")
+        .to_string();
+
+    let at = store(&worktree, &env);
+    assert_eq!(at, home.join("cache/shared"));
+    let manifest = |root: &std::path::Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    assert!(manifest(&at).is_file(), "the manifest under moon's home");
+    assert!(
+        !manifest(&worktree.join(".moon/cache")).exists(),
+        "no manifest in the worktree"
+    );
+    check_key(&key, "alpha:test", &|k| blob_in(&at, k), &|p| {
+        file_at(&worktree, "HEAD", p)
+    })
+    .unwrap();
+
+    // moon fetched nothing into its fresh home. Beside its cache it keeps
+    // its id, an empty `temp`, and the system toolchain's plugin, which
+    // moon carries in its own binary and writes out (moon 2.6.1,
+    // `crates/config-loader/src/toolchains_config_ext.rs`).
+    fn files(dir: &std::path::Path, under: &str, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            let name = format!("{under}{}", e.file_name().to_string_lossy());
+            if e.file_type().unwrap().is_dir() {
+                if name != "cache" {
+                    files(&e.path(), &format!("{name}/"), out);
+                }
+            } else {
+                out.push(name);
+            }
+        }
+    }
+    let mut held = Vec::new();
+    files(&home, "", &mut held);
+    held.sort();
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(held[0], "id", "{held:?}");
+    assert!(
+        held[1].starts_with("plugins/toolchains/system-") && held[1].ends_with(".wasm"),
+        "{held:?}"
+    );
+}
