@@ -44,6 +44,7 @@ None.
 plugins/sluice-board/hooks/register.tsx
 plugins/sluice-board/hooks/board.ts
 plugins/sluice-board/tests/**
+plugins/sluice-board/types/index.d.ts
 plugins/sluice-board/README.md
 README.md
 site/src/content/docs/guides/claude-code.md
