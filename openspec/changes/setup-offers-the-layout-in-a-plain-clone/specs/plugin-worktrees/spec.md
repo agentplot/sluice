@@ -3,8 +3,8 @@
 ### Requirement: The plain-clone conversion prints its plan first
 
 The plugin's plain-clone conversion SHALL print, before it moves
-anything, the layout the folder will take, every process that has its
-working directory or an open file in the folder, and the Claude Code
+anything, the layout the folder will take, every process that holds the
+folder by its working directory or an open file in it, and the Claude Code
 history it will carry with the paths it carries it to.
 
 #### Scenario: The plan of a clone with a process in it
@@ -17,11 +17,13 @@ history it will carry with the paths it carries it to.
 
 ### Requirement: The plain-clone conversion refuses while anything else holds the folder
 
-The conversion SHALL refuse, moving nothing, while any process other
-than its caller and the caller's own ancestors has its working
-directory at or under the folder or a file in it open, and SHALL name
-each such process. It SHALL refuse the same when it cannot list the
-host's processes.
+The conversion SHALL refuse, moving nothing, while any process outside
+the session that runs it, that session's ancestors and its descendants
+has its working directory at or under the folder or a file in it open,
+and SHALL name each such process and none of the session's own (126).
+The session SHALL be the process the caller names, and, named none, the
+process that started the conversion. The conversion SHALL refuse the
+same when it cannot list the host's processes.
 
 #### Scenario: Another process in the folder
 
@@ -29,6 +31,28 @@ host's processes.
   directory in the folder
 - **THEN** it exits non-zero naming that process, and the folder, its
   `.git` and its files are as they were
+
+#### Scenario: The session's own helpers
+
+- **WHEN** the caller names its session's process, and the only other
+  processes in the folder are that session's descendants: the shell
+  the conversion runs in and helpers the session started beside it
+- **THEN** the conversion lays the folder out, and its output names none
+  of them as holding the folder
+
+#### Scenario: Another process beside the session's helpers
+
+- **WHEN** the caller names its session, a helper the session started
+  is in the folder, and so is a process outside the session
+- **THEN** it exits non-zero naming the process outside the session and
+  not the helper, and the folder is as it was
+
+#### Scenario: No session named
+
+- **WHEN** the conversion is run with no session named, and the only
+  process in the folder besides it is the process that started it
+- **THEN** that process is taken as the session, and the plan names
+  no process as holding the folder
 
 #### Scenario: Only the caller's session
 

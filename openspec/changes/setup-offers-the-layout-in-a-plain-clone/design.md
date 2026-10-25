@@ -80,13 +80,15 @@ design agent.
 `plugins/sluice/scripts/lay-out.sh`, bash like the plugin's other
 scripts, with two forms:
 
-- `lay-out.sh plan <folder>` prints the plan and changes nothing: the
+- `lay-out.sh plan <folder> [--session-pid <pid>]` prints the plan and
+  changes nothing: the
   git directory's new name (`<name>.git`, where `<name>` is the
   folder's), `main/` on the branch checked out, each process holding
   the folder (id, command, and whether by working directory or an open
   file), each other worktree and whether it will be repaired or stops
   the move, and the history to carry with its old and new keys.
-- `lay-out.sh go <folder> [--session <id>]` checks again, refuses on
+- `lay-out.sh go <folder> [--session <id>] [--session-pid <pid>]`
+  checks again, refuses on
   anything the plan would have stopped on, lays the folder out, then
   carries the history, and prints what it did. Exit 0 done, 1 refused
   with nothing moved, 2 a step failed after the move began (every file
@@ -109,22 +111,56 @@ spec (core.21).
 
 ### What "holds the folder" means
 
-A process holds the folder when `lsof` shows its working directory at
-or under the folder, or a file under it open. The script lists every
-process's working directory and open files once and keeps those whose
-path is the folder or starts with `<folder>/`, both as given and with
-symbolic links resolved. It leaves out its own process and its
-ancestors, found by walking parent ids with `ps`: those are the shell
-the setup's session runs it from and the session itself, whose working
-directory is the folder and stays valid because the folder itself does
-not move. If `lsof` is missing or fails, the script refuses: it cannot
-tell the folder is free.
+A holder is a process outside the session that runs the move, that
+session's ancestors and its descendants (126 as amended; record 0057,
+proposed). What the refusal protects is a process the move would
+surprise: an editor, another session, a build in flight. The session
+that runs the move is told the new path and its history is carried
+there; what it started (a tool server, a watcher, a sleep inhibitor,
+the shell the command runs in) is its own, started from it and ending
+with it.
 
-The setup's own session is left out on purpose. It is the one agent
-the operator is talking to, its directory is not moved, and it moves
-itself into `main/` by `/cd` afterwards. Every other session, editor,
-shell or server must let the folder go first (126: "moves nothing an
-agent or an editor has open").
+The session is the process the caller names, and, named none, the
+conversion's parent:
+
+- Both forms take `--session-pid <pid>`. The script resolves nothing
+  about any harness from it (core.1): it is a process id, nothing more.
+- Without it, the session is the process that started the script. A
+  person who types the command in a terminal starts it from their
+  interactive shell, which is then the session.
+- Claude Code runs a command line in a shell of its own, whose parent
+  is the session's process, and may wrap the command inside that shell,
+  so the default would stop one level short. The plugin's skills
+  therefore name the session in the command line itself:
+  `--session-pid "$PPID"`, which that shell expands to its own parent.
+
+A process is in the session when walking its parent ids reaches the
+session; the session's ancestors are found by walking up from it. The
+script's own process is left out too. A process whose working
+directory is at or under the folder, or that has a file under it open,
+holds the folder when it is none of those. The script lists every
+process's working directory, open files and parent id once (`lsof`,
+whose `R` field gives the parent: `ps` is setuid on macOS and a sandbox
+may refuse it), and keeps the paths that are the folder or start with
+`<folder>/`, both as given and with symbolic links resolved. If `lsof`
+is missing or fails, the script refuses: it cannot tell the folder is
+free.
+
+The refusal names every holder it found, by id, command and how it
+holds the folder, and never one of the session's own; the plan lists
+the same holders, so what the operator is asked to stop is what `go`
+would refuse on. Every other session, editor, shell or server must let
+the folder go first (126: "moves nothing an agent or an editor has
+open").
+
+*Alternative:* the session as the nearest ancestor whose command is
+Claude Code's. That names a harness in the conversion and fails a
+person in a terminal (record 0057, option 2).
+
+*Alternative:* only the conversion and its ancestors left out. A
+session's harness keeps helpers of its own in the folder, siblings of
+the command's shell, so the move would refuse on the very session that
+offers it (record 0057, option 3).
 
 ### Carrying the history
 
@@ -216,10 +252,20 @@ plan when worktrunk is used.
   resume by id still finds it.
 - [`lsof` over every process is slow on a busy Mac] → it runs once per
   form, a few seconds; the setup is done once per repository.
-- [The setup's own session holds a file in the folder open at the
-  moment of the move] → it is excluded as an ancestor; the file moves
-  with the rest and the session's next read finds it under `main/`
-  after `/cd`.
+- [The setup's own session, or a helper it started, holds a file in
+  the folder open at the moment of the move] → it is the session's, so
+  no holder; the file moves with the rest and the session's next read
+  finds it under `main/` after `/cd`.
+- [Claude Code puts a wrapper between the session's process and the
+  shell that runs the command, so `$PPID` names the wrapper] → the
+  session's helpers then show as holders and the move refuses, naming
+  them; it never moves something held. The operator can name the
+  session's process by hand.
+- [A person names as the session a process whose descendants include
+  another agent, a terminal multiplexer's server] → those agents are
+  left out and may be surprised. The default is the narrowest session
+  that fits a person in a terminal; the skills say to name only the
+  process that runs this session.
 
 ## Migration Plan
 

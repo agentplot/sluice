@@ -33,9 +33,12 @@ only on the operator's word, which the setup's record says.
   history kept under the folder's path and where it will be carried;
   what stays behind (prompt recall, the folder's trust and permission
   answers, which Claude asks again once for `main/`).
-- The move refuses while anything but the setup's own session holds
-  the folder, names what holds it, and waits for the operator to let it
-  go. It moves nothing and deletes nothing until then.
+- The move refuses while anything but the setup's own session, and what
+  that session started, holds the folder; names what holds it, never the
+  session's own; and waits for the operator to let it go. It moves
+  nothing and deletes nothing until then. The session is the process the
+  caller names, and, named none, the one that started the move (126 as
+  amended, record 0057).
 - With the move, the setup carries the Claude Code history across: the
   folder's other sessions and its project memory, moved to the places
   Claude Code reads for the new paths; then this session itself, by
@@ -66,8 +69,8 @@ None.
   repository's only working copy, says its costs, and records the
   operator's choice to keep the plain clone.
 - `plugin-worktrees`: the plain-clone conversion refuses while anything
-  but its caller holds the folder, and carries Claude Code's history to
-  the new paths.
+  outside its session holds the folder, and carries Claude Code's
+  history to the new paths.
 
 ## Out of scope
 
