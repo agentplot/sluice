@@ -142,11 +142,66 @@ Then ask the user, before writing anything:
 
    A fast tag such as `#check-fast` suits a family of bolts, and a slower
    one such as `#e2e` can be added on `main` only.
+3. **For each that lives on GitHub, whether the team lands on it through
+   pull requests today.** Ask only for a branch whose policy will name a
+   remote on GitHub: one kept on this host has no pull requests, and
+   sluice refuses the table without `remote`. Ask per branch, since a team
+   often reviews everything into `main` and lets agents land on `bolt/*`
+   straight from their worktrees. On no, write no `pull_requests` table
+   for it; on yes, see [a branch the team lands by pull
+   request](#a-branch-the-team-lands-by-pull-request).
 
 Tell the user what their answer means. `[tests]` picks how checks run;
 each branch's `required` picks which. Under the command runner the one
 command runs in full on every gated branch, so a quick suite on `dev/*`
 and the full one on `main` need moon, whose tasks each branch names.
+
+### A branch the team lands by pull request
+
+Read what GitHub requires of the branch now, from its rulesets and from
+classic branch protection; for a pattern, read an existing branch that
+matches it. `gh` fills in `{owner}` and `{repo}` from the remote:
+
+```sh
+gh api repos/{owner}/{repo}/rules/branches/main --jq '.[] | {type, parameters}'
+gh api repos/{owner}/{repo}/branches/main/protection   # 404: no classic protection
+```
+
+- From the rules: the `pull_request` rule's `required_approving_review_count`
+  and `require_code_owner_review`, the `required_status_checks` rule's
+  `required_status_checks[].context`, and whether there is a
+  `merge_queue` rule.
+- From protection: `required_pull_request_reviews.required_approving_review_count`
+  and `require_code_owners_review`, and `required_status_checks.checks[].context`.
+
+Show the user what was read, and from where, then offer:
+
+- `reviews`: the highest approving review count of them all;
+- `checks`: each check's name, once, leaving out `sluice` and every name
+  starting `sluice / `. Those are sluice's own, posted on what it tests,
+  and a pull request never waits for them.
+
+Where `gh` is missing or signed out, or a read is refused (protection
+needs admin rights), say which read failed and ask the user how many
+approving reviews and which checks the team requires.
+
+Then say plainly what the policy can't hold. The table has `reviews` and
+`checks` alone, so a review from code owners has no condition there, nor
+has the approval of the latest push, resolved conversations, a
+deployment or code scanning. For each the branch requires, say: "sluice's
+policy has no condition for a review from code owners, so sluice will not
+wait for one: a pull request lands once it has its reviews and checks and
+its combination passes." Never stand in for one, such as by counting code
+owners into `reviews`: sluice would land a pull request the team's own
+rule would have held.
+
+Write what the user confirms:
+
+```toml
+[branches.main.pull_requests]
+reviews = 1
+checks = ["ci/test"]
+```
 
 ## 4. Choose, per part
 
