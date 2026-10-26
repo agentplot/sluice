@@ -16,6 +16,7 @@ pub mod preview;
 pub mod profiles;
 pub mod progress;
 pub mod protect;
+pub mod reader;
 pub mod runs;
 pub mod scrub;
 pub mod sessions;
@@ -30,7 +31,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use sluice_core::overview::{in_queue, Held};
+use reader::Reader;
+use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Requester,
@@ -828,7 +830,7 @@ pub fn run(
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
                 }
-                return submit_group(&s, pushers, clock, req, no_wait, json, pause, out);
+                return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
             if check {
@@ -856,6 +858,7 @@ pub fn run(
             }
             submit(
                 &s,
+                host,
                 pushers,
                 clock,
                 SubmitRequest {
@@ -910,6 +913,7 @@ pub fn run(
             };
             let intake = takes_pulls(&s, &sub.branch)?.then_some(pulls);
             let waiting = Waiting {
+                host,
                 clock,
                 pulls: intake,
                 deadline,
@@ -1611,6 +1615,7 @@ pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 fn submit(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pushers: &dyn Pushers,
     clock: &dyn Clock,
     req: SubmitRequest,
@@ -1657,6 +1662,7 @@ fn submit(
     // Keep the queue moving while waiting (walkthrough section 6).
     let sub = s.state(id)?.expect("a submission just made");
     let waiting = Waiting {
+        host,
         clock,
         pulls: None,
         deadline: None,
@@ -1688,6 +1694,7 @@ fn queued_ahead(ahead: &[u64], name: impl Fn(u64) -> String) -> String {
 #[allow(clippy::too_many_arguments)]
 fn submit_group(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pushers: &dyn Pushers,
     clock: &dyn Clock,
     req: GroupRequest,
@@ -1738,6 +1745,7 @@ fn submit_group(
     }
     // Each record carries its own copy, below.
     let waiting = Waiting {
+        host,
         clock,
         pulls: None,
         deadline: None,
@@ -1941,6 +1949,9 @@ fn record_json(sub: &Submission, copy: Option<&CopyDiffers>) -> Result<String> {
 
 /// How a command waits on a submission.
 struct Waiting<'a> {
+    /// Where the repository's reader on the host keeps its files, and
+    /// what the overview it writes reads of the host (129).
+    host: &'a dyn exec::Host,
     clock: &'a dyn Clock,
     /// On a branch that takes pull requests: taken in before each round,
     /// as a waiting pull-request submit does.
@@ -2066,7 +2077,7 @@ fn could_not_read(
 /// already decided runs nothing. A round the forge answered 5xx is run
 /// again, as [`Unread`] bounds it. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
-/// moves (ADR 0042).
+/// moves (ADR 0042). It reads them as [`Reading`] does (129).
 fn wait_on(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
@@ -2081,6 +2092,12 @@ fn wait_on(
     let mut said_hold = None;
     let mut first = true;
     let mut unread = Unread::default();
+    // Decided already: nothing read again, and no round run.
+    if sub.state.is_out() {
+        return Ok(Waited::Decided(sub, None));
+    }
+    let mut reading = Reading::take(waiting.host)?;
+    reading.read(s, waiting, &mut sub)?;
     loop {
         if sub.state.is_out() {
             return Ok(Waited::Decided(sub, None));
@@ -2088,8 +2105,8 @@ fn wait_on(
         if !waiting.json {
             // How far it has got decides nothing: a read that fails says
             // nothing this time.
-            let view = s.branch_view_of(&branch).ok();
-            let own = view.as_ref().and_then(|v| progress::own(v, id));
+            let view = reading.view.as_ref();
+            let own = view.and_then(|v| progress::own(v, id));
             let now: Moved = (sub.state, own.map(progress::moved));
             if said.as_ref() != Some(&now) {
                 match own {
@@ -2104,7 +2121,7 @@ fn wait_on(
                 }
                 said = Some(now);
             }
-            if let Some(v) = &view {
+            if let Some(v) = view {
                 tell_hold(out, &branch, v.held.as_ref(), &mut said_hold)?;
             }
         }
@@ -2138,10 +2155,96 @@ fn wait_on(
                 return Ok(Waited::Unread(sub, unread));
             }
         }
-        sub = s
-            .state(id)?
-            .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))?;
+        reading.reader.lead_once_free()?;
+        reading.read(s, waiting, &mut sub)?;
     }
+}
+
+/// How a wait reads its submission, its combination and its branch's
+/// hold (129; ADR 0056; rule core.25): the first watch or wait of the
+/// repository on the host is its reader, which reads the records and
+/// writes the whole overview for the others; every other wait reads them
+/// from the reader's document, and its own record only once a document no
+/// longer holds it, as when it has left the queue.
+struct Reading {
+    reader: Reader,
+    /// Its branch's part of the overview, as last read.
+    view: Option<BranchView>,
+    /// The reader's last document that did not hold the submission: its
+    /// record is read once for each such document, never at every pause.
+    lacked: Option<serde_json::Value>,
+}
+
+impl Reading {
+    fn take(host: &dyn exec::Host) -> Result<Reading> {
+        Ok(Reading {
+            reader: Reader::take(&host.readers()?, &host.repository()?)?,
+            view: None,
+            lacked: None,
+        })
+    }
+
+    /// Read `sub` again, and its branch's part of the overview. A follower
+    /// with no whole document to read says nothing new.
+    fn read(&mut self, s: &Sluice<'_>, waiting: &Waiting<'_>, sub: &mut Submission) -> Result<()> {
+        let (id, branch) = (sub.id, sub.branch.clone());
+        // The reader's document, when it was read from one.
+        let followed = match &mut self.reader {
+            Reader::Lead(lead) => match overview::document(s, waiting.host, waiting.clock) {
+                Ok((branches, doc)) => {
+                    lead.write(&doc)?;
+                    self.view = branches.into_iter().find(|b| b.branch == branch);
+                    None
+                }
+                // Another branch's part, or the host's, could not be read:
+                // its own, as a wait alone reads them, and nothing written.
+                Err(_) => {
+                    self.view = s.branch_view_of(&branch).ok();
+                    *sub = record(s, id, &branch)?;
+                    return Ok(());
+                }
+            },
+            Reader::Follow(follow) => {
+                let Some(doc) = follow.read() else {
+                    return Ok(());
+                };
+                self.view = branch_in(&doc, &branch);
+                Some(doc)
+            }
+        };
+        let held = self
+            .view
+            .as_ref()
+            .and_then(|v| v.submissions.iter().find(|x| x.id == id));
+        match (held, followed) {
+            // In the queue: the overview's record is its record.
+            (Some(x), _) => *sub = x.clone(),
+            // Out of the queue, as the records just read say.
+            (None, None) => *sub = record(s, id, &branch)?,
+            // Out of the reader's queue, or not yet in it.
+            (None, Some(doc)) if self.lacked.as_ref() != Some(&doc) => {
+                *sub = record(s, id, &branch)?;
+                self.lacked = Some(doc);
+            }
+            (None, Some(_)) => {}
+        }
+        Ok(())
+    }
+}
+
+/// Submission `id`'s record, from the records of `branch`.
+fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
+    s.state(id)?
+        .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))
+}
+
+/// `branch`'s part of an overview document; `None` when it has none.
+fn branch_in(doc: &serde_json::Value, branch: &str) -> Option<BranchView> {
+    let b = doc["branches"]
+        .as_array()?
+        .iter()
+        .find(|b| b["branch"] == branch)?;
+    serde_json::from_value(b.clone()).ok()
 }
 
 /// 122: submission `id` as landed, when its work is on its branch: its
