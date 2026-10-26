@@ -1,8 +1,8 @@
 # Proposal
 
 Status: approved by the operator 2026-10-16. Part 1, finished
-submissions, is built; part 2, the log in parts, is not. The statement
-change is `agentplot/blueprints:design/sluice/proposals/finished-records-1.md`.
+submissions, is built; part 2, the log in parts, is not. The statement's
+clauses are 61 and 130 to 132 (agentplot/blueprints 53f6d44).
 
 ## Why
 
@@ -56,14 +56,13 @@ None.
 
 ## What it needs from the statement
 
-Clause 61 reads "given a branch, its records as last written". A read
-that leaves out finished entries changes it, so the statement changes
-first (rule core.12): `finished-records-1.md` in agentplot/blueprints
-rewrites 61 as the branch's live records, and proposes 104 (the move),
-105 (reading a finished entry) and 106 (the log in parts). 26 and 49
-hold unchanged: every state and verdict stays readable by every host
-with sluice stopped, now by 105. 53 holds: the files keep their form,
-only their place changes.
+A read that leaves out finished entries changes clause 61, so the
+statement changes first (rule core.12): agentplot/blueprints 53f6d44
+has 61 read the branch's live records, with read-finished and read-log
+beside it, and adds 130 (the move), 131 (reading a finished entry) and
+132 (the log in parts). 26 and 49 hold unchanged: every state and
+verdict stays readable by every host with sluice stopped, now by 131.
+53 holds: the files keep their form, only their place changes.
 
 ## Not in this change
 

@@ -109,7 +109,7 @@ fn two_hosts_write_one_version_and_one_is_refused() {
 }
 
 /// A log is appended to, and a finished record is kept beside the live
-/// ones, never read with them (finished-records-1 clause 104).
+/// ones, never read with them (130).
 #[test]
 fn appends_and_finished_records_keep_their_places() {
     let (a, _bare, _b) = two_hosts("rr-append");
