@@ -193,6 +193,102 @@ export function flipped(list: readonly string[], key: string): string[] {
   return list.includes(key) ? list.filter((k) => k !== key) : [...list, key].slice(-OPENED);
 }
 
+/** A place of a branch held because its release failed and tried no more (123). */
+export type HeldPlace = {
+  /** A checkout by its name, which every host's overview lists; a worktree or a preview by its host's. */
+  key: string;
+  branch: string;
+  /** `sluice/try/main/48`, `worktree unit-a` or `preview docs`. */
+  name: string;
+  /** What `sluice release` is given to release it. */
+  release: string;
+  tries: number;
+  /** The last line of what failed. */
+  failed: string;
+  /** Another host's, on which alone it is released. */
+  host: string | null;
+};
+
+/** The last line of `text` with anything on it. */
+function lastLine(text: string | undefined): string {
+  const lines = (text ?? "").split("\n").map((l) => l.trim());
+  return lines.filter((l) => l !== "").pop() ?? "";
+}
+
+/**
+ * Every place the overview holds because its release failed and tried no
+ * more: its branches' checkouts, then its worktrees and its previews. A
+ * sluice older than them gives none.
+ */
+export function heldAll(doc: Overview): HeldPlace[] {
+  const checkouts = doc.branches.flatMap((b) =>
+    (b.held_checkouts ?? [])
+      .filter((f) => f.stopped)
+      .map((f) => ({
+        key: `checkout ${f.place}`,
+        branch: b.branch,
+        name: f.place,
+        release: f.place,
+        tries: f.tries,
+        failed: lastLine(f.failed),
+        host: f.host && f.host !== doc.host ? f.host : null,
+      })),
+  );
+  const worktrees = doc.sessions
+    .filter((s) => s.release_failed?.stopped)
+    .map((s) => ({
+      key: `worktree ${doc.host} ${s.worktree}`,
+      branch: s.branch,
+      name: `worktree ${basename(s.worktree)}`,
+      release: `--worktree ${s.worktree}`,
+      tries: s.release_failed?.tries ?? 0,
+      failed: lastLine(s.release_failed?.failed),
+      host: null,
+    }));
+  const previews = doc.previews
+    .filter((p) => p.release_failed?.stopped)
+    .map((p) => ({
+      key: `preview ${doc.host} ${p.name}`,
+      branch: p.branch,
+      name: `preview ${p.name}`,
+      release: p.name,
+      tries: p.release_failed?.tries ?? 0,
+      failed: lastLine(p.release_failed?.failed),
+      host: null,
+    }));
+  return [...checkouts, ...worktrees, ...previews];
+}
+
+/** A branch's held places. */
+export function heldPlaces(doc: Overview, branch: string): HeldPlace[] {
+  return heldAll(doc).filter((p) => p.branch === branch);
+}
+
+/** The branches of held places that the overview lists no records of. */
+export function unlistedHeld(doc: Overview): string[] {
+  const listed = new Set(doc.branches.map((b) => b.branch));
+  return [...new Set(heldAll(doc).map((p) => p.branch))].filter((b) => !listed.has(b)).sort();
+}
+
+/** `2 held: release failed`, beside "held" alone, which the footer's worktrees take. */
+export function heldWords(n: number): string {
+  return `${n} held: release failed`;
+}
+
+/**
+ * A held place's two rows under RELEASE FAILED, in the herdr popup's words:
+ * what failed, then how to run its release again or free it without.
+ */
+export function heldLines(p: HeldPlace): [string, string] {
+  const on = p.host ? ` on ${p.host}` : "";
+  const times = p.tries === 1 ? "once" : `${p.tries} times`;
+  const failed = p.failed ? ` · ${p.failed}` : "";
+  return [
+    `✗ ${p.name} held${on} · failed ${times}${failed}`,
+    `${p.host ? `on ${p.host}: ` : ""}sluice release ${p.release} · --accept-failure frees it without`,
+  ];
+}
+
 /** Whether a branch has anything queued or under test; the rest are left out of the band. */
 export function busy(b: OverviewBranch): boolean {
   return b.depth > 0 || testing(b).length > 0;
@@ -201,12 +297,13 @@ export function busy(b: OverviewBranch): boolean {
 /**
  * Whether the pane shows a branch: one busy, or whose last event is under a
  * quarter of an hour old, so a host with many idle branches shows its queues
- * and a landing is still seen once its queue is empty.
+ * and a landing is still seen once its queue is empty; or one with `held`
+ * places held because their release failed.
  */
-export function shown(b: OverviewBranch, now: number): boolean {
+export function shown(b: OverviewBranch, now: number, held = 0): boolean {
   const last = b.recent[b.recent.length - 1];
   const age = last ? since(last.at, now) : undefined;
-  return busy(b) || (age !== undefined && age < 900);
+  return busy(b) || held > 0 || (age !== undefined && age < 900);
 }
 
 /**
@@ -229,9 +326,12 @@ export function checksWords(room: Room): string {
     : `${room.sessions} slots to agents' checks`;
 }
 
-/** The band's line for one branch, or null when it has nothing to show. */
-export function branchLine(b: OverviewBranch, now: number, room?: Room): string | null {
-  if (!busy(b)) return null;
+/**
+ * The band's line for one branch, or null when it has nothing to show; last,
+ * how many of its places are `held` because their release failed.
+ */
+export function branchLine(b: OverviewBranch, now: number, room?: Room, held = 0): string | null {
+  if (!busy(b) && held === 0) return null;
   const under = testing(b);
   const parts = [`sluice ${b.branch}`, plural(b.depth, "submission")];
   for (const c of under) {
@@ -246,7 +346,23 @@ export function branchLine(b: OverviewBranch, now: number, room?: Room): string 
   const last = b.recent[b.recent.length - 1];
   if (last) parts.push(`last ${recentWords(last)}`);
   if (room && heldBack(b, room)) parts.push(checksWords(room));
+  if (held > 0) parts.push(heldWords(held));
   return parts.join(" · ");
+}
+
+/** A branch the overview lists no records of, as one with nothing queued. */
+function noRecords(branch: string): OverviewBranch {
+  return {
+    branch,
+    at: null,
+    version: 0,
+    window: 0,
+    parallel: null,
+    depth: 0,
+    candidates: [],
+    submissions: [],
+    recent: [],
+  };
 }
 
 /** The branch named for this session first, then the rest in the overview's order. */
@@ -262,8 +378,10 @@ export function namedFirst<B extends { branch: string }>(
 }
 
 /**
- * The band: one line per branch with a queue, in the overview's order but
- * for the branch named for this session, first; empty when none has.
+ * The band: one line per branch with a queue or a held place, in the
+ * overview's order but for the branch named for this session, first, and
+ * then the branches with no records that have a held place; empty when none
+ * has.
  */
 export function bandLines(
   doc: Overview | null,
@@ -272,8 +390,8 @@ export function bandLines(
 ): string[] {
   // A document an earlier load took without branches shows nothing.
   if (!isOverview(doc)) return [];
-  return namedFirst(doc.branches, named)
-    .map((b) => branchLine(b, now, doc.room))
+  return [...namedFirst(doc.branches, named), ...unlistedHeld(doc).map(noRecords)]
+    .map((b) => branchLine(b, now, doc.room, heldPlaces(doc, b.branch).length))
     .filter((l): l is string => l !== null);
 }
 
@@ -515,7 +633,9 @@ export function submitted(stdout: string): { ids: number[]; pulls: string[] } {
 
 /**
  * The status line: what is queued, and where this session's work stands;
- * with no submission of its own, the state of the branch named for it.
+ * with no submission of its own, the state of the branch named for it. It
+ * ends with how many places are held because their release failed, and
+ * shows them with nothing queued.
  */
 export function statusLine(
   doc: Overview | null,
@@ -526,14 +646,17 @@ export function statusLine(
   if (!doc) return undefined;
   const queued = doc.branches.reduce((n, b) => n + b.depth, 0);
   const own = doc.branches.flatMap((b) => b.submissions).filter((s) => isMine(s, mine));
-  const held =
+  const checks =
     doc.room && doc.branches.some((b) => heldBack(b, doc.room))
       ? ` · ${checksWords(doc.room)}`
       : "";
-  if (named && own.length === 0) return `sluice: ${namedLine(doc, named, now)}${held}`;
-  if (queued === 0 && own.length === 0) return undefined;
+  const count = heldAll(doc).length;
+  const held = count > 0 ? ` · ${heldWords(count)}` : "";
+  if (named && own.length === 0) return `sluice: ${namedLine(doc, named, now)}${checks}${held}`;
+  if (queued === 0 && own.length === 0)
+    return count > 0 ? `sluice: ${heldWords(count)}` : undefined;
   const yours = own.map((s) => ` · yours #${s.id} ${s.state}`).join("");
-  return `sluice: ${plural(queued, "submission")}${yours}${held}`;
+  return `sluice: ${plural(queued, "submission")}${yours}${checks}${held}`;
 }
 
 /** The prompt that tells an idle session its submission's outcome. */

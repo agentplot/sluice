@@ -359,6 +359,32 @@ fn a_held_checkouts_failure_is_accepted() {
     );
 }
 
+/// satisfies: 123, 26, 61: the overview lists a held checkout under its
+/// branch, held, with what failed, from the branch's state; reading it
+/// ten times runs no release, counts no try and writes nothing
+#[test]
+fn the_overview_shows_a_held_checkout_and_changes_nothing() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let (version, files, releases) = (h.version(), h.files(), h.releases_of(&place));
+    let s = h.sluice();
+    let view = s.branch_view_of(BRANCH).unwrap();
+    let held = view
+        .held_checkouts
+        .iter()
+        .find(|f| f.place == place)
+        .unwrap_or_else(|| panic!("{:?}", view.held_checkouts));
+    assert!(held.stopped, "{held:?}");
+    assert!(held.failed.contains(shared::RELEASE_FAILS), "{held:?}");
+    for _ in 0..10 {
+        let all = s.overview(None).unwrap();
+        assert!(all.iter().any(|b| b.held_checkouts == view.held_checkouts));
+    }
+    assert_eq!(h.version(), version, "the branch's state was written");
+    assert_eq!(h.files(), files, "its state or log changed");
+    assert_eq!(h.releases_of(&place), releases, "a release was run");
+}
+
 /// How each `gone` line of the log names `place`: whether its release
 /// ran, and what it printed when it failed.
 fn gone_lines(h: &Harness, place: &str) -> Vec<(bool, Option<String>)> {

@@ -168,6 +168,22 @@ each preview shows its name, the branch and commit it was made from, as in
 On desktop, a link that is not `https:`, such as a preview at
 `http://localhost:4001`, shows as plain text.
 
+When a checkout's release keeps failing, sluice stops trying and holds the
+checkout until you release it
+([held checkouts](/sluice/reference/commands/#checkouts-held-because-their-release-failed)).
+The pane shows each one first under its branch's heading, under RELEASE
+FAILED, with the worktrees and previews of that branch held the same way.
+Each row is red and gives how many times the release failed and the last
+line of what failed, as in `✗ sluice/try/main/48 held · failed 4 times ·
+usage: scripts/preview up`. Beneath it, dimmed, comes the command that
+runs the release again, as in `sluice release sluice/try/main/48 ·
+--accept-failure frees it without`. A checkout another host made says
+`held on deneb`, and its command begins `on deneb:`. The rows read as
+herdr's popup does, and pressing one runs nothing. A branch with a held
+checkout, worktree or preview is shown even with nothing queued. The band
+ends that branch's line with `· 1 held: release failed`, and the status
+line ends with the same count, or says it alone when nothing is queued.
+
 Press a conflict to open it the same way. It shows the files in conflict,
 then what is in the way: each submission it conflicted with and the
 worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what

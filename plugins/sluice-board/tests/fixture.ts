@@ -301,3 +301,43 @@ export function withRelease(): Overview {
   }));
   return doc;
 }
+
+/**
+ * The fixture with main's checkout sluice/try/main/48 held after four
+ * failed releases, sluice/try/main/51 still being tried, and the worktree
+ * unit-a, whose runs are held to main, held after its one. The herdr
+ * plugin's tests name the same places and expect the same words.
+ */
+export function withHeld(): Overview {
+  const doc = overview();
+  doc.branches[0]!.held_checkouts = [
+    {
+      place: "sluice/try/main/48",
+      failed: "the release command ended exit status: 2\nusage: scripts/preview up",
+      tries: 4,
+      at: "2026-10-16T19:40:00Z",
+      stopped: true,
+    },
+    {
+      place: "sluice/try/main/51",
+      failed: "busy",
+      tries: 1,
+      at: "2026-10-16T19:44:00Z",
+      stopped: false,
+    },
+  ];
+  doc.sessions = [
+    {
+      worktree: "/work/sluice/unit-a",
+      branch: "main",
+      ports: {},
+      release_failed: {
+        failed: "a\nrm: cannot remove .stack",
+        tries: 1,
+        at: "2026-10-16T19:41:00Z",
+        stopped: true,
+      },
+    },
+  ];
+  return doc;
+}

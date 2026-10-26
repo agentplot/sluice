@@ -83,7 +83,15 @@ export type OverviewBranch = {
   remote?: string;
   /** The worktree each submission the recent lines name came from, by id. */
   recent_from?: Record<string, string>;
+  /** Its checkouts whose release failed; absent from a sluice older than them. */
+  held_checkouts?: HeldCheckout[];
 };
+
+/** A place's release that failed (123): what it printed and how often; `stopped` once tried no more. */
+export type ReleaseFailure = { failed: string; tries: number; at: string; stopped: boolean };
+
+/** A checkout of a branch whose release failed, as its state names it; `host` on a branch on its remote. */
+export type HeldCheckout = ReleaseFailure & { place: string; host?: string | null };
 
 /** How a worktree's last `sluice exec` ended (ADR 0027). */
 export type LastResult = {
@@ -118,6 +126,7 @@ export type OverviewSession = {
   last_result?: LastResult;
   holds_queued_branch?: string;
   run?: SessionRun;
+  release_failed?: ReleaseFailure;
 };
 
 /** The host's bound and what counts against it (session-runs-1 clauses 89, 91). */
@@ -153,6 +162,7 @@ export type OverviewPreview = {
   state: string;
   /** Label to address, in the policy's order. */
   addresses?: Record<string, string>;
+  release_failed?: ReleaseFailure;
 };
 
 export type OverviewHost = {

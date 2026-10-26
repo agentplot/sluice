@@ -3764,6 +3764,153 @@ fn status_marks_a_worktree_whose_release_failed() {
     assert_eq!(failed["stopped"], true, "{doc}");
 }
 
+/// The lines of `text` from the one that starts with `head` on.
+fn from_line<'a>(text: &'a str, head: &str) -> Vec<&'a str> {
+    text.lines().skip_while(|l| !l.starts_with(head)).collect()
+}
+
+/// 123, 26: `sluice overview` says nothing of a checkout its next round
+/// tries again, which `--json` lists with `stopped` false; once its tries
+/// are spent it names it under its branch's line, with the last line of
+/// what failed and the two commands, and `--json` lists it held.
+#[test]
+fn overview_names_a_held_checkout_under_its_branch() {
+    let f = setup_one_retry();
+    let first = format!("sluice/try/{BRANCH}/1");
+    f.world.place_release_fails(&first, Some(RELEASE_FAILS));
+    work(
+        &f,
+        "unit/a",
+        "unit/a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+
+    let (_, text) = sluice(&f, &["overview"]);
+    assert!(!text.contains(&first), "{text}");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(out.contains("tried again by the next round"), "{out}");
+    let (_, out) = sluice(&f, &["overview", "--json"]);
+    let held = &json(&out)["branches"][0]["held_checkouts"];
+    assert_eq!(held[0]["place"], first, "{held}");
+    assert_eq!(held[0]["stopped"], false, "{held}");
+    assert_eq!(held[0]["tries"], 1, "{held}");
+
+    work(
+        &f,
+        "unit/b",
+        "unit/b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    let (_, text) = sluice(&f, &["overview"]);
+    let lines = from_line(&text, &format!("{BRANCH} at "));
+    assert!(
+        lines[1].starts_with(&format!("  {first} is held: its release failed 2 times: "))
+            && lines[1].ends_with(RELEASE_FAILS),
+        "{text}"
+    );
+    assert_eq!(
+        lines[2],
+        format!(
+            "    sluice release {first} runs it again; \
+             sluice release {first} --accept-failure frees it without"
+        ),
+        "{text}"
+    );
+    let (_, out) = sluice(&f, &["overview", "--json"]);
+    let doc = json(&out);
+    let held = doc["branches"][0]["held_checkouts"]
+        .as_array()
+        .expect("held checkouts are listed");
+    assert_eq!(held.len(), 1, "{doc}");
+    assert_eq!(held[0]["place"], first);
+    assert_eq!(held[0]["tries"], 2);
+    assert_eq!(held[0]["stopped"], true);
+    assert!(held[0]["failed"].as_str().unwrap().contains(RELEASE_FAILS));
+    assert!(held[0]["at"].is_string());
+    assert!(held[0].get("host").is_none(), "{doc}");
+}
+
+/// A worktree `unit/a` of `BRANCH` whose `sluice release` failed once,
+/// which holds it, and its path as the overview names it.
+fn held_worktree(f: &Fakes) -> String {
+    work(
+        f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.release_fails(Some(RELEASE_FAILS));
+    release(f, &["--worktree", "unit/a"]);
+    f.world.release_fails(None);
+    let (_, out) = sluice(f, &["overview", "--json"]);
+    let doc = json(&out);
+    assert_eq!(
+        doc["sessions"][0]["release_failed"]["stopped"], true,
+        "{doc}"
+    );
+    doc["sessions"][0]["worktree"].as_str().unwrap().to_string()
+}
+
+/// 123, 26: a held worktree is named under its branch's line, with what
+/// failed and `sluice release --worktree <path>`.
+#[test]
+fn overview_names_a_held_worktree_under_its_branch() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    let path = held_worktree(&f);
+    let (_, text) = sluice(&f, &["overview"]);
+    let lines = from_line(&text, &format!("{BRANCH} at "));
+    assert!(
+        lines[1].starts_with(&format!(
+            "  worktree {path} is held: its release failed once: "
+        )) && lines[1].ends_with(RELEASE_FAILS),
+        "{text}"
+    );
+    assert_eq!(
+        lines[2],
+        format!(
+            "    sluice release --worktree {path} runs it again; \
+             sluice release --worktree {path} --accept-failure frees it without"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("no records"), "{text}");
+}
+
+/// 123: a held worktree of a branch with no records is named under a
+/// line of its own for that branch.
+#[test]
+fn overview_names_a_held_worktree_of_a_branch_with_no_records() {
+    let f = setup_releasing();
+    let path = held_worktree(&f);
+    let (code, text) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0);
+    let lines = from_line(&text, &format!("{BRANCH} · no records"));
+    assert!(lines.len() > 2, "{text}");
+    assert!(
+        lines[1].starts_with(&format!("  worktree {path} is held: ")),
+        "{text}"
+    );
+    assert!(
+        lines[2].starts_with(&format!(
+            "    sluice release --worktree {path} runs it again"
+        )),
+        "{text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A branch read without its last landing is held (121)
 // ---------------------------------------------------------------------------

@@ -42,6 +42,8 @@ import {
   forecastToast,
   forecastWords,
   githubBase,
+  heldLines,
+  heldPlaces,
   hostLine,
   hostsLine,
   isMine,
@@ -69,6 +71,7 @@ import {
   submitted,
   taskLines,
   testing,
+  unlistedHeld,
   unreadReason,
   wakeText,
 } from "./board";
@@ -541,11 +544,15 @@ export const register: Register = (on, options) => {
     const at = await $.clock.now();
     // The session's named branch first, shown when idle too.
     const first = await read($, named);
-    const visible = namedFirst(d.branches, first).filter((b) => b.branch === first || shown(b, at));
+    const visible = namedFirst(d.branches, first).filter(
+      (b) => b.branch === first || shown(b, at, heldPlaces(d, b.branch).length),
+    );
     const quiet = d.branches.length - visible.length;
     const unknown = first !== null && !d.branches.some((b) => b.branch === first);
     // sluice has records of no branch: how a submission gets here.
     const empty = emptyLines(d, first);
+    // Branches with no records that hold a place whose release failed, after the rest.
+    const unlisted = unlistedHeld(d).filter((b) => b !== first);
     const checks = checkRows(d, at);
     const previews = previewRows(d);
     const room = hostLine(d.room);
@@ -566,6 +573,39 @@ export const register: Register = (on, options) => {
             {t.text}
           </Text>
         ))}
+      </Box>
+    );
+    // RELEASE FAILED: each place of the branch whose release failed, with the
+    // command that releases it. Nothing here presses: the release is the operator's.
+    const heldView = (branch: string) => {
+      const places = heldPlaces(d, branch);
+      if (places.length === 0) return null;
+      return (
+        <Box key={`held-${branch}`} flexDirection="column">
+          <Text bold>RELEASE FAILED</Text>
+          {places.map((p) => {
+            const [what, how] = heldLines(p);
+            return (
+              <Box key={`held-${p.key}`} flexDirection="column">
+                <Text color="red">
+                  {"  "}
+                  {what}
+                </Text>
+                <Text dimColor>
+                  {"    "}
+                  {how}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+      );
+    };
+    // A branch the overview has no records of, as a heading alone.
+    const noRecords = (branch: string) => (
+      <Box key={`none-${branch}`} flexDirection="column" marginTop={1}>
+        <Text bold>{branch} · no records</Text>
+        {heldView(branch)}
       </Box>
     );
     // An opened conflict, under its row: its files, what is in the way, the next step.
@@ -648,11 +688,7 @@ export const register: Register = (on, options) => {
           </Text>
           {close}
         </Box>
-        {unknown && (
-          <Box marginTop={1}>
-            <Text bold>{first} · no records</Text>
-          </Box>
-        )}
+        {unknown && noRecords(first)}
         {empty.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             {empty.map((line) => (
@@ -668,6 +704,7 @@ export const register: Register = (on, options) => {
               {plural(testing(b).length, "combination")} under test
               {b.parallel ? ` (up to ${b.parallel} at once)` : ""}
             </Text>
+            {heldView(b.branch)}
             {/* Headed as the herdr plugin's popup heads them. */}
             {(testing(b).length > 0 || b.candidates.some((c) => c.state === "formed")) && (
               <Text bold>TESTING</Text>
@@ -826,6 +863,7 @@ export const register: Register = (on, options) => {
               })}
           </Box>
         ))}
+        {unlisted.map(noRecords)}
         {quiet > 0 && visible.length > 0 && (
           <Box marginTop={1}>
             <Text dimColor>

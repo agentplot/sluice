@@ -21,7 +21,10 @@ import {
   forecastToast,
   forecastWords,
   githubBase,
+  heldAll,
   heldBack,
+  heldLines,
+  heldPlaces,
   hostLine,
   hostsLine,
   isMine,
@@ -48,7 +51,7 @@ import {
   wakeText,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
-import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
+import { NOW, overview, withChecks, withHeld, withRelease, withTasks } from "./fixture";
 
 const ME: Mine = { root: "/work/sluice/plugin-board", ids: [], pulls: [] };
 
@@ -396,6 +399,120 @@ describe("the pane", () => {
     ]);
     expect(emptyLines(none, "release")).toEqual([]);
     expect(emptyLines(overview(), null)).toEqual([]);
+  });
+});
+
+describe("places held because their release failed", () => {
+  // The herdr popup's rows for the same places, line for line.
+  const CHECKOUT_48: [string, string] = [
+    "✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up",
+    "sluice release sluice/try/main/48 · --accept-failure frees it without",
+  ];
+  const UNIT_A: [string, string] = [
+    "✗ worktree unit-a held · failed once · rm: cannot remove .stack",
+    "sluice release --worktree /work/sluice/unit-a · --accept-failure frees it without",
+  ];
+
+  test("a held checkout and a held worktree, in the herdr popup's words", () => {
+    expect(heldPlaces(withHeld(), "main").map(heldLines)).toEqual([CHECKOUT_48, UNIT_A]);
+  });
+
+  test("another host's checkout is held on it, and released there", () => {
+    const doc = withHeld();
+    doc.host = "vega";
+    const [held, tried] = doc.branches[0]!.held_checkouts!;
+    held!.host = "deneb";
+    tried!.host = "vega";
+    tried!.stopped = true;
+    expect(heldPlaces(doc, "main").map(heldLines).slice(0, 2)).toEqual([
+      [
+        "✗ sluice/try/main/48 held on deneb · failed 4 times · usage: scripts/preview up",
+        "on deneb: sluice release sluice/try/main/48 · --accept-failure frees it without",
+      ],
+      [
+        "✗ sluice/try/main/51 held · failed once · busy",
+        "sluice release sluice/try/main/51 · --accept-failure frees it without",
+      ],
+    ]);
+  });
+
+  test("an idle branch with a held preview is shown", () => {
+    const doc = overview();
+    const main = { ...doc.branches[0]!, depth: 0, candidates: [], submissions: [], recent: [] };
+    doc.branches = [main];
+    doc.previews = [
+      {
+        name: "preview/4f1c2aa0e1b2",
+        branch: "main",
+        revision: "4f1c2aa0e1b2c3d4",
+        state: "up",
+        release_failed: {
+          failed: "down: exit 1",
+          tries: 3,
+          at: "2026-10-16T19:44:00Z",
+          stopped: true,
+        },
+      },
+    ];
+    expect(heldPlaces(doc, "main").map(heldLines)).toEqual([
+      [
+        "✗ preview preview/4f1c2aa0e1b2 held · failed 3 times · down: exit 1",
+        "sluice release preview/4f1c2aa0e1b2 · --accept-failure frees it without",
+      ],
+    ]);
+    expect(shown(main, NOW)).toBe(false);
+    expect(shown(main, NOW, heldPlaces(doc, "main").length)).toBe(true);
+  });
+
+  test("one still being tried is not held", () => {
+    expect(heldAll(withHeld()).map((p) => p.name)).toEqual([
+      "sluice/try/main/48",
+      "worktree unit-a",
+    ]);
+  });
+
+  test("an older sluice gives none, and draws as before", () => {
+    expect(heldAll(overview())).toEqual([]);
+    expect(bandLines(overview(), NOW)).toEqual([
+      "sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa",
+    ]);
+    expect(statusLine(overview(), ME)).toBe("sluice: 3 submissions · yours #13 testing");
+  });
+
+  test("the band ends a branch's line with them, and gives one with nothing queued", () => {
+    const doc = withHeld();
+    doc.sessions = [];
+    expect(bandLines(doc, NOW)).toEqual([
+      "sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa · 1 held: release failed",
+    ]);
+    const idle = withHeld();
+    idle.branches[0] = {
+      ...idle.branches[0]!,
+      depth: 0,
+      candidates: [],
+      submissions: [],
+      recent: [],
+    };
+    idle.sessions[0]!.branch = "release";
+    expect(bandLines(idle, NOW)).toEqual([
+      "sluice main · 0 submissions · 1 held: release failed",
+      "sluice release · 0 submissions · 1 held: release failed",
+    ]);
+  });
+
+  test("the status line counts them, with nothing queued too", () => {
+    const quiet = withHeld();
+    quiet.branches = [];
+    expect(statusLine(quiet, ME)).toBe("sluice: 1 held: release failed");
+    const doc = withHeld();
+    doc.sessions = [];
+    expect(statusLine(doc, learn(doc, ME))).toBe(
+      "sluice: 3 submissions · yours #13 testing · 1 held: release failed",
+    );
+    const elsewhere: Mine = { root: null, ids: [], pulls: [] };
+    expect(statusLine(doc, elsewhere, "hotfix", NOW)).toBe(
+      "sluice: hotfix · no records · 1 held: release failed",
+    );
   });
 });
 

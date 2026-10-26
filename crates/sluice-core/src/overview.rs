@@ -12,13 +12,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 
 use crate::line::Line;
 use crate::policy::{Policy, Rules};
 use crate::records::{
-    parse_lines, BranchHold, CandidateState, Event, FailedTask, LogLine, Submission, LOG_FILE,
+    parse_lines, BranchHold, CandidateState, Event, FailedRelease, FailedTask, LogLine, Submission,
+    LOG_FILE,
 };
 use crate::Sluice;
 
@@ -82,6 +83,34 @@ pub struct BranchView {
     /// landing, and nothing is formed or landed on it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub held: Option<BranchHold>,
+    /// 123: the branch's checkouts whose release failed, from its state,
+    /// so every host's overview lists them (26, 61): held once `stopped`,
+    /// tried again by the next round until then.
+    #[serde(serialize_with = "held_checkouts")]
+    pub held_checkouts: Vec<FailedRelease>,
+}
+
+/// 123: each held checkout as `sluice status <branch> --json` lists it,
+/// `stopped` said either way, and `host` where the state names one.
+fn held_checkouts<S: Serializer>(held: &[FailedRelease], s: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        place: &'a str,
+        failed: &'a str,
+        tries: u32,
+        at: &'a str,
+        stopped: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host: Option<&'a str>,
+    }
+    s.collect_seq(held.iter().map(|f| Entry {
+        place: &f.place,
+        failed: &f.failed,
+        tries: f.tries,
+        at: &f.at,
+        stopped: f.stopped,
+        host: f.host.as_deref(),
+    }))
 }
 
 /// One candidate: a combination under test or judged.
@@ -183,6 +212,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         recent,
         recent_from,
         held: line.doc.held.clone(),
+        held_checkouts: line.doc.failed_releases.clone(),
     })
 }
 
@@ -586,6 +616,7 @@ mod tests {
             recent,
             recent_from: BTreeMap::new(),
             held: None,
+            held_checkouts: Vec::new(),
         }
     }
 
@@ -624,6 +655,51 @@ mod tests {
         assert_eq!(local.remote, None);
         let json = serde_json::to_value(&local).unwrap();
         assert!(json.get("remote").is_none(), "{json}");
+    }
+
+    /// 123, 26: a branch lists every checkout its state names whose
+    /// release failed, held or still tried, each as `sluice status
+    /// --json` names it; one with none an empty list.
+    #[test]
+    fn a_branch_lists_its_checkouts_whose_release_failed() {
+        const GATE: &str = "[branches.main]\nrequired = []\n";
+        let mut doc = crate::records::BranchDoc::new("main");
+        doc.failed_releases = vec![
+            FailedRelease {
+                place: "sluice/try/main/48".into(),
+                failed: "preview: down\nusage: scripts/preview up\n".into(),
+                tries: 4,
+                at: "2026-10-23T09:00:00Z".into(),
+                stopped: true,
+                host: Some("deneb".into()),
+            },
+            FailedRelease {
+                place: "sluice/try/main/51".into(),
+                failed: "busy".into(),
+                tries: 1,
+                at: "2026-10-23T09:05:00Z".into(),
+                stopped: false,
+                host: None,
+            },
+        ];
+        let branch = String::from_utf8(crate::records::to_document(&doc)).unwrap();
+        let v = read(GATE, &[(crate::records::BRANCH_FILE, branch)]);
+        assert_eq!(v.held_checkouts, doc.failed_releases);
+        assert_eq!(
+            serde_json::to_value(&v).unwrap()["held_checkouts"],
+            serde_json::json!([
+                {"place": "sluice/try/main/48", "failed": "preview: down\nusage: scripts/preview up\n",
+                 "tries": 4, "at": "2026-10-23T09:00:00Z", "stopped": true, "host": "deneb"},
+                {"place": "sluice/try/main/51", "failed": "busy",
+                 "tries": 1, "at": "2026-10-23T09:05:00Z", "stopped": false},
+            ])
+        );
+
+        let none = read(GATE, &[]);
+        assert_eq!(
+            serde_json::to_value(&none).unwrap()["held_checkouts"],
+            serde_json::json!([])
+        );
     }
 
     fn submission(id: u64, worktree: &str, state: &str) -> (String, String) {

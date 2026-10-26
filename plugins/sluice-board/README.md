@@ -48,6 +48,18 @@ sluice's queue inside a Claude Code session.
   `https:`, such as `http://localhost:4001`, shows as plain text.
 - **PREVIEWS** lists each preview: its name, `main@4f1c2aa`, its state, and
   each address as `web: https://…`.
+- **RELEASE FAILED**, first under a branch's heading: each checkout,
+  worktree and preview of the branch whose release failed and that sluice
+  tries no more, in red, with how many times it failed and the last line of
+  what failed:
+  `✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up`.
+  Beneath it, dimmed, the command that releases it:
+  `sluice release sluice/try/main/48 · --accept-failure frees it without`.
+  One another host made says `held on deneb`, and its command begins
+  `on deneb:`. The words are the herdr popup's. A branch with one is shown
+  even with nothing queued. The rows show the command and run nothing.
+  The band's line for the branch, and the status line, end
+  `· 1 held: release failed`.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
@@ -63,7 +75,9 @@ sluice's queue inside a Claude Code session.
 - **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
   same `· 1 slot to an agent's checks` when checks hold the queue back; or
   the state of the branch named for the session
-  ([below](#naming-a-sessions-branch)).
+  ([below](#naming-a-sessions-branch)). It ends `· 1 held: release failed`
+  while a checkout, worktree or preview is held because its release failed,
+  and with nothing queued says that alone: `sluice: 1 held: release failed`.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.
