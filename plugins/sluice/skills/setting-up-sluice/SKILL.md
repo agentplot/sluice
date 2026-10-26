@@ -146,6 +146,16 @@ the setup offers the move and goes on as the repository stands (126).
    in, whether the folder or a worktree beside it, and write and commit the
    policy there as for any repository.
 
+Whenever the user says to lay the folder out, at any point in the setup,
+run `go` on the folder as on "lay it out" for the only working copy,
+with `--session` and `--session-pid`, and take its exits 1, 2 and 0 as it
+does, but for `/cd`: on exit 0, ask for `/cd <the folder>/main` only when
+you were asked in the folder. Asked in a worktree beside it, that
+worktree was repaired in place: go on there. A policy written in the
+folder and not yet committed moves into `main/` with the working copy's
+other changes, as the plan says of every changed path. Then carry on
+with the step you were on.
+
 ## 3. Survey the repository
 
 Find out what the repository already uses before writing anything:
