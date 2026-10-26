@@ -1645,6 +1645,244 @@ fn one_shot_overview_reads_the_records_beside_a_reader() {
     assert_eq!(readers_doc(), Some(doc));
 }
 
+/// The overview as a reader read it of queues no test's records hold:
+/// `#1` under test on the branch from a head of its own, `done` of its
+/// five tasks ended.
+fn one_testing(done: usize) -> serde_json::Value {
+    use sluice_seams::{TaskProgress, TaskState};
+    let g = setup();
+    g.world.hold_runs(true);
+    work(&g, "unit/r", "agent-r", &[("plugin/r", Some("r"))]);
+    sluice(&g, &["submit", BRANCH, "--worktree", "unit/r", "--no-wait"]);
+    sluice(&g, &["step", BRANCH]);
+    let tasks: Vec<TaskProgress> = (0..5)
+        .map(|i| {
+            let state = match i {
+                i if i < done => TaskState::Passed,
+                i if i == done => TaskState::Running,
+                _ => TaskState::Waiting,
+            };
+            TaskProgress {
+                target: format!("t{i}:test"),
+                state,
+                started: None,
+                ended: None,
+                exit: state.ended().then_some(0),
+            }
+        })
+        .collect();
+    g.world.says_tasks(&tested(&g, 1), &tasks);
+    // A round keeps what the runner says beside the records.
+    sluice(&g, &["step", BRANCH]);
+    let (_, out) = sluice(&g, &["overview", "--json"]);
+    json(&out)
+}
+
+/// 129: a wait that finds no reader becomes it, and writes the whole
+/// overview, every branch's, not only its own.
+#[test]
+fn wait_with_no_reader_writes_the_whole_overview() {
+    let f = setup();
+    let other = "bolt/other";
+    f.world.init(other, &[(".config/sluice.toml", POLICY)]);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let head = f
+        .world
+        .work(&f.world.tip(other), &[("plugin/b", Some("b"))]);
+    f.world.session("unit/b", "agent-b", &head);
+    f.world.hold_runs(true);
+    sluice(&f, &["submit", other, "--worktree", "unit/b", "--no-wait"]);
+    f.world.hold_runs(false);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (code, out) = sluice(&f, &["wait", "2"]);
+    assert_eq!(code, LANDED, "{out}");
+    let doc = readers_doc().expect("the reader's document");
+    assert_eq!(doc["schema"], "sluice/overview@1");
+    let mut branches: Vec<&str> = doc["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["branch"].as_str().unwrap())
+        .collect();
+    branches.sort();
+    assert_eq!(branches, [BRANCH, other], "{doc}");
+}
+
+/// 129: a wait that finds a live reader says its combination's progress
+/// from the reader's document, which no records here hold.
+#[test]
+fn wait_follows_the_readers_progress() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let _reader = reader_of(REPOSITORY, &one_testing(3));
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines[0].starts_with(&format!(
+            "testing {BRANCH} + #1 · 3/5 tasks · running t3:test"
+        )),
+        "{out}"
+    );
+    assert_eq!(lines[1], "still waiting: sluice wait 1");
+}
+
+/// 129: out of time, a follower's `--json` is its record as the reader's
+/// document holds it.
+#[test]
+fn wait_out_of_time_prints_the_readers_record() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let doc = one_testing(3);
+    let _reader = reader_of(REPOSITORY, &doc);
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    let held = &doc["branches"][0]["submissions"][0];
+    assert_eq!(json(&out), *held);
+    assert_eq!(held["state"], "testing");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_ne!(json(&out)["head"], held["head"]);
+}
+
+/// 129: once the reader's document no longer holds a follower's
+/// submission, the wait reads its record once and says how it ended.
+#[test]
+fn followed_wait_reports_its_landing() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (_, queued) = sluice(&f, &["overview", "--json"]);
+    let reader = RefCell::new(reader_of(REPOSITORY, &json(&queued)));
+    let between = |n: usize| {
+        if n == 3 {
+            let (_, now) = sluice(&f, &["overview", "--json"]);
+            let now = json(&now);
+            assert_eq!(now["branches"][0]["submissions"], serde_json::json!([]));
+            reader.borrow_mut().write(&now).unwrap();
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 10,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    // It waited on the document, whatever its own rounds had done.
+    assert_eq!(pause.n.get(), 3, "{out}");
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+}
+
+/// 129: a follower's submission withdrawn ends its wait as a wait that
+/// read the records would.
+#[test]
+fn followed_wait_reports_its_withdrawal() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let (_, queued) = sluice(&f, &["overview", "--json"]);
+    let reader = RefCell::new(reader_of(REPOSITORY, &json(&queued)));
+    let between = |n: usize| match n {
+        1 => {
+            sluice(&f, &["withdraw", "1"]);
+        }
+        2 => {
+            let (_, now) = sluice(&f, &["overview", "--json"]);
+            reader.borrow_mut().write(&json(&now)).unwrap();
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 10,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1", "--json"]);
+    assert_eq!(code, sluice::WITHDRAWN, "{out}");
+    assert_eq!(json(&out)["state"], "withdrawn");
+    assert_eq!(pause.n.get(), 2, "{out}");
+}
+
+/// 129: when the wait that is the reader ends, a watch that followed it
+/// is the reader within one pause, and printed nothing before but the
+/// documents the wait wrote.
+#[test]
+fn watch_leads_once_the_readers_wait_ends() {
+    use std::sync::mpsc;
+
+    /// A pause that says it has paused and waits for the next tick; none
+    /// to come stops it.
+    struct Lockstep(mpsc::Sender<()>, mpsc::Receiver<()>);
+
+    impl Pause for Lockstep {
+        fn pause(&self) -> bool {
+            let _ = self.0.send(());
+            self.1.recv().is_ok()
+        }
+    }
+
+    let readers = support::readers();
+    let (tick, ticks) = mpsc::channel();
+    let (paused, pauses) = mpsc::channel();
+    // Another process on the host, with fakes of its own: it reads them
+    // only once it is the reader.
+    let watch = std::thread::spawn(move || {
+        support::share_readers(readers);
+        ticks.recv().unwrap();
+        let g = setup();
+        sluice_with(
+            &g,
+            &Lockstep(paused, ticks),
+            &["overview", "--json", "--watch"],
+        )
+        .1
+    });
+
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let wrote = RefCell::new(Vec::new());
+    let step = Then(Cell::new(0), |_| {
+        wrote
+            .borrow_mut()
+            .push(readers_doc().expect("the wait's document"));
+        tick.send(()).unwrap();
+        pauses.recv().unwrap();
+        true
+    });
+    let (code, out) = sluice_with(&f, &step, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    // One tick once the wait has ended, then none.
+    tick.send(()).unwrap();
+    pauses.recv().unwrap();
+    drop(tick);
+    let out = watch.join().unwrap();
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    let (led, followed) = lines.split_last().expect("a line");
+    assert!(!followed.is_empty(), "{out}");
+    let wrote = wrote.into_inner();
+    for l in followed {
+        assert!(wrote.contains(l), "not the wait's: {l}");
+    }
+    assert_eq!(led["branches"], serde_json::json!([]), "{out}");
+    assert_eq!(readers_doc().as_ref(), Some(led));
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();

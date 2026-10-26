@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 
 use crate::line::Line;
@@ -45,8 +45,9 @@ pub struct BranchRead {
     pub progress: BTreeMap<String, Vec<TaskProgress>>,
 }
 
-/// One branch's part of the overview.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// One branch's part of the overview: read back from a reader's document
+/// as it was written (129).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BranchView {
     pub branch: String,
     /// The branch's revision as its records last saw it.
@@ -75,7 +76,7 @@ pub struct BranchView {
 }
 
 /// One candidate: a combination under test or judged.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CandidateView {
     pub id: String,
     pub submissions: Vec<u64>,
