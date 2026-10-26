@@ -73,6 +73,17 @@ impl Bound {
 
     /// `program` is the `sluice` executable that supervises check runs.
     pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
+        Bound::bind(dir, program, instance, false)
+    }
+
+    /// 124: bind the repository holding `dir` for branch protection's hook:
+    /// the host's settings and each policy read only as far as guarding
+    /// needs, every other field passed over (ADR 0059).
+    pub fn guarding(dir: &Path) -> Result<Self> {
+        Bound::bind(dir, std::env::current_exe()?, Instance::guarding()?, true)
+    }
+
+    fn bind(dir: &Path, program: PathBuf, instance: Instance, guarding: bool) -> Result<Self> {
         // C.4: the app the host names is sluice's identity on GitHub, and
         // C.5: what reads and posts pull requests there.
         let app = match &instance.forge {
@@ -85,6 +96,7 @@ impl Bound {
             .map(|a| (a as Rc<dyn Identity>, program.clone()));
         let forge = app.map(|a| a as Rc<dyn github::Forge>);
         let branch = branches::Branches::open_as(dir, identity.clone())?;
+        let branch = if guarding { branch.guarding() } else { branch };
         let common = branch.common_dir()?;
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),
@@ -99,6 +111,7 @@ impl Bound {
             branches::Branches::open_as(dir, identity.clone())?,
             instance.signing.clone(),
         );
+        let state = if guarding { state.guarding() } else { state };
         let jobs = instance.jobs();
         let caches = instance.caches.clone();
         Ok(Bound {
