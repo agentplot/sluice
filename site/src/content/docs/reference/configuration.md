@@ -110,10 +110,12 @@ with the reason ([ADR 0013](/sluice/decisions/0013/)).
 A checkout holds its combination and nothing restored from another
 checkout, and saves nothing when it is released. What its tests build is
 shared through the host's [`[[caches]]`](#caches), which every run on
-the host is given. A cache table an older revision's `[checkout]` still
-declares is read as nothing, so a branch whose policy holds one is
-tested and lands as before. The caches an earlier sluice saved in `.git/sluice/.caches/`
-are removed when the next checkout is made.
+the host is given. A policy whose `[checkout]` still declares a
+`[[checkout.cache]]` is refused when sluice reads it, saying what
+replaced it ([ADR 0049](/sluice/decisions/0049/)): remove it from
+`.config/sluice.toml`, and have the host declare the caches its builds
+share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
+`.git/sluice/.caches/` are removed when the next checkout is made.
 
 | key | values | meaning |
 |---|---|---|

@@ -11,7 +11,7 @@
 
 ## 3. The configuration page
 
-- [ ] 3.1 In `site/src/content/docs/reference/configuration.md`, the `[checkout]` section: replace the sentence that a cache table an older revision declares is read as nothing with one saying a `[[checkout.cache]]` is refused when the policy is read, naming [ADR 0049](/sluice/decisions/0049/) and linking the host's [`[[caches]]`](#caches), and telling the reader to remove it. Verify with `moon run site:prose` clean.
+- [x] 3.1 In `site/src/content/docs/reference/configuration.md`, the `[checkout]` section: replace the sentence that a cache table an older revision declares is read as nothing with one saying a `[[checkout.cache]]` is refused when the policy is read, naming [ADR 0049](/sluice/decisions/0049/) and linking the host's [`[[caches]]`](#caches), and telling the reader to remove it. Verify with `moon run site:prose` clean.
 
 ## 4. The gate
 
