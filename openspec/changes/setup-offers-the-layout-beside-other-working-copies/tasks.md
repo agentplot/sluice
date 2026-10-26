@@ -10,7 +10,7 @@ test in that isolation. Run suites with `sluice exec main -- moon run
 
 ## 1. The script tells how a repository stands
 
-- [ ] 1.1 Add the `kind <path>` form to `plugins/sluice/scripts/lay-out.sh` (design D1): its usage line, its paragraph in the header comment, `only <folder>` / `several <folder>` / `apart` on stdout, exit 1 with `refused: <path> is not a working copy of a git repository`, nothing changed and no `lsof` run; bash 3.2; verify by 1.2
+- [x] 1.1 Add the `kind <path>` form to `plugins/sluice/scripts/lay-out.sh` (design D1): its usage line, its paragraph in the header comment, `only <folder>` / `several <folder>` / `apart` on stdout, exit 1 with `refused: <path> is not a working copy of a git repository`, nothing changed and no `lsof` run; bash 3.2; verify by 1.2
 - [ ] 1.2 Add tests to `plugins/sluice/tests/lay-out.sh`, one per scenario of the `plugin-worktrees` delta: a plain clone (`only`, its folder); `clone`'s clone with its `-side` worktree, asked from the clone and from `-side` (`several`, the clone's folder both times); a clone with a detached worktree under `.git/sluice/` and a worktree whose folder was then removed (`only`); a laid-out repository's `main/` (`apart`); a plain folder (exit 1); and one clone reached through a symbolic link to its scratch directory, which names the physical folder; each with the folder's snapshot unchanged; verify `sluice exec main -- moon run plugin-sluice:lay-out` passes
 
 ## 2. The setup makes the offer and goes on
