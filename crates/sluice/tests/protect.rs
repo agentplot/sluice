@@ -787,3 +787,43 @@ fn every_other_command_refuses_a_setting_it_does_not_know() {
         "{t}"
     );
 }
+
+/// 124: a policy field and table the hook does not know change nothing it
+/// guards.
+#[test]
+fn a_policy_field_the_hook_does_not_know_changes_nothing_it_guards() {
+    let policy = format!(
+        "{}\n[later]\nx = 1\n",
+        POLICY.replace("trust = ", "later = true\ntrust = ")
+    );
+    let (repo, held) = protected_with("protect-later-policy", &policy);
+    // git refuses to force a checked-out branch itself.
+    repo.git(&["worktree", "remove", "--force", held.to_str().unwrap()]);
+    let tip = repo.rev("bolt/x");
+    let out = repo.git_raw(&["branch", "-f", "bolt/x", "unit/a"]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(t.contains("bolt/x is protected by sluice"), "{t}");
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
+
+/// 124: a branch kept on a remote, under a policy and host settings each
+/// holding a field no sluice yet reads, is still judged as sluice's copy.
+#[test]
+fn a_copy_is_judged_under_fields_the_hook_does_not_know() {
+    let (repo, _held, copy, remote, _bare) =
+        copy_apart_with("protect-later-copy", "later = true\n");
+    host_settings(&repo, "[later]\nx = 1\n");
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &remote]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains("sluice levels this host's bolt/x to each landing itself"),
+        "{t}"
+    );
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), copy);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
