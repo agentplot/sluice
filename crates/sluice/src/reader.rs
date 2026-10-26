@@ -67,7 +67,9 @@ impl Reader {
             files: Files {
                 lock: dir.join(format!("{name}.lock")),
                 doc: dir.join(format!("{name}.json")),
-                tmp: dir.join(format!(".{name}.json.tmp")),
+                // A name kept whole is up to 246 bytes, so the temporary
+                // file's adds no more than its document's to a file name.
+                tmp: dir.join(format!(".{name}.tmp")),
             },
         };
         Ok(match follow.try_lead()? {
@@ -225,6 +227,20 @@ mod tests {
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
         lead.write(&doc("2026-10-25T09:00:02Z", 2)).unwrap();
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:02Z", 2)));
+    }
+
+    /// A repository whose name is the longest one kept whole, as a
+    /// scratch repository deep in a checkout is, has its files as any
+    /// other: no name of them too long for a file system.
+    #[test]
+    fn a_repository_named_as_long_as_is_kept_whole_has_its_files() {
+        let s = Scratch::new("long");
+        let repository = format!("/{}", "x".repeat(243));
+        assert_eq!(flat_name(&repository).len(), 246);
+        let mut lead = lead(Reader::take(&s.0, &repository).unwrap());
+        let follow = follow(Reader::take(&s.0, &repository).unwrap());
+        lead.write(&doc("2026-10-25T09:00:00Z", 1)).unwrap();
+        assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
     }
 
     /// A half-written temporary file is never read: a follower reads the
