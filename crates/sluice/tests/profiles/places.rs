@@ -233,20 +233,6 @@ fn a_policy_need_not_name_the_method() {
     }
 }
 
-/// A `[checkout]` an older revision may hold: a cache of `target` keyed
-/// by `Cargo.lock`, which a place reads as nothing.
-fn cached() -> Settings {
-    let mut s = Settings::new();
-    s.insert(
-        "cache".into(),
-        Setting::Tables(vec![Settings::from([
-            ("key".into(), Setting::List(vec!["Cargo.lock".into()])),
-            ("paths".into(), Setting::List(vec!["target".into()])),
-        ])]),
-    );
-    s
-}
-
 /// A candidate off main with `Cargo.lock` as `lock`.
 fn locked(repo: &Repo, lock: &str) -> Rev {
     let rev = repo.branch(
@@ -299,27 +285,6 @@ fn a_checkout_starts_with_nothing_but_its_revision() {
     holds_the_candidate(&repo, &next, &one);
     assert!(!next.path.join("target").exists());
     assert!(!root.join(".caches").exists());
-    p.release(NAME).unwrap();
-}
-
-/// 35, core.15: a `[checkout]` that still declares `[[checkout.cache]]`
-/// makes a place as one that declares none, with no error: nothing
-/// restored into it, and nothing saved once it is released as passed.
-#[test]
-fn an_older_policys_checkout_cache_is_read_as_nothing() {
-    let (repo, _) = scratch("places-old-cache");
-    let p = places(&repo);
-    let one = locked(&repo, "one\n");
-    let place = p.materialize(NAME, &one, &cached()).unwrap();
-    holds_the_candidate(&repo, &place, &one);
-    build(&place);
-    p.release(NAME).unwrap();
-    left_behind(&repo, &place);
-    assert!(!repo.dir().join(".git/sluice/.caches").exists());
-
-    let next = p.materialize(NAME, &one, &cached()).unwrap();
-    holds_the_candidate(&repo, &next, &one);
-    assert!(!next.path.join("target").exists());
     p.release(NAME).unwrap();
 }
 

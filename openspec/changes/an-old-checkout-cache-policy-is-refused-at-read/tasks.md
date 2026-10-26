@@ -7,7 +7,7 @@
 
 ## 2. The places profile stops reading it quietly
 
-- [ ] 2.1 In `crates/sluice/src/profiles/places.rs`, change the module comment and the comment on the record's old `caches` field so neither says a `[[checkout.cache]]` is read as nothing; say instead that the policy refuses one (ADR 0049). In `crates/sluice/tests/profiles/places.rs`, remove `an_older_policys_checkout_cache_is_read_as_nothing` and its `cached()` helper (design D3). Verify with `sluice exec main -- cargo test -p sluice --test places` passing and `git grep -n 'read as nothing' -- crates` finding nothing about the checkout cache.
+- [x] 2.1 In `crates/sluice/src/profiles/places.rs`, change the module comment and the comment on the record's old `caches` field so neither says a `[[checkout.cache]]` is read as nothing; say instead that the policy refuses one (ADR 0049). In `crates/sluice/tests/profiles/places.rs`, remove `an_older_policys_checkout_cache_is_read_as_nothing` and its `cached()` helper (design D3). Verify with `sluice exec main -- cargo test -p sluice --test places` passing and `git grep -n 'read as nothing' -- crates` finding nothing about the checkout cache.
 
 ## 3. The configuration page
 
