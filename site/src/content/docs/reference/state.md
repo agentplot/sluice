@@ -62,6 +62,12 @@ every repository on the host and never pushed:
 ```
 ~/.local/state/sluice/
   ports/<n>            a block of ports, naming the checkout that holds it
+  readers/<repository>.lock
+                       held by the first watch or wait of the repository for
+                       as long as it runs
+  readers/<repository>.json
+                       the overview it last read, as `sluice overview --json`
+                       prints it, for every other watch and wait to follow
   running/.lock        held while a run is counted against the bound
   running/<run>.json   each run going on the host, every repository's:
                        a submission's or an agent's, its repository, its
@@ -97,6 +103,20 @@ before the run began, holds nothing: the next run that starts removes
 it. A file in `sessions/` is there while its agent's run is going, and
 its `sluice exec` rewrites it as each task ends, for `sluice overview`
 to show; nothing that decides a result reads it.
+
+One process on the host reads a repository's queues for every watch and
+wait of it. The first `sluice overview --json --watch`, `sluice wait` or
+waiting `sluice submit` of the repository holds its `readers/` lock. It
+keeps the overview in the file beside it, rewritten whole each time it
+changes, so nothing reads half of one. Every other watch and wait of the
+repository on the host follows that file and reads no state of its own.
+A wait still reads its submission's own file once, when it leaves the
+queue, to say how it ended. When the one holding the lock stops, however
+it stops, the lock goes with it: the next watch or wait takes over
+within its next look, a second for a watch, three for a wait. The file
+names take the repository's git directory, which all its worktrees
+share, written as one file name as a checkout's is. `sluice overview`
+alone always reads the state itself.
 
 ## A branch whose state is on its remote
 

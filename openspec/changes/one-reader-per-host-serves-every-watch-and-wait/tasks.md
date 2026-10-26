@@ -21,7 +21,7 @@ run alone while iterating with `sluice exec main -- cargo test -p sluice
 
 ## 4. The site
 
-- [ ] 4.1 In `site/src/content/docs/reference/state.md`, add `readers/<repository>.lock` and `readers/<repository>.json` to the host's state, with a paragraph: the first watch or wait of a repository holds the lock and keeps its overview in the file, every other one on the host follows it, and the next takes over within a tick when it stops. In `site/src/content/docs/reference/commands.md`, say in the `sluice overview` and `sluice wait` rows that one watch or wait per repository on the host reads the queue and the others follow it, and that `sluice overview` alone always reads it itself. Verify the `site:prose` task passes with no warning.
+- [x] 4.1 In `site/src/content/docs/reference/state.md`, add `readers/<repository>.lock` and `readers/<repository>.json` to the host's state, with a paragraph: the first watch or wait of a repository holds the lock and keeps its overview in the file, every other one on the host follows it, and the next takes over within a tick when it stops. In `site/src/content/docs/reference/commands.md`, say in the `sluice overview` and `sluice wait` rows that one watch or wait per repository on the host reads the queue and the others follow it, and that `sluice overview` alone always reads it itself. Verify the `site:prose` task passes with no warning.
 
 ## 5. The whole
 
