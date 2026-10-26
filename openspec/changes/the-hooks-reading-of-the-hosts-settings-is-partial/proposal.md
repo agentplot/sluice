@@ -81,6 +81,7 @@ None.
 ```
 crates/sluice-core/src/policy.rs
 crates/sluice-core/src/lib.rs
+crates/sluice-core/src/ops.rs
 crates/sluice/src/instance.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/main.rs
