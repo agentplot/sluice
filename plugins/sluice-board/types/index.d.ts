@@ -10,6 +10,8 @@ export type Recent = {
   to?: string;
   combination?: string;
   paths?: string[];
+  /** A conflict's: the submissions in the way. */
+  with?: number[];
 };
 
 export type OverviewSubmission = {
@@ -20,7 +22,27 @@ export type OverviewSubmission = {
 };
 
 /** A failed test: the system it failed on, where the policy names one. */
-export type OverviewFailed = { task: string; log?: string; system?: string };
+export type OverviewFailed = { task: string; log?: string; system?: string; flaky?: Flaky };
+
+/**
+ * A check read as failed for being flaky (19): this run's outcome, when and
+ * where it ran, and the run it contradicts. A time or host is absent from a
+ * record made before sluice kept them.
+ */
+export type Flaky = {
+  here: "pass" | "fail";
+  at?: string;
+  host?: string;
+  other: {
+    outcome: "pass" | "fail";
+    at: string;
+    branch: string;
+    combination: string;
+    worktree?: string;
+    log?: string;
+    host?: string;
+  };
+};
 
 /** One task of a run under test, as its runner says while it goes. */
 export type OverviewTask = {
@@ -57,7 +79,19 @@ export type OverviewBranch = {
   candidates: OverviewCandidate[];
   submissions: OverviewSubmission[];
   recent: Recent[];
+  /** The git remote the branch's policy names, absent for a branch kept in this host's files. */
+  remote?: string;
+  /** The worktree each submission the recent lines name came from, by id. */
+  recent_from?: Record<string, string>;
+  /** Its checkouts whose release failed; absent from a sluice older than them. */
+  held_checkouts?: HeldCheckout[];
 };
+
+/** A place's release that failed (123): what it printed and how often; `stopped` once tried no more. */
+export type ReleaseFailure = { failed: string; tries: number; at: string; stopped: boolean };
+
+/** A checkout of a branch whose release failed, as its state names it; `host` on a branch on its remote. */
+export type HeldCheckout = ReleaseFailure & { place: string; host?: string | null };
 
 /** How a worktree's last `sluice exec` ended (ADR 0027). */
 export type LastResult = {
@@ -92,6 +126,7 @@ export type OverviewSession = {
   last_result?: LastResult;
   holds_queued_branch?: string;
   run?: SessionRun;
+  release_failed?: ReleaseFailure;
 };
 
 /** The host's bound and what counts against it (session-runs-1 clauses 89, 91). */
@@ -112,11 +147,22 @@ export type Overview = {
   at: string;
   branches: OverviewBranch[];
   sessions: OverviewSession[];
-  previews: { name: string; state: string }[];
+  previews: OverviewPreview[];
   /** Absent from a sluice older than agents' checks in the overview. */
   room?: Room;
   /** The hosts serving a remote, by their last sign of life. */
   hosts?: OverviewHost[];
+};
+
+/** A preview of a landed revision, and the addresses its stack answers on. */
+export type OverviewPreview = {
+  name: string;
+  branch: string;
+  revision: string;
+  state: string;
+  /** Label to address, in the policy's order. */
+  addresses?: Record<string, string>;
+  release_failed?: ReleaseFailure;
 };
 
 export type OverviewHost = {
@@ -167,13 +213,23 @@ export type Forecasting = {
   head: string | null;
   /** The conflict told, by its signature, or null. */
   told: string | null;
+  /** The branch the last forecast found a conflict on, or null. */
+  branch: string | null;
+  /** That conflict, or null. */
+  conflict: Forecast["conflict"];
 };
 
 /** The session's latest submission, as the document shows it. */
 export type Latest = { id: number; branch: string; conflict: boolean; active: boolean };
 
-/** A failed test as an opened failure shows it: its log's last lines, or why not. */
-export type OpenedTest = { task: string; log?: string; tail?: string[]; error?: string };
+/** A log as an opened failure shows it: its path, its last lines, or why not. */
+export type OpenedLog = { log?: string; tail?: string[]; error?: string };
+
+/**
+ * A failed test as an opened failure shows it: its log's last lines, or why
+ * not; and, for a flaky one, the run it contradicts with its log.
+ */
+export type OpenedTest = OpenedLog & { task: string; flaky?: Flaky; other?: OpenedLog };
 
 declare module "claude-code" {
   interface PluginState {
@@ -183,8 +239,8 @@ declare module "claude-code" {
       told: string[];
       isHidden: boolean;
       now: number;
-      /** `https://github.com/<owner>/<repo>` when origin is on GitHub. */
-      repo: string | null;
+      /** Each remote's `https://github.com/<owner>/<repo>`, or null when it is not on GitHub. */
+      remotes: Record<string, string | null>;
       /** The keys of the failures opened in place on the pane. */
       opened: string[];
       /** What each opened failure showed when it was opened. */
@@ -193,6 +249,8 @@ declare module "claude-code" {
       named: string | null;
       /** The session's worktree's last forecast. */
       forecasting: Forecasting;
+      /** The band's line for the overview's last error, until a document comes. */
+      error: string | null;
       /** Why the last `sluice overview --json` gave no overview, or null when it did. */
       unread: string | null;
     };

@@ -401,6 +401,15 @@ fn the_overview_shows_hosts_their_room_and_a_lapse() {
     assert_eq!(hosts[0].room, 0);
 }
 
+/// satisfies: C.4, C.7; the overview spec's "A branch on origin"
+#[test]
+fn the_overview_names_the_remote_a_branch_lands_on() {
+    let h = peers();
+    opened(&h);
+    let view = as_signer(&h, "lead", None).branch_view_of(BRANCH).unwrap();
+    assert_eq!(view.remote.as_deref(), Some("origin"));
+}
+
 /// satisfies: 71, 75; the run-claims spec's "A host full with another
 /// repository's runs claims nothing"
 #[test]

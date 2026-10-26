@@ -230,7 +230,8 @@ fn a_failure_names_its_system() {
 /// where both runs' logs are kept; and that the same head lands once the
 /// operator sets the fail aside, or a real fix changes what the test
 /// reads, never by a change to its inputs only to have it tested again.
-/// `--json` carries the same.
+/// `--json` carries the same, with when and on which host each run was,
+/// and so does the overview's combination while it is listed.
 #[test]
 fn a_flaky_failure_says_so() {
     let f = setup();
@@ -262,6 +263,21 @@ fn a_flaky_failure_says_so() {
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let flaky = &v["failed"][0]["flaky"];
     assert_eq!(flaky["here"], "pass", "{json}");
+    // When and where each run was, from the lines recorded before the
+    // verdict: this run's `ran` line, and the run it contradicts.
+    let last_ran = |f: &Fakes| {
+        let log = String::from_utf8(f.world.files(BRANCH)["log.jsonl"].clone()).unwrap();
+        log.lines()
+            .rev()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|l| l["event"] == "ran" && l["task"] == "tests:t-batch-cards")
+            .unwrap()
+    };
+    let ran = last_ran(&f);
+    assert_eq!(ran["outcome"], "pass", "{ran}");
+    assert_eq!(flaky["at"], ran["at"], "{json}");
+    assert_eq!(flaky["host"], "fake-host", "{json}");
+    assert_eq!(flaky["other"]["host"], "fake-host", "{json}");
     assert_eq!(flaky["other"]["outcome"], "fail", "{json}");
     assert_eq!(flaky["other"]["log"], failed_log.as_str(), "{json}");
     assert!(
@@ -314,6 +330,59 @@ fn a_flaky_failure_says_so() {
         ],
         "{out}"
     );
+
+    // A combination whose failure waits on one ahead of it to be blamed
+    // (18) is listed in the overview, with when and where each run was:
+    // on a branch whose window has room for both.
+    let f = setup();
+    f.world
+        .flaky("tests:t-batch-cards", &[Outcome::Fail, Outcome::Pass]);
+    work(
+        &f,
+        "unit/batch-review",
+        "crw-1-unit-2",
+        &[("tests/t_cards.py", Some("flaky"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/batch-review"]);
+    assert_eq!(code, FAILED, "{out}");
+    f.world.hold_runs(true);
+    work(
+        &f,
+        "unit/ahead",
+        "crw-1-unit-1",
+        &[("plugin/ahead", Some("a"))],
+    );
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/ahead", "--no-wait"],
+    );
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/batch-review",
+            "--no-wait",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    f.world.complete(&tested(&f, 3));
+    sluice(&f, &["step", BRANCH]);
+    let (_, ov) = sluice(&f, &["overview", "--json"]);
+    let ov: serde_json::Value = serde_json::from_str(&ov).unwrap();
+    let c = ov["branches"][0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["submissions"] == serde_json::json!([2, 3]))
+        .unwrap_or_else(|| panic!("{ov:#}"));
+    let listed = &c["failed"][0]["flaky"];
+    assert_eq!(c["state"], "failed", "{c:#}");
+    assert_eq!(listed["here"], "pass", "{c:#}");
+    assert_eq!(listed["at"], last_ran(&f)["at"], "{c:#}");
+    assert_eq!(listed["host"], "fake-host", "{c:#}");
+    assert_eq!(listed["other"]["host"], "fake-host", "{c:#}");
 }
 
 /// Time-limit-1 66: a submission whose run its time limit ended names the
@@ -1140,6 +1209,8 @@ fn overview_shows_every_branch_at_a_glance() {
     assert_eq!(b["branch"], BRANCH);
     assert_eq!(b["at"], f.world.tip(BRANCH).0);
     assert_eq!(b["parallel"], 4);
+    // C.4, C.7: a branch whose policy names no remote names none.
+    assert!(b.get("remote").is_none(), "{json}");
     assert_eq!(b["depth"], 1);
     assert!(b["version"].as_u64().unwrap() > 0);
     // Only the submission still in play, as `status <id> --json` has it.
@@ -1182,6 +1253,38 @@ fn overview_shows_every_branch_at_a_glance() {
         )
     );
     assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
+}
+
+/// 26, 49, 61: the overview names the worktree each submission its recent
+/// lines name came from, the landed #1 read from the finished records.
+#[test]
+fn overview_names_where_recent_submissions_came_from() {
+    let f = setup();
+    three_submissions(&f);
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+
+    let (_, json) = sluice(&f, &["overview", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let b = &v["branches"][0];
+    let mut named: Vec<u64> = b["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| {
+            r["ids"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![r["id"].clone()])
+        })
+        .map(|id| id.as_u64().unwrap())
+        .collect();
+    named.sort_unstable();
+    assert_eq!(named, [1, 2], "{json}");
+    assert_eq!(
+        b["recent_from"],
+        serde_json::json!({"1": "unit/touches", "2": "unit/batch-review"}),
+        "{json}"
+    );
 }
 
 /// ADR 0028: a combination under test carries its run's tasks, as a
@@ -3659,6 +3762,153 @@ fn status_marks_a_worktree_whose_release_failed() {
     let failed = &doc["worktrees"][0]["release_failed"];
     assert_eq!(failed["tries"], 1, "{doc}");
     assert_eq!(failed["stopped"], true, "{doc}");
+}
+
+/// The lines of `text` from the one that starts with `head` on.
+fn from_line<'a>(text: &'a str, head: &str) -> Vec<&'a str> {
+    text.lines().skip_while(|l| !l.starts_with(head)).collect()
+}
+
+/// 123, 26: `sluice overview` says nothing of a checkout its next round
+/// tries again, which `--json` lists with `stopped` false; once its tries
+/// are spent it names it under its branch's line, with the last line of
+/// what failed and the two commands, and `--json` lists it held.
+#[test]
+fn overview_names_a_held_checkout_under_its_branch() {
+    let f = setup_one_retry();
+    let first = format!("sluice/try/{BRANCH}/1");
+    f.world.place_release_fails(&first, Some(RELEASE_FAILS));
+    work(
+        &f,
+        "unit/a",
+        "unit/a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+
+    let (_, text) = sluice(&f, &["overview"]);
+    assert!(!text.contains(&first), "{text}");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(out.contains("tried again by the next round"), "{out}");
+    let (_, out) = sluice(&f, &["overview", "--json"]);
+    let held = &json(&out)["branches"][0]["held_checkouts"];
+    assert_eq!(held[0]["place"], first, "{held}");
+    assert_eq!(held[0]["stopped"], false, "{held}");
+    assert_eq!(held[0]["tries"], 1, "{held}");
+
+    work(
+        &f,
+        "unit/b",
+        "unit/b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    let (_, text) = sluice(&f, &["overview"]);
+    let lines = from_line(&text, &format!("{BRANCH} at "));
+    assert!(
+        lines[1].starts_with(&format!("  {first} is held: its release failed 2 times: "))
+            && lines[1].ends_with(RELEASE_FAILS),
+        "{text}"
+    );
+    assert_eq!(
+        lines[2],
+        format!(
+            "    sluice release {first} runs it again; \
+             sluice release {first} --accept-failure frees it without"
+        ),
+        "{text}"
+    );
+    let (_, out) = sluice(&f, &["overview", "--json"]);
+    let doc = json(&out);
+    let held = doc["branches"][0]["held_checkouts"]
+        .as_array()
+        .expect("held checkouts are listed");
+    assert_eq!(held.len(), 1, "{doc}");
+    assert_eq!(held[0]["place"], first);
+    assert_eq!(held[0]["tries"], 2);
+    assert_eq!(held[0]["stopped"], true);
+    assert!(held[0]["failed"].as_str().unwrap().contains(RELEASE_FAILS));
+    assert!(held[0]["at"].is_string());
+    assert!(held[0].get("host").is_none(), "{doc}");
+}
+
+/// A worktree `unit/a` of `BRANCH` whose `sluice release` failed once,
+/// which holds it, and its path as the overview names it.
+fn held_worktree(f: &Fakes) -> String {
+    work(
+        f,
+        "unit/a",
+        "agent-a",
+        &[("plugin/lib/plan.py", Some("p2"))],
+    );
+    exec(f, &[BRANCH, "--worktree", "unit/a"]);
+    f.world.release_fails(Some(RELEASE_FAILS));
+    release(f, &["--worktree", "unit/a"]);
+    f.world.release_fails(None);
+    let (_, out) = sluice(f, &["overview", "--json"]);
+    let doc = json(&out);
+    assert_eq!(
+        doc["sessions"][0]["release_failed"]["stopped"], true,
+        "{doc}"
+    );
+    doc["sessions"][0]["worktree"].as_str().unwrap().to_string()
+}
+
+/// 123, 26: a held worktree is named under its branch's line, with what
+/// failed and `sluice release --worktree <path>`.
+#[test]
+fn overview_names_a_held_worktree_under_its_branch() {
+    let f = setup_releasing();
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("p3"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, LANDED, "{out}");
+    let path = held_worktree(&f);
+    let (_, text) = sluice(&f, &["overview"]);
+    let lines = from_line(&text, &format!("{BRANCH} at "));
+    assert!(
+        lines[1].starts_with(&format!(
+            "  worktree {path} is held: its release failed once: "
+        )) && lines[1].ends_with(RELEASE_FAILS),
+        "{text}"
+    );
+    assert_eq!(
+        lines[2],
+        format!(
+            "    sluice release --worktree {path} runs it again; \
+             sluice release --worktree {path} --accept-failure frees it without"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("no records"), "{text}");
+}
+
+/// 123: a held worktree of a branch with no records is named under a
+/// line of its own for that branch.
+#[test]
+fn overview_names_a_held_worktree_of_a_branch_with_no_records() {
+    let f = setup_releasing();
+    let path = held_worktree(&f);
+    let (code, text) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0);
+    let lines = from_line(&text, &format!("{BRANCH} · no records"));
+    assert!(lines.len() > 2, "{text}");
+    assert!(
+        lines[1].starts_with(&format!("  worktree {path} is held: ")),
+        "{text}"
+    );
+    assert!(
+        lines[2].starts_with(&format!(
+            "    sluice release --worktree {path} runs it again"
+        )),
+        "{text}"
+    );
 }
 
 // ---------------------------------------------------------------------------
