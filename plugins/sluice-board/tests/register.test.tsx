@@ -1,13 +1,41 @@
 import type { On } from "claude-code";
-import type { Engine } from "claude-code/testing";
+import type { Engine, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
-import type { Overview } from "../types";
-import { NOW, overview, withChecks, withRelease, withTasks } from "./fixture";
+import type { Flaky, Overview } from "../types";
+import {
+  NOW,
+  overview,
+  withChecks,
+  withConflict,
+  withLinks,
+  withPreviews,
+  withRelease,
+  withTasks,
+} from "./fixture";
 
 const ROOT = "/work/sluice/plugin-board";
 const WHOLE = { isStdoutTruncated: false, isStderrTruncated: false };
 const LOG = "/work/sluice/sluice.git/sluice/.logs/main/c41/cli:test.log";
+/** The log of the run a flaky failure contradicts. */
+const OTHER = "/work/sluice/sluice.git/sluice/.logs/main/c38/cli:test.log";
+
+/** `cli:test` passed here, read as failed for a fail recorded earlier, whose log is `log`. */
+function flaky(log?: string): Flaky {
+  return {
+    here: "pass",
+    at: "2026-10-16T19:42:05Z",
+    host: "devbox",
+    other: {
+      outcome: "fail",
+      at: "2026-10-16T19:10:30Z",
+      branch: "main",
+      combination: "4f1c2aa0e1",
+      host: "mac-studio",
+      ...(log ? { log } : {}),
+    },
+  };
+}
 
 /** The fixture, then #13 blamed. */
 function blamed(): Overview {
@@ -29,7 +57,7 @@ function blamed(): Overview {
 const ran: string[] = [];
 
 /** The fixture, with #9's blame and its failed test kept on a combination. */
-function blamedWithLog(log: string): Overview {
+function blamedWithLog(log: string, f?: Flaky): Overview {
   const d = overview();
   d.branches[0]!.candidates.push({
     id: "c40",
@@ -40,20 +68,22 @@ function blamedWithLog(log: string): Overview {
     executor: "sandbox",
     ran: 1,
     replayed: 0,
-    failed: [{ task: "cli:test", log }],
+    failed: [{ task: "cli:test", log, ...(f ? { flaky: f } : {}) }],
   });
   return d;
 }
 
 /**
  * A host where sluice answers from `docs`, streamed by --watch in turn, and
- * the session was started with the variables `env`.
+ * the session was started with the variables `env`; a command `more` names
+ * prints what it says there, before any other answer.
  */
 function host(
   on: On,
   docs: Overview[],
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
   env: Record<string, string> = {},
+  more: Record<string, string> = {},
 ) {
   mock.env(on, env);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -61,6 +91,9 @@ function host(
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
     ran.push(argv);
+    const answer = more[argv];
+    if (answer !== undefined)
+      return { value: { exitCode: 0, stdout: answer, stderr: "", ...WHOLE } };
     if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
     if (argv === "sluice status 9 --json") {
@@ -173,6 +206,8 @@ test("the band and the pane show the queue on every surface", async ($, on) => {
     expect(
       await pane.find({ type: "Text", text: /▶ testing main\+#12\+#13\s+2m10s \/ 15m/ }),
     ).toBeDefined();
+    // A combination whose runner lists no tasks is a plain line, nothing to press.
+    expect(await pane.find({ type: "Button", key: "tasks-main-c41" })).toBeUndefined();
     // Headed as the herdr plugin's popup is.
     const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
     expect(heads.map((h) => h.text)).toEqual(["TESTING", "QUEUED", "RECENT"]);
@@ -180,6 +215,186 @@ test("the band and the pane show the queue on every surface", async ($, on) => {
     expect(link?.props.href).toBe("https://github.com/agentplot/sluice/pull/41");
     await pane.unmount();
   }
+});
+
+test("a branch that lands on another remote links its pull requests there", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d = overview();
+  d.branches[0]!.remote = "upstream";
+  // Two documents name it: it is resolved once.
+  host(
+    on,
+    [d, d],
+    nothingSeen(),
+    {},
+    {
+      "git remote get-url origin": "git@github.com:fork-owner/sluice.git\n",
+      "git remote get-url upstream": "https://github.com/agentplot/sluice.git\n",
+    },
+  );
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(ran.filter((r) => r === "git remote get-url upstream")).toHaveLength(1);
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const link = await pane.find({ type: "Link", text: "PR 41" });
+  expect(link?.props.href).toBe("https://github.com/agentplot/sluice/pull/41");
+  await pane.unmount();
+});
+
+/** The pane of a host whose overview is `d`, its remotes answering as `more` says. */
+async function paneOf($: Engine, on: On, d: Overview, more: Record<string, string> = {}) {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [d], nothingSeen(), {}, more);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  return $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+}
+
+const SLUICE = "https://github.com/agentplot/sluice";
+
+/** A link's own words: the kit's `text` of a Link leads with its address. */
+function words(l: { children: unknown[] }): string {
+  return l.children.map(String).join("");
+}
+
+test("a landing on GitHub links its commit, and each pull request it landed", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin"));
+  const links = (await pane.findAll({ type: "Link" })).map((l) => [words(l), l.props.href]);
+  expect(links).toEqual([
+    // QUEUED: #14.
+    ["PR 41", `${SLUICE}/pull/41`],
+    // RECENT, newest first: #9's blame, then #11 and #12's landing, #12 from no pull request.
+    ["PR 40", `${SLUICE}/pull/40`],
+    ["9ecc34a", `${SLUICE}/commit/9ecc34a1b2`],
+    ["PR 41", `${SLUICE}/pull/41`],
+  ]);
+  // Both in the landing's own row.
+  const row = JSON.stringify(
+    (await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as / }))?.children,
+  );
+  expect(row).toContain(`${SLUICE}/commit/9ecc34a1b2`);
+  expect(row).toContain(`${SLUICE}/pull/41`);
+  await pane.unmount();
+});
+
+test("a landing with no remote, or one off GitHub, names its commit as plain text", async ($, on) => {
+  const pane = await paneOf($, on, withLinks());
+  expect(
+    await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as 9ecc34a/ }),
+  ).toBeDefined();
+  expect(await pane.find({ type: "Link", text: "9ecc34a" })).toBeUndefined();
+  await pane.unmount();
+});
+
+test("a branch whose remote is off GitHub links nothing", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("mirror"), {
+    "git remote get-url mirror": "https://git.example.test/sluice.git\n",
+  });
+  expect(
+    await pane.find({ type: "Text", text: /✓ 19:41 #11 #12 landed as 9ecc34a$/ }),
+  ).toBeDefined();
+  expect(await pane.findAll({ type: "Link" })).toEqual([]);
+  await pane.unmount();
+});
+
+test("a blamed pull request is linked beside its row, which still opens its tests", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin"));
+  const pr = await pane.find({ type: "Link", text: "PR 40" });
+  expect(pr?.props.href).toBe(`${SLUICE}/pull/40`);
+  // Beside the button, never inside it.
+  const button = await pane.find({ type: "Button", key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  expect(JSON.stringify(button?.children)).not.toContain("PR");
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "last line" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a sluice older than where submissions came from names no pull request on RECENT", async ($, on) => {
+  const pane = await paneOf($, on, withLinks("origin", false));
+  const links = (await pane.findAll({ type: "Link" })).map(words);
+  expect(links).toEqual(["PR 41", "9ecc34a"]);
+  await pane.unmount();
+});
+
+test("PREVIEWS: each preview's name, branch@rev7 and state, and its addresses linked", async ($, on) => {
+  const pane = await paneOf($, on, withPreviews());
+  const heads = await pane.findAll({ type: "Text", text: /^(CHECKING|PREVIEWS|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["RECENT", "PREVIEWS"]);
+  const up = await pane.find({
+    type: "Text",
+    text: /^ {2}preview\/4f1c2aa0e1b2 {2}main@4f1c2aa {2}up {2}web: /,
+  });
+  expect(up).toBeDefined();
+  const link = await pane.find({ type: "Link", text: "web-4f1c2aa.example.test" });
+  expect(link?.props.href).toBe("https://web-4f1c2aa.example.test");
+  expect(words(link!)).toBe("https://web-4f1c2aa.example.test");
+  expect(JSON.stringify(up?.children)).toContain("https://web-4f1c2aa.example.test");
+  // One whose policy names no addresses: its row, and no link.
+  expect(
+    await pane.find({ type: "Text", text: "  preview/9ecc34a1b2c3  main@9ecc34a  starting" }),
+  ).toBeDefined();
+  expect(
+    (await pane.findAll({ type: "Link" })).filter((l) =>
+      /example\.test/.test(String(l.props.href)),
+    ),
+  ).toHaveLength(1);
+  expect(await pane.find({ type: "Text", text: /0 worktrees held · 2 previews/ })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a link that is not https: is drawn as a link on every surface, the engine plain on desktop", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [withPreviews("http://localhost:4001")], nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // The kit reports the tree a surface is handed, never what it paints: on
+  // desktop the engine draws this link's text plain (LinkProps.href), and the
+  // tree keeps the Link. So the test pins what the kit marks, the same Link
+  // handed to both surfaces and taken by each; an engine that refused it, or
+  // a kit that marked it plain, fails here rather than opening nothing.
+  for (const surface of ["desktop", "terminal"] as const) {
+    const pane = await $.ui.mount({
+      plugin: "sluice-board",
+      surface,
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+    await expect(pane.drawn()).resolves.toBeDefined();
+    const row = await pane.find({ type: "Text", text: /web: / });
+    expect(row?.children.slice(-2)).toEqual([
+      "  web: ",
+      {
+        type: "Link",
+        props: { href: "http://localhost:4001" },
+        children: ["http://localhost:4001"],
+      },
+    ]);
+    await pane.unmount();
+  }
+});
+
+test("no PREVIEWS while there are none", async ($, on) => {
+  const pane = await paneOf($, on, overview());
+  expect(await pane.find({ type: "Text", text: "PREVIEWS" })).toBeUndefined();
+  await pane.unmount();
 });
 
 test("the pane leaves out branches with nothing queued and no event this quarter hour", async ($, on) => {
@@ -219,7 +434,7 @@ test("the pane leaves out branches with nothing queued and no event this quarter
   await pane.unmount();
 });
 
-test("a combination's tasks: the count and bar in the band, the list in the pane alone", async ($, on) => {
+test("a combination's tasks: the count and bar in the band, the list in the pane on a press", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = {
@@ -256,10 +471,34 @@ test("a combination's tasks: the count and bar in the band, the list in the pane
       text: /▶ testing main\+#12\+#13\s+3\/5 ▓▓▓▓▓▓░░░░\s+2m10s \/ 15m/,
     }),
   ).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /✓ sluice:test\s+1m48s/ })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /… sluice:e2e\s+running/ })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /· core:test\s+waiting/ })).toBeDefined();
+  // Folded until its row is pressed.
+  const tasks = /^\s+[✓✗…·] (sluice|core|site):/;
+  expect(await pane.findAll({ type: "Text", text: tasks })).toEqual([]);
+  expect(await pane.find({ type: "Button", key: "tasks-main-c41" })).toBeDefined();
+  await pane.press({ key: "tasks-main-c41" });
+  await pane.redraw();
+  const lines = (await pane.findAll({ type: "Text", text: tasks })).map((t) => t.text);
+  const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+  expect(at(/✓ sluice:test\s+1m48s$/)).toBeGreaterThanOrEqual(0);
+  expect(at(/… sluice:e2e\s+running 1m12s$/)).toBeGreaterThan(at(/✓ sluice:test/));
+  expect(at(/· core:test\s+waiting$/)).toBeGreaterThan(at(/… sluice:e2e/));
+  await pane.press({ key: "tasks-main-c41" });
+  await pane.redraw();
+  expect(await pane.findAll({ type: "Text", text: tasks })).toEqual([]);
   await pane.unmount();
+
+  // The band is as it was, whatever the pane opened.
+  const after = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await after.find({ type: "Text", text: /testing main\+#12\+#13 3\/5 ▓▓▓▓▓▓░░░░ 2m10s\/15m/ }),
+  ).toBeDefined();
+  expect(await after.find({ type: "Text", text: /sluice:e2e/ })).toBeUndefined();
+  await after.unmount();
 });
 
 test("agents' checks: the clause in the band, CHECKING and the host line in the pane", async ($, on) => {
@@ -320,6 +559,50 @@ test("agents' checks: the clause in the band, CHECKING and the host line in the 
   expect(await pane.findAll({ type: "Text", text: /^\s+#\d+ queued/ })).toHaveLength(1);
   // The worktree only warned of holds no ports, and is not counted held.
   expect(await pane.find({ type: "Text", text: "6 worktrees held · 0 previews" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("a CHECKING row opens to its run's tasks, and folds", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [withChecks()], { prompts: [], toasts: [], status: [] });
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const tasks = async () =>
+    (await pane.findAll({ type: "Text", text: /^\s+[✓✗…·] t:\d+\s/ })).map((t) => t.text.trim());
+  const press = async (name: string) => {
+    await pane.press({ key: `checks-/work/sluice/${name}` });
+    await pane.redraw();
+  };
+  expect(await tasks()).toEqual([]);
+
+  // A check under way: its eight tasks, marked and ordered as a combination's.
+  await press("fix-cards");
+  const going = await tasks();
+  expect(going).toHaveLength(8);
+  expect(going.slice(0, 4).map((t) => t.split(" ")[0])).toEqual(["✓", "✓", "✓", "…"]);
+  expect(going.slice(4).every((t) => t.startsWith("· "))).toBe(true);
+  await press("fix-cards");
+  expect(await tasks()).toEqual([]);
+
+  // A command check has none.
+  await press("e2e-stack");
+  expect(await pane.find({ type: "Text", text: "runs make e2e · no tasks" })).toBeDefined();
+  await press("e2e-stack");
+  expect(await pane.find({ type: "Text", text: /no tasks/ })).toBeUndefined();
+
+  // A check that ended: the run it ended with.
+  await press("done-ok");
+  expect(await tasks()).toHaveLength(14);
+  await press("done-ok");
+  expect(await tasks()).toEqual([]);
   await pane.unmount();
 });
 
@@ -883,6 +1166,180 @@ test("a log it cannot read says why", async ($, on) => {
   await pane.unmount();
 });
 
+const THIS_RUN = "this run: passed 19:42 on devbox";
+const THAT_RUN = "the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa";
+
+/** The texts an opened row shows, from its test's name on. */
+async function openedTexts(pane: {
+  findAll: (q: { type: string }) => Promise<{ text: string }[]>;
+}) {
+  const all = (await pane.findAll({ type: "Text" })).map((t) => t.text);
+  return all.slice(all.indexOf("cli:test"));
+}
+
+test("a flaky failure opens to this run and the run it contradicts, each with its log", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const status = { id: 9, failed: [{ task: "cli:test", log: LOG, flaky: flaky(OTHER) }] };
+  host(
+    on,
+    [blamedWithLog(LOG, flaky(OTHER))],
+    nothingSeen(),
+    {},
+    {
+      "sluice status 9 --json": JSON.stringify(status),
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  const both = [
+    "cli:test",
+    THIS_RUN,
+    `${LOG} [copy]`,
+    "first",
+    "last line",
+    THAT_RUN,
+    `${OTHER} [copy]`,
+    "other first",
+    "other last",
+  ];
+  // The blamed row, from sluice's record of #9.
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, both.length)).toEqual(both);
+  await pane.press({ key: "blamed-main-9-2026-10-16T19:42:00Z" });
+  await pane.redraw();
+  // The `log of` row, from the combination the overview lists.
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, both.length)).toEqual(both);
+  expect(ran).toEqual([
+    "sluice status 9 --json",
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+  ]);
+  await pane.unmount();
+});
+
+test("a flaky failure whose contradicting run's log was not kept says so", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  host(on, [blamedWithLog(LOG, flaky())], nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  const shown = await openedTexts(pane);
+  expect(shown.slice(shown.indexOf(THAT_RUN), shown.indexOf(THAT_RUN) + 2)).toEqual([
+    THAT_RUN,
+    "its log was not kept",
+  ]);
+  expect(ran).toEqual([`tail -n 20 -- ${LOG}`]);
+  await pane.unmount();
+});
+
+test("a flaky failure whose own log cannot be read still shows the run it contradicts", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const gone = "/gone/cli:test.log";
+  host(
+    on,
+    [blamedWithLog(gone, flaky(OTHER))],
+    nothingSeen(),
+    {},
+    {
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  await pane.press({ key: "log-main-cli:test" });
+  await pane.redraw();
+  expect((await openedTexts(pane)).slice(0, 8)).toEqual([
+    "cli:test",
+    THIS_RUN,
+    `${gone} [copy]`,
+    "cannot read it: tail: No such file or directory",
+    THAT_RUN,
+    `${OTHER} [copy]`,
+    "other first",
+    "other last",
+  ]);
+  await pane.unmount();
+});
+
+/** A RECENT conflict, its `with` as given: closed, opened to `inWay`, folded, with no command run. */
+function conflictOpens(with_: number[], inWay: string): TestBody {
+  return async ($, on) => {
+    const next = "next: take main into the worktree, resolve and commit, then sluice submit main";
+    const clock = mock.clock(on);
+    await clock.set(NOW);
+    host(on, [withConflict(with_)], { prompts: [], toasts: [], status: [] });
+    await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+    await clock.settle();
+    ran.length = 0;
+    const pane = await $.ui.mount({
+      plugin: "sluice-board",
+      surface: "terminal",
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+    const key = "conflict-main-218-2026-10-16T19:44:00Z";
+    expect(
+      await pane.find({ type: "Text", text: /⚠ 19:44 #218 conflict · docs\/builds\.md/ }),
+    ).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^files: / })).toBeUndefined();
+    await pane.press({ key });
+    await pane.redraw();
+    expect(await pane.find({ type: "Text", text: "files: docs/builds.md" })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: inWay })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: next })).toBeDefined();
+    await pane.press({ key });
+    await pane.redraw();
+    expect(await pane.find({ type: "Text", text: /^(files|in the way|next): / })).toBeUndefined();
+    // Built from the line and the overview: no command ran.
+    expect(ran).toEqual([]);
+    await pane.unmount();
+  };
+}
+
+test(
+  "a RECENT conflict with a queued submission opens to it, and folds",
+  conflictOpens([217], "in the way: #217 (bolt/runner)"),
+);
+
+test(
+  "a RECENT conflict with what the branch landed opens to it, and folds",
+  conflictOpens([], "in the way: what main has landed"),
+);
+
 /** What a forecast host answers, changed as a test goes. */
 type World = { doc: Overview; head: string; answer: object; forecasts: number };
 
@@ -951,6 +1408,76 @@ function forecastHost(
 function nothingSeen() {
   return { prompts: [] as string[], toasts: [] as string[], status: [] as (string | undefined)[] };
 }
+
+test("a press only reads", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  // One pane with every kind of row that opens: main testing c41 with its
+  // tasks, the agents' checks, a RECENT conflict and #9's flaky blame with
+  // its `log of` row; and this session's work forecast to conflict.
+  const d = withConflict([217]);
+  const main = d.branches[0]!;
+  main.candidates[0]!.tasks = withTasks().branches[0]!.candidates[0]!.tasks;
+  main.submissions = main.submissions.filter((s) => s.id !== 13);
+  main.candidates.push(blamedWithLog(LOG, flaky(OTHER)).branches[0]!.candidates.at(-1)!);
+  const checks = withChecks();
+  d.sessions = checks.sessions;
+  d.room = checks.room;
+  const status = { id: 9, failed: [{ task: "cli:test", log: LOG, flaky: flaky(OTHER) }] };
+  host(
+    on,
+    [d],
+    nothingSeen(),
+    {},
+    {
+      "sluice status 9 --json": JSON.stringify(status),
+      [`tail -n 20 -- ${OTHER}`]: "other first\nother last\n",
+      "git rev-parse HEAD": "h1\n",
+      "git rev-list --count 9ecc34a1b2..HEAD": "4\n",
+      "sluice submit main --check --json": JSON.stringify(WITH_217),
+    },
+  );
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  ran.length = 0;
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(
+    await pane.find({ type: "Text", text: "  ⚠ your work would conflict · docs/builds.md" }),
+  ).toBeDefined();
+  const rows = [
+    "tasks-main-c41",
+    "checks-/work/sluice/fix-cards",
+    "checks-/work/sluice/e2e-stack",
+    "checks-/work/sluice/done-ok",
+    "conflict-main-218-2026-10-16T19:44:00Z",
+    "forecast-main",
+    "blamed-main-9-2026-10-16T19:42:00Z",
+    "log-main-cli:test",
+  ];
+  for (const key of rows) {
+    // Open, then fold.
+    for (let n = 0; n < 2; n++) {
+      await pane.press({ key });
+      await pane.redraw();
+    }
+  }
+  // Only sluice's record of the blamed submission and the logs' last lines
+  // were read, by the blame and the `log of` row; the rest ran nothing.
+  expect(ran).toEqual([
+    "sluice status 9 --json",
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+    `tail -n 20 -- ${LOG}`,
+    `tail -n 20 -- ${OTHER}`,
+  ]);
+  await pane.unmount();
+});
 
 test("main landing a change to the same lines starts one turn, once, a reload included", async ($, on) => {
   const clock = mock.clock(on);
@@ -1033,6 +1560,68 @@ test("a conflict with a queued submission names it, and its failing clears it on
   ]);
   await clock.advance(3000);
   expect(seen.prompts).toHaveLength(told + 1);
+});
+
+test("the forecast's conflict is a row under its branch, kept across a reload until none is found", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const d1 = free();
+  d1.branches[0]!.submissions.push({
+    id: 217,
+    state: "testing",
+    from: { agent: "runner", worktree: "bolt/runner" },
+  });
+  const w: World = { doc: d1, head: "h1", answer: WITH_217, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(1);
+  const row = "  ⚠ your work would conflict · docs/builds.md";
+  const mount = () =>
+    $.ui.mount({
+      plugin: "sluice-board",
+      surface: "terminal",
+      component: "Pane",
+      props: PANE,
+      requestId: "sluice",
+    });
+  let pane = await mount();
+  expect(await pane.find({ type: "Text", text: row })).toBeDefined();
+  // Under main, after its queue and before RECENT.
+  const order = (
+    await pane.findAll({ type: "Text", text: /^(QUEUED|RECENT| {2}⚠ your work)/ })
+  ).map((t) => t.text);
+  expect(order).toEqual(["QUEUED", row, "RECENT"]);
+  await pane.press({ key: "forecast-main" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "files: docs/builds.md" })).toBeDefined();
+  expect(await pane.find({ type: "Text", text: "in the way: #217 (bolt/runner)" })).toBeDefined();
+  expect(
+    await pane.find({
+      type: "Text",
+      text: "next: take main into the worktree, resolve and commit, then sluice submit main",
+    }),
+  ).toBeDefined();
+  await pane.press({ key: "forecast-main" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: /^in the way: / })).toBeUndefined();
+  await pane.unmount();
+
+  // A reload keeps it.
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.advance(3000);
+  pane = await mount();
+  expect(await pane.find({ type: "Text", text: row })).toBeDefined();
+  await pane.unmount();
+
+  // #217 fails: the next forecast finds no conflict, and the row goes.
+  w.doc = free();
+  w.answer = CLEAR;
+  await clock.advance(3000);
+  pane = await mount();
+  expect(await pane.find({ type: "Text", text: /your work would conflict/ })).toBeUndefined();
+  await pane.unmount();
 });
 
 test("a conflict cleared by the agent's own merge starts no turn", async ($, on) => {

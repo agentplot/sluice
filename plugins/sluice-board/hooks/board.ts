@@ -2,6 +2,7 @@
 // pure functions over the document, so the tests need no sluice running.
 
 import type {
+  Flaky,
   Forecast,
   LastResult,
   Latest,
@@ -45,6 +46,25 @@ export function hostsLine(hosts: readonly OverviewHost[]): string {
 /** A failed test by name, and the system it failed on where there is one. */
 export function failedName(f: OverviewFailed): string {
   return f.system ? `${f.task} (${f.system})` : f.task;
+}
+
+/** ` 19:42 on devbox`: when and where a run ran, each left out when the record lacks it. */
+function ranAt(at: string | undefined, host: string | undefined): string {
+  const time = at ? at.slice(11, 16) : "";
+  return `${time ? ` ${time}` : ""}${host ? ` on ${host}` : ""}`;
+}
+
+/**
+ * The headings of a flaky failure's two runs: this run's outcome, time and
+ * host, then the run it contradicts, with its branch and combination too.
+ */
+export function flakyLines(f: Flaky): [string, string] {
+  const word = (o: "pass" | "fail") => (o === "pass" ? "passed" : "failed");
+  const o = f.other;
+  return [
+    `this run: ${word(f.here)}${ranAt(f.at, f.host)}`,
+    `the run it contradicts: ${word(o.outcome)}${ranAt(o.at, o.host)} · ${o.branch} ${o.combination.slice(0, 7)}`,
+  ];
 }
 
 /** `2m10s`, `45s`, `1h03m`. */
@@ -126,19 +146,26 @@ export function progress(c: { tasks?: OverviewTask[] }): string | null {
 
 const MARK = { passed: "✓", replayed: "✓", failed: "✗", running: "…", waiting: "·" } as const;
 
-/** What follows a task's name: how long it took once ended, else its state. */
-function taskDetail(t: OverviewTask): string {
+/** What follows a task's name: how long it took once ended, how long it has run, else its state. */
+function taskDetail(t: OverviewTask, now: number): string {
   if (t.state === "replayed") return "replayed";
-  if (t.state === "running" || t.state === "waiting") return t.state;
+  if (t.state === "running") {
+    const took = since(t.started, now);
+    return took === undefined ? "running" : `running ${duration(took)}`;
+  }
+  if (t.state === "waiting") return t.state;
   const took = t.started && t.ended ? (Date.parse(t.ended) - Date.parse(t.started)) / 1000 : NaN;
   return Number.isNaN(took) ? t.state : duration(took);
 }
 
 /**
  * The pane's task list: ended tasks in the order they ended, then running
- * ones, then waiting ones, names padded and times right-aligned.
+ * ones, then waiting ones, names padded and times right-aligned, at `now`.
  */
-export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"]; text: string }[] {
+export function taskLines(
+  c: { tasks?: OverviewTask[] },
+  now: number,
+): { state: OverviewTask["state"]; text: string }[] {
   const tasks = c.tasks ?? [];
   const rank = (t: OverviewTask) => (ended(t) ? 0 : t.state === "running" ? 1 : 2);
   const order = tasks
@@ -151,11 +178,19 @@ export function taskLines(c: OverviewCandidate): { state: OverviewTask["state"];
     )
     .map((x) => x.t);
   const name = Math.max(0, ...order.map((t) => t.target.length));
-  const detail = Math.max(0, ...order.map((t) => taskDetail(t).length));
+  const detail = Math.max(0, ...order.map((t) => taskDetail(t, now).length));
   return order.map((t) => ({
     state: t.state,
-    text: `${MARK[t.state]} ${t.target.padEnd(name)}  ${taskDetail(t).padStart(detail)}`,
+    text: `${MARK[t.state]} ${t.target.padEnd(name)}  ${taskDetail(t, now).padStart(detail)}`,
   }));
+}
+
+/** How many opened rows the pane keeps, the oldest let go first. */
+const OPENED = 200;
+
+/** The rows opened in place, with `key` opened, or folded when it was open. */
+export function flipped(list: readonly string[], key: string): string[] {
+  return list.includes(key) ? list.filter((k) => k !== key) : [...list, key].slice(-OPENED);
 }
 
 /** Whether a branch has anything queued or under test; the rest are left out of the band. */
@@ -323,6 +358,8 @@ export type CheckRow = {
   key: string;
   state: "running" | "passed" | "failed" | "ended";
   text: string;
+  /** The checkout it came from, whose run the row opens to. */
+  session: OverviewSession;
 };
 
 function checkRow(s: OverviewSession, now: number): CheckRow | null {
@@ -335,6 +372,7 @@ function checkRow(s: OverviewSession, now: number): CheckRow | null {
       key: s.worktree,
       state: "running",
       text: [who, ...(what ? [what] : []), ...clock].join(" "),
+      session: s,
     };
   }
   const r = s.last_result;
@@ -345,12 +383,41 @@ function checkRow(s: OverviewSession, now: number): CheckRow | null {
     key: s.worktree,
     state: r.outcome === "pass" ? "passed" : r.outcome === "fail" ? "failed" : "ended",
     text: `${who} ${words}`,
+    session: s,
   };
+}
+
+/**
+ * What a CHECKING row opens to: the tasks of the run going, else of the run
+ * that ended; a command's run has none, and says what it runs while it goes,
+ * since a finished run keeps no command.
+ */
+export function checkLines(
+  s: OverviewSession,
+  now: number,
+): { state?: OverviewTask["state"]; text: string }[] {
+  const run = s.run ?? s.last_result;
+  if (s.run?.command) return [{ text: `runs ${s.run.command} · no tasks` }];
+  if (!s.run && s.last_result?.kind === "command") return [{ text: "ran a command · no tasks" }];
+  if (!run?.tasks || run.tasks.length === 0) return [{ text: "no tasks reported" }];
+  return taskLines(run, now);
 }
 
 /** CHECKING: agents' checks, as load on the host and never as submissions. */
 export function checkRows(doc: Overview, now: number): CheckRow[] {
   return doc.sessions.map((s) => checkRow(s, now)).filter((r): r is CheckRow => r !== null);
+}
+
+/** One row of PREVIEWS: its words, then each address the stack answers on, by label. */
+export type PreviewRow = { name: string; words: string; addresses: [string, string][] };
+
+/** PREVIEWS: `preview/4f1c2aa0e1b2  main@4f1c2aa  up`, and its addresses in the overview's order. */
+export function previewRows(doc: Overview): PreviewRow[] {
+  return doc.previews.map((p) => ({
+    name: p.name,
+    words: `${p.name}  ${p.branch}@${p.revision.slice(0, 7)}  ${p.state}`,
+    addresses: Object.entries(p.addresses ?? {}),
+  }));
 }
 
 /** `host: 4 of 6 runs · 3 queue · 1 agent`, or null while nothing counts against the bound. */
@@ -548,11 +615,51 @@ export function signature(branch: string, f: Forecast): string | null {
   return `${branch}|${paths}|${with_.join(",")}`;
 }
 
+/** A submission in a conflict's way, and the worktree it came from where it is known. */
+export type InWay = { id: number; worktree?: string };
+
 /** What a conflict is contested with: the submissions, or what the branch landed. */
-function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
-  return f.with.length === 0
+function inTheWay(branch: string, inWay: readonly InWay[]): string {
+  return inWay.length === 0
     ? `what ${branch} has landed`
-    : f.with.map((c) => `#${c.id} (${c.from.worktree})`).join(", ");
+    : inWay.map((c) => (c.worktree ? `#${c.id} (${c.worktree})` : `#${c.id}`)).join(", ");
+}
+
+function contested(branch: string, f: NonNullable<Forecast["conflict"]>): string {
+  return inTheWay(branch, forecastInWay(f));
+}
+
+/** What an opened conflict shows: its files, what is in the way, and the next step. */
+export function conflictLines(
+  branch: string,
+  paths: readonly string[],
+  inWay: readonly InWay[],
+): string[] {
+  return [
+    `files: ${paths.join(", ")}`,
+    `in the way: ${inTheWay(branch, inWay)}`,
+    `next: take ${branch} into the worktree, resolve and commit, then sluice submit ${branch}`,
+  ];
+}
+
+/** What is in a RECENT conflict's way, each named with the worktree it came from. */
+export function recentInWay(b: OverviewBranch, r: Recent): InWay[] {
+  const from = b.recent_from ?? {};
+  return (r.with ?? []).map((id) => {
+    const worktree = from[String(id)];
+    return worktree ? { id, worktree } : { id };
+  });
+}
+
+/** The row a conflict a forecast found draws under its branch. */
+export function forecastWords(f: NonNullable<Forecast["conflict"]>): string {
+  const more = f.paths.length > 1 ? ` +${f.paths.length - 1}` : "";
+  return `your work would conflict · ${f.paths[0] ?? "a file"}${more}`;
+}
+
+/** What is in a forecast conflict's way, as the forecast names it. */
+export function forecastInWay(f: NonNullable<Forecast["conflict"]>): InWay[] {
+  return f.with.map((c) => ({ id: c.id, worktree: c.from.worktree }));
 }
 
 /** The toast for a conflict a forecast found. */
@@ -625,4 +732,37 @@ export function githubBase(url: string): string | null {
 export function pullOf(worktree: string): number | null {
   const m = worktree.match(/^pull\/(\d+)$/);
   return m ? Number(m[1]) : null;
+}
+
+/** Each remote's GitHub base as the board resolved it, or null when it is not on GitHub. */
+export type Remotes = Record<string, string | null>;
+
+/**
+ * Where a branch's landings are on GitHub: its remote's repository, or null
+ * for a branch with no remote, which lands in this host's repository alone.
+ */
+export function commitBase(b: OverviewBranch, remotes: Remotes): string | null {
+  return b.remote ? (remotes[b.remote] ?? null) : null;
+}
+
+/**
+ * Where a branch's pull requests are on GitHub: its remote's repository, or
+ * origin's when the overview names none, the repository the board knows best.
+ */
+export function pullBase(b: OverviewBranch, remotes: Remotes): string | null {
+  return remotes[b.remote ?? "origin"] ?? null;
+}
+
+/**
+ * The pull requests a recent line's own submissions came from: a landing's
+ * ids, a blame's or a conflict's id, never what is in a conflict's way.
+ */
+export function pullsOf(b: OverviewBranch, r: Recent): number[] {
+  const own = r.event === "landed" ? (r.ids ?? []) : r.id !== undefined ? [r.id] : [];
+  const from = b.recent_from ?? {};
+  return own
+    .map((id) => from[String(id)])
+    .filter((w): w is string => w !== undefined)
+    .map(pullOf)
+    .filter((n): n is number => n !== null);
 }

@@ -12,26 +12,35 @@ import type {
   Forecast,
   Forecasting,
   Mine,
+  OpenedLog,
   OpenedTest,
   Outcome,
   Overview,
+  OverviewFailed,
   OverviewTask,
 } from "../types";
 import type { CheckRow } from "./board";
 import {
   bandLines,
+  checkLines,
   checkRows,
   clearText,
   combination,
+  commitBase,
+  conflictLines,
   conflictText,
   duration,
   emptyLines,
   errorLine,
   failedName,
+  flakyLines,
+  flipped,
   forecastBranch,
+  forecastInWay,
   forecastKey,
   forecasts,
   forecastToast,
+  forecastWords,
   githubBase,
   hostLine,
   hostsLine,
@@ -45,8 +54,12 @@ import {
   openedText,
   outcomes,
   plural,
+  previewRows,
   progress,
+  pullBase,
   pullOf,
+  pullsOf,
+  recentInWay,
   recentKeys,
   recentWords,
   shown,
@@ -76,14 +89,14 @@ const CHECK_COLOR: Record<CheckRow["state"], string | undefined> = {
   ended: undefined,
 };
 const NO_ONE: Mine = { root: null, ids: [], pulls: [] };
-const NOT_YET: Forecasting = { key: null, head: null, told: null };
+const NOT_YET: Forecasting = { key: null, head: null, told: null, branch: null, conflict: null };
 
 const doc = atom({ plugin: "sluice-board", key: "doc" } as const, null);
 const mine = atom({ plugin: "sluice-board", key: "mine" } as const, NO_ONE);
 const told = atom({ plugin: "sluice-board", key: "told" } as const, []);
 const isHidden = atom({ plugin: "sluice-board", key: "isHidden" } as const, false);
 const now = atom({ plugin: "sluice-board", key: "now" } as const, 0);
-const repo = atom({ plugin: "sluice-board", key: "repo" } as const, null);
+const remotes = atom({ plugin: "sluice-board", key: "remotes" } as const, {});
 // Failures opened in place: their keys, and what each showed when opened.
 const opened = atom({ plugin: "sluice-board", key: "opened" } as const, []);
 const details = atom({ plugin: "sluice-board", key: "details" } as const, {});
@@ -96,35 +109,52 @@ const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
 
 type Detail = OpenedTest;
 
-/** What a failure shows opened: each failed test's log tail, read with `tail`. */
-async function open($: $, failed: { task: string; log?: string }[]): Promise<Detail[]> {
+/** A log's last 20 lines, read with `tail`, or why they could not be read. */
+async function tailOf($: $, log: string): Promise<OpenedLog> {
+  const got = await $.process.run(["tail", "-n", "20", "--", log]).catch(() => null);
+  if (got && got.exitCode === 0)
+    return { log, tail: got.stdout.split("\n").filter((l) => l !== "") };
+  return { log, error: (got?.stderr ?? "").trim() || "it could not be read" };
+}
+
+/**
+ * What a failure shows opened: each failed test's log tail, read with
+ * `tail`, and for a flaky one the run it contradicts, its log's tail too.
+ */
+async function open($: $, failed: OverviewFailed[]): Promise<Detail[]> {
   const out: Detail[] = [];
   for (const f of failed) {
-    if (!f.log) {
-      out.push({ task: f.task, error: "no log was kept" });
-      continue;
+    const shown: Detail = f.log
+      ? { ...f, ...(await tailOf($, f.log)) }
+      : { task: f.task, error: "no log was kept" };
+    if (f.flaky) {
+      const other = f.flaky.other.log;
+      shown.flaky = f.flaky;
+      shown.other = other ? await tailOf($, other) : {};
     }
-    const got = await $.process.run(["tail", "-n", "20", "--", f.log]).catch(() => null);
-    if (got && got.exitCode === 0)
-      out.push({ ...f, tail: got.stdout.split("\n").filter((l) => l !== "") });
-    else out.push({ ...f, error: (got?.stderr ?? "").trim() || "it could not be read" });
+    out.push(shown);
   }
   return out;
 }
 
 /** Open a failure in place, or fold it: it never leaves this pane. */
-async function toggle($: $, key: string, failed: () => Promise<{ task: string; log?: string }[]>) {
+async function toggle($: $, key: string, failed: () => Promise<OverviewFailed[]>) {
   if ((await read($, opened)).includes(key)) {
-    await update($, opened, (list) => list.filter((k) => k !== key));
+    await update($, opened, (list) => flipped(list, key));
     return;
   }
   const shown = await open($, await failed());
   await update($, details, (all) => ({ ...all, [key]: shown }));
-  await update($, opened, (list) => [...list, key]);
+  await update($, opened, (list) => (list.includes(key) ? list : flipped(list, key)));
+}
+
+/** Open a row drawn from the document, or fold it: what it shows is drawn live. */
+async function flip($: $, key: string) {
+  await update($, opened, (list) => flipped(list, key));
 }
 
 /** The failed tests of a blamed submission, from sluice. */
-async function blamedTests($: $, id: number): Promise<{ task: string; log?: string }[]> {
+async function blamedTests($: $, id: number): Promise<OverviewFailed[]> {
   const cwd = (await read($, mine)).root ?? undefined;
   const got = await $.process
     .run(["sluice", "status", String(id), "--json"], cwd ? { cwd } : undefined)
@@ -142,6 +172,20 @@ type $ = EngineInterface;
 type How = { wake: boolean; forecast: boolean };
 
 /**
+ * Each remote a branch names that the board has not resolved: its GitHub
+ * base, read once with `git remote get-url`. Its URL is never kept, so one
+ * carrying credentials leaves none in the board's state.
+ */
+async function learnRemotes($: $, next: Overview, cwd: string) {
+  const known = await read($, remotes);
+  const named = next.branches.map((b) => b.remote).filter((r): r is string => r !== undefined);
+  for (const name of [...new Set(named)].filter((r) => !(r in known))) {
+    const url = await output($, ["git", "remote", "get-url", name], cwd);
+    await update($, remotes, (all) => ({ ...all, [name]: url ? githubBase(url) : null }));
+  }
+}
+
+/**
  * A new document: learn this session's submissions, tell new outcomes. An
  * error document is the band's one line, and the last document stays.
  */
@@ -152,6 +196,7 @@ async function take($: $, next: unknown, cwd: string, how: How) {
     return;
   }
   await update($, error, () => null);
+  await learnRemotes($, next, cwd);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
@@ -240,12 +285,25 @@ async function forecastOnce($: $, wake: boolean, quiet: boolean) {
     }
     if (!f) {
       // It could not be formed: wait for the next move, and tell nothing.
-      await update($, forecasting, () => ({ key, head, told: sameHead ? last.told : null }));
+      await update($, forecasting, () => ({
+        ...last,
+        key,
+        head,
+        told: sameHead ? last.told : null,
+      }));
       return;
     }
   }
   const sig = f ? signature(b.branch, f) : null;
-  await update($, forecasting, () => ({ key, head, told: sig }));
+  // The conflict is kept for the pane's row until a forecast finds none.
+  const conflict = f?.conflict ?? null;
+  await update($, forecasting, () => ({
+    key,
+    head,
+    told: sig,
+    branch: conflict ? b.branch : null,
+    conflict,
+  }));
   if (f?.conflict && sig !== last.told) {
     $.ui.toast(forecastToast(b.branch, f.conflict));
     if (wake && !quiet) await $.prompt.submit({ text: conflictText(b.branch, f.conflict) });
@@ -340,7 +398,7 @@ async function follow($: $, cwd: string, first: Overview, chosen: How) {
     .run(["git", "remote", "get-url", "origin"], { cwd })
     .catch(() => null);
   const base = origin && origin.exitCode === 0 ? githubBase(origin.stdout) : null;
-  await update($, repo, () => base);
+  await update($, remotes, (all) => ({ ...all, origin: base }));
   // A session whose orchestrator forecasts for it turns this off.
   const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
   const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
@@ -457,7 +515,7 @@ export const register: Register = (on, options) => {
       ) : null;
     const d = await read($, doc);
     const m = await read($, mine);
-    const base = await read($, repo);
+    const bases = await read($, remotes);
     await read($, now);
     if (!d) {
       // No overview: why sluice could not be read, and what to do; or the
@@ -489,36 +547,97 @@ export const register: Register = (on, options) => {
     // sluice has records of no branch: how a submission gets here.
     const empty = emptyLines(d, first);
     const checks = checkRows(d, at);
+    const previews = previewRows(d);
     const room = hostLine(d.room);
     const held = d.sessions.filter((s) => s.ports !== undefined).length;
     const open_ = await read($, opened);
+    const ahead = await read($, forecasting);
     const shownOf = await read($, details);
-    // An opened failure, under its row: each test, its log, the log's tail.
+    // A run's tasks, opened under its row: drawn from the document as it stands.
+    const tasksView = (k: string, lines: { state?: OverviewTask["state"]; text: string }[]) => (
+      <Box key={`${k}-opened`} flexDirection="column">
+        {lines.map((t) => (
+          <Text
+            key={`${k}-${t.text}`}
+            color={t.state ? TASK_COLOR[t.state] : undefined}
+            dimColor={t.state === undefined || t.state === "waiting"}
+          >
+            {"    "}
+            {t.text}
+          </Text>
+        ))}
+      </Box>
+    );
+    // An opened conflict, under its row: its files, what is in the way, the next step.
+    const linesView = (k: string, lines: string[]) => (
+      <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
+        {lines.map((l) => (
+          <Text key={`${k}-${l}`} dimColor>
+            {l}
+          </Text>
+        ))}
+      </Box>
+    );
+    // The session's own work, forecast to conflict on this branch: a row until a forecast finds none.
+    const forecastRow = (branch: string) => {
+      const f = ahead.branch === branch ? ahead.conflict : null;
+      if (!f) return null;
+      const k = `forecast-${branch}`;
+      return (
+        <Box key={`${k}-row`} flexDirection="column">
+          <Button key={k} plain onPress={() => flip($, k)}>
+            <Text color="yellow">
+              {"  "}⚠ {forecastWords(f)}
+            </Text>
+          </Button>
+          {open_.includes(k) && linesView(k, conflictLines(branch, f.paths, forecastInWay(f)))}
+        </Box>
+      );
+    };
+    // A log as an opened failure shows it: its path to copy, then its tail or why not.
+    const logView = (k: string, l: OpenedLog) => [
+      l.log && (
+        <Button
+          key={`${k}-copy`}
+          plain
+          onPress={() => $.ui.copy({ text: l.log ?? "", surface: e.surface }).then(() => undefined)}
+        >
+          <Text dimColor>{l.log} [copy]</Text>
+        </Button>
+      ),
+      l.error && (
+        <Text key={`${k}-error`} color="red">
+          cannot read it: {l.error}
+        </Text>
+      ),
+      ...(l.tail ?? []).map((line, n) => (
+        <Text key={`${k}-${n}`} dimColor wrap="truncate-end">
+          {line}
+        </Text>
+      )),
+    ];
+    // An opened failure, under its row: each test, its log, the log's tail; a
+    // flaky one's two runs, each headed by when and where it ran.
     const view = (k: string, shown: Detail[]) => (
       <Box key={`${k}-opened`} flexDirection="column" marginLeft={6}>
         {shown.length === 0 && <Text dimColor>no failed tests recorded</Text>}
-        {shown.map((t) => (
-          <Box key={`${k}-${t.task}`} flexDirection="column">
-            <Text bold>{t.task}</Text>
-            {t.log && (
-              <Button
-                key={`${k}-${t.task}-copy`}
-                plain
-                onPress={() =>
-                  $.ui.copy({ text: t.log ?? "", surface: e.surface }).then(() => undefined)
-                }
-              >
-                <Text dimColor>{t.log} [copy]</Text>
-              </Button>
-            )}
-            {t.error && <Text color="red">cannot read it: {t.error}</Text>}
-            {(t.tail ?? []).map((l, n) => (
-              <Text key={`${k}-${t.task}-${n}`} dimColor wrap="truncate-end">
-                {l}
-              </Text>
-            ))}
-          </Box>
-        ))}
+        {shown.map((t) => {
+          const heads = t.flaky ? flakyLines(t.flaky) : null;
+          return (
+            <Box key={`${k}-${t.task}`} flexDirection="column">
+              <Text bold>{t.task}</Text>
+              {heads && <Text>{heads[0]}</Text>}
+              {logView(`${k}-${t.task}`, t)}
+              {heads && <Text>{heads[1]}</Text>}
+              {t.other &&
+                (t.other.log ? (
+                  logView(`${k}-${t.task}-other`, t.other)
+                ) : (
+                  <Text dimColor>its log was not kept</Text>
+                ))}
+            </Box>
+          );
+        })}
       </Box>
     );
     return (
@@ -555,30 +674,33 @@ export const register: Register = (on, options) => {
             )}
             {testing(b).map((c) => {
               const took = since(c.started, at);
+              const head = (
+                <Text color="yellow">
+                  ▶ testing {combination(b.branch, c.submissions)}
+                  {progress(c) ? `  ${progress(c)}` : ""}
+                  {took === undefined
+                    ? ""
+                    : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ""}`}
+                </Text>
+              );
+              // Its tasks open under it on a press; one with none is a plain line.
+              const k = `tasks-${b.branch}-${c.id}`;
+              const listed = (c.tasks ?? []).length > 0;
               return (
                 <Box key={`cand-${b.branch}-${c.id}`} flexDirection="column">
-                  <Text color="yellow">
-                    ▶ testing {combination(b.branch, c.submissions)}
-                    {progress(c) ? `  ${progress(c)}` : ""}
-                    {took === undefined
-                      ? ""
-                      : `  ${duration(took)}${c.limit ? ` / ${limit(c.limit)}` : ""}`}
-                  </Text>
+                  {listed ? (
+                    <Button key={k} plain onPress={() => flip($, k)}>
+                      {head}
+                    </Button>
+                  ) : (
+                    head
+                  )}
                   <Text dimColor>
                     {"    "}
                     {c.targets.join(" ")}
                     {c.executor ? ` · ${c.executor}` : ""}
                   </Text>
-                  {taskLines(c).map((t) => (
-                    <Text
-                      key={`task-${b.branch}-${c.id}-${t.text}`}
-                      color={TASK_COLOR[t.state]}
-                      dimColor={t.state === "waiting"}
-                    >
-                      {"    "}
-                      {t.text}
-                    </Text>
-                  ))}
+                  {listed && open_.includes(k) && tasksView(k, taskLines(c, at))}
                 </Box>
               );
             })}
@@ -592,6 +714,7 @@ export const register: Register = (on, options) => {
             {b.submissions.length > 0 && <Text bold>QUEUED</Text>}
             {b.submissions.map((s) => {
               const pull = pullOf(s.from.worktree);
+              const base = pullBase(b, bases);
               return (
                 <Text key={`sub-${b.branch}-${s.id}`}>
                   {"  "}#{s.id} {s.state.padEnd(9)}{" "}
@@ -605,6 +728,7 @@ export const register: Register = (on, options) => {
                 </Text>
               );
             })}
+            {forecastRow(b.branch)}
             {b.recent.length > 0 && <Text bold>RECENT</Text>}
             {[...b.recent]
               .reverse()
@@ -613,19 +737,69 @@ export const register: Register = (on, options) => {
                 const mark = r.event === "landed" ? "✓" : r.event === "blamed" ? "✗" : "⚠";
                 const color =
                   r.event === "landed" ? "green" : r.event === "blamed" ? "red" : "yellow";
-                if (r.event === "blamed" && r.id !== undefined) {
+                // ` · PR 41` for each of the line's own submissions from a pull request.
+                const base = pullBase(b, bases);
+                const pulls = base
+                  ? pullsOf(b, r).flatMap((n) => [
+                      " · ",
+                      <Link key={`pr-${b.branch}-${i}-${n}`} href={`${base}/pull/${n}`}>
+                        PR {n}
+                      </Link>,
+                    ])
+                  : [];
+                if ((r.event === "blamed" || r.event === "conflict") && r.id !== undefined) {
                   const id = r.id;
-                  const k = `blamed-${b.branch}-${id}-${r.at}`;
+                  const k = `${r.event}-${b.branch}-${id}-${r.at}`;
+                  // The row opens on its button; its links sit beside it, never inside.
                   return (
                     <Box key={`recent-${b.branch}-${i}`} flexDirection="column">
-                      <Button key={k} plain onPress={() => toggle($, k, () => blamedTests($, id))}>
-                        <Text color={color}>
-                          {"  "}
-                          {mark} {r.at.slice(11, 16)} {recentWords(r)}
-                        </Text>
-                      </Button>
-                      {open_.includes(k) && view(k, shownOf[k] ?? [])}
+                      <Box key={`${k}-row`} flexDirection="row">
+                        <Button
+                          key={k}
+                          plain
+                          onPress={() =>
+                            r.event === "blamed"
+                              ? toggle($, k, () => blamedTests($, id))
+                              : flip($, k)
+                          }
+                        >
+                          <Text color={color}>
+                            {"  "}
+                            {mark} {r.at.slice(11, 16)} {recentWords(r)}
+                          </Text>
+                        </Button>
+                        {pulls.length > 0 && (
+                          <Text key={`${k}-pulls`} color={color}>
+                            {pulls}
+                          </Text>
+                        )}
+                      </Box>
+                      {open_.includes(k) &&
+                        (r.event === "blamed"
+                          ? view(k, shownOf[k] ?? [])
+                          : linesView(
+                              k,
+                              conflictLines(b.branch, r.paths ?? [], recentInWay(b, r)),
+                            ))}
                     </Box>
+                  );
+                }
+                if (r.event === "landed") {
+                  // The landing's commit, linked where the branch's remote is on GitHub.
+                  const at = commitBase(b, bases);
+                  const to = typeof r.to === "string" ? r.to : "";
+                  return (
+                    <Text key={`recent-${b.branch}-${i}`} color={color}>
+                      {"  "}
+                      {mark} {r.at.slice(11, 16)} {(r.ids ?? []).map((n) => `#${n}`).join(" ")}{" "}
+                      landed as{" "}
+                      {at && to ? (
+                        <Link href={`${at}/commit/${to}`}>{to.slice(0, 7)}</Link>
+                      ) : (
+                        to.slice(0, 7)
+                      )}
+                      {pulls}
+                    </Text>
                   );
                 }
                 return (
@@ -663,13 +837,39 @@ export const register: Register = (on, options) => {
         {(checks.length > 0 || room) && (
           <Box flexDirection="column" marginTop={1}>
             {checks.length > 0 && <Text bold>CHECKING</Text>}
-            {checks.map((c) => (
-              <Text key={`check-${c.key}`} color={CHECK_COLOR[c.state]}>
+            {checks.map((c) => {
+              const k = `checks-${c.key}`;
+              return (
+                <Box key={`check-${c.key}`} flexDirection="column">
+                  <Button key={k} plain onPress={() => flip($, k)}>
+                    <Text color={CHECK_COLOR[c.state]}>
+                      {"  "}
+                      {c.text}
+                    </Text>
+                  </Button>
+                  {open_.includes(k) && tasksView(k, checkLines(c.session, at))}
+                </Box>
+              );
+            })}
+            {room && <Text dimColor>{room}</Text>}
+          </Box>
+        )}
+        {/* Each address is a link; the surface decides what a click opens. */}
+        {previews.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold>PREVIEWS</Text>
+            {previews.map((p) => (
+              <Text key={`preview-${p.name}`}>
                 {"  "}
-                {c.text}
+                {p.words}
+                {p.addresses.flatMap(([label, address]) => [
+                  `  ${label}: `,
+                  <Link key={`preview-${p.name}-${label}`} href={address}>
+                    {address}
+                  </Link>,
+                ])}
               </Text>
             ))}
-            {room && <Text dimColor>{room}</Text>}
           </Box>
         )}
         <Box marginTop={1}>

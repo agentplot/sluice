@@ -73,7 +73,10 @@ export function overview(): Overview {
   };
 }
 
-/** The same, with main's combination 3 of its 5 tasks through, as moon says. */
+/**
+ * The same, with main's combination 3 of its 5 tasks through, as moon says,
+ * and `sluice:e2e` running for 72 s.
+ */
 export function withTasks(): Overview {
   const doc = overview();
   doc.branches[0]!.candidates[0]!.tasks = [
@@ -92,8 +95,71 @@ export function withTasks(): Overview {
       exit: 0,
     },
     { target: "core:test", state: "waiting" },
-    { target: "sluice:e2e", state: "running" },
+    { target: "sluice:e2e", state: "running", started: "2026-10-16T19:43:58Z" },
     { target: "site:prose", state: "replayed", ended: "2026-10-16T19:44:54Z" },
+  ];
+  return doc;
+}
+
+/**
+ * The fixture with #218, from `design-runner`, removed from main for a
+ * conflict in `docs/builds.md` with the submissions `with`; #217 came from
+ * `bolt/runner`.
+ */
+export function withConflict(with_: number[] = [217]): Overview {
+  const doc = overview();
+  const main = doc.branches[0]!;
+  main.recent.push({
+    schema: "sluice/log@1",
+    at: "2026-10-16T19:44:00Z",
+    event: "conflict",
+    id: 218,
+    paths: ["docs/builds.md"],
+    with: with_,
+  });
+  main.recent_from = {
+    "9": "fix-cards",
+    "11": "unit/a",
+    "217": "bolt/runner",
+    "218": "design-runner",
+  };
+  return doc;
+}
+
+/**
+ * The fixture with main on `remote`, #11 and #12 landed together, #11 from
+ * `pull/41` and #12 from `unit/a`, and #9, from `pull/40`, blamed; with no
+ * `recent_from` when `from` is false, as a sluice older than it gives.
+ */
+export function withLinks(remote?: string, from = true): Overview {
+  const doc = overview();
+  const main = doc.branches[0]!;
+  if (remote) main.remote = remote;
+  main.recent[0]!.ids = [11, 12];
+  if (from) main.recent_from = { "9": "pull/40", "11": "pull/41", "12": "unit/a" };
+  return doc;
+}
+
+/**
+ * The fixture with previews of main at 4f1c2aa: one up with `web` at
+ * `web`, and one whose policy names no addresses.
+ */
+export function withPreviews(web = "https://web-4f1c2aa.example.test"): Overview {
+  const doc = overview();
+  doc.previews = [
+    {
+      name: "preview/4f1c2aa0e1b2",
+      branch: "main",
+      revision: "4f1c2aa0e1b2c3d4",
+      state: "up",
+      addresses: { web },
+    },
+    {
+      name: "preview/9ecc34a1b2c3",
+      branch: "main",
+      revision: "9ecc34a1b2c3d4e5",
+      state: "starting",
+    },
   ];
   return doc;
 }
