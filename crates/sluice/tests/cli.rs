@@ -1140,6 +1140,50 @@ fn status_warns_of_cache_in_trust() {
     assert_eq!(v["warnings"], serde_json::json!([]));
 }
 
+/// 35, 71; ADR 0049: a policy that still declares a checkout cache is
+/// refused when `sluice status` reads it, an error the binary prints and
+/// exits non-zero on, naming what replaced it.
+#[test]
+fn status_refuses_a_checkout_cache() {
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!(
+                    "{POLICY}\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"
+                ),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    let cli = Cli::try_parse_from(["sluice", "status", BRANCH]).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let e = run(
+        cli,
+        f.seams(),
+        &host,
+        &(),
+        &(),
+        &f.clock,
+        &Rounds(Cell::new(0)),
+        &mut out,
+    )
+    .unwrap_err();
+    let e = format!("{e:#}");
+    assert!(
+        e.contains("[checkout] declares a cache")
+            && e.contains("ADR 0049")
+            && e.contains("[[caches]]"),
+        "{e}"
+    );
+}
+
 /// A landed #1, a blamed #2 and #3 under test, as `status_lists_the_queue`
 /// leaves them.
 fn three_submissions(f: &Fakes) {

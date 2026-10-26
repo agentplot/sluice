@@ -10,10 +10,10 @@
 //!
 //! A place holds its candidate and nothing restored from another place:
 //! the caches its runs share are the host's, which the check seam gives
-//! them (35; ADR 0049). An older revision's `[[checkout.cache]]` is read
-//! as nothing, as its `method` is read quietly (core.15), and the caches
-//! an earlier sluice saved under `<common>/sluice/.caches/` are removed
-//! when a place is made.
+//! them (35; ADR 0049). A policy that still declares `[[checkout.cache]]`
+//! is refused when it is read, so none reaches a place (ADR 0049), and
+//! the caches an earlier sluice saved under `<common>/sluice/.caches/`
+//! are removed when a place is made.
 //!
 //! A place holds a block of ports when `[checkout] ports` names any (31;
 //! ADR 0016): block `n` runs from `ports_from + n × names`, one port per
@@ -118,7 +118,8 @@ struct Made {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
     /// The checkout cache an older sluice kept on the record: read, and
-    /// ignored (35; ADR 0049).
+    /// ignored; a policy that still declares one is refused before any
+    /// place is made (35; ADR 0049).
     #[serde(rename = "caches", default, skip_serializing)]
     _caches: serde::de::IgnoredAny,
     /// The block of ports it holds on the host (31).

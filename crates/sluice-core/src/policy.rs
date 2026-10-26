@@ -340,6 +340,19 @@ impl Policy {
     pub fn parse(text: &str) -> Result<Policy> {
         let form: FileForm = toml::from_str(text).context("reading .config/sluice.toml")?;
         let tests = settings(form.tests, "[tests]")?;
+        // 35, 71; ADR 0049: the checkout cache was the statement's, not a
+        // profile's, and the statement no longer has it, so the core reads
+        // this one word of `[checkout]`: a policy that still declares it is
+        // refused, saying what replaced it, so no repository's checks start
+        // cold with no word to anyone.
+        if form.checkout.contains_key("cache") {
+            bail!(
+                "[checkout] declares a cache, which sluice no longer keeps: a checkout starts \
+                 with nothing but its revision, and the caches its tests share are the host's \
+                 [[caches]], which the host's keeper declares in ~/.config/sluice/config.toml \
+                 (ADR 0049). Remove [[checkout.cache]] from .config/sluice.toml"
+            );
+        }
         let checkout = settings(form.checkout, "[checkout]")?;
         let limits = Limits {
             executor: form.executor.kind,
@@ -1300,6 +1313,40 @@ hold = "5m"
                 .unwrap()
                 .checkout["ports_from"],
             Setting::Text("20000".into())
+        );
+    }
+
+    /// 35, 71; ADR 0049: a `[checkout]` that still declares a cache, in
+    /// any shape, is refused, saying what replaced it; one that declares
+    /// none reads as before.
+    #[test]
+    fn refuses_a_checkout_cache() {
+        let refused = |text: &str| format!("{:#}", Policy::parse(text).unwrap_err());
+        for text in [
+            "[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n",
+            "[checkout]\ncache = \"target\"\n",
+        ] {
+            let e = refused(text);
+            assert!(
+                e.contains("ADR 0049")
+                    && e.contains("[[caches]]")
+                    && e.contains("~/.config/sluice/config.toml")
+                    && e.contains("Remove [[checkout.cache]] from .config/sluice.toml"),
+                "{e}"
+            );
+        }
+        let p = Policy::parse(
+            "[checkout]\nmethod = \"git-worktree\"\nports = [\"web\"]\nports_from = 20000\n",
+        )
+        .unwrap();
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+        assert_eq!(
+            p.checkout,
+            Settings::from([
+                ("method".into(), Setting::Text("git-worktree".into())),
+                ("ports".into(), Setting::List(vec!["web".into()])),
+                ("ports_from".into(), Setting::Text("20000".into())),
+            ])
         );
     }
 
