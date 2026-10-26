@@ -50,7 +50,7 @@ command); add to `tests/fixture.ts` what a test needs. Run suites with
 ## 7. Screenshots and the gate
 
 - [x] 7.1 Retake the screenshots with `moon run root:screenshots` in `devenv shell` on macOS, showing a combination opened if `plugins/screenshots-capture.sh` can press its row, else the pane folded; fix the alt text in the README and the guide to say what they show; by hand, since the gate drives no GUI terminal or logged-in Claude Code; verify by looking at `plugins/sluice-board/screenshots/board-{light,dark}.png` and `sluice exec main -- moon run site:prose`
-- [ ] 7.2 Try it once by hand: build the demo scene with `plugins/screenshots-scene.sh`, open `/sluice` in a session, press every row and follow every link; by hand, since only a person follows a link; every behaviour it checks has a test above
+- [x] 7.2 Try it once by hand: build the demo scene with `plugins/screenshots-scene.sh`, open `/sluice` in a session, press every row and follow every link; by hand, since only a person follows a link; every behaviour it checks has a test above
 - [x] 7.3 Commit, then run the gate's checks: `sluice exec main` passes
 
 ## Workflow follow-up
