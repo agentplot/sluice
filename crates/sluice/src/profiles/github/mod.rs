@@ -35,11 +35,24 @@ impl Identity for App {
     }
 
     fn credentials(&self, url: &str) -> Result<Credentials> {
-        let repo = Repo::from_url(url)
-            .ok_or_else(|| anyhow::anyhow!("{url} is no repository on GitHub"))?;
-        Ok(Credentials {
-            username: TOKEN_USER.into(),
-            password: self.token(&repo)?,
-        })
+        given(self, url, false)
     }
+
+    /// A token bought afresh: GitHub sometimes refuses one it has just
+    /// given, and a token held since may have lost what it reached.
+    fn renew(&self, url: &str) -> Result<Credentials> {
+        given(self, url, true)
+    }
+}
+
+/// Credentials for `url` with a token for its repository alone.
+fn given(app: &App, url: &str, fresh: bool) -> Result<Credentials> {
+    let repo =
+        Repo::from_url(url).ok_or_else(|| anyhow::anyhow!("{url} is no repository on GitHub"))?;
+    let token = app.issue(&repo, fresh)?;
+    Ok(Credentials {
+        username: TOKEN_USER.into(),
+        password: token.secret,
+        about: token.about,
+    })
 }

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
+use sluice::identity::Identity;
 use sluice::profiles::github::check::{check, Finding};
 use sluice::profiles::github::{App, Repo};
 use support::http::{json, Fake, Request};
@@ -47,10 +48,12 @@ impl Clock {
 }
 
 /// What the fake's GitHub holds for the app: its installation's
-/// permissions and each ruleset's bypass actors on `main`.
+/// permissions, the repositories a token it gives reaches, and each
+/// ruleset's bypass actors on `main`.
 #[derive(Clone)]
 struct Forge {
     permissions: serde_json::Value,
+    reaches: serde_json::Value,
     rulesets: Vec<(u64, serde_json::Value)>,
     clock: Clock,
 }
@@ -62,6 +65,7 @@ impl Forge {
                 "contents": "write", "workflows": "write", "checks": "write",
                 "pull_requests": "write", "metadata": "read"
             }),
+            reaches: json!([{ "full_name": "o/r" }]),
             rulesets: vec![(
                 11,
                 json!([{ "actor_id": APP, "actor_type": "Integration", "bypass_mode": "always" }]),
@@ -89,7 +93,11 @@ impl Forge {
                 let ends = self.clock.now() + TimeDelta::hours(1);
                 return json(
                     201,
-                    json!({ "token": format!("token-{n}"), "expires_at": ends.to_rfc3339() }),
+                    json!({
+                        "token": format!("token-{n}"), "expires_at": ends.to_rfc3339(),
+                        "permissions": { "contents": "write", "metadata": "read" },
+                        "repository_selection": "selected", "repositories": self.reaches
+                    }),
                 );
             }
             if path == "/repos/o/r/rules/branches/main" {
@@ -165,6 +173,68 @@ fn a_refused_token_says_why() {
     let err = format!("{:#}", app.token(&repo()).unwrap_err());
     assert!(
         err.contains("401 A JSON web token could not be decoded"),
+        "{err}"
+    );
+}
+
+/// A clock that moves ten seconds on at each reading.
+fn ticking(clock: &Clock) -> sluice::profiles::github::app::Now {
+    let clock = clock.clone();
+    Box::new(move || {
+        let t = clock.now();
+        clock.set(t + TimeDelta::seconds(10));
+        t
+    })
+}
+
+/// The credentials for a remote on GitHub say what their token is: the
+/// app, the repository, the installation it was bought from, the scope
+/// GitHub gave it, and its age; renewed, they are a token bought then,
+/// which the next call is given too.
+#[test]
+fn credentials_say_what_their_token_is_and_renew_buys_one() {
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let app = App::new(APP, KEY, fake.url(), ticking(&clock)).unwrap();
+    let url = "https://github.com/o/r.git";
+    let c = app.credentials(url).unwrap();
+    assert_eq!(c.password, "token-1");
+    let scope = "scoped to o/r with contents: write, metadata: read";
+    assert!(
+        c.about
+            .starts_with("app 4242's token for o/r from installation 7"),
+        "{}",
+        c.about
+    );
+    assert!(c.about.contains(scope), "{}", c.about);
+    assert!(c.about.ends_with("s ago"), "{}", c.about);
+    assert!(!c.about.contains("token-1"), "{}", c.about);
+    assert_eq!(app.credentials(url).unwrap().password, "token-1");
+    let fresh = app.renew(url).unwrap();
+    assert_eq!(fresh.password, "token-2");
+    assert!(fresh.about.contains(scope), "{}", fresh.about);
+    assert_eq!(app.credentials(url).unwrap().password, "token-2");
+    assert_eq!(minted(&fake), 2);
+    let asked: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.ends_with("/access_tokens"))
+        .map(|r| serde_json::from_str::<serde_json::Value>(&r.body).unwrap())
+        .collect();
+    let alone = json!({ "repositories": ["r"] });
+    assert_eq!(asked, [alone.clone(), alone], "for o/r alone");
+}
+
+/// A token GitHub gives that does not reach the repository is refused.
+#[test]
+fn a_token_for_another_repository_is_refused() {
+    let clock = Clock::new();
+    let mut forge = Forge::new(&clock);
+    forge.reaches = json!([{ "full_name": "o/other" }]);
+    let fake = forge.start();
+    let err = format!("{:#}", app(&fake, &clock).token(&repo()).unwrap_err());
+    assert!(
+        err.contains("GitHub gave a token for o/r that reaches o/other, not o/r"),
         "{err}"
     );
 }
