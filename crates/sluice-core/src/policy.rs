@@ -5,7 +5,8 @@
 //! profiles that bind the check and place seams and their settings, which
 //! the core passes on (52; rule core.1). It reads the `[branches]` tables,
 //! the gate of each branch, and `[executor]`, the limits a run is held to
-//! (83).
+//! (83). Branch protection reads only which branches are guarded and
+//! where their records are, [`Policy::guarding`] (124).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -270,6 +271,15 @@ struct FileForm {
     signers: BTreeMap<String, BTreeMap<String, toml::Value>>,
     #[serde(default)]
     pools: BTreeMap<String, toml::Spanned<BTreeMap<String, toml::Value>>>,
+}
+
+/// What [`Policy::guarding`] reads, every other table passed over.
+#[derive(Deserialize)]
+struct GuardingForm {
+    /// Each key with where it is written, as `FileForm` keeps them.
+    #[serde(default)]
+    branches: BTreeMap<toml::Spanned<String>, toml::Value>,
+    signers: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -635,6 +645,66 @@ impl Policy {
         })
     }
 
+    /// 124: the policy as branch protection reads it, only what guarding
+    /// needs: each `[branches]` pattern in the order written, with the
+    /// default gate and its `remote`, and the names `[signers]` gives, so
+    /// that `signers.is_empty()` says what it says in [`Policy::parse`]
+    /// (C.6). Every other table and field, known or not, is passed over,
+    /// and the rest of the policy is its defaults (ADR 0059).
+    pub fn guarding(text: &str) -> Result<Policy> {
+        let form: GuardingForm = toml::from_str(text).context("reading .config/sluice.toml")?;
+        let mut written: Vec<_> = form.branches.into_iter().collect();
+        written.sort_by_key(|(p, _)| p.span().start);
+        let mut branches = Vec::new();
+        for (pattern, table) in written {
+            let pattern = pattern.into_inner();
+            let at = format!("[branches.\"{pattern}\"]");
+            let toml::Value::Table(mut table) = table else {
+                bail!("{at} must be a table, not {}", table.type_str());
+            };
+            let remote = match table.remove("remote") {
+                None => None,
+                Some(toml::Value::String(r)) => Some(r),
+                Some(v) => bail!("{at} remote must be the name of a git remote, not {v}"),
+            };
+            branches.push((
+                pattern,
+                Rules {
+                    remote,
+                    ..Rules::default()
+                },
+            ));
+        }
+        let signers = match form.signers {
+            None => BTreeMap::new(),
+            // Its identity and claims passed over: guarding verifies no run.
+            Some(toml::Value::Table(t)) => t
+                .into_iter()
+                .map(|(name, _)| {
+                    let signer = Signer {
+                        identity: (String::new(), Setting::List(Vec::new())),
+                        confined: false,
+                        systems: None,
+                    };
+                    (name, signer)
+                })
+                .collect(),
+            Some(v) => bail!("[signers] must be a table of signers, not {}", v.type_str()),
+        };
+        Ok(Policy {
+            tests: Settings::new(),
+            checkout: Settings::new(),
+            limits: Limits::default(),
+            branches,
+            landing_subject: LANDING_SUBJECT.into(),
+            preview: None,
+            systems: BTreeMap::new(),
+            signers,
+            pools: Vec::new(),
+            warnings: Vec::new(),
+        })
+    }
+
     /// The gate for `branch`: an exact name before any pattern, then the
     /// pattern with the most literal characters. `None` when no table
     /// names the branch, which is then not sluice's to land on.
@@ -989,41 +1059,46 @@ hold = "5m"
         assert_eq!(unchecked_under_moon(&p), ["dev/*"]);
     }
 
+    const DIR: &str = "../../plugins/sluice/skills/setting-up-sluice/references/examples";
+
+    /// The Claude Code plugin's example policies, each with a branch its
+    /// comments say it gates.
+    const EXAMPLES: [(&str, &str, &str); 4] = [
+        (
+            "moon-minimal.sluice.toml",
+            include_str!(
+                "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-minimal.sluice.toml"
+            ),
+            "main",
+        ),
+        (
+            "moon-worktrunk-github.sluice.toml",
+            include_str!(
+                "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-worktrunk-github.sluice.toml"
+            ),
+            "main",
+        ),
+        (
+            "command-only.sluice.toml",
+            include_str!(
+                "../../../plugins/sluice/skills/setting-up-sluice/references/examples/command-only.sluice.toml"
+            ),
+            "main",
+        ),
+        (
+            "moon-peers-github.sluice.toml",
+            include_str!(
+                "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-peers-github.sluice.toml"
+            ),
+            "main",
+        ),
+    ];
+
     /// The Claude Code plugin's example policies read, gate the branches
     /// their comments say, and hold every branch under moon to a check.
     #[test]
     fn the_plugins_example_policies_read() {
-        const DIR: &str = "../../plugins/sluice/skills/setting-up-sluice/references/examples";
-        let examples = [
-            (
-                "moon-minimal.sluice.toml",
-                include_str!(
-                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-minimal.sluice.toml"
-                ),
-                "main",
-            ),
-            (
-                "moon-worktrunk-github.sluice.toml",
-                include_str!(
-                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-worktrunk-github.sluice.toml"
-                ),
-                "main",
-            ),
-            (
-                "command-only.sluice.toml",
-                include_str!(
-                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/command-only.sluice.toml"
-                ),
-                "main",
-            ),
-            (
-                "moon-peers-github.sluice.toml",
-                include_str!(
-                    "../../../plugins/sluice/skills/setting-up-sluice/references/examples/moon-peers-github.sluice.toml"
-                ),
-                "main",
-            ),
-        ];
+        let examples = EXAMPLES;
         for (name, text, branch) in examples {
             let p = Policy::parse(text).unwrap_or_else(|e| panic!("{DIR}/{name}: {e:#}"));
             assert!(
@@ -1558,6 +1633,76 @@ checks = ["codeql"]
             assert!(
                 e.contains(&format!("sets {key}")) && e.contains("[peers]"),
                 "{e}"
+            );
+        }
+    }
+
+    /// 124: guarding passes over a table, a branch's field and a signer's
+    /// field no sluice yet reads, each of which the full reading refuses.
+    #[test]
+    fn guarding_passes_over_what_it_does_not_need() {
+        let table = "[later]\nx = 1\n";
+        let field = "[branches.\"bolt/*\"]\nremote = \"origin\"\nlater = true\n";
+        let signer = "[signers.box]\nssh = \"k\"\nlater = 1\n";
+        for text in [table, field, signer] {
+            assert!(Policy::parse(text).is_err(), "{text}");
+        }
+        let p = Policy::guarding(&format!("{table}{field}{signer}")).unwrap();
+        let bolt = p.rules_for("bolt/x").unwrap().unwrap();
+        assert_eq!(bolt.remote.as_deref(), Some("origin"));
+        assert!(p.rules_for("main").unwrap().is_none());
+        assert_eq!(p.signers.keys().collect::<Vec<_>>(), ["box"]);
+        assert!(Policy::guarding("").unwrap().branches.is_empty());
+    }
+
+    /// 124: a value guarding needs, of the wrong kind, is an error naming
+    /// it.
+    #[test]
+    fn guarding_refuses_what_it_needs_of_the_wrong_kind() {
+        let e = format!(
+            "{:#}",
+            Policy::guarding("[branches.\"bolt/*\"]\nremote = 1\n").unwrap_err()
+        );
+        assert!(
+            e.contains("[branches.\"bolt/*\"] remote") && e.contains('1'),
+            "{e}"
+        );
+        let e = format!(
+            "{:#}",
+            Policy::guarding("[branches]\nmain = 1\n").unwrap_err()
+        );
+        assert!(e.contains("[branches.\"main\"] must be a table"), "{e}");
+        let e = format!("{:#}", Policy::guarding("signers = 1\n").unwrap_err());
+        assert!(e.contains("[signers] must be a table"), "{e}");
+        assert!(Policy::guarding("[branches.\"bolt/*\"\nnot toml").is_err());
+    }
+
+    /// 124: guarding and the full reading agree on every example policy:
+    /// the same patterns in the same order, each one's `remote`, and the
+    /// same signers' names.
+    #[test]
+    fn guarding_reads_the_examples_as_parse_does() {
+        let own = (
+            "sluice's own",
+            include_str!("../../../.config/sluice.toml"),
+            "main",
+        );
+        let consts = [("POLICY", POLICY, "main"), ("PEERS", PEERS, "main")];
+        for (name, text, _) in EXAMPLES.into_iter().chain([own]).chain(consts) {
+            let full = Policy::parse(text).unwrap_or_else(|e| panic!("{DIR}/{name}: {e:#}"));
+            let guarding = Policy::guarding(text).unwrap_or_else(|e| panic!("{DIR}/{name}: {e:#}"));
+            let routes = |p: &Policy| -> Vec<(String, Option<String>)> {
+                p.branches
+                    .iter()
+                    .map(|(n, r)| (n.clone(), r.remote.clone()))
+                    .collect()
+            };
+            assert_eq!(routes(&guarding), routes(&full), "{name}");
+            assert!(
+                guarding.signers.keys().eq(full.signers.keys()),
+                "{name}: {:?} and {:?}",
+                guarding.signers.keys(),
+                full.signers.keys()
             );
         }
     }
