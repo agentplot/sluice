@@ -29,10 +29,8 @@ branch has a queue.
 holds and how many combinations are under test; under TESTING each
 combination under test with its targets and elapsed time and the
 combinations formed and not running; under QUEUED the submissions with
-their states, each from a pull request linked to it on GitHub when the
-branch's remote, or `origin` when the overview names no remote for the
-branch, is there; and under RECENT recent landings and blames with their
-log paths.
+their states; and under RECENT recent landings and blames with their log
+paths.
 
 #### Scenario: Opened
 
@@ -45,6 +43,12 @@ log paths.
   recent blame
 - **THEN** the pane shows the headings TESTING, QUEUED and RECENT, in that
   order, above those lines
+
+### Requirement: QUEUED rows link their pull requests
+
+Each QUEUED submission from a pull request SHALL be linked to it on
+GitHub when the branch's remote, or `origin` when the overview names no
+remote for the branch, is there.
 
 #### Scenario: A pull request's submission
 
