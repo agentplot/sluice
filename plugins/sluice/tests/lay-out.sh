@@ -4,7 +4,8 @@
 # holds the folder, or when it cannot tell, and never on the session or
 # what the session started; otherwise it lays the clone out with its changes
 # and its worktrees intact, and carries Claude Code's history to the new
-# keys, overwriting nothing. git runs isolated from the user's config and
+# keys, overwriting nothing. Its kind tells a repository's only working
+# copy from one of several and from the layout, changing nothing. git runs isolated from the user's config and
 # credentials, `lsof` is a stand-in, and Claude Code's directory is
 # scratch, so nothing reaches the host's processes or the user's history.
 
@@ -24,16 +25,18 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@localhost
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_ASKPASS SSH_ASKPASS
 
-# A stand-in lsof: it prints what FAKE_LSOF holds, in lsof's -F form, or
-# fails when FAKE_LSOF_FAIL is set.
+# A stand-in lsof: it leaves LSOF_RAN behind, and prints what FAKE_LSOF
+# holds, in lsof's -F form, or fails when FAKE_LSOF_FAIL is set.
 mkdir -p "$scratch/bin"
 cat >"$scratch/bin/lsof" <<'EOF'
 #!/bin/sh
+: >"$LSOF_RAN"
 [ -z "${FAKE_LSOF_FAIL:-}" ] || exit 1
 [ -z "${FAKE_LSOF:-}" ] || cat "$FAKE_LSOF"
 EOF
 chmod +x "$scratch/bin/lsof"
 export PATH="$scratch/bin:$PATH"
+export LSOF_RAN=$scratch/lsof.ran
 export CLAUDE_CONFIG_DIR=$scratch/claude
 projects=$CLAUDE_CONFIG_DIR/projects
 
@@ -312,6 +315,67 @@ if [ $status = 0 ] && [ -e "$hashed/s1.jsonl" ] && [ -d "$l/main" ] &&
   ok "a path too long for a derived key carries nothing and says to resume by id"
 else
   fail "a long path (exit $status): $out"
+fi
+
+# kind, asked from $2, answers $3 and nothing else, runs no lsof and
+# leaves $2 as it was.
+kind_is() { # what path answer
+  local before
+  before=$(snapshot "$2")
+  rm -f "$LSOF_RAN"
+  run bash "$lay_out" kind "$2"
+  if [ $status = 0 ] && [ "$out" = "$3" ] && [ ! -e "$LSOF_RAN" ] &&
+    [ "$(snapshot "$2")" = "$before" ]; then
+    ok "$1"
+  else
+    fail "$1 (exit $status): $out"
+  fi
+}
+
+k=$scratch/k
+git clone -q "$scratch/origin" "$k"
+kind_is "kind names a plain clone its repository's only working copy" "$k" "only $k"
+
+w=$scratch/w
+clone "$w"
+kind_is "kind, asked from a clone with a worktree beside it, names the clone one of several" \
+  "$w" "several $w"
+kind_is "kind, asked from the worktree beside the clone, names the clone's folder" \
+  "$w-side" "several $w"
+
+# sluice's own checkout under the git directory, and a worktree whose
+# folder was deleted, are no working copy.
+g=$scratch/g
+git clone -q "$scratch/origin" "$g"
+git -C "$g" worktree add -q --detach "$g/.git/sluice/.places/x"
+git -C "$g" worktree add -q -b gone "$g-gone"
+rm -rf "$g-gone"
+kind_is "kind counts neither sluice's checkout under .git nor a deleted worktree" "$g" "only $g"
+
+kind_is "kind names a laid-out repository's git directory apart" "$c/main" apart
+
+# A clone reached through a symbolic link, with sluice's checkout added
+# through the link too: kind names the folder as it is on disk.
+mkdir "$scratch/r"
+git clone -q "$scratch/origin" "$scratch/r/k"
+ln -s r "$scratch/s"
+git -C "$scratch/s/k" worktree add -q --detach "$scratch/s/k/.git/sluice/.places/y"
+kind_is "kind, asked through a symbolic link, names the folder as it is on disk" \
+  "$scratch/s/k" "only $scratch/r/k"
+
+# A folder that is no working copy is refused, and left as it was; the
+# ceiling keeps git from finding a repository above the scratch directory.
+n=$scratch/n
+mkdir "$n"
+echo x >"$n/f.txt"
+before=$(cd "$n" && find . | sort)
+rm -f "$LSOF_RAN"
+run env GIT_CEILING_DIRECTORIES="$scratch" bash "$lay_out" kind "$n"
+if [ $status = 1 ] && [ "$out" = "refused: $n is not a working copy of a git repository" ] &&
+  [ ! -e "$LSOF_RAN" ] && [ "$(cd "$n" && find . | sort)" = "$before" ]; then
+  ok "kind refuses a folder that is no working copy, and changes nothing"
+else
+  fail "kind on a plain folder (exit $status): $out"
 fi
 
 if [ "$failures" -gt 0 ]; then
