@@ -6,6 +6,7 @@
 
 mod support;
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::rc::Rc;
@@ -287,10 +288,30 @@ fn the_router_sends_a_branch_to_its_remote() {
     assert!(err.contains("\"nowhere\""), "{err}");
 }
 
-/// An identity whose remote is a fake HTTP server, with a token of its own.
+/// An identity whose remote is a fake HTTP server, with a token of its
+/// own: `token`, then `token-1`, `token-2` and on as it is renewed.
 struct FakeIdentity {
     url: String,
     token: String,
+    renewed: Cell<usize>,
+}
+
+impl FakeIdentity {
+    fn new(url: &str, token: &str) -> FakeIdentity {
+        FakeIdentity {
+            url: url.into(),
+            token: token.into(),
+            renewed: Cell::new(0),
+        }
+    }
+
+    /// The token it gives after `renewed` renewals.
+    fn token(&self, renewed: usize) -> String {
+        match renewed {
+            0 => self.token.clone(),
+            n => format!("{}-{n}", self.token),
+        }
+    }
 }
 
 impl Identity for FakeIdentity {
@@ -304,11 +325,81 @@ impl Identity for FakeIdentity {
 
     fn credentials(&self, url: &str) -> anyhow::Result<Credentials> {
         assert_eq!(url, self.url);
+        let n = self.renewed.get();
         Ok(Credentials {
             username: "x-fake".into(),
-            password: self.token.clone(),
+            password: self.token(n),
+            about: format!("the fake's token number {n}"),
         })
     }
+
+    fn renew(&self, url: &str) -> anyhow::Result<Credentials> {
+        self.renewed.set(self.renewed.get() + 1);
+        self.credentials(url)
+    }
+}
+
+/// The `Authorization` header git sends with the fake's `token`.
+fn basic(token: &str) -> String {
+    format!("Basic {}", base64(format!("x-fake:{token}").as_bytes()))
+}
+
+/// The `Authorization` headers the fake remote was sent, in order.
+fn given(fake: &Fake) -> Vec<String> {
+    fake.requests()
+        .iter()
+        .filter_map(|r| r.header("Authorization").map(String::from))
+        .collect()
+}
+
+/// What git is answered with no credentials: a 401 asking for some.
+fn ask() -> support::http::Answer {
+    (
+        401,
+        vec![("WWW-Authenticate".into(), "Basic realm=\"fake\"".into())],
+        String::new(),
+    )
+}
+
+/// GitHub's answer to git with a token that may not read the repository.
+fn not_found() -> support::http::Answer {
+    (
+        404,
+        vec![("Content-Type".into(), "text/plain".into())],
+        "Repository not found.\n".into(),
+    )
+}
+
+/// A repository with nothing in it, as git's smart HTTP lists one.
+fn empty_repository() -> support::http::Answer {
+    let pkt = |s: &str| format!("{:04x}{s}", s.len() + 4);
+    let zero = "0".repeat(40);
+    let body = format!(
+        "{}0000{}0000",
+        pkt("# service=git-upload-pack\n"),
+        pkt(&format!("{zero} capabilities^{{}}\0multi_ack\n"))
+    );
+    (
+        200,
+        vec![(
+            "Content-Type".into(),
+            "application/x-git-upload-pack-advertisement".into(),
+        )],
+        body,
+    )
+}
+
+/// The pushed refs of `repo` reached through `fake` as `identity`.
+fn as_identity(repo: &Repo, identity: &Rc<FakeIdentity>) -> PushedRefs {
+    PushedRefs::open_as(
+        repo.dir(),
+        "origin",
+        Some((
+            identity.clone() as Rc<dyn Identity>,
+            PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
+        )),
+    )
+    .unwrap()
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -339,36 +430,19 @@ fn an_identity_reaches_only_sluices_git() {
     // A remote that asks for credentials and refuses whatever it gets.
     let fake = Fake::start(|r| match r.header("Authorization") {
         Some(_) => (403, vec![], "refused\n".into()),
-        None => (
-            401,
-            vec![("WWW-Authenticate".into(), "Basic realm=\"fake\"".into())],
-            String::new(),
-        ),
+        None => ask(),
     });
     let token = format!("fake-token-{}", std::process::id());
     let url = format!("{}/o/r.git", fake.url());
-    let identity = Rc::new(FakeIdentity {
-        url: url.clone(),
-        token: token.clone(),
-    });
-    let p = PushedRefs::open_as(
-        repo.dir(),
-        "origin",
-        Some((identity, PathBuf::from(env!("CARGO_BIN_EXE_sluice")))),
-    )
-    .unwrap();
+    let identity = Rc::new(FakeIdentity::new(&url, &token));
+    let p = as_identity(&repo, &identity);
     assert_eq!(p.identity().as_deref(), Some("a fake identity"));
     assert!(p.read("main").is_err(), "the fake refuses every fetch");
-    let given: Vec<String> = fake
-        .requests()
-        .iter()
-        .filter_map(|r| r.header("Authorization").map(String::from))
-        .collect();
-    let basic = format!("Basic {}", base64(format!("x-fake:{token}").as_bytes()));
+    let basic = basic(&token);
     assert_eq!(
-        given,
-        std::slice::from_ref(&basic),
-        "git gave the fake identity's credentials"
+        given(&fake),
+        [basic.clone(), self::basic(&identity.token(1))],
+        "git gave the fake identity's credentials, then fresh ones"
     );
 
     let config = std::fs::read_to_string(repo.dir().join(".git/config")).unwrap();
@@ -400,6 +474,80 @@ fn an_identity_reaches_only_sluices_git() {
         let auth = r.header("Authorization").unwrap_or("");
         assert_ne!(auth, basic, "an agent's push carried sluice's token");
     }
+}
+
+/// A fetch the remote refuses the identity's credentials on is run once
+/// more with credentials made afresh, and reads what the second run
+/// finds.
+#[test]
+fn a_refused_fetch_is_run_again_with_fresh_credentials() {
+    let repo = Repo::new("refused-once");
+    let _bare = repo.bare_origin();
+    let token = format!("fake-token-{}", std::process::id());
+    let (first, fresh) = (basic(&token), basic(&format!("{token}-1")));
+    let fake = Fake::start(move |r| match r.header("Authorization") {
+        None => ask(),
+        Some(a) if a == first => not_found(),
+        Some(a) if a == fresh => empty_repository(),
+        Some(_) => (403, vec![], "an unknown token\n".into()),
+    });
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, &token));
+    let p = as_identity(&repo, &identity);
+    assert_eq!(p.read("main").unwrap(), None, "the fresh token reads");
+    assert_eq!(
+        given(&fake),
+        [basic(&token), basic(&identity.token(1))],
+        "the refused token, then a fresh one, once"
+    );
+}
+
+/// A fetch refused on fresh credentials too fails with the remote's words
+/// and what each refused credential was; it is run no third time.
+#[test]
+fn a_refusal_that_stands_names_both_credentials() {
+    let repo = Repo::new("refused-twice");
+    let _bare = repo.bare_origin();
+    let fake = Fake::start(|r| match r.header("Authorization") {
+        None => ask(),
+        Some(_) => not_found(),
+    });
+    let token = format!("fake-token-{}", std::process::id());
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, &token));
+    let p = as_identity(&repo, &identity);
+    let err = format!("{:#}", p.read("main").unwrap_err());
+    assert!(err.contains("Repository not found."), "{err}");
+    assert!(
+        err.contains("origin refused the fake's token number 0, then the fake's token number 1"),
+        "{err}"
+    );
+    assert!(!err.contains(&token), "a report carries no token: {err}");
+    assert_eq!(given(&fake).len(), 2, "run no third time");
+}
+
+/// A push the remote refuses is never run again (rule core.5), and fails
+/// with the remote's words and what the refused credential was.
+#[test]
+fn a_refused_push_is_not_run_again() {
+    let repo = Repo::new("refused-push");
+    let _bare = repo.bare_origin();
+    let fake = Fake::start(|r| match r.header("Authorization") {
+        None => ask(),
+        Some(_) => not_found(),
+    });
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    let head = rev(repo.rev("HEAD"));
+    let err = format!("{:#}", p.push_branch(&head, "agent").unwrap_err());
+    assert!(err.contains("Repository not found."), "{err}");
+    assert!(
+        err.ends_with("origin refused the fake's token number 0"),
+        "{err}"
+    );
+    assert_eq!(given(&fake).len(), 1, "one push, never again");
+    assert_eq!(identity.renewed.get(), 0);
 }
 
 /// sluice runs unattended: a push to a remote that wants a credential the

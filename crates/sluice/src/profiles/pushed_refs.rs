@@ -20,7 +20,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
-use crate::identity::{Identity, PASSWORD_VAR, USERNAME_VAR};
+use crate::identity::{Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
 
 pub struct PushedRefs {
     local: LocalRefs,
@@ -107,14 +107,55 @@ impl PushedRefs {
     /// are cleared for this call alone and sluice's is named in their
     /// place, given the credentials in this call's environment; nothing is
     /// written to a git config, so no other git finds them.
+    ///
+    /// A read the remote refuses the credentials on is run once more with
+    /// credentials made afresh, since a forge may refuse ones it has just
+    /// given; a push is never run again. A refusal that stands has what
+    /// each refused credential was added to git's words, for whoever
+    /// reports the failure.
     pub(crate) fn remote_git(&self, args: &[&str]) -> Result<Output> {
         let Some(s) = &self.speaker else {
             return git(self.local.git_dir(), args);
         };
-        let c = s
+        let given = s
             .identity
             .credentials(&s.url)
             .with_context(|| format!("{} on {}", s.identity.name(), self.remote))?;
+        let out = self.git_as(s, &given, args)?;
+        if out.status.success() || !refused(&out) {
+            return Ok(out);
+        }
+        if !reads(args) {
+            let said = format!("{} refused {}", self.remote, given.about);
+            return Ok(told(out, &said));
+        }
+        let fresh = match s.identity.renew(&s.url) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(told(
+                    out,
+                    &format!(
+                        "{} refused {}, and none could be made afresh: {e:#}",
+                        self.remote, given.about
+                    ),
+                ))
+            }
+        };
+        let again = self.git_as(s, &fresh, args)?;
+        if again.status.success() || !refused(&again) {
+            return Ok(again);
+        }
+        Ok(told(
+            again,
+            &format!(
+                "{} refused {}, then {}",
+                self.remote, given.about, fresh.about
+            ),
+        ))
+    }
+
+    /// git with sluice's helper alone, given `c`.
+    fn git_as(&self, s: &Speaker, c: &Credentials, args: &[&str]) -> Result<Output> {
         let helper = format!("credential.helper={}", s.helper);
         let mut all = vec!["-c", "credential.helper=", "-c", &helper];
         all.extend(args);
@@ -203,6 +244,43 @@ impl PushedRefs {
         }
         Ok(())
     }
+}
+
+/// Whether git `args` only read the remote: a fetch, or a listing of its
+/// refs.
+fn reads(args: &[&str]) -> bool {
+    matches!(args.first(), Some(&"fetch" | &"ls-remote"))
+}
+
+/// What git prints when the remote refuses a call's credentials over
+/// HTTP: 404, which GitHub answers a token that may not read the
+/// repository, 401 and 403.
+const REFUSED: &[&str] = &[
+    // repository '…' not found; GitHub's own: Repository not found.
+    "not found",
+    // 401
+    "Authentication failed",
+    // The requested URL returned error: …
+    "error: 401",
+    "error: 403",
+    "error: 404",
+    // RPC failed; HTTP …
+    "HTTP 401",
+    "HTTP 403",
+    "HTTP 404",
+];
+
+/// Whether git says the remote refused the call's credentials.
+fn refused(out: &Output) -> bool {
+    let err = String::from_utf8_lossy(&out.stderr);
+    REFUSED.iter().any(|w| err.contains(w))
+}
+
+/// `out` with `said` on the line after what git printed on stderr.
+fn told(mut out: Output, said: &str) -> Output {
+    out.stderr.truncate(out.stderr.trim_ascii_end().len());
+    out.stderr.extend_from_slice(format!("\n{said}").as_bytes());
+    out
 }
 
 /// Why a `git push --porcelain` failed: the remote's reason for each ref
