@@ -15,4 +15,4 @@
 
 ## 4. The gate
 
-- [ ] 4.1 Commit, then run the gate's checks with `sluice exec main`; every task passes. The tests that parse sluice's own `.config/sluice.toml` and the setting-up-sluice examples pass with no change, which shows none of them declares a checkout cache.
+- [x] 4.1 Commit, then run the gate's checks with `sluice exec main`; every task passes. The tests that parse sluice's own `.config/sluice.toml` and the setting-up-sluice examples pass with no change, which shows none of them declares a checkout cache.
