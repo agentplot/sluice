@@ -35,8 +35,9 @@ trust = ["confined", "sandbox"]   # which results satisfy the branch
 - Tests that write outside the checkout (`~/.cache`, `/tmp`) fail in the
   sandbox. Point their scratch files at `SLUICE_TMP`. A cache every build on
   the host shares (a compile server's, moon's shared worktree cache) is the
-  host's: declare it in the host's config, `[[caches]]` in
-  `~/.config/sluice/config.toml`, with its `dir`, its server's `socket` and
+  host's: declare it in the host's file, `[[caches]]` in
+  `~/.config/sluice/config.toml` or where the host's configuration is
+  managed (the skill's step 6, *The host's file*), with its `dir`, its server's `socket` and
   the `env` its clients read. The sandbox opens each `dir` and `socket`, and
   every run gets the `env`. A repository's policy declares no cache.
 - Tests that call out to the internet need `network = true`; prefer fakes.
