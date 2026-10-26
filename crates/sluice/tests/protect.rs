@@ -417,6 +417,10 @@ fn a_tracked_hooks_directory_is_not_written() {
     assert!(!out.status.success());
     assert!(text(&out).contains("core.hooksPath"), "{}", text(&out));
     assert!(!repo.dir().join(".githooks/reference-transaction").exists());
+    // 124: nor does a command that only re-installs, and it says nothing.
+    let out = sl(&repo, &["status", "main"]);
+    assert!(!text(&out).contains("protection"), "{}", text(&out));
+    assert!(!repo.dir().join(".githooks/reference-transaction").exists());
 }
 
 /// ADR 0024: `sluice protect` names a worktree that has checked out a
@@ -861,4 +865,58 @@ fn settings_or_a_policy_the_hook_cannot_read_pass_said_once() {
         &repo,
         &["bolt/x's policy at ", "[branches.\"bolt/*\"] remote"],
     );
+}
+
+/// 124: the next command a newer sluice runs in the repository puts the
+/// hook back for itself, the hook it chains unchanged and nothing said of
+/// it; a hook `sluice protect --remove` took out stays out.
+#[test]
+fn a_newer_sluices_next_command_reinstalls_the_hook() {
+    let repo = Repo::new("protect-reinstall");
+    repo.write(".config/sluice.toml", POLICY);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let hooks = repo.dir().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let theirs = "#!/bin/sh\nexit 0\n";
+    std::fs::write(hooks.join("reference-transaction"), theirs).unwrap();
+    std::fs::set_permissions(
+        hooks.join("reference-transaction"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let older = repo.dir().join(".git/older-sluice");
+    copy_executable(Path::new(sluice()), &older);
+    let out = run_copied(&older, || {
+        support::isolated(&mut Command::new(&older))
+            .current_dir(repo.dir())
+            .arg("protect")
+            .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+            .stdin(Stdio::null())
+            .output()
+    });
+    assert!(out.status.success(), "{}", text(&out));
+    let hook = hooks.join("reference-transaction");
+    let chained = hooks.join("reference-transaction.pre-sluice");
+    let older = std::fs::canonicalize(&older).unwrap().display().to_string();
+    let ours = std::fs::canonicalize(sluice())
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(std::fs::read_to_string(&hook).unwrap().contains(&older));
+
+    let out = sl(&repo, &["status", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains("protection"), "{}", text(&out));
+    let now = std::fs::read_to_string(&hook).unwrap();
+    assert!(now.contains(&ours) && !now.contains(&older), "{now}");
+    assert_eq!(std::fs::read_to_string(&chained).unwrap(), theirs);
+
+    let out = sl(&repo, &["protect", "--remove"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = sl(&repo, &["status", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), theirs);
+    assert!(!chained.exists());
 }

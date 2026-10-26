@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use clap::Parser;
@@ -34,6 +35,28 @@ fn main() {
         }
         return;
     }
+    // 1: whatever runs sluice's work keeps its branches protected; 124:
+    // every other command puts back for this sluice a hook installed for
+    // another, and installs none. `protect` installs or removes its own,
+    // and the hook runs on every ref update.
+    match cli.command {
+        Some(
+            Command::Submit { .. }
+            | Command::Wait { .. }
+            | Command::Step { .. }
+            | Command::Run { .. },
+        ) => {
+            if let Err(e) = protection(sluice::protect::install) {
+                eprintln!("sluice: warning: branch protection not installed: {e:#}");
+            }
+        }
+        Some(Command::Protect { .. } | Command::Hook { .. }) => {}
+        _ => {
+            if let Err(e) = protection(sluice::protect::reinstall) {
+                eprintln!("sluice: warning: branch protection not re-installed: {e:#}");
+            }
+        }
+    }
     // The forge check reads the host's config itself, and says what in it
     // is wrong rather than failing on it.
     if let Some(Command::Forge {
@@ -64,26 +87,6 @@ fn main() {
             return;
         }
         std::process::exit(hook(cli));
-    }
-    // 1: whatever runs sluice's work keeps its branches protected.
-    if matches!(
-        cli.command,
-        Some(
-            Command::Submit { .. }
-                | Command::Wait { .. }
-                | Command::Step { .. }
-                | Command::Run { .. }
-        )
-    ) {
-        let ensured = std::env::current_dir()
-            .map_err(anyhow::Error::from)
-            .and_then(|dir| {
-                let exe = std::fs::canonicalize(std::env::current_exe()?)?;
-                sluice::protect::install(&dir, &exe)
-            });
-        if let Err(e) = ensured {
-            eprintln!("sluice: warning: branch protection not installed: {e:#}");
-        }
     }
     let bound = match std::env::current_dir()
         .map_err(anyhow::Error::from)
@@ -180,6 +183,14 @@ fn hook(cli: Cli) -> i32 {
             0
         }
     }
+}
+
+/// `put` sluice's hook, for this executable, in the repository holding the
+/// folder the command runs in.
+fn protection(put: fn(&Path, &Path) -> anyhow::Result<bool>) -> anyhow::Result<bool> {
+    let dir = std::env::current_dir()?;
+    let exe = std::fs::canonicalize(std::env::current_exe()?)?;
+    put(&dir, &exe)
 }
 
 /// sluice failing itself (exit 3), told on stdout as well when the reader

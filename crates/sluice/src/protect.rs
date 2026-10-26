@@ -56,6 +56,21 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
 /// follows `core.hooksPath`. A hook directory inside a worktree is a
 /// tracked one, which sluice will not write.
 fn hookdir(dir: &Path) -> Result<PathBuf> {
+    match located(dir)? {
+        (hooks, None) => Ok(hooks),
+        (hooks, Some(worktree)) => bail!(
+            "core.hooksPath is {}, inside the worktree {}: sluice will not write a tracked hook; \
+             add `{} hook {HOOK} \"$1\"` to that hook yourself",
+            hooks.display(),
+            worktree.display(),
+            std::env::current_exe()?.display()
+        ),
+    }
+}
+
+/// The repository's hook directory, as git finds it from `dir`, and the
+/// worktree it is inside, where it is a tracked one.
+fn located(dir: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
     let hooks = PathBuf::from(git(
         dir,
         &["rev-parse", "--path-format=absolute", "--git-path", "hooks"],
@@ -65,7 +80,7 @@ fn hookdir(dir: &Path) -> Result<PathBuf> {
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?);
     if hooks.starts_with(&common) {
-        return Ok(hooks);
+        return Ok((hooks, None));
     }
     let list = git(dir, &["worktree", "list", "--porcelain"])?;
     let mut path = None;
@@ -77,18 +92,12 @@ fn hookdir(dir: &Path) -> Result<PathBuf> {
         } else if line.is_empty() {
             if let Some(p) = path.take() {
                 if hooks.starts_with(&p) {
-                    bail!(
-                        "core.hooksPath is {}, inside the worktree {}: sluice will not write a tracked hook; \
-                         add `{} hook {HOOK} \"$1\"` to that hook yourself",
-                        hooks.display(),
-                        p.display(),
-                        std::env::current_exe()?.display()
-                    );
+                    return Ok((hooks, Some(p)));
                 }
             }
         }
     }
-    Ok(hooks)
+    Ok((hooks, None))
 }
 
 fn shim(program: &Path) -> String {
@@ -131,11 +140,43 @@ pub fn install(dir: &Path, program: &Path) -> Result<bool> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    let tmp = hooks.join(format!(".{HOOK}.sluice.{}", std::process::id()));
-    std::fs::write(&tmp, want)?;
-    std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
-    std::fs::rename(&tmp, &hook)?;
+    write(&hooks, &want)?;
     Ok(true)
+}
+
+/// 124: put sluice's hook for `program` where the hook in place is
+/// sluice's for another, keeping the hook it chains, so a host whose
+/// sluice was upgraded is guarded by the newer one from its next command
+/// in the repository. Writes nothing where there is no hook, where it is
+/// someone else's or already `program`'s, or where the hooks directory is
+/// tracked: a hook is installed only by `sluice protect` and the commands
+/// that run sluice's work (ADR 0059). `true` when it wrote the hook.
+pub fn reinstall(dir: &Path, program: &Path) -> Result<bool> {
+    // No repository to find a hook in is the command's to report, and a
+    // tracked hooks directory holds no hook sluice wrote.
+    let Ok((hooks, None)) = located(dir) else {
+        return Ok(false);
+    };
+    let hook = hooks.join(HOOK);
+    let want = shim(program);
+    match std::fs::read_to_string(&hook) {
+        Ok(have) if have != want && have.lines().nth(1) == Some(MARKER) => {
+            write(&hooks, &want)?;
+            Ok(true)
+        }
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("reading {}", hook.display())),
+    }
+}
+
+/// Write `shim` as the hook in `hooks`, in one rename.
+fn write(hooks: &Path, shim: &str) -> Result<()> {
+    let tmp = hooks.join(format!(".{HOOK}.sluice.{}", std::process::id()));
+    std::fs::write(&tmp, shim)?;
+    std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+    std::fs::rename(&tmp, hooks.join(HOOK))?;
+    Ok(())
 }
 
 /// Take sluice's hook out, putting back the hook it chained; `false` when
