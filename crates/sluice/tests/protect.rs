@@ -25,8 +25,13 @@ fn sluice() -> &'static str {
 /// branch `unit/a` one commit ahead of it, a worktree on `bolt/x`, and
 /// the hook installed.
 fn protected(name: &str) -> (Repo, PathBuf) {
+    protected_with(name, POLICY)
+}
+
+/// [`protected`], under `policy`.
+fn protected_with(name: &str, policy: &str) -> (Repo, PathBuf) {
     let repo = Repo::new(name);
-    repo.write(".config/sluice.toml", POLICY);
+    repo.write(".config/sluice.toml", policy);
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "policy"]);
     repo.git(&["branch", "bolt/x", "main"]);
@@ -47,6 +52,15 @@ fn sl(repo: &Repo, args: &[&str]) -> Output {
         .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+/// The host's settings, written where every command the test runs, git's
+/// hook among them, reads them; returns their path.
+fn host_settings(repo: &Repo, settings: &str) -> PathBuf {
+    let path = repo.dir().join(".git/no-config/sluice/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, settings).unwrap();
+    path
 }
 
 fn text(out: &Output) -> String {
@@ -429,10 +443,15 @@ fn protect_names_a_worktree_holding_a_protected_branch() {
 /// Returns the repository, the worktree on `bolt/x`, the copy's revision,
 /// origin's, and the bare repository.
 fn copy_apart(name: &str) -> (Repo, PathBuf, String, String, Scratch) {
+    copy_apart_with(name, "")
+}
+
+/// [`copy_apart`], `bolt/*`'s table given `extra` as well.
+fn copy_apart_with(name: &str, extra: &str) -> (Repo, PathBuf, String, String, Scratch) {
     let repo = Repo::new(name);
     repo.write(
         ".config/sluice.toml",
-        &POLICY.replace("trust = ", "remote = \"origin\"\ntrust = "),
+        &POLICY.replace("trust = ", &format!("remote = \"origin\"\n{extra}trust = ")),
     );
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "policy"]);
@@ -722,4 +741,19 @@ fn a_transaction_the_protection_cannot_read_passes_said_once() {
     for b in ["bolt/p", "bolt/q"] {
         assert_eq!(protected_in(&repo.dir().join(".git"), b), 0);
     }
+}
+
+/// 124: every other command still reads the host's settings in full, and
+/// refuses a field it does not know, naming the file and the field.
+#[test]
+fn every_other_command_refuses_a_setting_it_does_not_know() {
+    let (repo, _) = protected("protect-strict-settings");
+    let path = host_settings(&repo, "[runs]\nlater = 1\n");
+    let out = sl(&repo, &["status", "bolt/x"]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(3), "{t}");
+    assert!(
+        t.contains(&path.display().to_string()) && t.contains("later"),
+        "{t}"
+    );
 }

@@ -145,8 +145,9 @@ fn main() {
 
 /// 124: the protection hook, judging the repository git names: `GIT_DIR`
 /// when git set it, resolved against the folder the command ran in, and
-/// that folder only when git set none. A transaction it cannot read for a
-/// reason of its own passes, said once; it never exits 3.
+/// that folder only when git set none. It reads the host's settings and
+/// the policy only as far as guarding needs. A transaction it cannot read
+/// for a reason of its own passes, said once; it never exits 3.
 fn hook(cli: Cli) -> i32 {
     let bound = std::env::current_dir()
         .map(|dir| match std::env::var_os("GIT_DIR") {
@@ -154,7 +155,7 @@ fn hook(cli: Cli) -> i32 {
             _ => dir,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::open(&dir));
+        .and_then(|dir| Bound::guarding(&dir));
     let bound = match bound {
         Ok(b) => b,
         Err(e) => {
