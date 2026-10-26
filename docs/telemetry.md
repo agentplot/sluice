@@ -37,7 +37,6 @@ and for logs [ADR 0022](adr/0022-telemetry-sends-a-failures-output-scrubbed-and-
   | `sluice.landed`, `sluice.refused` | counter | submissions landed; landings refused because the branch moved |
   | `sluice.submission.landed_after` | histogram, seconds | submit to landed |
   | `sluice.candidate.tested_for` | histogram, seconds | a candidate's time under test, by `sluice.outcome` |
-  | `sluice.cache.restored` | counter | a place's build cache restored, by `sluice.hit` (`key`, `last`, `none`) |
 
 - **Logs**: one record for each failed task, sent by the round that
   reads its verdict, under that round's `sluice.verdict` span, with

@@ -488,6 +488,7 @@ fn a_run_s_checks_join_the_round() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(repo.dir().join(".git/host-running"));

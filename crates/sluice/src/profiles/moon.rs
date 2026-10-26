@@ -24,7 +24,7 @@ use sluice_seams::{
     KeptOutTask, NotRun, Outcome, RunDetail, Source, TaskProgress, TaskResult, TaskState,
 };
 
-use super::checks::{not_run_reason, Context, Plan};
+use super::checks::{cold_tests, not_run_reason, Context, Plan};
 
 /// The run report, relative to the place.
 const REPORT: &str = ".moon/cache/runReport.json";
@@ -50,6 +50,7 @@ impl Moon {
     pub fn plan(&self, cx: &Context) -> Result<Plan> {
         let request = cx.request;
         let place = &request.place.path;
+        let cold = cold_tests(&request.tests)?;
         self.install(cx)?;
         self.check_version(cx)?;
 
@@ -110,8 +111,10 @@ impl Moon {
                 holds_processors: true,
                 stamps: Vec::new(),
                 kept_out,
+                cold: false,
             });
         }
+        let cold = holds_cold(&tasks, &targets, &cold);
         // The workspace's toolchains, installed here, outside the executor,
         // where a download and a write to the user's home are allowed: the
         // run inside only uses them.
@@ -137,6 +140,7 @@ impl Moon {
             // proto stamps each toolchain it runs as used.
             stamps: vec![".last-used"],
             kept_out,
+            cold,
         })
     }
 
@@ -405,6 +409,19 @@ fn kept_out(tasks: &BTreeMap<String, Task>, required: &[String]) -> Vec<KeptOutT
             })
         })
         .collect()
+}
+
+/// 35: whether any of `targets` is a test `cold` names, by its own name
+/// or by a tag it carries, as `[tests] cold` names them.
+fn holds_cold(tasks: &BTreeMap<String, Task>, targets: &[String], cold: &[String]) -> bool {
+    targets.iter().any(|target| {
+        cold.iter().any(|c| match c.strip_prefix('#') {
+            Some(tag) => tasks
+                .get(target)
+                .is_some_and(|task| task.tags.iter().any(|t| t == tag)),
+            None => c == target,
+        })
+    })
 }
 
 /// `moon 2.6.1` → `(2, 6)`.
@@ -772,18 +789,142 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// moon's blob store in a place: `<2>/<62>` of a key.
-pub fn blob_in(place: &Path, key: &str) -> Option<Vec<u8>> {
+/// moon's blob store under `store`: `<2>/<62>` of a key.
+pub fn blob_in(store: &Path, key: &str) -> Option<Vec<u8>> {
     if key.len() < 3 || !key.is_ascii() {
         return None;
     }
-    std::fs::read(
-        place
-            .join(".moon/cache/blobs")
-            .join(&key[..2])
-            .join(&key[2..]),
-    )
-    .ok()
+    std::fs::read(store.join("blobs").join(&key[..2]).join(&key[2..])).ok()
+}
+
+/// Design D8 (C.2 moon row, 35): where moon keeps the blobs and hash
+/// manifests of a run in `checkout` whose command starts in `env`, found as
+/// moon 2.6.1 finds it (`crates/app/src/session.rs`, `get_cache_engine`),
+/// and never from where the host's `[[caches]]` says. `env` is the
+/// environment as the command sees it, `[tests] toolchain` sourced
+/// ([`super::checks::Context::command_env`]): a toolchain that sets
+/// `MOON_HOME` moves moon's home, as sluice's own devenv does. With moon's shared worktree
+/// setting on in a linked worktree, it is the repository's base checkout's
+/// `.moon/cache` when the base holds `.moon`, else `cache/shared` under
+/// moon's home; otherwise, the base checkout itself among it, the
+/// checkout's own `.moon/cache`.
+pub fn store(checkout: &Path, env: &BTreeMap<String, String>) -> PathBuf {
+    // moon's working directory is the checkout, resolved.
+    let checkout = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let own = checkout.join(".moon/cache");
+    if !shares_worktree_cache(&checkout, env) {
+        return own;
+    }
+    let Ok(repo) = gix::discover(&checkout) else {
+        return own;
+    };
+    if !matches!(repo.kind(), gix::repository::Kind::LinkedWorkTree) {
+        return own;
+    }
+    // `get_repository_root`: the common directory, or its parent when it
+    // is a `.git`.
+    let mut root = lexical(repo.common_dir());
+    if root.ends_with(".git") {
+        root.pop();
+    }
+    let work = lexical(repo.workdir().unwrap_or(repo.git_dir()));
+    if root.join(".moon").exists() && root != work {
+        root.join(".moon/cache")
+    } else {
+        moon_home(&checkout, env).join("cache/shared")
+    }
+}
+
+/// moon's shared worktree setting for a run given `env` (moon 2.6.1,
+/// `crates/config/src/workspace/cache_config.rs`). moon applies the
+/// environment over its files, so `MOON_CACHE_SHARED_WORKTREE_CACHE`, when
+/// set, decides alone: on for `1`, `true`, `yes`, `on`, `enabled` or
+/// `enable` in any case, off for anything else, empty included. Unset, the
+/// workspace's `cache.unstable_sharedWorktreeCache` decides, off when it
+/// says nothing.
+fn shares_worktree_cache(checkout: &Path, env: &BTreeMap<String, String>) -> bool {
+    if let Some(v) = env.get("MOON_CACHE_SHARED_WORKTREE_CACHE") {
+        return matches!(
+            v.to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on" | "enabled" | "enable"
+        );
+    }
+    // moon reads both files, the later over the earlier.
+    ["workspace.yml", "workspace.yaml"]
+        .iter()
+        .rev()
+        .filter_map(|f| std::fs::read_to_string(checkout.join(".moon").join(f)).ok())
+        .find_map(|yaml| workspace_setting(&yaml))
+        .unwrap_or(false)
+}
+
+/// `cache.unstable_sharedWorktreeCache` of a workspace's YAML, as a
+/// mapping under `cache` in block or flow style, the boolean read as
+/// moon's YAML reads one; `None` when the workspace does not say.
+fn workspace_setting(yaml: &str) -> Option<bool> {
+    let key = regex::Regex::new(r"unstable_sharedWorktreeCache\s*:\s*([A-Za-z]+)").unwrap();
+    let boolean = |text: &str| {
+        key.captures(text).and_then(|c| match &c[1] {
+            "true" | "True" | "TRUE" => Some(true),
+            "false" | "False" | "FALSE" => Some(false),
+            _ => None,
+        })
+    };
+    let mut lines = yaml.lines();
+    while let Some(line) = lines.next() {
+        let Some(rest) = line.strip_prefix("cache:") else {
+            continue;
+        };
+        if rest.trim_start().starts_with('{') {
+            return boolean(rest);
+        }
+        // The block ends at the next line that is neither indented, blank
+        // nor a comment.
+        return lines
+            .take_while(|l| l.starts_with([' ', '\t']) || l.trim().is_empty() || l.starts_with('#'))
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .find_map(boolean);
+    }
+    None
+}
+
+/// moon's home, as moon 2.6.1 reads it from a run's `env`
+/// (`crates/env/src/lib.rs`): `MOON_HOME`, else `$XDG_DATA_HOME/moon`,
+/// else `.moon` under `HOME` or the user's home directory; a relative
+/// path is taken from the run's working directory, `cwd`, and an empty
+/// variable is unset.
+fn moon_home(cwd: &Path, env: &BTreeMap<String, String>) -> PathBuf {
+    let set = |k: &str| env.get(k).filter(|v| !v.is_empty());
+    let path = |k: &str| set(k).map(|v| cwd.join(v));
+    path("MOON_HOME")
+        .or_else(|| path("XDG_DATA_HOME").map(|x| x.join("moon")))
+        .unwrap_or_else(|| {
+            set("HOME")
+                .map(PathBuf::from)
+                .or_else(std::env::home_dir)
+                .unwrap_or_default()
+                .join(".moon")
+        })
+}
+
+/// `path` with `.` and `..` taken out by its components alone, as moon's
+/// `clean_components` does: a linked worktree's common directory is given
+/// as `<git dir>/../..`.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -818,6 +959,51 @@ mod tests {
                     "root:integration".to_string()
                 ),
             ]
+        );
+    }
+
+    /// 35: a run is cold when it holds a test `[tests] cold` names, by
+    /// its name or a tag it carries; tests it does not hold make it warm.
+    #[test]
+    fn a_run_holding_a_cold_test_is_cold() {
+        let task = |tags: &[&str]| Task {
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            in_ci: true,
+        };
+        let tasks = BTreeMap::from([
+            ("app:bench".to_string(), task(&["check-fast", "bench"])),
+            ("app:test".to_string(), task(&["check-fast"])),
+            ("root:timing".to_string(), task(&[])),
+        ]);
+        let s = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let bench = s(&["#bench"]);
+        assert!(holds_cold(&tasks, &s(&["app:bench", "app:test"]), &bench));
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &bench));
+        assert!(holds_cold(
+            &tasks,
+            &s(&["root:timing"]),
+            &s(&["root:timing"])
+        ));
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &s(&["root:timing"])));
+        assert!(!holds_cold(&tasks, &s(&["app:bench"]), &[]));
+        // A tag names no task by its own name.
+        assert!(!holds_cold(&tasks, &s(&["app:test"]), &s(&["#app:test"])));
+    }
+
+    /// 35: `[tests] cold` is a list of tests; anything else is refused.
+    #[test]
+    fn a_cold_that_is_no_list_is_refused() {
+        use sluice_seams::{Setting, Settings};
+        assert_eq!(cold_tests(&Settings::new()).unwrap(), Vec::<String>::new());
+        let list = Settings::from([(
+            "cold".to_string(),
+            Setting::List(vec!["#bench".to_string()]),
+        )]);
+        assert_eq!(cold_tests(&list).unwrap(), ["#bench"]);
+        let text = Settings::from([("cold".to_string(), Setting::Text("#bench".into()))]);
+        assert_eq!(
+            cold_tests(&text).unwrap_err().to_string(),
+            "[tests] cold must be a list of tests, named as required names them"
         );
     }
 
@@ -915,6 +1101,172 @@ mod tests {
             let e =
                 check_key(&b, "b:test", &blob, &tree(&[("a/x", "1"), ("b/y", "2")])).unwrap_err();
             assert!(e.to_string().starts_with("a:test:"), "{e}");
+        }
+    }
+
+    /// Design D8: where moon 2.6.1 keeps a run's manifests, over
+    /// repositories laid out as git lays them out.
+    mod stores {
+        use super::super::*;
+        use crate::instance::HostCache;
+
+        /// A directory, resolved as moon's working directory is, removed
+        /// when the test ends.
+        struct Scratch(PathBuf);
+
+        impl Scratch {
+            fn new(name: &str) -> Scratch {
+                let dir = std::env::temp_dir()
+                    .join(format!("sluice-moon-store-{}-{name}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                Scratch(dir.canonicalize().unwrap())
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        /// A linked worktree at `at` of the repository whose common
+        /// directory is `common`, as `git worktree add` writes one.
+        fn worktree(common: &Path, at: &Path) {
+            let admin = common.join("worktrees").join(at.file_name().unwrap());
+            std::fs::create_dir_all(&admin).unwrap();
+            std::fs::create_dir_all(at).unwrap();
+            std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+            std::fs::write(
+                admin.join("gitdir"),
+                format!("{}\n", at.join(".git").display()),
+            )
+            .unwrap();
+            std::fs::write(at.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        }
+
+        fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        const ON: (&str, &str) = ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true");
+
+        #[test]
+        fn a_key_is_read_where_moon_keeps_it() {
+            let s = Scratch::new("keeps");
+            let home = s.0.join("home");
+
+            // A repository whose base checkout holds `.moon`, a worktree
+            // beside it.
+            let base = s.0.join("base");
+            gix::init(&base).unwrap();
+            std::fs::create_dir_all(base.join(".moon")).unwrap();
+            let linked = s.0.join("linked");
+            worktree(&base.join(".git"), &linked);
+            std::fs::create_dir_all(linked.join(".moon")).unwrap();
+            let shared = base.join(".moon/cache");
+
+            // The setting off: the checkout's own.
+            let none = env(&[("HOME", home.to_str().unwrap())]);
+            assert_eq!(store(&linked, &none), linked.join(".moon/cache"));
+            // On, in a linked worktree: the base's, where moon wrote the
+            // manifest.
+            let on = env(&[ON, ("HOME", home.to_str().unwrap())]);
+            assert_eq!(store(&linked, &on), shared);
+            let key = "ab".to_string() + &"c".repeat(62);
+            let blobs = shared.join("blobs/ab");
+            std::fs::create_dir_all(&blobs).unwrap();
+            std::fs::write(blobs.join("c".repeat(62)), b"manifest").unwrap();
+            assert_eq!(
+                blob_in(&store(&linked, &on), &key).as_deref(),
+                Some(&b"manifest"[..])
+            );
+            assert_eq!(blob_in(&store(&linked, &none), &key), None);
+            // On, in the base checkout itself: its own.
+            assert_eq!(store(&base, &on), shared);
+            assert_eq!(store(&base, &none), shared);
+
+            // A worktree of a bare repository: moon's home, from the
+            // run's environment.
+            let bare = s.0.join("repo.git");
+            gix::init_bare(&bare).unwrap();
+            let main = s.0.join("main");
+            worktree(&bare, &main);
+            let moon_home = s.0.join("moon-home");
+            let with_home = env(&[
+                ON,
+                ("HOME", home.to_str().unwrap()),
+                ("MOON_HOME", moon_home.to_str().unwrap()),
+            ]);
+            assert_eq!(store(&main, &with_home), moon_home.join("cache/shared"));
+            assert_eq!(store(&main, &on), home.join(".moon/cache/shared"));
+            let xdg = env(&[
+                ON,
+                ("HOME", home.to_str().unwrap()),
+                ("XDG_DATA_HOME", s.0.join("data").to_str().unwrap()),
+            ]);
+            assert_eq!(store(&main, &xdg), s.0.join("data/moon/cache/shared"));
+            assert_eq!(store(&main, &none), main.join(".moon/cache"));
+
+            // A host cache whose `dir` is elsewhere moves nothing.
+            let elsewhere = HostCache {
+                dir: s.0.join("caches/moon"),
+                socket: None,
+                env: env(&[ON]),
+            };
+            let mut declared = env(&[("HOME", home.to_str().unwrap())]);
+            declared.extend(elsewhere.env.clone());
+            assert_eq!(store(&linked, &declared), shared);
+            assert_eq!(store(&main, &declared), home.join(".moon/cache/shared"));
+        }
+
+        /// The variable, when set, decides over the workspace's file, as
+        /// moon applies the environment last; unset, the file decides.
+        #[test]
+        fn the_variable_decides_over_the_workspace() {
+            let s = Scratch::new("decides");
+            let base = s.0.join("base");
+            gix::init(&base).unwrap();
+            std::fs::create_dir_all(base.join(".moon")).unwrap();
+            let linked = s.0.join("linked");
+            worktree(&base.join(".git"), &linked);
+            std::fs::create_dir_all(linked.join(".moon")).unwrap();
+            let own = linked.join(".moon/cache");
+            let shared = base.join(".moon/cache");
+            let var = |v: &str| env(&[("MOON_CACHE_SHARED_WORKTREE_CACHE", v)]);
+
+            for on in ["1", "true", "TRUE", "yes", "On", "enabled", "enable"] {
+                assert_eq!(store(&linked, &var(on)), shared, "{on}");
+            }
+            for off in ["0", "false", "", "no", "y"] {
+                assert_eq!(store(&linked, &var(off)), own, "{off:?}");
+            }
+
+            let workspace = linked.join(".moon/workspace.yml");
+            std::fs::write(
+                &workspace,
+                "projects: {}\ncache:\n  # shared among worktrees\n  cas:\n    verifyIntegrity: true\n  unstable_sharedWorktreeCache: true\nvcs:\n  client: git\n",
+            )
+            .unwrap();
+            assert_eq!(store(&linked, &BTreeMap::new()), shared);
+            assert_eq!(store(&linked, &var("false")), own);
+            std::fs::write(
+                &workspace,
+                "cache: { unstable_sharedWorktreeCache: True }\n",
+            )
+            .unwrap();
+            assert_eq!(store(&linked, &BTreeMap::new()), shared);
+            std::fs::write(
+                &workspace,
+                "cache:\n  unstable_sharedWorktreeCache: false\nunstable_sharedWorktreeCache: true\n",
+            )
+            .unwrap();
+            assert_eq!(store(&linked, &BTreeMap::new()), own);
+            assert_eq!(store(&linked, &var("yes")), shared);
         }
     }
 
