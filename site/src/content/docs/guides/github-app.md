@@ -63,7 +63,9 @@ in a repository; anyone who holds it can push as sluice.
 
 ## 4. Name the app in the host's config
 
-In `~/.config/sluice/config.toml`:
+In `~/.config/sluice/config.toml`, or where the host's configuration is
+managed when a tool manages it
+([who writes it](/sluice/reference/configuration/#who-writes-it)):
 
 ```toml
 [forge]

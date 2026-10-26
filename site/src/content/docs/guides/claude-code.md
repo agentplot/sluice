@@ -63,6 +63,12 @@ and walks through `sluice protect`, the host's `[runs]` settings and, for
 GitHub, the app and `sluice forge check`. It ends with one change landed
 through sluice to prove the setup.
 
+Before it writes the host's config, Claude checks who writes it. A file
+that is read-only, or a link into another tool's store, is managed with
+the rest of the host's configuration: Claude says so, shows the settings
+to add where the configuration is managed, and leaves the file alone
+([who writes it](/sluice/reference/configuration/#who-writes-it)).
+
 ## What your agents do with it
 
 In a repository with a `.config/sluice.toml`, Claude:
