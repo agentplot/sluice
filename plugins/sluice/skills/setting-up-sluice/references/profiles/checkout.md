@@ -22,7 +22,9 @@ on its first `sluice exec` and keeps them until `sluice release`.
 A checkout starts from its revision alone and saves nothing when it is
 released; the policy declares no cache. A cache every build on the host
 shares, a compile server's or moon's shared worktree cache, is the host's:
-declare it in the host's config, which whoever keeps the host writes.
+declare it in the host's file, which whoever administers the host writes, or
+whatever manages the host's configuration (the skill's step 6, *The host's
+file*, says which).
 
 ```toml
 # ~/.config/sluice/config.toml

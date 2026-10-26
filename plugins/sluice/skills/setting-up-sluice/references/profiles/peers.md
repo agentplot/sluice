@@ -66,7 +66,9 @@ systems = ["linux-x64"]
 
 ## The host's own settings
 
-In `~/.config/sluice/config.toml` on each host:
+In each host's own file, `~/.config/sluice/config.toml`, or where that host's
+configuration is managed; check which on each host first (the skill's step 6,
+*The host's file*):
 
 ```toml
 [signing]
@@ -99,8 +101,9 @@ will submit or run checks.
    chmod 600 ~/.config/sluice/signing
    ```
 
-2. **On each host, name its signer and key** in `~/.config/sluice/config.toml`
-   (`[signing]`, above). The signer is the name the policy will give it:
+2. **On each host, name its signer and key** in its own file (`[signing]`,
+   above), or, where a tool manages the host's configuration, have the user
+   add it there. Keep the key itself out of any store everyone may read. The signer is the name the policy will give it:
    one per kind of host, such as `box` for hosts that run no agents and
    `sessions` for the hosts agents work on. Set `[peers] name` when two
    hosts share a host name. On a host that runs only some of the policy's
