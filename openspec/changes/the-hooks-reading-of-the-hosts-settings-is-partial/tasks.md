@@ -34,4 +34,4 @@ committed. `core:test` is `cargo test -p sluice-core`; `sluice:test` and
 
 ## 6. The gate
 
-- [ ] 6.1 Commit the work and run the gate's checks with `sluice exec main`; verify every task it runs passes.
+- [x] 6.1 Commit the work and run the gate's checks with `sluice exec main`; verify every task it runs passes.
