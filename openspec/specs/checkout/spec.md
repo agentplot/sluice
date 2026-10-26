@@ -102,17 +102,14 @@ A branch's policy whose `[checkout]` still declares a `cache`, as
 SHALL be refused when sluice reads it, before anything is made, tested
 or landed under it, so a repository that relied on the checkout cache
 learns it is gone rather than getting slower with no word (35, 71; ADR
-0049 as amended). The refusal SHALL name ADR 0049 and the host's
-`[[caches]]` in `~/.config/sluice/config.toml` that replace it, and say
-to remove `[[checkout.cache]]` from `.config/sluice.toml`. Every command
-and round that reads the policy SHALL show the same refusal.
+0049 as amended). Every command and round that reads the policy SHALL
+show the same refusal.
 
 #### Scenario: The policy is read
 
 - **WHEN** a policy whose `[checkout]` holds a `[[checkout.cache]]`
   entry, or `cache = "target"`, is read
-- **THEN** the read is refused, and its message names ADR 0049,
-  `[[caches]]` and `~/.config/sluice/config.toml`
+- **THEN** the read is refused
   (`refuses_a_checkout_cache` in `crates/sluice-core/src/policy.rs`)
 
 #### Scenario: A branch's status
@@ -122,6 +119,22 @@ and round that reads the policy SHALL show the same refusal.
 - **THEN** it exits with an error and prints the refusal naming ADR
   0049 and the host's `[[caches]]`
   (`status_refuses_a_checkout_cache` in `crates/sluice/tests/cli.rs`)
+
+### Requirement: The refusal names what replaces the checkout cache
+
+The refusal of a policy that still declares the checkout cache SHALL
+name ADR 0049 and the host's `[[caches]]` in
+`~/.config/sluice/config.toml` that replace it, and say to remove
+`[[checkout.cache]]` from `.config/sluice.toml`.
+
+#### Scenario: The refusal's message
+
+- **WHEN** a policy whose `[checkout]` holds a `[[checkout.cache]]`
+  entry, or `cache = "target"`, is refused
+- **THEN** its message names ADR 0049, `[[caches]]` and
+  `~/.config/sluice/config.toml`, and says to remove
+  `[[checkout.cache]]` from `.config/sluice.toml`
+  (`refuses_a_checkout_cache` in `crates/sluice-core/src/policy.rs`)
 
 ### Requirement: A policy that declares no checkout cache reads as before
 
