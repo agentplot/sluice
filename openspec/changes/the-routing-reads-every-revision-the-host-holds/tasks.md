@@ -1,0 +1,21 @@
+# Tasks
+
+## 1. The routing reads every revision the host holds
+
+- [ ] 1.1 In `crates/sluice/src/profiles/branches.rs`, add the walk the design describes: the revisions of a branch the host holds, own ref first and then each remote's tracking ref in `git remote`'s order, and the routing read off them (the remote any of them names, the first revision naming it and its policy, or, with none named, the first revision holding a policy); refuse two different remotes with an error naming each remote and the ref (as `main`, `upstream/main`) and revision that named it (124; record 0060; rule core.27). Verify with `cargo check -p sluice`.
+- [ ] 1.2 Rewrite `remote`, `remote_if_made_from` and `policy_of` on that walk, `remote_if_made_from` listing `from`'s revisions and reading the remote each policy names for `branch`, and rewrite their doc comments to say the new reading, citing 124 and rule core.27; no fetch is made in any of them. Verify the existing router tests in `crates/sluice/tests/pushed_refs.rs` and `a_bolt_only_fetched_here_lands_on_its_remote` in `crates/sluice/tests/remote_branch.rs` still pass under `sluice exec main -- cargo test -p sluice --features tools --test pushed_refs --test remote_branch`.
+- [ ] 1.3 Add router tests to `crates/sluice/tests/pushed_refs.rs`, each with a doc comment citing 124: the host's `main` at a commit from before the policy file and `origin/main` holding a policy naming origin routes `main` to origin and reads origin's revision; the host's `main` with a policy naming no remote and `origin/main` naming origin routes to origin; both naming none stays local refs; `main` naming `origin` and `upstream/main` naming `upstream` is refused, the error naming both remotes and both refs; with origin's URL set to a path that does not exist and `origin/main` naming origin, `remote("main")` answers `origin` (so no fetch was tried); `remote_if_made_from("bolt/x", "main")` and `policy_of("main")` read the same way on the stale-copy case. Verify with `sluice exec main -- cargo test -p sluice --features tools --test pushed_refs`.
+
+## 2. The scenario for a host's copy from before the policy file
+
+- [ ] 2.1 Add to `crates/sluice/tests/remote_branch.rs` the scenario `a_bolt_is_made_on_origin_from_a_main_this_host_holds_from_before_the_policy`, its doc comment citing 124 and the C.7 pushed refs row: a `Setup::new(.., "origin")`, the host's `main` moved back to the root commit before sluice first runs there (so it predates `.config/sluice.toml`), `origin/main` as fetched holding the policy; `sluice branch create bolt/x --from main --json` succeeds, prints origin's `main` as `created`, origin holds `bolt/x` at that revision, and the host's `main` is still the root commit. Verify with `sluice exec main -- cargo test -p sluice --features tools --test remote_branch a_bolt_is_made_on_origin_from_a_main`.
+- [ ] 2.2 In the same file, a scenario citing 124 where the host's `main` holds a policy saying `remote = "origin"` and `upstream/main` (a second bare remote, fetched) one saying `remote = "upstream"`: `sluice step main` exits non-zero, its output names `origin` with `main` and `upstream` with `upstream/main`, neither remote's `main` moved and nothing ran. Verify with `sluice exec main -- cargo test -p sluice --features tools --test remote_branch two_remotes`.
+
+## 3. Say it to the operator
+
+- [ ] 3.1 In `site/src/content/docs/guides/github.md`, under *What changes*, add one bullet saying that sluice finds which remote `main` is on from every copy of it on your machine, your own `main` and what you last fetched from each remote, so a machine whose own `main` is old, or from before the policy, needs only a `git fetch`; and that two copies naming different remotes are refused, naming both. Verify with `moon run site:prose`, every warning cleared.
+- [ ] 3.2 In `plugins/sluice/skills/setting-up-sluice/references/profiles/remote-branches.md`, under *Turning it on*, add the same in one or two sentences, for a host that has fetched the branch but whose own copy is old (rule core.26: no name of ours). Verify with `moon run plugin-sluice:validate` and `sluice exec main -- cargo test -p sluice --test plugin_docs`.
+
+## 4. The gate
+
+- [ ] 4.1 Run the gate's checks on the committed work, `sluice exec main`, and verify every task passes, `cli:tools` among them.
