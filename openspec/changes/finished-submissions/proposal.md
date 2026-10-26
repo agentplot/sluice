@@ -45,6 +45,15 @@ and every `sluice` with no command pays for the whole history.
 - The next write to a branch moves its finished submissions written
   before this change, so no migration step is run by hand.
 
+## Capabilities
+
+### New Capabilities
+- `finished-records`: where a branch keeps its finished submissions and
+  its log's closed parts, and which reads take them.
+
+### Modified Capabilities
+None.
+
 ## What it needs from the statement
 
 Clause 61 reads "given a branch, its records as last written". A read
