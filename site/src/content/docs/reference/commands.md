@@ -349,6 +349,14 @@ A checkout whose directory someone deleted, held or not, has the release
 its run stored run once from its scratch directory by the next round, is
 freed whatever that did, and is logged `gone`.
 
+A held checkout also shows wherever you watch the queue, on every host.
+[`sluice overview`](#sluice-overview) names it under its branch.
+[herdr](/sluice/guides/herdr/) and the
+[Claude Code board](/sluice/guides/claude-code/) show it under `RELEASE
+FAILED`. Each says what failed and gives the commands that release it.
+They show a worktree or a preview held because its release failed the
+same way. A checkout the next round still tries shows only in `sluice status`.
+
 ## `sluice overview`
 
 `sluice overview` shows every branch of the repository that has a
@@ -358,6 +366,8 @@ and writes nothing, and it reads with no sluice running.
 ```console
 $ sluice overview
 bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
+  sluice/try/bolt/concurrent-units/9 is held: its release failed 4 times: usage: scripts/preview up
+    sluice release sluice/try/bolt/concurrent-units/9 runs it again; sluice release sluice/try/bolt/concurrent-units/9 --accept-failure frees it without
   testing bolt/concurrent-units + #13 + #14 · 3/5 tasks · running tests:t-cards 2m10s · 6m02s of 15m
   2026-10-16T09:15:02Z  landed #12 as c41e8f2
   2026-10-16T09:11:40Z  blamed #11 on 9a03c1e
@@ -366,18 +376,30 @@ host: 2 of 4 runs · 1 queue · 1 agent
 2 worktrees held · 0 previews
 ```
 
+Under a branch's line come the checkouts, worktrees and previews of
+that branch [held because their release failed](#checkouts-held-because-their-release-failed).
+Each says how many times its release failed and the last line of what
+failed, then gives the commands that run its release again or free it
+without.
+A checkout another host made is held on that host, and its commands are
+given to run there. One whose branch has no state comes after the
+branches, under `<branch> · no records`.
+
 `--json` prints one document, `sluice/overview@1`, for a pane, a status
 line or a script. Fields are only ever added to it.
 
 | field | |
 |---|---|
 | `schema`, `host`, `repository`, `at` | the schema, the host's name, the repository's git directory, and when it was read |
-| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel` and `depth` (submissions still queued, waiting, testing, passed or landing). They come in the order the default branch's policy names them |
+| `branches[]` | each branch with a queue: `branch`, `at` (its revision as its state last saw it), `version` (moves on every write), `window`, `parallel`, `remote` and `depth` (submissions still queued, waiting, testing, passed or landing). `remote` is the name of the git remote the branch's policy lands it on, as the policy writes it, never its URL; a branch kept in this host's repository has none. The branches come in the order the default branch's policy names them |
 | `branches[].candidates[]` | each combination: `id`, `submissions`, `revision`, `state`, `started`, `limit` (seconds), `targets` (the tests the branch requires), `executor`, `ran`, `replayed`, and `failed`, each failed test with where its output is kept |
+| `branches[].candidates[].failed[].flaky` | a test read as failed because its inputs both passed and failed. `here` is what this run gave, `at` when its result was recorded and `host` the host that ran it. `other` is the result it contradicts: its `outcome`, `at`, `host`, `branch`, `combination` and `log`. A submission's `failed` in `sluice status <id> --json` gives the same. Records written before `at` and `host` leave them out |
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
+| `branches[].recent_from` | each submission the recent lines name, a landing's `ids`, a blame's `id` and a conflict's `id` and `with`, mapped to the worktree it came from, as its `from.worktree` says, a pull request's as `pull/<n>`: `{"12": "unit/a", "13": "pull/41"}`. It's `{}` when the branch has no recent lines |
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
+| `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |

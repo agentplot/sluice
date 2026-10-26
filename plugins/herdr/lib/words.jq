@@ -73,14 +73,54 @@ def recent_words: if .event == "landed" then "\((.ids // []) | map("#\(.)") | jo
   elif .event == "conflict" then "#\(.id) conflict · \((.paths // []) | join(", "))"
   else (.event | tostring) end;
 
+# The last part of a worktree's path, its name in a row.
+def base_name: sub("/+$"; "") | split("/") | last;
+
+# --- Places held because their release failed --------------------------
+
+# Every place of the document $d held because its release failed and tried
+# no more (123), each {key, branch, name, release, tries, failed, host}:
+# its branches' checkouts, then its worktrees and its previews. A checkout
+# is keyed by its name, since every host's document lists it from the
+# branch's state; a worktree or a preview is its own host's. One made by
+# another host names it in $host, where alone it is released.
+def held_all($d):
+  [ ($d.branches[] | .branch as $b | (.held_checkouts // [])[] | select(.stopped == true)
+      | {key: "checkout \(.place)", branch: $b, name: .place, release: .place, tries, failed,
+         host: (if .host != null and .host != $d.host then .host else null end)}),
+    ($d.sessions[] | select(.release_failed.stopped == true)
+      | {key: "worktree \($d.host) \(.worktree)", branch, name: "worktree \(.worktree | base_name)",
+         release: "--worktree \(.worktree)", tries: .release_failed.tries, failed: .release_failed.failed, host: null}),
+    ($d.previews[] | objects | select(.release_failed.stopped == true)
+      | {key: "preview \($d.host) \(.name)", branch, name: "preview \(.name)", release: .name,
+         tries: .release_failed.tries, failed: .release_failed.failed, host: null}) ];
+
+def held_places($d; $branch): held_all($d) | map(select(.branch == $branch));
+
+# The branches of the document's held places that it lists no records of.
+def unlisted_held($d): [held_all($d)[].branch] | unique
+  | map(select(. as $b | $d.branches | all(.branch != $b)));
+
+def held_words($n): "\($n) held: release failed";
+
+def times: if . == 1 then "once" else "\(.) times" end;
+
+# A held place's two lines, as the board's pane words them: what failed,
+# then how to run its release again or free it without.
+def held_lines: [
+    "✗ \(.name) held\(if .host then " on \(.host)" else "" end) · failed \(.tries | times)\(if (.failed // "") != "" then " · \(.failed)" else "" end)",
+    "\(if .host then "on \(.host): " else "" end)sluice release \(.release) · --accept-failure frees it without" ];
+
 # Whether a branch has anything queued or under test; the rest are left out
 # of the band.
 def busy: .depth > 0 or (testing | length) > 0;
 
 # Whether the popup shows a branch: one busy, or whose last event is under
 # a quarter of an hour old, so a host with many idle branches shows its
-# queues and a landing is still seen once its queue is empty.
+# queues and a landing is still seen once its queue is empty; or one with
+# $held places held because their release failed.
 def shown($now): busy or ((.recent | last | .at | since($now)) // 900) < 900;
+def shown($now; $held): shown($now) or $held > 0;
 
 # --- Agents' checks ---------------------------------------------------
 
@@ -93,13 +133,14 @@ def held_back($room): $room != null and ($room.sessions // 0) > 0
   and (($room.queue // 0) + $room.sessions) >= ($room.bound // 0)
   and any(.submissions[]; .state == "queued") and (testing | length) < (.window // 0);
 
-def held_words($room): if $room.sessions == 1 then "1 slot to an agent's checks"
+def checks_words($room): if $room.sessions == 1 then "1 slot to an agent's checks"
   else "\($room.sessions) slots to agents' checks" end;
 
 # The band's line for one branch, or null when it has nothing to show,
-# saying so at its end when agents' checks hold its queue back.
-def branch_line($now; $room): . as $b | testing as $under
-  | if ($b | busy | not) then null
+# saying so at its end when agents' checks hold its queue back, and last
+# how many of its places are held because their release failed.
+def branch_line($now; $room; $held): . as $b | testing as $under
+  | if ($b | busy | not) and $held == 0 then null
     else ["sluice \($b.branch)", plural($b.depth; "submission")]
       + ($under | map((.started | since($now)) as $took
           | "testing \(.submissions | combination($b.branch))"
@@ -107,11 +148,17 @@ def branch_line($now; $room): . as $b | testing as $under
             + (if $took == null then "" else " \($took | duration)" + (if .limit then "/\(.limit | limit)" else "" end) end)))
       + ($b | waiting | if length > 0 then [(map("#\(.)") | join(" ")) + " waiting"] else [] end)
       + ($b.recent | if length > 0 then ["last \(.[-1] | recent_words)"] else [] end)
-      + (if $b | held_back($room) then [held_words($room)] else [] end)
+      + (if $b | held_back($room) then [checks_words($room)] else [] end)
+      + (if $held > 0 then [held_words($held)] else [] end)
       | join(" · ") end;
 
-# The tab-bar segment: every branch with a queue, on one line.
-def segment($now): [.[] | .room as $room | .branches[] | branch_line($now; $room) | select(. != null)] | join("  |  ");
+# A branch the document lists no records of, as one with nothing queued.
+def no_records: {branch: ., depth: 0, window: 0, candidates: [], submissions: [], recent: []};
+
+# The tab-bar segment: every branch with a queue or a held place, on one line.
+def segment($now): [.[] | . as $d | .room as $room
+  | ($d.branches + (unlisted_held($d) | map(no_records)))[]
+  | branch_line($now; $room; held_places($d; .branch) | length) | select(. != null)] | join("  |  ");
 
 def paint($on; $code): if $on then "\u001b[\($code)m\(.)\u001b[0m" else . end;
 
@@ -121,9 +168,6 @@ def pull_of: (capture("^pull/(?<n>[0-9]+)$") | .n) // null;
 def candidate_rows($c; $color): $c | task_lines
   | map(.state as $s | "        \(.text)" | paint($color; {passed: "32", replayed: "32", failed: "31", running: "33", waiting: "2"}[$s] // "2")
     | {text: ., kind: "task", state: $s});
-
-# The last part of a worktree's path, its name in a row.
-def base_name: sub("/+$"; "") | split("/") | last;
 
 # How a finished check ended, from its last_result: what its passes are
 # worth when its head is submitted, or how many of its tasks failed. A run
@@ -162,21 +206,29 @@ def host_line: .room as $r
 def named_first($named): map(select(.branch == $named)) + map(select(.branch != $named));
 
 # One document's rows, as the board's /sluice pane draws them, under the
-# headings TESTING, QUEUED and RECENT: {text, kind, url?}. A row with a url
-# is a link: a submission to its worktree's pane, a failed test to its log.
-# The branch named for the focused pane ($named, or null) comes first, shown
-# when idle, and as one line when no record names it.
+# headings RELEASE FAILED, TESTING, QUEUED and RECENT: {text, kind, url?}. A
+# row with a url is a link: a submission to its worktree's pane, a failed
+# test to its log. The branch named for the focused pane ($named, or null)
+# comes first, shown when idle, and as one line when no record names it; a
+# branch with no records that has a held place follows the branches.
 def rows($now; $color; $named): . as $d
   | ($d | check_rows($now; $color)) as $checks | ($d | host_line) as $host
   | def row($kind): {text: ., kind: $kind};
-  def visible: shown($now) or .branch == $named;
+  # A held place is the operator's to release: its rows are no links.
+  def held_rows($branch): held_places($d; $branch)
+    | if length == 0 then empty
+      else ("  RELEASE FAILED" | paint($color; "1") | row("heading")),
+        (.[] | held_lines | ("    " + .[0] | paint($color; "31") | row("held")), ("        " + .[1] | paint($color; "2") | row("held")))
+      end;
+  def visible: shown($now; held_places($d; .branch) | length) or .branch == $named;
+  def no_records_rows: ("" | row("blank")), ("\(.) · no records" | paint($color; "1") | row("heading")), held_rows(.);
   [("\($d.repository) on \($d.host)" | paint($color; "2") | row("heading"))]
-  + (if $named != null and ([$d.branches[] | select(.branch == $named)] | length) == 0
-      then [("" | row("blank")), ("\($named) · no records" | paint($color; "1") | row("heading"))] else [] end)
+  + [ if $named != null and ($d.branches | all(.branch != $named)) then $named | no_records_rows else empty end ]
   + (if ([$d.branches[] | select(visible)] | length) == 0 then ["No branch has a queue." | paint($color; "2") | row("heading")] else [] end)
   + [ $d.branches | named_first($named)[] | select(visible) | . as $b | testing as $under
       | ("" | row("blank"))
       , ("\($b.branch) at \(($b.at // "nothing") | .[0:7]) · \(plural($b.depth; "submission")) · \(plural($under | length; "combination")) under test\(if $b.parallel then " (up to \($b.parallel) at once)" else "" end)" | paint($color; "1") | row("heading"))
+      , held_rows($b.branch)
       , ( ($under + ($b.candidates | map(select(.state == "formed")))) as $shown
           | if ($shown | length) > 0 then
               ("  TESTING" | paint($color; "1") | row("heading"))
@@ -206,6 +258,7 @@ def rows($now; $color; $named): . as $d
                   + {url: "sluice-herdr:log?path=\(.log | @uri)&task=\(.task | @uri)"})
           else empty end )
     ]
+  + [ unlisted_held($d)[] | select(. != $named) | no_records_rows ]
   + ([$d.branches[] | select(visible | not)] | length | if . > 0 and . < ($d.branches | length)
       then [("" | row("blank")), ((if . == 1 then "1 other branch" else "\(.) other branches" end) + " with nothing queued" | paint($color; "2") | row("heading"))] else [] end)
   + (if ($checks | length) > 0 or $host then [("" | row("blank"))] else [] end)
@@ -329,9 +382,13 @@ def pane_token($w; $paths; $failed; $check; $now; $named):
       "#\($landed.id) landed \($landed.at | since($now) | minutes)"
     else "" end;
 
-# The `sluice_q` token: every branch's submissions in these documents.
+# The `sluice_q` token: every branch's submissions in these documents, and
+# the places held because their release failed, a checkout two hosts'
+# documents list counted once.
 def queue_token: ([.[].branches[].depth] | add // 0) as $n
-  | if $n > 0 then plural($n; "submission") else "" end;
+  | ([.[] | . as $d | held_all($d)[]] | unique_by(.key) | length) as $held
+  | [if $n > 0 then plural($n; "submission") else empty end, if $held > 0 then held_words($held) else empty end]
+  | join(" · ");
 
 # --- Events ------------------------------------------------------------
 

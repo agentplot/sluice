@@ -4,7 +4,7 @@ sluice's queue inside a Claude Code session.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="screenshots/board-dark.png">
-  <img src="screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="800">
+  <img src="screenshots/board-light.png" alt="Claude Code with the sluice board's /sluice pane docked on the right: one combination under test at 3/5, pressed open to its tasks, three passed and two running; three submissions queued, this session's among them; a landing and a blame; an agent's check at 4/5; the band above the prompt and the status line below it." width="800">
 </picture>
 
 ```
@@ -13,7 +13,9 @@ sluice's queue inside a Claude Code session.
 ```
 
 - **Band** above the prompt, while a branch has a queue:
-  `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`
+  `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`.
+  While the overview fails, the band is its error on one line,
+  `sluice: <message>`, until it reads again.
 - **`/sluice`** opens a pane. With full-screen mode off it opens above the
   prompt holding the keyboard, and Esc, its `close` button (or `x`) or
   `/sluice` again closes it; with full-screen mode on it docks beside the
@@ -25,6 +27,39 @@ sluice's queue inside a Claude Code session.
   path). A branch with nothing queued is left out once a quarter hour has
   passed since its last event. Branches come in the order the policy names
   them.
+- **A combination's tasks** fold under its row, which keeps their count and
+  a bar of the same. Press the row to list them: `✓ sluice:test 1m48s` for
+  one that ended, `… sluice:e2e running 1m12s` for one still running. Press
+  it again to fold them.
+- **A conflict** opens on a press to its files, what is in the way and what
+  to do next: `in the way: #217 (bolt/runner)`, or `what main has landed`,
+  then `next: take main into the worktree, resolve and commit, then sluice
+  submit main`. Press it again to fold it. A RECENT conflict opens this
+  way, and so does this session's own forecast conflict.
+- **A flaky failure**, in an opened blame or `log of` row, shows both runs:
+  `this run: passed 19:42 on devbox` with its log and last lines, then
+  `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa` with
+  its log and last lines, or `its log was not kept`.
+- **Links**, only where the address is known. A landing's commit links
+  when the branch's remote is on GitHub. Each pull request on QUEUED and
+  RECENT rows links, as `· PR 41`, at the branch's remote, or at origin
+  when the policy names none. Each preview's addresses link too. A branch
+  with no remote, or one elsewhere, shows its commit as plain text. On desktop, a link that is not
+  `https:`, such as `http://localhost:4001`, shows as plain text.
+- **PREVIEWS** lists each preview: its name, `main@4f1c2aa`, its state, and
+  each address as `web: https://…`.
+- **RELEASE FAILED**, first under a branch's heading: each checkout,
+  worktree and preview of the branch whose release failed and that sluice
+  tries no more, in red, with how many times it failed and the last line of
+  what failed:
+  `✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up`.
+  Beneath it, dimmed, the command that releases it:
+  `sluice release sluice/try/main/48 · --accept-failure frees it without`.
+  One another host made says `held on deneb`, and its command begins
+  `on deneb:`. The words are the herdr popup's. A branch with one is shown
+  even with nothing queued. The rows show the command and run nothing.
+  The band's line for the branch, and the status line, end
+  `· 1 held: release failed`.
 - **Agents' checks**: each `sluice exec` takes one of the host's runs, the
   ones combinations are tested in. When checks hold a queue back, the
   band's line for that branch ends `· 1 slot to an agent's checks`. The
@@ -32,12 +67,17 @@ sluice's queue inside a Claude Code session.
   `fix-cards → main 3/8 ▓▓▓░░░░░░░ 1m10s` while it runs, and for a quarter
   hour after, what it is worth: `14 passed · reused when submitted` when
   the gate takes its passes for that commit, `not kept: uncommitted
-  changes` when the checkout held more. Under them,
+  changes` when the checkout held more. Press a check's row to list its
+  tasks as a combination's, from the run going or the one that ended, and
+  again to fold them. A check that runs a command has none, and says so:
+  `runs make e2e · no tasks`. Under them,
   `host: 4 of 6 runs · 3 queue · 1 agent`.
 - **Status line**: `sluice: 3 submissions · yours #13 testing`, with the
   same `· 1 slot to an agent's checks` when checks hold the queue back; or
   the state of the branch named for the session
-  ([below](#naming-a-sessions-branch)).
+  ([below](#naming-a-sessions-branch)). It ends `· 1 held: release failed`
+  while a checkout, worktree or preview is held because its release failed,
+  and with nothing queued says that alone: `sluice: 1 held: release failed`.
 - **Wake**: when this session's submission lands, fails or conflicts, a
   toast, and a turn telling the session the outcome, the blamed tests and
   their logs. Turn the turn off with the `wake` option in `/config`.
@@ -49,7 +89,9 @@ sluice's queue inside a Claude Code session.
   the session to merge the branch in now; when a conflict it told of
   clears with the head unchanged, because a submission ahead failed or
   left, a turn saying so. A conflict already there when the session starts
-  is a toast alone. Turn it off with the `forecast` option in `/config`,
+  is a toast alone. While the forecast finds a conflict, the pane shows it
+  under its branch as `⚠ your work would conflict · docs/builds.md`, which
+  opens as a RECENT conflict does. Turn it off with the `forecast` option in `/config`,
   or start the session with `SLUICE_FORECAST=0` where something else
   forecasts for it.
 

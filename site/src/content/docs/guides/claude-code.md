@@ -125,8 +125,8 @@ A second plugin, `sluice-board`, shows the queue inside the session:
 It needs no herdr: it shows the queue in any Claude Code session, with
 full-screen mode on or off.
 
-<a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
-<a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: two combinations under test at 3/5 with their tasks, one submission queued, a landing and a blame; the band above the prompt and the status line below it." width="1248" height="754" /></a>
+<a class="screenshot-light" href="/sluice/screenshots/board-light.webp"><img src="/sluice/screenshots/board-light.webp" alt="Claude Code with the /sluice pane docked on the right: one combination under test at 3/5, pressed open to its tasks, three passed and two running; three submissions queued, this session's among them; a landing and a blame; an agent's check at 4/5; the band above the prompt and the status line below it." width="1248" height="754" /></a>
+<a class="screenshot-dark" href="/sluice/screenshots/board-dark.webp"><img src="/sluice/screenshots/board-dark.webp" alt="Claude Code with the /sluice pane docked on the right: one combination under test at 3/5, pressed open to its tasks, three passed and two running; three submissions queued, this session's among them; a landing and a blame; an agent's check at 4/5; the band above the prompt and the status line below it." width="1248" height="754" /></a>
 
 While a branch has a queue, the band above the prompt reads like
 `sluice main · 3 submissions · testing main+#12+#13 2m10s/15m · #14 waiting · last #11 landed as 9ecc34a`,
@@ -155,13 +155,58 @@ each failed test, its log path (press it to copy the path) and the log's
 last lines. Press it again to close it. The pane only shows: it never
 moves to another session or another agent's pane.
 
+A test blamed for being flaky passed on one run and failed on another for
+the same inputs. Opened, it shows both runs, each with when and on which
+host it ran. First comes this run, as in `this run: passed 19:42 on
+devbox`, with its log and last lines. Then comes the run it contradicts,
+as in `the run it contradicts: failed 19:10 on mac-studio · main 4f1c2aa`,
+with the branch and combination it ran for, and its log and last lines,
+or `its log was not kept`. A record from an older sluice leaves out the
+times and hosts it lacks.
+
+The pane links what it knows the address of, and nothing else. A
+landing's commit links to it on GitHub when the branch's remote is there,
+and is plain text for a branch with no remote or one elsewhere. Each pull
+request on a QUEUED or RECENT row links to it, as in `· PR 41`, at the
+branch's remote, or at origin when the policy names none. Under PREVIEWS,
+each preview shows its name, the branch and commit it was made from, as in
+`main@4f1c2aa`, its state, and each address its stack answers on, linked.
+On desktop, a link that is not `https:`, such as a preview at
+`http://localhost:4001`, shows as plain text.
+
+When a checkout's release keeps failing, sluice stops trying and holds the
+checkout until you release it
+([held checkouts](/sluice/reference/commands/#checkouts-held-because-their-release-failed)).
+The pane shows each one first under its branch's heading, under RELEASE
+FAILED, with the worktrees and previews of that branch held the same way.
+Each row is red and gives how many times the release failed and the last
+line of what failed, as in `✗ sluice/try/main/48 held · failed 4 times ·
+usage: scripts/preview up`. Beneath it, dimmed, comes the command that
+runs the release again, as in `sluice release sluice/try/main/48 ·
+--accept-failure frees it without`. A checkout another host made says
+`held on deneb`, and its command begins `on deneb:`. The rows read as
+herdr's popup does, and pressing one runs nothing. A branch with a held
+checkout, worktree or preview is shown even with nothing queued. The band
+ends that branch's line with `· 1 held: release failed`, and the status
+line ends with the same count, or says it alone when nothing is queued.
+
+Press a conflict to open it the same way. It shows the files in conflict,
+then what is in the way: each submission it conflicted with and the
+worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what
+main has landed` when it conflicted with no submission. Last comes what to
+do next: `next: take main into the worktree, resolve and commit, then
+sluice submit main`. The board builds it from the conflict's own line and
+runs no command.
+
 With the moon runner, a combination under test also shows how many of
 its tasks have ended and a bar of the same, as in
-`testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. The pane lists each task
-below it: `✓` passed, `✗` failed, `…` running and `·` waiting, with how
-long each ended task took. Each round updates it, every few seconds
-while a submission waits, and it counts tasks, not the tests inside one.
-It shows only for combinations tested on this host.
+`testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m`. Press its row in the pane
+to list each task below it: `✓` passed, `✗` failed, `…` running and `·`
+waiting. An ended task shows how long it took, and a running one how long
+it has run so far, as in `… sluice:e2e running 1m12s`. Press the row again
+to fold the list. Each round updates it, every few seconds while a submission
+waits, and it counts tasks, not the tests inside one. It shows only for
+combinations tested on this host.
 
 Your agents' own runs of `sluice exec` are checks, not submissions, and
 the board shows them as load on the host, never in a branch's queue. A
@@ -175,8 +220,11 @@ runs. A check that ended stays a quarter hour. `14 passed · reused when
 submitted` means the gate takes those passes when that commit is
 submitted, so its combination doesn't run them again; `not kept:
 uncommitted changes` means the checkout held more than its commit and
-nothing was kept. Under the rows, `host: 4 of 6 runs · 3 queue · 1 agent`
-says where the host's runs go.
+nothing was kept. Press a check's row to list its tasks as a combination's
+list shows them, from the run going or the one that ended, and press it
+again to fold them. A check that runs a command has no tasks, and says so:
+`runs make e2e · no tasks`. Under the rows, `host: 4 of 6 runs · 3 queue ·
+1 agent` says where the host's runs go.
 
 When one of the session's submissions lands, fails or conflicts, a toast
 says so, and an idle session gets a turn telling it the outcome, which tests
@@ -191,7 +239,10 @@ then gets a turn naming the files and telling it to merge the branch in
 now, while the conflict is small. A conflict it was told of can also go
 away without its commit moving, when a submission ahead fails or is
 withdrawn. The session is told that too, and that a submission removed for
-the conflict can go again. The `forecast` option in `/config` turns this
+the conflict can go again. While a forecast finds a conflict, the pane
+shows it under its branch as `⚠ your work would conflict ·
+docs/builds.md`, until a later forecast finds none. Press it to open the
+files, what is in the way and the next step, as for a conflict in RECENT. The `forecast` option in `/config` turns this
 off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 

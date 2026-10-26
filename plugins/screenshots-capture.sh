@@ -9,7 +9,8 @@
 # plugins/herdr/screenshots/popup-{light,dark}.png, optimized losslessly.
 # Each frame is a window of its own Ghostty instance, shot whole with
 # `screencapture -l` by another (Ghostty holds the Screen Recording grant;
-# the shell this runs in may not), and never edited after.
+# the shell this runs in may not), and never edited after. The board's
+# combination under test is pressed open by keys, as a person presses it.
 #
 # Run it in `devenv shell` on macOS, with Ghostty in /Applications. The
 # gate cannot: it drives a GUI terminal and a logged-in Claude Code. The
@@ -34,6 +35,7 @@ die() {
 [ "$(uname)" = Darwin ] || die "needs macOS"
 [ -d "$GHOSTTY" ] || die "needs Ghostty in /Applications"
 [ -x /usr/bin/swiftc ] && [ -x /usr/bin/clang ] || die "needs Apple's swiftc and clang: xcode-select --install"
+[ -x /usr/bin/expect ] || die "needs Apple's expect in /usr/bin"
 for t in screencapture oxipng claude herdr moon jq cargo; do
   command -v "$t" >/dev/null || die "needs $t on PATH; run it in devenv shell"
 done
@@ -88,6 +90,24 @@ printf '%s\n' "PROMPT='%1~ %# '" >"$CAP/zdot/.zshrc"
 for theme in light dark; do
   printf '{"tui": "fullscreen", "theme": "%s", "permissions": {"defaultMode": "default"}}\n' "$theme" >"$CAP/claude-$theme.json"
 done
+# press.exp <command...>: the command on this terminal; once its pane draws TESTING, that row is pressed: ctrl+x tab
+# twice (the band, then the pane), Tab onto the row, Enter, then ctrl+x tab, which hands the keys back to the prompt.
+cat >"$CAP/press.exp" <<'EOF'
+set timeout 120
+# Raw and silent from the start: the terminal's answers to the queries the command makes are not echoed over it.
+stty raw -echo
+spawn -noecho {*}$argv
+stty rows [stty rows] columns [stty columns] < $spawn_out(slave,name)
+trap {stty rows [stty rows] columns [stty columns] < $spawn_out(slave,name)} WINCH
+expect TESTING {
+  sleep 2
+  foreach k [list "\x18\t" "\x18\t" "\t" "\r" "\x18\t"] {
+    send -- $k
+    sleep 1
+  }
+}
+interact
+EOF
 
 # --- windows -------------------------------------------------------------------------------------------------------------
 # The window ids and owners of every on-screen window, as "<id> <pid>".
@@ -152,11 +172,11 @@ shoot() {
   [ "$(cat "$rc" 2>/dev/null)" = 0 ] || die "screencapture could not take window $wid; give Ghostty Screen Recording in System Settings"
 }
 
-# trust <dir>: Claude Code asks nothing about the folder.
+# trust <dir>: Claude Code asks nothing about the folder, which it knows by its resolved path (/private/tmp/...).
 trust() {
   local f=$CLAUDE_DIR/.claude.json
   [ -f "$f" ] || echo '{}' >"$f"
-  jq --arg d "$1" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true})' "$f" >"$f.new"
+  jq --arg d "$(cd "$1" && pwd -P)" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true})' "$f" >"$f.new"
   mv "$f.new" "$f"
 }
 
@@ -181,11 +201,11 @@ out_board=$W/plugins/sluice-board/screenshots
 out_herdr=$W/plugins/herdr/screenshots
 mkdir -p "$out_board" "$out_herdr"
 
-# --- the board: this session's worktree is order-emails, queued behind checkout-flow ---------------------------------------
+# --- the board: this session's worktree is order-emails, queued behind checkout-flow, whose tasks are pressed open --------
 board() {
   local theme=$1 win
   win=$(open_window board "$theme" 150 42 \
-    "cd $WT/order-emails && exec claude --plugin-dir $W/plugins/sluice-board --settings $CAP/claude-$theme.json --strict-mcp-config /sluice")
+    "cd $WT/order-emails && exec /usr/bin/expect $CAP/press.exp claude --plugin-dir $W/plugins/sluice-board --settings $CAP/claude-$theme.json --strict-mcp-config --no-chrome /sluice")
   sleep "$SETTLE"
   shoot "${win% *}" "$out_board/board-$theme.png"
   kill "${win#* }" 2>/dev/null || true
@@ -239,7 +259,7 @@ split() {
   p=$(herdr pane split "$1" --direction "$2" --cwd "$WT/$3" --no-focus | jq -r '.result.pane.pane_id')
   # Its shell at its prompt first, or the agent has no shell to start in.
   herdr pane wait-output "$p" --match "$3 %" --timeout 30000 >/dev/null
-  herdr agent start "$3" --kind claude --pane "$p" -- --settings "$CAP/claude-$theme.json" --strict-mcp-config >/dev/null
+  herdr agent start "$3" --kind claude --pane "$p" -- --settings "$CAP/claude-$theme.json" --strict-mcp-config --no-chrome >/dev/null
   echo "$p"
 }
 

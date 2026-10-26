@@ -35,8 +35,8 @@ use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, Event, FailedTask, Held,
-    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State,
-    SystemRun, Tested, ToldRecord,
+    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState,
+    State, SystemRun, Tested, ToldRecord,
 };
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::landing_message;
@@ -1170,9 +1170,35 @@ impl Sluice<'_> {
         }
         // 19, 20: where the run a flaky task contradicts is kept, when the
         // records name it; a pointer, so one that cannot be read holds up
-        // no verdict.
+        // no verdict. This run's time and host are those of its own line,
+        // recorded before the verdict was read (rule core.7): the newest of
+        // the kind it reported for the task on this combination and
+        // system, the one written at `now` or the same result written
+        // before it; neither for a result with no line.
         for f in &mut v.failed {
             if let Some(k) = &mut f.flaky {
+                let kind = report
+                    .tasks
+                    .iter()
+                    .find(|t| t.task == f.task && t.hash == f.hash)
+                    .map(|t| match t.source {
+                        Source::Ran { .. } => ResultKind::Ran,
+                        Source::Replayed { .. } => ResultKind::Replayed,
+                    });
+                let this = results
+                    .iter()
+                    .filter(|l| {
+                        Some(l.kind) == kind
+                            && l.task == f.task
+                            && l.hash == f.hash
+                            && l.branch == line.branch
+                            && l.combination == c.revision
+                            && l.worktree.is_none()
+                            && l.system.as_deref() == system
+                    })
+                    .max_by(|a, b| a.at.cmp(&b.at));
+                k.at = this.map(|l| l.at.clone());
+                k.host = this.and_then(|l| l.host.clone());
                 k.other.log = match self.kept_log(line, &f.task, &k.other) {
                     Ok(log) => log,
                     Err(e) => {
