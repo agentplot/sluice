@@ -9,6 +9,12 @@
 //! repository git names, wherever the command ran, and lets through, said
 //! once, a transaction it cannot read for a reason of its own.
 //!
+//! It reads of the host's settings and the policy only what guarding
+//! needs, and passes over every other field, known to it or not; it runs
+//! the sluice that installed it, by its path, and every command sluice
+//! runs in the repository puts it back for itself where it stands for
+//! another (124; ADR 0059).
+//!
 //! sluice moves branches through gix, which runs no hooks, so its own
 //! moves never reach the hook. Everything that runs git does. This guards
 //! against sessions running git; it is no security boundary.

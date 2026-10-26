@@ -64,8 +64,8 @@
 //!
 //! Branch protection's hook reads only `[forge]`, how sluice reaches a
 //! branch's remote, and passes over every other table and field, known
-//! or not, [`Instance::guarding`] (124). Every other command reads the
-//! settings in full and refuses a field it does not know.
+//! or not, [`Instance::guarding`] (124; ADR 0059). Every other command
+//! reads the settings in full and refuses a field it does not know.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

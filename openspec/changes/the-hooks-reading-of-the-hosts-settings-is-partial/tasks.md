@@ -30,7 +30,7 @@ committed. `core:test` is `cargo test -p sluice-core`; `sluice:test` and
 
 ## 5. Record the decision
 
-- [ ] 5.1 Write `docs/adr/0059-the-protection-reads-only-what-guarding-needs.md` (MADR, as its neighbours are written; design D6): the hook's partial reading and every other command's strict one, why `[forge]`, the branches and the signers are what guarding needs, and why a command other than `submit`, `wait`, `step`, `run` and `protect` re-installs only a hook already there; cite 124 and rules core.2 and core.4. Point `protect.rs`'s module comment and `instance.rs`'s at it. Verify the ADR is listed where its neighbours are and that `sluice exec main` passes (`root:format` checks the Markdown).
+- [x] 5.1 Write `docs/adr/0059-the-protection-reads-only-what-guarding-needs.md` (MADR, as its neighbours are written; design D6): the hook's partial reading and every other command's strict one, why `[forge]`, the branches and the signers are what guarding needs, and why a command other than `submit`, `wait`, `step`, `run` and `protect` re-installs only a hook already there; cite 124 and rules core.2 and core.4. Point `protect.rs`'s module comment and `instance.rs`'s at it. Verify the ADR is listed where its neighbours are and that `sluice exec main` passes (`root:format` checks the Markdown).
 
 ## 6. The gate
 
