@@ -171,7 +171,7 @@ branch against:
   `landed`, or with `sluice branch accept`.
 - `copies`: for a branch kept on a remote, each host whose own branch
   of that name a round could not set to `landed`, by the host's name:
-  `{"deneb": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
+  `{"build-2": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
   holds the lock on refs/heads/bolt/x", "since":
   "2026-10-23T09:16:40Z"}}`. `at` is the revision that host's branch
   holds, `null` when it has none. Each host writes only its own entry,
@@ -251,9 +251,9 @@ like a pass, and a replayed result is logged as a replay, never as a
 run:
 
 ```json
-{"schema":"sluice/log@1","event":"ran","combination":"9ab3d07c11","task":"tests:t-after","hash":"4d1e22b0c9","outcome":"pass","host":"mac-studio"}
+{"schema":"sluice/log@1","event":"ran","combination":"9ab3d07c11","task":"tests:t-after","hash":"4d1e22b0c9","outcome":"pass","host":"build-1"}
 {"schema":"sluice/log@1","event":"replayed","combination":"9ab3d07c11","task":"tests:t-amend","hash":"77aa01f3de","outcome":"pass"}
-{"schema":"sluice/log@1","event":"ran","combination":"e20a6f9b48","task":"tests:t-batch-cards","hash":"5c0e97aa21","outcome":"fail","host":"mac-studio"}
+{"schema":"sluice/log@1","event":"ran","combination":"e20a6f9b48","task":"tests:t-batch-cards","hash":"5c0e97aa21","outcome":"fail","host":"build-1"}
 {"schema":"sluice/log@1","event":"blamed","id":13,"combination":"e20a6f9b48"}
 {"schema":"sluice/log@1","event":"landing","ids":[12],"from":"c41e8f2d90","to":"b7d2e94f03"}
 {"schema":"sluice/log@1","event":"landed","ids":[12],"to":"b7d2e94f03"}
@@ -279,8 +279,8 @@ logged when a round sets one that was behind. `copy` is the revision
 this host's branch holds:
 
 ```json
-{"schema":"sluice/log@1","event":"copy-behind","host":"deneb","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
-{"schema":"sluice/log@1","event":"copy-levelled","host":"deneb","copy":"c43609b8e1"}
+{"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
+{"schema":"sluice/log@1","event":"copy-levelled","host":"build-2","copy":"c43609b8e1"}
 ```
 
 `released` is logged when a combination's checkout is released. One

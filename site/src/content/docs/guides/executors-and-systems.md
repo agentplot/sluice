@@ -45,7 +45,9 @@ host:
 ssh-keygen -t ed25519 -f ~/.config/sluice/signing -N ""
 ```
 
-Name it in the host's config, `~/.config/sluice/config.toml`:
+Name it in that host's config, `~/.config/sluice/config.toml`, or where
+the host's configuration is managed
+([who writes it](/sluice/reference/configuration/#who-writes-it)):
 
 ```toml
 [signing]
