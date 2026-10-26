@@ -26,7 +26,7 @@ committed. `core:test` is `cargo test -p sluice-core`; `sluice:test` and
 ## 4. The hook is the sluice that installed it, re-installed at the next run
 
 - [x] 4.1 Add `protect::reinstall(dir, program)` in `crates/sluice/src/protect.rs` (design D5): writes the shim for `program` only where the hook in place carries sluice's marker and names another program, keeping the chained hook; nothing otherwise, a tracked hooks directory included. Call it in `main.rs` before binding for every command but `hook`, `supervise`, `credential` and `protect`, saying a failure once as `sluice: warning: branch protection not re-installed: …` on stderr. Verify in `protect.rs`: a hook installed by a copied sluice (`copy_executable`, `run_copied`) is rewritten to name the test's sluice by `sluice status`, its chained hook unchanged and nothing said of the hook; after `sluice protect --remove`, `sluice status` leaves no hook (`sluice exec main -- moon run sluice:tools`).
-- [ ] 4.2 In `protect.rs`, with the hook installed and a directory first on git's `PATH` holding an executable `sluice` that exits 0 having read nothing, `git update-ref refs/heads/bolt/x <unit/a>` is still refused by the installed sluice. Verify with `sluice exec main -- moon run sluice:tools`.
+- [x] 4.2 In `protect.rs`, with the hook installed and a directory first on git's `PATH` holding an executable `sluice` that exits 0 having read nothing, `git update-ref refs/heads/bolt/x <unit/a>` is still refused by the installed sluice. Verify with `sluice exec main -- moon run sluice:tools`.
 
 ## 5. Record the decision
 

@@ -920,3 +920,40 @@ fn a_newer_sluices_next_command_reinstalls_the_hook() {
     assert_eq!(std::fs::read_to_string(&hook).unwrap(), theirs);
     assert!(!chained.exists());
 }
+
+/// 1, 124: the hook runs the sluice that installed it, by its path: a
+/// program called `sluice` first on the caller's `PATH`, which lets
+/// everything through, judges nothing.
+#[test]
+fn a_sluice_on_the_callers_path_is_not_the_one_that_judges() {
+    let (repo, _) = protected("protect-path");
+    let bin = repo.dir().join(".git/other-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("sluice"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        bin.join("sluice"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let tip = repo.rev("bolt/x");
+    let head = repo.rev("unit/a");
+    let out = support::git_command()
+        .current_dir(repo.dir())
+        .args(["update-ref", "refs/heads/bolt/x", &head])
+        .env("PATH", path)
+        .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(t.contains("bolt/x is protected by sluice"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
+}
