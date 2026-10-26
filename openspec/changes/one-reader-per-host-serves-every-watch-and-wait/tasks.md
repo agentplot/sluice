@@ -25,4 +25,4 @@ run alone while iterating with `sluice exec main -- cargo test -p sluice
 
 ## 5. The whole
 
-- [ ] 5.1 Run the gate's checks with `sluice exec main` once the work is committed. Verify every check-fast and check-tools task passes.
+- [x] 5.1 Run the gate's checks with `sluice exec main` once the work is committed. Verify every check-fast and check-tools task passes.
