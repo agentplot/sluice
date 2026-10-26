@@ -359,9 +359,10 @@ Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
 
 ## 5. Write, read back and commit the policy
 
-Where step 2 made its offer, write nothing here until the user has
-answered it: without their choice, no `.config/sluice.toml` is written in
-a repository's only working copy.
+Where step 2 offered the layout of a repository's only working copy,
+write nothing here until the user has answered it: without their choice,
+no `.config/sluice.toml` is written there. Beside other working copies,
+nothing here waits on the offer.
 
 Write `.config/sluice.toml`. sluice reads it **from the branch it gates**,
 never from a submission, so it takes effect once it is committed on that
@@ -376,13 +377,16 @@ to land untested.
 
 Then commit it the way the repository lands work today, before protecting
 the branch. That one change is the last one landed by hand. When the user
-kept the plain clone at step 2, its message carries this line, the
-setup's record of their choice:
+kept the plain clone, the repository's only working copy, at step 2, its
+message carries this line, the setup's record of their choice:
 
 ```
 The operator chose to keep this plain clone over a git directory with
 one working copy per branch (126).
 ```
+
+Beside other working copies nothing was chosen, and the message says
+nothing of the layout.
 
 ## 6. Protect the branch and set up the host
 
