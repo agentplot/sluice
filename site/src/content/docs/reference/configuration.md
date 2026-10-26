@@ -237,8 +237,8 @@ Either way, each line is in `ssh-keygen`'s allowed-signers form:
 
 ```text
 # .config/sluice.sessions: one line per session host
-laptop-chuck ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... chuck's laptop
-mini-2       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+laptop ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... a developer's laptop
+mini   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
 ```
 
 The first word is a label: sluice shows it and never checks it. Then
@@ -465,8 +465,15 @@ a tool submits only once the work is approved.
 
 ## The host's config: `~/.config/sluice/config.toml`
 
-How many runs a host tests at once, and who sluice pushes as, are the
-host's own settings, not the repository's:
+How many runs a host tests at once, who sluice pushes as, what it signs
+its results as and which caches every run shares are the host's own
+settings, never a repository's. They live in one file on the host,
+`$XDG_CONFIG_HOME/sluice/config.toml`, which is
+`~/.config/sluice/config.toml` where `XDG_CONFIG_HOME` is unset, and
+every repository on the host reads the same file. sluice reads it when a
+command starts and never writes it: a change counts from the next
+command, and a `sluice run` you keep running takes it once you start it
+again. Without the file, every setting has its default.
 
 ```toml
 [runs]
@@ -485,7 +492,67 @@ key = "~/.config/sluice/signing" # an SSH private key on this host
 [peers]
 lease = "5m"   # how long a quiet host keeps a branch
 alive = "2m"   # how often this host shows it is alive
+
+[[caches]]                       # a cache every run on the host shares
+dir = "~/.cache/sccache"
 ```
+
+| table | what it sets | a host needs it when |
+|---|---|---|
+| [`[runs]`](#runs) | How many runs share the host's cores at once, how many of its cores they use, and how many runs are kept for submissions. | Always; each key has a default. |
+| [`[runs] systems`](#runs-systems) | The systems the host runs. | It runs only some of the systems a policy names. |
+| [`[forge]`](#forge) | The GitHub App sluice pushes as. | It lands on a branch whose remote is on GitHub. |
+| [`[signing]`](#signing) | The signer the host signs its results as, and its key. | It runs checks for a branch whose state is on its remote. |
+| [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
+| [`[[caches]]`](#caches) | The caches every run on the host shares. | Its builds share a cache, a compile server's or the task runner's. |
+
+### Who writes it
+
+Whoever administers the host writes the file, or whatever manages the
+host's configuration does. A host is set up one of three ways.
+
+**A host you administer yourself.** You write the file. Make its
+directory, and add the tables the host needs:
+
+```sh
+mkdir -p ~/.config/sluice
+$EDITOR ~/.config/sluice/config.toml
+```
+
+Keep the keys it names, `[forge] key` and `[signing] key`, on the host
+with mode `0600`.
+
+**A host under configuration management.** When Nix, Ansible, an MDM or
+another tool manages the host's configuration, the file is that tool's.
+It is read-only, or a link into the tool's own store, or the tool writes
+it again each time it applies the configuration. Change it where the
+host's configuration is managed, and apply it from there: an edit on the
+host is refused, or lost at the next apply. A `->` in the listing marks
+a link, and a mode with no `w` marks a read-only file:
+
+```sh
+ls -ld ~/.config/sluice ~/.config/sluice/config.toml
+```
+
+A key file stays out of any store everyone on the host may read, as
+Nix's store is: sluice refuses a key anyone but its owner may read. Put
+the key on the host by the tool's own way of handling secrets, or by
+hand with mode `0600`, and let the managed file name its path. The
+caches' `env` reaches every run exactly as written, and the agents'
+shells need the same values: set both from the same managed
+configuration, so they agree.
+
+**Several hosts as peers.** Hosts that submit to one branch on a remote,
+or run its checks, each have a file of their own, set up on each host in
+one of the two ways above. Each holds what is that host's alone: its own
+signer and key in `[signing]`, the systems it runs in `[runs] systems`,
+its own bound in `[runs]`, and `[peers] name` where two hosts share a
+name. Each host that lands a branch on GitHub names the app in its own
+`[forge]`, with the app's key on that host. What the hosts share is the
+branch's policy, whose [`[signers]`](#signersname-who-may-sign-results)
+list each host's public key. The guide
+[Executors and systems](/sluice/guides/executors-and-systems/) sets them
+up.
 
 ### `[runs]`
 
@@ -657,7 +724,7 @@ cache.
 | `SLUICE_NAME_<NAME>` | sluice, for a preview | The preview's name for each port: one DNS label, unique among the repository's previews, for a proxy to route to the port. |
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
-| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`, the bound every repository on the host shares. |
+| `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the cores sluice may use, `[runs] cores` where set and else what the host gives it, divided by `[runs] max`, the bound every repository on the host shares, and never less than one. |
 | each `[[caches]]` `env` | the host's config, for every run | The variables a cache's clients read, exactly as the host's [`[[caches]]`](#caches) declares them: for a submission's run, an agent's `sluice exec` and a preview's command, under any executor. Nothing else of sluice's own environment reaches a run. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

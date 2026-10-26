@@ -844,8 +844,8 @@ impl Sluice<'_> {
         self.finished_sub(branch, id)
     }
 
-    /// Finished-records-1 clause 105: a submission moved to the finished
-    /// records, read by its branch and number.
+    /// Clause 131: a submission moved to the finished records, read by its
+    /// branch and number.
     pub(crate) fn finished_sub(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
         match self
             .seams

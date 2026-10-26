@@ -77,7 +77,7 @@ pub struct BranchView {
     pub recent: Vec<serde_json::Value>,
     /// The worktree each submission the recent lines name was submitted
     /// from, as its `from.worktree` says (26, 49, 61): live, or moved to
-    /// the finished index, which keeps it (finished-records-1 clause 104).
+    /// the finished index, which keeps it (130).
     pub recent_from: BTreeMap<u64, String>,
     /// 121: the branch was last read at a revision lacking its last
     /// landing, and nothing is formed or landed on it.
@@ -545,8 +545,7 @@ impl Sluice<'_> {
                 Entry::Occupied(e) => e.into_mut(),
                 Entry::Vacant(e) => e.insert(self.read_line(branch)?),
             };
-            // Live, or moved to the finished records: one file then
-            // (finished-records-1 clause 105).
+            // Live, or moved to the finished records: one file then (131).
             let s = match line.subs.get(&id) {
                 Some(s) => Some(s.clone()),
                 None if line.finished.contains_key(&id) => self.finished_sub(branch, id)?,

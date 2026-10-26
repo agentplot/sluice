@@ -43,7 +43,9 @@ sluice refuses a key anyone but the owner may read. Never commit it.
 
 ## 4. Name it in the host config
 
-`~/.config/sluice/config.toml`:
+`~/.config/sluice/config.toml`, once the skill's step 6, *The host's file*,
+has said who writes it; where a tool manages the host's configuration, the
+user adds it there and keeps the key out of any store everyone may read:
 
 ```toml
 [forge]

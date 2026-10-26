@@ -344,7 +344,64 @@ one working copy per branch (126).
 sluice protect        # git hook: only sluice moves a gated branch (submit, step and run install it too)
 ```
 
-Host settings live in `~/.config/sluice/config.toml`, not the repository:
+### The host's file
+
+Host settings live in one file on the host, never in the repository:
+`$XDG_CONFIG_HOME/sluice/config.toml`, `~/.config/sluice/config.toml` when
+`XDG_CONFIG_HOME` is unset. Every repository on the host shares it. sluice
+reads it as each command starts and never writes it; a `sluice run` kept
+running takes a change once restarted. Before writing it, find out who
+writes it:
+
+```sh
+f="${XDG_CONFIG_HOME:-$HOME/.config}/sluice/config.toml"
+for p in "$f" "${f%/*}"; do [ -L "$p" ] && echo "managed: $p links to $(readlink "$p")"; done
+[ ! -e "$f" ] || [ -w "$f" ] || echo "managed: $f is read-only"
+[ ! -d "${f%/*}" ] || [ -w "${f%/*}" ] || echo "managed: ${f%/*} is read-only"
+```
+
+The host is one of three setups:
+
+1. **The user administers the host themselves.** Nothing printed `managed`.
+   Show the tables to add, and on the user's word make the directory
+   (`mkdir -p`) and write the file.
+2. **A tool manages the host's configuration** (Nix, Ansible, an MDM). The
+   check printed `managed`, or the user says a tool manages the file. Say
+   so in those words, naming the link's target or the read-only path, and
+   write nothing: not the file, not the link's target, not a file put in
+   the link's place. Show the tables to add, for the user to add where the
+   host's configuration is managed and apply from there; an edit on the
+   host is refused, or lost at the next apply. A key file stays out of any
+   store everyone may read, as Nix's store is: sluice refuses a key anyone
+   but its owner may read, so the key goes on the host by hand or through
+   the tool's handling of secrets, mode `0600`, and the managed file names
+   its path.
+3. **Several hosts as peers.** Each host has its own file, checked and
+   written on that host as 1 or 2 says. Each holds what is that host's
+   alone: its signer and key, the systems it runs, its bound, its name
+   where two hosts share one. The hosts share the branch's policy, which
+   lists each host's public key ([peers](references/profiles/peers.md)).
+
+What the file holds:
+
+| table | sets | the host needs it when |
+|---|---|---|
+| `[runs]` `max`, `cores`, `reserved` | runs at once, the cores they use, runs kept for submissions | always; each has a default |
+| `[runs] systems` | the systems the host runs | it runs only some of the policy's systems |
+| `[forge]` | the GitHub App sluice pushes as | it lands on a branch on GitHub ([github-app](references/profiles/github-app.md)) |
+| `[signing]` | its signer and SSH key | it runs checks for a branch whose state is on its remote ([peers](references/profiles/peers.md)) |
+| `[peers]` | `lease`, `alive`, `name` | it shares a branch's remote with other hosts |
+| `[[caches]]` | the caches every run on the host shares | its builds share a cache ([checkout](references/profiles/checkout.md)) |
+
+The caches a run shares are the host's, never a policy's: each `[[caches]]`
+names a `dir` outside every checkout, its server's `socket` where it has
+one, and the `env` its clients read. Every run sluice starts on the host,
+a submission's, an agent's `sluice exec` and a preview's command alike,
+gets each `env` exactly as written, so the agents' shells need the same
+values; on a managed host, set both from the same configuration. sluice
+starts no cache's server.
+
+Every host has a bound, in `[runs]`:
 
 ```toml
 [runs]
@@ -362,6 +419,8 @@ core where the host sets neither, as on a Mac. sluice refuses a `cores` below
 
 A repository whose tests bring up a stack of containers sets `max` to how
 many stacks fit in memory at once.
+
+### A branch on GitHub, and several hosts
 
 For a branch on GitHub, do these in this order, or a step is refused:
 
@@ -382,8 +441,9 @@ For a branch on GitHub, do these in this order, or a step is refused:
 
 For more than one host or system, follow [peers](references/profiles/peers.md)'s
 "Set it up, in order": a signing key per host, `[signing]` in each host's
-config, then one landing that adds `[signers]` and rewrites `trust`, then
-`sluice run` kept running on each standing executor.
+file (checked first on each host, as *The host's file* says), then one
+landing that adds `[signers]` and rewrites `trust`, then `sluice run` kept
+running on each standing executor.
 
 A bolt pattern with `remote = "origin"` needs no push by hand: `sluice branch
 create bolt/<b> --from main` makes each bolt there as the app, and its

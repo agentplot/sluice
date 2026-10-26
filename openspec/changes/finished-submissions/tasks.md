@@ -1,7 +1,8 @@
 # Tasks
 
 Read first: this change's proposal and design;
-`agentplot/blueprints:design/sluice/proposals/finished-records-1.md`;
+clauses 61 and 130 to 132 of
+`agentplot/blueprints:design/sluice/requirements.md`;
 `docs/architecture/core.md`. Work inside `devenv shell`.
 
 ## 1. Finished submissions

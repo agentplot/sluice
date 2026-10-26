@@ -56,8 +56,8 @@ pub fn finished_file(id: u64) -> String {
 }
 
 /// What the live records keep of a submission moved to the finished
-/// ones (finished-records-1 clause 104): enough to order a chain whose
-/// `after` names it (7) and to count a worktree's attempts.
+/// ones (130): enough to order a chain whose `after` names it (7) and to
+/// count a worktree's attempts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinishedLine {
     pub id: u64,

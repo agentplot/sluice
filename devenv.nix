@@ -273,6 +273,10 @@ in
     # ask for 5.4 or later.
     pkgs.typescript
     pkgs.bun
+    # The site's build (site/package.json): its scripts and Astro run under
+    # Node.js, the major the Pages runner's image carries, rather than bun
+    # standing in for a node the shell lacks.
+    pkgs.nodejs_22
     # The stack acceptance test's browser test (ADR 0016): Playwright and
     # the one browser it drives, from Nix, read-only for the sandbox.
     pkgs.playwright-test

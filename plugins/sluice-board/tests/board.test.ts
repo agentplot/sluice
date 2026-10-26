@@ -94,7 +94,9 @@ describe("the band", () => {
     expect(shown(b, NOW)).toBe(true);
     const idle = { ...b, depth: 0, candidates: [], submissions: [], recent: [] };
     expect(shown(idle, NOW)).toBe(false);
-    const at = (s: string) => [{ schema: "sluice/log@1", at: s, event: "landed", ids: [1] }];
+    const at = (s: string) => [
+      { schema: "sluice/log@1", at: s, event: "landed" as const, ids: [1] },
+    ];
     expect(shown({ ...idle, recent: at("2026-10-16T19:40:00Z") }, NOW)).toBe(true);
     expect(shown({ ...idle, recent: at("2026-10-16T19:20:00Z") }, NOW)).toBe(false);
   });
@@ -566,11 +568,22 @@ describe("links to pull requests", () => {
       ...overview().branches[0]!,
       recent_from: { "11": "pull/41", "12": "unit/a", "9": "pull/40", "217": "pull/39" },
     };
-    const landed = { at: "2026-10-16T19:41:00Z", event: "landed", ids: [11, 12], to: "9ecc34a1b2" };
+    const landed = {
+      at: "2026-10-16T19:41:00Z",
+      event: "landed" as const,
+      ids: [11, 12],
+      to: "9ecc34a1b2",
+    };
     expect(pullsOf(b, landed)).toEqual([41]);
     expect(pullsOf(b, { at: "2026-10-16T19:42:00Z", event: "blamed", id: 9 })).toEqual([40]);
     // What is in a conflict's way is not its own.
-    const conflict = { at: "2026-10-16T19:44:00Z", event: "conflict", id: 218, with: [217] };
+    const conflict = {
+      at: "2026-10-16T19:44:00Z",
+      event: "conflict" as const,
+      id: 218,
+      paths: ["docs/builds.md"],
+      with: [217],
+    };
     expect(pullsOf(b, conflict)).toEqual([]);
     expect(pullsOf({ ...b, recent_from: { "218": "pull/42" } }, conflict)).toEqual([42]);
     // A sluice older than recent_from, or a line whose ids it lacks.
@@ -734,14 +747,24 @@ describe("forecasts", () => {
     expect(forecastBranch(d, ME)).toBeNull();
     d.sessions = [{ worktree: ME.root!, branch: "release" }];
     expect(forecastBranch(d, ME)?.branch).toBe("release");
-    d.branches[0]!.recent.push({ at: "2026-10-16T19:44:00Z", event: "conflict", id: 20 });
+    d.branches[0]!.recent.push({
+      at: "2026-10-16T19:44:00Z",
+      event: "conflict",
+      id: 20,
+      paths: ["a"],
+    });
     expect(forecastBranch(d, { ...ME, ids: [20] })?.branch).toBe("main");
     expect(forecastBranch(free(), ME)?.branch).toBe("main");
   });
 
   test("the latest submission: in a queue, or named by a recent line", () => {
     const d = free();
-    d.branches[0]!.recent.push({ at: "2026-10-16T19:44:00Z", event: "conflict", id: 20 });
+    d.branches[0]!.recent.push({
+      at: "2026-10-16T19:44:00Z",
+      event: "conflict",
+      id: 20,
+      paths: ["a"],
+    });
     expect(latest(d, { ...ME, ids: [20] })).toEqual({
       id: 20,
       branch: "main",
@@ -777,8 +800,9 @@ describe("forecasts", () => {
     const b = { ...free().branches[0]!, recent_from: { "217": "bolt/runner" } };
     const line = (w: number[]) => ({
       at: "2026-10-16T19:45:00Z",
-      event: "conflict",
+      event: "conflict" as const,
       id: 218,
+      paths: ["docs/builds.md"],
       with: w,
     });
     expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([217])))).toEqual([

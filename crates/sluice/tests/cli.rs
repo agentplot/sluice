@@ -988,7 +988,7 @@ fn status_lists_the_queue() {
     );
 
     // `--json` lists the queue, `--all` the history, the landed #1 read
-    // from the finished records (finished-records-1 clause 105).
+    // from the finished records (131).
     let (_, json) = sluice(&f, &["status", BRANCH, "--json"]);
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(v["submissions"].as_array().unwrap().len(), 1);
@@ -1018,10 +1018,10 @@ fn status_reads_the_revision_the_records_saw() {
     assert_eq!(v["at"], seen.0);
 }
 
-/// Finished-records-1 clauses 104, 105: a landed submission leaves the
-/// live records in the write that tells its outcome, is read by its
-/// number, still counts as landed for an `after`, still counts toward
-/// its worktree's attempts, and is refused a change as before.
+/// Clauses 130, 131: a landed submission leaves the live records in the
+/// write that tells its outcome, is read by its number, still counts as
+/// landed for an `after`, still counts toward its worktree's attempts,
+/// and is refused a change as before.
 #[test]
 fn a_landed_submission_moves_to_the_finished_records() {
     let f = setup();
