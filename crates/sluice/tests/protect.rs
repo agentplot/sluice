@@ -827,3 +827,38 @@ fn a_copy_is_judged_under_fields_the_hook_does_not_know() {
     assert_eq!(repo.rev("bolt/x"), copy);
     assert_eq!(protected_events(&repo).len(), 1);
 }
+
+/// 124: host settings the hook cannot read at all, and a policy whose
+/// `remote` is of the wrong kind, each pass the transaction with exactly
+/// one warning naming what could not be read, and nothing refused.
+#[test]
+fn settings_or_a_policy_the_hook_cannot_read_pass_said_once() {
+    let unread = |repo: &Repo, names: &[&str]| {
+        let head = repo.rev("unit/a");
+        let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &head]);
+        let t = text(&out);
+        assert!(out.status.success(), "{t}");
+        assert_eq!(repo.rev("bolt/x"), head);
+        let said = "warning: sluice's branch protection let this through unread: ";
+        assert_eq!(t.matches(said).count(), 1, "{t}");
+        let why = &t[t.find(said).unwrap()..];
+        for name in names {
+            assert!(why.contains(name), "{name}: {t}");
+        }
+        assert!(!t.contains("protected by sluice"), "{t}");
+        assert!(protected_events(repo).is_empty());
+    };
+
+    let (repo, _) = protected("protect-unread-settings");
+    let path = host_settings(&repo, "[runs\nnot toml");
+    unread(&repo, &[&path.display().to_string()]);
+
+    let (repo, _) = protected_with(
+        "protect-unread-remote",
+        &POLICY.replace("trust = ", "remote = 1\ntrust = "),
+    );
+    unread(
+        &repo,
+        &["bolt/x's policy at ", "[branches.\"bolt/*\"] remote"],
+    );
+}
