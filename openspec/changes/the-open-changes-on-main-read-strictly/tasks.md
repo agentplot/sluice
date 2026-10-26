@@ -18,7 +18,7 @@ after this change, makes it), so each verification here is the
 ## 2. finished-submissions
 
 - [x] 2.1 Add `openspec/changes/finished-submissions/specs/finished-records/spec.md` with the text in this change's design, word for word: six ADDED requirements, the last two the log in parts. Verify `openspec validate finished-submissions --strict` passes and `openspec show finished-submissions --json --deltas-only` lists six ADDED requirements.
-- [ ] 2.2 Add the Capabilities section in this change's design to `openspec/changes/finished-submissions/proposal.md`, after "What Changes" and before "What it needs from the statement"; leave its tasks' boxes as they are. Verify `openspec validate finished-submissions --strict` still passes.
+- [x] 2.2 Add the Capabilities section in this change's design to `openspec/changes/finished-submissions/proposal.md`, after "What Changes" and before "What it needs from the statement"; leave its tasks' boxes as they are. Verify `openspec validate finished-submissions --strict` still passes.
 
 ## 3. Every open change
 
