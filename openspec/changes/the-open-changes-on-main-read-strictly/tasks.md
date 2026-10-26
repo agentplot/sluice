@@ -13,7 +13,7 @@ after this change, makes it), so each verification here is the
 
 ## 1. actions-pool
 
-- [ ] 1.1 Replace `openspec/changes/actions-pool/specs/forge-identity/spec.md` with the text under "The text to write" in this change's design, word for word: the requirement names contents, workflows, checks and pull requests, and the block holds five scenarios, "No permission to post checks" third. Verify `openspec validate actions-pool --strict` passes.
+- [x] 1.1 Replace `openspec/changes/actions-pool/specs/forge-identity/spec.md` with the text under "The text to write" in this change's design, word for word: the requirement names contents, workflows, checks and pull requests, and the block holds five scenarios, "No permission to post checks" third. Verify `openspec validate actions-pool --strict` passes.
 
 ## 2. finished-submissions
 
