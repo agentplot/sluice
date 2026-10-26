@@ -46,6 +46,16 @@ tasks:
     inputs: ['/openspec/specs/**/*', '/openspec/config.yaml', '/devenv.nix', '/devenv.lock']
     tags: [check-fast]
     options: {runFromWorkspaceRoot: true}
+  # Every open change under openspec/changes passes the same strict
+  # validation, so a requirement archive would refuse fails the unit's own
+  # checks and not first at its merge. A MODIFIED block is read against the
+  # specs it replaces, so they are inputs too; the archived changes are not.
+  changes:
+    command: 'openspec validate --changes --strict --no-interactive'
+    env: {OPENSPEC_TELEMETRY: '0', OPENSPEC_NO_UPDATE_CHECK: '1'}
+    inputs: ['/openspec/changes/**/*', '!/openspec/changes/archive/**/*', '/openspec/specs/**/*', '/openspec/config.yaml', '/devenv.nix', '/devenv.lock']
+    tags: [check-fast]
+    options: {runFromWorkspaceRoot: true}
   # The scene the plugins' screenshots are taken of, built --fast with the
   # sluice built here and asserted, so a change to sluice that breaks it
   # fails here and not at the next retake. It reads the tools it drives from
