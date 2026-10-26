@@ -7,8 +7,7 @@ write that tells its outcome, once no combination or landing names it;
 a submission one still names SHALL move on a later write. The same
 write SHALL add the submission's id, state and worktree as one line of
 `finished.jsonl`, and SHALL make the move whole or not at all. A blamed
-or conflicting submission SHALL stay in `submissions/` (finished-records-1
-104; 53, 63).
+or conflicting submission SHALL stay in `submissions/` (130, 53, 63).
 
 #### Scenario: A landed submission moves
 - **WHEN** submission 1 from `unit/a` lands on `main`
@@ -28,7 +27,7 @@ A round, `sluice overview`, `sluice` with no command and `sluice status
 `submissions/`, `finished.jsonl` and the log the live state carries,
 never `.finished/`. `sluice status <branch>`, as text or `--json`,
 SHALL list the queue alone and say how many submissions are no longer
-in it (finished-records-1 61, 104).
+in it (61, 130).
 
 #### Scenario: Status lists the queue
 - **WHEN** `main` has had two submissions land and has none queued, and the operator runs `sluice status main`
@@ -45,7 +44,7 @@ in `.finished/`, and `sluice status <branch> --all`, as text or
 no sluice process running. A finished submission SHALL count as landed
 for an `--after` that names it and toward its worktree's attempts, and
 `sluice amend` and `sluice withdraw` SHALL refuse it as they did before
-it moved (finished-records-1 105; 26, 49).
+it moved (131, 26, 49).
 
 #### Scenario: A landed submission read by its number
 - **WHEN** submission 1 has landed and moved, and the operator runs `sluice status 1 --json`
@@ -67,7 +66,7 @@ it moved (finished-records-1 105; 26, 49).
 A branch whose state was written before finished submissions moved
 SHALL have each of its landed or withdrawn submissions that nothing
 names moved, as any other, by the branch's next write, with no step
-run by hand (finished-records-1 104).
+run by hand (130).
 
 #### Scenario: A branch from before the move
 - **WHEN** `main`'s state holds landed submissions under `submissions/` and no `finished.jsonl`, and a new submission is queued
@@ -78,7 +77,7 @@ run by hand (finished-records-1 104).
 its 1,001st line SHALL first close it as `log/<n>.jsonl`, numbered from
 1 oldest first, and start a new `log.jsonl`, in the same write and
 under the branch's lock as every write. No line SHALL change in a move
-(finished-records-1 106; 53, 63; core.14).
+(132, 53, 63; core.14).
 
 #### Scenario: The 1,001st line starts a new part
 - **WHEN** `main`'s `log.jsonl` holds 1,000 lines and a round writes three more
@@ -93,8 +92,7 @@ The branch's live state SHALL carry `log.jsonl` and the newest closed
 part only, so `sluice overview`'s recent lines are always in it. A
 reader that searches the whole log for a submission's events, the pull
 request driver's removal time, a report's run counts, or the time a
-combination was under test, SHALL read every part in order (finished-records-1
-106).
+combination was under test, SHALL read every part in order (61, 132).
 
 #### Scenario: Recent lines just after a part closes
 - **WHEN** `main`'s `log.jsonl` has just been closed into `log/3.jsonl` and holds two lines

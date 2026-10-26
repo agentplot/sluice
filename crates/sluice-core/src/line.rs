@@ -20,7 +20,7 @@ pub struct Line {
     /// the finished records.
     pub subs: BTreeMap<u64, Submission>,
     /// The submissions moved to the finished records, as the live index
-    /// keeps them (finished-records-1 clause 104).
+    /// keeps them (130).
     pub finished: BTreeMap<u64, FinishedLine>,
     original: BTreeMap<String, Vec<u8>>,
     appended: Vec<u8>,
@@ -169,9 +169,8 @@ impl Line {
 
     /// Every file whose bytes changed, and the log lines appended. A write
     /// that changes anything also moves each submission done with to the
-    /// finished records, in the same write (finished-records-1 clause 104;
-    /// 63), so records written before them move on their branch's next
-    /// write.
+    /// finished records, in the same write (130, 63), so records written
+    /// before them move on their branch's next write.
     pub fn changes(&self) -> Changes {
         let mut changes = Changes::default();
         let mut index = Vec::new();

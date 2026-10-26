@@ -470,8 +470,7 @@ impl Sluice<'_> {
                 Entry::Occupied(e) => e.into_mut(),
                 Entry::Vacant(e) => e.insert(self.read_line(branch)?),
             };
-            // Live, or moved to the finished records: one file then
-            // (finished-records-1 clause 105).
+            // Live, or moved to the finished records: one file then (131).
             let s = match line.subs.get(&id) {
                 Some(s) => Some(s.clone()),
                 None if line.finished.contains_key(&id) => self.finished_sub(branch, id)?,

@@ -521,8 +521,7 @@ impl Pulls {
         }
         let log = Line::read_log(&s.seams().state.read(branch)?)?;
         // Each open pull request's latest submission, finished or not: a
-        // head that landed is never submitted again (finished-records-1
-        // clause 105).
+        // head that landed is never submitted again (131).
         let open: Vec<String> = pulls
             .iter()
             .filter(|p| p.from_repo(&t.repo))

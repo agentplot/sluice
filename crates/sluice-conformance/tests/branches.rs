@@ -76,8 +76,7 @@ fn a_branch_is_removed_only_once_its_work_has_landed_into_another() {
         s.remove_branch(BRANCH, "main").unwrap(),
         Err(RemoveRefusal::Absent)
     );
-    // Its records stay (26), among the finished ones once landed
-    // (finished-records-1 clauses 104, 105).
+    // Its records stay (26), among the finished ones once landed (130, 131).
     assert_eq!(s.history(BRANCH).unwrap()[0].state, State::Landed);
 }
 

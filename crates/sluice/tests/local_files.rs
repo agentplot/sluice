@@ -381,10 +381,9 @@ fn results_append_once_and_whole() {
     );
 }
 
-/// Finished-records-1 clauses 104, 105, 63: a submission moved to the
-/// finished records leaves every read of the live ones in the same write,
-/// is read by its name, and a crash part way through the move reads as
-/// the whole move.
+/// Clauses 130, 131, 63: a submission moved to the finished records
+/// leaves every read of the live ones in the same write, is read by its
+/// name, and a crash part way through the move reads as the whole move.
 #[test]
 fn a_finished_submission_moves_out_of_the_live_records_all_or_nothing() {
     let dir = Scratch::new("finished");

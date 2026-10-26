@@ -455,8 +455,7 @@ pub fn state_and_status_read_the_records_with_no_step_running(h: &impl Rig) {
     let status = h.sluice().status(BRANCH).unwrap();
     assert_eq!(status.at, Some(h.tip()));
     assert_eq!(status.parallel, Some(4));
-    // Landed, it is among the finished records, read by its number
-    // (finished-records-1 clauses 104, 105).
+    // Landed, it is among the finished records, read by its number (130, 131).
     assert!(status.submissions.is_empty());
     assert_eq!(status.finished, 1);
     assert_eq!(h.sluice().history(BRANCH).unwrap().len(), 1);
@@ -709,8 +708,7 @@ pub fn every_record_written_is_the_real_format_and_names_its_schema(h: &impl Rig
     let doc: BranchDoc = serde_json::from_slice(&files["branch.json"]).unwrap();
     assert_eq!(doc.schema, BRANCH_SCHEMA);
     for id in [one, two] {
-        // Live, or among the finished records in the same form
-        // (finished-records-1 clause 104; 53).
+        // Live, or among the finished records in the same form (130, 53).
         let bytes = match files.get(&format!("submissions/{id}.json")) {
             Some(b) => b.clone(),
             None => h

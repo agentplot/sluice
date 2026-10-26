@@ -1180,9 +1180,8 @@ pub struct Snapshot {
 }
 
 /// Where a branch's finished records are kept, beside its live ones and
-/// never in a `read` of them (finished-records-1 clause 104): a directory
-/// whose name no branch's can take, since a git branch's components never
-/// start with a dot.
+/// never in a `read` of them (130): a directory whose name no branch's can
+/// take, since a git branch's components never start with a dot.
 pub const FINISHED: &str = ".finished";
 
 /// One write: whole files replaced, bytes appended to logs, and files
@@ -1223,7 +1222,7 @@ pub trait State {
     fn wait_lock<'a>(&'a self, branch: &str) -> Result<Box<dyn Guard + 'a>>;
 
     /// 61: the branch's live records, and the version they were read at:
-    /// nothing under [`FINISHED`] (finished-records-1 clause 61).
+    /// nothing under [`FINISHED`] (131).
     fn read(&self, branch: &str) -> Result<Snapshot>;
 
     /// 80: where the branch's last read could not reach the records it
@@ -1317,8 +1316,8 @@ pub trait State {
         Ok(())
     }
 
-    /// Finished-records-1 clause 105: one file of the branch's finished
-    /// records, by its name under [`FINISHED`], as last written.
+    /// 61, 131: one file of the branch's finished records, by its name
+    /// under [`FINISHED`], as last written.
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>>;
 
     /// Every file of the branch's finished records, by its name under
