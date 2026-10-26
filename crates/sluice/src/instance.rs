@@ -61,6 +61,11 @@
 //! the host is given them, and a sandboxed run may write each `dir` and
 //! reach each `socket`. sluice names no cache's tool and runs no cache's
 //! server: the keeper does, as it runs the container engine.
+//!
+//! Branch protection's hook reads only `[forge]`, how sluice reaches a
+//! branch's remote, and passes over every other table and field, known
+//! or not, [`Instance::guarding`] (124; ADR 0059). Every other command
+//! reads the settings in full and refuses a field it does not know.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -196,6 +201,19 @@ struct ForgeForm {
     key: String,
 }
 
+/// What [`Instance::guarding_from`] reads, every other table passed over.
+#[derive(Deserialize, Default)]
+struct GuardingForm {
+    forge: Option<GuardingForgeForm>,
+}
+
+/// `[forge]` as guarding reads it, any other field of it passed over.
+#[derive(Deserialize)]
+struct GuardingForgeForm {
+    app_id: u64,
+    key: String,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RunsForm {
@@ -223,14 +241,7 @@ impl Instance {
     /// The settings on a host of `all` cores that gives sluice `given` of
     /// them: fewer where its affinity or quota limits sluice (71).
     pub fn from_host(path: Option<&Path>, given: usize, all: usize) -> Result<Instance> {
-        let text = match path.map(std::fs::read_to_string) {
-            Some(Ok(t)) => t,
-            Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(e).with_context(|| format!("reading {}", path.unwrap().display()))
-            }
-            _ => String::new(),
-        };
-        let form: ConfigForm = toml::from_str(&text)
+        let form: ConfigForm = toml::from_str(&settings_text(path)?)
             .with_context(|| format!("reading {}", path.unwrap_or(Path::new("")).display()))?;
         // What sluice may use (71): the host's limit where it gives one, the
         // keeper's `cores` where it gives none, and all its cores otherwise.
@@ -320,6 +331,39 @@ impl Instance {
         })
     }
 
+    /// 124: the host's settings as branch protection reads them: `[forge]`
+    /// alone, every other table and field passed over, known or not, and
+    /// the defaults for the rest, no `[signing]` among them (ADR 0059).
+    pub fn guarding() -> Result<Instance> {
+        Instance::guarding_from(config_path().as_deref())
+    }
+
+    /// As [`Instance::guarding`], from the settings at `path`.
+    pub fn guarding_from(path: Option<&Path>) -> Result<Instance> {
+        let form: GuardingForm = toml::from_str(&settings_text(path)?)
+            .with_context(|| format!("reading {}", path.unwrap_or(Path::new("")).display()))?;
+        let forge = form
+            .forge
+            .map(|f| {
+                let f = ForgeForm {
+                    app_id: f.app_id,
+                    key: f.key,
+                };
+                forge(f, home().as_deref())
+            })
+            .transpose()?;
+        Ok(Instance {
+            bound: 1,
+            reserved: 0,
+            processors: 1,
+            forge,
+            signing: None,
+            peers: Peers::default(),
+            systems: None,
+            caches: Vec::new(),
+        })
+    }
+
     /// The cores each run is given, so the host's `bound` runs at once,
     /// whatever repositories they are of, use what sluice may use and no
     /// more (71).
@@ -384,6 +428,17 @@ fn caches(forms: Vec<toml::Value>, home: Option<&Path>) -> Result<Vec<HostCache>
         });
     }
     Ok(out)
+}
+
+/// The settings file's text; none where there is no file.
+fn settings_text(path: Option<&Path>) -> Result<String> {
+    match path.map(std::fs::read_to_string) {
+        Some(Ok(t)) => Ok(t),
+        Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("reading {}", path.unwrap().display()))
+        }
+        _ => Ok(String::new()),
+    }
 }
 
 /// `1` → `first`: an entry named by its place among the others.

@@ -22,6 +22,8 @@ pub struct Branches {
     dir: PathBuf,
     identity: Option<(Rc<dyn Identity>, PathBuf)>,
     pushed: RefCell<BTreeMap<String, Rc<PushedRefs>>>,
+    /// 124: whether the policy is read only as far as guarding needs.
+    guarding: bool,
 }
 
 impl Branches {
@@ -40,7 +42,17 @@ impl Branches {
             local,
             identity,
             pushed: RefCell::default(),
+            guarding: false,
         })
+    }
+
+    /// The same binding, for branch protection: each policy is read only
+    /// as far as guarding needs, [`Policy::guarding`] (124).
+    pub fn guarding(self) -> Self {
+        Branches {
+            guarding: true,
+            ..self
+        }
     }
 
     /// The repository's git directory.
@@ -110,12 +122,7 @@ impl Branches {
         let Some(rev) = at else {
             return Ok(None);
         };
-        let Some(bytes) = self.local.read_file(&rev, POLICY_PATH)? else {
-            return Ok(None);
-        };
-        let policy = Policy::parse(std::str::from_utf8(&bytes)?)
-            .with_context(|| format!("{branch}'s policy at {rev}"))?;
-        Ok(Some((rev, policy)))
+        Ok(self.policy_at(branch, &rev)?.map(|policy| (rev, policy)))
     }
 
     /// A file of a revision's tree.
@@ -143,12 +150,27 @@ impl Branches {
 
     /// The remote the policy at `rev` names for `branch`.
     fn named(&self, branch: &str, rev: &Rev) -> Result<Option<String>> {
+        let Some(policy) = self.policy_at(branch, rev)? else {
+            return Ok(None);
+        };
+        Ok(policy.rules_for(branch)?.and_then(|r| r.remote.clone()))
+    }
+
+    /// The policy at `rev`, that `branch` is routed by: read only as far as
+    /// guarding needs when bound for branch protection (124), and in full
+    /// otherwise.
+    fn policy_at(&self, branch: &str, rev: &Rev) -> Result<Option<Policy>> {
         let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {
             return Ok(None);
         };
-        let policy = Policy::parse(std::str::from_utf8(&bytes)?)
-            .with_context(|| format!("{branch}'s policy at {rev}"))?;
-        Ok(policy.rules_for(branch)?.and_then(|r| r.remote.clone()))
+        let text = std::str::from_utf8(&bytes)?;
+        let policy = match self.guarding {
+            true => Policy::guarding(text),
+            false => Policy::parse(text),
+        };
+        Ok(Some(
+            policy.with_context(|| format!("{branch}'s policy at {rev}"))?,
+        ))
     }
 
     /// The profile for `branch`: its remote's, or `None` for local refs.

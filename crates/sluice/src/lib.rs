@@ -793,6 +793,11 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock).as_peer(host.peer());
+    // 124: the hook reads the policy only as far as guarding needs.
+    let s = match &cli.command {
+        Some(Command::Hook { .. }) => s.guarding(),
+        _ => s,
+    };
     let Some(command) = cli.command else {
         return home::run(&s, host, &cli.worktree, cli.json, out);
     };
