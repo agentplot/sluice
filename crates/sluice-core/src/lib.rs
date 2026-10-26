@@ -78,6 +78,8 @@ pub struct Sluice<'a> {
     clock: &'a dyn Clock,
     serves: Serves,
     peer: Peer,
+    /// 124: whether it reads the policy only as far as guarding needs.
+    guarding: bool,
 }
 
 /// 72 to 74: who this instance is among the hosts that keep a branch
@@ -121,6 +123,7 @@ impl<'a> Sluice<'a> {
             clock,
             serves: Serves::Stepped,
             peer: Peer::default(),
+            guarding: false,
         }
     }
 
@@ -133,6 +136,15 @@ impl<'a> Sluice<'a> {
     /// The same sluice, serving `serves` (71).
     pub fn serving(self, serves: Serves) -> Self {
         Sluice { serves, ..self }
+    }
+
+    /// The same sluice, for branch protection: it reads the policy only as
+    /// far as guarding needs, [`Policy::guarding`] (124).
+    pub fn guarding(self) -> Self {
+        Sluice {
+            guarding: true,
+            ..self
+        }
     }
 
     /// The seams this sluice is bound to, for a reader of the records.
@@ -169,12 +181,18 @@ impl<'a> Sluice<'a> {
         bail!("{branch}'s records kept moving under {WRITE_TRIES} writes")
     }
 
-    /// 56: the policy, read from a revision of the branch.
+    /// 56: the policy, read from a revision of the branch; for guarding,
+    /// only as far as guarding needs (124).
     pub fn policy_at(&self, rev: &Rev) -> Result<Option<Policy>> {
-        match self.seams.branch.read_file(rev, POLICY_PATH)? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(Policy::parse(std::str::from_utf8(&bytes)?)?)),
-        }
+        let Some(bytes) = self.seams.branch.read_file(rev, POLICY_PATH)? else {
+            return Ok(None);
+        };
+        let text = std::str::from_utf8(&bytes)?;
+        Ok(Some(if self.guarding {
+            Policy::guarding(text)?
+        } else {
+            Policy::parse(text)?
+        }))
     }
 
     /// 27, 56: the gate of `branch`, read from its revision `rev`.

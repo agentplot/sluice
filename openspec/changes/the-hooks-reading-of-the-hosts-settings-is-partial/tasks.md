@@ -9,7 +9,7 @@ committed. `core:test` is `cargo test -p sluice-core`; `sluice:test` and
 ## 1. The guarding reading of the policy (core)
 
 - [x] 1.1 Add `Policy::guarding(text)` in `crates/sluice-core/src/policy.rs` (design D3): `[branches]` patterns in written order with `Rules::default()` and each `remote`, `[signers]` names only, every other table and field passed over; a `[branches]` entry that is not a table, a `remote` that is not a string or `[signers]` that is not a table is an error naming it. Verify with unit tests in `policy.rs`: a policy with an unknown top-level table, an unknown field in `[branches."bolt/*"]` and an unknown field in `[signers.box]` reads, while `Policy::parse` of the same text still fails; `remote = 1` fails naming `remote`; and every example policy the existing example test reads gives the same patterns, `remote`s and `signers` names both ways (`sluice exec main -- moon run core:test`).
-- [ ] 1.2 Give `Sluice` a reading set by `Sluice::guarding(self)`, beside `as_peer` and `serving`, and make `policy_at` parse with `Policy::guarding` under it (`crates/sluice-core/src/lib.rs`). Verify with a core unit test that `protects` on a branch whose policy holds an unknown field answers `true` guarding and errs otherwise (`sluice exec main -- moon run core:test`).
+- [x] 1.2 Give `Sluice` a reading set by `Sluice::guarding(self)`, beside `as_peer` and `serving`, and make `policy_at` parse with `Policy::guarding` under it (`crates/sluice-core/src/lib.rs`). Verify with a core unit test that `protects` on a branch whose policy holds an unknown field answers `true` guarding and errs otherwise (`sluice exec main -- moon run core:test`).
 
 ## 2. The guarding reading of the host's settings and the hook's binding
 
