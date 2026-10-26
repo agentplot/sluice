@@ -135,6 +135,20 @@ fn host_bound(config: &Scratch, max: usize) {
     .unwrap();
 }
 
+/// The host's configuration in `config`: one cache whose clients read
+/// `SCCACHE_DIR`.
+fn host_cache(config: &Scratch) {
+    std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+    std::fs::write(
+        config.path().join("sluice/config.toml"),
+        format!(
+            "[[caches]]\ndir = {:?}\nenv = {{ SCCACHE_DIR = \"/caches/sccache\" }}\n",
+            config.path().join("cache").display().to_string()
+        ),
+    )
+    .unwrap();
+}
+
 /// Wait until `done` holds, for at most a minute.
 fn eventually(what: &str, mut done: impl FnMut() -> bool) {
     let until = Instant::now() + Duration::from_secs(60);
@@ -195,6 +209,21 @@ fn a_command_gets_the_worktrees_environment_and_its_exit() {
     assert_eq!(one, two, "the same place and port on the second run");
     assert_eq!(s.results(), "", "a command records nothing");
     assert!(s.sessions().is_empty(), "the run is no longer counted");
+}
+
+/// 35, 89: an agent's run in its worktree is given the host's caches as
+/// a submission's run is: the variables the host's config declares.
+#[test]
+fn sluice_exec_gets_the_hosts_cache_environment() {
+    let s = Setup::new("exec-cache-env");
+    host_cache(&s.config);
+    let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "env > seen"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let seen = std::fs::read_to_string(s.worktree.join("seen")).unwrap();
+    assert!(
+        seen.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+        "{seen}"
+    );
 }
 
 /// Every file name kept under `dir`, walked whole.

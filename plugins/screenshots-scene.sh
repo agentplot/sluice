@@ -79,7 +79,7 @@ if [ "${1:-}" = --fast ]; then
   shift
 fi
 ROOT=${1:?usage: screenshots-scene.sh [--fast] <new dir>}
-for t in git jq moon sluice; do command -v "$t" >/dev/null || die "needs $t on PATH"; done
+for t in git jq moon sluice; do command -v "$t" >/dev/null || die "needs $t on PATH; run it in devenv shell"; done
 case $(moon --version) in
 "moon 2."[6-9]* | "moon 2."[1-9][0-9]* | "moon "[3-9]*) ;;
 *) die "needs moon >= 2.6, found $(moon --version)" ;;

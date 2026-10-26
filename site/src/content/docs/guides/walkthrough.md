@@ -43,10 +43,6 @@ under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 network = "localhost"
@@ -82,9 +78,11 @@ features and can demand more.
 
 **`[checkout]`** says where a combination is tested: in a clean checkout
 of its own, apart from every agent's worktree, with nothing running in it
-but the tests. `[[checkout.cache]]` is what a new checkout may start
-with, the way a CI job restores a cache. A cache only spares work: it
-never decides a result.
+but the tests. A checkout starts from its revision alone. For a warm
+build, the host's config declares the caches every run on the host
+shares, a compile server's or moon's, as
+[`[[caches]]`](/sluice/reference/configuration/#caches). A cache only
+spares work: it never decides a result.
 
 **`[executor]`** says what the tests may touch: nothing held back, or a
 sandbox that may write only its checkout and scratch directory and reach
@@ -268,7 +266,6 @@ readable with plain tools whether or not sluice is running:
   log.jsonl            every submission, test run, result, blame and landing, in order
 .git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-.git/sluice/.caches/   the [[checkout.cache]] entries, the last two keys of each
 .git/sluice/results.jsonl
                        every test result of the repository, with its executor
 ```

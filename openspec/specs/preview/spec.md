@@ -29,12 +29,13 @@ head, SHALL be refused with the reason and SHALL make nothing.
 
 ### Requirement: The preview command runs once under the executor
 
-A preview's checkout SHALL receive its ports and caches as a
-combination's checkout does, and SHALL run the `[preview] command` of
-the previewed revision's policy once, under the host's executor and
-the limits of the branch's current policy, and end its process group
-when it exits (98, 66). What the command hands to another process SHALL
-stay until the preview is released.
+A preview's checkout SHALL receive its ports as a combination's
+checkout does, and its command SHALL be given the host's caches as any
+run is (35). It SHALL run the `[preview] command` of the previewed
+revision's policy once, under the host's executor and the limits of the
+branch's current policy, and end its process group when it exits (98,
+66). What the command hands to another process SHALL stay until the
+preview is released.
 
 #### Scenario: The stack is handed off
 
@@ -53,6 +54,14 @@ stay until the preview is released.
 
 - **WHEN** the previewed revision's policy has no `[preview]` table
 - **THEN** sluice refuses, naming the missing table, and makes nothing
+
+#### Scenario: The command gets the host's caches
+
+- **WHEN** the host's config declares a cache's `env` and a preview's
+  command prints its environment
+- **THEN** it prints the declared variables
+  (`a_preview_gets_the_hosts_cache_environment` in
+  `crates/sluice/tests/previews.rs`)
 
 ### Requirement: Each port has a name unique on the host
 

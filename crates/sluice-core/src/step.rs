@@ -35,8 +35,8 @@ use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
     BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, Event, FailedTask, Held,
-    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultLine, RunState, State,
-    SystemRun, Tested, ToldRecord,
+    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState,
+    State, SystemRun, Tested, ToldRecord,
 };
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::landing_message;
@@ -239,7 +239,7 @@ impl Sluice<'_> {
             })
             .collect();
         for (cand, place) in stale {
-            let outcome = self.release_made(branch, &place, false)?;
+            let outcome = self.release_made(branch, &place)?;
             let retry = matches!(outcome.how, Releasing::Failed { .. });
             self.update(branch, |l| {
                 if let Some(c) = l.candidate_mut(&cand) {
@@ -298,7 +298,7 @@ impl Sluice<'_> {
             if passed_over {
                 continue;
             }
-            let outcome = self.release_made(branch, place, doc.passed.contains(place))?;
+            let outcome = self.release_made(branch, place)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -595,7 +595,7 @@ impl Sluice<'_> {
                 Ok(run) => run,
                 // Refused before anything of it ran: no run, no outcome.
                 Err(e) if e.downcast_ref::<AtBound>().is_some() => {
-                    let outcome = self.release_made(branch, &name, false)?;
+                    let outcome = self.release_made(branch, &name)?;
                     let retry = matches!(outcome.how, Releasing::Failed { .. });
                     self.reopen(branch, &c.id, i, &name, retry)?;
                     if outcome.how != Releasing::Released {
@@ -1170,9 +1170,35 @@ impl Sluice<'_> {
         }
         // 19, 20: where the run a flaky task contradicts is kept, when the
         // records name it; a pointer, so one that cannot be read holds up
-        // no verdict.
+        // no verdict. This run's time and host are those of its own line,
+        // recorded before the verdict was read (rule core.7): the newest of
+        // the kind it reported for the task on this combination and
+        // system, the one written at `now` or the same result written
+        // before it; neither for a result with no line.
         for f in &mut v.failed {
             if let Some(k) = &mut f.flaky {
+                let kind = report
+                    .tasks
+                    .iter()
+                    .find(|t| t.task == f.task && t.hash == f.hash)
+                    .map(|t| match t.source {
+                        Source::Ran { .. } => ResultKind::Ran,
+                        Source::Replayed { .. } => ResultKind::Replayed,
+                    });
+                let this = results
+                    .iter()
+                    .filter(|l| {
+                        Some(l.kind) == kind
+                            && l.task == f.task
+                            && l.hash == f.hash
+                            && l.branch == line.branch
+                            && l.combination == c.revision
+                            && l.worktree.is_none()
+                            && l.system.as_deref() == system
+                    })
+                    .max_by(|a, b| a.at.cmp(&b.at));
+                k.at = this.map(|l| l.at.clone());
+                k.host = this.and_then(|l| l.host.clone());
                 k.other.log = match self.kept_log(line, &f.task, &k.other) {
                     Ok(log) => log,
                     Err(e) => {
@@ -1219,9 +1245,6 @@ impl Sluice<'_> {
         x.ran += v.ran;
         x.replayed += v.replayed;
         if let Some(p) = place {
-            if v.passed {
-                line.doc.passed.push(p.clone());
-            }
             line.doc.release.push(p);
         }
         Ok(())
@@ -2152,7 +2175,7 @@ impl Sluice<'_> {
             if (stopped && !self.held_gone(&p)) || releases.iter().any(|o| o.place == p) {
                 continue;
             }
-            let outcome = self.release_made(branch, &p, false)?;
+            let outcome = self.release_made(branch, &p)?;
             if outcome.how != Releasing::Released {
                 releases.push(outcome);
             }
@@ -2204,14 +2227,13 @@ impl Sluice<'_> {
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        let outcome = self.release_made(branch, &p, false)?;
+                        let outcome = self.release_made(branch, &p)?;
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }
                     }
                 }
                 Progress::Finished(report) => {
-                    let mut passed = false;
                     self.update(branch, |l| {
                         let now = self.now();
                         let Some(x) = l.candidate(&c.id).cloned() else {
@@ -2233,18 +2255,14 @@ impl Sluice<'_> {
                             home.as_deref(),
                             &now,
                         )?;
-                        passed = l
-                            .candidate(&c.id)
-                            .is_some_and(|y| y.runs[i].state == RunState::Passed);
                         // This host releases its own place below.
                         if let Some(p) = &place {
                             l.doc.release.retain(|q| q != p);
-                            l.doc.passed.retain(|q| q != p);
                         }
                         Ok(())
                     })?;
                     if let Some(p) = place {
-                        let outcome = self.release_made(branch, &p, passed)?;
+                        let outcome = self.release_made(branch, &p)?;
                         if outcome.how != Releasing::Released {
                             releases.push(outcome);
                         }

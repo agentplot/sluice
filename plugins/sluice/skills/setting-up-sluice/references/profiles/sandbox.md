@@ -1,8 +1,9 @@
 # Executor: open or sandbox
 
 **Choose `sandbox`** on macOS when the gate should hold tests to their
-checkout: they may write only the checkout and their scratch directory, and
-reach only the network the policy allows (Seatbelt). **Choose `open`** on
+checkout: they may write only the checkout, their scratch directory and the
+host's declared caches, and reach only the network the policy allows
+(Seatbelt). **Choose `open`** on
 Linux today, or when tests need what a sandbox refuses. `container` is
 designed and not built.
 
@@ -32,7 +33,12 @@ trust = ["confined", "sandbox"]   # which results satisfy the branch
 ## Traps
 
 - Tests that write outside the checkout (`~/.cache`, `/tmp`) fail in the
-  sandbox. Point caches at `SLUICE_TMP` or the checkout.
+  sandbox. Point their scratch files at `SLUICE_TMP`. A cache every build on
+  the host shares (a compile server's, moon's shared worktree cache) is the
+  host's: declare it in the host's config, `[[caches]]` in
+  `~/.config/sluice/config.toml`, with its `dir`, its server's `socket` and
+  the `env` its clients read. The sandbox opens each `dir` and `socket`, and
+  every run gets the `env`. A repository's policy declares no cache.
 - Tests that call out to the internet need `network = true`; prefer fakes.
 
 ## Verify
