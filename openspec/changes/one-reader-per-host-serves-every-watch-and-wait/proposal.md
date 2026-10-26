@@ -83,6 +83,7 @@ crates/sluice/src/lib.rs
 crates/sluice/src/reader.rs
 crates/sluice/src/exec.rs
 crates/sluice/src/profiles/mod.rs
+crates/sluice-core/src/overview.rs
 crates/sluice/tests/cli.rs
 crates/sluice/tests/support/**
 site/src/content/docs/reference/state.md
