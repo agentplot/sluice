@@ -108,10 +108,12 @@ One process on the host reads a repository's queues for every watch and
 wait of it. The first `sluice overview --json --watch`, `sluice wait` or
 waiting `sluice submit` of the repository holds its `readers/` lock. It
 keeps the overview in the file beside it, rewritten whole each time it
-changes, so nothing reads half of one. Every other watch and wait of the
+changes, so nothing reads half of one. Every other watch of the
 repository on the host follows that file and reads no state of its own.
-A wait still reads its submission's own file once, when it leaves the
-queue, to say how it ended. When the one holding the lock stops, however
+Every other wait takes its submission's progress from that file and
+still runs sluice's rounds, which read the branch's state as they always
+do. It reads its submission's own file once, when the submission leaves
+the queue, to say how it ended. When the one holding the lock stops, however
 it stops, the lock goes with it: the next watch or wait takes over
 within its next look, a second for a watch, three for a wait. The file
 names take the repository's git directory, which all its worktrees
