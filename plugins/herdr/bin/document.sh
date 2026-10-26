@@ -11,19 +11,27 @@ set -u
 source_name=${1:-local}
 dir=${2:-}
 # Read as sluice/overview@1 with every list it may leave out made empty;
-# anything else is logged and the last good state kept.
-doc=$(jq -c -e 'select(.schema == "sluice/overview@1" and (.host | type) == "string"
+# anything else is logged and the last good state kept. What a held
+# place's release printed is kept to its last line with anything on it,
+# before control characters go, which would join its lines into one.
+doc=$(jq -c -e 'def last_line: if type == "string"
+      then ([splits("\n") | select(test("\\S"))] | last // "") | sub("^\\s+"; "") | sub("\\s+$"; "")
+      else "" end;
+  def release_failed: if (.release_failed | type) == "object" then .release_failed.failed |= last_line else del(.release_failed) end;
+  select(.schema == "sluice/overview@1" and (.host | type) == "string"
     and (.repository | type) == "string" and ((.branches // []) | type) == "array")
   | .branches = [(.branches // [])[] | select(type == "object" and (.branch | type) == "string")
       | .depth //= 0 | .recent = [(.recent // [])[] | objects]
       | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
       | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []
-          | .tasks = [(.tasks // [])[] | objects | select((.target | type) == "string")]]]
+          | .tasks = [(.tasks // [])[] | objects | select((.target | type) == "string")]]
+      | .held_checkouts = [(.held_checkouts // [])[] | objects | select((.place | type) == "string") | .failed |= last_line]]
   | .sessions = [(.sessions // [])[] | objects | select((.worktree | type) == "string")
       | if (.run | type) == "object" then .run.tasks = [(.run.tasks // [])[] | objects | select((.target | type) == "string")] else del(.run) end
-      | if (.last_result | type) == "object" then .last_result.tasks = [(.last_result.tasks // [])[] | objects | select((.target | type) == "string")] else del(.last_result) end]
+      | if (.last_result | type) == "object" then .last_result.tasks = [(.last_result.tasks // [])[] | objects | select((.target | type) == "string")] else del(.last_result) end
+      | release_failed]
   | if (.room | type) == "object" and (.room.bound | type) == "number" then . else del(.room) end
-  | .previews //= []
+  | .previews = [(.previews // [])[] | if type == "object" then release_failed else . end]
   # Nothing a document says is shown with its control characters: a task or
   # path holding an escape would reach the terminal as one.
   | walk(if type == "string" then gsub("[[:cntrl:]]"; "") else . end)' 2>/dev/null) || {
