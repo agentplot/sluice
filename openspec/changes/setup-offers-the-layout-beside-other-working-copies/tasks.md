@@ -22,7 +22,7 @@ test in that isolation. Run suites with `sluice exec main -- moon run
 
 ## 3. The guides
 
-- [ ] 3.1 In `site/src/content/docs/guides/claude-code.md` (the paragraph "In a plain clone, ...") and `site/src/content/docs/guides/worktrees.md` (the paragraph "For a clone you already have, ..."), add that in a clone with other worktrees Claude makes the same offer, names the same costs, and goes on with the repository as it is without waiting for an answer, laying it out whenever you ask; verify `sluice exec main -- moon run site:prose` clears every Vale warning
+- [x] 3.1 In `site/src/content/docs/guides/claude-code.md` (the paragraph "In a plain clone, ...") and `site/src/content/docs/guides/worktrees.md` (the paragraph "For a clone you already have, ..."), add that in a clone with other worktrees Claude makes the same offer, names the same costs, and goes on with the repository as it is without waiting for an answer, laying it out whenever you ask; verify `sluice exec main -- moon run site:prose` clears every Vale warning
 
 ## 4. Try it and the gate
 
