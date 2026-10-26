@@ -22,7 +22,7 @@ after this change, makes it), so each verification here is the
 
 ## 3. Every open change
 
-- [ ] 3.1 Run `openspec validate --changes --strict` and `moon run root:specs`; verify every open change on the branch passes and the archived specs still pass.
+- [x] 3.1 Run `openspec validate --changes --strict` and `moon run root:specs`; verify every open change on the branch passes and the archived specs still pass.
 
 ## Workflow follow-up
 
