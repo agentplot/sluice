@@ -465,7 +465,7 @@ export const register: Register = (on, options) => {
       if (seen.ids.length > 0 || seen.pulls.length > 0) {
         await update($, mine, (m) => ({
           ...m,
-          ids: [...new Set([...m.ids, ...seen.ids])],
+          ids: [...new Set([...(m.ids ?? []), ...seen.ids])],
           pulls: [...new Set([...m.pulls, ...seen.pulls])],
         }));
       }
@@ -630,7 +630,8 @@ export const register: Register = (on, options) => {
               {"  "}⚠ {forecastWords(f)}
             </Text>
           </Button>
-          {open_.includes(k) && linesView(k, conflictLines(branch, f.paths, forecastInWay(f)))}
+          {open_.includes(k) &&
+            linesView(k, conflictLines(branch, f.paths ?? [], forecastInWay(f)))}
         </Box>
       );
     };
@@ -814,10 +815,7 @@ export const register: Register = (on, options) => {
                       {open_.includes(k) &&
                         (r.event === "blamed"
                           ? view(k, shownOf[k] ?? [])
-                          : linesView(
-                              k,
-                              conflictLines(b.branch, r.paths ?? [], recentInWay(b, r)),
-                            ))}
+                          : linesView(k, conflictLines(b.branch, r.paths, recentInWay(b, r))))}
                     </Box>
                   );
                 }

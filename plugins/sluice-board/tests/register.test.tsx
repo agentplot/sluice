@@ -2,7 +2,7 @@ import type { On } from "claude-code";
 import type { Engine, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
-import type { Flaky, Overview } from "../types";
+import type { Flaky, Mine, Overview } from "../types";
 import {
   NOW,
   overview,
@@ -412,7 +412,7 @@ test("the pane leaves out branches with nothing queued and no event this quarter
   });
   for (let i = 0; i < 30; i++) d.branches.push(idle(`bolt/b${i}`, []));
   const landed = (at: string) => [
-    { schema: "sluice/log@1", at, event: "landed", ids: [77], to: "abcdef0" },
+    { schema: "sluice/log@1", at, event: "landed" as const, ids: [77], to: "abcdef0" },
   ];
   d.branches.push(idle("bolt/done", landed("2026-10-16T19:40:00Z")));
   d.branches.push(idle("bolt/old", landed("2026-10-16T19:20:00Z")));
@@ -1740,6 +1740,38 @@ test("a conflict there when the session starts is a toast, not a turn", async ($
   expect(w.forecasts).toBe(1);
   expect(seen.prompts).toEqual([]);
   expect(seen.toasts).toContain("sluice: your work would conflict with main in docs/builds.md");
+});
+
+test("a forecast conflict with no paths and a session state with no ids draw as empty", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  // Every write of the session's state loses its ids.
+  on("state.set", { plugin: "sluice-board", key: "mine" }, ($, e, next) => {
+    const { ids: _, ...rest } = e.value;
+    return next({ ...e, value: rest as Mine });
+  });
+  const w: World = { doc: free(), head: "h1", answer: { conflict: { with: [] } }, forecasts: 0 };
+  const seen = nothingSeen();
+  forecastHost(on, w, seen);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(w.forecasts).toBe(1);
+  expect(seen.toasts).toContain("sluice: your work would conflict with main in a file");
+  const pane = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "Pane",
+    props: PANE,
+    requestId: "sluice",
+  });
+  expect(await pane.find({ type: "Text", text: /#12 testing/ })).toBeDefined();
+  expect(
+    await pane.find({ type: "Text", text: "  ⚠ your work would conflict · a file" }),
+  ).toBeDefined();
+  await pane.press({ key: "forecast-main" });
+  await pane.redraw();
+  expect(await pane.find({ type: "Text", text: "files: " })).toBeDefined();
+  await pane.unmount();
 });
 
 test("SLUICE_FORECAST=0 turns forecasting off", async ($, on) => {

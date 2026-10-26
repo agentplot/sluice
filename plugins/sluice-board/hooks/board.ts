@@ -105,9 +105,7 @@ export function recentWords(r: Recent): string {
     case "blamed":
       return `#${r.id} blamed on ${short(r.combination)}`;
     case "conflict":
-      return `#${r.id} conflict · ${(r.paths ?? []).join(", ")}`;
-    default:
-      return String(r.event);
+      return `#${r.id} conflict · ${r.paths.join(", ")}`;
   }
 }
 
@@ -553,14 +551,14 @@ export function moving(doc: Overview | null, now: number): boolean {
   return doc.branches.some((b) => testing(b).length > 0) || checkRows(doc, now).length > 0;
 }
 
-/** Whether a submission is this session's. */
+/** Whether a submission is this session's; a session state with no ids holds none. */
 export function isMine(
   s: { id: number; from: { worktree: string; path?: string } },
   mine: Mine,
 ): boolean {
   return (
     (mine.root !== null && s.from.path === mine.root) ||
-    mine.ids.includes(s.id) ||
+    (mine.ids ?? []).includes(s.id) ||
     mine.pulls.includes(s.from.worktree)
   );
 }
@@ -571,8 +569,9 @@ export function learn(doc: Overview, mine: Mine): Mine {
     .flatMap((b) => b.submissions)
     .filter((s) => isMine(s, mine))
     .map((s) => s.id);
-  const more = found.filter((i) => !mine.ids.includes(i));
-  return more.length === 0 ? mine : { ...mine, ids: [...mine.ids, ...more] };
+  const own = mine.ids ?? [];
+  const more = found.filter((i) => !own.includes(i));
+  return more.length === 0 ? mine : { ...mine, ids: [...own, ...more] };
 }
 
 /** A recent line's identity, so an outcome is told once. */
@@ -591,18 +590,19 @@ export function recentKeys(doc: Overview): string[] {
  */
 export function outcomes(doc: Overview, mine: Mine, told: readonly string[]): Outcome[] {
   const out: Outcome[] = [];
+  const own = mine.ids ?? [];
   for (const b of doc.branches) {
     for (const r of b.recent) {
       const k = key(b.branch, r);
       if (told.includes(k)) continue;
       if (r.event === "landed") {
         for (const id of r.ids ?? []) {
-          if (mine.ids.includes(id)) {
+          if (own.includes(id)) {
             out.push({ key: k, branch: b.branch, id, word: "landed", to: String(r.to ?? "") });
           }
         }
       } else if ((r.event === "blamed" || r.event === "conflict") && r.id !== undefined) {
-        if (mine.ids.includes(r.id)) {
+        if (own.includes(r.id)) {
           out.push({
             key: k,
             branch: b.branch,
@@ -688,13 +688,14 @@ export function latest(doc: Overview, mine: Mine): Latest | null {
   const see = (l: Latest) => {
     if (!found || l.id > found.id) found = l;
   };
+  const own = mine.ids ?? [];
   for (const b of doc.branches) {
     for (const s of b.submissions)
       if (isMine(s, mine)) see({ id: s.id, branch: b.branch, conflict: false, active: true });
     for (const r of b.recent) {
       const named = r.id !== undefined ? [r.id] : (r.ids ?? []);
       for (const id of named)
-        if (mine.ids.includes(id) && !b.submissions.some((s) => s.id === id))
+        if (own.includes(id) && !b.submissions.some((s) => s.id === id))
           see({ id, branch: b.branch, conflict: r.event === "conflict", active: false });
     }
   }
@@ -733,7 +734,7 @@ export function forecastKey(head: string, b: OverviewBranch, mine: Mine): string
 /** A conflict by its files and what they are contested with, or null for none. */
 export function signature(branch: string, f: Forecast): string | null {
   if (!f.conflict) return null;
-  const paths = [...f.conflict.paths].sort().join(",");
+  const paths = [...(f.conflict.paths ?? [])].sort().join(",");
   const with_ = f.conflict.with.map((c) => c.id).sort((x, y) => x - y);
   return `${branch}|${paths}|${with_.join(",")}`;
 }
@@ -774,10 +775,11 @@ export function recentInWay(b: OverviewBranch, r: Recent): InWay[] {
   });
 }
 
-/** The row a conflict a forecast found draws under its branch. */
+/** The row a conflict a forecast found draws under its branch; one with no paths names none. */
 export function forecastWords(f: NonNullable<Forecast["conflict"]>): string {
-  const more = f.paths.length > 1 ? ` +${f.paths.length - 1}` : "";
-  return `your work would conflict · ${f.paths[0] ?? "a file"}${more}`;
+  const paths = f.paths ?? [];
+  const more = paths.length > 1 ? ` +${paths.length - 1}` : "";
+  return `your work would conflict · ${paths[0] ?? "a file"}${more}`;
 }
 
 /** What is in a forecast conflict's way, as the forecast names it. */
@@ -787,14 +789,15 @@ export function forecastInWay(f: NonNullable<Forecast["conflict"]>): InWay[] {
 
 /** The toast for a conflict a forecast found. */
 export function forecastToast(branch: string, f: NonNullable<Forecast["conflict"]>): string {
-  const more = f.paths.length > 1 ? ` +${f.paths.length - 1}` : "";
-  return `sluice: your work would conflict with ${branch} in ${f.paths[0] ?? "a file"}${more}`;
+  const paths = f.paths ?? [];
+  const more = paths.length > 1 ? ` +${paths.length - 1}` : "";
+  return `sluice: your work would conflict with ${branch} in ${paths[0] ?? "a file"}${more}`;
 }
 
 /** The prompt that tells a session its work has come to conflict. */
 export function conflictText(branch: string, f: NonNullable<Forecast["conflict"]>): string {
   return [
-    `[sluice] Your work would conflict with ${contested(branch, f)}, in ${f.paths.join(", ")}.`,
+    `[sluice] Your work would conflict with ${contested(branch, f)}, in ${(f.paths ?? []).join(", ")}.`,
     `Merge ${branch} into your worktree now and resolve it while it is small (check with \`sluice submit --check ${branch}\`).`,
   ].join(" ");
 }

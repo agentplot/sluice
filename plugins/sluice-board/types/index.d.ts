@@ -1,18 +1,25 @@
 // The parts of `sluice overview --json` (schema sluice/overview@1) the board
 // reads, and the values it keeps for the session.
 
-export type Recent = {
+/** What a recent line of the branch's log carries, whatever its event. */
+export type RecentLine = {
   schema?: string;
   at: string;
-  event: string;
   id?: number;
   ids?: number[];
   to?: string;
   combination?: string;
-  paths?: string[];
   /** A conflict's: the submissions in the way. */
   with?: number[];
 };
+
+/** A landing or a blame; or a conflict, whose files the overview always writes. */
+export type Recent = RecentLine &
+  (
+    | { event: "landed"; paths?: undefined }
+    | { event: "blamed"; paths?: undefined }
+    | { event: "conflict"; paths: string[] }
+  );
 
 export type OverviewSubmission = {
   id: number;
