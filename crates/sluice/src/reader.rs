@@ -75,6 +75,16 @@ impl Reader {
             None => Reader::Follow(follow),
         })
     }
+
+    /// The lead from now, when it followed a reader that has stopped.
+    pub fn lead_once_free(&mut self) -> Result<()> {
+        if let Reader::Follow(follow) = self {
+            if let Some(lead) = follow.try_lead()? {
+                *self = Reader::Lead(lead);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Lead {

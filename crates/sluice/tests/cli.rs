@@ -1436,6 +1436,215 @@ fn watch_needs_json() {
     assert!(Cli::try_parse_from(["sluice", "overview", "--watch"]).is_err());
 }
 
+// ---------------------------------------------------------------------------
+// One reader of the repository's queues on the host (129; ADR 0056)
+// ---------------------------------------------------------------------------
+
+/// The repository the fakes' host names.
+const REPOSITORY: &str = "/fake/repo.git";
+
+/// One of `repository`'s reader's files on the fakes' host.
+fn readers_file(repository: &str, ext: &str) -> std::path::PathBuf {
+    let name = sluice::runs::flat_name(repository);
+    support::readers().join(format!("{name}.{ext}"))
+}
+
+/// `repository`'s reader's document, as it stands.
+fn readers_doc_of(repository: &str) -> Option<serde_json::Value> {
+    let bytes = std::fs::read(readers_file(repository, "json")).ok()?;
+    Some(serde_json::from_slice(&bytes).unwrap())
+}
+
+fn readers_doc() -> Option<serde_json::Value> {
+    readers_doc_of(REPOSITORY)
+}
+
+/// A live reader of `repository`, the test's own, until dropped; its
+/// document `doc`.
+fn reader_of(repository: &str, doc: &serde_json::Value) -> sluice::reader::Lead {
+    match sluice::reader::Reader::take(&support::readers(), repository).unwrap() {
+        sluice::reader::Reader::Lead(mut lead) => {
+            lead.write(doc).unwrap();
+            lead
+        }
+        sluice::reader::Reader::Follow(_) => panic!("a reader of {repository} already"),
+    }
+}
+
+/// Replace the reader's document with `doc`, as it is, time and all.
+fn rewrite_readers_doc(doc: &serde_json::Value) {
+    std::fs::write(readers_file(REPOSITORY, "json"), doc.to_string()).unwrap();
+}
+
+/// The overview as a reader read it of queues no test's records hold:
+/// `#7` under test on the branch.
+fn seven_testing() -> serde_json::Value {
+    let g = setup();
+    g.world.hold_runs(true);
+    work(&g, "unit/r", "agent-r", &[("plugin/r", Some("r"))]);
+    sluice(&g, &["submit", BRANCH, "--worktree", "unit/r", "--no-wait"]);
+    sluice(&g, &["step", BRANCH]);
+    let (_, out) = sluice(&g, &["overview", "--json"]);
+    let mut doc = json(&out);
+    let b = &mut doc["branches"][0];
+    assert_eq!(b["submissions"][0]["state"], "testing", "{b}");
+    b["submissions"][0]["id"] = 7.into();
+    b["submissions"][0]["tested"]["submissions"] = serde_json::json!([7]);
+    b["candidates"][0]["submissions"] = serde_json::json!([7]);
+    doc
+}
+
+/// 129: a watch that finds no reader becomes it, and writes each document
+/// it prints, whole: at its start, and once the submission is queued.
+#[test]
+fn watch_with_no_reader_writes_each_document() {
+    let f = setup();
+    work(
+        &f,
+        "unit/touches",
+        "crw-1-unit-1",
+        &[("plugin/lib/plan.py", Some("touched"))],
+    );
+    let written = RefCell::new(Vec::new());
+    let between = |n: usize| {
+        written.borrow_mut().push(readers_doc());
+        if n == 2 {
+            sluice(
+                &f,
+                &["submit", BRANCH, "--worktree", "unit/touches", "--no-wait"],
+            );
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    let written = written.into_inner();
+    assert_eq!(written[0].as_ref(), Some(&lines[0]));
+    assert_eq!(written[2].as_ref(), Some(&lines[1]));
+    assert_eq!(lines[1]["schema"], "sluice/overview@1");
+    assert_eq!(lines[1]["branches"][0]["depth"], 1);
+}
+
+/// 129: a watch that finds a live reader follows its document: what it
+/// prints is what the reader wrote, which no records here hold.
+#[test]
+fn watch_follows_the_readers_document() {
+    let f = setup();
+    let doc = seven_testing();
+    let _reader = reader_of(REPOSITORY, &doc);
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, [doc], "{out}");
+}
+
+/// 129: a follower prints the reader's document again each time it
+/// changes, and never for its time alone.
+#[test]
+fn watch_follows_each_change_once() {
+    let f = setup();
+    let testing = seven_testing();
+    let mut landed = testing.clone();
+    let b = &mut landed["branches"][0];
+    b["depth"] = 0.into();
+    b["submissions"] = serde_json::json!([]);
+    b["candidates"] = serde_json::json!([]);
+    b["recent"] = serde_json::json!([{
+        "at": "2026-10-11T09:05:00Z", "event": "landed", "ids": [7], "to": "f00d",
+    }]);
+    let mut later = landed.clone();
+    later["at"] = "2026-10-11T09:10:00Z".into();
+    let _reader = reader_of(REPOSITORY, &testing);
+    let between = |n: usize| match n {
+        1 => rewrite_readers_doc(&landed),
+        2 => rewrite_readers_doc(&later),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, [testing, landed], "{out}");
+}
+
+/// 129: once the reader stops, a follower is the reader within one pause,
+/// and the document it writes is the one it read from the records.
+#[test]
+fn watch_leads_once_the_reader_stops() {
+    let f = setup();
+    let doc = seven_testing();
+    let reader = RefCell::new(Some(reader_of(REPOSITORY, &doc)));
+    let written = RefCell::new(None);
+    let between = |n: usize| match n {
+        1 => drop(reader.borrow_mut().take()),
+        2 => *written.borrow_mut() = readers_doc(),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0], doc);
+    assert_eq!(lines[1]["branches"], serde_json::json!([]));
+    assert_eq!(written.into_inner().as_ref(), Some(&lines[1]));
+}
+
+/// 129: a reader serves its own repository alone: a watch of another
+/// repository on the host is that one's reader.
+#[test]
+fn watch_of_another_repository_leads() {
+    let f = setup();
+    let other = "/fake/other.git";
+    let doc = seven_testing();
+    let _reader = reader_of(other, &doc);
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 1,
+        between: &|_| {},
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert_eq!(lines[0]["branches"], serde_json::json!([]));
+    assert_eq!(readers_doc().as_ref(), Some(&lines[0]));
+    assert_eq!(readers_doc_of(other), Some(doc));
+}
+
+/// 129: a one-shot overview reads the records itself, beside a live
+/// reader or with none, and never takes the reader's place.
+#[test]
+fn one_shot_overview_reads_the_records_beside_a_reader() {
+    let f = setup();
+    sluice(&f, &["overview", "--json"]);
+    assert!(!readers_file(REPOSITORY, "lock").exists());
+    let doc = seven_testing();
+    let _reader = reader_of(REPOSITORY, &doc);
+    let (code, out) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(json(&out)["branches"], serde_json::json!([]));
+    let (_, text) = sluice(&f, &["overview"]);
+    assert_eq!(text, "no branch has records here\n");
+    assert_eq!(readers_doc(), Some(doc));
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();
