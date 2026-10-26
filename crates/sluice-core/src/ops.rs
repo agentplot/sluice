@@ -1135,12 +1135,15 @@ mod tests {
         records: RefCell<Snapshot>,
         writes: Cell<usize>,
         next_id: Cell<u64>,
+        /// The policy every revision holds.
+        policy: RefCell<String>,
     }
 
     impl Host {
         fn new() -> Host {
             let h = Host::default();
             h.next_id.set(1);
+            *h.policy.borrow_mut() = "[branches.main]\n".into();
             h
         }
 
@@ -1228,7 +1231,7 @@ mod tests {
         }
 
         fn read_file(&self, _: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
-            Ok((path == POLICY_PATH).then(|| b"[branches.main]\n".to_vec()))
+            Ok((path == POLICY_PATH).then(|| self.policy.borrow().clone().into_bytes()))
         }
 
         fn form(&self, _: &Rev, _: &Rev) -> Result<Formed> {
@@ -1574,5 +1577,18 @@ mod tests {
         let s = h.sluice();
         assert_eq!(s.state(1).unwrap().unwrap().state, State::Withdrawn);
         assert_eq!(s.state(2).unwrap().unwrap().attempt, 2);
+    }
+
+    /// 124: a policy field no sluice yet reads leaves the branch guarded;
+    /// every reading but guarding's refuses it.
+    #[test]
+    fn guarding_passes_over_a_field_it_does_not_know() {
+        let h = Host::new();
+        *h.policy.borrow_mut() = "[branches.main]\nlater = true\n[later]\nx = 1\n".into();
+        let tip = Rev::new("tip");
+        assert!(h.sluice().guarding().protects(BRANCH, &tip).unwrap());
+        assert!(!h.sluice().guarding().protects("unit/x", &tip).unwrap());
+        let e = format!("{:#}", h.sluice().protects(BRANCH, &tip).unwrap_err());
+        assert!(e.contains("later"), "{e}");
     }
 }

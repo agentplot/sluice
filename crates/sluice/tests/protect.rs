@@ -25,8 +25,13 @@ fn sluice() -> &'static str {
 /// branch `unit/a` one commit ahead of it, a worktree on `bolt/x`, and
 /// the hook installed.
 fn protected(name: &str) -> (Repo, PathBuf) {
+    protected_with(name, POLICY)
+}
+
+/// [`protected`], under `policy`.
+fn protected_with(name: &str, policy: &str) -> (Repo, PathBuf) {
     let repo = Repo::new(name);
-    repo.write(".config/sluice.toml", POLICY);
+    repo.write(".config/sluice.toml", policy);
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "policy"]);
     repo.git(&["branch", "bolt/x", "main"]);
@@ -47,6 +52,15 @@ fn sl(repo: &Repo, args: &[&str]) -> Output {
         .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+/// The host's settings, written where every command the test runs, git's
+/// hook among them, reads them; returns their path.
+fn host_settings(repo: &Repo, settings: &str) -> PathBuf {
+    let path = repo.dir().join(".git/no-config/sluice/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, settings).unwrap();
+    path
 }
 
 fn text(out: &Output) -> String {
@@ -403,6 +417,10 @@ fn a_tracked_hooks_directory_is_not_written() {
     assert!(!out.status.success());
     assert!(text(&out).contains("core.hooksPath"), "{}", text(&out));
     assert!(!repo.dir().join(".githooks/reference-transaction").exists());
+    // 124: nor does a command that only re-installs, and it says nothing.
+    let out = sl(&repo, &["status", "main"]);
+    assert!(!text(&out).contains("protection"), "{}", text(&out));
+    assert!(!repo.dir().join(".githooks/reference-transaction").exists());
 }
 
 /// ADR 0024: `sluice protect` names a worktree that has checked out a
@@ -429,10 +447,15 @@ fn protect_names_a_worktree_holding_a_protected_branch() {
 /// Returns the repository, the worktree on `bolt/x`, the copy's revision,
 /// origin's, and the bare repository.
 fn copy_apart(name: &str) -> (Repo, PathBuf, String, String, Scratch) {
+    copy_apart_with(name, "")
+}
+
+/// [`copy_apart`], `bolt/*`'s table given `extra` as well.
+fn copy_apart_with(name: &str, extra: &str) -> (Repo, PathBuf, String, String, Scratch) {
     let repo = Repo::new(name);
     repo.write(
         ".config/sluice.toml",
-        &POLICY.replace("trust = ", "remote = \"origin\"\ntrust = "),
+        &POLICY.replace("trust = ", &format!("remote = \"origin\"\n{extra}trust = ")),
     );
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "policy"]);
@@ -722,4 +745,215 @@ fn a_transaction_the_protection_cannot_read_passes_said_once() {
     for b in ["bolt/p", "bolt/q"] {
         assert_eq!(protected_in(&repo.dir().join(".git"), b), 0);
     }
+}
+
+/// 124: host settings the hook does not know change nothing it guards: a
+/// move is refused and reported once, nothing said of the settings, and a
+/// reset that moves nothing passes saying nothing.
+#[test]
+fn settings_the_hook_does_not_know_change_nothing_it_guards() {
+    let (repo, held) = protected("protect-later-settings");
+    host_settings(&repo, "[runs]\ncores = 12\n\n[later]\nx = 1\n");
+    let tip = repo.rev("bolt/x");
+    let head = repo.rev("unit/a");
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &head]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains("error: bolt/x is protected by sluice; submit the change to sluice instead")
+            && t.contains(&format!(
+                "update-ref refs/heads/bolt/x {head}` would move it"
+            )),
+        "{t}"
+    );
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+
+    let out = git_in(&repo, &held, &["reset", "-q", "--hard"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
+
+/// 124: every other command still reads the host's settings in full, and
+/// refuses a field it does not know, naming the file and the field.
+#[test]
+fn every_other_command_refuses_a_setting_it_does_not_know() {
+    let (repo, _) = protected("protect-strict-settings");
+    let path = host_settings(&repo, "[runs]\nlater = 1\n");
+    let out = sl(&repo, &["status", "bolt/x"]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(3), "{t}");
+    assert!(
+        t.contains(&path.display().to_string()) && t.contains("later"),
+        "{t}"
+    );
+}
+
+/// 124: a policy field and table the hook does not know change nothing it
+/// guards.
+#[test]
+fn a_policy_field_the_hook_does_not_know_changes_nothing_it_guards() {
+    let policy = format!(
+        "{}\n[later]\nx = 1\n",
+        POLICY.replace("trust = ", "later = true\ntrust = ")
+    );
+    let (repo, held) = protected_with("protect-later-policy", &policy);
+    // git refuses to force a checked-out branch itself.
+    repo.git(&["worktree", "remove", "--force", held.to_str().unwrap()]);
+    let tip = repo.rev("bolt/x");
+    let out = repo.git_raw(&["branch", "-f", "bolt/x", "unit/a"]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(t.contains("bolt/x is protected by sluice"), "{t}");
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
+
+/// 124: a branch kept on a remote, under a policy and host settings each
+/// holding a field no sluice yet reads, is still judged as sluice's copy.
+#[test]
+fn a_copy_is_judged_under_fields_the_hook_does_not_know() {
+    let (repo, _held, copy, remote, _bare) =
+        copy_apart_with("protect-later-copy", "later = true\n");
+    host_settings(&repo, "[later]\nx = 1\n");
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &remote]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains("sluice levels this host's bolt/x to each landing itself"),
+        "{t}"
+    );
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), copy);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
+
+/// 124: host settings the hook cannot read at all, and a policy whose
+/// `remote` is of the wrong kind, each pass the transaction with exactly
+/// one warning naming what could not be read, and nothing refused.
+#[test]
+fn settings_or_a_policy_the_hook_cannot_read_pass_said_once() {
+    let unread = |repo: &Repo, names: &[&str]| {
+        let head = repo.rev("unit/a");
+        let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &head]);
+        let t = text(&out);
+        assert!(out.status.success(), "{t}");
+        assert_eq!(repo.rev("bolt/x"), head);
+        let said = "warning: sluice's branch protection let this through unread: ";
+        assert_eq!(t.matches(said).count(), 1, "{t}");
+        let why = &t[t.find(said).unwrap()..];
+        for name in names {
+            assert!(why.contains(name), "{name}: {t}");
+        }
+        assert!(!t.contains("protected by sluice"), "{t}");
+        assert!(protected_events(repo).is_empty());
+    };
+
+    let (repo, _) = protected("protect-unread-settings");
+    let path = host_settings(&repo, "[runs\nnot toml");
+    unread(&repo, &[&path.display().to_string()]);
+
+    let (repo, _) = protected_with(
+        "protect-unread-remote",
+        &POLICY.replace("trust = ", "remote = 1\ntrust = "),
+    );
+    unread(
+        &repo,
+        &["bolt/x's policy at ", "[branches.\"bolt/*\"] remote"],
+    );
+}
+
+/// 124: the next command a newer sluice runs in the repository puts the
+/// hook back for itself, the hook it chains unchanged and nothing said of
+/// it; a hook `sluice protect --remove` took out stays out.
+#[test]
+fn a_newer_sluices_next_command_reinstalls_the_hook() {
+    let repo = Repo::new("protect-reinstall");
+    repo.write(".config/sluice.toml", POLICY);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let hooks = repo.dir().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let theirs = "#!/bin/sh\nexit 0\n";
+    std::fs::write(hooks.join("reference-transaction"), theirs).unwrap();
+    std::fs::set_permissions(
+        hooks.join("reference-transaction"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let older = repo.dir().join(".git/older-sluice");
+    copy_executable(Path::new(sluice()), &older);
+    let out = run_copied(&older, || {
+        support::isolated(&mut Command::new(&older))
+            .current_dir(repo.dir())
+            .arg("protect")
+            .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+            .stdin(Stdio::null())
+            .output()
+    });
+    assert!(out.status.success(), "{}", text(&out));
+    let hook = hooks.join("reference-transaction");
+    let chained = hooks.join("reference-transaction.pre-sluice");
+    let older = std::fs::canonicalize(&older).unwrap().display().to_string();
+    let ours = std::fs::canonicalize(sluice())
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(std::fs::read_to_string(&hook).unwrap().contains(&older));
+
+    let out = sl(&repo, &["status", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains("protection"), "{}", text(&out));
+    let now = std::fs::read_to_string(&hook).unwrap();
+    assert!(now.contains(&ours) && !now.contains(&older), "{now}");
+    assert_eq!(std::fs::read_to_string(&chained).unwrap(), theirs);
+
+    let out = sl(&repo, &["protect", "--remove"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = sl(&repo, &["status", "bolt/x"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), theirs);
+    assert!(!chained.exists());
+}
+
+/// 1, 124: the hook runs the sluice that installed it, by its path: a
+/// program called `sluice` first on the caller's `PATH`, which lets
+/// everything through, judges nothing.
+#[test]
+fn a_sluice_on_the_callers_path_is_not_the_one_that_judges() {
+    let (repo, _) = protected("protect-path");
+    let bin = repo.dir().join(".git/other-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("sluice"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        bin.join("sluice"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let tip = repo.rev("bolt/x");
+    let head = repo.rev("unit/a");
+    let out = support::git_command()
+        .current_dir(repo.dir())
+        .args(["update-ref", "refs/heads/bolt/x", &head])
+        .env("PATH", path)
+        .env("XDG_CONFIG_HOME", repo.dir().join(".git/no-config"))
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(t.contains("bolt/x is protected by sluice"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
 }

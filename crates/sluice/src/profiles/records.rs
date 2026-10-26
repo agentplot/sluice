@@ -60,6 +60,9 @@ pub struct Records {
     routes: RefCell<BTreeMap<String, Option<String>>>,
     /// The branches whose state is on a remote, once listed.
     listed: RefCell<Option<Vec<String>>>,
+    /// 124: whether it is bound for branch protection, which verifies and
+    /// signs no run.
+    guarding: bool,
 }
 
 impl Records {
@@ -73,6 +76,18 @@ impl Records {
             remotes: RefCell::default(),
             routes: RefCell::default(),
             listed: RefCell::default(),
+            guarding: false,
+        }
+    }
+
+    /// The same binding, for branch protection: each policy is read only
+    /// as far as guarding needs, and a remote's profile is given no signer's
+    /// key and no signing, since the hook verifies and signs no run (124).
+    pub fn guarding(self) -> Self {
+        Records {
+            branches: self.branches.guarding(),
+            guarding: true,
+            ..self
         }
     }
 
@@ -138,7 +153,7 @@ impl Records {
             return Ok(r.clone());
         }
         let mut signers = BTreeMap::new();
-        for (name, s) in &policy.signers {
+        for (name, s) in policy.signers.iter().filter(|_| !self.guarding) {
             let key = match (&s.identity.0[..], &s.identity.1) {
                 ("ssh", Setting::Text(v)) => {
                     let text = if v.split_whitespace().count() >= 2 {
@@ -157,7 +172,7 @@ impl Records {
             };
             signers.insert(name.clone(), key);
         }
-        let signing = match &self.signing {
+        let signing = match self.signing.as_ref().filter(|_| !self.guarding) {
             Some(s) => Some(Signing {
                 signer: s.signer.clone(),
                 key: ssh::private_key(&s.key)?,

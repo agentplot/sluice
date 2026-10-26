@@ -64,6 +64,59 @@ fn a_reserve_that_leaves_no_run_is_refused() {
     assert!(e.contains("[runs] reserved"), "{e}");
 }
 
+/// 124: branch protection reads only `[forge]` of the host's settings,
+/// passing over a table, a field and a field of `[forge]` no sluice yet
+/// reads, each of which every other command refuses.
+#[test]
+fn guarding_reads_only_the_forge() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new("instance-guarding");
+    let key = dir.path().join("app.pem");
+    std::fs::write(&key, "key").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[runs]\ncores = 12\n\n[later]\nx = 1\n\n[forge]\napp_id = 42\nkey = {:?}\nlater = 1\n",
+            key.display().to_string()
+        ),
+    )
+    .unwrap();
+    let i = Instance::guarding_from(Some(&path)).unwrap();
+    assert_eq!(
+        i.forge,
+        Some(sluice::instance::Forge {
+            app_id: 42,
+            key: key.clone()
+        })
+    );
+    assert_eq!((i.signing, i.bound), (None, 1));
+    let e = format!("{:#}", Instance::from_file(Some(&path), 16).unwrap_err());
+    assert!(e.contains(&path.display().to_string()), "{e}");
+
+    // A forge guarding cannot read is an error naming the file.
+    std::fs::write(&path, "[forge]\napp_id = \"42\"\nkey = \"k\"\n").unwrap();
+    let e = format!("{:#}", Instance::guarding_from(Some(&path)).unwrap_err());
+    assert!(e.contains(&path.display().to_string()), "{e}");
+    std::fs::write(&path, "[forge]\nkey = \"k\"\n").unwrap();
+    assert!(Instance::guarding_from(Some(&path)).is_err());
+
+    // Settings that are not TOML are read by neither.
+    std::fs::write(&path, "[runs\nnot toml").unwrap();
+    let e = format!("{:#}", Instance::guarding_from(Some(&path)).unwrap_err());
+    assert!(e.contains(&path.display().to_string()), "{e}");
+    assert!(Instance::from_file(Some(&path), 16).is_err());
+
+    // No file, no forge.
+    assert_eq!(
+        Instance::guarding_from(Some(&dir.path().join("none.toml")))
+            .unwrap()
+            .forge,
+        None
+    );
+}
+
 #[cfg(feature = "tools")]
 mod bound {
     use super::support;
