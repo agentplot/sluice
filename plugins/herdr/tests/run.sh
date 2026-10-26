@@ -570,6 +570,19 @@ cmp -s "${f%.json}.paths" "$t/before.paths" || fail "a document it cannot read c
 grep -q 'cannot read' "$t/err" || fail "nothing logged: $(cat "$t/err")"
 pass
 
+fresh 'watch: what a held place failed is kept to its last line'
+feed "$(doc '.branches[0].held_checkouts = [{place: "sluice/try/main/48", failed: "preview: stopping\nusage: scripts/preview up\n\n",
+      tries: 4, at: "2026-10-16T19:40:00Z", stopped: true}, {place: 7}, "x"]
+  | .branches += [{branch: "release", depth: 0}]
+  | .sessions = [{worktree: $work, branch: "main", release_failed: {failed: "one\ntwo\n", tries: 1, stopped: true}}]
+  | .previews = [{name: "docs", branch: "main", release_failed: {failed: "a\nb", tries: 3, stopped: true}}]')"
+f=$(ls "$S"/docs/*.json)
+out=$(jq -c '[.branches[] | .held_checkouts | map(.failed)]' "$f")
+[ "$out" = '[["usage: scripts/preview up"],[]]' ] || fail "the branches' held checkouts read as $out"
+[ "$(jq -r '.sessions[0].release_failed.failed' "$f")" = two ] || fail "a worktree's failure read as $(jq -c .sessions "$f")"
+[ "$(jq -r '.previews[0].release_failed.failed' "$f")" = b ] || fail "a preview's failure read as $(jq -c .previews "$f")"
+pass
+
 fresh 'watch: source exits'
 doc >"$FAKE/overview-work.json"
 doc >"$FAKE/watch-work.jsonl"
@@ -1016,6 +1029,87 @@ first=$(printf '%s\n' "$out" | grep -E -m1 '^(hotfix|main)( at | · )')
 [ "$first" = 'hotfix · no records' ] || fail "the first branch line is '$first': $out"
 pass
 
+# main's checkout sluice/try/main/48, held after four failed releases;
+# a worktree of main held after its one; the rows they draw.
+held48='.branches[0].held_checkouts = [{place: "sluice/try/main/48", failed: "the release command ended exit status: 2\nusage: scripts/preview up",
+    tries: 4, at: "2026-10-16T19:40:00Z", stopped: true}]'
+held_unit_a='.sessions += [{worktree: "/work/sluice/unit-a", branch: "main", ports: {},
+    release_failed: {failed: "a\nrm: cannot remove .stack", tries: 1, at: "2026-10-16T19:41:00Z", stopped: true}}]'
+rows48='  RELEASE FAILED
+    ✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up
+        sluice release sluice/try/main/48 · --accept-failure frees it without'
+# The rows under main's heading, $1 of them, in the popup of the documents fed.
+under_main() {
+  frame_of "$work" --once | sed -n '/^main at /,$p' | sed -n "2,$(($1 + 1))p"
+}
+
+fresh 'status: a held checkout'
+feed "$(doc "$held48 | .branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' queued)]")"
+out=$(under_main 4)
+[ "$out" = "$rows48
+  QUEUED" ] || fail "under main the popup shows: $out"
+pass
+
+fresh 'status: a held worktree'
+feed "$(doc "$held_unit_a")"
+out=$(under_main 3)
+[ "$out" = '  RELEASE FAILED
+    ✗ worktree unit-a held · failed once · rm: cannot remove .stack
+        sluice release --worktree /work/sluice/unit-a · --accept-failure frees it without' ] ||
+  fail "under main the popup shows: $out"
+pass
+
+fresh "status: another host's held checkout"
+feed "$(doc "$held48 | .host = \"vega\" | .branches[0].held_checkouts += [.branches[0].held_checkouts[0]
+  | .place = \"sluice/try/main/50\" | .host = \"vega\"] | .branches[0].held_checkouts[0].host = \"deneb\"")"
+out=$(under_main 5)
+[ "$out" = '  RELEASE FAILED
+    ✗ sluice/try/main/48 held on deneb · failed 4 times · usage: scripts/preview up
+        on deneb: sluice release sluice/try/main/48 · --accept-failure frees it without
+    ✗ sluice/try/main/50 held · failed 4 times · usage: scripts/preview up
+        sluice release sluice/try/main/50 · --accept-failure frees it without' ] ||
+  fail "under main the popup shows: $out"
+pass
+
+fresh 'status: an idle branch with a held place'
+feed "$(doc "$held48 | $release_idle")"
+out=$(frame_of "$work" --once)
+[ "$(under_main 3)" = "$rows48" ] || fail "main is not shown with its held checkout: $out"
+printf '%s' "$out" | grep -q '^1 other branch with nothing queued$' || fail "release is not counted as idle: $out"
+printf '%s' "$out" | grep -q 'No branch has a queue' && fail "it says no branch has a queue: $out"
+pass
+
+fresh 'status: a checkout still being tried'
+feed "$(doc "$held48 | .branches[0].held_checkouts[0] |= (.stopped = false | .tries = 1)
+  | .branches[0].depth = 1 | .branches[0].submissions = [$(sub 95 '$work' queued)]")"
+out=$(frame_of "$work" --once)
+printf '%s' "$out" | grep -q 'RELEASE FAILED\|sluice/try/main/48' && fail "a checkout still tried is shown: $out"
+pass
+
+fresh 'status: a document from before held places'
+feed "$(doc '.branches[0].depth = 1 | .branches[0].submissions = [{id: 95, state: "queued", from: {agent: "claude", worktree: "w"}}]')"
+frame_of "$work" --once >"$t/old"
+feed "$(doc '.branches[0].depth = 1 | .branches[0].submissions = [{id: 95, state: "queued", from: {agent: "claude", worktree: "w"}}]
+  | .branches[0].held_checkouts = [] | .sessions = [{worktree: "/w/x", branch: "main", ports: {}}]')"
+frame_of "$work" --once >"$t/new"
+grep -q 'RELEASE FAILED' "$t/old" && fail "an older document shows RELEASE FAILED: $(cat "$t/old")"
+sed '/worktree held/d; /worktrees held/d' "$t/old" >"$t/old.rows"
+sed '/worktree held/d; /worktrees held/d' "$t/new" >"$t/new.rows"
+cmp -s "$t/old.rows" "$t/new.rows" || fail "an older document draws otherwise: $(diff "$t/old.rows" "$t/new.rows")"
+pass
+
+fresh 'status: the segment counts held places'
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+band='sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa'
+feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $held48")"
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+[ "$out" = "$band · 1 held: release failed" ] || fail "beside a queue the segment printed: $out"
+# The same host's document, in place of the board's.
+feed "$(doc "$held48 | $held_unit_a | .host = \"host-a\"")"
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+[ "$out" = 'sluice main · 0 submissions · 2 held: release failed' ] || fail "with nothing queued the segment printed: $out"
+pass
+
 fresh 'status: setup shows, never edits'
 before=$(find "$HERDR_PLUGIN_CONFIG_DIR" "$scratch/home" -type f | sort)
 # A state directory outside the home directory is named whole.
@@ -1453,6 +1547,27 @@ feed "$(doc)"
 tokens
 has 'workspace report-metadata w1 --source agentplot.sluice'
 has '--clear-token sluice_q'
+pass
+
+fresh 'sidebar: queued and held'
+feed "$(doc ".branches[0].depth = 3 | .branches += [.branches[0] | .branch = \"release\" | .depth = 1] | $held48")"
+tokens
+has '--token sluice_q=4 submissions · 1 held: release failed'
+pass
+
+fresh 'sidebar: held alone'
+feed "$(doc "$held_unit_a")"
+tokens
+has '--token sluice_q=1 held: release failed'
+pass
+
+fresh 'sidebar: a checkout two hosts list is counted once'
+for h in deneb vega; do
+  feed "$(doc "$held48 | .host = \"$h\" | .branches[0].held_checkouts[0].host = \"deneb\"")"
+done
+[ "$(find "$S/docs" -name '*.json' | wc -l)" -eq 2 ] || fail "not two documents: $(ls "$S/docs")"
+tokens
+has '--token sluice_q=1 held: release failed'
 pass
 
 fresh 'sidebar: tokens fade without the watcher'

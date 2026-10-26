@@ -8,10 +8,10 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use sluice::instance::Instance;
+use sluice::instance::{HostCache, Instance};
 use sluice::profiles::checks::Checks;
 use sluice_seams::{
     Limits, Network, Outcome, Place, Progress, Rev, RunHandle, RunReport, RunRequest, Setting,
@@ -66,8 +66,19 @@ fn change(repo: &Repo, changes: &[(&str, &str)]) -> String {
 }
 
 fn checks(repo: &Repo) -> Checks {
+    caching(repo, Vec::new())
+}
+
+/// The check profile of `repo` on a host that declares `caches`.
+fn caching(repo: &Repo, caches: Vec<HostCache>) -> Checks {
+    checks_in(&repo.dir().join(".git"), caches)
+}
+
+/// The check profile of the repository whose common directory is
+/// `common`, on a host that declares `caches`.
+fn checks_in(common: &Path, caches: Vec<HostCache>) -> Checks {
     Checks::new(
-        &repo.dir().join(".git"),
+        common,
         PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
         Instance {
             bound: 2,
@@ -77,9 +88,10 @@ fn checks(repo: &Repo) -> Checks {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches,
         },
     )
-    .with_running(repo.dir().join(".git/host-running"))
+    .with_running(common.join("host-running"))
 }
 
 fn moon() -> Settings {
@@ -761,6 +773,122 @@ fn a_sandboxed_run_reads_as_an_open_one() {
     assert!(tasks(&second).iter().all(|t| t.2), "{:?}", tasks(&second));
 }
 
+/// A workspace whose `app:bench`, tagged `bench`, and `app:test`, tagged
+/// `check-fast`, each keep their environment in the run's scratch
+/// directory and try to write in `cache`; and a host that declares
+/// `cache` with one variable.
+fn cold_workspace(name: &str) -> (Repo, support::Scratch, Checks) {
+    let repo = Repo::new(name);
+    let host = support::Scratch::new(&format!("{name}-host"));
+    let cache = host.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    repo.write(
+        ".moon/workspace.yml",
+        "projects:\n  app: 'app'\nvcs:\n  client: 'git'\n  defaultBranch: 'main'\ntelemetry: false\n",
+    );
+    repo.write(
+        "app/moon.yml",
+        "tasks:\n  bench:\n    command: 'sh probe.sh bench'\n    tags: [bench]\n\
+         \x20 test:\n    command: 'sh probe.sh test'\n    tags: [check-fast]\n",
+    );
+    repo.write(
+        "app/probe.sh",
+        &format!(
+            "env > \"$SLUICE_TMP/$1.env\"\ntouch {}/$1 2>/dev/null\nexit 0\n",
+            cache.display()
+        ),
+    );
+    repo.write(".gitignore", ".moon/cache/\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "workspace"]);
+    let c = caching(
+        &repo,
+        vec![HostCache {
+            dir: cache,
+            socket: None,
+            env: [("SCCACHE_DIR".to_string(), "/caches/sccache".to_string())].into(),
+        }],
+    );
+    (repo, host, c)
+}
+
+/// Whether each of `names`, tasks of run `req`, was given the host's
+/// variable, and whether it wrote in the host's cache.
+fn cold_probe(
+    c: &Checks,
+    req: &RunRequest,
+    host: &support::Scratch,
+    names: &[&str],
+) -> Vec<(bool, bool)> {
+    let r = finish(c, req);
+    assert!(
+        r.tasks.iter().all(|t| t.outcome == Outcome::Pass),
+        "{:?}",
+        tasks(&r)
+    );
+    names
+        .iter()
+        .map(|task| {
+            let env = std::fs::read_to_string(req.place.tmp.join(format!("{task}.env"))).unwrap();
+            let written = host.path().join("cache").join(task);
+            let wrote = written.exists();
+            let _ = std::fs::remove_file(&written);
+            (
+                env.lines().any(|l| l == "SCCACHE_DIR=/caches/sccache"),
+                wrote,
+            )
+        })
+        .collect()
+}
+
+/// The moon runs of `cold_workspace` under `[tests] cold = ["#bench"]`.
+fn cold_request(repo: &Repo, name: &str, required: &[&str]) -> RunRequest {
+    let mut req = request(repo, name, required, None);
+    req.tests
+        .insert("cold".into(), Setting::List(vec!["#bench".into()]));
+    req.replay = false;
+    req
+}
+
+/// 35: a run holding a task `[tests] cold` names by its tag is given
+/// none of the host's declared variables; a run holding none of them is
+/// given every one.
+#[test]
+fn a_cold_test_gets_no_cache() {
+    let (repo, host, c) = cold_workspace("moon-cold");
+    let both = cold_request(&repo, "p1", &["#bench", "#check-fast"]);
+    let cold = cold_probe(&c, &both, &host, &["bench", "test"]);
+    assert!(
+        cold.iter().all(|(env, _)| !env),
+        "every test of a cold run is run cold: {cold:?}"
+    );
+    let fast = cold_request(&repo, "p2", &["#check-fast"]);
+    let warm = cold_probe(&c, &fast, &host, &["test"]);
+    assert!(warm[0].0, "a run with no cold test got no cache");
+}
+
+/// 35: under the sandbox, a run holding a cold task cannot write the
+/// host's declared cache directory; a run holding none of them can.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_cold_test_gets_no_cache_in_the_sandbox() {
+    let (repo, host, c) = cold_workspace("moon-cold-sandbox");
+    let sandboxed = |name: &str, required: &[&str]| {
+        let mut req = cold_request(&repo, name, required);
+        req.limits = Limits {
+            executor: Some("sandbox".into()),
+            network: Some(Network::Denied),
+            memory: None,
+            docker: false,
+        };
+        req
+    };
+    let cold = cold_probe(&c, &sandboxed("p1", &["#bench"]), &host, &["bench"]);
+    assert_eq!(cold, [(false, false)]);
+    let warm = cold_probe(&c, &sandboxed("p2", &["#check-fast"]), &host, &["test"]);
+    assert_eq!(warm, [(true, true)]);
+}
+
 /// Design D9 of the change `peers` (C.6): a task's key is the sha256 of
 /// its hash manifest, kept in moon's blob store under the key, and every
 /// input the manifest names carries the sha256 of the file's content.
@@ -921,4 +1049,170 @@ fn asking_moon_leaves_the_worktree_clean() {
         .map(|d| d.map(|e| e.unwrap().file_name()).collect())
         .unwrap_or_default();
     assert!(left.is_empty(), "{left:?}");
+}
+
+/// Design D8 on the fleet's layout: a bare `<repo>.git` with its worktree
+/// beside it. moon itself, with its shared worktree setting on and a
+/// home of the test's own, keeps the task's manifest in `cache/shared`
+/// under that home and not in the worktree, which is where `store` finds
+/// it, and the key is proven reading it there.
+#[test]
+fn a_key_run_in_a_bare_repositorys_worktree_is_proven() {
+    use sluice::profiles::moon::{blob_in, check_key, file_at, store};
+
+    let src = workspace("moon-bare-src");
+    let scratch = support::Scratch::new("moon-bare");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+
+    // Everything moon is given, on its process alone: no `MOON_*` of the
+    // test's own, nor its home. The path, `HOME` and `PROTO_HOME` are kept,
+    // as a run keeps them, so proto's shim finds the moon installed.
+    let mut env: std::collections::BTreeMap<String, String> = ["PATH", "HOME", "PROTO_HOME"]
+        .into_iter()
+        .filter_map(|k| Some((k.to_string(), std::env::var(k).ok()?)))
+        .collect();
+    env.extend(
+        [
+            ("MOON_HOME", home.display().to_string()),
+            ("MOON_CACHE_SHARED_WORKTREE_CACHE", "true".into()),
+            ("MOON_EXPERIMENT_CAS_OUTPUTS_CACHE", "true".into()),
+        ]
+        .map(|(k, v)| (k.to_string(), v)),
+    );
+    let out = support::isolated(std::process::Command::new("moon").env_clear())
+        .current_dir(&worktree)
+        .envs(&env)
+        .args(["exec", "alpha:test", "--ci"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "moon: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(worktree.join(".moon/cache/runReport.json")).unwrap(),
+    )
+    .unwrap();
+    let key = report["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["node"]["params"]["target"] == "alpha:test")
+        .flat_map(|a| a["operations"].as_array().unwrap())
+        .find(|o| o["meta"]["type"] == "hash-generation")
+        .and_then(|o| o["meta"]["hash"].as_str())
+        .expect("the task's key in the run report")
+        .to_string();
+
+    let at = store(&worktree, &env);
+    assert_eq!(at, home.join("cache/shared"));
+    let manifest = |root: &std::path::Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    assert!(manifest(&at).is_file(), "the manifest under moon's home");
+    assert!(
+        !manifest(&worktree.join(".moon/cache")).exists(),
+        "no manifest in the worktree"
+    );
+    check_key(&key, "alpha:test", &|k| blob_in(&at, k), &|p| {
+        file_at(&worktree, "HEAD", p)
+    })
+    .unwrap();
+
+    // moon fetched nothing into its fresh home. Beside its cache it keeps
+    // its id, an empty `temp`, and the system toolchain's plugin, which
+    // moon carries in its own binary and writes out (moon 2.6.1,
+    // `crates/config-loader/src/toolchains_config_ext.rs`).
+    fn files(dir: &std::path::Path, under: &str, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            let name = format!("{under}{}", e.file_name().to_string_lossy());
+            if e.file_type().unwrap().is_dir() {
+                if name != "cache" {
+                    files(&e.path(), &format!("{name}/"), out);
+                }
+            } else {
+                out.push(name);
+            }
+        }
+    }
+    let mut held = Vec::new();
+    files(&home, "", &mut held);
+    held.sort();
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(held[0], "id", "{held:?}");
+    assert!(
+        held[1].starts_with("plugins/toolchains/system-") && held[1].ends_with(".wasm"),
+        "{held:?}"
+    );
+}
+
+/// Design D8 (C.2 moon, 35): moon's home is read as the run's command
+/// starts in it, the toolchain sourced. On the fleet's layout, a toolchain
+/// that sets `MOON_HOME` and moon's shared worktree setting, as sluice's
+/// own devenv sets its home, has moon keep the run's manifests under that
+/// home, whatever home sluice's own process has; and the run's keys are
+/// proven reading them there.
+#[test]
+fn a_key_is_read_under_the_home_the_toolchain_gives_moon() {
+    let src = workspace("moon-toolchain-home-src");
+    let scratch = support::Scratch::new("moon-toolchain-home");
+    let bare = scratch.path().join("repo.git");
+    let worktree = scratch.path().join("main");
+    let home = scratch.path().join("moon-home");
+    src.git(&["clone", "-q", "--bare", ".", bare.to_str().unwrap()]);
+    src.git(&[
+        "--git-dir",
+        bare.to_str().unwrap(),
+        "worktree",
+        "add",
+        "-q",
+        worktree.to_str().unwrap(),
+        "main",
+    ]);
+    let mut req = request(&src, "p1", &["alpha:test"], None);
+    req.place.path = worktree.clone();
+    req.tests.insert(
+        "toolchain".into(),
+        Setting::List(vec![
+            "echo".into(),
+            format!(
+                "export MOON_HOME='{}' MOON_CACHE_SHARED_WORKTREE_CACHE=true \
+                 MOON_EXPERIMENT_CAS_OUTPUTS_CACHE=true",
+                home.display()
+            ),
+        ]),
+    );
+    let c = checks_in(&bare, Vec::new());
+    let (run, report) = finish_run(&c, &req);
+    assert_eq!(
+        tasks(&report),
+        [("alpha:test".into(), Outcome::Pass, false)]
+    );
+
+    let key = &report.tasks[0].hash;
+    let manifest = |root: &Path| root.join("blobs").join(&key[..2]).join(&key[2..]);
+    assert!(
+        manifest(&home.join("cache/shared")).is_file(),
+        "the manifest under the toolchain's home"
+    );
+    assert!(
+        !manifest(&worktree.join(".moon/cache")).exists(),
+        "no manifest in the worktree"
+    );
+    assert_eq!(c.proven(&run, &report).unwrap(), ["alpha:test"]);
 }

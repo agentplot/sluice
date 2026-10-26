@@ -202,7 +202,6 @@ struct Inner {
     session_releases: Vec<(String, Option<String>)>,
     /// The next release of a candidate's place fails, its place kept.
     fail_release: bool,
-    saved: Vec<String>,
     /// Previews made and not yet released, by name.
     previews: BTreeMap<String, PreviewPlace>,
     /// Each preview released, and whether it was kept as failed.
@@ -1068,12 +1067,6 @@ impl World {
         self.0.borrow_mut().stored_none.insert(name.into());
     }
 
-    /// The released places whose candidate passed, so whose caches were
-    /// saved (35).
-    pub fn saved_places(&self) -> Vec<String> {
-        self.0.borrow().saved.clone()
-    }
-
     // -- the driver --------------------------------------------------------
 
     /// A session's place holding `head`.
@@ -1648,13 +1641,13 @@ impl Tests for FakeTests {
 
 impl FakeCheckout {
     /// A place's removal, with everything started in it ended.
-    fn drop_place(&self, name: &str, passed: bool) {
-        self.drop_place_as(name, passed, false);
+    fn drop_place(&self, name: &str) {
+        self.drop_place_as(name, false);
     }
 
     /// A place's removal, released or, when `freed`, freed with nothing
     /// run.
-    fn drop_place_as(&self, name: &str, passed: bool, freed: bool) {
+    fn drop_place_as(&self, name: &str, freed: bool) {
         let mut inner = self.0 .0.borrow_mut();
         inner.adopted.retain(|a| a != name);
         inner.adopted_for.remove(name);
@@ -1667,9 +1660,6 @@ impl FakeCheckout {
                 inner.freed.push(name.into());
             } else {
                 inner.released.push(name.into());
-            }
-            if passed {
-                inner.saved.push(name.into());
             }
             // 34: everything started in it is ended.
             for r in inner.runs.iter_mut() {
@@ -1816,7 +1806,7 @@ impl Checkout for FakeCheckout {
             inner.session_release_failed.insert(name.into(), failure);
             return Err(e);
         }
-        self.drop_place(name, false);
+        self.drop_place(name);
         let release = policy.and_then(|p| match p.tests.get("release") {
             Some(sluice_seams::Setting::Text(t)) => Some(t.clone()),
             _ => None,
@@ -1885,15 +1875,6 @@ impl Checkout for FakeCheckout {
             .collect())
     }
 
-    fn save_caches(&self, name: &str, _: &Rev, _: &Settings) -> Result<()> {
-        let mut inner = self.0 .0.borrow_mut();
-        if !inner.adopted.iter().any(|a| a == name) {
-            bail!("no session's place {name}");
-        }
-        inner.saved.push(name.into());
-        Ok(())
-    }
-
     fn made(&self) -> Result<Vec<String>> {
         let inner = self.0 .0.borrow();
         Ok(inner
@@ -1904,7 +1885,7 @@ impl Checkout for FakeCheckout {
             .collect())
     }
 
-    fn release(&self, name: &str, passed: bool) -> Result<()> {
+    fn release(&self, name: &str) -> Result<()> {
         // Rule core.16: the core releases only places it made, never a
         // session's; a session's place goes only through `release_session`.
         assert!(
@@ -1917,7 +1898,7 @@ impl Checkout for FakeCheckout {
         if std::mem::take(&mut self.0 .0.borrow_mut().fail_release) {
             bail!("the release command of {name} failed");
         }
-        self.drop_place(name, passed);
+        self.drop_place(name);
         Ok(())
     }
 
@@ -1936,7 +1917,7 @@ impl Checkout for FakeCheckout {
 
     fn free(&self, name: &str) -> Result<()> {
         // Rule core.16: the worktree of a session's place is left as it is.
-        self.drop_place_as(name, false, true);
+        self.drop_place_as(name, true);
         let mut inner = self.0 .0.borrow_mut();
         inner.previews.remove(name);
         inner.stored_none.remove(name);
@@ -2054,7 +2035,7 @@ impl Checkout for FakeCheckout {
             }
             return Err(e);
         }
-        self.drop_place(name, false);
+        self.drop_place(name);
         let mut inner = self.0 .0.borrow_mut();
         inner.preview_releases.push((name.into(), failed.is_some()));
         match failed {

@@ -35,10 +35,6 @@ submission, so a submission cannot loosen the rules it is tested under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 network = "localhost"
@@ -83,13 +79,12 @@ every agent's worktree: `git worktree add --detach` at the combination,
 tests: no git or worktrunk hooks. Whatever a test needs before it runs goes
 in the toolchain or in a moon task the test depends on.
 
-**`[[checkout.cache]]`**: what a new checkout may start with, the way a CI
-job restores `actions/cache`. `key` names the files whose content keys the
-cache; `paths` the ignored paths it holds. A checkout starts with the cache
-of its combination's key, or else the one saved last; a checkout whose
-combination passed saves its `paths` under its key. sluice's own caches
-`target` keyed by `Cargo.lock` and `.prototools`: a test build that takes
-two and a half minutes cold takes under a second warm. A cache only spares
+A checkout starts from its revision alone and saves nothing when it is
+released. A warm build comes from the caches the host keeps for every build
+on it, a compile server's or moon's shared worktree cache, which the host's
+config declares as `[[caches]]` in `~/.config/sluice/config.toml`: every run
+on the host gets their variables, and the sandbox opens their directories
+and sockets. The repository's policy declares no cache. A cache only spares
 work: it never decides a result.
 
 **`ports`**: the ports a checkout's tests use, by name, e.g. `["ministack",
@@ -317,7 +312,6 @@ with plain tools whether or not sluice is running:
   log.jsonl            every submission, test run, result, blame and landing, in order
 .git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-.git/sluice/.caches/   the [[checkout.cache]] entries, the last two keys of each
 .git/sluice/results.jsonl
                        every test result of the repository, with its executor
 ```

@@ -14,10 +14,6 @@ submission cannot loosen the rules it is tested under.
 runner = "moon"
 toolchain = ["devenv", "print-dev-env"]
 
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 network = "localhost"
@@ -52,6 +48,7 @@ trust = ["confined", "sandbox"]
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
 | `ready` | a command | Shows that the host can run the tests, e.g. `["docker", "info"]` for tests that need a container engine. It runs in the checkout under the same executor, toolchain and environment as the tests, within 60 seconds. When it fails before a run, the run is refused and nothing is recorded. When it fails after a run in which a test did not pass, those tests could not run: they have no result, and the combination is tested again. A list, the command first, or a string run by `sh -c`. |
 | `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result, as with `ready`. Unset, every exit but `0` is a fail. |
+| `cold` | a list of tests | Tests that run with none of the host's [caches](#caches), e.g. `["#bench"]` for timings a warm cache would skew. Each is named as `required` names it: a moon target or a `#tag`, or the command with `runner = "command"`. A run that holds one gets no cache directory, no cache socket and none of the caches' variables, and its other tests lose only speed. |
 
 Nothing in `[tests]` chooses what runs on a branch. With
 `runner = "command"`, its command runs on every gated branch; with
@@ -113,33 +110,25 @@ There is one way to make a checkout, so no key names it. An older
 `method = "git-worktree"` is still read; any other `method` is refused
 with the reason ([ADR 0013](/sluice/decisions/0013/)).
 
+A checkout holds its combination and nothing restored from another
+checkout, and saves nothing when it is released. What its tests build is
+shared through the host's [`[[caches]]`](#caches), which every run on
+the host is given. A cache table an older revision's `[checkout]` still
+declares is read as nothing, so a branch whose policy holds one is
+tested and lands as before. The caches an earlier sluice saved in `.git/sluice/.caches/`
+are removed when the next checkout is made.
+
 | key | values | meaning |
 |---|---|---|
 | `ports` | e.g. `["web", "db"]` | A port for each name, held for the checkout on this host and checked free, given to the tests as `SLUICE_PORT_WEB`, `SLUICE_PORT_DB` ([ADR 0016](/sluice/decisions/0016/)). An agent's worktree gets its ports on its first `sluice exec` and keeps them until `sluice release`. A preview gets a name for each as well, `SLUICE_NAME_WEB`. |
 | `ports_from` | a port, default `20000` | Where the blocks of ports begin. |
-
-### `[[checkout.cache]]`
-
-What a new checkout may start with, the way a CI job restores a cache.
-
-| key | meaning |
-|---|---|
-| `key` | The files whose content keys the cache. |
-| `paths` | The ignored paths it holds. |
-
-A checkout starts with the cache of its combination's key, or else the
-one saved last; a checkout whose combination passed saves its `paths`
-under its key. sluice's own repository caches `target` keyed by
-`Cargo.lock` and `.prototools`: a test build that takes two and a half
-minutes cold takes under a second warm. A cache only spares work: it
-never decides a result.
 
 ## `[executor]`: what the tests may touch
 
 | key | values | meaning |
 |---|---|---|
 | `kind` | `"open"` | The tests run as a process group, with nothing held back. |
-| | `"sandbox"` | The tests may write only their checkout and scratch directory (macOS: Seatbelt; Linux: not built yet). |
+| | `"sandbox"` | The tests may write only their checkout, their scratch directory and the host's declared [cache directories](#caches), and may reach the host's declared cache sockets whatever `network` says (macOS: Seatbelt; Linux: not built yet). |
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
@@ -591,6 +580,69 @@ sets either is refused.
 | `alive` | How often this host rewrites its sign of life. A claim on a run lapses once its host's sign of life has stood unchanged this long, and another host runs it. It must be shorter than `lease`. The default is `"2m"`. |
 | `name` | What this host is called among the hosts that share a remote: in a branch's state as its lead, and on the runs it claims. The default is the host's own name; give two instances on one machine a name each. |
 
+### `[[caches]]`
+
+The caches the host keeps for every build on it: a compile server's
+cache, or the task runner's cache shared by every worktree. Every run
+sluice starts on the host is given them, under any executor: a
+submission's run, an agent's `sluice exec` and a preview's command
+alike. An agent's shell and a run on the host then reach the same
+caches.
+
+```toml
+[[caches]]                       # a compile server's cache
+dir = "~/.cache/sccache"
+socket = "~/.cache/sccache/server.sock"
+env = { RUSTC_WRAPPER = "sccache", SCCACHE_DIR = "/Users/me/.cache/sccache", SCCACHE_SERVER_UDS = "/Users/me/.cache/sccache/server.sock" }
+
+[[caches]]                       # moon's shared worktree cache
+dir = "~/.moon/cache/shared"
+env = { MOON_CACHE_SHARED_WORKTREE_CACHE = "true", MOON_EXPERIMENT_CAS_OUTPUTS_CACHE = "true" }
+```
+
+| key | meaning |
+|---|---|
+| `dir` | The directory the cache keeps, outside every checkout: an absolute path, or one under `~/`. A sandboxed run may write it. |
+| `socket` | The socket of the cache's server, where it has one, written the same way. A sandboxed run may connect to it whatever the policy's `network` says. |
+| `env` | The variables the cache's clients read, each a string. Every run gets them exactly as written: sluice expands nothing in them, so write the same values into the agents' shells. |
+
+A repository's policy declares no cache. The caches are the host's, and
+every repository on the host shares them. A run that holds a test the
+policy marks [`cold`](#tests-how-tests-run) gets none of them.
+
+sluice starts, ends and locks nothing of a cache, and names no cache's
+tool. You run a cache's server, as you run the container engine. When
+the server is down, a run goes on without it, and what the run's tools
+do then is theirs.
+
+sluice refuses to start when a cache has no `dir`, a key it does not
+know, a `dir` or `socket` that is neither absolute nor under `~/`, or an
+`env` value that is not a string. It names the cache by its place among
+the `[[caches]]`, and the key. It refuses a variable it sets for every
+run itself: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
+`LANG`, `TERM`, `PROTO_HOME`, `MOON_HOME`, `LC_*` and `SLUICE_*`. It
+refuses one variable set by two caches.
+
+A shared cache lies outside every checkout, so one checkout never
+writes another's. sluice refuses a run whose checkout is a cache's
+`dir`, lies inside one or holds one, before anything of the run starts.
+
+Share moon's cache through moon's own shared worktree setting, as
+above. moon then shares what it built among every worktree on the host,
+and keeps each worktree's run report and task states in the worktree,
+where sluice reads them. Where it keeps what it shares is moon's to
+say: in the base checkout's `.moon/cache` when the repository has a
+base checkout holding `.moon`, otherwise in `cache/shared` under moon's
+home, `MOON_HOME` or `~/.moon`. moon's home is the one moon's command
+sees in a run, with `[tests] toolchain` sourced: a toolchain that sets
+`MOON_HOME` moves it. Declare that directory as the cache's `dir`, so a
+sandboxed run may write it. sluice reads the manifest by which a host
+proves a task's key where moon keeps it, whatever `dir` says.
+
+`MOON_CACHE_DIR` moves nothing of moon's. moon 2.6.1 reads no such
+variable: it sets it for the tasks it runs, naming the workspace's own
+cache.
+
 ## Environment
 
 | variable | set by | meaning |
@@ -604,5 +656,6 @@ sets either is refused.
 | `SLUICE_BRANCH` | sluice, for a preview | The branch the preview was asked for through. |
 | `SLUICE_REVISION` | sluice, for a preview | The full revision the preview holds. |
 | `SLUICE_JOBS` | sluice, for a run | The cores the run may use: the host's cores divided by `[runs] max`, the bound every repository on the host shares. |
+| each `[[caches]]` `env` | the host's config, for every run | The variables a cache's clients read, exactly as the host's [`[[caches]]`](#caches) declares them: for a submission's run, an agent's `sluice exec` and a preview's command, under any executor. Nothing else of sluice's own environment reaches a run. |
 | `SLUICE_OTEL` | the host | `1` turns telemetry on; see [telemetry](/sluice/reference/telemetry/). |
 | `SLUICE_FORGE_API` | tests | Where the `[forge]` app's API calls go instead of `https://api.github.com`: a fake one. |

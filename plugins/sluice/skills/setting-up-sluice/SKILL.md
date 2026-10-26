@@ -234,7 +234,7 @@ ruleset with the button left on.
 |---|---|---|
 | how tests run (`[tests] runner`) | `moon`, `command` | [moon](references/profiles/moon.md), [command](references/profiles/command.md) |
 | what tests may touch (`[executor] kind`) | `open`, `sandbox` (macOS) | [sandbox](references/profiles/sandbox.md) |
-| where a combination is tested (`[checkout]`) | a clean git worktree, with ports and caches | [checkout](references/profiles/checkout.md) |
+| where a combination is tested (`[checkout]`) | a clean git worktree, with ports and a release command | [checkout](references/profiles/checkout.md) |
 | who submits | `sluice submit`, `wt submit` (worktrunk) | [worktrunk](references/profiles/worktrunk.md) |
 | where the branch lives | local, or on a remote (`remote`) | [remote-branches](references/profiles/remote-branches.md) |
 | sluice's identity on GitHub (host `[forge]`) | a GitHub App | [github-app](references/profiles/github-app.md) |

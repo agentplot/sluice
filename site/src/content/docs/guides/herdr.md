@@ -83,6 +83,36 @@ are listed beneath its tests:
 
 The tab bar and the sidebar show the count and its ten-cell bar alone.
 
+## Checkouts whose release failed
+
+When a checkout's release keeps failing, sluice stops trying and holds the
+checkout until you release it
+([held checkouts](/sluice/reference/commands/#checkouts-held-because-their-release-failed)).
+The popup shows each one first under its branch's heading, under RELEASE
+FAILED, with the worktrees and previews of that branch held the same way:
+
+```
+main at b7d2e94 · 0 submissions · 0 combinations under test (up to 2 at once)
+  RELEASE FAILED
+    ✗ sluice/try/main/48 held · failed 4 times · usage: scripts/preview up
+        sluice release sluice/try/main/48 · --accept-failure frees it without
+    ✗ worktree unit-a held · failed once · rm: cannot remove .stack
+        sluice release --worktree /work/sluice/unit-a · --accept-failure frees it without
+```
+
+Each row gives the last line of what failed; `sluice status <branch>` has
+all of it. The command beneath runs the release again, and with
+`--accept-failure` frees it without running the release. A checkout
+another host made says `held on deneb`, and its command begins `on
+deneb:`, since only that host can release it. The popup shows the command
+and runs nothing. A branch with a held checkout, worktree or preview is
+shown even with nothing queued. A checkout the next round still tries is
+left out.
+
+The tab bar's line for that branch ends `· 1 held: release failed`, and
+shows a branch with nothing queued that has one:
+`sluice main · 0 submissions · 1 held: release failed`.
+
 ## Agents' checks
 
 An agent that runs its checks with `sluice exec` takes one of the runs the
@@ -165,7 +195,9 @@ The ahead row asks `sluice submit <branch> --check --json` whether the
 worktree would merge with no conflict behind everything queued, and names
 the first file in conflict. It asks again only when the worktree's head,
 the branch's revision or the submissions queued on it move. Each workspace's row shows how many submissions
-its repositories hold. Every row expires two minutes after the plugin last
+its repositories hold, then how many checkouts, worktrees and previews are
+held because their release failed: `4 submissions · 1 held: release failed`. A checkout that several
+hosts list counts once. Every row expires two minutes after the plugin last
 set it, so nothing stale stays if the plugin stops.
 
 ## Naming a pane's branch

@@ -62,7 +62,6 @@ const NEVER_FAILED: &str = "no release had failed";
 /// A place leaves the branch's lists of places to release.
 fn forget(l: &mut Line, place: &str) {
     l.doc.release.retain(|p| p != place);
-    l.doc.passed.retain(|p| p != place);
     l.doc.failed_releases.retain(|f| f.place != place);
 }
 
@@ -98,16 +97,14 @@ impl Sluice<'_> {
     /// fails counts a try and is logged `release_failed`; once its tries
     /// pass the branch's `release_retries` it leaves `release` and is
     /// held. Only a failure to write the records is an error.
-    pub fn release_made(&self, branch: &str, place: &str, passed: bool) -> Result<ReleaseOutcome> {
+    pub fn release_made(&self, branch: &str, place: &str) -> Result<ReleaseOutcome> {
         let checkout = self.seams.checkout;
         let tried = checkout.gone(place).and_then(|gone| match gone {
             true => checkout.release_gone(place).map(|g| Releasing::Gone {
                 ran: g.ran,
                 failed: g.failed,
             }),
-            false => checkout
-                .release(place, passed)
-                .map(|()| Releasing::Released),
+            false => checkout.release(place).map(|()| Releasing::Released),
         });
         let how = match tried {
             Ok(how) => {
@@ -146,8 +143,7 @@ impl Sluice<'_> {
         }
         let failure = entry.map(|f| f.failed.clone());
         if !accept {
-            let passed = line.doc.passed.iter().any(|p| p == place);
-            return self.release_made(branch, place, passed).map(Some);
+            return self.release_made(branch, place).map(Some);
         }
         let how = match self.seams.checkout.free(place) {
             Ok(()) => Releasing::Accepted(failure),
@@ -244,7 +240,6 @@ impl Sluice<'_> {
             let (tries, held) = (f.tries, f.stopped);
             if held {
                 l.doc.release.retain(|p| p != place);
-                l.doc.passed.retain(|p| p != place);
             }
             l.log(
                 &now,

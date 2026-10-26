@@ -337,6 +337,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
             signing: None,
             peers: Default::default(),
             systems: None,
+            caches: Vec::new(),
         },
     )
     .with_running(running.path().to_path_buf());
@@ -411,7 +412,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
 
     // 95: released, the container is gone, the ports free, the worktree
     // standing.
-    places.release(&first.name, false).unwrap();
+    places.release(&first.name).unwrap();
     assert_eq!(leftovers(&id).0, "", "the release left a container");
     let held: Vec<String> = std::fs::read_dir(blocks.path())
         .unwrap()

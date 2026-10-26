@@ -46,13 +46,6 @@ fn every_place_holds_its_candidate_and_is_released_with_everything_in_it() {
     for session in ["unit/1", "unit/2", "unit/3"] {
         assert!(!released.contains(session));
     }
-    // Only a place whose candidate passed saves its caches (35): the
-    // candidate holding the culprit failed, and the one dropped for it
-    // never had a verdict.
-    let saved: BTreeSet<_> = h.w().saved_places().into_iter().collect();
-    assert!(!saved.is_empty());
-    assert!(saved.is_subset(&released));
-    assert!(saved.len() < released.len(), "{saved:?} of {released:?}");
     // sluice chose no port and started nothing but the gate's checks
     // through the check seam (31): a run request carries a place and a
     // scratch directory, and nothing else of the host.
@@ -357,6 +350,32 @@ fn a_held_checkouts_failure_is_accepted() {
             .unwrap(),
         None
     );
+}
+
+/// satisfies: 123, 26, 61: the overview lists a held checkout under its
+/// branch, held, with what failed, from the branch's state; reading it
+/// ten times runs no release, counts no try and writes nothing
+#[test]
+fn the_overview_shows_a_held_checkout_and_changes_nothing() {
+    let h = Harness::bolt();
+    let place = held_checkout(&h);
+    let (version, files, releases) = (h.version(), h.files(), h.releases_of(&place));
+    let s = h.sluice();
+    let view = s.branch_view_of(BRANCH).unwrap();
+    let held = view
+        .held_checkouts
+        .iter()
+        .find(|f| f.place == place)
+        .unwrap_or_else(|| panic!("{:?}", view.held_checkouts));
+    assert!(held.stopped, "{held:?}");
+    assert!(held.failed.contains(shared::RELEASE_FAILS), "{held:?}");
+    for _ in 0..10 {
+        let all = s.overview(None).unwrap();
+        assert!(all.iter().any(|b| b.held_checkouts == view.held_checkouts));
+    }
+    assert_eq!(h.version(), version, "the branch's state was written");
+    assert_eq!(h.files(), files, "its state or log changed");
+    assert_eq!(h.releases_of(&place), releases, "a release was run");
 }
 
 /// How each `gone` line of the log names `place`: whether its release

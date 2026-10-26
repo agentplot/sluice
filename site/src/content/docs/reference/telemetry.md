@@ -41,7 +41,6 @@ back: the queue never depends on it
   | `sluice.landed`, `sluice.refused` | counter | submissions landed; landings refused because the branch moved |
   | `sluice.submission.landed_after` | histogram, seconds | submit to landed |
   | `sluice.candidate.tested_for` | histogram, seconds | a combination's time under test, by `sluice.outcome` |
-  | `sluice.cache.restored` | counter | a checkout's build cache restored, by `sluice.hit` (`key`, `last`, `none`) |
 
 - **The checks inside a run**: with telemetry on, a run gets sluice's
   `OTEL_*` variables, and moon runs with `--otel`, so moon's own traces

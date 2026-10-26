@@ -731,9 +731,15 @@ pub fn every_record_written_is_the_real_format_and_names_its_schema(h: &impl Rig
     assert!(!log.is_empty());
     // Every check of #1, and of #2 alone once #1 is blamed (21); #1 + #2
     // too, unless #1's failure was read first and its run ended unfinished.
+    // A runner's cache the checkouts share (35) may hand #2 alone a replay
+    // of what #1 + #2 ran and never recorded; no recorded pass proves it,
+    // so #2's checks run again with no replay (108), and a check it had
+    // replayed is recorded once more, as run, for the same combination.
     let results = h.results();
+    let checks: std::collections::BTreeSet<_> =
+        results.iter().map(|r| (&r.task, &r.combination)).collect();
     assert!(
-        results.len() == 3 + 3 || results.len() == 3 + 3 + 3,
+        checks.len() == 3 + 3 || checks.len() == 3 + 3 + 3,
         "{:#?}",
         results
             .iter()
