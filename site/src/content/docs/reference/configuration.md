@@ -235,8 +235,8 @@ Either way, each line is in `ssh-keygen`'s allowed-signers form:
 
 ```text
 # .config/sluice.sessions: one line per session host
-laptop-chuck ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... chuck's laptop
-mini-2       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+laptop ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... a developer's laptop
+mini   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
 ```
 
 The first word is a label: sluice shows it and never checks it. Then
