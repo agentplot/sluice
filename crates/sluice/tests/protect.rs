@@ -743,6 +743,36 @@ fn a_transaction_the_protection_cannot_read_passes_said_once() {
     }
 }
 
+/// 124: host settings the hook does not know change nothing it guards: a
+/// move is refused and reported once, nothing said of the settings, and a
+/// reset that moves nothing passes saying nothing.
+#[test]
+fn settings_the_hook_does_not_know_change_nothing_it_guards() {
+    let (repo, held) = protected("protect-later-settings");
+    host_settings(&repo, "[runs]\ncores = 12\n\n[later]\nx = 1\n");
+    let tip = repo.rev("bolt/x");
+    let head = repo.rev("unit/a");
+    let out = repo.git_raw(&["update-ref", "refs/heads/bolt/x", &head]);
+    let t = text(&out);
+    assert_eq!(out.status.code(), Some(128), "{t}");
+    assert!(
+        t.contains("error: bolt/x is protected by sluice; submit the change to sluice instead")
+            && t.contains(&format!(
+                "update-ref refs/heads/bolt/x {head}` would move it"
+            )),
+        "{t}"
+    );
+    assert!(!t.contains("warning"), "{t}");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+
+    let out = git_in(&repo, &held, &["reset", "-q", "--hard"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    assert_eq!(repo.rev("bolt/x"), tip);
+    assert_eq!(protected_events(&repo).len(), 1);
+}
+
 /// 124: every other command still reads the host's settings in full, and
 /// refuses a field it does not know, naming the file and the field.
 #[test]
