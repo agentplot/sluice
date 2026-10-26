@@ -240,6 +240,24 @@ impl Setup {
         ]);
     }
 
+    /// `main`'s records, where the remote's side of a push can copy them.
+    fn records(&self) -> PathBuf {
+        self.repo.dir().join(".git/sluice/main")
+    }
+
+    /// Step `main` until a step fails; what it said.
+    fn step_until_failed(&self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let out = self.sluice(&["step", "main"]);
+            if !out.status.success() {
+                return text(&out);
+            }
+            assert!(Instant::now() < deadline, "{}", self.status());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     /// A records file of `main` holds `word`.
     fn logged(&self, word: &str) -> bool {
         let dir = self.repo.dir().join(".git/sluice/main");
@@ -359,22 +377,156 @@ fn a_push_that_never_reached_the_remote_lands_on_the_next_round() {
     );
     let before = s.remote_main();
     s.submit("a");
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let failed = loop {
-        let out = s.sluice(&["step", "main"]);
-        if !out.status.success() {
-            break text(&out);
-        }
-        assert!(Instant::now() < deadline, "{}", s.status());
-        std::thread::sleep(Duration::from_millis(200));
-    };
+    let failed = s.step_until_failed();
     assert!(failed.contains("pushing main to origin failed"), "{failed}");
+    assert_eq!(s.states(), ["landing"], "not landed");
     std::fs::rename(&aside, s.origin.path()).unwrap();
     assert_eq!(s.remote_main(), before);
     s.step_until_out();
     assert_eq!(s.states(), ["landed"]);
     assert_eq!(s.runs(), 1, "no new run");
     assert_eq!(s.repo.rev("main"), s.remote_main());
+}
+
+/// 22, 122, 124, I4: when the remote's side of the landing's push has
+/// received it, the remote holds the landing and the records still say
+/// the submission is landing: landed is written only once the remote has
+/// moved, and the host's copy is levelled to it after.
+#[test]
+fn landed_is_written_only_once_the_remote_holds_the_landing() {
+    let s = Setup::new("remote-landed-after", "origin");
+    let at_push = s.seen.path().join("at-push");
+    s.on_next_push(
+        &format!(
+            "mkdir -p {at}/submissions\n\
+             git --git-dir {origin} rev-parse refs/heads/main > {at}/remote\n\
+             cp {records}/submissions/*.json {at}/submissions/\n\
+             cp {records}/log.jsonl {at}/log.jsonl\n",
+            at = at_push.display(),
+            origin = s.origin.path().display(),
+            records = s.records().display(),
+        ),
+        true,
+    );
+    let before = s.remote_main();
+    s.submit("a");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    let landed = s.remote_main();
+    assert_ne!(landed, before);
+    assert_eq!(s.status()["submissions"][0]["landed_as"], landed.as_str());
+
+    let remote = std::fs::read_to_string(at_push.join("remote")).unwrap();
+    assert_eq!(remote.trim(), landed, "the remote held the landing");
+    let subs: Vec<serde_json::Value> = std::fs::read_dir(at_push.join("submissions"))
+        .unwrap()
+        .map(|e| serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap())
+        .collect();
+    let states: Vec<&str> = subs.iter().map(|x| x["state"].as_str().unwrap()).collect();
+    assert_eq!(
+        states,
+        ["landing"],
+        "and the records did not yet say landed"
+    );
+    let log = std::fs::read_to_string(at_push.join("log.jsonl")).unwrap();
+    assert!(!log.contains("\"event\":\"landed\""), "{log}");
+    assert!(s.logged("\"event\":\"landed\""));
+    assert_eq!(s.repo.rev("main"), landed, "the copy is levelled to it");
+}
+
+/// 22, 122, 124, I4: a push the remote refuses by a rule of its own lands
+/// nothing: the round says the remote's own words, the submission is left
+/// landing and never told landed, and neither the remote nor the host's
+/// copy moves. Once the remote takes the push, the next round lands it,
+/// with no new run.
+#[test]
+fn a_push_the_remote_refuses_leaves_the_submission_unlanded_with_its_words() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Setup::new("remote-rule", "origin");
+    let words = "main takes no push but the queue's identity";
+    let hook = s.origin.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, format!("#!/bin/sh\necho \"{words}\" >&2\nexit 1\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let before = s.remote_main();
+    s.submit("a");
+    let failed = s.step_until_failed();
+    assert!(failed.contains("pushing main to origin failed"), "{failed}");
+    assert!(failed.contains(words), "{failed}");
+    assert!(failed.contains("pre-receive hook declined"), "{failed}");
+    assert_eq!(s.states(), ["landing"]);
+    assert!(s.status()["submissions"][0]["landed_as"].is_null());
+    assert!(!s.logged("\"event\":\"landed\""));
+    assert_eq!(s.remote_main(), before);
+    assert_eq!(
+        s.repo.rev("main"),
+        before,
+        "the copy is written at no other time"
+    );
+
+    // A waiter is told the words, and not that it landed.
+    let id = s.status()["submissions"][0]["id"].to_string();
+    let out = s.sluice(&["wait", &id, "--timeout", "30s", "--json"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains(words), "{}", text(&out));
+    assert_eq!(s.states(), ["landing"]);
+
+    std::fs::remove_file(&hook).unwrap();
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 1, "no new run");
+    let landed = s.remote_main();
+    assert_eq!(s.repo.rev(&format!("{landed}^1")), before);
+    assert_eq!(s.repo.rev("main"), landed);
+}
+
+/// 124, 6, rule core.6: after a landing, this host's copy of `main`
+/// stands where it was before it, and git's lock keeps any round from
+/// levelling it (S64). A session cut from the copy submits; its candidate
+/// is formed on the remote's revision, which holds the first landing, and
+/// lands there, and the copy is written only once its lock is gone, to
+/// the landing.
+#[test]
+fn a_submit_with_the_copy_behind_is_formed_on_the_remotes_revision() {
+    let s = Setup::new("remote-copy-behind", "origin");
+    let made = s.repo.rev("main");
+    s.submit("a");
+    s.step_until_out();
+    let first = s.remote_main();
+    assert_eq!(s.repo.rev("main"), first);
+    // As an older sluice left it, past the protection.
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/main",
+        &made,
+    ]);
+    let lock = s.repo.dir().join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+
+    s.submit("b");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed", "landed"], "{}", s.status());
+    let second = s.remote_main();
+    assert_eq!(
+        s.repo.rev(&format!("{second}^1")),
+        first,
+        "formed on origin's"
+    );
+    for n in ["a", "b"] {
+        s.repo
+            .git(&["cat-file", "-e", &format!("{second}:{n}.txt")]);
+    }
+    assert_eq!(s.runs(), 2);
+    assert_eq!(s.repo.rev("main"), made, "the copy is left behind");
+    assert!(s.logged("copy-behind"));
+
+    std::fs::remove_file(&lock).unwrap();
+    let out = s.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.repo.rev("main"), second, "levelled to the landing");
+    assert!(s.logged("copy-levelled"));
 }
 
 /// A failed fetch lands nothing and says so; the checks already running
