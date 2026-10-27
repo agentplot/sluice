@@ -11,7 +11,7 @@ crate, `herdr`, or `site`.
 ## 1. The name a submission is shown by
 
 - [x] 1.1 If `Submission` in `crates/sluice-core/src/records.rs` has no `subject`, add it exactly as `git show origin/bolt/a-pull-request-is-titled-by-what-lands:crates/sluice-core/src/records.rs` defines it (doc comment, serde attributes, after `held`), and `subject: None` at each struct literal; verify `cargo check --workspace --all-targets` passes and `git diff` of the field against that branch's shows no difference.
-- [ ] 1.2 Add `Submission::name()` (the subject, else `from.worktree`), `subject: Option<String>` with `name()` on `FinishedLine` (serde default, skipped when none), and write the subject into the index line in `Line::changes`; verify with unit tests in `records.rs` and `line.rs`: a submission with and without a subject, an index line without the field read back with none, a submission moved to the finished records keeping its subject in the index.
+- [x] 1.2 Add `Submission::name()` (the subject, else `from.worktree`), `subject: Option<String>` with `name()` on `FinishedLine` (serde default, skipped when none), and write the subject into the index line in `Line::changes`; verify with unit tests in `records.rs` and `line.rs`: a submission with and without a subject, an index line without the field read back with none, a submission moved to the finished records keeping its subject in the index.
 - [ ] 1.3 Add `shown()` to `crates/sluice-core/src/text.rs`, each run of control characters one space, trimmed; verify with unit tests: a line break, a tab, an escape sequence, and a subject left as it was.
 
 ## 2. `sluice status` and `sluice overview` as text
