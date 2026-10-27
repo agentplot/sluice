@@ -13,7 +13,7 @@
 
 ## 3. Say it to the operator
 
-- [ ] 3.1 In `site/src/content/docs/guides/github.md`, under *What changes*, add one bullet saying that sluice finds which remote `main` is on from every copy of it on your machine, your own `main` and what you last fetched from each remote, so a machine whose own `main` is old, or from before the policy, needs only a `git fetch`; and that two copies naming different remotes are refused, naming both. Verify with `moon run site:prose`, every warning cleared.
+- [x] 3.1 In `site/src/content/docs/guides/github.md`, under *What changes*, add one bullet saying that sluice finds which remote `main` is on from every copy of it on your machine, your own `main` and what you last fetched from each remote, so a machine whose own `main` is old, or from before the policy, needs only a `git fetch`; and that two copies naming different remotes are refused, naming both. Verify with `moon run site:prose`, every warning cleared.
 - [ ] 3.2 In `plugins/sluice/skills/setting-up-sluice/references/profiles/remote-branches.md`, under *Turning it on*, add the same in one or two sentences, for a host that has fetched the branch but whose own copy is old (rule core.26: no name of ours). Verify with `moon run plugin-sluice:validate` and `sluice exec main -- cargo test -p sluice --test plugin_docs`.
 
 ## 4. The gate
