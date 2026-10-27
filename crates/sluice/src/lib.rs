@@ -17,6 +17,7 @@ pub mod profiles;
 pub mod progress;
 pub mod protect;
 pub mod reader;
+pub mod retry;
 pub mod runs;
 pub mod scrub;
 pub mod sessions;
@@ -53,9 +54,10 @@ pub const INTERNAL: i32 = 3;
 pub const WITHDRAWN: i32 = 4;
 /// `sluice wait --timeout` ran out with the submission undecided.
 pub const WAITING: i32 = 5;
-/// How long a waiting submit or `sluice wait` reads again, a pause apart,
-/// through a forge's 5xx answers before it says it could not read
-/// ([`INTERNAL`]); what it could not read decides nothing.
+/// How long a waiting submit or `sluice wait` gives each call to a remote,
+/// tried again under the retry policy through a forge's 5xx answers and
+/// whatever else the remote never judged, before it says it could not read
+/// ([`INTERNAL`]) (134); what it could not read decides nothing.
 pub const UNANSWERED_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 /// A command line sluice cannot read: an unknown command, flag or value.
 /// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
@@ -1445,7 +1447,13 @@ pub fn run(
         Command::Branch { command } => branch::run(&s, command, out),
         Command::Forge {
             command: ForgeCommand::Check { branch, json },
-        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), json, out),
+        } => profiles::forge_check(
+            &std::env::current_dir()?,
+            branch.as_deref(),
+            json,
+            out,
+            std::rc::Rc::new(retry::Policy::command()),
+        ),
         Command::Credential { operation } => {
             identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)
@@ -1820,10 +1828,10 @@ fn submit_group(
                 stopped = Some(code);
                 subs.push(sub);
             }
-            Waited::Unread(sub, unread) => {
+            Waited::Unread(sub, e) => {
                 // Said on stderr; the act's answer holds it as it stands.
                 let (what, again) = (format!("#{}", sub.id), format!("sluice wait {}", sub.id));
-                let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
                 stopped = Some(code);
                 subs.push(sub);
             }
@@ -2033,9 +2041,9 @@ fn await_submission(
             }
             return Ok(code);
         }
-        Waited::Unread(sub, unread) => {
+        Waited::Unread(sub, e) => {
             let again = format!("sluice wait {}", sub.id);
-            return could_not_read(&unread, &format!("#{}", sub.id), &again, waiting.json, out);
+            return could_not_read(&e, &format!("#{}", sub.id), &again, waiting.json, out);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
@@ -2055,59 +2063,41 @@ enum Waited {
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
-    /// As last read, when the forge answered 5xx for [`UNANSWERED_FOR`].
-    Unread(Submission, Unread),
+    /// As last read, when a round failed as the forge could not answer
+    /// for the retry policy's time.
+    Unread(Submission, anyhow::Error),
 }
 
-/// A forge's 5xx answers to a wait's reads, in a row: when the first came,
-/// and the last with when it came. The wait reads again through them for
-/// [`UNANSWERED_FOR`], and a read answered ends the run.
-#[derive(Default)]
-struct Unread {
-    since: Option<chrono::DateTime<chrono::Utc>>,
-    last: Option<(chrono::DateTime<chrono::Utc>, anyhow::Error)>,
-}
-
-impl Unread {
-    /// After a read failed with `e`: `Ok(true)` to read again after the
-    /// next pause, `e` being a forge's 5xx answer within [`UNANSWERED_FOR`]
-    /// of the first in a row; `Ok(false)` once that has passed, the wait
-    /// ending as it could not read; `e` itself for any other failure.
-    fn again(&mut self, clock: &dyn Clock, e: anyhow::Error) -> Result<bool> {
-        if !sluice_seams::unanswered(&e) {
-            return Err(e);
-        }
-        let now = clock.now();
-        let since = *self.since.get_or_insert(now);
-        self.last = Some((now, e));
-        Ok(now - since < UNANSWERED_FOR)
-    }
-
-    /// A read answered: the run of 5xx answers, if any, is over.
-    fn answered(&mut self) {
-        *self = Unread::default();
+/// `e`, a wait's read or round that failed, when it failed as a forge
+/// could not answer for as long as the retry policy tried, which ends the
+/// wait as it could not read (134; rule core.29); any other failure is
+/// the wait's own.
+fn unread(e: anyhow::Error) -> Result<anyhow::Error> {
+    if sluice_seams::unanswered(&e) {
+        Ok(e)
+    } else {
+        Err(e)
     }
 }
 
-/// A wait that could not read `what` (`unread`, the forge's 5xx answers):
-/// said on stderr, on its own line beginning `sluice: could not read`, and
-/// apart from any outcome, which only the records give; exit
-/// [`INTERNAL`], with `again` to wait once more. Under `--json`, the error
-/// document in place of the record.
+/// A wait that could not read `what` (`e`, the forge's last answer once
+/// the retry policy stopped): said on stderr, on its own line beginning
+/// `sluice: could not read`, with how long it was tried, and apart from
+/// any outcome, which only the records give; exit [`INTERNAL`], with
+/// `again` to wait once more. Under `--json`, the error document in place
+/// of the record.
 fn could_not_read(
-    unread: &Unread,
+    e: &anyhow::Error,
     what: &str,
     again: &str,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (lasted, cause) = match (&unread.last, unread.since) {
-        (Some((at, e)), Some(since)) => ((*at - since).num_seconds(), format!(": {e:#}")),
-        _ => (0, String::new()),
-    };
+    let lasted = retry::lasted(e).as_secs() as i64;
     let text = format!(
-        "could not read {what} for {}, so whether it landed is not known{cause}",
-        progress::duration(lasted)
+        "could not read {what} for {}, so whether it landed is not known: {}",
+        progress::duration(lasted),
+        retry::unspent(e)
     );
     telemetry::error(&format!("sluice: {text}"));
     if json {
@@ -2121,8 +2111,10 @@ fn could_not_read(
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. A round the forge answered 5xx is run
-/// again, as [`Unread`] bounds it. Without `--json`, it says the
+/// already decided runs nothing. Each call a round makes to a remote is
+/// tried again under the retry policy for the wait's five minutes (134);
+/// a round that still fails as the forge could not answer ends the wait as
+/// it could not read. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
 /// moves (ADR 0042). It reads them as [`Reading`] does (129).
 fn wait_on(
@@ -2138,7 +2130,6 @@ fn wait_on(
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let mut first = true;
-    let mut unread = Unread::default();
     // Decided already: nothing read again, and no round run.
     if sub.state.is_out() {
         return Ok(Waited::Decided(sub, None));
@@ -2184,7 +2175,6 @@ fn wait_on(
         }
         match s.round(&branch) {
             Ok(round) => {
-                unread.answered();
                 exec::tell_abandoned(out, waiting.json, &round.released)?;
                 exec::tell_releases(out, waiting.json, &round.releases)?;
             }
@@ -2196,10 +2186,7 @@ fn wait_on(
                 if let Some(sub) = landed(s, id) {
                     return Ok(Waited::Decided(sub, Some(e)));
                 }
-                if unread.again(waiting.clock, e)? {
-                    continue;
-                }
-                return Ok(Waited::Unread(sub, unread));
+                return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
         reading.reader.lead_once_free()?;
@@ -2646,8 +2633,10 @@ enum PullMode<'a> {
 /// push the worktree's branch and open or update its pull request, which
 /// waits for its conditions; then follow it, reporting each state it
 /// reaches, to its outcome. [`PullMode::Status`] only says where it
-/// stands; [`PullMode::Wait`] follows the one open. While it waits, a
-/// read the forge answered 5xx is made again, as [`Unread`] bounds it.
+/// stands; [`PullMode::Wait`] follows the one open. While it waits, each
+/// read is tried again under the retry policy for the wait's five minutes
+/// (134), and one that still fails as the forge could not answer ends the
+/// wait as it could not read.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -2668,22 +2657,19 @@ fn submit_pull(
     // 124: how the host's copy differed from what the submit opened.
     let mut copy = None;
     let number = if !opens {
-        let mut unread = Unread::default();
-        let found = loop {
-            let e = match pulls.find(seams, clock, branch, worktree) {
-                Ok(found) => break found,
-                Err(e) => e,
-            };
-            let PullMode::Wait { deadline } = mode else {
-                return Err(e);
-            };
-            let what = format!("the pull request from {worktree} into {branch}");
-            if !unread.again(clock, e)? || deadline.is_some_and(|d| clock.now() >= d) {
-                return could_not_read(&unread, &what, &again, json, out);
-            }
-            if !pause.pause() {
-                could_not_read(&unread, &what, &again, json, out)?;
-                return Ok(STOPPED);
+        let found = match pulls.find(seams, clock, branch, worktree) {
+            Ok(found) => found,
+            Err(e) => {
+                let PullMode::Wait { .. } = mode else {
+                    return Err(e);
+                };
+                let what = format!("the pull request from {worktree} into {branch}");
+                let code = could_not_read(&unread(e)?, &what, &again, json, out)?;
+                // Ctrl-C ended the retry policy's pauses.
+                if INTERRUPTED.load(Ordering::SeqCst) {
+                    return Ok(STOPPED);
+                }
+                return Ok(code);
             }
         };
         match found {
@@ -2719,7 +2705,6 @@ fn submit_pull(
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let what = format!("#{number}");
-    let mut unread = Unread::default();
     // The submission the pull request was last read taken in as.
     let mut taken: Option<u64> = None;
     loop {
@@ -2727,14 +2712,10 @@ fn submit_pull(
         let followed = match pulls.follow(seams, clock, branch, number) {
             Ok(f) => Some(f),
             Err(e) if no_wait || status => return Err(e),
-            Err(e) => {
-                if !unread.again(clock, e)? {
-                    return could_not_read(&unread, &what, &again, json, out);
-                }
-                None
-            }
+            // Ctrl-C ended the retry policy's pauses: stopped, below.
+            Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+            Err(e) => return could_not_read(&unread(e)?, &what, &again, json, out),
         };
-        let read = followed.is_some();
         match followed {
             Some(Followed::Done(sub, names)) => {
                 if status && json {
@@ -2848,6 +2829,9 @@ fn submit_pull(
             }
             Ok(code)
         };
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return still(out, STOPPED);
+        }
         if let PullMode::Wait { deadline: Some(d) } = mode {
             if clock.now() >= d {
                 return still(out, WAITING);
@@ -2855,9 +2839,6 @@ fn submit_pull(
         }
         match s.round(branch) {
             Ok(round) => {
-                if read {
-                    unread.answered();
-                }
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
@@ -2886,9 +2867,7 @@ fn submit_pull(
                     after_landing(&e);
                     return Ok(code);
                 }
-                if !unread.again(clock, e)? {
-                    return could_not_read(&unread, &what, &again, json, out);
-                }
+                return could_not_read(&unread(e)?, &what, &again, json, out);
             }
         }
         if !pause.pause() {
@@ -2963,16 +2942,14 @@ fn submit_pull_group(
     let mut last: Vec<Option<(String, Vec<String>)>> = vec![None; opened.len()];
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
-    // As `submit_pull`: a read the forge answered 5xx is made again, as
-    // [`Unread`] bounds it, and said on stderr when it ends the wait.
+    // As `submit_pull`: a read the forge could not answer for the retry
+    // policy's time ends the wait, said on stderr.
     let what = hashes(&opened.iter().map(|o| o.number).collect::<Vec<_>>());
     let again = format!("sluice wait {branch}");
-    let mut unread = Unread::default();
     // 122: what failed after a landing, said once the outcomes are.
     let mut after = Vec::new();
     let stopped = 'wait: loop {
         intake(pulls, seams, clock, branch);
-        let mut read = true;
         for (i, o) in opened.iter().enumerate() {
             if decided[i].is_some() {
                 continue;
@@ -2980,14 +2957,12 @@ fn submit_pull_group(
             let followed = match pulls.follow(seams, clock, branch, o.number) {
                 Ok(f) => f,
                 Err(e) if no_wait => return Err(e),
+                // Ctrl-C ended the retry policy's pauses.
+                Err(_) if INTERRUPTED.load(Ordering::SeqCst) => break 'wait Some(STOPPED),
                 Err(e) => {
-                    if !unread.again(clock, e)? {
-                        let code =
-                            could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
-                        break 'wait Some(code);
-                    }
-                    read = false;
-                    continue;
+                    let e = unread(e)?;
+                    let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
+                    break 'wait Some(code);
                 }
             };
             match followed {
@@ -3011,9 +2986,6 @@ fn submit_pull_group(
         }
         match s.round(branch) {
             Ok(round) => {
-                if read {
-                    unread.answered();
-                }
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
@@ -3053,8 +3025,9 @@ fn submit_pull_group(
                     if decided.iter().all(Option::is_some) {
                         break None;
                     }
-                } else if !unread.again(clock, e)? {
-                    let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                } else {
+                    let e = unread(e)?;
+                    let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
                     break Some(code);
                 }
             }

@@ -18,15 +18,23 @@ use support::Repo;
 
 const NAME: &str = "sluice/try/bolt/x/1";
 
-/// Held by every test that checks ports free or starts a run that
-/// outlives the moment: on macOS a socket is made close-on-exec only
-/// after it is made, so a child spawned on another thread between the
-/// two keeps a port another test was checking, and that port reads as
-/// in use for the child's whole life.
-static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Held by every test: alone by one that asks the host for ports, shared
+/// by every other, each of which spawns git. On macOS a socket is made
+/// close-on-exec only after it is made, so a child spawned on another
+/// thread between the two keeps the port the socket was checking,
+/// listening, for the child's whole life, and that port reads as in use
+/// to the test that checked it free.
+static PORTS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
-fn ports_lock() -> std::sync::MutexGuard<'static, ()> {
-    PORTS.lock().unwrap_or_else(|e| e.into_inner())
+/// Held by a test that asks the host for ports: no other test spawns a
+/// process while it does.
+fn ports_lock() -> std::sync::RwLockWriteGuard<'static, ()> {
+    PORTS.write().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Held by a test that asks the host for no ports.
+fn spawns() -> std::sync::RwLockReadGuard<'static, ()> {
+    PORTS.read().unwrap_or_else(|e| e.into_inner())
 }
 
 fn places(repo: &Repo) -> Places {
@@ -122,6 +130,7 @@ fn left_behind(repo: &Repo, place: &Place) {
 /// 33 to 35, 25, rule core.16: git-worktree.
 #[test]
 fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-git");
     let before = others(&repo);
     let p = places(&repo);
@@ -151,6 +160,7 @@ fn a_git_worktree_place_is_the_candidate_and_leaves_nothing() {
 /// under its name; one whose checkout was deleted by hand is released.
 #[test]
 fn a_git_worktree_place_left_by_a_crash() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-git-crash");
     let p = places(&repo);
     let first = p.materialize(NAME, &rev, &Settings::new()).unwrap();
@@ -165,7 +175,7 @@ fn a_git_worktree_place_left_by_a_crash() {
 /// 34: releasing a place ends the run in it before removing it.
 #[test]
 fn releasing_a_place_ends_its_run() {
-    let _ports = ports_lock();
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-run");
     let p = places(&repo);
     let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
@@ -207,6 +217,7 @@ fn releasing_a_place_ends_its_run() {
 /// is refused before anything is made (ADR 0013).
 #[test]
 fn an_unknown_method_is_refused() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-method");
     let p = places(&repo);
     for m in [method("worktrunk"), method("archive"), method("rsync")] {
@@ -223,6 +234,7 @@ fn an_unknown_method_is_refused() {
 /// revision's policy that names the one there is still makes a place.
 #[test]
 fn a_policy_need_not_name_the_method() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-no-method");
     let p = places(&repo);
     for m in [Settings::new(), method("git-worktree")] {
@@ -261,6 +273,7 @@ fn build(place: &Place) {
 /// sluice's beside them.
 #[test]
 fn a_checkout_starts_with_nothing_but_its_revision() {
+    let _spawns = spawns();
     let (repo, _) = scratch("places-no-cache");
     let p = places(&repo);
     let one = locked(&repo, "one\n");
@@ -302,13 +315,38 @@ fn port(place: &Place, name: &str) -> u16 {
     place.env[name].parse().unwrap()
 }
 
-/// The first of twenty ports this test process uses, so two runs of these
-/// tests on one host, as two candidates under test at once are, ask for
-/// different ports. All are below 32768, where Linux starts the ports it
-/// gives a host's own connections for a moment, which would make a block
-/// look busy; macOS starts at 49152.
-fn base() -> u16 {
-    25000 + (std::process::id() % 380) as u16 * 20
+/// Whether nothing on the host holds `port`, asked as the place seam asks.
+fn free(port: u16) -> bool {
+    let local = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+        && std::net::TcpStream::connect_timeout(&local, std::time::Duration::from_millis(100))
+            .is_err()
+}
+
+/// The first of `n` ports in a row for the test that asks, under
+/// `ports_lock`: the next that no test of this process was given and that
+/// the host holds none of, from where the process's forty begin. Its id
+/// places them, so two runs of these tests on one host, as two candidates
+/// under test at once are, ask for different ports; the suite asks for
+/// fewer than forty. All are from 25000 to 32767: above the blocks the
+/// host's own places take from 20000, and below 32768, where Linux starts
+/// the ports it gives a host's own connections for a moment, which would
+/// make a block look busy; macOS starts at 49152.
+fn ports(n: u16) -> u16 {
+    static NEXT: std::sync::Mutex<Option<u16>> = std::sync::Mutex::new(None);
+    let mut next = NEXT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut from = next.unwrap_or(25000 + (std::process::id() % 194) as u16 * 40);
+    loop {
+        if from + n > 32768 {
+            from = 25000;
+        }
+        match (from..from + n).find(|p| !free(*p)) {
+            Some(held) => from = held + 1,
+            None => break,
+        }
+    }
+    *next = Some(from + n);
+    from
 }
 
 /// 31: two places alive at once hold two blocks of ports: the same
@@ -320,7 +358,7 @@ fn places_alive_at_once_hold_their_own_ports() {
     let (repo, rev) = scratch("places-ports");
     let blocks = support::Scratch::new("places-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let from = base();
+    let from = ports(4);
     let settings = ported(&["web", "api-server"], &from.to_string());
     let a = p.materialize("sluice/try/a/1", &rev, &settings).unwrap();
     let b = p.materialize("sluice/try/b/1", &rev, &settings).unwrap();
@@ -356,7 +394,7 @@ fn a_block_with_a_port_in_use_is_passed_over() {
     let (repo, rev) = scratch("places-busy");
     let blocks = support::Scratch::new("places-busy-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let from = base() + 10;
+    let from = ports(4);
     let _held = std::net::TcpListener::bind(("127.0.0.1", from + 1)).unwrap();
     let a = p
         .materialize(NAME, &rev, &ported(&["web", "api"], &from.to_string()))
@@ -375,6 +413,7 @@ fn a_block_with_a_port_in_use_is_passed_over() {
 /// A place's ports are names a check can be given: refused otherwise.
 #[test]
 fn ports_with_bad_names_are_refused() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-bad-ports");
     let blocks = support::Scratch::new("places-bad-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
@@ -423,7 +462,8 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let session = repo.dir().with_extension("session");
     let other = another_session(&repo, "other");
-    let settings = ported(&["web", "db"], "41200");
+    let from = ports(4);
+    let settings = ported(&["web", "db"], &from.to_string());
     let (before, listed) = (others(&repo), worktrees(&repo));
 
     let a = p
@@ -446,7 +486,7 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
         .adopt(
             session.to_str().unwrap(),
             "bolt/x",
-            &ported(&["web"], "41200"),
+            &ported(&["web"], &from.to_string()),
             "2026-10-14T09:00:00Z",
         )
         .unwrap();
@@ -465,7 +505,7 @@ fn a_sessions_worktree_is_adopted_with_ports_it_keeps() {
     let (aw, ad) = (port(&a, "SLUICE_PORT_WEB"), port(&a, "SLUICE_PORT_DB"));
     let (bw, bd) = (port(&b, "SLUICE_PORT_WEB"), port(&b, "SLUICE_PORT_DB"));
     assert_eq!(bd, bw + 1);
-    assert!(bw >= 41200 && (bw - 41200) % 2 == 0, "{bw}");
+    assert!(bw >= from && (bw - from).is_multiple_of(2), "{bw}");
     assert!(![aw, ad].contains(&bw) && ![aw, ad].contains(&bd));
     assert_ne!(a.env["SLUICE_PLACE"], b.env["SLUICE_PLACE"]);
 
@@ -486,7 +526,7 @@ fn releasing_a_sessions_place_leaves_its_worktree() {
     let blocks = support::Scratch::new("places-session-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let session = repo.dir().with_extension("session");
-    let settings = ported(&["web"], "41300");
+    let settings = ported(&["web"], &ports(1).to_string());
     let (before, listed) = (others(&repo), worktrees(&repo));
     let place = p
         .adopt(
@@ -581,7 +621,7 @@ fn a_sessions_place_is_released_under_the_policy_read_now() {
             sluice::profiles::checks::release_request(place, tests, limits, jobs, &[], dir)
         }));
     let session = repo.dir().with_extension("session");
-    let settings = ported(&["web"], "41600");
+    let settings = ported(&["web"], &ports(1).to_string());
     let log = repo.dir().with_extension("release-now.log");
     let _ = std::fs::remove_file(&log);
     let release = |what: &str| {
@@ -691,7 +731,8 @@ fn a_preview_is_made_kept_apart_and_released() {
     let (repo, rev) = scratch("places-preview");
     let blocks = support::Scratch::new("places-preview-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let settings = ported(&["web", "api"], "41700");
+    let from = ports(6);
+    let settings = ported(&["web", "api"], &from.to_string());
     let name = preview_name(&rev);
     let urls = addresses(&[
         ("web", "https://{name.web}.localhost"),
@@ -748,7 +789,7 @@ fn a_preview_is_made_kept_apart_and_released() {
             &name,
             &rev,
             "main",
-            &ported(&["web"], "41700"),
+            &ported(&["web"], &from.to_string()),
             &BTreeMap::new(),
             "later",
         )
@@ -797,6 +838,7 @@ fn a_preview_is_made_kept_apart_and_released() {
 /// before anything is made.
 #[test]
 fn a_preview_naming_an_unlisted_port_is_refused() {
+    let _spawns = spawns();
     let (repo, rev) = scratch("places-preview-refused");
     let blocks = support::Scratch::new("places-preview-refused-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
@@ -841,7 +883,7 @@ fn a_failed_preview_is_kept_holding_nothing() {
             &name,
             &rev,
             "main",
-            &ported(&["web"], "41800"),
+            &ported(&["web"], &ports(1).to_string()),
             &BTreeMap::new(),
             "now",
         )
@@ -894,7 +936,7 @@ fn a_name_another_preview_holds_takes_the_longer_revision() {
     let (repo, rev) = scratch("places-preview-clash");
     let blocks = support::Scratch::new("places-preview-clash-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let settings = ported(&["web"], "41850");
+    let settings = ported(&["web"], &ports(1).to_string());
     let name = preview_name(&rev);
     let (_, first) = p
         .preview(&name, &rev, "main", &settings, &BTreeMap::new(), "now")
@@ -933,6 +975,7 @@ fn a_name_another_preview_holds_takes_the_longer_revision() {
 /// and head; a detached one, a candidate's place among them, is left out.
 #[test]
 fn checked_out_lists_the_worktrees_on_a_branch() {
+    let _spawns = spawns();
     let (repo, cand) = scratch("checked-out");
     // The repository's own worktree back on main, as `<repo>/main` is.
     repo.git(&["switch", "-q", "main"]);
@@ -998,7 +1041,7 @@ fn a_deleted_checkout_is_gone_and_freed_with_nothing_run() {
     let (repo, rev) = scratch("places-gone");
     let blocks = support::Scratch::new("places-gone-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let settings = ported(&["web"], &base().to_string());
+    let settings = ported(&["web"], &ports(1).to_string());
     let place = p.materialize(NAME, &rev, &settings).unwrap();
     let r = runs(&repo);
     let marker = repo.dir().with_extension("gone-released");
@@ -1038,7 +1081,7 @@ fn freeing_a_sessions_place_leaves_its_worktree() {
     let blocks = support::Scratch::new("places-session-free-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
     let session = repo.dir().with_extension("session");
-    let settings = ported(&["web"], "41350");
+    let settings = ported(&["web"], &ports(1).to_string());
     let (before, listed) = (others(&repo), worktrees(&repo));
     let place = p
         .adopt(session.to_str().unwrap(), "bolt/x", &settings, "now")
@@ -1083,7 +1126,7 @@ fn a_failed_session_release_keeps_its_place_with_what_failed() {
         .adopt(
             session.to_str().unwrap(),
             "bolt/x",
-            &ported(&["web"], "41450"),
+            &ported(&["web"], &ports(1).to_string()),
             "now",
         )
         .unwrap();
@@ -1139,7 +1182,7 @@ fn a_failed_preview_release_is_held_once_its_retries_are_spent() {
             &name,
             &rev,
             "main",
-            &ported(&["web"], "41850"),
+            &ported(&["web"], &ports(1).to_string()),
             &BTreeMap::new(),
             "now",
         )
@@ -1220,7 +1263,7 @@ fn a_deleted_checkouts_stored_release_runs_once_from_its_scratch_directory() {
     let (repo, rev) = scratch("places-release-gone");
     let blocks = support::Scratch::new("places-release-gone-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let settings = ported(&["web"], "41900");
+    let settings = ported(&["web"], &ports(1).to_string());
     let place = p.materialize(NAME, &rev, &settings).unwrap();
     let tmp = std::fs::canonicalize(&place.tmp).unwrap();
     let r = runs(&repo);
@@ -1286,7 +1329,7 @@ fn a_gone_checkout_is_freed_whatever_its_stored_release_did() {
     let (repo, rev) = scratch("places-release-gone-fails");
     let blocks = support::Scratch::new("places-release-gone-fails-blocks");
     let p = places(&repo).with_blocks(blocks.path().to_path_buf());
-    let settings = ported(&["web"], "41950");
+    let settings = ported(&["web"], &ports(1).to_string());
     let place = p.materialize(NAME, &rev, &settings).unwrap();
     let r = runs(&repo);
     ended_run(&r, NAME, &place, "echo usage: scripts/preview up; exit 2");
@@ -1341,4 +1384,240 @@ fn a_gone_checkout_is_freed_whatever_its_stored_release_did() {
     assert_eq!((gone.ran, gone.failed), (false, None));
     left_behind(&repo, &third);
     assert!(p.made().unwrap().is_empty());
+}
+
+/// Where a candidate's or a session's place's record is.
+fn record_path(repo: &Repo, name: &str) -> PathBuf {
+    repo.dir().join(format!(
+        ".git/sluice/.places/{}.json",
+        sluice::runs::flat_name(name)
+    ))
+}
+
+/// A place's record, as it is written.
+fn record_of(repo: &Repo, name: &str) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(record_path(repo, name)).unwrap()).unwrap()
+}
+
+/// Whether `path` is the repository's scratch root and 10 hex digits.
+fn short_scratch(repo: &Repo, path: &std::path::Path) -> bool {
+    let name = path.file_name().unwrap().to_string_lossy();
+    path.parent() == Some(&repo.dir().join(".git/sluice/.tmp"))
+        && name.len() == 10
+        && name.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// 35, 34, rule core.30: a candidate's checkout's record names its
+/// scratch, under the repository's own state and 10 hex digits long, and
+/// its checks are given that directory; its release removes the directory
+/// and the record.
+#[test]
+fn a_place_names_its_scratch_on_its_record() {
+    let (repo, rev) = scratch("places-scratch-record");
+    let p = places(&repo);
+    let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
+    let named = PathBuf::from(record_of(&repo, NAME)["scratch"].as_str().unwrap());
+    assert!(short_scratch(&repo, &named), "{}", named.display());
+    assert_eq!(place.tmp, named);
+    assert!(place.tmp.is_dir());
+
+    p.release(NAME).unwrap();
+    assert!(!place.tmp.exists(), "{} left", place.tmp.display());
+    assert!(!record_path(&repo, NAME).exists());
+}
+
+/// 35, 34, rule core.30: a worktree is given one scratch on every run, of
+/// the same length as another worktree's and not the same, holding
+/// nothing of the worktree's path.
+#[test]
+fn a_worktree_keeps_one_short_scratch() {
+    let (repo, _) = scratch("places-scratch-keep");
+    let p = places(&repo);
+    let session = repo.dir().with_extension("session");
+    let other = another_session(&repo, "other-with-a-longer-name");
+    let adopt = |w: &PathBuf| {
+        p.adopt(
+            w.to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap()
+    };
+    let (a, b) = (adopt(&session), adopt(&other));
+    assert_eq!(adopt(&session).tmp, a.tmp);
+    assert_eq!(adopt(&other).tmp, b.tmp);
+    assert_ne!(a.tmp, b.tmp);
+    for (place, worktree) in [(&a, &session), (&b, &other)] {
+        assert!(short_scratch(&repo, &place.tmp), "{}", place.tmp.display());
+        let tmp = place.tmp.to_string_lossy();
+        let worktree = std::fs::canonicalize(worktree).unwrap();
+        assert!(!tmp.contains(worktree.to_str().unwrap()), "{tmp}");
+        let own = worktree.file_name().unwrap().to_string_lossy();
+        assert!(!tmp.contains(own.as_ref()), "{tmp}");
+    }
+    p.release(&a.name).unwrap();
+    p.release(&b.name).unwrap();
+}
+
+/// 35, 34, rule core.30: a worktree's checkout an older sluice adopted,
+/// whose record names no scratch, keeps its scratch at the checkout's name
+/// as one directory name until it is released, which removes it; adopted
+/// again, it is given a short one.
+#[test]
+fn a_place_from_before_keeps_its_scratch_until_released() {
+    let (repo, _) = scratch("places-scratch-before");
+    let p = places(&repo);
+    let session = std::fs::canonicalize(repo.dir().with_extension("session")).unwrap();
+    let name = format!("session/{}", session.display());
+    let record = record_path(&repo, &name);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(
+        &record,
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": session,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let former = repo
+        .dir()
+        .join(".git/sluice/.tmp")
+        .join(sluice::runs::dir_name(&name));
+    std::fs::create_dir_all(&former).unwrap();
+    std::fs::write(former.join("kept"), "").unwrap();
+
+    let adopt = || {
+        p.adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap()
+    };
+    let place = adopt();
+    assert_eq!(place.name, name);
+    assert_eq!(place.tmp, former);
+    assert!(former.join("kept").exists(), "its scratch was emptied");
+    assert!(record_of(&repo, &name).get("scratch").is_none());
+
+    p.release_session(&name, None).unwrap();
+    assert!(!former.exists(), "{} left", former.display());
+
+    let next = adopt();
+    assert!(short_scratch(&repo, &next.tmp), "{}", next.tmp.display());
+    assert!(next.tmp.is_dir());
+    assert_eq!(
+        record_of(&repo, &name)["scratch"].as_str(),
+        next.tmp.to_str()
+    );
+    p.release(&name).unwrap();
+}
+
+/// 123, rule core.30: of the repository's scratch directories, only the
+/// one no record names is removed; a held worktree's checkout's scratch,
+/// and the former-name scratch of a checkout whose record names none, are
+/// left as they were.
+#[test]
+fn scratch_no_record_names_is_removed() {
+    let (repo, _) = scratch("places-scratch-sweep");
+    let p = places(&repo);
+    let held = p
+        .adopt(
+            repo.dir().with_extension("session").to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap();
+    std::fs::write(held.tmp.join("socket"), "").unwrap();
+
+    let before = std::fs::canonicalize(another_session(&repo, "before")).unwrap();
+    let name = format!("session/{}", before.display());
+    std::fs::write(
+        record_path(&repo, &name),
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": before,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let root = repo.dir().join(".git/sluice/.tmp");
+    let former = root.join(sluice::runs::dir_name(&name));
+    std::fs::create_dir_all(&former).unwrap();
+    std::fs::write(former.join("kept"), "").unwrap();
+
+    let stray = root.join("0123abcdef");
+    std::fs::create_dir_all(stray.join("deep")).unwrap();
+
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
+    assert!(!stray.exists());
+    assert!(
+        held.tmp.join("socket").exists(),
+        "a held scratch was removed"
+    );
+    assert!(former.join("kept").exists(), "a former scratch was removed");
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), Vec::<PathBuf>::new());
+
+    p.release(&held.name).unwrap();
+    p.release(&name).unwrap();
+    assert!(!former.exists());
+}
+
+/// 35, 123, rule core.30: a checkout's record that exists and cannot be
+/// read names its scratch still: the scratch of the place its file name
+/// reads back as is kept, of either form, while a directory no record
+/// names is removed; and while such a record's file name was cut short,
+/// so that it names no place, nothing is removed. The sweep succeeds
+/// both times.
+#[test]
+fn an_unreadable_record_keeps_its_scratch() {
+    let (repo, rev) = scratch("places-scratch-unreadable");
+    let p = places(&repo);
+    let held = p.materialize(NAME, &rev, &Settings::new()).unwrap();
+    std::fs::write(held.tmp.join("socket"), "").unwrap();
+    let record = record_path(&repo, NAME);
+    let written = std::fs::read(&record).unwrap();
+    std::fs::write(&record, "{\"kind\":").unwrap();
+    let root = repo.dir().join(".git/sluice/.tmp");
+    let former = root.join(sluice::runs::dir_name(NAME));
+    std::fs::create_dir_all(&former).unwrap();
+    let stray = root.join("0123abcdef");
+    std::fs::create_dir_all(&stray).unwrap();
+
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
+    assert!(
+        held.tmp.join("socket").exists(),
+        "an unreadable record's scratch was removed"
+    );
+    assert!(
+        former.is_dir(),
+        "an unreadable record's former scratch was removed"
+    );
+
+    let cut = repo.dir().join(format!(
+        ".git/sluice/.places/{}%~0123456789abcdef.json",
+        "x".repeat(160)
+    ));
+    std::fs::write(&cut, "").unwrap();
+    let strays = [root.join("fedcba9876"), root.join("session+2F+2Fgone")];
+    for s in &strays {
+        std::fs::create_dir_all(s).unwrap();
+    }
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), Vec::<PathBuf>::new());
+    for s in &strays {
+        assert!(s.is_dir(), "{} was removed", s.display());
+    }
+
+    std::fs::remove_file(&cut).unwrap();
+    std::fs::write(&record, written).unwrap();
+    p.release(NAME).unwrap();
+    assert!(!held.tmp.exists());
 }

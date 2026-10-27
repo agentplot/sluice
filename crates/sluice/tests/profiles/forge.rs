@@ -8,14 +8,18 @@ mod support;
 #[path = "forge/github.rs"]
 mod github;
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::json;
 use sluice::identity::Identity;
 use sluice::profiles::github::check::{check, Finding};
 use sluice::profiles::github::{App, Repo};
-use support::http::{json, Fake, Request};
+use sluice::retry::Policy;
+use support::http::{json, Answer, Fake, Request};
 
 const KEY: &[u8] = include_bytes!("forge/test-key.pem");
 const APP: u64 = 4242;
@@ -77,58 +81,72 @@ impl Forge {
     /// The fake API; each token it gives is `token-<n>`, good for an hour.
     fn start(self) -> Fake {
         let minted = Mutex::new(0);
-        Fake::start(move |r: &Request| {
-            let path = r.path.as_str();
-            if path == "/repos/o/r/installation" && r.method == "GET" {
-                return json(
-                    200,
-                    json!({ "id": INSTALLATION, "app_id": APP, "permissions": self.permissions }),
-                );
-            }
-            if path == format!("/app/installations/{INSTALLATION}/access_tokens")
-                && r.method == "POST"
-            {
-                let mut n = minted.lock().unwrap();
-                *n += 1;
-                let ends = self.clock.now() + TimeDelta::hours(1);
-                return json(
-                    201,
-                    json!({
-                        "token": format!("token-{n}"), "expires_at": ends.to_rfc3339(),
-                        "permissions": { "contents": "write", "metadata": "read" },
-                        "repository_selection": "selected", "repositories": self.reaches
-                    }),
-                );
-            }
-            if path == "/app" && r.method == "GET" {
-                return json(200, json!({ "id": APP, "slug": "sluice-test" }));
-            }
-            if path == "/repos/o/r/rules/branches/main" {
-                let rules: Vec<_> = self
-                    .rulesets
-                    .iter()
-                    .map(|(id, _)| json!({ "type": "update", "ruleset_id": id }))
-                    .collect();
-                return json(200, json!(rules));
-            }
-            // Who may bypass a ruleset is shown to its admins alone.
-            for (id, actors) in &self.rulesets {
-                if path.starts_with(&format!("/repos/o/r/rulesets/{id}")) {
-                    let mut set = json!({ "id": id, "name": format!("ruleset {id}") });
-                    if r.header("Authorization") == Some("Bearer operator") {
-                        set["bypass_actors"] = actors.clone();
-                    }
-                    return json(200, set);
-                }
-            }
-            json(404, json!({ "message": "Not Found" }))
-        })
+        Fake::start(move |r: &Request| self.answer(r, &minted))
     }
+
+    /// The fake API's answer to `r`, `minted` the tokens it gave so far.
+    fn answer(&self, r: &Request, minted: &Mutex<usize>) -> Answer {
+        let path = r.path.as_str();
+        if path == "/repos/o/r/installation" && r.method == "GET" {
+            return json(
+                200,
+                json!({ "id": INSTALLATION, "app_id": APP, "permissions": self.permissions }),
+            );
+        }
+        if path == format!("/app/installations/{INSTALLATION}/access_tokens") && r.method == "POST"
+        {
+            let mut n = minted.lock().unwrap();
+            *n += 1;
+            let ends = self.clock.now() + TimeDelta::hours(1);
+            return json(
+                201,
+                json!({
+                    "token": format!("token-{n}"), "expires_at": ends.to_rfc3339(),
+                    "permissions": { "contents": "write", "metadata": "read" },
+                    "repository_selection": "selected", "repositories": self.reaches
+                }),
+            );
+        }
+        if path == "/app" && r.method == "GET" {
+            return json(200, json!({ "id": APP, "slug": "sluice-test" }));
+        }
+        if path == "/repos/o/r/rules/branches/main" {
+            let rules: Vec<_> = self
+                .rulesets
+                .iter()
+                .map(|(id, _)| json!({ "type": "update", "ruleset_id": id }))
+                .collect();
+            return json(200, json!(rules));
+        }
+        // Who may bypass a ruleset is shown to its admins alone.
+        for (id, actors) in &self.rulesets {
+            if path.starts_with(&format!("/repos/o/r/rulesets/{id}")) {
+                let mut set = json!({ "id": id, "name": format!("ruleset {id}") });
+                if r.header("Authorization") == Some("Bearer operator") {
+                    set["bypass_actors"] = actors.clone();
+                }
+                return json(200, set);
+            }
+        }
+        json(404, json!({ "message": "Not Found" }))
+    }
+}
+
+/// The retry policy, its pauses skipped.
+fn policy() -> Rc<Policy> {
+    Rc::new(Policy::command().recording())
 }
 
 fn app(fake: &Fake, clock: &Clock) -> App {
     let clock = clock.clone();
-    App::new(APP, KEY, fake.url(), Box::new(move || clock.now())).unwrap()
+    App::new(
+        APP,
+        KEY,
+        fake.url(),
+        Box::new(move || clock.now()),
+        policy(),
+    )
+    .unwrap()
 }
 
 fn minted(fake: &Fake) -> usize {
@@ -222,7 +240,7 @@ fn ticking(clock: &Clock) -> sluice::profiles::github::app::Now {
 fn credentials_say_what_their_token_is_and_renew_buys_one() {
     let clock = Clock::new();
     let fake = Forge::new(&clock).start();
-    let app = App::new(APP, KEY, fake.url(), ticking(&clock)).unwrap();
+    let app = App::new(APP, KEY, fake.url(), ticking(&clock), policy()).unwrap();
     let url = "https://github.com/o/r.git";
     let c = app.credentials(url).unwrap();
     assert_eq!(c.password, "token-1");
@@ -559,7 +577,7 @@ fn the_apps_pull_request_calls() {
     use sluice::profiles::github::forge::{approvals, Forge as _, Posting, Standing, Status};
     let dir = support::Scratch::new("forge-pulls");
     let gh = github::GitHub::start(&github::file(dir.path()), None);
-    let app = App::new(APP, KEY, gh.url(), Box::new(Utc::now)).unwrap();
+    let app = App::new(APP, KEY, gh.url(), Box::new(Utc::now), policy()).unwrap();
     let f = &gh.forge;
     let r = repo();
     let a = f
@@ -688,6 +706,7 @@ fn live_pull_request_calls() {
         &key,
         sluice::profiles::github::app::API,
         Box::new(Utc::now),
+        Rc::new(Policy::command()),
     )
     .unwrap();
     let base = std::env::var("SLUICE_GITHUB_TEST_BASE").unwrap_or_else(|_| "main".into());
@@ -804,7 +823,7 @@ fn the_pools_calls() {
         ("github".into(), Setting::Tables(vec![t]))
     };
     let kind = table(&[("workflow", ".github/workflows/sluice.yml")]);
-    let pool = Actions::new(std::rc::Rc::new(app(&fake, &clock)), dir.path());
+    let pool = Actions::new(Rc::new(app(&fake, &clock)), dir.path());
     pool.launch(&Launch {
         pool: "forge".into(),
         kind: kind.clone(),
@@ -847,4 +866,340 @@ fn the_pools_calls() {
     let body: serde_json::Value = serde_json::from_str(&wake.body).unwrap();
     assert_eq!(body["inputs"]["mode"], "round");
     assert_eq!(body["inputs"]["branch"], "main");
+}
+
+// 134; rule core.29: every call to GitHub's API under the retry policy.
+
+/// A policy whose pauses are kept and skipped, its clock moved on by each.
+fn pausing() -> (Rc<Policy>, Rc<RefCell<Vec<Duration>>>) {
+    let pauses = Rc::new(RefCell::new(Vec::new()));
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let (kept, moved) = (pauses.clone(), clock.clone());
+    let policy = Policy::command().pausing(
+        move |d| {
+            kept.borrow_mut().push(d);
+            moved.set(moved.get() + d);
+            true
+        },
+        move || clock.get(),
+    );
+    (Rc::new(policy), pauses)
+}
+
+/// The fake GitHub holding one open pull request from `unit/a` at `aaa`,
+/// its number, and the app calling it under `policy`.
+fn on_github(name: &str, policy: Rc<Policy>) -> (support::Scratch, github::GitHub, App, u64) {
+    let dir = support::Scratch::new(name);
+    let gh = github::GitHub::start(&github::file(dir.path()), None);
+    let app = App::new(APP, KEY, gh.url(), Box::new(Utc::now), policy).unwrap();
+    let n = gh
+        .forge
+        .open_by("ann", "main", "unit/a", "aaa", false, None)
+        .unwrap();
+    (dir, gh, app, n)
+}
+
+fn waiting() -> sluice::profiles::github::forge::Posting {
+    use sluice::profiles::github::forge::{Posting, Status};
+    Posting {
+        status: Status::Queued,
+        title: "waiting".into(),
+        summary: "needs qa/approved".into(),
+        text: None,
+    }
+}
+
+/// The remote-retry spec's "A pull request read answered 503": a read
+/// GitHub answers 503 three times is made a fourth, each after a longer
+/// pause; one answered 404 is made once and reads as absent.
+#[test]
+fn a_read_github_could_not_answer_is_made_again() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (policy, pauses) = pausing();
+    let (_dir, gh, app, n) = on_github("forge-503", policy);
+    gh.unavailable(3);
+    let p = app.pull(&repo(), n).unwrap().unwrap();
+    assert_eq!(p.number, n);
+    assert_eq!(gh.calls("GET", &format!("/repos/o/r/pulls/{n}")), 4);
+    let pauses = pauses.borrow().clone();
+    assert_eq!(pauses.len(), 3, "{pauses:?}");
+    assert!(pauses.windows(2).all(|w| w[1] > w[0]), "{pauses:?}");
+
+    assert_eq!(app.pull(&repo(), 99).unwrap(), None);
+    assert_eq!(gh.calls("GET", "/repos/o/r/pulls/99"), 1);
+}
+
+/// The remote-retry spec's "The policy's time is set by what called it":
+/// a read GitHub answers 503 until the policy's thirty seconds are spent
+/// fails as GitHub could not answer, saying how long it was tried.
+#[test]
+fn a_read_answered_503_until_the_bound_fails_unanswered() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (policy, pauses) = pausing();
+    let (_dir, gh, app, n) = on_github("forge-spent", policy);
+    gh.unavailable(usize::MAX);
+    let e = app.pull(&repo(), n).unwrap_err();
+    assert!(sluice_seams::unanswered(&e), "{e:#}");
+    let slept: Duration = pauses.borrow().iter().sum();
+    assert_eq!(sluice::retry::lasted(&e), slept);
+    assert!(
+        slept > Duration::ZERO && slept <= Duration::from_secs(30),
+        "{slept:?}"
+    );
+    let tries = pauses.borrow().len() + 1;
+    assert_eq!(gh.calls("GET", &format!("/repos/o/r/pulls/{n}")), tries);
+    let words = format!("{e:#}");
+    assert!(
+        words.contains(&format!("tried {tries} times over")),
+        "{words}"
+    );
+    assert!(words.ends_with("503 Service Unavailable"), "{words}");
+}
+
+/// The remote-retry spec's "The forge's API refuses a token": a call
+/// answered 401 on the token held is made again on one bought afresh,
+/// which sluice holds after.
+#[test]
+fn a_call_refused_its_token_is_made_on_a_fresh_one() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let forge = Forge::new(&clock);
+    let sold = Mutex::new(0);
+    let fake = Fake::start(move |r: &Request| {
+        if r.path != "/repos/o/r/pulls/7" {
+            return forge.answer(r, &sold);
+        }
+        if r.header("Authorization") == Some("Bearer token-1") {
+            return json(401, json!({ "message": "Bad credentials" }));
+        }
+        json(
+            200,
+            json!({ "number": 7, "state": "open", "head": { "ref": "unit/a" }, "base": { "ref": "main" } }),
+        )
+    });
+    // A clock that moves on at each reading, so the fresh token is
+    // settled at once.
+    let app = App::new(APP, KEY, fake.url(), ticking(&clock), policy()).unwrap();
+    assert_eq!(app.pull(&repo(), 7).unwrap().unwrap().number, 7);
+    let asked: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path == "/repos/o/r/pulls/7")
+        .map(|r| r.header("Authorization").unwrap().to_string())
+        .collect();
+    assert_eq!(asked, ["Bearer token-1", "Bearer token-2"]);
+    assert_eq!(app.token(&repo()).unwrap(), "token-2");
+    assert_eq!(minted(&fake), 2);
+}
+
+/// The remote-retry spec's "A draft mark answered 502" and "A check run's
+/// update cut after it was sent": a write that sets a state is made again.
+#[test]
+fn a_write_that_sets_a_state_is_made_again() {
+    use github::Trouble;
+    use sluice::profiles::github::forge::{Forge as _, Posting, Status};
+    let (_dir, gh, app, n) = on_github("forge-set", policy());
+    let r = repo();
+    gh.trouble("POST", "/graphql", 1, Trouble::Status(502));
+    app.set_draft(&r, n, true).unwrap();
+    assert_eq!(gh.calls("POST", "/graphql"), 2);
+    assert!(app.pull(&r, n).unwrap().unwrap().draft);
+
+    app.post(&r, "aaa", None, &waiting()).unwrap();
+    let id = app.posted(&r, "aaa").unwrap().unwrap().id;
+    let landed = Posting {
+        status: Status::Success,
+        title: "landed".into(),
+        summary: String::new(),
+        text: None,
+    };
+    gh.trouble(
+        "PATCH",
+        "/repos/o/r/check-runs/",
+        1,
+        Trouble::Cut { taken: false },
+    );
+    app.post(&r, "aaa", Some(id), &landed).unwrap();
+    assert_eq!(gh.calls("PATCH", "/repos/o/r/check-runs/"), 2);
+    assert_eq!(app.posted(&r, "aaa").unwrap().unwrap().posting, landed);
+}
+
+/// The remote-retry spec's "A comment posted, its answer lost", "A
+/// comment not taken" and "A check run made, its answer lost": a write
+/// that makes something whose answer was not read is read back on GitHub,
+/// carried on when GitHub holds it and made once more when it does not.
+#[test]
+fn a_write_that_makes_something_is_read_back_before_it_is_made_again() {
+    use github::Trouble;
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, gh, app, n) = on_github("forge-make", policy());
+    let r = repo();
+    let comments = format!("/repos/o/r/issues/{n}/comments");
+
+    gh.trouble("POST", &comments, 1, Trouble::Taken(502));
+    app.comment(&r, n, "taken").unwrap();
+    assert_eq!(gh.calls("POST", &comments), 1);
+    assert_eq!(app.comments(&r, n).unwrap(), ["taken"]);
+
+    gh.trouble("POST", &comments, 1, Trouble::Status(502));
+    app.comment(&r, n, "not taken").unwrap();
+    assert_eq!(gh.calls("POST", &comments), 3);
+    assert_eq!(app.comments(&r, n).unwrap(), ["taken", "not taken"]);
+
+    gh.trouble(
+        "POST",
+        "/repos/o/r/check-runs",
+        1,
+        Trouble::Cut { taken: true },
+    );
+    app.post(&r, "aaa", None, &waiting()).unwrap();
+    assert_eq!(gh.calls("POST", "/repos/o/r/check-runs"), 1);
+    let names: Vec<String> = app
+        .posted_all(&r, "aaa")
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(names, ["sluice"]);
+
+    gh.trouble("POST", "/repos/o/r/pulls", 1, Trouble::Taken(502));
+    let opened = app.open(&r, "main", "unit/e", "E", "body", false).unwrap();
+    assert_eq!(
+        (opened.head_ref.as_str(), opened.title.as_str()),
+        ("unit/e", "E")
+    );
+    assert_eq!(gh.calls("POST", "/repos/o/r/pulls"), 1);
+    assert_eq!(app.pulls(&r, "main").unwrap().len(), 2);
+}
+
+/// The remote-retry spec's "A connection never made": a comment whose
+/// first try cannot connect is made again, and posted once.
+#[test]
+fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
+    use sluice::profiles::github::forge::Forge as _;
+    use std::net::TcpListener;
+    let dir = support::Scratch::new("forge-unconnected");
+    let file = github::file(dir.path());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // GitHub sells the app its token, then goes away: the comment's
+    // first try finds nothing on the port, and the pause brings GitHub
+    // back on it.
+    let selling = support::http::serve(listener, 2, |r: &Request| {
+        if r.path.ends_with("/access_tokens") {
+            let ends = Utc::now() + TimeDelta::hours(1);
+            return json(
+                201,
+                json!({ "token": "token", "expires_at": ends.to_rfc3339() }),
+            );
+        }
+        json(
+            200,
+            json!({ "id": INSTALLATION, "app_id": APP, "permissions": {} }),
+        )
+    });
+    let back: Rc<RefCell<Option<github::GitHub>>> = Rc::default();
+    let (up, at) = (back.clone(), file.clone());
+    let policy = Policy::command().pausing(
+        move |_| {
+            if up.borrow().is_none() {
+                let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+                *up.borrow_mut() = Some(github::GitHub::start_on(listener, &at, None));
+            }
+            true
+        },
+        Instant::now,
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    let app = App::new(APP, KEY, &url, Box::new(Utc::now), Rc::new(policy)).unwrap();
+    app.token(&repo()).unwrap();
+    assert_eq!(selling.join().unwrap().len(), 2);
+    let n = sluice::profiles::github::fake::FileForge::new(&file, &repo())
+        .open_by("ann", "main", "unit/a", "aaa", false, None)
+        .unwrap();
+    app.comment(&repo(), n, "posted").unwrap();
+    let gh = back.borrow();
+    let gh = gh.as_ref().expect("GitHub back after the first try");
+    assert_eq!(
+        gh.calls("POST", &format!("/repos/o/r/issues/{n}/comments")),
+        1
+    );
+    assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
+    // Never judged, the comment was made again blind: nothing read
+    // whether GitHub held it, but the read just made.
+    assert_eq!(
+        gh.calls("GET", &format!("/repos/o/r/issues/{n}/comments")),
+        1
+    );
+}
+
+/// The remote-retry spec's "A run's dispatch answered 502": a dispatch
+/// GitHub answers 502 is made once, and fails saying its answer was not
+/// read.
+#[test]
+fn a_dispatch_answered_502_is_made_once() {
+    use sluice::profiles::checks::Launcher;
+    use sluice::profiles::github::actions::Actions;
+    use sluice_seams::{Launch, Rev, Setting};
+    use std::collections::BTreeMap;
+
+    let clock = Clock::new();
+    let forge = Forge::new(&clock);
+    let minted = Mutex::new(0);
+    let fake = Fake::start(move |r: &Request| {
+        if r.path.ends_with("/dispatches") {
+            return json(502, json!({ "message": "Bad Gateway" }));
+        }
+        forge.answer(r, &minted)
+    });
+    let dir = support::Scratch::new("pool-unanswered");
+    for args in [
+        &["init", "-q", "."][..],
+        &["remote", "add", "origin", "https://github.com/o/r.git"][..],
+    ] {
+        let out = support::git_command()
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }
+    let workflow = |pairs: &[(&str, &str)]| -> (String, Setting) {
+        let t: BTreeMap<String, Setting> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), Setting::Text(v.to_string())))
+            .collect();
+        ("github".into(), Setting::Tables(vec![t]))
+    };
+    let kind = workflow(&[("workflow", ".github/workflows/sluice.yml")]);
+    let pool = Actions::new(Rc::new(app(&fake, &clock)), dir.path());
+    let e = pool
+        .launch(&Launch {
+            pool: "forge".into(),
+            kind: kind.clone(),
+            signer: kind,
+            runner: "macos-15".into(),
+            remote: Some("origin".into()),
+            branch: "main".into(),
+            candidate: "c3".into(),
+            combination: Rev::new("c0ffee"),
+            system: Some("macos-arm64".into()),
+            claim: "pool/forge/7".into(),
+        })
+        .unwrap_err();
+    assert!(sluice_seams::unanswered(&e), "{e:#}");
+    let words = format!("{e:#}");
+    assert!(
+        words.contains(
+            "GitHub's answer to POST /repos/o/r/actions/workflows/sluice.yml/dispatches \
+             was not read: 502 Bad Gateway"
+        ),
+        "{words}"
+    );
+    let dispatched = fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/dispatches"))
+        .count();
+    assert_eq!(dispatched, 1);
 }
