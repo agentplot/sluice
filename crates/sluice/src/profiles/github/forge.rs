@@ -143,6 +143,10 @@ pub fn check_name(task: &str, system: Option<&str>) -> String {
 }
 
 pub trait Forge {
+    /// Who GitHub names as the author of a pull request sluice opens: a
+    /// request whose author it is, sluice opened.
+    fn login(&self) -> Result<String>;
+
     /// The open pull requests into `base`.
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>>;
 
@@ -216,8 +220,9 @@ pub trait Forge {
         draft: bool,
     ) -> Result<Pull>;
 
-    /// Replace pull request `number`'s body.
-    fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()>;
+    /// Replace pull request `number`'s body, and its title when `title`
+    /// is given, in one write.
+    fn edit(&self, repo: &Repo, number: u64, title: Option<&str>, body: &str) -> Result<()>;
 
     /// Mark pull request `number` a draft, or ready for review, which
     /// GitHub's timeline records.
