@@ -16,7 +16,7 @@
 
 ## 3. Say it to the operator and the suite
 
-- [ ] 3.1 In `site/src/content/docs/reference/state.md`, change the `.tmp/<checkout>/` line to say a checkout's scratch is named by a short code made from the checkout's name, the same length for every checkout, which its record names; a checkout made by an older sluice keeps its former name until it is released; and a directory there no record names is removed by the next round or run (rule core.26: no word of ours). Verify with `moon run site:prose`, every warning cleared.
+- [x] 3.1 In `site/src/content/docs/reference/state.md`, change the `.tmp/<checkout>/` line to say a checkout's scratch is named by a short code made from the checkout's name, the same length for every checkout, which its record names; a checkout made by an older sluice keeps its former name until it is released; and a directory there no record names is removed by the next round or run (rule core.26: no word of ours). Verify with `moon run site:prose`, every warning cleared.
 - [ ] 3.2 In `plugins/sluice/tests/lay-out.sh`, keep the key-length guard and rewrite its comment and failure message to say the scratch is too long because this host's sluice names a checkout's scratch by its worktree's path, and that updating the host's sluice gives a short one. Verify with `moon run plugin-sluice:lay-out` from this worktree.
 
 ## 4. The gate
