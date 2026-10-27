@@ -1,7 +1,7 @@
 ---
 number: 64
 title: A landing's pull request is titled by what lands, never by its first commit
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # A landing's pull request is titled by what lands, never by its first commit
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: the user, whose word of 2026-10-27 swancloud-design relayed (afterthought/crew-state, swancloud/main, signal 2026-10-27-swancloud-design-60cb0ec3/01): "do both: a landing's pull request is titled by what lands, the bolt branch's name or the submission's own subject, never its first commit"; the shape is madswan-design's, and the user's yes is asked on the record's card, since the word reached this record through another agent.
 Sources: statement clauses 118, 120 and the C.5 pull request row; records 0021, 0025, 0052; `crates/sluice/src/profiles/github/pulls.rs` on main at 2026-10-27, where a request sluice opens takes the first line of the first commit between the branch's tip and the head, and the head's ref where there is none; WilldanGroup/switchboard-kit pull requests 17, 31 and 38.
