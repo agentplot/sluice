@@ -13,9 +13,10 @@ use std::rc::Rc;
 use sluice::identity::{Credentials, Identity};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::pushed_refs::PushedRefs;
+use sluice_core::policy::Policy;
 use sluice_seams::{Branch, HostCopy, LandingCommit, Moved, Rev};
 use support::http::Fake;
-use support::Repo;
+use support::{Repo, Scratch};
 
 fn rev(s: String) -> Rev {
     Rev::new(s)
@@ -285,6 +286,168 @@ fn the_router_sends_a_branch_to_its_remote() {
     assert_eq!(b.read("main").unwrap(), Some(rev(pushed)));
     let err = format!("{:#}", b.read("bolt/x").unwrap_err());
     assert!(err.contains("\"nowhere\""), "{err}");
+}
+
+/// A repository whose `origin/main`, as fetched, holds `policy`, while
+/// the host's own `main` is the root commit, from before the policy file.
+/// Returns the root and origin's revision.
+fn a_copy_from_before_the_policy(repo: &Repo, policy: &str) -> (Scratch, String, String) {
+    let root = repo.rev("main");
+    repo.write(".config/sluice.toml", policy);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let bare = repo.bare_origin();
+    let fetched = repo.rev("refs/remotes/origin/main");
+    repo.git(&["reset", "-q", "--hard", &root]);
+    (bare, root, fetched)
+}
+
+/// The revision `policy_of` gave, and the remote its policy names for
+/// `branch`.
+fn routed_by(at: Option<(Rev, Policy)>, branch: &str) -> (String, Option<String>) {
+    let (rev, policy) = at.expect("a policy to route by");
+    let remote = policy
+        .rules_for(branch)
+        .unwrap()
+        .and_then(|r| r.remote.clone());
+    (rev.to_string(), remote)
+}
+
+/// 124: a host whose own `main` is from before the policy file routes
+/// `main` by origin's copy as last fetched, and reads origin's revision;
+/// its own `main` stays where it was.
+#[test]
+fn the_router_reads_a_copy_from_before_the_policy_as_origins() {
+    let repo = Repo::new("router-stale");
+    let (_bare, root, fetched) =
+        a_copy_from_before_the_policy(&repo, "[branches.main]\nremote = \"origin\"\n");
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(b.remote("main").unwrap().as_deref(), Some("origin"));
+    assert_eq!(b.read("main").unwrap(), Some(rev(fetched)));
+    assert_eq!(repo.rev("main"), root);
+}
+
+/// 124: a branch to be made from a `main` this host holds from before
+/// the policy file, and the policy `main`'s records are routed by, are
+/// read off origin's copy as `remote` reads it.
+#[test]
+fn made_from_and_policy_of_read_a_copy_from_before_the_policy_as_origins() {
+    let repo = Repo::new("router-stale-made");
+    let (_bare, _, fetched) = a_copy_from_before_the_policy(
+        &repo,
+        "[branches.main]\nremote = \"origin\"\n[branches.\"bolt/*\"]\nremote = \"origin\"\n",
+    );
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(
+        b.remote_if_made_from("bolt/x", "main").unwrap().as_deref(),
+        Some("origin")
+    );
+    assert_eq!(
+        routed_by(b.policy_of("main").unwrap(), "main"),
+        (fetched, Some("origin".into()))
+    );
+}
+
+/// 124: a host's `main` whose policy names no remote yet decides nothing
+/// against origin's later copy, which names origin.
+#[test]
+fn the_router_follows_a_later_copy_naming_a_remote() {
+    let repo = Repo::new("router-later");
+    repo.write(".config/sluice.toml", "[branches.main]\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let bare = repo.bare_origin();
+    let own = repo.rev("main");
+    let other = Repo::clone_of(bare.path(), "other");
+    let named = other.push_change(
+        ".config/sluice.toml",
+        "[branches.main]\nremote = \"origin\"\n",
+    );
+    repo.git(&["fetch", "-q", "origin"]);
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(b.remote("main").unwrap().as_deref(), Some("origin"));
+    assert_eq!(
+        routed_by(b.policy_of("main").unwrap(), "main"),
+        (named.clone(), Some("origin".into()))
+    );
+    assert_eq!(b.read("main").unwrap(), Some(rev(named)));
+    assert_eq!(repo.rev("main"), own);
+}
+
+/// 124: with neither the host's `main` nor origin's copy naming a remote,
+/// `main` stays in local refs, read from the host's own ref.
+#[test]
+fn the_router_keeps_a_branch_no_copy_routes_local() {
+    let repo = Repo::new("router-none");
+    repo.write(".config/sluice.toml", "[branches.main]\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let bare = repo.bare_origin();
+    let own = repo.rev("main");
+    let other = Repo::clone_of(bare.path(), "other");
+    let theirs = other.push_change("b", "2\n");
+    repo.git(&["fetch", "-q", "origin"]);
+    assert_eq!(repo.rev("refs/remotes/origin/main"), theirs);
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(b.remote("main").unwrap(), None);
+    assert_eq!(b.read("main").unwrap(), Some(rev(own.clone())));
+    assert_eq!(routed_by(b.policy_of("main").unwrap(), "main"), (own, None));
+}
+
+/// 124: the host's `main` naming origin and `upstream/main` naming
+/// upstream are refused, the refusal naming each remote and its ref.
+#[test]
+fn the_router_refuses_two_remotes_named() {
+    let repo = Repo::new("router-two");
+    repo.write(
+        ".config/sluice.toml",
+        "[branches.main]\nremote = \"origin\"\n",
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let _origin = repo.bare_origin();
+    let upstream = Scratch::new("upstream.git");
+    let at = upstream.path().to_str().unwrap();
+    repo.git(&["clone", "-q", "--bare", ".", at]);
+    repo.git(&["remote", "add", "upstream", at]);
+    let theirs = repo.branch(
+        "upstream-policy",
+        "main",
+        &[(
+            ".config/sluice.toml",
+            Some("[branches.main]\nremote = \"upstream\"\n"),
+        )],
+    );
+    repo.git(&[
+        "push",
+        "-q",
+        "upstream",
+        &format!("{theirs}:refs/heads/main"),
+    ]);
+    repo.git(&["fetch", "-q", "upstream"]);
+    let b = Branches::open(repo.dir()).unwrap();
+    for err in [
+        format!("{:#}", b.remote("main").unwrap_err()),
+        format!("{:#}", b.read("main").unwrap_err()),
+    ] {
+        assert!(err.contains("origin on main ("), "{err}");
+        assert!(err.contains("upstream on upstream/main ("), "{err}");
+    }
+}
+
+/// 124: deciding where a branch is fetches nothing: with origin out of
+/// reach, origin's copy as last fetched still routes `main` there, and
+/// only the read that follows tries origin, failing.
+#[test]
+fn the_router_decides_with_the_remote_out_of_reach() {
+    let repo = Repo::new("router-offline");
+    let (_bare, _, _) =
+        a_copy_from_before_the_policy(&repo, "[branches.main]\nremote = \"origin\"\n");
+    let gone = repo.dir().join("no-such-remote.git");
+    repo.git(&["remote", "set-url", "origin", gone.to_str().unwrap()]);
+    let b = Branches::open(repo.dir()).unwrap();
+    assert_eq!(b.remote("main").unwrap().as_deref(), Some("origin"));
+    assert!(b.read("main").is_err());
 }
 
 /// An identity whose remote is a fake HTTP server, with a token of its own.
