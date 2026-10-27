@@ -23,7 +23,7 @@ crate, `herdr`, or `site`.
 
 ## 3. The overview's JSON and the home view
 
-- [ ] 3.1 Add `recent_subjects` to `BranchView` in `crates/sluice-core/src/overview.rs`, built beside `recent_from` from the live records and the finished index, only for submissions with a subject; verify with the overview's unit tests and a CLI test for the four scenarios of the `overview` delta, and that `recent` and `recent_from` are unchanged.
+- [x] 3.1 Add `recent_subjects` to `BranchView` in `crates/sluice-core/src/overview.rs`, built beside `recent_from` from the live records and the finished index, only for submissions with a subject; verify with the overview's unit tests and a CLI test for the four scenarios of the `overview` delta, and that `recent` and `recent_from` are unchanged.
 - [ ] 3.2 Name the home view's submission `#<id> <name> to <branch> · <state>` and add `subject` to its JSON in `crates/sluice/src/home.rs`; verify with CLI tests for both scenarios of the home view requirement, and that the JSON's other fields and `next` are unchanged.
 - [ ] 3.3 Update the home view's example in `site/src/content/docs/reference/commands.md` and the overview's `--json` fields where the page lists them; verify `moon run 'site:prose'` is clean.
 

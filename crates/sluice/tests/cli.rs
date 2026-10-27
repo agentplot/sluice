@@ -1400,6 +1400,42 @@ fn overview_names_where_recent_submissions_came_from() {
     );
 }
 
+/// 23, 26: the overview names the subject of each submission its recent
+/// lines name whose submit gave one, once it has moved to the finished
+/// records too, beside where each came from; none before anything lands.
+#[test]
+fn overview_names_the_subjects_of_recent_submissions() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    for w in ["unit/a", "unit/b"] {
+        sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    }
+    give_subject(&f, 2, "Batch review cards");
+    let branch = |f: &Fakes| json(&sluice(f, &["overview", "--json"]).1)["branches"][0].clone();
+    let b = branch(&f);
+    assert_eq!(b["recent"], serde_json::json!([]));
+    assert_eq!(b["recent_subjects"], serde_json::json!({}));
+
+    sluice(&f, &["run", "--rounds", "6"]);
+    // Landed together, #2 moved to the finished records, #1 not yet.
+    let files = f.world.files(BRANCH);
+    assert!(files.contains_key(".finished/2.json"), "{:?}", files.keys());
+    assert!(files.contains_key("submissions/1.json"));
+    let b = branch(&f);
+    assert_eq!(b["recent"][0]["ids"], serde_json::json!([1, 2]), "{b}");
+    assert_eq!(
+        b["recent_subjects"],
+        serde_json::json!({"2": "Batch review cards"}),
+        "{b}"
+    );
+    assert_eq!(
+        b["recent_from"],
+        serde_json::json!({"1": "unit/a", "2": "unit/b"}),
+        "{b}"
+    );
+}
+
 /// ADR 0028: a combination under test carries its run's tasks, as a
 /// round kept them, and its text line says how many have ended.
 #[test]
