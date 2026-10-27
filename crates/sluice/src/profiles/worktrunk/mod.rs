@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context as _, Result};
-use clap::Parser as _;
+use clap::{CommandFactory as _, FromArgMatches as _};
 use sluice_seams::{Driver, Notification, Rev, Session, Submitter};
 
 /// The worktrunk driver.
@@ -115,12 +115,14 @@ pub fn forward(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     out
 }
 
-/// What `wt submit` does once sluice answers: the arguments for sluice,
-/// and the waiting submit whose worktree goes if it lands, if any.
+/// What `wt submit` does: the arguments for sluice, and the waiting
+/// submit, if it is one; or why its command line is refused (64) with
+/// nothing run.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Submit {
     pub sluice: Vec<OsString>,
-    pub remove: Option<Waiting>,
+    pub waiting: Option<Waiting>,
+    pub refused: Option<String>,
 }
 
 /// A waiting submit: the branch it waits on and the worktree it is from.
@@ -128,46 +130,134 @@ pub struct Submit {
 pub struct Waiting {
     pub branch: String,
     pub worktree: PathBuf,
+    /// Its worktree goes once it lands: no `--no-remove`.
+    pub remove: bool,
+    /// `wt submit`'s own `--timeout`, as given: how long a run again
+    /// follows a submission already made.
+    pub timeout: Option<OsString>,
+    /// `--json`, for the wait a run again follows with.
+    pub json: bool,
+    /// `--after` or `--priority` given: a place in the queue, which only a
+    /// new submission takes.
+    pub orders: bool,
 }
 
 impl Submit {
-    /// `--no-remove` is `wt submit`'s own; the rest is read as sluice
-    /// reads it, so that only a waiting submit can remove anything: not
-    /// one that does not wait for its outcome (`--no-wait`, `--check`,
-    /// `--status`), and not `--help`, `--version` or arguments sluice
-    /// refuses, which exit as they do with nothing submitted.
+    /// `--no-remove` and `--timeout` are `wt submit`'s own; the rest is
+    /// read as sluice reads it, so that only a waiting submit can follow
+    /// or remove anything: not one that does not wait for its outcome
+    /// (`--no-wait`, `--check`, `--status`), and not `--help`, `--version`
+    /// or arguments sluice refuses, which exit as they do with nothing
+    /// submitted. `--timeout` follows a submission already made, so it is
+    /// refused on a run that would make one whatever stands.
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Submit {
         let mut keep = false;
-        let rest: Vec<OsString> = args
-            .into_iter()
-            .filter(|a| {
-                let ours = a.to_str() == Some("--no-remove");
-                keep |= ours;
-                !ours
-            })
-            .collect();
+        let mut timeout: Option<OsString> = None;
+        let mut refused = None;
+        let mut rest = Vec::new();
+        let mut args = args.into_iter();
+        while let Some(a) = args.next() {
+            match a.to_str() {
+                Some("--no-remove") => keep = true,
+                Some("--timeout") => match args.next() {
+                    Some(t) => timeout = Some(t),
+                    None => refused = Some("--timeout takes a duration, as 9m".to_string()),
+                },
+                Some(t) if t.starts_with("--timeout=") => {
+                    timeout = Some(t["--timeout=".len()..].into());
+                }
+                _ => rest.push(a),
+            }
+        }
+        if let (None, Some(t)) = (&refused, &timeout) {
+            let text = t.to_string_lossy();
+            if let Err(e) = crate::timeout(&text) {
+                refused = Some(format!("--timeout {text}: {e}"));
+            }
+        }
         let sluice = forward(rest);
-        let read = crate::Cli::try_parse_from(
-            std::iter::once(OsString::from("sluice")).chain(sluice.iter().cloned()),
-        );
-        // Several worktrees are one act of `sluice submit`'s, and none is
-        // removed.
-        let remove = match read.map(|c| c.command) {
-            Ok(Some(crate::Command::Submit {
+        let read = crate::Cli::command()
+            .try_get_matches_from(
+                std::iter::once(OsString::from("sluice")).chain(sluice.iter().cloned()),
+            )
+            .ok()
+            .and_then(|m| {
+                let given = |id: &str| {
+                    m.subcommand_matches("submit")
+                        .and_then(|s| s.value_source(id))
+                        == Some(clap::parser::ValueSource::CommandLine)
+                };
+                let orders = given("after") || given("priority");
+                crate::Cli::from_arg_matches(&m)
+                    .ok()
+                    .and_then(|c| c.command)
+                    .map(|c| (c, orders))
+            });
+        let Some((
+            crate::Command::Submit {
                 branch,
-                no_wait: false,
-                check: false,
-                status: false,
+                no_wait,
+                check,
+                status,
                 worktree,
+                json,
                 ..
-            })) if !keep && worktree.len() == 1 => Some(Waiting {
-                branch,
-                worktree: worktree[0].clone().into(),
-            }),
-            _ => None,
+            },
+            orders,
+        )) = read
+        else {
+            // Help, a version or a command line sluice refuses: sluice says
+            // so, as it would with no `--timeout`.
+            return Submit {
+                sluice,
+                waiting: None,
+                refused,
+            };
         };
-        Submit { sluice, remove }
+        if refused.is_none() && timeout.is_some() {
+            let clause = if no_wait {
+                Some("takes no --no-wait")
+            } else if check {
+                Some("takes no --check")
+            } else if status {
+                Some("takes no --status")
+            } else if worktree.len() > 1 {
+                Some("takes one worktree")
+            } else if orders {
+                Some("takes no --after or --priority")
+            } else {
+                None
+            };
+            if let Some(clause) = clause {
+                refused = Some(follows_only(&branch, clause));
+            }
+        }
+        // Several worktrees are one act of `sluice submit`'s, which none
+        // follows and none is removed by.
+        let waiting = (!no_wait && !check && !status && worktree.len() == 1).then(|| Waiting {
+            branch,
+            worktree: worktree[0].clone().into(),
+            remove: !keep,
+            timeout,
+            json,
+            orders,
+        });
+        Submit {
+            sluice,
+            waiting,
+            refused,
+        }
     }
+}
+
+/// Why `--timeout` is refused, `clause` saying what of this run stops it:
+/// it follows a submission already made, which `wt submit <branch>
+/// --no-wait` makes.
+pub fn follows_only(branch: &str, clause: &str) -> String {
+    format!(
+        "--timeout follows a submission already made, and {clause}; \
+         make one with wt submit {branch} --no-wait"
+    )
 }
 
 /// Whether sluice records `worktree`'s head as landed on `branch`: its
@@ -258,31 +348,51 @@ mod tests {
     /// in a new directory (section 7).
     /// C.4: a waiting submit removes its worktree once it lands, unless
     /// told not to; one that does not wait never does, nor does asking
-    /// for help or arguments sluice refuses.
+    /// for help or arguments sluice refuses. `--timeout` is `wt submit`'s
+    /// own, kept for the waiting run's follow and refused where a run
+    /// would submit whatever stands, or with a value sluice cannot read.
     #[test]
     fn what_a_submit_removes() {
         let parse = |a: &[&str]| Submit::parse(a.iter().map(OsString::from));
-        let waiting = |b: &str, w: &str| {
-            Some(Waiting {
-                branch: b.into(),
-                worktree: w.into(),
-            })
+        // The branch and worktree a run removes once it lands.
+        let removes = |s: &Submit| {
+            s.waiting
+                .as_ref()
+                .filter(|w| w.remove)
+                .map(|w| (w.branch.clone(), w.worktree.clone()))
         };
+        let at = |b: &str, w: &str| Some((b.to_string(), PathBuf::from(w)));
         let s = parse(&["main", "--json"]);
         assert_eq!(s.sluice, ["submit", "main", "--json"]);
-        assert_eq!(s.remove, waiting("main", "."));
-        assert_eq!(parse(&["main", "--no-remove"]).remove, None);
-        assert_eq!(parse(&["main", "--no-remove"]).sluice, ["submit", "main"]);
-        assert_eq!(parse(&["main", "--no-wait"]).remove, None);
-        assert_eq!(parse(&["main", "--check"]).remove, None);
-        assert_eq!(parse(&["main", "--status"]).remove, None);
+        assert_eq!(removes(&s), at("main", "."));
+        assert!(s.waiting.as_ref().is_some_and(|w| w.json && !w.orders));
+        assert_eq!(s.refused, None);
+        // Kept, and still a waiting run, which a run again follows with.
+        let s = parse(&["main", "--no-remove"]);
+        assert_eq!(removes(&s), None);
+        assert!(s.waiting.as_ref().is_some_and(|w| !w.remove));
+        assert_eq!(s.sluice, ["submit", "main"]);
+        for no_wait in [
+            &["main", "--no-wait"][..],
+            &["main", "--check"],
+            &["main", "--status"],
+        ] {
+            let s = parse(no_wait);
+            assert_eq!(s.waiting, None, "{no_wait:?}");
+            assert_eq!(s.refused, None, "{no_wait:?}");
+        }
         let w = parse(&["main", "--worktree", "../s"]);
-        assert_eq!(w.remove, waiting("main", "../s"));
+        assert_eq!(removes(&w), at("main", "../s"));
         assert_eq!(w.sluice, ["submit", "main", "--worktree", "../s"]);
         let w = parse(&["main", "--worktree=../t"]);
-        assert_eq!(w.remove, waiting("main", "../t"));
+        assert_eq!(removes(&w), at("main", "../t"));
         let w = parse(&["--priority", "3", "main", "--after", "1,2"]);
-        assert_eq!(w.remove, waiting("main", "."));
+        assert_eq!(removes(&w), at("main", "."));
+        assert!(w.waiting.as_ref().is_some_and(|w| w.orders));
+        let w = parse(&["main", "--priority", "0"]);
+        assert!(w.waiting.as_ref().is_some_and(|w| w.orders));
+        let w = parse(&["main", "--worktree", "../a", "--worktree", "../b"]);
+        assert_eq!(w.waiting, None);
         for asks in [
             &["--help"][..],
             &["-h"],
@@ -292,9 +402,80 @@ mod tests {
             &["main", "--no-such-flag"],
         ] {
             let s = parse(asks);
-            assert_eq!(s.remove, None, "{asks:?}");
+            assert_eq!(s.waiting, None, "{asks:?}");
             assert_eq!(s.sluice.len(), asks.len() + 1, "{asks:?}");
         }
+
+        // `--timeout`, in either form, is kept for the follow and never
+        // forwarded to sluice.
+        for given in [
+            &["main", "--timeout", "9m", "--json"][..],
+            &["main", "--timeout=9m", "--json"],
+        ] {
+            let s = parse(given);
+            assert_eq!(s.sluice, ["submit", "main", "--json"], "{given:?}");
+            assert_eq!(s.refused, None, "{given:?}");
+            let w = s.waiting.expect("a waiting run");
+            assert_eq!(w.timeout, Some(OsString::from("9m")), "{given:?}");
+            assert!(w.remove && w.json, "{given:?}");
+        }
+        let s = parse(&["main", "--timeout", "1h30m", "--no-remove"]);
+        assert_eq!(s.refused, None);
+        assert!(s
+            .waiting
+            .is_some_and(|w| !w.remove && w.timeout == Some("1h30m".into())));
+        // Refused with nothing run where a run would submit whatever stands.
+        for (given, clause) in [
+            (
+                &["main", "--timeout", "9m", "--no-wait"][..],
+                "takes no --no-wait",
+            ),
+            (&["main", "--check", "--timeout", "9m"], "takes no --check"),
+            (&["main", "--timeout=9m", "--status"], "takes no --status"),
+            (
+                &[
+                    "main",
+                    "--timeout",
+                    "9m",
+                    "--worktree",
+                    "../a",
+                    "--worktree",
+                    "../b",
+                ],
+                "takes one worktree",
+            ),
+            (
+                &["main", "--timeout", "9m", "--after", "3"],
+                "takes no --after or --priority",
+            ),
+            (
+                &["main", "--priority", "2", "--timeout", "9m"],
+                "takes no --after or --priority",
+            ),
+        ] {
+            let s = parse(given);
+            assert_eq!(s.refused, Some(follows_only("main", clause)), "{given:?}");
+            assert!(
+                s.refused
+                    .as_ref()
+                    .is_some_and(|r| r.contains("wt submit main --no-wait")),
+                "{given:?}"
+            );
+        }
+        // A value sluice cannot read, or none.
+        let s = parse(&["main", "--timeout", "soon"]);
+        assert!(
+            s.refused
+                .as_ref()
+                .is_some_and(|r| r.starts_with("--timeout soon: ")),
+            "{:?}",
+            s.refused
+        );
+        assert!(parse(&["main", "--timeout=9x"]).refused.is_some());
+        assert_eq!(
+            parse(&["main", "--timeout"]).refused,
+            Some("--timeout takes a duration, as 9m".into())
+        );
     }
 
     #[test]

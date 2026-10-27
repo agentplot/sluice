@@ -132,8 +132,9 @@ Exit codes:
   130  stopped with Ctrl-C; the submission stays queued";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
-/// read is a command line sluice cannot read (64).
-fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
+/// read is a command line sluice cannot read (64). `wt submit`'s own
+/// `--timeout` is read by it too.
+pub fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
     sluice_core::policy::parse_duration(text).map_err(|e| format!("{e:#}"))
 }
 

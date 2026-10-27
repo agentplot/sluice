@@ -8,10 +8,14 @@
 use std::process::Command;
 
 use sluice::profiles::worktrunk::{landed, release, remove, removes_on_landing, Submit};
-use sluice::LANDED;
+use sluice::{LANDED, USAGE};
 
 fn main() {
     let submit = Submit::parse(std::env::args_os().skip(1));
+    if let Some(why) = &submit.refused {
+        eprintln!("wt submit: {why}");
+        std::process::exit(USAGE);
+    }
     let code = match Command::new("sluice").args(&submit.sluice).status() {
         Ok(s) => s.code().unwrap_or(1),
         Err(err) => {
@@ -20,7 +24,7 @@ fn main() {
         }
     };
     if code == LANDED {
-        if let Some(waiting) = &submit.remove {
+        if let Some(waiting) = submit.waiting.as_ref().filter(|w| w.remove) {
             let w = waiting.worktree.as_path();
             if !landed(&waiting.branch, w) {
                 eprintln!(
