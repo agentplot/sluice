@@ -260,30 +260,116 @@ pub fn follows_only(branch: &str, clause: &str) -> String {
     )
 }
 
+/// What stands of a worktree's last submission to a branch, at the head
+/// the worktree holds now (record 0065).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Standing {
+    /// A submission of the worktree's head, undecided or landed.
+    Submission { id: u64, landed: bool },
+    /// The worktree's pull request, open and ready at its head, not yet
+    /// decided.
+    PullRequest(u64),
+    /// None: never submitted, or of another head, or blamed, conflicting,
+    /// withdrawn or closed.
+    Nothing,
+}
+
+/// A submission's states that stand: undecided, or landed.
+const STANDS: [&str; 6] = [
+    "queued", "waiting", "testing", "passed", "landing", "landed",
+];
+
+/// [`Standing`] read from `sluice submit <branch> --status --json`'s exit
+/// `code` and output, against the worktree's `head`; or, when sluice gave
+/// no answer to read, its words.
+pub fn standing(
+    head: &str,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> std::result::Result<Standing, String> {
+    let words = || {
+        let said = String::from_utf8_lossy(stderr).trim().to_string();
+        let said = if said.is_empty() {
+            String::from_utf8_lossy(stdout).trim().to_string()
+        } else {
+            said
+        };
+        match code {
+            Some(c) => format!("sluice submit --status exited {c}: {said}"),
+            None => format!("sluice submit --status was stopped: {said}"),
+        }
+    };
+    // 0 says where it stands; 1 that nothing was submitted, or a pull
+    // request closed.
+    if !matches!(code, Some(0 | 1)) {
+        return Err(words());
+    }
+    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return Err(words());
+    };
+    if let Some(error) = doc.get("error") {
+        return match error["kind"].as_str() {
+            Some("not_found") => Ok(Standing::Nothing),
+            _ => Err(error["message"].as_str().map_or_else(words, str::to_string)),
+        };
+    }
+    let at_head = doc["head"] == head;
+    let state = doc["state"].as_str().unwrap_or_default();
+    if let Some(id) = doc["id"].as_u64() {
+        return Ok(if at_head && STANDS.contains(&state) {
+            Standing::Submission {
+                id,
+                landed: state == "landed",
+            }
+        } else {
+            Standing::Nothing
+        });
+    }
+    if let Some(n) = doc["pull_request"].as_u64() {
+        let ready = doc["draft"] == false;
+        return Ok(if at_head && ready && state != "closed" {
+            Standing::PullRequest(n)
+        } else {
+            Standing::Nothing
+        });
+    }
+    Err(words())
+}
+
+/// What stands of `worktree`'s last submission to `branch`, as sluice
+/// records it, at the head the worktree holds now; or why it could not be
+/// read.
+pub fn standing_in(branch: &str, worktree: &Path) -> std::result::Result<Standing, String> {
+    let head = Worktrunk
+        .git(worktree, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|e| format!("{e:#}"))?;
+    if !head.status.success() {
+        return Err(format!(
+            "{} has no head: {}",
+            worktree.display(),
+            String::from_utf8_lossy(&head.stderr).trim()
+        ));
+    }
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let out = Command::new("sluice")
+        .args(["submit", branch, "--status", "--json", "--worktree"])
+        .arg(worktree)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("running sluice: {e}"))?;
+    standing(&head, out.status.code(), &out.stdout, &out.stderr)
+}
+
 /// Whether sluice records `worktree`'s head as landed on `branch`: its
 /// last submission from the worktree has landed, and is of the head the
 /// worktree holds now. A worktree is removed on this, never on an exit
 /// alone.
 pub fn landed(branch: &str, worktree: &Path) -> bool {
-    let head = Worktrunk
-        .git(worktree, &["rev-parse", "--verify", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let Some(head) = head else {
-        return false;
-    };
-    let out = Command::new("sluice")
-        .args(["submit", branch, "--status", "--json", "--worktree"])
-        .arg(worktree)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output();
-    let Some(out) = out.ok().filter(|o| o.status.success()) else {
-        return false;
-    };
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
-        .is_ok_and(|v| v["state"] == "landed" && v["head"] == head.as_str())
+    matches!(
+        standing_in(branch, worktree),
+        Ok(Standing::Submission { landed: true, .. })
+    )
 }
 
 /// Whether worktrunk removes a worktree once it lands: the user's
@@ -476,6 +562,108 @@ mod tests {
             parse(&["main", "--timeout"]).refused,
             Some("--timeout takes a duration, as 9m".into())
         );
+    }
+
+    /// Record 0065: a run again follows a submission of the worktree's
+    /// head, undecided or landed, or its pull request open and ready
+    /// there; anything else is submitted, and an answer sluice did not
+    /// give is no answer.
+    #[test]
+    fn what_stands_at_the_head() {
+        const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+        let read = |code: i32, doc: serde_json::Value| {
+            standing(HEAD, Some(code), doc.to_string().as_bytes(), b"")
+        };
+        let record = |state: &str, head: &str| serde_json::json!({ "id": 7, "branch": "main", "state": state, "head": head });
+        for state in ["queued", "waiting", "testing", "passed", "landing"] {
+            assert_eq!(
+                read(0, record(state, HEAD)),
+                Ok(Standing::Submission {
+                    id: 7,
+                    landed: false
+                }),
+                "{state}"
+            );
+        }
+        assert_eq!(
+            read(0, record("landed", HEAD)),
+            Ok(Standing::Submission {
+                id: 7,
+                landed: true
+            })
+        );
+        for state in ["failed", "conflict", "withdrawn"] {
+            assert_eq!(
+                read(0, record(state, HEAD)),
+                Ok(Standing::Nothing),
+                "{state}"
+            );
+        }
+        assert_eq!(
+            read(0, record("queued", "fedcba9876543210")),
+            Ok(Standing::Nothing)
+        );
+        assert_eq!(
+            read(0, record("landed", "fedcba9876543210")),
+            Ok(Standing::Nothing)
+        );
+
+        let pull = |state: &str, head: Option<&str>, draft: bool| {
+            serde_json::json!({
+                "pull_request": 12, "branch": "main", "state": state,
+                "head": head, "draft": draft,
+            })
+        };
+        assert_eq!(
+            read(0, pull("waiting: needs 1 review", Some(HEAD), false)),
+            Ok(Standing::PullRequest(12))
+        );
+        assert_eq!(
+            read(0, pull("waiting: a draft", Some(HEAD), true)),
+            Ok(Standing::Nothing)
+        );
+        assert_eq!(
+            read(0, pull("waiting", Some("fedcba9876543210"), false)),
+            Ok(Standing::Nothing)
+        );
+        assert_eq!(read(0, pull("waiting", None, false)), Ok(Standing::Nothing));
+        assert_eq!(
+            read(
+                1,
+                serde_json::json!({ "pull_request": 12, "branch": "main", "state": "closed" })
+            ),
+            Ok(Standing::Nothing)
+        );
+
+        // Never submitted from this worktree.
+        let none = serde_json::json!({ "error": {
+            "kind": "not_found", "message": "nothing submitted from . to main",
+            "next": ["sluice submit main"],
+        }});
+        assert_eq!(read(1, none), Ok(Standing::Nothing));
+
+        // No answer: sluice's words, never Nothing.
+        let internal = serde_json::json!({ "error": {
+            "kind": "internal", "message": "reading main's records: refused", "next": [],
+        }});
+        assert_eq!(
+            read(3, internal.clone()),
+            Err("sluice submit --status exited 3: ".to_string() + &internal.to_string())
+        );
+        assert_eq!(
+            read(1, internal),
+            Err("reading main's records: refused".to_string())
+        );
+        let e = standing(HEAD, Some(0), b"not json", b"").unwrap_err();
+        assert!(e.contains("not json"), "{e}");
+        let e = standing(HEAD, Some(0), b"{}", b"").unwrap_err();
+        assert!(e.contains("{}"), "{e}");
+        let e = standing(HEAD, Some(64), b"", b"error: unexpected argument").unwrap_err();
+        assert_eq!(
+            e,
+            "sluice submit --status exited 64: error: unexpected argument"
+        );
+        assert!(standing(HEAD, None, b"", b"").is_err());
     }
 
     #[test]
