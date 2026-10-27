@@ -39,21 +39,31 @@ Check `~/.local/bin` is on `PATH`, then `sluice --version` again.
 
 sluice is set up in a repository whose git directory stands apart from its
 working copies, one per branch, so every session works and submits from a
-working copy of its own (126). Before surveying or writing anything, check
-where you were asked:
+working copy of its own (126). Before surveying or writing anything, ask
+the conversion how the repository stands, from where you were asked:
 
 ```sh
-git rev-parse --is-bare-repository                      # false
-git rev-parse --show-toplevel                           # the folder
-git rev-parse --path-format=absolute --git-common-dir   # <the folder>/.git
-git worktree list --porcelain | grep -c '^worktree '    # 1
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" kind .
 ```
 
-When all four answer so, the folder is a plain clone, the repository's
-one and only working copy: offer the layout before anything else. When
-any differs, go on to step 3: in a worktree of a bare git directory the
-repository is in the layout already, and a clone that has worktrees of
-its own is the `worktrees` skill's to convert, when the user asks.
+It changes nothing and prints one line. `<the folder>` is the folder that
+holds the git directory, `.git`, wherever you were asked; sluice's own
+checkouts under the git directory, and worktrees whose folder is gone,
+count as no working copy.
+
+- `apart`: the git directory already stands apart from every working
+  copy, as in a worktree of a bare git directory. Make no offer; go on to
+  step 3.
+- `only <the folder>`: the folder is a plain clone, the repository's one
+  and only working copy. Offer the layout before anything else, and wait
+  for the user's choice: [the only working copy](#the-only-working-copy).
+- `several <the folder>`: the git directory is inside one of several
+  working copies. Make the same offer and go on without waiting:
+  [beside other working copies](#beside-other-working-copies).
+- Exit 1: where you were asked is no working copy of a git repository.
+  Say so, and ask the user where the repository is.
+
+### The only working copy
 
 1. Run the plan, which changes nothing, naming this session's process:
 
@@ -109,6 +119,42 @@ its own is the `worktrees` skill's to convert, when the user asks.
      directory.
 5. On "keep the plain clone", go on to step 3 in the clone. Step 5's
    commit records the choice.
+
+### Beside other working copies
+
+Every session can already work from a working copy of its own here, so
+the setup offers the move and goes on as the repository stands (126).
+
+1. Run the plan on the folder `kind` named, as for the only working copy,
+   naming this session's process, and, when worktrunk is used, with its
+   `worktree-path` template checked as part of it:
+
+   ```sh
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan <the folder> --session-pid "$PPID"
+   ```
+
+2. Show it to the user as a plain clone's plan is shown, the costs first,
+   then the layout. Where it exits 1, its `go refuses now` lines are what
+   stops the move today, such as a worktree inside the folder: say so,
+   and why.
+3. Then say, in your own words, that every session can already work from
+   a working copy of its own, so the setup goes on with the repository as
+   it stands, and that you lay the folder out whenever the user asks. Ask
+   nothing about the layout: no question, no choice offered, nothing that
+   ends your turn waiting for an answer.
+4. Go on to step 3, in the same turn, in the working copy you were asked
+   in, whether the folder or a worktree beside it, and write and commit the
+   policy there as for any repository.
+
+Whenever the user says to lay the folder out, at any point in the setup,
+run `go` on the folder as on "lay it out" for the only working copy,
+with `--session` and `--session-pid`, and take its exits 1, 2 and 0 as it
+does, but for `/cd`: on exit 0, ask for `/cd <the folder>/main` only when
+you were asked in the folder. Asked in a worktree beside it, that
+worktree was repaired in place: go on there. A policy written in the
+folder and not yet committed moves into `main/` with the working copy's
+other changes, as the plan says of every changed path. Then carry on
+with the step you were on.
 
 ## 3. Survey the repository
 
@@ -313,9 +359,10 @@ Every key: <https://agentplot.github.io/sluice/reference/configuration/>.
 
 ## 5. Write, read back and commit the policy
 
-Where step 2 made its offer, write nothing here until the user has
-answered it: without their choice, no `.config/sluice.toml` is written in
-a repository's only working copy.
+Where step 2 offered the layout of a repository's only working copy,
+write nothing here until the user has answered it: without their choice,
+no `.config/sluice.toml` is written there. Beside other working copies,
+nothing here waits on the offer.
 
 Write `.config/sluice.toml`. sluice reads it **from the branch it gates**,
 never from a submission, so it takes effect once it is committed on that
@@ -330,13 +377,16 @@ to land untested.
 
 Then commit it the way the repository lands work today, before protecting
 the branch. That one change is the last one landed by hand. When the user
-kept the plain clone at step 2, its message carries this line, the
-setup's record of their choice:
+kept the plain clone, the repository's only working copy, at step 2, its
+message carries this line, the setup's record of their choice:
 
 ```
 The operator chose to keep this plain clone over a git directory with
 one working copy per branch (126).
 ```
+
+Beside other working copies nothing was chosen, and the message says
+nothing of the layout.
 
 ## 6. Protect the branch and set up the host
 

@@ -48,6 +48,10 @@ Once the folder is laid out, it carries the folder's other sessions and
 its project memory across, and asks you to type `/cd <folder>/main` to
 bring this session along. It keeps the plain clone only on your word,
 and the commit that adds `.config/sluice.toml` then says you chose to.
+In a clone that already has other worktrees, each agent can work in one
+of its own. Claude makes the same offer there and names the same costs,
+then goes on with the repository as it is, without waiting for an
+answer. It lays the folder out whenever you ask.
 
 Then Claude reads what the repository already uses and proposes a
 `.config/sluice.toml` to match:

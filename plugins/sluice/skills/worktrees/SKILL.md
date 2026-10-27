@@ -72,4 +72,8 @@ Details and the reasons behind each setting: [references/layout.md](references/l
   repository's only working copy, the setting-up-sluice skill offers the
   layout first, by the same script, and goes on in the plain clone only on
   the user's word; the commit that adds `.config/sluice.toml` then says
-  the user chose to keep the plain clone (126). Give each agent a worktree.
+  the user chose to keep the plain clone (126). Beside other working
+  copies, where every session can already work from one of its own, it
+  offers the same move with its cost and goes on as the repository
+  stands, laying the folder out whenever the user asks. Give each agent a
+  worktree.

@@ -8,6 +8,17 @@
 #       print the plan, change nothing
 #   lay-out.sh go <folder> [--session <id>] [--session-pid <pid>]
 #       check again, lay out, carry
+#   lay-out.sh kind <path>
+#       say how the repository stands, change nothing
+#
+# kind, asked from any working copy, prints one line: `only <folder>` when
+# the git directory is .git inside the repository's only working copy,
+# `several <folder>` when inside one of several, `apart` when it stands
+# apart from every one (a bare git directory, a .bare directory, a
+# --separate-git-dir clone). <folder> holds .git, wherever kind was asked.
+# A checkout under the git directory (sluice's own) and a worktree whose
+# folder is gone are no working copy. It exits 1 on a path that is no
+# working copy of a git repository, and runs no lsof.
 #
 # Exit 0: done (plan: go would go). 1: refused, nothing moved (plan: go
 # would refuse, and why). 2: a step failed after the move began; every
@@ -25,7 +36,7 @@
 set -u
 
 usage() {
-  echo "usage: lay-out.sh plan <folder> [--session-pid <pid>] | lay-out.sh go <folder> [--session <id>] [--session-pid <pid>]" >&2
+  echo "usage: lay-out.sh plan <folder> [--session-pid <pid>] | lay-out.sh go <folder> [--session <id>] [--session-pid <pid>] | lay-out.sh kind <path>" >&2
   exit 1
 }
 
@@ -37,6 +48,7 @@ session=
 session_pid=$PPID
 case $form in
 plan | go) ;;
+kind) [ $# = 0 ] || usage ;;
 *) usage ;;
 esac
 while [ $# -gt 0 ]; do
@@ -61,6 +73,60 @@ refuse() {
   echo "refused: $1" >&2
   exit 1
 }
+
+if [ "$form" = kind ]; then
+  not_one="$given is not a working copy of a git repository"
+  [ -d "$given" ] || refuse "$not_one"
+  at=$(cd "$given" && pwd -P) || refuse "$not_one"
+  cd / || exit 1
+  common=$(git -C "$at" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || refuse "$not_one"
+  common=$(cd "$common" && pwd -P) || refuse "$not_one"
+  holder=${common%/*}
+  if [ "${common##*/}" != .git ] ||
+    [ "$(git -C "$holder" rev-parse --is-bare-repository 2>/dev/null)" != false ] ||
+    [ "$(git -C "$holder" rev-parse --show-toplevel 2>/dev/null)" != "$holder" ]; then
+    echo apart
+    exit 0
+  fi
+  # The working copies: every block of the listing but a bare one, a
+  # prunable one, and one at or under the git directory, its path compared
+  # once resolved as the git directory's was.
+  count=0
+  path=
+  skip=
+  counted() {
+    [ -n "$path" ] || return 0
+    if [ -z "$skip" ]; then
+      if [ -d "$path" ] && p=$(cd "$path" && pwd -P); then
+        path=$p
+      fi
+      case $path in
+      "$common" | "$common"/*) ;;
+      *) count=$((count + 1)) ;;
+      esac
+    fi
+    path=
+    skip=
+  }
+  while IFS= read -r line; do
+    case $line in
+    "worktree "*)
+      counted
+      path=${line#worktree }
+      ;;
+    bare | prunable | "prunable "*) skip=1 ;;
+    esac
+  done <<EOF
+$(git -C "$holder" worktree list --porcelain)
+EOF
+  counted
+  if [ $count -gt 1 ]; then
+    echo "several $holder"
+  else
+    echo "only $holder"
+  fi
+  exit 0
+fi
 
 [ -d "$given" ] || refuse "$given is not a folder"
 # The folder as given, made absolute, and with symbolic links resolved.
