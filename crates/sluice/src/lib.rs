@@ -3099,6 +3099,9 @@ fn write_status(
     if let Some(copy) = &status.copy {
         writeln!(out, "{}", copy_behind_line(&status.branch, copy))?;
     }
+    if let Some(refused) = &status.refused {
+        writeln!(out, "{}", refused_lines(refused))?;
+    }
     for t in testing {
         writeln!(out, "  {t}")?;
     }
@@ -3183,7 +3186,7 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
             })
         })
         .collect();
-    serde_json::json!({
+    let mut json = serde_json::json!({
         "branch": status.branch,
         "at": status.at,
         "depth": status.depth(),
@@ -3196,7 +3199,11 @@ fn status_json(status: &Status, submissions: &[Submission]) -> serde_json::Value
         "held": status.held.as_ref().map(held_json),
         "held_checkouts": held_checkouts,
         "copy": status.copy,
-    })
+    });
+    if let Some(refused) = &status.refused {
+        json["refused"] = serde_json::json!(refused);
+    }
+    json
 }
 
 /// The names of a combination's checkout begin so: `sluice/try/<branch>/<n>`.
@@ -3284,6 +3291,27 @@ pub(crate) fn copy_differs_line(copy: &CopyDiffers) -> String {
 
 /// 124, S64: this host's copy of `branch` left behind its landing, and
 /// why.
+/// 133: this host's refusal of the branch's remote, git's words on as
+/// many lines as git gave them.
+fn refused_lines(refused: &sluice_core::Refused) -> String {
+    let rounds = match refused.rounds {
+        1 => "1 round".to_string(),
+        n => format!("{n} rounds"),
+    };
+    let mut said = refused.said.lines();
+    let mut text = format!(
+        "this host could not read {} from {} since {}, {rounds}: {}",
+        refused.asked,
+        refused.remote,
+        refused.since,
+        said.next().unwrap_or_default()
+    );
+    for line in said {
+        text.push_str(&format!("\n  {line}"));
+    }
+    text
+}
+
 fn copy_behind_line(branch: &str, copy: &CopyBehind) -> String {
     let at = copy.at.as_ref().map_or("nothing", |r| r.short());
     format!(

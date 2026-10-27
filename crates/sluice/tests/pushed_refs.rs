@@ -14,7 +14,7 @@ use std::rc::Rc;
 use sluice::identity::{Credentials, Identity};
 use sluice::profiles::branches::Branches;
 use sluice::profiles::pushed_refs::PushedRefs;
-use sluice_seams::{Branch, HostCopy, LandingCommit, Moved, Rev};
+use sluice_seams::{read_refused, Branch, HostCopy, LandingCommit, Moved, ReadRefused, Rev};
 use support::http::Fake;
 use support::Repo;
 
@@ -127,6 +127,44 @@ fn an_unreachable_remote_fails_the_read_and_the_push() {
     std::fs::rename(&aside, bare.path()).unwrap();
     assert_eq!(repo.rev("main"), base.as_str());
     assert_eq!(p.read("main").unwrap(), Some(base));
+}
+
+/// 133: a fetch from a remote whose path is not there fails as a refused
+/// read naming the remote, the ref asked for and git's words unchanged, as
+/// git prints them for the same fetch.
+#[test]
+fn a_fetch_from_a_remote_not_there_is_a_refused_read() {
+    let repo = Repo::new("not-there");
+    let bare = repo.bare_origin();
+    let p = PushedRefs::open(repo.dir(), "origin").unwrap();
+    std::fs::rename(bare.path(), bare.path().with_extension("aside")).unwrap();
+    let err = p.read("main").unwrap_err();
+    let refused = read_refused(&err).expect("a refused read");
+    let git = repo.git_raw(&[
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+    ]);
+    assert!(!git.status.success());
+    assert_eq!(
+        refused,
+        &ReadRefused {
+            remote: "origin".into(),
+            asked: "refs/heads/main".into(),
+            said: String::from_utf8_lossy(&git.stderr).trim_end().into(),
+            note: None,
+        }
+    );
+    assert!(refused
+        .said
+        .contains("does not appear to be a git repository"));
+    assert_eq!(
+        err.to_string(),
+        format!("fetching main from origin failed: {}", refused.said)
+    );
 }
 
 /// A push the remote refuses names the remote's reason, which git's own
@@ -656,14 +694,22 @@ fn a_refusal_that_stands_names_both_credentials() {
     let url = format!("{}/o/r.git", fake.url());
     let identity = Rc::new(FakeIdentity::new(&url, &token));
     let p = as_identity(&repo, &identity);
-    let err = format!("{:#}", p.read("main").unwrap_err());
+    let read = p.read("main").unwrap_err();
+    let err = format!("{read:#}");
     assert!(err.contains("Repository not found."), "{err}");
-    assert!(
-        err.contains("origin refused the fake's token number 0, then the fake's token number 1"),
-        "{err}"
-    );
+    let note = "origin refused the fake's token number 0, then the fake's token number 1";
+    assert!(err.contains(note), "{err}");
     assert!(!err.contains(&token), "a report carries no token: {err}");
     assert_eq!(given(&fake).len(), 2, "run no third time");
+    // 133: the note is sluice's, apart from what git said.
+    let refused = read_refused(&read).expect("a refused read");
+    assert_eq!(refused.asked, "refs/heads/main");
+    assert!(
+        refused.said.contains("Repository not found."),
+        "{refused:?}"
+    );
+    assert!(!refused.said.contains("refused the fake's"), "{refused:?}");
+    assert_eq!(refused.note.as_deref(), Some(note));
 }
 
 /// 134, C.5: a session's branch the remote refuses on the identity's first

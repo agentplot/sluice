@@ -20,7 +20,8 @@
 //! finds by its type: a start at the host's bound, [`AtBound`], refused
 //! before the check seam runs anything (71). Another error is told apart,
 //! [`Unanswered`]: a remote that could not answer just then, which a
-//! waiting command reads again through.
+//! waiting command reads again through. A third, [`ReadRefused`], is a read
+//! of a branch's remote that could not be made, which a round logs (133).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -47,6 +48,48 @@ impl std::error::Error for Unanswered {}
 /// Whether `e`, or anything that caused it, is an [`Unanswered`].
 pub fn unanswered(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<Unanswered>())
+}
+
+/// 133: a read of a branch's remote that could not be made: a fetch that
+/// failed for any reason but the remote having no such ref.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadRefused {
+    /// The remote's name.
+    pub remote: String,
+    /// The ref fetched: `refs/heads/<branch>`, or the records' ref.
+    pub asked: String,
+    /// What git printed of the failure, whole, trailing whitespace trimmed.
+    pub said: String,
+    /// sluice's own words on the credentials the remote refused, when it
+    /// tried more than the host's: never the remote's, so never logged.
+    pub note: Option<String>,
+}
+
+impl fmt::Display for ReadRefused {
+    /// `fetching main from origin failed: …`, a branch named as git's
+    /// branch is, then the note on the next line.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let asked = self
+            .asked
+            .strip_prefix("refs/heads/")
+            .unwrap_or(&self.asked);
+        write!(
+            f,
+            "fetching {asked} from {} failed: {}",
+            self.remote, self.said
+        )?;
+        if let Some(note) = &self.note {
+            write!(f, "\n{note}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ReadRefused {}
+
+/// The [`ReadRefused`] `e` is, or that caused it.
+pub fn read_refused(e: &anyhow::Error) -> Option<&ReadRefused> {
+    e.chain().find_map(|c| c.downcast_ref::<ReadRefused>())
 }
 
 /// A git revision, as the branch seam names it.
@@ -1225,11 +1268,24 @@ pub trait State {
     /// nothing under [`FINISHED`] (131).
     fn read(&self, branch: &str) -> Result<Snapshot>;
 
-    /// 80: where the branch's last read could not reach the records it
-    /// keeps elsewhere and read what was last fetched, the place it could
-    /// not reach; `None` when the read was current.
-    fn stale(&self, _branch: &str) -> Option<String> {
+    /// 80: why the branch's last read could not reach the records it keeps
+    /// elsewhere and read what was last fetched; `None` when the read was
+    /// current.
+    fn stale(&self, _branch: &str) -> Option<ReadRefused> {
         None
+    }
+
+    /// 133: this host's document of a standing refusal of `branch`'s
+    /// remote, as last kept; kept on this host alone, beside the branch's
+    /// records and never in them, so it decides nothing.
+    fn refusal(&self, _branch: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// Keep `doc` as this host's document of a refusal of `branch`'s
+    /// remote, in place of the one kept before, or, with `None`, remove it.
+    fn keep_refusal(&self, _branch: &str, _doc: Option<&[u8]>) -> Result<()> {
+        Ok(())
     }
 
     /// 77, 107: rewrite this host's sign of life, `beat` its document:
@@ -1364,4 +1420,54 @@ pub trait State {
         candidate: &str,
         tasks: Option<&[TaskProgress]>,
     ) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(note: Option<&str>) -> ReadRefused {
+        ReadRefused {
+            remote: "origin".into(),
+            asked: "refs/heads/main".into(),
+            said: "remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found".into(),
+            note: note.map(str::to_string),
+        }
+    }
+
+    /// 133: the round's word to whoever ran it is today's: the branch as
+    /// git names it, git's words, and the note on the next line.
+    #[test]
+    fn a_refused_read_says_what_it_said_before() {
+        assert_eq!(
+            refused(None).to_string(),
+            "fetching main from origin failed: remote: Repository not found.\n\
+             fatal: repository 'https://github.com/acme/app.git/' not found"
+        );
+        assert_eq!(
+            refused(Some("origin refused a token made 5s ago")).to_string(),
+            "fetching main from origin failed: remote: Repository not found.\n\
+             fatal: repository 'https://github.com/acme/app.git/' not found\n\
+             origin refused a token made 5s ago"
+        );
+        let state = ReadRefused {
+            asked: "refs/sluice/state/main".into(),
+            ..refused(None)
+        };
+        assert!(state
+            .to_string()
+            .starts_with("fetching refs/sluice/state/main from origin failed: "));
+    }
+
+    /// The core finds a refused read under whatever context a caller
+    /// added, and finds none in an error that holds none.
+    #[test]
+    fn a_refused_read_is_found_under_added_context() {
+        let e = anyhow::Error::new(refused(None))
+            .context("reading main")
+            .context("a round of main");
+        assert_eq!(read_refused(&e), Some(&refused(None)));
+        assert!(format!("{e:#}").ends_with("not found"), "{e:#}");
+        assert_eq!(read_refused(&anyhow::anyhow!("main does not exist")), None);
+    }
 }
