@@ -711,6 +711,55 @@ fn a_submission_the_runner_could_not_check_is_taken_with_a_warning() {
     assert!(warnings[0].as_str().unwrap().contains("no devenv"), "{out}");
 }
 
+/// A subject on a branch with no pull requests titles nothing: the
+/// submission is queued as without it, with a warning beneath the answer
+/// saying so; under `--json --no-wait`, the warning is the document's.
+#[test]
+fn a_subject_on_a_branch_with_no_pull_requests_titles_nothing() {
+    let f = setup();
+    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    let subject = ["--subject", "Batch review cards"];
+    let args = [
+        &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, 0, "{out}");
+    let warning = format!("{BRANCH} opens no pull request; the subject titles nothing");
+    assert_eq!(
+        out,
+        format!("submission 1 to {BRANCH} · nothing queued ahead\nwarning: {warning}\n")
+    );
+    let subs = queued(&f);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["state"], "queued");
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("y"))],
+    );
+    let args = [
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/b",
+            "--no-wait",
+            "--json",
+        ][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, 0, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["id"], 2);
+    assert_eq!(v["warnings"], serde_json::json!([warning]));
+}
+
 /// Under `--json`, a refusal is one error document on stdout, naming
 /// what moves it on; the exit is a refusal's still.
 #[test]
