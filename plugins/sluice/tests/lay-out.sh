@@ -5,9 +5,10 @@
 # what the session started; otherwise it lays the clone out with its changes
 # and its worktrees intact, and carries Claude Code's history to the new
 # keys, overwriting nothing. Its kind tells a repository's only working
-# copy from one of several and from the layout, changing nothing. git runs isolated from the user's config and
-# credentials, `lsof` is a stand-in, and Claude Code's directory is
-# scratch, so nothing reaches the host's processes or the user's history.
+# copy from one of several and from the layout, changing nothing. git runs
+# isolated from the user's config and credentials, `lsof` is a stand-in,
+# and Claude Code's directory is scratch, so nothing reaches the host's
+# processes or the user's history.
 
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
