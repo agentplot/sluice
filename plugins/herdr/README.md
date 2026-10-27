@@ -22,7 +22,10 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   for the focused pane's repository, each branch's combinations under test
   with their tests and time, the submissions queued, and recent landings,
   blames and conflicts, under TESTING, QUEUED and RECENT, in the same words
-  as the Claude Code board's `/sluice` pane. It redraws as the queue moves.
+  as the Claude Code board's `/sluice` pane. Each submission stands with
+  its subject, or the branch it was submitted from where its submit gave
+  none, beside its number, where the board shows its number alone for
+  now. It redraws as the queue moves.
   A branch with nothing queued is left out, and counted on one line, once
   a quarter hour has passed since its last landing, blame or conflict.
   Branches come in the order the repository's `.config/sluice.toml` names
@@ -88,8 +91,10 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
   (`4 submissions · 1 held: release failed`, every branch counted, a
   checkout that several hosts list once).
 - **The tab bar**: the focused repository's queue on one line, as the
-  board's band says it: `sluice main · 3 submissions · testing
-  main+#12+#13 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa`. When
+  board's band says it, each submission with its subject or its branch:
+  `sluice main · 3 submissions · testing main + #12 Batch review cards +
+  #13 unit/forecast 2m10s/15m · #14 Herdr popup waiting · last #9
+  unit/sidebar blamed on 4f1c2aa`. When
   agents' checks hold the queue back, the host has no run free while a
   submission is queued, and the line ends `· 1 slot to an agent's checks`.
   A branch with checkouts held because their release failed ends its line

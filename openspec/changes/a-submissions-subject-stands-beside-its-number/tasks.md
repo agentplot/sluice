@@ -31,7 +31,7 @@ crate, `herdr`, or `site`.
 
 - [x] 4.1 Add `name_of($b)` and `named($b)` to `plugins/herdr/lib/words.jq` (design: "Where each view finds its names"), and use them in `combination`, `waiting`, `recent_words`, the QUEUED rows (names padded so states line up), the TESTING and formed rows, and `branch_line`; say in the file's header that the popup and segment name subjects where the board does not yet; verify `moon run 'plugin-herdr:test-sh'` and `moon run 'plugin-herdr:test-dash'` pass.
 - [x] 4.2 Give the fixtures in `plugins/herdr/tests/` subjects and update `tests/docs/board.frame` and `tests/run.sh`'s expected lines; add cases for each scenario of the `herdr-status` delta: testing with and without tasks, a landing of two, what is waiting and the last event in the segment, a document with no `recent_subjects` or `recent_from`, and a subject with a line break and an escape sequence drawn on one line with the colors unchanged; verify `plugin-herdr:test-sh` and `plugin-herdr:test-dash` pass.
-- [ ] 4.3 Update the popup and segment examples in `plugins/herdr/README.md` and `site/src/content/docs/guides/herdr.md`; verify `moon run 'site:prose'` is clean.
+- [x] 4.3 Update the popup and segment examples in `plugins/herdr/README.md` and `site/src/content/docs/guides/herdr.md`; verify `moon run 'site:prose'` is clean.
 
 ## 5. The whole
 
