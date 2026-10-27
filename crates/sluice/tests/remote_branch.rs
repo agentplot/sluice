@@ -547,6 +547,26 @@ fn a_bolt_only_fetched_here_lands_on_its_remote() {
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:b.txt")]);
 }
 
+/// 124, C.7 pushed refs: this host's `main` is from before
+/// `.config/sluice.toml`, while `origin/main` as fetched holds the policy
+/// naming origin; `sluice branch create` reads `main` as origin's and
+/// makes the bolt there at origin's `main`, leaving this host's `main`
+/// where it was.
+#[test]
+fn a_bolt_is_made_on_origin_from_a_main_this_host_holds_from_before_the_policy() {
+    let s = Setup::new("remote-bolt-stale-main", "origin");
+    let root = s.repo.rev("main~1");
+    s.repo.git(&["reset", "-q", "--hard", &root]);
+    let origins = s.remote_main();
+    assert_eq!(s.repo.rev("refs/remotes/origin/main"), origins);
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let made: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(made["created"], origins);
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), origins);
+    assert_eq!(s.repo.rev("main"), root);
+}
+
 fn remote_rev(s: &Setup, name: &str) -> String {
     let out = support::git_command()
         .arg("--git-dir")
