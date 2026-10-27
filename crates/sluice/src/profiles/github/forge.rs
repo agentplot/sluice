@@ -216,8 +216,9 @@ pub trait Forge {
         draft: bool,
     ) -> Result<Pull>;
 
-    /// Replace pull request `number`'s body.
-    fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()>;
+    /// Replace pull request `number`'s body, and its title when `title`
+    /// is given, in one write.
+    fn edit(&self, repo: &Repo, number: u64, title: Option<&str>, body: &str) -> Result<()>;
 
     /// Mark pull request `number` a draft, or ready for review, which
     /// GitHub's timeline records.

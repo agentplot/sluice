@@ -2030,7 +2030,7 @@ impl crate::PullRequests for Pulls {
             let (pull, word) = match existing {
                 Some(p) => {
                     if p.body != body {
-                        forge.edit(&t.repo, p.number, &body)?;
+                        forge.edit(&t.repo, p.number, None, &body)?;
                     }
                     push()?;
                     (Pull { body, ..p.clone() }, "updated")

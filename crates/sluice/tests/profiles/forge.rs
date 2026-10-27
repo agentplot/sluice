@@ -625,10 +625,17 @@ fn the_apps_pull_request_calls() {
     assert!(opened.open && !opened.draft && opened.title == "E");
     let drafted = app.open(&r, "main", "unit/f", "F", "", true).unwrap();
     assert!(drafted.open && drafted.draft);
-    app.edit(&r, opened.number, "new body").unwrap();
+    app.edit(&r, opened.number, None, "new body").unwrap();
+    let edited = app.pull(&r, opened.number).unwrap().unwrap();
     assert_eq!(
-        app.pull(&r, opened.number).unwrap().unwrap().body,
-        "new body"
+        (edited.title.as_str(), edited.body.as_str()),
+        ("E", "new body")
+    );
+    app.edit(&r, opened.number, Some("E, retitled"), "new body")
+        .unwrap();
+    assert_eq!(
+        app.pull(&r, opened.number).unwrap().unwrap().title,
+        "E, retitled"
     );
 }
 
@@ -703,7 +710,7 @@ fn live_pull_request_calls() {
         .unwrap()
         .iter()
         .any(|c| c == "sluice's live test"));
-    app.edit(&r, pull.number, "edited by sluice's live test")
+    app.edit(&r, pull.number, None, "edited by sluice's live test")
         .unwrap();
 }
 

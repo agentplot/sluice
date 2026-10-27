@@ -121,6 +121,16 @@ fn open_request(base: &str, head_ref: &str, title: &str, body: &str, draft: bool
     json!({ "title": title, "head": head_ref, "base": base, "body": body, "draft": draft })
 }
 
+/// The body of the REST request that replaces a pull request's body, and
+/// its title only when given: a field left out is left as it is.
+fn edit_request(title: Option<&str>, body: &str) -> Value {
+    let mut v = json!({ "body": body });
+    if let Some(title) = title {
+        v["title"] = json!(title);
+    }
+    v
+}
+
 /// The GraphQL request that marks the pull request `node_id` a draft, or
 /// ready for review.
 fn draft_request(node_id: &str, draft: bool) -> Value {
@@ -347,12 +357,12 @@ impl Forge for App {
         pull(&v)
     }
 
-    fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
+    fn edit(&self, repo: &Repo, number: u64, title: Option<&str>, body: &str) -> Result<()> {
         let token = self.token(repo)?;
         self.patch_api(
             &Self::repo_path(repo, &format!("/pulls/{number}")),
             &token,
-            &json!({ "body": body }).to_string(),
+            &edit_request(title, body).to_string(),
         )?;
         Ok(())
     }
@@ -458,6 +468,17 @@ mod tests {
         assert_eq!(
             open_request("main", "unit/a", "A", "", false)["draft"],
             false
+        );
+    }
+
+    /// An edit carries the title only when given, so one that gives none
+    /// leaves the title GitHub holds.
+    #[test]
+    fn editing_the_body_and_the_title() {
+        assert_eq!(edit_request(None, "body"), json!({ "body": "body" }));
+        assert_eq!(
+            edit_request(Some("Batch review cards"), "body"),
+            json!({ "body": "body", "title": "Batch review cards" })
         );
     }
 

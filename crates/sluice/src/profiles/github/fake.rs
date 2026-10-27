@@ -294,8 +294,13 @@ impl Forge for FileForge {
             .ok_or_else(|| anyhow!("no pull request {number}"))
     }
 
-    fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
-        self.with_pull(number, |p| p.body = body.into())
+    fn edit(&self, _: &Repo, number: u64, title: Option<&str>, body: &str) -> Result<()> {
+        self.with_pull(number, |p| {
+            if let Some(title) = title {
+                p.title = title.into();
+            }
+            p.body = body.into();
+        })
     }
 
     fn set_draft(&self, _: &Repo, number: u64, draft: bool) -> Result<()> {
@@ -451,8 +456,15 @@ mod tests {
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
         let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
         assert!(!opened.draft);
-        f.edit(&repo, opened.number, "new body").unwrap();
-        assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");
+        f.edit(&repo, opened.number, None, "new body").unwrap();
+        let edited = f.by_ref("unit/b").unwrap().unwrap();
+        assert_eq!(
+            (edited.title.as_str(), edited.body.as_str()),
+            ("B", "new body")
+        );
+        f.edit(&repo, opened.number, Some("B2"), "new body")
+            .unwrap();
+        assert_eq!(f.by_ref("unit/b").unwrap().unwrap().title, "B2");
         let drafted = f.open(&repo, "main", "unit/c", "C", "", true).unwrap();
         assert!(drafted.draft && f.by_ref("unit/c").unwrap().unwrap().draft);
         assert!(f.readied(&repo, drafted.number).unwrap().is_empty());

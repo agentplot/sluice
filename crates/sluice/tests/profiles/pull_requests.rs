@@ -530,6 +530,7 @@ fn a_pull_request_opened_by_hand() {
         .edit(
             &github::repo(),
             n,
+            None,
             "Hand work.\n\n<!-- sluice: agent=crw-1-unit-1 -->",
         )
         .unwrap();
@@ -2616,6 +2617,7 @@ fn a_round_between_a_groups_opens_submits_none() {
             .edit(
                 &github::repo(),
                 n,
+                None,
                 &format!("<!-- sluice: agent=ops -->\n<!-- sluice: group=t {k}/3 head={head} -->"),
             )
             .unwrap();

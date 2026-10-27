@@ -410,7 +410,12 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
         ("PATCH", ["pulls", n]) => {
             let n: u64 = n.parse().unwrap();
             forge
-                .edit(&repo, n, body["body"].as_str().unwrap_or_default())
+                .edit(
+                    &repo,
+                    n,
+                    body["title"].as_str(),
+                    body["body"].as_str().unwrap_or_default(),
+                )
                 .unwrap();
             json(200, pull_json(&forge.pull(&repo, n).unwrap().unwrap()))
         }
