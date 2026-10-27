@@ -27,7 +27,7 @@ Edit nothing outside the paths under Touches.
 
 ## 4. Against a real remote
 
-- [ ] 4.1 In `crates/sluice/tests/remote_branch.rs`, with a bare remote moved away so every fetch fails: a waiting `sluice submit main` prints the fetch's failure as before, `main`'s `log.jsonl` holds one `read-refused` line after several rounds, and once the remote is put back one round logs `read-again` with the rounds counted; with the state on the remote too, both lines land in the first write after the remote is back. Verify `moon run cli:tools` passes.
+- [x] 4.1 In `crates/sluice/tests/remote_branch.rs`, with a bare remote moved away so every fetch fails: a waiting `sluice submit main` prints the fetch's failure as before, `main`'s `log.jsonl` holds one `read-refused` line after several rounds, and once the remote is put back one round logs `read-again` with the rounds counted; with the state on the remote too, both lines land in the first write after the remote is back. Verify `moon run cli:tools` passes.
 - [ ] 4.2 Run `sluice exec main` once the work is committed; verify every gate task passes.
 
 ## Workflow follow-up
