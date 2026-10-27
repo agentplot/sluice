@@ -26,9 +26,9 @@ by what called it. No call to a remote SHALL be tried again outside it
 ### Requirement: What the remote never judged is tried again
 A call SHALL be tried again when the remote never judged it: the
 connection was not made, the server could not answer (a 5xx or a 429)
-before a push was sent, or the remote refused the call's credential
-before it negotiated any ref, saying not found, permission denied or
-unauthenticated (134).
+before a push was sent or to a forge call that makes nothing, or the
+remote refused the call's credential before it negotiated any ref,
+saying not found, permission denied or unauthenticated (134).
 
 #### Scenario: A token refused on a fetch
 - **WHEN** a round fetches the branch, GitHub answers `Repository not found.` on the token held, and serves the branch on a fresh one
@@ -115,16 +115,70 @@ went unanswered and what the remote holds (122; ADR 0017).
 - **WHEN** a host's sign of life is pushed, the connection is cut after the push was sent, and the remote's ref holds the pushed commit
 - **THEN** one push was made, and the sign of life stands
 
-### Requirement: A write to the forge whose answer was not read is not made again
-A forge call that changes something, a `POST` or a `PATCH` other than a
-query, SHALL be tried again only when the forge never judged it: the
-connection was not made, or the forge answered 5xx or 429. One whose
-answer was not read, the connection cut after it was sent, SHALL NOT be
-made again, and SHALL fail with what was not read (134).
+### Requirement: A forge write that sets a state is tried again
+A forge call that sets a state, a pull request's draft mark, or a check
+run's, a comment's or a pull request's text edited, SHALL be tried
+again on any failure but the forge's answer, as a read is, since the
+state read decides and setting it twice leaves it as once (134).
 
-#### Scenario: A comment's answer lost
-- **WHEN** sluice posts a comment on a pull request, and the connection is cut while it waits for GitHub's answer
-- **THEN** one post was made, and the failure says GitHub's answer was not read
+#### Scenario: A draft mark answered 502
+- **WHEN** sluice marks a pull request a draft and GitHub answers `502`, then `200`
+- **THEN** two calls were made, and the pull request reads as a draft
+
+#### Scenario: A check run's update cut after it was sent
+- **WHEN** sluice updates its check run on a pull request and the connection is cut while it waits for GitHub's answer, and the next try is answered
+- **THEN** two calls were made, and the check run shows what sluice posted
+
+### Requirement: A forge write that makes something is tried again blind only while unsent
+A forge call that makes or starts something, a check run, a comment, a
+pull request or a workflow's run, SHALL be tried again blind only while
+the connection was never made, or on a token GitHub refused before
+taking the call (134).
+
+#### Scenario: A connection never made
+- **WHEN** sluice posts a comment and the first try cannot connect, and the next is answered
+- **THEN** the comment is posted, once
+
+### Requirement: A thing made whose answer was not read is read back before it is made again
+A check run, a comment or a pull request whose making's answer was not
+read, the connection cut after the call was sent or a 5xx or a 429
+among them, SHALL NOT be made again until the forge is read: one the
+forge already holds SHALL be carried on and not made again, and one it
+lacks SHALL be made then (134).
+
+#### Scenario: A comment posted, its answer lost
+- **WHEN** sluice comments on a pull request, GitHub answers `502`, and the pull request then holds the comment
+- **THEN** one post was made, and sluice goes on as if GitHub had answered it
+
+#### Scenario: A comment not taken
+- **WHEN** sluice comments on a pull request, GitHub answers `502`, and the pull request then holds no such comment
+- **THEN** the comment is posted again, once, and the pull request holds it once
+
+#### Scenario: A check run made, its answer lost
+- **WHEN** sluice creates its check run on a revision and the connection is cut after the call was sent, and the revision then holds sluice's check run of that name
+- **THEN** one call created a check run, and the revision holds one sluice check run of that name
+
+### Requirement: A workflow's run is never dispatched twice
+A workflow dispatch whose answer was not read SHALL NOT be sent again,
+since nothing reads a dispatch back. A pool's run whose dispatch went
+unanswered SHALL be claimed as dispatched, and the event in the
+branch's log that claims it SHALL carry the forge's words saying its
+answer was not read; the next round reads whether the job runs, and a
+claim with no job lapses as any pool's claim does, its run open again
+(77, 88, 133, 134). A dispatch whose connection was never made SHALL be
+sent again.
+
+#### Scenario: A run's dispatch answered 502
+- **WHEN** a round dispatches a pool's job for a run and GitHub answers `502`
+- **THEN** one dispatch was made, the run reads as claimed by the pool's job, and the branch's log holds that claim with GitHub's words saying its answer was not read
+
+#### Scenario: The dispatch was not taken
+- **WHEN** a run's dispatch went unanswered, and on the next round no job of its claim is queued or running
+- **THEN** the claim lapses and the run is dispatched again under a new claim, never under the one whose answer was lost
+
+#### Scenario: A dispatch that never connected
+- **WHEN** a round dispatches a pool's job and the first try cannot connect, and the next is answered
+- **THEN** the run is claimed, and the branch's log holds its claim with nothing unanswered
 
 ### Requirement: The policy's time is set by what called it
 A waiting submit and `sluice wait` SHALL give each call five minutes of

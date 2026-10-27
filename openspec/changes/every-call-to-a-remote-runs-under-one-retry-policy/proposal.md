@@ -36,8 +36,19 @@ backoff, and rule core.29 rules out the loops written at the call sites.
   again. A push whose answer was not read (the connection cut after the
   push was sent, a server error after it) is never pushed again: sluice
   reads the ref, and what the remote holds decides.
-- A write to GitHub's API (a `POST` or `PATCH`) is tried again only when
-  GitHub never judged it; one whose answer was not read is reported.
+- A write to GitHub's API is tried again by what it does (134). One that
+  sets a state, a pull request's draft mark, a check run's or a
+  comment's or a pull request's text edited, is tried again as a read
+  is, since setting the state twice leaves it as once. One that makes or
+  starts something, a check run, a comment, a pull request opened, a
+  workflow's run, is tried again blind only while the connection was
+  never made. After an answer not read, a server error among them,
+  GitHub is read first: a check run, a comment or a pull request it
+  already holds is carried on and not made again, and one it lacks is
+  made then. A workflow's run, which nothing reads back, is never
+  dispatched again: a run's dispatch is reported unanswered in the
+  branch's log, in the event that claims the run for the pool's job,
+  and a wake's in the warning a wake gives today.
 - A refusal that stands when the policy's time is spent is reported in
   the remote's own words, followed by what each refused credential was.
   A round's is its one event in the branch's log, as now (133): never a
@@ -80,6 +91,9 @@ backoff, and rule core.29 rules out the loops written at the call sites.
   branch's policy: it is no call to a remote and stays as it is (ADR 0062).
 - How the branch's log records a refusal (133): the log's event, its
   once-per-cause rule and its end are built and do not change here.
+- Recording a wake in the branch's log: a wake has no event today, and
+  one lost delays the branch and loses nothing (59, 111), so a wake
+  whose dispatch went unanswered keeps the warning a failed wake gives.
 - Retrying a call on the host's own credentials that the remote refused:
   sluice cannot buy those afresh, so a push on them is made once, as now.
 
@@ -92,20 +106,29 @@ backoff, and rule core.29 rules out the loops written at the call sites.
   reading its ref.
 - `crates/sluice/src/profiles/remote_refs.rs`: its pushes name the ref
   and value each sets, so an unanswered push is settled by reading it.
-- `crates/sluice/src/profiles/github/app.rs`, `rest.rs`, `mod.rs`:
-  every API call through the policy, its classing of HTTP failures, a
-  401 buying a token afresh.
+- `crates/sluice/src/profiles/github/app.rs`, `rest.rs`, `pulls.rs`,
+  `actions.rs`, `check.rs`, `mod.rs`: every API call through the
+  policy, its classing of HTTP failures, a 401 buying a token afresh; a
+  check run, a comment and a pull request whose answer was not read
+  settled by reading GitHub; a dispatch whose answer was not read
+  reported, never sent again.
+- `crates/sluice-core/src/step.rs`, `crates/sluice-core/src/records.rs`:
+  a pool's run whose dispatch went unanswered is claimed as dispatched,
+  its claim's event carrying GitHub's words, so the next round reads
+  whether the job runs instead of dispatching it again.
 - `crates/sluice/src/lib.rs`, `crates/sluice/src/main.rs`: the wait's
   `Unread` loop gone; each command hands its bound to the policy.
 - `Cargo.toml`, `crates/sluice/Cargo.toml`, `Cargo.lock`: `backon`.
 - Tests: `crates/sluice/tests/pushed_refs.rs`, `remote_refs.rs`,
   `cli.rs`, `profiles/forge.rs`, `profiles/forge/github.rs`,
-  `support/http.rs`.
+  `support/http.rs`; `crates/sluice-conformance/tests/peers.rs`.
 - Docs: `site/src/content/docs/guides/github-app.md`,
   `site/src/content/docs/reference/commands.md`.
-- Sources: clauses 24, 45, 46, 104, 105, 122, 133, 134, C.5, C.6 and the
-  pushed refs row of C.7 (blueprints c457619); ADRs 0017, 0061, 0062;
-  rules core.4, core.5, core.29 (sluice 9062bac1).
+- Sources: clauses 24, 45, 46, 104, 105, 122, 133, C.5, C.6 and the
+  pushed refs row of C.7 (blueprints c457619), and 134 as amended for
+  forge writes (blueprints e524de8); ADRs 0017, 0061, 0062; rules
+  core.4, core.5 (sluice 9062bac1) and core.29 as amended (sluice
+  b33c8ca9).
 
 ## Touches
 
@@ -122,9 +145,12 @@ crates/sluice/src/profiles/pushed_refs.rs
 crates/sluice/src/profiles/remote_refs.rs
 crates/sluice/src/profiles/records.rs
 crates/sluice/src/profiles/github/*.rs
+crates/sluice-core/src/step.rs
+crates/sluice-core/src/records.rs
 crates/sluice-seams/src/lib.rs
 crates/sluice-fakes/src/lib.rs
 crates/sluice/tests/**
+crates/sluice-conformance/tests/peers.rs
 site/src/content/docs/guides/github-app.md
 site/src/content/docs/reference/commands.md
 ```
