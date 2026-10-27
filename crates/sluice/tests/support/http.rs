@@ -25,6 +25,10 @@ impl Request {
 /// An answer: its status, its headers and its body.
 pub type Answer = (u16, Vec<(String, String)>, String);
 
+/// The status of an answer never sent: the connection is closed after the
+/// request, as one cut is.
+pub const CUT: u16 = 0;
+
 pub struct Fake {
     url: String,
     seen: Arc<Mutex<Vec<Request>>>,
@@ -49,6 +53,9 @@ impl Fake {
                     };
                     kept.lock().unwrap().push(req.clone());
                     let (status, headers, body) = handler(&req);
+                    if status == CUT {
+                        return;
+                    }
                     let mut out = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
                     for (k, v) in headers {
                         out.push_str(&format!("{k}: {v}\r\n"));
