@@ -3767,12 +3767,12 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
 }
 
 /// Pull request 7 into the branch, from any worktree, waiting; its forge
-/// answers 5xx to as many finds and follows as each count holds. It counts
-/// the times it is opened.
+/// answers 5xx to as many finds and follows as each count holds. It keeps
+/// the subject of each open.
 struct Pull7 {
     finds: Cell<usize>,
     follows: Cell<usize>,
-    opens: Cell<usize>,
+    subjects: RefCell<Vec<Option<String>>>,
 }
 
 impl Pull7 {
@@ -3780,7 +3780,7 @@ impl Pull7 {
         Pull7 {
             finds: Cell::new(finds),
             follows: Cell::new(follows),
-            opens: Cell::new(0),
+            subjects: RefCell::default(),
         }
     }
 
@@ -3817,8 +3817,9 @@ impl sluice::PullRequests for Pull7 {
         _: &dyn sluice_core::Clock,
         _: &str,
         _: &str,
+        subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
-        self.opens.set(self.opens.get() + 1);
+        self.subjects.borrow_mut().push(subject.map(String::from));
         Ok(Ok(sluice::Opened {
             number: 7,
             said: "opened #7".into(),
@@ -3922,8 +3923,32 @@ fn a_subject_is_one_line_for_one_pull_request() {
         assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
         assert!(out.contains(why), "{args:?}: {out}");
     }
-    assert_eq!(pulls.opens.get(), 0);
+    assert!(pulls.subjects.borrow().is_empty());
     assert!(queued(&f).is_empty());
+}
+
+/// The subject reaches the pull request a submit opens, as written; a
+/// submit with none gives none.
+#[test]
+fn a_subject_is_handed_to_the_pull_request_opened() {
+    let f = pulls_setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    let pulls = Pull7::new(0, 0);
+    let submit = |rest: &[&str]| {
+        let args = [
+            &["submit", BRANCH, "--worktree", "unit/b1", "--no-wait"][..],
+            rest,
+        ]
+        .concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, 0, "{out}");
+    };
+    submit(&["--subject", "Batch review cards"]);
+    submit(&[]);
+    assert_eq!(
+        *pulls.subjects.borrow(),
+        [Some("Batch review cards".to_string()), None]
+    );
 }
 
 /// A subject titles what a submit opens: neither a forecast nor a

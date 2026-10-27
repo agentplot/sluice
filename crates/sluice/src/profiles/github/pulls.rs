@@ -1919,9 +1919,10 @@ impl crate::PullRequests for Pulls {
         clock: &dyn Clock,
         worktree: &str,
         branch: &str,
+        subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         Ok(
-            match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
+            match self.opening(seams, clock, &[worktree.to_string()], branch, subject)? {
                 Ok(mut opened) => Ok(opened.remove(0)),
                 Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
                 Err(GroupRefused::Short { .. }) => {
@@ -1931,19 +1932,118 @@ impl crate::PullRequests for Pulls {
         )
     }
 
-    /// 125: every worktree read before anything is pushed, and a refusal
-    /// for each refused; then, in order, each request marked one of the
-    /// group before its head reaches it: an open request's description
-    /// written for its head before its branch is pushed, a new one opened
-    /// a draft with it once its branch is. Then the group is taken whole or left drafts
-    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
-    /// marked ready, for intake to take on its conditions.
     fn open_group(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
+        self.opening(seams, clock, worktrees, branch, None)
+    }
+
+    fn find(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        worktree: &str,
+    ) -> Result<Option<u64>> {
+        let session = seams.driver.session(worktree)?;
+        let s = Sluice::new(seams, clock);
+        let Some(t) = self.target(&s, branch)? else {
+            return Ok(None);
+        };
+        let forge = self.forge(branch)?;
+        let head_ref = &session.from.worktree;
+        if let Some(p) = forge
+            .pulls(&t.repo, branch)?
+            .into_iter()
+            .find(|p| &p.head_ref == head_ref && p.from_repo(&t.repo))
+        {
+            return Ok(Some(p.number));
+        }
+        // Landed and closed: its entry has the head this worktree submits.
+        let head = s.submitted_head(&session)?.head;
+        Ok(s.history(branch)?
+            .iter()
+            .rev()
+            .filter(|x| x.head == head)
+            .find_map(|x| number(&x.from.worktree)))
+    }
+
+    fn follow(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        n: u64,
+    ) -> Result<Followed> {
+        let s = Sluice::new(seams, clock);
+        let Some(t) = self.target(&s, branch)? else {
+            bail!("{branch} takes no pull requests");
+        };
+        let forge = self.forge(branch)?;
+        let pull = forge.pull(&t.repo, n)?;
+        let status = s.status(branch)?;
+        let latest = s.latest_of(branch, &[place(n)])?.remove(&place(n));
+        if let Some(e) = &latest {
+            let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
+            if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
+                // Sent back on this head, and marked ready since: intake
+                // takes it again, so that verdict is no longer its outcome.
+                let again = match &pull {
+                    Some(p) if p.open && e.state != State::Landed => {
+                        let log = Line::read_log(&s.seams().state.read(branch)?)?;
+                        match submits(p) {
+                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
+                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
+                        }
+                    }
+                    _ => false,
+                };
+                if !again {
+                    return Ok(Followed::Done(e.clone(), names(&status.submissions)));
+                }
+            }
+        }
+        if !pull.as_ref().is_some_and(|p| p.open) {
+            return Ok(Followed::Closed);
+        }
+        // Taken in on the head it has now, and undecided: the submission
+        // a submit that does not wait answers with, and a wait follows.
+        let submission = latest
+            .filter(|e| !e.state.is_out() && pull.as_ref().is_some_and(|p| p.head == e.head.0));
+        let names = names(&status.submissions);
+        let (title, lines) = match self.shown.borrow().get(&n) {
+            Some(shown) => (shown.posting.title.clone(), shown.lines.clone()),
+            None => ("waiting".into(), Vec::new()),
+        };
+        Ok(Followed::Open {
+            title,
+            lines,
+            submission,
+            names,
+        })
+    }
+}
+
+impl Pulls {
+    /// 125: every worktree read before anything is pushed, and a refusal
+    /// for each refused; then, in order, each request marked one of the
+    /// group before its head reaches it: an open request's description
+    /// written for its head before its branch is pushed, a new one opened
+    /// a draft with it once its branch is. Then the group is taken whole or left drafts
+    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
+    /// marked ready, for intake to take on its conditions; only one is
+    /// given a `subject` to title its request with.
+    fn opening(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        worktrees: &[String],
+        branch: &str,
+        _subject: Option<&str>,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
@@ -2122,93 +2222,6 @@ impl crate::PullRequests for Pulls {
         })
     }
 
-    fn find(
-        &self,
-        seams: Seams<'_>,
-        clock: &dyn Clock,
-        branch: &str,
-        worktree: &str,
-    ) -> Result<Option<u64>> {
-        let session = seams.driver.session(worktree)?;
-        let s = Sluice::new(seams, clock);
-        let Some(t) = self.target(&s, branch)? else {
-            return Ok(None);
-        };
-        let forge = self.forge(branch)?;
-        let head_ref = &session.from.worktree;
-        if let Some(p) = forge
-            .pulls(&t.repo, branch)?
-            .into_iter()
-            .find(|p| &p.head_ref == head_ref && p.from_repo(&t.repo))
-        {
-            return Ok(Some(p.number));
-        }
-        // Landed and closed: its entry has the head this worktree submits.
-        let head = s.submitted_head(&session)?.head;
-        Ok(s.history(branch)?
-            .iter()
-            .rev()
-            .filter(|x| x.head == head)
-            .find_map(|x| number(&x.from.worktree)))
-    }
-
-    fn follow(
-        &self,
-        seams: Seams<'_>,
-        clock: &dyn Clock,
-        branch: &str,
-        n: u64,
-    ) -> Result<Followed> {
-        let s = Sluice::new(seams, clock);
-        let Some(t) = self.target(&s, branch)? else {
-            bail!("{branch} takes no pull requests");
-        };
-        let forge = self.forge(branch)?;
-        let pull = forge.pull(&t.repo, n)?;
-        let status = s.status(branch)?;
-        let latest = s.latest_of(branch, &[place(n)])?.remove(&place(n));
-        if let Some(e) = &latest {
-            let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
-            if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
-                // Sent back on this head, and marked ready since: intake
-                // takes it again, so that verdict is no longer its outcome.
-                let again = match &pull {
-                    Some(p) if p.open && e.state != State::Landed => {
-                        let log = Line::read_log(&s.seams().state.read(branch)?)?;
-                        match submits(p) {
-                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
-                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
-                        }
-                    }
-                    _ => false,
-                };
-                if !again {
-                    return Ok(Followed::Done(e.clone(), names(&status.submissions)));
-                }
-            }
-        }
-        if !pull.as_ref().is_some_and(|p| p.open) {
-            return Ok(Followed::Closed);
-        }
-        // Taken in on the head it has now, and undecided: the submission
-        // a submit that does not wait answers with, and a wait follows.
-        let submission = latest
-            .filter(|e| !e.state.is_out() && pull.as_ref().is_some_and(|p| p.head == e.head.0));
-        let names = names(&status.submissions);
-        let (title, lines) = match self.shown.borrow().get(&n) {
-            Some(shown) => (shown.posting.title.clone(), shown.lines.clone()),
-            None => ("waiting".into(), Vec::new()),
-        };
-        Ok(Followed::Open {
-            title,
-            lines,
-            submission,
-            names,
-        })
-    }
-}
-
-impl Pulls {
     /// 2, 47: the head of pull request `worktree`, `pull/<n>`, as intake
     /// read it this round, fetched from its remote; never dirty, never
     /// detached; its agent the one its body names, or its author; and the

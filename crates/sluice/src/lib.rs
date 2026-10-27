@@ -557,13 +557,15 @@ pub trait PullRequests {
     fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
 
     /// Push `worktree`'s branch and open its pull request into `branch`,
-    /// or update the one open.
+    /// or update the one open; `subject`, the submitter's line saying what
+    /// lands, titles it.
     fn open(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktree: &str,
         branch: &str,
+        subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>>;
 
     /// 125: push each of `worktrees`' branches and open or update its
@@ -617,6 +619,7 @@ impl PullRequests for () {
         _: &dyn Clock,
         _: &str,
         branch: &str,
+        _: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         anyhow::bail!("{branch} takes no pull requests")
     }
@@ -877,7 +880,10 @@ pub fn run(
                 let mode = if status {
                     PullMode::Status
                 } else {
-                    PullMode::Open { no_wait }
+                    PullMode::Open {
+                        no_wait,
+                        subject: subject.as_deref(),
+                    }
                 };
                 return submit_pull(&s, pulls, clock, &worktree, &branch, mode, json, pause, out);
             }
@@ -2607,9 +2613,13 @@ fn submitted(
 
 /// What `submit_pull` does with a worktree's pull request.
 #[derive(Clone, Copy)]
-enum PullMode {
-    /// Open or update it, then follow it to its outcome unless `no_wait`.
-    Open { no_wait: bool },
+enum PullMode<'a> {
+    /// Open or update it, titled by `subject` where given, then follow it
+    /// to its outcome unless `no_wait`.
+    Open {
+        no_wait: bool,
+        subject: Option<&'a str>,
+    },
     /// Only say where it stands.
     Status,
     /// Follow it to its outcome, or until `deadline`: `sluice wait
@@ -2632,14 +2642,14 @@ fn submit_pull(
     clock: &dyn Clock,
     worktree: &str,
     branch: &str,
-    mode: PullMode,
+    mode: PullMode<'_>,
     json: bool,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
     let status = matches!(mode, PullMode::Status);
-    let no_wait = matches!(mode, PullMode::Open { no_wait: true });
+    let no_wait = matches!(mode, PullMode::Open { no_wait: true, .. });
     let opens = matches!(mode, PullMode::Open { .. });
     let again = format!("sluice wait {branch}");
     // 124: how the host's copy differed from what the submit opened.
@@ -2673,7 +2683,11 @@ fn submit_pull(
             }
         }
     } else {
-        match pulls.open(seams, clock, worktree, branch)? {
+        let subject = match mode {
+            PullMode::Open { subject, .. } => subject,
+            _ => None,
+        };
+        match pulls.open(seams, clock, worktree, branch, subject)? {
             Ok(o) => {
                 if !json {
                     writeln!(out, "{}", o.said)?;
