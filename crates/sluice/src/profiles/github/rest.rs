@@ -3,9 +3,11 @@
 //! their timelines read; sluice's check run and comments posted. A list
 //! is read a hundred at a time until a page comes back short. A pull
 //! request is marked a draft or ready for review through GraphQL, the one
-//! API that can.
+//! API that can. A check run, a comment or a pull request whose making's
+//! answer was not read is read back on GitHub before it is made again
+//! (134; rule core.29).
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
@@ -45,6 +47,32 @@ impl App {
             }
         }
         Ok(out)
+    }
+
+    /// Make something on `repo` with a `POST` of `body` to `path`, read
+    /// from GitHub's answer by `answer` (134; rule core.29). A call whose
+    /// answer was not read is not made again until `held` reads whether
+    /// GitHub holds what it made: what it holds is carried on, and what it
+    /// lacks is made then, once more.
+    fn make<T>(
+        &self,
+        repo: &Repo,
+        path: &str,
+        body: &str,
+        answer: impl Fn(&Value) -> Result<T>,
+        held: impl FnOnce() -> Result<Option<T>>,
+    ) -> Result<T> {
+        let post = || self.post_api(Call::Make, path, Bearer::Repo(repo), body);
+        match post() {
+            Ok(v) => answer(&v),
+            Err(e) if sluice_seams::unanswered(&e) => {
+                match held().with_context(|| format!("{e:#}; reading whether it was made"))? {
+                    Some(made) => Ok(made),
+                    None => answer(&post()?),
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -288,11 +316,15 @@ impl Forge for App {
             }
             None => {
                 body["head_sha"] = json!(rev);
-                self.post_api(
-                    Call::Make,
+                self.make(
+                    repo,
                     &Self::repo_path(repo, "/check-runs"),
-                    Bearer::Repo(repo),
                     &body.to_string(),
+                    |_| Ok(()),
+                    || {
+                        let runs = self.posted_all(repo, rev)?;
+                        Ok(runs.iter().any(|p| p.name == name).then_some(()))
+                    },
                 )?;
             }
         }
@@ -322,13 +354,16 @@ impl Forge for App {
     }
 
     fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
-        self.post_api(
-            Call::Make,
+        self.make(
+            repo,
             &Self::repo_path(repo, &format!("/issues/{number}/comments")),
-            Bearer::Repo(repo),
             &json!({ "body": body }).to_string(),
-        )?;
-        Ok(())
+            |_| Ok(()),
+            || {
+                let comments = self.comment_list(repo, number)?;
+                Ok(comments.iter().any(|c| c.body == body).then_some(()))
+            },
+        )
     }
 
     fn open(
@@ -340,13 +375,18 @@ impl Forge for App {
         body: &str,
         draft: bool,
     ) -> Result<Pull> {
-        let v = self.post_api(
-            Call::Make,
+        self.make(
+            repo,
             &Self::repo_path(repo, "/pulls"),
-            Bearer::Repo(repo),
             &open_request(base, head_ref, title, body, draft).to_string(),
-        )?;
-        pull(&v)
+            pull,
+            || {
+                let pulls = self.pulls(repo, base)?;
+                Ok(pulls
+                    .into_iter()
+                    .find(|p| p.head_ref == head_ref && p.from_repo(repo)))
+            },
+        )
     }
 
     fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
