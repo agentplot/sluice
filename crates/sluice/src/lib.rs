@@ -1406,7 +1406,13 @@ pub fn run(
         Command::Branch { command } => branch::run(&s, command, out),
         Command::Forge {
             command: ForgeCommand::Check { branch, json },
-        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), json, out),
+        } => profiles::forge_check(
+            &std::env::current_dir()?,
+            branch.as_deref(),
+            json,
+            out,
+            std::rc::Rc::new(retry::Policy::command()),
+        ),
         Command::Credential { operation } => {
             identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)

@@ -59,6 +59,7 @@ fn main() {
             }
         }
     }
+    let retry = Rc::new(retry(&cli));
     // The forge check reads the host's config itself, and says what in it
     // is wrong rather than failing on it.
     if let Some(Command::Forge {
@@ -73,6 +74,7 @@ fn main() {
                     branch.as_deref(),
                     *json,
                     &mut std::io::stdout(),
+                    retry.clone(),
                 )
             })
             .unwrap_or_else(|e| {
@@ -88,9 +90,8 @@ fn main() {
         if state != "prepared" {
             return;
         }
-        std::process::exit(hook(cli));
+        std::process::exit(hook(cli, retry));
     }
-    let retry = Rc::new(retry(&cli));
     let bound = match std::env::current_dir()
         .map_err(anyhow::Error::from)
         .and_then(|dir| Bound::open(&dir, retry))
@@ -154,14 +155,14 @@ fn main() {
 /// that folder only when git set none. It reads the host's settings and
 /// the policy only as far as guarding needs. A transaction it cannot read
 /// for a reason of its own passes, said once; it never exits 3.
-fn hook(cli: Cli) -> i32 {
+fn hook(cli: Cli, retry: Rc<Policy>) -> i32 {
     let bound = std::env::current_dir()
         .map(|dir| match std::env::var_os("GIT_DIR") {
             Some(git_dir) if !git_dir.is_empty() => dir.join(git_dir),
             _ => dir,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::guarding(&dir));
+        .and_then(|dir| Bound::guarding(&dir, retry));
     let bound = match bound {
         Ok(b) => b,
         Err(e) => {

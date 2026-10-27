@@ -85,9 +85,9 @@ impl Bound {
 
     /// 124: bind the repository holding `dir` for branch protection's hook:
     /// the host's settings and each policy read only as far as guarding
-    /// needs, every other field passed over (ADR 0059).
-    pub fn guarding(dir: &Path) -> Result<Self> {
-        let retry = Rc::new(retry::Policy::command());
+    /// needs, every other field passed over (ADR 0059), every call to a
+    /// remote under the command's `retry` policy (134).
+    pub fn guarding(dir: &Path, retry: Rc<retry::Policy>) -> Result<Self> {
         Bound::bind(
             dir,
             std::env::current_exe()?,
@@ -187,12 +187,13 @@ pub fn forge_check(
     branch: Option<&str>,
     json: bool,
     out: &mut dyn Write,
+    retry: Rc<retry::Policy>,
 ) -> Result<i32> {
     let branch = match branch {
         Some(b) => b.to_string(),
         None => checked_out(dir)?,
     };
-    let found = forge_findings(dir, &branch)?;
+    let found = forge_findings(dir, &branch, retry)?;
     let ok = found.iter().all(|f| f.ok);
     if json {
         let checks: Vec<serde_json::Value> = found
@@ -219,7 +220,11 @@ pub fn forge_check(
 
 /// Each thing `sluice forge check` checks for `branch`, up to the first
 /// that stops the rest.
-fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding>> {
+fn forge_findings(
+    dir: &Path,
+    branch: &str,
+    retry: Rc<retry::Policy>,
+) -> Result<Vec<github::check::Finding>> {
     let mut found = Vec::new();
     let mut said = |ok: bool, what: String| found.push(github::check::Finding { ok, what });
     let instance = match Instance::read() {
@@ -237,7 +242,7 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
         );
         return Ok(found);
     };
-    let branches = branches::Branches::open(dir)?;
+    let branches = branches::Branches::open_as(dir, None, retry.clone())?;
     let remote = match branches.remote(branch)? {
         Some(r) => Some(r),
         // A bolt not yet made is checked before it is: its rules on the
@@ -265,7 +270,7 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
         );
         return Ok(found);
     };
-    let app = match github::App::open(forge, Rc::new(retry::Policy::command())) {
+    let app = match github::App::open(forge, retry) {
         Ok(a) => a,
         Err(e) => {
             said(false, format!("{e:#}"));
