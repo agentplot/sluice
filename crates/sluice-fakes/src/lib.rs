@@ -1947,6 +1947,11 @@ impl Checkout for FakeCheckout {
         Ok(gone)
     }
 
+    /// The fake keeps no scratch directories: there is none to remove.
+    fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
+
     fn preview(
         &self,
         name: &str,
