@@ -23,7 +23,7 @@ Edit nothing outside the paths under Touches.
 ## 3. Status and the pages
 
 - [x] 3.1 Add `refused` to `Status` in `crates/sluice-core/src/ops.rs` from this host's document while it has not ended, and show it in `crates/sluice/src/lib.rs` above the queue in text and under `refused` in `--json`, taking `stale`'s remote from its `ReadRefused` (D2, D7). Verify in `crates/sluice/tests/cli.rs` that status shows the refusal's ref, remote, since, rounds and git's words during a refusal and nothing once it ended, and that a stale state still says it could not refresh; `moon run cli:test` passes.
-- [ ] 3.2 Document `read-refused` and `read-again` in `site/src/content/docs/reference/state.md` beside `copy-behind`, with the spec's two lines as examples and that a line written late keeps the time it happened, and add the host's `.refused/` and `sluice-remote/<remote>/refused/` to its layout; add the refusal's line to `sluice status` in `site/src/content/docs/reference/commands.md` where status's other lines above the queue are. Verify `moon run site:prose` passes with no warning.
+- [x] 3.2 Document `read-refused` and `read-again` in `site/src/content/docs/reference/state.md` beside `copy-behind`, with the spec's two lines as examples and that a line written late keeps the time it happened, and add the host's `.refused/` and `sluice-remote/<remote>/refused/` to its layout; add the refusal's line to `sluice status` in `site/src/content/docs/reference/commands.md` where status's other lines above the queue are. Verify `moon run site:prose` passes with no warning.
 
 ## 4. Against a real remote
 
