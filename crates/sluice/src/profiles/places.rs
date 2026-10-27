@@ -64,7 +64,17 @@
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
-//! is derived from the place's name, never searched for (rule core.16).
+//! is derived from the place's name or read from its record, never
+//! searched for (rule core.16).
+//!
+//! A place's scratch directory, its checks' `SLUICE_TMP`, is
+//! `<common>/sluice/.tmp/` and 10 hex digits of the SHA-1 of its name, the
+//! same length for every place whatever its name or its worktree's
+//! location (35). Its record names it before it is made, and every run,
+//! release and gone release reads it from there (rule core.30). A record
+//! an older sluice wrote names none: its scratch stays where that sluice
+//! put it, `.tmp/` and the place's name as one directory name, until the
+//! place is released.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -471,7 +481,7 @@ impl Places {
                 .path
                 .clone()
                 .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
-            tmp: self.tmp(name),
+            tmp: self.scratch(name, made),
             env,
         })
     }
@@ -521,7 +531,7 @@ impl Places {
                 .path
                 .clone()
                 .unwrap_or_else(|| self.worktree_path(name)),
-            tmp: self.tmp(name),
+            tmp: self.scratch(name, made),
             env,
         })
     }
@@ -590,14 +600,18 @@ impl Places {
         Ok(names)
     }
 
-    /// Let go of what a place held beyond its checkout: its scratch
-    /// directory, its block of ports and its record.
-    fn let_go(&self, name: &str, block: Option<u32>) -> Result<()> {
-        let tmp = self.tmp(name);
-        if tmp.exists() {
-            std::fs::remove_dir_all(&tmp)?;
+    /// Let go of what a place held beyond its checkout: the scratch
+    /// directory its record `made` names, its block of ports and its
+    /// record. With no record, no scratch is removed: one no record names
+    /// is removed with the abandoned places (123, rule core.30).
+    fn let_go(&self, name: &str, made: Option<&Made>) -> Result<()> {
+        if let Some(made) = made {
+            let tmp = self.scratch(name, made);
+            if tmp.exists() {
+                std::fs::remove_dir_all(&tmp)?;
+            }
         }
-        if let Some(n) = block {
+        if let Some(n) = made.and_then(|m| m.block) {
             free_block(&self.blocks()?, n, &self.record(name))?;
         }
         // A session's record is removed under the lock `ran` writes it
@@ -679,8 +693,14 @@ impl Places {
         self.root().join(places_dir(name)).join(dir_name(name))
     }
 
-    fn tmp(&self, name: &str) -> PathBuf {
-        self.root().join(".tmp").join(dir_name(name))
+    /// 35, rule core.30: the scratch directory of the place `name`, as its
+    /// record `made` names it; a record an older sluice wrote names none,
+    /// and its scratch is where that sluice put it, the place's name as one
+    /// directory name.
+    fn scratch(&self, name: &str, made: &Made) -> PathBuf {
+        made.scratch
+            .clone()
+            .unwrap_or_else(|| self.root().join(".tmp").join(dir_name(name)))
     }
 
     /// 35, rule core.30: where a place made now keeps its scratch, which
@@ -919,7 +939,7 @@ impl Checkout for Places {
                 env.insert(env_name(p), (first + i as u16).to_string());
             }
         }
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -998,7 +1018,7 @@ impl Checkout for Places {
                 }
             }
         }
-        self.let_go(name, made.and_then(|m| m.block))
+        self.let_go(name, made.as_ref())
     }
 
     fn gone(&self, name: &str) -> Result<bool> {
@@ -1022,11 +1042,12 @@ impl Checkout for Places {
             }
         }
         // A session's worktree stays (25, rule core.16).
-        self.let_go(name, made.and_then(|m| m.block))
+        self.let_go(name, made.as_ref())
     }
 
     fn release_gone(&self, name: &str) -> Result<GoneRelease> {
-        // 123: noted before it starts, so it never starts twice.
+        // 123: noted before it starts, so it never starts twice; it runs in
+        // the scratch the record names (rule core.30).
         let start = {
             let _lock = self.lock_records()?;
             match self.read_record(name)? {
@@ -1034,14 +1055,13 @@ impl Checkout for Places {
                     made.gone_release =
                         Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
                     self.write_record(name, &made)?;
-                    true
+                    Some(self.scratch(name, &made))
                 }
-                _ => false,
+                _ => None,
             }
         };
         let mut gone = GoneRelease::default();
-        if start {
-            let tmp = self.tmp(name);
+        if let Some(tmp) = start {
             std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
             match self.runs.release_gone(name, &tmp) {
                 Ok(ran) => gone.ran = ran,
@@ -1096,7 +1116,7 @@ impl Checkout for Places {
                 }
             };
             self.runs.remove_all_with(name, with)?;
-            self.let_go(name, made.block)?;
+            self.let_go(name, Some(&made))?;
             Ok(released)
         })();
         // 123: held at once: no round releases a session's place (25).
@@ -1225,7 +1245,7 @@ impl Checkout for Places {
         // result; the one before is not this run's.
         made.last_result = None;
         self.write_record(&name, &made)?;
-        let tmp = self.tmp(&name);
+        let tmp = self.scratch(&name, &made);
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut env = made.ports.clone();
         env.insert(
@@ -1301,7 +1321,7 @@ impl Checkout for Places {
             );
         }
         self.write_record(name, &made)?;
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -1349,7 +1369,7 @@ impl Checkout for Places {
             return Err(e);
         }
         self.remove_worktree(&self.worktree_path(name))?;
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -1411,16 +1431,14 @@ mod tests {
         let places = Places::new(&root, Runs::new(&root, "sluice".into()))
             .with_blocks(root.join("not-a-dir/blocks"));
         let name = "try/main/90";
-        places
-            .write_record(name, &Made::new(Kind::Made, "worktree"))
-            .unwrap();
-        places.let_go(name, None).unwrap();
+        let made = Made::new(Kind::Made, "worktree");
+        places.write_record(name, &made).unwrap();
+        places.let_go(name, Some(&made)).unwrap();
         assert!(!places.record(name).exists());
         let session = format!("session/{}", root.join("wt").display());
-        places
-            .write_record(&session, &Made::new(Kind::Session, "session"))
-            .unwrap();
-        places.let_go(&session, None).unwrap();
+        let made = Made::new(Kind::Session, "session");
+        places.write_record(&session, &made).unwrap();
+        places.let_go(&session, Some(&made)).unwrap();
         assert!(!places.record(&session).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
