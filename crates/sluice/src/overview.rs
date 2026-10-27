@@ -1,7 +1,8 @@
 //! `sluice overview`: every branch's queue at a glance, for a person, a
 //! pane or a status line (26, 49; ADR 0023). A reader only: it releases,
 //! counts and writes nothing (rules core.11, core.14), so `sluice
-//! previews`' own tidying is left to it.
+//! previews`' own tidying is left to it. A watch writes only the reader's
+//! document in the host's state, when it is the reader (129; ADR 0056).
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -14,6 +15,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
+use crate::reader::{untimed, Reader};
 use crate::{hashes, held_line, progress, sessions_json, Pause, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
@@ -73,22 +75,36 @@ pub fn run(
         }
         return Ok(0);
     }
+    // 129: the first watch or wait of the repository on the host reads its
+    // queues and writes each document it prints; every other follows that
+    // document, reading nothing itself, until it finds the lock free
+    // (rule core.25).
+    let mut reader = Reader::take(&host.readers()?, &host.repository()?)?;
     // Once at the start, then each time anything but the time it was read
-    // changes: a reader finds what happened by comparing `recent`.
+    // changes: what reads the lines finds what happened by comparing
+    // `recent`.
     let mut last: Option<serde_json::Value> = None;
     loop {
-        let (_, mut doc) = document(s, host, clock)?;
-        let at = doc["at"].take();
-        if last.as_ref() != Some(&doc) {
-            let mut shown = doc.clone();
-            shown["at"] = at;
-            writeln!(out, "{}", serde_json::to_string(&shown)?)?;
-            out.flush()?;
-            last = Some(doc);
+        let doc = match &mut reader {
+            Reader::Lead(lead) => {
+                let (_, doc) = document(s, host, clock)?;
+                lead.write(&doc)?;
+                Some(doc)
+            }
+            Reader::Follow(follow) => follow.read(),
+        };
+        if let Some(doc) = doc {
+            let now = untimed(&doc);
+            if last.as_ref() != Some(&now) {
+                writeln!(out, "{}", serde_json::to_string(&doc)?)?;
+                out.flush()?;
+                last = Some(now);
+            }
         }
         if !pause.pause() {
             return Ok(STOPPED);
         }
+        reader.lead_once_free()?;
     }
 }
 
