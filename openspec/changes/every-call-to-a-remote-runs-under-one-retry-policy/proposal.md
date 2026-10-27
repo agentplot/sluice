@@ -141,6 +141,7 @@ crates/sluice/src/lib.rs
 crates/sluice/src/main.rs
 crates/sluice/src/instance.rs
 crates/sluice/src/profiles/branches.rs
+crates/sluice/src/profiles/mod.rs
 crates/sluice/src/profiles/pushed_refs.rs
 crates/sluice/src/profiles/remote_refs.rs
 crates/sluice/src/profiles/records.rs
