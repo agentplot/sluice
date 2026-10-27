@@ -1,6 +1,6 @@
 ## 1. A fake remote that answers a push
 
-- [ ] 1.1 In `crates/sluice/tests/pushed_refs.rs` (or `tests/support/http.rs` where it is shared), add answers for git's smart HTTP push: `info/refs?service=git-receive-pack` advertising a ref at a revision the test names (or no refs), and `POST /git-receive-pack` answering report-status `unpack ok` and `ok <ref>`, with a helper reading the pkt-line command `<old> <new> <ref>` from a request's body; verify with a test that `push_branch` through a fake that accepts the first token succeeds and the fake saw one push naming the branch and revision.
+- [x] 1.1 In `crates/sluice/tests/pushed_refs.rs` (or `tests/support/http.rs` where it is shared), add answers for git's smart HTTP push: `info/refs?service=git-receive-pack` advertising a ref at a revision the test names (or no refs), and `POST /git-receive-pack` answering report-status `unpack ok` and `ok <ref>`, with a helper reading the pkt-line command `<old> <new> <ref>` from a request's body; verify with a test that `push_branch` through a fake that accepts the first token succeeds and the fake saw one push naming the branch and revision.
 
 ## 2. A push refused on the token is made once more
 

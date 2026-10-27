@@ -372,21 +372,126 @@ fn not_found() -> support::http::Answer {
 
 /// A repository with nothing in it, as git's smart HTTP lists one.
 fn empty_repository() -> support::http::Answer {
-    let pkt = |s: &str| format!("{:04x}{s}", s.len() + 4);
+    listing("git-upload-pack", &[])
+}
+
+/// `s` as a pkt-line.
+fn pkt(s: &str) -> String {
+    format!("{:04x}{s}", s.len() + 4)
+}
+
+/// The fake's refs, each a ref and its revision, as git's smart HTTP lists
+/// them for `service`: `git-upload-pack` for a fetch, `git-receive-pack`
+/// for a push.
+fn listing(service: &str, refs: &[(&str, &str)]) -> support::http::Answer {
+    let caps = match service {
+        "git-receive-pack" => "report-status delete-refs ofs-delta",
+        _ => "multi_ack ofs-delta",
+    };
     let zero = "0".repeat(40);
+    let mut lines = match refs {
+        [] => vec![format!("{zero} capabilities^{{}}")],
+        _ => refs.iter().map(|(r, at)| format!("{at} {r}")).collect(),
+    };
+    lines[0] = format!("{}\0{caps}", lines[0]);
     let body = format!(
         "{}0000{}0000",
-        pkt("# service=git-upload-pack\n"),
-        pkt(&format!("{zero} capabilities^{{}}\0multi_ack\n"))
+        pkt(&format!("# service={service}\n")),
+        lines
+            .iter()
+            .map(|l| pkt(&format!("{l}\n")))
+            .collect::<String>()
     );
     (
         200,
         vec![(
             "Content-Type".into(),
-            "application/x-git-upload-pack-advertisement".into(),
+            format!("application/x-{service}-advertisement"),
         )],
         body,
     )
+}
+
+/// A push's commands, `(old, new, ref)` each, as git sends them at the
+/// head of a `POST /git-receive-pack`.
+fn commands(r: &support::http::Request) -> Vec<(String, String, String)> {
+    let body = r.body.as_bytes();
+    let mut at = 0;
+    let mut all = Vec::new();
+    while let Some(len) = body
+        .get(at..at + 4)
+        .and_then(|h| usize::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok())
+    {
+        if len < 4 {
+            break;
+        }
+        let line = String::from_utf8_lossy(&body[at + 4..at + len]);
+        let line = line.split('\0').next().unwrap().trim_end();
+        let mut words = line.split(' ').map(String::from);
+        if let (Some(old), Some(new), Some(name)) = (words.next(), words.next(), words.next()) {
+            all.push((old, new, name));
+        }
+        at += len;
+    }
+    all
+}
+
+/// The fake's answer to a push it takes: every ref it names updated.
+fn received(r: &support::http::Request) -> support::http::Answer {
+    let ok: String = commands(r)
+        .iter()
+        .map(|(_, _, name)| pkt(&format!("ok {name}\n")))
+        .collect();
+    (
+        200,
+        vec![(
+            "Content-Type".into(),
+            "application/x-git-receive-pack-result".into(),
+        )],
+        format!("{}{ok}0000", pkt("unpack ok\n")),
+    )
+}
+
+/// Whether `r` lists the fake's refs for a push.
+fn lists_for_push(r: &support::http::Request) -> bool {
+    r.method == "GET" && r.path.ends_with("?service=git-receive-pack")
+}
+
+/// Whether `r` is a push: its commands and its objects.
+fn is_push(r: &support::http::Request) -> bool {
+    r.method == "POST" && r.path.ends_with("/git-receive-pack")
+}
+
+/// The pushes the fake was sent, each its `Authorization` and its
+/// commands, in order.
+fn pushes(fake: &Fake) -> Vec<(String, Vec<(String, String, String)>)> {
+    fake.requests()
+        .iter()
+        .filter(|r| is_push(r))
+        .map(|r| (r.header("Authorization").unwrap_or("").into(), commands(r)))
+        .collect()
+}
+
+/// A fake remote, answering each token as `answer` does for it; one that
+/// gives none is asked for one.
+fn remote(
+    answer: impl Fn(&str, &support::http::Request) -> support::http::Answer + Send + Sync + 'static,
+) -> Fake {
+    Fake::start(move |r| match r.header("Authorization") {
+        None => ask(),
+        Some(a) => answer(a, r),
+    })
+}
+
+/// The answer of a fake remote holding `refs` and taking every push.
+fn takes(r: &support::http::Request, refs: &[(&str, &str)]) -> support::http::Answer {
+    if lists_for_push(r) {
+        listing("git-receive-pack", refs)
+    } else if is_push(r) {
+        received(r)
+    } else {
+        listing("git-upload-pack", refs)
+    }
 }
 
 /// The pushed refs of `repo` reached through `fake` as `identity`.
@@ -584,4 +689,31 @@ fn a_push_with_no_credential_fails_rather_than_waits() {
     assert!(read.contains("fetching main from origin failed"), "{read}");
     let push = push.unwrap_err();
     assert!(push.contains("pushing main to origin failed"), "{push}");
+}
+
+/// C.5: a session's branch pushed through a remote that takes the
+/// identity's token is one push, naming the branch and the revision.
+#[test]
+fn a_push_the_remote_takes_is_one_push() {
+    let repo = Repo::new("push-taken");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let head = repo.branch("unit/u", "main", &[("a", Some("1"))]);
+    let fake = {
+        let base = base.clone();
+        remote(move |_, r| takes(r, &[("refs/heads/main", &base)]))
+    };
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    p.push_branch(&rev(head.clone()), "unit/u").unwrap();
+    let zero = "0".repeat(40);
+    assert_eq!(
+        pushes(&fake),
+        [(
+            basic("fake-token"),
+            vec![(zero, head, "refs/heads/unit/u".into())]
+        )]
+    );
+    assert_eq!(identity.renewed.get(), 0);
 }
