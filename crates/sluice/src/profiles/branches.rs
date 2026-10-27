@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sluice_core::policy::{Policy, POLICY_PATH};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
@@ -65,64 +65,31 @@ impl Branches {
         self.local.common_dir()
     }
 
-    /// The remote `branch`'s policy names, read on the local branch's
-    /// revision: it may lag the remote's, which is enough to choose the
-    /// profile; the gate itself is read from the revision the profile
-    /// reads (rule core.15). With no local branch, as on a host that has
-    /// only fetched one another host made, it is read on each remote's
-    /// tracking ref of it, and kept when it names that remote.
+    /// The remote `branch` is on: the one the policy at any revision of
+    /// it this host holds names, its own ref or a remote's tracking ref as
+    /// last fetched, with no fetch made to decide it (124; rule core.27).
+    /// A revision that lags, holds no policy or names no remote decides
+    /// nothing against one that names a remote, and two naming different
+    /// remotes are refused. The gate itself is read from the revision the
+    /// profile reads (rule core.15).
     pub fn remote(&self, branch: &str) -> Result<Option<String>> {
-        if let Some(rev) = self.local.read(branch)? {
-            return self.named(branch, &rev);
-        }
-        for r in remotes(&self.dir)? {
-            let tracking = format!("refs/remotes/{r}/{branch}");
-            let Some(rev) = self.local.read_ref(&tracking)? else {
-                continue;
-            };
-            if self.named(branch, &rev)?.as_deref() == Some(r.as_str()) {
-                return Ok(Some(r));
-            }
-        }
-        Ok(None)
+        Ok(self.routing(branch, branch)?.remote)
     }
 
     /// The remote `branch` would be made on from `from` (branches-1 104):
-    /// the one the policy at `from`'s revision names for it, `from` read
-    /// locally or, failing that, on a remote's tracking ref of it.
+    /// the one the policy at any revision of `from` this host holds names
+    /// for `branch`, read as [`Branches::remote`] reads it, with no fetch
+    /// (124; rule core.27).
     pub fn remote_if_made_from(&self, branch: &str, from: &str) -> Result<Option<String>> {
-        let mut rev = self.local.read(from)?;
-        if rev.is_none() {
-            for r in remotes(&self.dir)? {
-                rev = self.local.read_ref(&format!("refs/remotes/{r}/{from}"))?;
-                if rev.is_some() {
-                    break;
-                }
-            }
-        }
-        match rev {
-            Some(rev) => self.named(branch, &rev),
-            None => Ok(None),
-        }
+        Ok(self.routing(branch, from)?.remote)
     }
 
     /// The policy `branch` is routed by, and the revision it was read at:
-    /// the local branch's, or a remote's tracking ref of it, as
-    /// [`Branches::remote`] reads it.
+    /// the first revision this host holds whose policy names the remote
+    /// [`Branches::remote`] reads, or, when none names one, the first
+    /// holding a policy, with no fetch (124; rule core.27).
     pub fn policy_of(&self, branch: &str) -> Result<Option<(Rev, Policy)>> {
-        let mut at = self.local.read(branch)?;
-        if at.is_none() {
-            for r in remotes(&self.dir)? {
-                at = self.local.read_ref(&format!("refs/remotes/{r}/{branch}"))?;
-                if at.is_some() {
-                    break;
-                }
-            }
-        }
-        let Some(rev) = at else {
-            return Ok(None);
-        };
-        Ok(self.policy_at(branch, &rev)?.map(|policy| (rev, policy)))
+        Ok(self.routing(branch, branch)?.at)
     }
 
     /// A file of a revision's tree.
@@ -146,6 +113,77 @@ impl Branches {
     /// The pushed refs profile for `remote`, as this binding reaches it.
     pub fn pushed_refs(&self, remote: &str) -> Result<Rc<PushedRefs>> {
         self.pushed(remote, remote)
+    }
+
+    /// The revisions of `branch` this host holds, each with its ref as the
+    /// user knows it: its own ref first, then each remote's tracking ref
+    /// of it as last fetched, remotes in the order git lists them (124).
+    /// Nothing is fetched.
+    fn revisions(&self, branch: &str) -> Result<Vec<(String, Rev)>> {
+        let mut out = Vec::new();
+        if let Some(rev) = self.local.read(branch)? {
+            out.push((branch.to_string(), rev));
+        }
+        for r in remotes(&self.dir)? {
+            if let Some(rev) = self.local.read_ref(&format!("refs/remotes/{r}/{branch}"))? {
+                out.push((format!("{r}/{branch}"), rev));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Where `branch` is, read off the revisions of `from` this host
+    /// holds (124; rule core.27): the remote any of their policies names
+    /// for `branch`, with the first revision naming it and its policy, or,
+    /// when none names one, the first revision holding a policy. A
+    /// revision that holds no policy or names no remote decides nothing;
+    /// two naming different remotes are refused, naming both, since
+    /// nothing the host holds says which is right (record 0060).
+    fn routing(&self, branch: &str, from: &str) -> Result<Routing> {
+        let mut named: Option<(String, String, Rev, Policy)> = None;
+        let mut first: Option<(Rev, Policy)> = None;
+        let mut read: Vec<Rev> = Vec::new();
+        for (name, rev) in self.revisions(from)? {
+            if read.contains(&rev) {
+                continue;
+            }
+            read.push(rev.clone());
+            let Some(policy) = self.policy_at(branch, &rev)? else {
+                continue;
+            };
+            let remote = policy.rules_for(branch)?.and_then(|r| r.remote.clone());
+            match (remote, &named) {
+                (Some(remote), None) => named = Some((remote, name, rev, policy)),
+                (Some(remote), Some((was, by, at, _))) if remote != *was => {
+                    let (what, which) = match branch == from {
+                        true => (format!("{branch}'s policy names"), "is on"),
+                        false => (
+                            format!("{from}'s policy names, for {branch},"),
+                            "would be made on",
+                        ),
+                    };
+                    bail!(
+                        "{what} two remotes: {was} on {by} ({}), {remote} on {name} ({}); \
+                         sluice cannot tell which remote {branch} {which}",
+                        at.short(),
+                        rev.short()
+                    );
+                }
+                (Some(_), Some(_)) => {}
+                (None, _) if first.is_none() => first = Some((rev, policy)),
+                (None, _) => {}
+            }
+        }
+        Ok(match named {
+            Some((remote, _, rev, policy)) => Routing {
+                remote: Some(remote),
+                at: Some((rev, policy)),
+            },
+            None => Routing {
+                remote: None,
+                at: first,
+            },
+        })
     }
 
     /// The remote the policy at `rev` names for `branch`.
@@ -193,6 +231,13 @@ impl Branches {
         self.pushed.borrow_mut().insert(remote.into(), p.clone());
         Ok(p)
     }
+}
+
+/// What the revisions of a branch the host holds say of where it is: the
+/// remote they name, if any, and the revision and policy it is routed by.
+struct Routing {
+    remote: Option<String>,
+    at: Option<(Rev, Policy)>,
 }
 
 impl Pushers for Branches {
