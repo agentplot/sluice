@@ -864,8 +864,56 @@ fn home_finds_a_landed_or_failed_submission_through_recent() {
 
     let (code, out) = sluice(&f, &["--worktree", "unit/b"]);
     assert_eq!(code, 0);
-    assert!(out.contains(&format!("#2 to {BRANCH} · failed\n")), "{out}");
+    assert!(
+        out.contains(&format!("#2 unit/b to {BRANCH} · failed\n")),
+        "{out}"
+    );
     assert!(out.contains("  failed tests:t-batch-cards: "), "{out}");
+}
+
+/// 26: the home view names its submission by its subject, or its branch
+/// where its submit gave none; `--json` carries the subject, null where
+/// there is none, its other fields as before.
+#[test]
+fn home_names_its_submission_with_its_subject() {
+    let f = setup();
+    work(&f, "unit/forecast", "agent-f", &[("plugin/a", Some("a"))]);
+    f.world.at_path("unit/forecast", "/w/f");
+    f.world.hold_runs(true);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/forecast", "--no-wait"],
+    );
+    sluice(&f, &["step", BRANCH]);
+    let text = |f: &Fakes| sluice(f, &["--worktree", "unit/forecast"]).1;
+    let out = text(&f);
+    assert!(
+        out.contains(&format!("\n#1 unit/forecast to {BRANCH} · testing\n")),
+        "{out}"
+    );
+    let v = home(&f, "unit/forecast");
+    assert_eq!(v["submission"]["subject"], serde_json::Value::Null);
+
+    give_subject(&f, 1, "Forecast concurrent units");
+    let out = text(&f);
+    assert!(
+        out.contains(&format!(
+            "\n#1 Forecast concurrent units to {BRANCH} · testing\n"
+        )),
+        "{out}"
+    );
+    let v = home(&f, "unit/forecast");
+    assert_eq!(
+        v["submission"],
+        serde_json::json!({
+            "id": 1, "branch": BRANCH, "state": "testing", "failed": [],
+            "landed_as": null, "subject": "Forecast concurrent units",
+        })
+    );
+    assert_eq!(
+        v["next"],
+        serde_json::json!(["sluice status 1", "sluice withdraw 1 --as agent-f"])
+    );
 }
 
 /// A pull request's submission names no worktree's path, but the branch it
