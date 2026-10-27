@@ -123,17 +123,28 @@ item, a service manager) is your choice.
 ## An agent submits
 
 ```console
-$ wt submit main
+$ wt submit main --subject "Batch review cards"
 pushed unit/batch-review · opened #41: Batch review cards
 waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 ```
 
 The agent's branch is pushed, and the pull request is opened. Its
-description holds the branch's commit messages, each whole and oldest
-first, and names the agent, which makes it the agent's pull request.
-Submitting again from the same worktree updates the same pull request
-and marks it ready for review.
+title is the subject, one line in the agent's words saying what lands.
+With no subject, the title is the branch's name, `unit/batch-review`,
+and never a commit's message: a branch's first commit can say little
+of what the branch lands. Its description holds the branch's commit
+messages, each whole and oldest first, and names the agent, which makes
+it the agent's pull request. Submitting again from the same worktree
+updates the same pull request and marks it ready for review.
+
+A later submit with a subject retitles a pull request sluice opened,
+and one with none leaves its title as it stands. A pull request a
+person opened keeps the title they gave it, whatever the subject. When
+a pull request lands, its landing commit names it by its title,
+`chore(land): #12 Batch review cards` under the default landing
+subject, and its `Sluice-From` trailer names the agent and the pull
+request.
 
 GitHub holds 65,536 characters in a description. When a branch's
 messages pass that, as a long bolt's can, the description holds as many
@@ -163,7 +174,7 @@ is also the head submitted:
 
 ```console
 $ wt submit main
-opened #52: Land bolt/review-cards
+opened #52: bolt/review-cards
 this host's bolt/review-cards is at 10e4791, behind origin's 8079db3; submitted 8079db3
 waiting: needs 1 review
 ```
