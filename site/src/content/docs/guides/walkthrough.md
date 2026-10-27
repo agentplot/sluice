@@ -102,7 +102,13 @@ and merge queue leaves it to the job: a moon task that depends on a
 server task (moon 2.6's `wait` and `cleanup` dependencies), `devenv test`
 with its processes and per-instance ports, testcontainers, Playwright's
 `webServer`, a pytest fixture. Ports come from the tool: a free port
-picked at start, or port 0.
+picked at start, or port 0. Such a port is the host's to hand any
+process next, so two checkouts running side by side can collide on it.
+A stack that may run beside another names its ports in
+[`[checkout] ports`](/sluice/reference/configuration/#checkout-where-a-combination-is-tested)
+and reads each from `SLUICE_PORT_<NAME>`. sluice gives every checkout
+ports no other on the host holds, the same for its whole life and free
+when the tests receive them.
 
 What sluice does owe the tests, and nothing more:
 
