@@ -24,10 +24,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification, Progress, Rev,
-    RunHandle, RunRequest, Source, TaskLog, Written,
+    read_refused, AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification,
+    Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
 };
-use tracing::{info, info_span};
+use tracing::{info, info_span, warn};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -38,6 +38,7 @@ use crate::records::{
     LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState,
     State, SystemRun, Tested, ToldRecord,
 };
+use crate::refused::Refusal;
 use crate::release::{ReleaseOutcome, Releasing};
 use crate::text::landing_message;
 use crate::{verdict, Serves, Sluice, OUTPUT};
@@ -136,6 +137,13 @@ impl Sluice<'_> {
     /// The round under the branch's lock; each release it tried that was
     /// not plainly released goes in `releases`, and no place is tried
     /// twice in one round (123).
+    ///
+    /// 133: what the round met of the branch's remote is counted here, once
+    /// a round (design D3). A round that never took the lock never reached
+    /// the remote, and counts as nothing. A round whose error holds a read
+    /// of the remote it could not make is refused, and returns that error
+    /// unchanged; one that ended well read the branch and its records, and
+    /// ends a standing refusal; any other error counts as nothing.
     fn step_locked(
         &self,
         branch: &str,
@@ -146,6 +154,26 @@ impl Sluice<'_> {
             round.record("sluice.step", "busy");
             return Ok(Step::Busy);
         };
+        let stepped = self.step_held(branch, round, releases);
+        match &stepped {
+            Ok(_) => self.note_read_again(branch),
+            Err(e) => {
+                if let Some(refused) = read_refused(e) {
+                    round.record("sluice.step", "refused");
+                    self.note_refused(branch, refused);
+                }
+            }
+        }
+        stepped
+    }
+
+    /// The round's work, under the branch's lock.
+    fn step_held(
+        &self,
+        branch: &str,
+        round: &tracing::Span,
+        releases: &mut Vec<ReleaseOutcome>,
+    ) -> Result<Step> {
         if !self.keeps(branch)? {
             // 75: another instance keeps the branch; this one takes, runs
             // and reports runs of its own.
@@ -183,6 +211,11 @@ impl Sluice<'_> {
     /// refused. A branch in this host's own files has no lead.
     fn keeps(&self, branch: &str) -> Result<bool> {
         let line = self.read_line(branch)?;
+        // 133: the round's first read of the records, answered from what was
+        // last fetched, refuses the round before anything is decided.
+        if let Some(refused) = self.seams.state.stale(branch) {
+            return Err(refused.into());
+        }
         let Some(tip) = self.seams.branch.read(branch)? else {
             return Ok(true);
         };
@@ -2407,6 +2440,60 @@ impl Sluice<'_> {
         }
         self.update(branch, |l| Ok(self.note_copy(l, landed, levelled, &now)))?;
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // 133: a read of the branch's remote the round could not make
+    // -----------------------------------------------------------------------
+
+    /// 133: a round `refused` refused, counted in this host's refusal of
+    /// the branch's remote, its cause added when no round of the refusal met
+    /// it before, and its lines written when the records can be (design D4,
+    /// D5). The round is kept before any write is tried, and a refusal that
+    /// ended with lines still unwritten is kept inside the one that opens
+    /// anew until a write carries them. The round's error stands whatever
+    /// this does.
+    fn note_refused(&self, branch: &str, refused: &ReadRefused) {
+        let noted = (|| {
+            let r = Refusal::refused(self.refusal(branch)?, refused, &self.now());
+            self.keep_refusal(branch, Some(&r))?;
+            self.write_refusal(branch)
+        })();
+        if let Err(e) = noted {
+            warn!(
+                sluice.branch = branch,
+                "keeping the refused read of {} in the log failed: {e:#}", refused.remote
+            );
+        }
+    }
+
+    /// 133: a round that read the branch and its records ends this host's
+    /// refusal of the remote, and writes its end (design D5).
+    fn note_read_again(&self, branch: &str) {
+        let noted = (|| {
+            let Some(mut r) = self.refusal(branch)? else {
+                return Ok(());
+            };
+            r.read_again(&self.now());
+            self.keep_refusal(branch, Some(&r))?;
+            self.write_refusal(branch)
+        })();
+        if let Err(e) = noted {
+            warn!(
+                sluice.branch = branch,
+                "keeping the end of a refused read in the log failed: {e:#}"
+            );
+        }
+    }
+
+    /// The lines of this host's refusal not yet in the branch's log, in a
+    /// write holding nothing else, when the round's read of the records
+    /// reached them; otherwise they wait for the first write that can.
+    fn write_refusal(&self, branch: &str) -> Result<()> {
+        if self.seams.state.stale(branch).is_some() {
+            return Ok(());
+        }
+        self.write_refusal_lines(branch)
     }
 
     /// The name of the next place on the branch.

@@ -14,6 +14,7 @@ pub mod overview;
 pub mod policy;
 pub mod preview;
 pub mod records;
+pub mod refused;
 pub mod release;
 pub mod session;
 pub mod step;
@@ -28,10 +29,12 @@ use sluice_seams::{Branch, Checkout, Driver, Rev, State, Tests, Written};
 use crate::line::Line;
 use crate::policy::{Policy, Rules, POLICY_PATH};
 use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
+use crate::refused::Refusal;
 
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Requester, Status, SubmitRefusal, SubmitRequest, SubmittedHead, WithdrawRefusal, Withdrew,
+    Refused, Requester, Status, SubmitRefusal, SubmitRequest, SubmittedHead, WithdrawRefusal,
+    Withdrew,
 };
 pub use step::{Round, Step};
 
@@ -160,12 +163,84 @@ impl<'a> Sluice<'a> {
         Line::load(branch, self.seams.state.read(branch)?)
     }
 
+    /// Write `line`'s changes. 133: the lines of this host's refusal of
+    /// the branch's remote not yet in its log go in the same write, each at
+    /// the time it happened, and once written are marked so (design D5).
     fn write(&self, line: &Line) -> Result<Written> {
-        let changes = line.changes();
+        self.carry(line, false)
+    }
+
+    /// [`Sluice::write`]; with `always`, the refusal's lines are written
+    /// even when `line` changes nothing else.
+    fn carry(&self, line: &Line, always: bool) -> Result<Written> {
+        let own = line.changes();
+        if own.is_empty() && !always {
+            return Ok(Written::Written(line.version));
+        }
+        let refusal = self.refusal(&line.branch)?;
+        let carried = refusal
+            .as_ref()
+            .map(|r| r.unwritten(&self.peer.name))
+            .unwrap_or_default();
+        let changes = if carried.is_empty() {
+            own
+        } else {
+            let mut with = line.clone();
+            for (at, event) in carried.iter().cloned() {
+                with.log(&at, event);
+            }
+            with.changes()
+        };
         if changes.is_empty() {
             return Ok(Written::Written(line.version));
         }
-        self.seams.state.write(&line.branch, line.version, changes)
+        let written = self
+            .seams
+            .state
+            .write(&line.branch, line.version, changes)?;
+        if let (Written::Written(_), Some(r)) = (written, refusal) {
+            if !carried.is_empty() {
+                // The write stands whatever this does: a line not marked is
+                // written again by the next write, which decides nothing.
+                if let Err(e) = self.keep_refusal(&line.branch, r.written().as_ref()) {
+                    tracing::warn!(
+                        sluice.branch = line.branch,
+                        "noting the refusal's lines as written failed: {e:#}"
+                    );
+                }
+            }
+        }
+        Ok(written)
+    }
+
+    /// 133: the lines of this host's refusal of `branch`'s remote not yet in
+    /// its log, in a write holding nothing else, read again when the write
+    /// is refused (62).
+    fn write_refusal_lines(&self, branch: &str) -> Result<()> {
+        for _ in 0..WRITE_TRIES {
+            let line = self.read_line(branch)?;
+            if let Written::Written(_) = self.carry(&line, true)? {
+                return Ok(());
+            }
+        }
+        bail!("{branch}'s records kept moving under {WRITE_TRIES} writes")
+    }
+
+    /// 133: this host's refusal of `branch`'s remote, as the records seam
+    /// keeps it beside the branch's records.
+    fn refusal(&self, branch: &str) -> Result<Option<Refusal>> {
+        self.seams
+            .state
+            .refusal(branch)?
+            .map(|b| Refusal::parse(&b))
+            .transpose()
+    }
+
+    /// Keep `refusal` as this host's refusal of `branch`'s remote, or, with
+    /// `None`, remove it.
+    fn keep_refusal(&self, branch: &str, refusal: Option<&Refusal>) -> Result<()> {
+        let bytes = refusal.map(Refusal::to_bytes);
+        self.seams.state.keep_refusal(branch, bytes.as_deref())
     }
 
     /// Read, change and write a branch's records, reading again when the

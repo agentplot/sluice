@@ -19,9 +19,10 @@ use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
     Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
     Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network, NotRun,
-    Notification, Outcome, Place, PreviewPlace, Progress, ReleaseFailure, ReleasePolicy, Released,
-    Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace, Settings, Snapshot,
-    Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests, Unanswered, Written,
+    Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
+    ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace,
+    Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
+    Unanswered, Written,
 };
 
 /// A tree: path to content.
@@ -115,6 +116,15 @@ struct Inner {
     levels: usize,
     /// How many merges were formed.
     forms: usize,
+    /// The words the remote refuses each host's reads of a branch with, by
+    /// host and branch (133).
+    refused_branch: BTreeMap<(String, String), String>,
+    /// The words the remote refuses each host's reads of a branch's records
+    /// with, by host and branch: a read answers what is held, stale, and a
+    /// write fails (80, 133).
+    refused_state: BTreeMap<(String, String), String>,
+    /// Each host's refusal document of a branch, by host and branch (133).
+    refusals: BTreeMap<(String, String), Vec<u8>>,
     crash: Option<Crash>,
     // the check
     tasks: Vec<TaskDef>,
@@ -732,6 +742,54 @@ impl World {
         self.0.borrow_mut().host = host.into();
     }
 
+    /// From now, `origin` refuses this host's reads of `branch` with
+    /// `said`; with `None`, it answers them again (133).
+    pub fn refuse_reads(&self, branch: &str, said: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let key = (inner.host.clone(), branch.to_string());
+        match said {
+            Some(said) => inner.refused_branch.insert(key, said.into()),
+            None => inner.refused_branch.remove(&key),
+        };
+    }
+
+    /// From now, `origin` refuses this host's reads of `branch`'s records
+    /// with `said`: a read answers the records as last read, stale, and a
+    /// write fails; with `None`, it answers them again (80, 133).
+    pub fn refuse_state_reads(&self, branch: &str, said: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let key = (inner.host.clone(), branch.to_string());
+        match said {
+            Some(said) => inner.refused_state.insert(key, said.into()),
+            None => inner.refused_state.remove(&key),
+        };
+    }
+
+    /// This host's refusal document of `branch`, as kept (133).
+    pub fn refusal(&self, branch: &str) -> Option<String> {
+        let inner = self.0.borrow();
+        let key = (inner.host.clone(), branch.to_string());
+        let doc = inner.refusals.get(&key)?;
+        Some(String::from_utf8(doc.clone()).expect("a refusal is JSON"))
+    }
+
+    /// The refused read of `asked` from `origin` with `said`.
+    fn refused(asked: String, said: &str) -> anyhow::Error {
+        ReadRefused {
+            remote: "origin".into(),
+            asked,
+            said: said.into(),
+            note: None,
+        }
+        .into()
+    }
+
+    /// The words this host's reads of `branch`'s records are refused with.
+    fn state_refused(inner: &Inner, branch: &str) -> Option<String> {
+        let key = (inner.host.clone(), branch.to_string());
+        inner.refused_state.get(&key).cloned()
+    }
+
     /// `doc`, a submission's document of this host's own records, left
     /// behind on `branch` when its records moved to the remote.
     pub fn leave_behind(&self, branch: &str, doc: &str) {
@@ -1279,7 +1337,12 @@ pub struct FakeClock(World);
 
 impl Branch for FakeBranch {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
-        Ok(self.0 .0.borrow().refs.get(branch).cloned())
+        let inner = self.0 .0.borrow();
+        let key = (inner.host.clone(), branch.to_string());
+        if let Some(said) = inner.refused_branch.get(&key) {
+            return Err(World::refused(format!("refs/heads/{branch}"), said));
+        }
+        Ok(inner.refs.get(branch).cloned())
     }
 
     fn copy(&self, branch: &str) -> Result<HostCopy> {
@@ -2192,6 +2255,12 @@ impl State for FakeState {
 
     fn read(&self, branch: &str) -> Result<Snapshot> {
         let inner = self.0 .0.borrow();
+        if let Some(said) = World::state_refused(&inner, branch) {
+            // 80: answered from what was last read, when there is any.
+            if !inner.lines.get(branch).is_some_and(|l| l.version > 0) {
+                return Err(World::refused(format!("refs/sluice/state/{branch}"), &said));
+            }
+        }
         Ok(match inner.lines.get(branch) {
             Some(l) => Snapshot {
                 version: l.version,
@@ -2226,6 +2295,9 @@ impl State for FakeState {
 
     fn write(&self, branch: &str, read_at: u64, changes: Changes) -> Result<Written> {
         let mut inner = self.0 .0.borrow_mut();
+        if let Some(said) = World::state_refused(&inner, branch) {
+            bail!("pushing refs/sluice/state/{branch} to origin failed: {said}");
+        }
         if inner.crash_writes > 0 {
             inner.crash_writes -= 1;
             bail!("crashed before writing {branch}'s records");
@@ -2275,6 +2347,50 @@ impl State for FakeState {
 
     fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
         self.0 .0.borrow_mut().published.push(head.clone());
+        Ok(())
+    }
+
+    fn fetch_heads(&self, branch: &str) -> Result<()> {
+        match World::state_refused(&self.0 .0.borrow(), branch) {
+            Some(said) => Err(World::refused("refs/sluice/heads/*".into(), &said)),
+            None => Ok(()),
+        }
+    }
+
+    fn fetch_candidates(&self, branch: &str) -> Result<()> {
+        match World::state_refused(&self.0 .0.borrow(), branch) {
+            Some(said) => Err(World::refused(
+                format!("refs/sluice/combinations/{branch}/*"),
+                &said,
+            )),
+            None => Ok(()),
+        }
+    }
+
+    fn stale(&self, branch: &str) -> Option<ReadRefused> {
+        let inner = self.0 .0.borrow();
+        let said = World::state_refused(&inner, branch)?;
+        Some(ReadRefused {
+            remote: "origin".into(),
+            asked: format!("refs/sluice/state/{branch}"),
+            said,
+            note: None,
+        })
+    }
+
+    fn refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        let inner = self.0 .0.borrow();
+        let key = (inner.host.clone(), branch.to_string());
+        Ok(inner.refusals.get(&key).cloned())
+    }
+
+    fn keep_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        let mut inner = self.0 .0.borrow_mut();
+        let key = (inner.host.clone(), branch.to_string());
+        match doc {
+            Some(doc) => inner.refusals.insert(key, doc.to_vec()),
+            None => inner.refusals.remove(&key),
+        };
         Ok(())
     }
 
@@ -2484,6 +2600,62 @@ mod tests {
             f.branch.level("bolt/x", None, &landed).unwrap(),
             Moved::Moved
         );
+    }
+
+    /// 133: a host's reads of a branch, or of its records, are refused with
+    /// the words given until answered again; a refused read of the records
+    /// answers them as held, stale, and a write fails. Each host keeps its
+    /// own refusal document.
+    #[test]
+    fn a_host_s_reads_are_refused_with_the_words_given() {
+        let f = Fakes::new();
+        let tip = f.world.init("main", &[("a", "1")]);
+        f.world
+            .refuse_reads("main", Some("remote: Repository not found."));
+        let err = f.branch.read("main").unwrap_err();
+        assert_eq!(
+            sluice_seams::read_refused(&err),
+            Some(&ReadRefused {
+                remote: "origin".into(),
+                asked: "refs/heads/main".into(),
+                said: "remote: Repository not found.".into(),
+                note: None,
+            })
+        );
+        f.world.be_host("other");
+        assert_eq!(f.branch.read("main").unwrap(), Some(tip.clone()));
+        f.world.be_host("fake-host");
+        f.world.refuse_reads("main", None);
+        assert_eq!(f.branch.read("main").unwrap(), Some(tip));
+
+        f.world.refuse_state_reads("main", Some("HTTP 503"));
+        let err = f.state.read("main").unwrap_err();
+        let refused = sluice_seams::read_refused(&err).unwrap();
+        assert_eq!(refused.asked, "refs/sluice/state/main");
+        f.world.refuse_state_reads("main", None);
+        {
+            let _g = f.state.lock("main").unwrap().unwrap();
+            f.state.write("main", 0, Changes::default()).unwrap();
+            f.world.refuse_state_reads("main", Some("HTTP 503"));
+            assert_eq!(f.state.read("main").unwrap().version, 1);
+            assert_eq!(f.state.stale("main").unwrap().said, "HTTP 503");
+            assert!(f.state.write("main", 1, Changes::default()).is_err());
+            let err = f.state.fetch_heads("main").unwrap_err();
+            assert_eq!(sluice_seams::read_refused(&err).unwrap().said, "HTTP 503");
+            assert!(f.state.fetch_candidates("main").is_err());
+        }
+        f.world.refuse_state_reads("main", None);
+        assert_eq!(f.state.stale("main"), None);
+
+        f.state
+            .keep_refusal("main", Some(b"{\"rounds\":1}"))
+            .unwrap();
+        assert_eq!(f.world.refusal("main").as_deref(), Some("{\"rounds\":1}"));
+        f.world.be_host("other");
+        assert_eq!(f.state.refusal("main").unwrap(), None);
+        f.world.be_host("fake-host");
+        f.state.keep_refusal("main", None).unwrap();
+        assert_eq!(f.world.refusal("main"), None);
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {
