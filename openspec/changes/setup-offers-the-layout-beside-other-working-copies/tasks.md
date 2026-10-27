@@ -27,7 +27,7 @@ test in that isolation. Run suites with `sluice exec main -- moon run
 ## 4. Try it and the gate
 
 - [x] 4.1 Try it once by hand: in a scratch clone with a worktree beside it, start Claude Code with this worktree's `plugins/sluice` loaded and ask it to set sluice up, once from the clone and once from the worktree; it shows the clone folder's plan and goes on to the survey in the same turn, asking nothing about the layout; then in a scratch plain clone it waits for the choice as before. By hand, since the gate drives no Claude session; the script's answers it rests on are tested in 1.2
-- [ ] 4.2 Commit, then run the gate's checks: `sluice exec main` passes
+- [x] 4.2 Commit, then run the gate's checks: `sluice exec main` passes
 
 ## Workflow follow-up
 
