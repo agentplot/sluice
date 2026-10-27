@@ -17,6 +17,7 @@ pub mod profiles;
 pub mod progress;
 pub mod protect;
 pub mod reader;
+pub mod retry;
 pub mod runs;
 pub mod scrub;
 pub mod sessions;
