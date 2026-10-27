@@ -2726,7 +2726,8 @@ fn submit_pull(
                 lines,
                 submission,
                 names,
-                ..
+                head,
+                draft,
             }) => {
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the
@@ -2759,7 +2760,16 @@ fn submit_pull(
                 }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
-                    if json && (no_wait || status) {
+                    if json && status {
+                        // Its head and draft mark, for a driver to tell
+                        // whether it stands at a worktree's head (record
+                        // 0065).
+                        let doc = serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": now.0,
+                            "head": head, "draft": draft,
+                        });
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else if json && no_wait {
                         let doc = serde_json::json!({
                             "pull_request": number, "branch": branch, "state": now.0,
                         });

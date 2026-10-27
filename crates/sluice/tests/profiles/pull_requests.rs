@@ -1532,6 +1532,44 @@ fn no_wait_then_status() {
     assert!(w.exists());
 }
 
+/// Waiting for a review: `--status --json` names the pull request's head
+/// and that it is no draft, beside its number, branch and state.
+#[test]
+fn status_names_the_head_waiting_for_a_review() {
+    let g = OnGitHub::new("pr-status-head", "reviews = 1");
+    let w = g.session("headed", &[("h.txt", "h\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/headed");
+    let out = g.wt_submit(&w, &["--status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "pull_request": pull.number, "branch": "main",
+            "state": "waiting: needs 1 review", "head": pull.head, "draft": false,
+        })
+    );
+}
+
+/// A draft: `--status --json` names its head and that it is a draft.
+#[test]
+fn status_names_a_draft() {
+    let g = OnGitHub::new("pr-status-draft", "reviews = 1");
+    let w = g.session("drafted", &[("d.txt", "d\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/drafted");
+    g.gh.forge.set_draft(pull.number, true).unwrap();
+    let out = g.wt_submit(&w, &["--status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert_eq!(doc["head"], pull.head.as_str(), "{doc}");
+    assert_eq!(doc["draft"], true, "{doc}");
+}
+
 /// No wait, its conditions hold: the submit answers with the submission
 /// sluice took the pull request in as, from its checkout `pull/<n>` at the
 /// head pushed, with the pull request beside it; `sluice wait <id>`
