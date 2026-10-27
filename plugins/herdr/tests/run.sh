@@ -628,7 +628,7 @@ feed "$testing95"
 first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
 second=$(awk 'BEGIN{RS="\f"} NR==2' "$t/out")
 printf '%s' "$first" | grep -q '░' && fail "a combination whose runner says nothing shows a bar: $first"
-printf '%s' "$second" | grep -q '▶ testing main+#95  1/2 ▓▓▓▓▓░░░░░  3m10s / 15m' || fail "the redraw does not count the tasks: $second"
+printf '%s' "$second" | grep -q '▶ testing main + #95 w  1/2 ▓▓▓▓▓░░░░░  3m10s / 15m' || fail "the redraw does not count the tasks: $second"
 printf '%s' "$second" | grep -q '^        ✓ a:test    1m05s$' || fail "the redraw does not list a:test: $second"
 printf '%s' "$second" | grep -q '^        … b:test  running$' || fail "the redraw does not list b:test: $second"
 pass
@@ -636,7 +636,7 @@ pass
 fresh 'status: a task list it cannot read is left out'
 feed "$(printf '%s' "$testing95" | jq -c '.branches[0].candidates[0].tasks = ["a:test", {state: "passed"}, {target: "c:test", state: "waiting"}]')"
 frame_of "$work" --once >"$t/frame"
-grep -q '▶ testing main+#95  0/1 ░░░░░░░░░░' "$t/frame" || fail "the bad tasks were counted: $(cat "$t/frame")"
+grep -q '▶ testing main + #95 w  0/1 ░░░░░░░░░░' "$t/frame" || fail "the bad tasks were counted: $(cat "$t/frame")"
 grep -q '^        · c:test  waiting$' "$t/frame" || fail "the good task is missing: $(cat "$t/frame")"
 pass
 
@@ -759,7 +759,7 @@ feed "$testing95"
 ) | SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
 second=$(awk 'BEGIN{RS="\f"} NR==2' "$t/out")
-printf '%s' "$first" | grep -q '▶ testing main+#95' || fail "the first frame does not show #95 testing"
+printf '%s' "$first" | grep -q '▶ testing main + #95 w' || fail "the first frame does not show #95 testing"
 printf '%s' "$second" | grep -q '✓ 19:45 #95 landed as abcdef0' || fail "the redraw does not show the landing: $second"
 printf '%s' "$second" | grep -q '▶ testing' && fail "the redraw still shows #95 under test"
 pass
@@ -781,7 +781,7 @@ pass
 fresh "status: the focused pane from herdr's context"
 feed "$testing95"
 ctx=$(jq -c --arg w "$work" '.focused_pane_cwd = $w' "$here/docs/context.json")
-HERDR_PLUGIN_CONTEXT_JSON=$ctx sh "$plugin/bin/status.sh" --once | grep -q '▶ testing main+#95' || fail "the popup did not read the focused pane's repository"
+HERDR_PLUGIN_CONTEXT_JSON=$ctx sh "$plugin/bin/status.sh" --once | grep -q '▶ testing main + #95 w' || fail "the popup did not read the focused pane's repository"
 pass
 
 fresh 'status: a plain directory'
@@ -810,7 +810,7 @@ printf q | LINES=20 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
 [ "$(printf '%s\n' "$first" | wc -l)" -le 20 ] || fail "the frame is taller than 20 lines: $first"
 printf '%s' "$first" | grep -q '^main at 9ecc34a · 3 submissions' || fail "the branch's heading went: $first"
-printf '%s' "$first" | grep -q '▶ testing main+#12+#13  19/30' || fail "the combination went: $first"
+printf '%s' "$first" | grep -q '▶ testing main + #12 overview-docs + #13 plugin-board  19/30' || fail "the combination went: $first"
 printf '%s' "$first" | grep -q '^        ✗ a:failed ' || fail "the failed task went: $first"
 printf '%s' "$first" | grep -q '^        … b:running ' || fail "the running task went: $first"
 printf '%s' "$first" | grep -q '^        … 18 passed, 10 waiting$' || fail "the tasks are not counted: $first"
@@ -872,7 +872,7 @@ hold_lease
 feed "$testing95"
 out=$(frame_of "$scratch/home" --once)
 printf '%s' "$out" | grep -qF "$scratch/home is in no git repository. Every repository held:" || fail "said: $out"
-printf '%s' "$out" | grep -q '▶ testing main+#95' || fail "the held repository is not shown: $out"
+printf '%s' "$out" | grep -q '▶ testing main + #95 w' || fail "the held repository is not shown: $out"
 printf '%s' "$out" | grep -q 'No sluice records' && fail "it still says no records: $out"
 pass
 
@@ -909,7 +909,7 @@ seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
 # The copy stands alone: nothing in it names the plugin's own directory.
 grep -rqF "$plugin" "$HERDR_PLUGIN_STATE_DIR/segment" && fail "the copy names the plugin's directory"
 out=$(cd "$work" && env -u HERDR_PLUGIN_ROOT -u HERDR_PLUGIN_STATE_DIR sh "$seg")
-[ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
+[ "$out" = 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
 feed "$(doc '.host = "host-a"')"
 out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
@@ -921,7 +921,7 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 # Another repository's document that is not JSON, beside the focused one's.
 echo '{"schema": "sluice/overview@1", "host": "host-a", "repo' >"$S/docs/host-a--other-1.json"
 out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
-[ "$out" = 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa' ] ||
+[ "$out" = 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa' ] ||
   fail "beside another repository's broken document the segment printed: $out"
 pass
 
@@ -970,7 +970,7 @@ pass
 fresh 'status: the band says when checks hold the queue back'
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
-band='sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa'
+band='sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa'
 segment_with() {
   # $1 the document's changes, as jq
   feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $1")"
@@ -1100,7 +1100,7 @@ pass
 
 fresh 'status: the segment counts held places'
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
-band='sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 waiting · last #9 blamed on 4f1c2aa'
+band='sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa'
 feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $held48")"
 out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
 [ "$out" = "$band · 1 held: release failed" ] || fail "beside a queue the segment printed: $out"
@@ -1156,7 +1156,7 @@ cmd=$(HOME=$home HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/setup.sh" </dev/null
 # server's home, socket and PATH, nothing else, so the clock is the host's
 # own and the time under test is however long ago the board's run started.
 out=$(cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$sock" PATH="$PATH" /bin/sh -lc "$cmd")
-case $out in 'sluice main · 3 submissions · testing main+#12+#13 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 waiting · last #9 blamed on 4f1c2aa') ;;
+case $out in 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa') ;;
 *) fail "with only the server's environment it printed: $out" ;;
 esac
 pass

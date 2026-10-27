@@ -2,7 +2,7 @@ REPO on host-a
 
 main at 9ecc34a · 3 submissions · 1 combination under test (up to 4 at once)
   TESTING
-    ▶ testing main+#12+#13  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
+    ▶ testing main + #12 overview-docs + #13 plugin-board  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
         #check-fast #check-tools · sandbox
         ✓ sluice:test      1m48s
         ✓ site:prose    replayed
@@ -10,9 +10,9 @@ main at 9ecc34a · 3 submissions · 1 combination under test (up to 4 at once)
         … sluice:e2e     running
         · core:test      waiting
   QUEUED
-[1] #12 testing   overview-docs claude
-[2] #13 testing   plugin-board claude
-    #14 queued    PR 41 herdr
+[1] #12 overview-docs  testing   overview-docs claude
+[2] #13 plugin-board   testing   plugin-board claude
+    #14 pull/41        queued    PR 41 herdr
   RECENT
     ✗ 19:42 #9 blamed on 4f1c2aa
     ✓ 19:41 #11 landed as 9ecc34a
