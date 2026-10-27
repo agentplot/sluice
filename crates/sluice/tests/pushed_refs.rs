@@ -289,11 +289,13 @@ fn the_router_sends_a_branch_to_its_remote() {
 }
 
 /// An identity whose remote is a fake HTTP server, with a token of its
-/// own: `token`, then `token-1`, `token-2` and on as it is renewed.
+/// own: `token`, then `token-1`, `token-2` and on as it is renewed, unless
+/// its forge refuses to make another, saying `refuses`.
 struct FakeIdentity {
     url: String,
     token: String,
     renewed: Cell<usize>,
+    refuses: Option<String>,
 }
 
 impl FakeIdentity {
@@ -302,6 +304,15 @@ impl FakeIdentity {
             url: url.into(),
             token: token.into(),
             renewed: Cell::new(0),
+            refuses: None,
+        }
+    }
+
+    /// The identity whose forge makes no fresh token, saying `why`.
+    fn refusing(self, why: &str) -> FakeIdentity {
+        FakeIdentity {
+            refuses: Some(why.into()),
+            ..self
         }
     }
 
@@ -334,6 +345,9 @@ impl Identity for FakeIdentity {
     }
 
     fn renew(&self, url: &str) -> anyhow::Result<Credentials> {
+        if let Some(why) = &self.refuses {
+            anyhow::bail!("{why}");
+        }
         self.renewed.set(self.renewed.get() + 1);
         self.credentials(url)
     }
@@ -704,6 +718,33 @@ fn a_push_refused_twice_is_not_made_a_third_time() {
     assert!(!err.contains(&token), "a report carries no token: {err}");
     assert_eq!(given(&fake).len(), 2, "two pushes, no third");
     assert_eq!(identity.renewed.get(), 1);
+}
+
+/// 134: a push refused on its token, when its forge makes no fresh one,
+/// fails with the remote's words, what the refused token was and why none
+/// could be made afresh, after one push.
+#[test]
+fn a_push_with_no_fresh_token_is_made_once() {
+    let repo = Repo::new("push-unrenewed");
+    let _bare = repo.bare_origin();
+    let fake = remote(|_, _| not_found());
+    let token = format!("fake-token-{}", std::process::id());
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, &token).refusing("the forge made no token"));
+    let p = as_identity(&repo, &identity);
+    let head = rev(repo.rev("HEAD"));
+    let err = format!("{:#}", p.push_branch(&head, "agent").unwrap_err());
+    assert!(err.contains("Repository not found."), "{err}");
+    assert!(
+        err.ends_with(
+            "origin refused the fake's token number 0, \
+             and none could be made afresh: the forge made no token"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains(&token), "a report carries no token: {err}");
+    assert_eq!(given(&fake).len(), 1, "one push");
+    assert_eq!(identity.renewed.get(), 0);
 }
 
 /// 134, 45, 104, rule core.5: a leased push the remote refuses on the
