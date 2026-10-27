@@ -1,7 +1,7 @@
 ---
 number: 62
 title: Every call to a remote runs under one retry policy, a crate's, that tries again only what the remote never judged
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # Every call to a remote runs under one retry policy, a crate's, that tries again only what the remote never judged
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it; accepted only on their yes. Revised from the proposal of 2026-10-26 on the user's note to its card.
+Status: accepted by the user on 2026-10-27, on their card, after the revision on their note of the same day.
 
 Deciders: madswan-design, on madswan-ops's signal 2026-10-26-madswan-ops-16f1e125/01 and madswan-planner's question of 2026-10-26, revised on the user's note of 2026-10-27; the user's yes is asked on the record's card.
 
