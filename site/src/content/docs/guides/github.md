@@ -55,6 +55,12 @@ With `remote` set, GitHub's copy of `main` is the real one:
   the branch's lock, leaves the landing landed; the next round tries
   again, and `sluice status main` says meanwhile which revision your
   `main` holds and why.
+- **Every copy of `main` on your machine says where it is.** sluice
+  reads the policy on your own `main` and on what you last fetched from
+  each remote, such as `origin/main`, and `main` is on GitHub if any of
+  them says `remote = "origin"`. So a machine whose own `main` is old,
+  or from before the policy, needs only a `git fetch`. Two copies
+  naming different remotes are refused, and the error names both.
 - **Only the branch goes to GitHub.** The queue, the test results and
   the logs stay in `.git/sluice/` on your machine, as before. On one
   machine nothing else needs them.
