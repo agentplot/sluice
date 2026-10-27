@@ -29,6 +29,7 @@ use sluice_seams::{Branch, Checkout, Driver, Rev, State, Tests, Written};
 use crate::line::Line;
 use crate::policy::{Policy, Rules, POLICY_PATH};
 use crate::records::{parse_lines, to_line, ResultLine, SetAside, SET_ASIDE_SCHEMA};
+use crate::refused::Refusal;
 
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
@@ -167,6 +168,23 @@ impl<'a> Sluice<'a> {
             return Ok(Written::Written(line.version));
         }
         self.seams.state.write(&line.branch, line.version, changes)
+    }
+
+    /// 133: this host's refusal of `branch`'s remote, as the records seam
+    /// keeps it beside the branch's records.
+    fn refusal(&self, branch: &str) -> Result<Option<Refusal>> {
+        self.seams
+            .state
+            .refusal(branch)?
+            .map(|b| Refusal::parse(&b))
+            .transpose()
+    }
+
+    /// Keep `refusal` as this host's refusal of `branch`'s remote, or, with
+    /// `None`, remove it.
+    fn keep_refusal(&self, branch: &str, refusal: Option<&Refusal>) -> Result<()> {
+        let bytes = refusal.map(Refusal::to_bytes);
+        self.seams.state.keep_refusal(branch, bytes.as_deref())
     }
 
     /// Read, change and write a branch's records, reading again when the
