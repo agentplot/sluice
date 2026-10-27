@@ -23,7 +23,7 @@
 
 ## 4. The wait reads through the policy
 
-- [ ] 4.1 In `crates/sluice/src/lib.rs`, remove `Unread` and its loop from `wait_on`; an `Unanswered` that reaches the wait goes to `could_not_read`, which takes how long from the `Spent` context (zero when absent), keeping its message, exit `3`, `--json` error document and `next`. `UNANSWERED_FOR` stays as the policy's wait bound; update its doc comment. Verify with 4.2.
+- [x] 4.1 In `crates/sluice/src/lib.rs`, remove `Unread` and its loop from `wait_on`; an `Unanswered` that reaches the wait goes to `could_not_read`, which takes how long from the `Spent` context (zero when absent), keeping its message, exit `3`, `--json` error document and `next`. `UNANSWERED_FOR` stays as the policy's wait bound; update its doc comment. Verify with 4.2.
 - [ ] 4.2 Rewrite `a_wait_reads_again_through_a_forges_5xx` and `a_wait_past_five_minutes_of_5xx_says_it_could_not_read` in `crates/sluice/tests/cli.rs` (and the fake's `unanswer_starts` in `crates/sluice-fakes/src/lib.rs` if it must answer as a spent policy does): a seam that answers `Unanswered` after the policy is spent makes the wait exit `3` with `sluice: could not read #1 for` on stderr and `could not read #1: sluice wait 1` on stdout, nothing decided; a wait's call between tries stops on Ctrl-C as a stopped wait. Run `sluice exec main -- cargo test -p sluice --test cli wait`.
 
 ## 5. Docs
