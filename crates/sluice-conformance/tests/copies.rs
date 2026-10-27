@@ -261,6 +261,7 @@ fn submit_to_main(h: &Harness, worktree: &str) -> sluice_core::Accepted {
             branch: "main".into(),
             after: Vec::new(),
             priority: 0,
+            subject: None,
         })
         .unwrap()
         .expect("accepted")
@@ -351,6 +352,7 @@ fn a_group_naming_a_bolts_worktree_submits_the_remotes_revision_for_it() {
             worktrees: vec![BRANCH.into(), "unit/m".into()],
             after: Vec::new(),
             priority: 0,
+            subjects: Vec::new(),
         })
         .unwrap()
         .expect("accepted");

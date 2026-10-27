@@ -711,6 +711,126 @@ fn a_submission_the_runner_could_not_check_is_taken_with_a_warning() {
     assert!(warnings[0].as_str().unwrap().contains("no devenv"), "{out}");
 }
 
+/// The message of the commit submission `id` landed as.
+fn landing_message(f: &Fakes, id: u64) -> String {
+    let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+    let landed = json(&out)["landed_as"]
+        .as_str()
+        .expect("landed")
+        .to_string();
+    f.world.message(&sluice_seams::Rev::new(landed))
+}
+
+/// 23: a subject on a branch with no pull requests names its landing.
+/// The submission is taken with no warning of its subject and lands, its
+/// landing commit's first line the subject, `Sluice-From` still naming
+/// the agent and the branch; under `--json --no-wait`, the document
+/// carries no warning either.
+#[test]
+fn a_subject_on_a_branch_with_no_pull_requests_names_its_landing() {
+    let f = setup();
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
+    let subject = ["--subject", "Batch review cards"];
+    let args = [
+        &["submit", BRANCH, "--worktree", "unit/review"][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!out.contains("warning:"), "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 Batch review cards"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("y"))],
+    );
+    let args = [
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/b",
+            "--no-wait",
+            "--json",
+        ][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, 0, "{out}");
+    let v = json(&out);
+    assert_eq!(v["id"], 2);
+    assert_eq!(v.get("warnings"), None, "{out}");
+}
+
+/// 23: with no subject, a landing commit is named by its branch.
+#[test]
+fn with_no_subject_a_landing_is_named_by_its_branch() {
+    let f = setup();
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/review"]);
+    assert_eq!(code, LANDED, "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 unit/review"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
+}
+
+/// 125, 23: a group given a subject for each worktree queues its
+/// submissions in order, each landing named by its own subject.
+#[test]
+fn a_subject_for_each_names_each_landing() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("tests/b", Some("b"))]);
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--no-wait",
+            "--worktree",
+            "unit/a",
+            "--worktree",
+            "unit/b",
+            "--subject",
+            "Batch review cards",
+            "--subject",
+            "Card filters",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(queued(&f).len(), 2);
+    for id in [1, 2] {
+        assert_eq!(sluice(&f, &["wait", &id.to_string()]).0, LANDED);
+    }
+    for (id, subject, from) in [
+        (1, "Batch review cards", "agent-a (unit/a)"),
+        (2, "Card filters", "agent-b (unit/b)"),
+    ] {
+        let m = landing_message(&f, id);
+        assert_eq!(
+            m.lines().next(),
+            Some(format!("chore(land): #{id} {subject}").as_str())
+        );
+        assert!(m.contains(&format!("\nSluice-From: {from}\n")), "{m}");
+    }
+}
+
 /// Under `--json`, a refusal is one error document on stdout, naming
 /// what moves it on; the exit is a refusal's still.
 #[test]
@@ -3767,10 +3887,12 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
 }
 
 /// Pull request 7 into the branch, from any worktree, waiting; its forge
-/// answers 5xx to as many finds and follows as each count holds.
+/// answers 5xx to as many finds and follows as each count holds. It keeps
+/// the subject of each open.
 struct Pull7 {
     finds: Cell<usize>,
     follows: Cell<usize>,
+    subjects: RefCell<Vec<Option<String>>>,
 }
 
 impl Pull7 {
@@ -3778,6 +3900,7 @@ impl Pull7 {
         Pull7 {
             finds: Cell::new(finds),
             follows: Cell::new(follows),
+            subjects: RefCell::default(),
         }
     }
 
@@ -3814,7 +3937,9 @@ impl sluice::PullRequests for Pull7 {
         _: &dyn sluice_core::Clock,
         _: &str,
         _: &str,
+        subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
+        self.subjects.borrow_mut().push(subject.map(String::from));
         Ok(Ok(sluice::Opened {
             number: 7,
             said: "opened #7".into(),
@@ -3881,6 +4006,106 @@ fn sluice_pulls(
     };
     let code = run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
+}
+
+/// C.5 pull request: a subject is one line. An empty one, or one of two
+/// lines, is a command line sluice cannot read, which pushes, opens and
+/// queues nothing.
+#[test]
+fn a_subject_is_one_line() {
+    let f = pulls_setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    let pulls = Pull7::new(0, 0);
+    let one = ["--worktree", "unit/b1", "--subject"];
+    for (subject, why) in [
+        ("", "--subject is empty"),
+        ("  ", "--subject is empty"),
+        ("one\ntwo", "a subject is one line"),
+        ("one\r\ntwo", "a subject is one line"),
+    ] {
+        let args = [&["submit", BRANCH][..], &one, &[subject]].concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+        assert!(out.contains(why), "{args:?}: {out}");
+    }
+    assert!(pulls.subjects.borrow().is_empty());
+    assert!(queued(&f).is_empty());
+}
+
+/// 125: a group takes one subject per worktree, in their order, or none;
+/// one subject for two worktrees, or any other count, is refused before
+/// anything is pushed, opened or queued, saying what to give.
+#[test]
+fn one_subject_for_two_worktrees_is_refused() {
+    let give = "give one --subject per --worktree, in their order, or none";
+    for f in [setup(), pulls_setup()] {
+        work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+        work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+        let pulls = Pull7::new(0, 0);
+        let two = ["--worktree", "unit/b1", "--worktree", "unit/b2"];
+        for (args, said) in [
+            (
+                [&two[..], &["--subject", "Both"]].concat(),
+                "1 subject for 2 worktrees",
+            ),
+            (
+                [
+                    &two[..],
+                    &["--subject", "a", "--subject", "b", "--subject", "c"],
+                ]
+                .concat(),
+                "3 subjects for 2 worktrees",
+            ),
+            (
+                vec!["--worktree", "unit/b1", "--subject", "a", "--subject", "b"],
+                "2 subjects for 1 worktree",
+            ),
+        ] {
+            let args = [&["submit", BRANCH, "--no-wait"][..], &args].concat();
+            let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+            assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+            assert_eq!(out, format!("sluice submit: {said}; {give}\n"), "{args:?}");
+        }
+        assert!(pulls.subjects.borrow().is_empty());
+        assert!(queued(&f).is_empty());
+    }
+}
+
+/// The subject reaches the pull request a submit opens, as written; a
+/// submit with none gives none.
+#[test]
+fn a_subject_is_handed_to_the_pull_request_opened() {
+    let f = pulls_setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    let pulls = Pull7::new(0, 0);
+    let submit = |rest: &[&str]| {
+        let args = [
+            &["submit", BRANCH, "--worktree", "unit/b1", "--no-wait"][..],
+            rest,
+        ]
+        .concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, 0, "{out}");
+    };
+    submit(&["--subject", "Batch review cards"]);
+    submit(&[]);
+    assert_eq!(
+        *pulls.subjects.borrow(),
+        [Some("Batch review cards".to_string()), None]
+    );
+}
+
+/// A subject titles what a submit opens: neither a forecast nor a
+/// worktree's status takes one.
+#[test]
+fn a_subject_takes_neither_check_nor_status() {
+    for flag in ["--check", "--status"] {
+        let e =
+            Cli::try_parse_from(["sluice", "submit", BRANCH, "--subject", "x", flag]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict);
+        let said = e.to_string();
+        assert!(said.contains("--subject") && said.contains(flag), "{said}");
+    }
 }
 
 /// Following a pull request, a find or a follow the forge answered 5xx is

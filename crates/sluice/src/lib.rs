@@ -97,6 +97,7 @@ const SUBMIT_AFTER_HELP: &str = "\
 Examples:
   $ sluice submit main
   $ sluice submit main --no-wait
+  $ sluice submit main --no-wait --subject \"Batch review cards\"   its pull request's title
   $ sluice submit main --after 12,14 --priority 5
   $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
 
@@ -219,6 +220,11 @@ pub enum Command {
         /// Return once submitted.
         #[arg(long)]
         no_wait: bool,
+        /// One line saying what lands: the title of the pull request this
+        /// submit opens, or of one it opened before, and the name of its
+        /// landing; with several worktrees, once for each, in their order.
+        #[arg(long, value_name = "TEXT", conflicts_with_all = ["check", "status"])]
+        subject: Vec<String>,
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
@@ -552,25 +558,30 @@ pub trait PullRequests {
     fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
 
     /// Push `worktree`'s branch and open its pull request into `branch`,
-    /// or update the one open.
+    /// or update the one open; `subject`, the submitter's line saying what
+    /// lands, titles it.
     fn open(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktree: &str,
         branch: &str,
+        subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>>;
 
     /// 125: push each of `worktrees`' branches and open or update its
-    /// pull request into `branch`, in order, each marked one of the group,
-    /// or none of them when any worktree is refused; then, for more than
-    /// one, mark each ready and queue them all in one write, or, when any
-    /// falls short of its conditions, leave each a draft and queue none.
+    /// pull request into `branch`, in order, each marked one of the group
+    /// and titled by its own of `subjects`, which are empty or one per
+    /// worktree, or none of them when any worktree is refused; then, for
+    /// more than one, mark each ready and queue them all in one write, or,
+    /// when any falls short of its conditions, leave each a draft and
+    /// queue none.
     fn open_group(
         &self,
         _seams: Seams<'_>,
         _clock: &dyn Clock,
         _worktrees: &[String],
+        _subjects: &[String],
         branch: &str,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         anyhow::bail!("{branch} takes no pull requests")
@@ -612,6 +623,7 @@ impl PullRequests for () {
         _: &dyn Clock,
         _: &str,
         branch: &str,
+        _: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         anyhow::bail!("{branch} takes no pull requests")
     }
@@ -809,6 +821,7 @@ pub fn run(
             after,
             priority,
             no_wait,
+            subject,
             check,
             head,
             status,
@@ -825,12 +838,34 @@ pub fn run(
                 )?;
                 return Ok(USAGE);
             }
+            // C.5 pull request, 23: a subject is one line; 125: a group
+            // gives one per worktree, in their order, or none.
+            let why = if subject.iter().any(|s| s.trim().is_empty()) {
+                Some("--subject is empty; a subject is one line saying what lands".to_string())
+            } else if subject.iter().any(|s| s.contains(['\n', '\r'])) {
+                Some("a subject is one line; --subject holds a line break".to_string())
+            } else if !subject.is_empty() && subject.len() != worktree.len() {
+                let given =
+                    |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+                Some(format!(
+                    "{} for {}; give one --subject per --worktree, in their order, or none",
+                    given(subject.len(), "subject"),
+                    given(worktree.len(), "worktree")
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                writeln!(out, "sluice submit: {why}")?;
+                return Ok(USAGE);
+            }
             if worktree.len() > 1 {
                 let req = GroupRequest {
                     branch,
                     worktrees: worktree,
                     after,
                     priority,
+                    subjects: subject,
                 };
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
@@ -838,6 +873,7 @@ pub fn run(
                 return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
+            let subject = subject.into_iter().next();
             if check {
                 return forecast(
                     &s,
@@ -854,7 +890,10 @@ pub fn run(
                 let mode = if status {
                     PullMode::Status
                 } else {
-                    PullMode::Open { no_wait }
+                    PullMode::Open {
+                        no_wait,
+                        subject: subject.as_deref(),
+                    }
                 };
                 return submit_pull(&s, pulls, clock, &worktree, &branch, mode, json, pause, out);
             }
@@ -871,6 +910,7 @@ pub fn run(
                     branch,
                     after,
                     priority,
+                    subject,
                 },
                 no_wait,
                 json,
@@ -1617,6 +1657,8 @@ pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
     }
 }
 
+/// `sluice submit` to a branch with no pull requests: the subject, where
+/// given, names the work its landing commit lands (23).
 #[allow(clippy::too_many_arguments)]
 fn submit(
     s: &Sluice<'_>,
@@ -2584,9 +2626,13 @@ fn submitted(
 
 /// What `submit_pull` does with a worktree's pull request.
 #[derive(Clone, Copy)]
-enum PullMode {
-    /// Open or update it, then follow it to its outcome unless `no_wait`.
-    Open { no_wait: bool },
+enum PullMode<'a> {
+    /// Open or update it, titled by `subject` where given, then follow it
+    /// to its outcome unless `no_wait`.
+    Open {
+        no_wait: bool,
+        subject: Option<&'a str>,
+    },
     /// Only say where it stands.
     Status,
     /// Follow it to its outcome, or until `deadline`: `sluice wait
@@ -2609,14 +2655,14 @@ fn submit_pull(
     clock: &dyn Clock,
     worktree: &str,
     branch: &str,
-    mode: PullMode,
+    mode: PullMode<'_>,
     json: bool,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
     let status = matches!(mode, PullMode::Status);
-    let no_wait = matches!(mode, PullMode::Open { no_wait: true });
+    let no_wait = matches!(mode, PullMode::Open { no_wait: true, .. });
     let opens = matches!(mode, PullMode::Open { .. });
     let again = format!("sluice wait {branch}");
     // 124: how the host's copy differed from what the submit opened.
@@ -2650,7 +2696,11 @@ fn submit_pull(
             }
         }
     } else {
-        match pulls.open(seams, clock, worktree, branch)? {
+        let subject = match mode {
+            PullMode::Open { subject, .. } => subject,
+            _ => None,
+        };
+        match pulls.open(seams, clock, worktree, branch, subject)? {
             Ok(o) => {
                 if !json {
                     writeln!(out, "{}", o.said)?;
@@ -2869,7 +2919,7 @@ fn submit_pull_group(
 ) -> Result<i32> {
     let seams = s.seams();
     let branch = &req.branch;
-    let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
+    let opened = match pulls.open_group(seams, clock, &req.worktrees, &req.subjects, branch)? {
         Ok(o) => o,
         Err(GroupRefused::Worktrees(refused)) => {
             return refused_group(s, &req, &refused, &(), json, out)

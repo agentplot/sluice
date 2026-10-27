@@ -518,6 +518,7 @@ fn s42_a_replay_no_trusted_signer_proved_runs_again() {
             branch: other.into(),
             after: vec![],
             priority: 0,
+            subject: None,
         })
         .unwrap()
         .unwrap()
@@ -712,6 +713,7 @@ fn s18_a_signer_the_gate_does_not_trust_settles_nothing() {
             branch: "bolt/y".into(),
             after: vec![],
             priority: 0,
+            subject: None,
         })
         .unwrap()
         .unwrap()

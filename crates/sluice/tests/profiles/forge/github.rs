@@ -1,6 +1,7 @@
 //! A fake of GitHub's API for one repository, `o/r`, on a port the system
-//! picks: the app's installation and tokens, and the pull request calls
-//! the app makes, answered from a [`FileForge`]. Given the bare
+//! picks: the app, its installation and tokens, and the pull request calls
+//! the app makes, answered from a [`FileForge`]; a request the file holds
+//! as sluice's shows the app's bot user as its author. Given the bare
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
 //! GitHub does. It marks a pull request a draft or ready for review
@@ -19,13 +20,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use sluice::profiles::github::fake::FileForge;
+use sluice::profiles::github::fake::{FileForge, LOGIN};
 use sluice::profiles::github::forge::{Forge, Posting, Pull, Standing, Status};
 use sluice::profiles::github::Repo;
 
 use crate::support::http::{json, Answer, Fake, Request};
 
 pub const APP: u64 = 4242;
+/// The app's slug, which GitHub names its bot user after.
+pub const SLUG: &str = "sluice";
 pub const INSTALLATION: u64 = 7;
 /// The pull request calls' prefix.
 const REPO: &str = "/repos/o/r";
@@ -248,13 +251,23 @@ pub fn set_ref(bare: &Path, name: &str, to: &str) {
     );
 }
 
+/// Who GitHub shows as a pull request's author: the app's bot user for one
+/// the file holds as sluice's.
+fn author(p: &Pull) -> String {
+    if p.author == LOGIN {
+        format!("{SLUG}[bot]")
+    } else {
+        p.author.clone()
+    }
+}
+
 fn pull_json(p: &Pull) -> Value {
     json!({
         "number": p.number,
         "node_id": p.node_id,
         "title": p.title,
         "body": p.body,
-        "user": { "login": p.author },
+        "user": { "login": author(p) },
         "draft": p.draft,
         "state": if p.open { "open" } else { "closed" },
         "head": { "sha": p.head, "ref": p.head_ref, "repo": { "full_name": p.head_repo } },
@@ -348,6 +361,9 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
     }
     let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
     let m = r.method.as_str();
+    if path == "/app" {
+        return json(200, json!({ "id": APP, "slug": SLUG }));
+    }
     if path == format!("{REPO}/installation") {
         return json(
             200,
@@ -410,7 +426,12 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
         ("PATCH", ["pulls", n]) => {
             let n: u64 = n.parse().unwrap();
             forge
-                .edit(&repo, n, body["body"].as_str().unwrap_or_default())
+                .edit(
+                    &repo,
+                    n,
+                    body["title"].as_str(),
+                    body["body"].as_str().unwrap_or_default(),
+                )
                 .unwrap();
             json(200, pull_json(&forge.pull(&repo, n).unwrap().unwrap()))
         }

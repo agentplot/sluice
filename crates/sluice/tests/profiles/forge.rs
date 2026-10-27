@@ -100,6 +100,9 @@ impl Forge {
                     }),
                 );
             }
+            if path == "/app" && r.method == "GET" {
+                return json(200, json!({ "id": APP, "slug": "sluice-test" }));
+            }
             if path == "/repos/o/r/rules/branches/main" {
                 let rules: Vec<_> = self
                     .rulesets
@@ -133,6 +136,30 @@ fn minted(fake: &Fake) -> usize {
         .iter()
         .filter(|r| r.path.ends_with("/access_tokens"))
         .count()
+}
+
+/// The app's login is its bot user, named after the slug GitHub gives
+/// the app's own JWT, read once however often it is asked for.
+#[test]
+fn the_apps_login_is_read_once() {
+    use sluice::profiles::github::forge::Forge as _;
+    let clock = Clock::new();
+    let fake = Forge::new(&clock).start();
+    let app = app(&fake, &clock);
+    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
+    assert_eq!(app.login().unwrap(), "sluice-test[bot]");
+    let reads: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path == "/app")
+        .collect();
+    assert_eq!(reads.len(), 1);
+    let auth = reads[0].header("Authorization").unwrap_or_default();
+    assert!(
+        auth.starts_with("Bearer ") && !auth.starts_with("Bearer token-"),
+        "{auth}"
+    );
+    assert_eq!(minted(&fake), 0);
 }
 
 /// A token is bought once and kept until five minutes before its hour
@@ -625,10 +652,17 @@ fn the_apps_pull_request_calls() {
     assert!(opened.open && !opened.draft && opened.title == "E");
     let drafted = app.open(&r, "main", "unit/f", "F", "", true).unwrap();
     assert!(drafted.open && drafted.draft);
-    app.edit(&r, opened.number, "new body").unwrap();
+    app.edit(&r, opened.number, None, "new body").unwrap();
+    let edited = app.pull(&r, opened.number).unwrap().unwrap();
     assert_eq!(
-        app.pull(&r, opened.number).unwrap().unwrap().body,
-        "new body"
+        (edited.title.as_str(), edited.body.as_str()),
+        ("E", "new body")
+    );
+    app.edit(&r, opened.number, Some("E, retitled"), "new body")
+        .unwrap();
+    assert_eq!(
+        app.pull(&r, opened.number).unwrap().unwrap().title,
+        "E, retitled"
     );
 }
 
@@ -703,7 +737,7 @@ fn live_pull_request_calls() {
         .unwrap()
         .iter()
         .any(|c| c == "sluice's live test"));
-    app.edit(&r, pull.number, "edited by sluice's live test")
+    app.edit(&r, pull.number, None, "edited by sluice's live test")
         .unwrap();
 }
 
