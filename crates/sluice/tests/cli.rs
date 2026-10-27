@@ -711,29 +711,42 @@ fn a_submission_the_runner_could_not_check_is_taken_with_a_warning() {
     assert!(warnings[0].as_str().unwrap().contains("no devenv"), "{out}");
 }
 
-/// A subject on a branch with no pull requests titles nothing: the
-/// submission is queued as without it, with a warning beneath the answer
-/// saying so; under `--json --no-wait`, the warning is the document's.
+/// The message of the commit submission `id` landed as.
+fn landing_message(f: &Fakes, id: u64) -> String {
+    let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+    let landed = json(&out)["landed_as"]
+        .as_str()
+        .expect("landed")
+        .to_string();
+    f.world.message(&sluice_seams::Rev::new(landed))
+}
+
+/// 23: a subject on a branch with no pull requests names its landing.
+/// The submission is taken with no warning of its subject and lands, its
+/// landing commit's first line the subject, `Sluice-From` still naming
+/// the agent and the branch; under `--json --no-wait`, the document
+/// carries no warning either.
 #[test]
-fn a_subject_on_a_branch_with_no_pull_requests_titles_nothing() {
+fn a_subject_on_a_branch_with_no_pull_requests_names_its_landing() {
     let f = setup();
-    work(&f, "unit/a", "agent", &[("tests/t_cards.py", Some("x"))]);
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
     let subject = ["--subject", "Batch review cards"];
     let args = [
-        &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"][..],
+        &["submit", BRANCH, "--worktree", "unit/review"][..],
         &subject,
     ]
     .concat();
     let (code, out) = sluice(&f, &args);
-    assert_eq!(code, 0, "{out}");
-    let warning = format!("{BRANCH} opens no pull request; the subject titles nothing");
-    assert_eq!(
-        out,
-        format!("submission 1 to {BRANCH} · nothing queued ahead\nwarning: {warning}\n")
-    );
-    let subs = queued(&f);
-    assert_eq!(subs.len(), 1, "{subs:?}");
-    assert_eq!(subs[0]["state"], "queued");
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!out.contains("warning:"), "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 Batch review cards"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
 
     work(
         &f,
@@ -755,9 +768,67 @@ fn a_subject_on_a_branch_with_no_pull_requests_titles_nothing() {
     .concat();
     let (code, out) = sluice(&f, &args);
     assert_eq!(code, 0, "{out}");
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let v = json(&out);
     assert_eq!(v["id"], 2);
-    assert_eq!(v["warnings"], serde_json::json!([warning]));
+    assert_eq!(v.get("warnings"), None, "{out}");
+}
+
+/// 23: with no subject, a landing commit is named by its branch.
+#[test]
+fn with_no_subject_a_landing_is_named_by_its_branch() {
+    let f = setup();
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/review"]);
+    assert_eq!(code, LANDED, "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 unit/review"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
+}
+
+/// 125, 23: a group given a subject for each worktree queues its
+/// submissions in order, each landing named by its own subject.
+#[test]
+fn a_subject_for_each_names_each_landing() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("tests/b", Some("b"))]);
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--no-wait",
+            "--worktree",
+            "unit/a",
+            "--worktree",
+            "unit/b",
+            "--subject",
+            "Batch review cards",
+            "--subject",
+            "Card filters",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(queued(&f).len(), 2);
+    for id in [1, 2] {
+        assert_eq!(sluice(&f, &["wait", &id.to_string()]).0, LANDED);
+    }
+    for (id, subject, from) in [
+        (1, "Batch review cards", "agent-a (unit/a)"),
+        (2, "Card filters", "agent-b (unit/b)"),
+    ] {
+        let m = landing_message(&f, id);
+        assert_eq!(
+            m.lines().next(),
+            Some(format!("chore(land): #{id} {subject}").as_str())
+        );
+        assert!(m.contains(&format!("\nSluice-From: {from}\n")), "{m}");
+    }
 }
 
 /// Under `--json`, a refusal is one error document on stdout, naming

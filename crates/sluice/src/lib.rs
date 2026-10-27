@@ -862,7 +862,7 @@ pub fn run(
                     worktrees: worktree,
                     after,
                     priority,
-                    subjects: Vec::new(),
+                    subjects: subject,
                 };
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
@@ -907,9 +907,8 @@ pub fn run(
                     branch,
                     after,
                     priority,
-                    subject: None,
+                    subject,
                 },
-                subject.as_deref(),
                 no_wait,
                 json,
                 pause,
@@ -1655,8 +1654,8 @@ pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
     }
 }
 
-/// `sluice submit` to a branch with no pull requests: `subject` titles
-/// nothing there, which the submission's warnings say.
+/// `sluice submit` to a branch with no pull requests: the subject, where
+/// given, names the work its landing commit lands (23).
 #[allow(clippy::too_many_arguments)]
 fn submit(
     s: &Sluice<'_>,
@@ -1664,13 +1663,12 @@ fn submit(
     pushers: &dyn Pushers,
     clock: &dyn Clock,
     req: SubmitRequest,
-    subject: Option<&str>,
     no_wait: bool,
     json: bool,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let mut accepted = match s.submit(&req)? {
+    let accepted = match s.submit(&req)? {
         Ok(a) => a,
         Err(r) => {
             let named = worktree_name(s, &req.worktree);
@@ -1680,19 +1678,12 @@ fn submit(
             return Ok(CONFLICT);
         }
     };
-    if subject.is_some() {
-        accepted.warnings.push(format!(
-            "{} opens no pull request; the subject titles nothing",
-            req.branch
-        ));
-    }
     let id = accepted.id;
     let copy = accepted.copy.as_ref();
     if json && no_wait {
         let mut doc =
             serde_json::json!({ "id": id, "branch": req.branch, "ahead": accepted.ahead });
-        // ADR 0050: only a submission taken unchecked has any, and one
-        // given a subject.
+        // ADR 0050: only a submission taken unchecked has any.
         if !accepted.warnings.is_empty() {
             doc["warnings"] = serde_json::json!(accepted.warnings);
         }
