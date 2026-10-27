@@ -657,6 +657,83 @@ fn s19_a_pools_jobs_land_the_work_with_no_box() {
     assert_eq!(h.sub(one).state, State::Landed);
 }
 
+/// Each claim in the branch's log, with the forge's words when its
+/// dispatch went unanswered.
+fn claimed(h: &Harness) -> Vec<(String, Option<String>)> {
+    h.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Claimed {
+                host, unanswered, ..
+            } => Some((host, unanswered)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// satisfies: 134, 77, 88; the remote-retry spec's "A run's dispatch
+/// answered 502" and "The dispatch was not taken": a run whose dispatch
+/// went unanswered is claimed after one launch, never launched again under
+/// that claim, its claim's event holding the forge's words; when no job of
+/// the claim runs, the next round lapses it and launches the run once
+/// more, under a new claim.
+#[test]
+fn a_run_whose_dispatch_went_unanswered_is_claimed_once() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    let lead = || as_signer(&h, "lead", None);
+    h.w().fail_next_launch(true);
+    lead().step(BRANCH).unwrap();
+    let first: Vec<String> = h.w().launches().iter().map(|l| l.claim.clone()).collect();
+    assert_eq!(first.len(), 2, "each run launched once");
+    let claims = claimed(&h);
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    let (host, words) = &claims[0];
+    assert_eq!(host, &first[0]);
+    let words = words.as_deref().expect("the unanswered words");
+    assert!(words.contains("its answer was not read: 502"), "{words}");
+    assert_eq!(claims[1], (first[1].clone(), None));
+    assert!(runs(&h)
+        .iter()
+        .any(|(host, state)| host.as_deref() == Some(first[0].as_str())
+            && *state == sluice_core::records::RunState::Starting));
+
+    // A round while the job may run launches nothing more.
+    lead().step(BRANCH).unwrap();
+    assert_eq!(h.w().launches().len(), 2);
+
+    // GitHub never took it: no job of the claim runs.
+    h.w().end_job(&first[0]);
+    lead().step(BRANCH).unwrap();
+    assert!(h
+        .events()
+        .iter()
+        .any(|e| matches!(e, Event::Lapsed { host, .. } if *host == first[0])));
+    let launches = h.w().launches();
+    assert_eq!(launches.len(), 3);
+    let again = &launches[2].claim;
+    assert!(!first.contains(again), "{again} is a new claim");
+    assert_eq!(launches[2].system, launches[0].system);
+    assert_eq!(claimed(&h).last(), Some(&(again.clone(), None)));
+}
+
+/// satisfies: 134; a launch the forge refused fails the round, and
+/// nothing is claimed.
+#[test]
+fn a_refused_launch_fails_the_round_with_nothing_claimed() {
+    let h = with_pool();
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    h.w().fail_next_launch(false);
+    let e = as_signer(&h, "lead", None).step(BRANCH).unwrap_err();
+    assert!(format!("{e:#}").contains("404 Not Found"), "{e:#}");
+    assert!(claimed(&h).is_empty(), "{:?}", claimed(&h));
+    assert!(h.w().launches().is_empty());
+}
+
 /// satisfies: 78, 79, 28, 29; S18: results signed by a signer the shared
 /// branch does not name settle nothing there; a confinement claim counts
 /// only from a signer that may make it.
