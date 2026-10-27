@@ -299,6 +299,15 @@ pub trait Checkout {
     /// is an error; the command's failure is in what is returned.
     fn release_gone(&self, name: &str) -> Result<GoneRelease>;
 
+    /// 35, 123, rule core.30: remove every scratch directory of the
+    /// repository that no place's record names, and return the paths
+    /// removed. A directory a record names is left, an older record's,
+    /// which names its scratch by the place's name, among them; so is one
+    /// made while the removal runs, since a place's record names its
+    /// scratch before the directory is made. A directory removed meanwhile
+    /// is no error.
+    fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>>;
+
     /// 81: every candidate's place this host made and has not released,
     /// by name: what a returning host releases before it claims again.
     fn made(&self) -> Result<Vec<String>>;

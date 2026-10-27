@@ -1375,6 +1375,10 @@ mod tests {
             unreachable!("a submit releases no place")
         }
 
+        fn remove_unnamed_scratch(&self) -> Result<Vec<std::path::PathBuf>> {
+            Ok(Vec::new())
+        }
+
         fn made(&self) -> Result<Vec<String>> {
             unreachable!("a submit reads no place")
         }
