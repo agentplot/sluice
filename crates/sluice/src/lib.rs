@@ -25,7 +25,7 @@ pub mod telemetry;
 pub mod told;
 pub mod words;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1064,7 +1064,7 @@ pub fn run(
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now())?;
+                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now(), None)?;
                     write_status(
                         &s.status(&branch)?,
                         pusher.as_ref(),
@@ -1112,7 +1112,7 @@ pub fn run(
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &target, None, clock.now())?;
+                    let testing = progress::lines(&s, &target, None, clock.now(), None)?;
                     write_status(&status, pusher.as_ref(), &testing, &shown, Some(&room), out)?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
@@ -1184,7 +1184,7 @@ pub fn run(
                         };
                         let text = format!(
                             "--after names no queued submission: {}; {queue} lists the queue",
-                            hashes(&ids)
+                            hashes(&ids, None, &mut BTreeSet::new())
                         );
                         (text, vec![queue])
                     }
@@ -1450,18 +1450,60 @@ pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
     serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
 }
 
-pub(crate) fn hashes(ids: &[u64]) -> String {
-    ids.iter()
-        .map(|i| format!("#{i}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+/// Each submission's name as a view's lines show it (26), by its number:
+/// its subject, or the branch it was submitted from, on one line.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names(BTreeMap<u64, String>);
+
+impl Names {
+    /// Each of `subs` by its own name.
+    pub fn of<'a>(subs: impl IntoIterator<Item = &'a Submission>) -> Names {
+        let mut names = Names::default();
+        for s in subs {
+            names.insert(s.id, s.name());
+        }
+        names
+    }
+
+    /// Names `id` by `name`, as a line shows it; a name that shows as
+    /// nothing leaves `id` to its number.
+    pub fn insert(&mut self, id: u64, name: &str) {
+        let shown = sluice_core::text::shown(name);
+        if !shown.is_empty() {
+            self.0.insert(id, shown);
+        }
+    }
 }
 
-/// `bolt/x + #12 + #13`
-fn combination(branch: &str, ids: &[u64]) -> String {
+/// Each of `ids` as one line names it (26): `#12 Batch review cards` the
+/// first time the line shows it, where `names` has a name for it, and
+/// `#12` after, or with no name; `said` holds what the line has named.
+pub(crate) fn named(ids: &[u64], names: Option<&Names>, said: &mut BTreeSet<u64>) -> Vec<String> {
+    ids.iter()
+        .map(|&id| match names.and_then(|n| n.0.get(&id)) {
+            Some(name) if said.insert(id) => format!("#{id} {name}"),
+            _ => format!("#{id}"),
+        })
+        .collect()
+}
+
+/// `#12 Batch review cards, #13 unit/forecast`, or `#12, #13` with no
+/// `names`.
+pub(crate) fn hashes(ids: &[u64], names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
+    named(ids, names, said).join(", ")
+}
+
+/// `bolt/x + #12 Batch review cards + #13 unit/forecast`, or `bolt/x + #12
+/// + #13` with no `names`.
+fn combination(
+    branch: &str,
+    ids: &[u64],
+    names: Option<&Names>,
+    said: &mut BTreeSet<u64>,
+) -> String {
     let mut s = branch.to_string();
-    for i in ids {
-        s.push_str(&format!(" + #{i}"));
+    for n in named(ids, names, said) {
+        s.push_str(&format!(" + {n}"));
     }
     s
 }
@@ -1519,7 +1561,7 @@ fn refusal(
         SubmitRefusal::UnknownAfter(ids) => {
             format!(
                 "refused: --after names no submission to {branch}: {}",
-                hashes(ids)
+                hashes(ids, None, &mut BTreeSet::new())
             )
         }
         SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
@@ -1924,7 +1966,7 @@ fn short_group(
         writeln!(
             out,
             "nothing submitted: {} are drafts at their heads",
-            hashes(&numbers)
+            hashes(&numbers, None, &mut BTreeSet::new())
         )?;
         writeln!(
             out,
@@ -2116,10 +2158,10 @@ fn wait_on(
             if said.as_ref() != Some(&now) {
                 match own {
                     Some(c) => {
-                        let line = progress::testing_line(&branch, c, waiting.clock.now());
+                        let line = progress::testing_line(&branch, c, waiting.clock.now(), None);
                         writeln!(out, "{line}")?;
                     }
-                    None => match detail(&branch, &sub) {
+                    None => match detail(&branch, &sub, None, &mut BTreeSet::new()) {
                         d if d.is_empty() => writeln!(out, "#{id} {}", sub.state.word())?,
                         d => writeln!(out, "#{id} {} · {d}", sub.state.word())?,
                     },
@@ -2576,7 +2618,7 @@ fn submitted(
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
     } else {
-        let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
+        let testing = progress::lines(s, branch, Some(sub.id), clock.now(), None)?;
         write_status(&status, None, &testing, &[sub], None, out)?;
     }
     Ok(0)
@@ -2692,7 +2734,7 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
-                    let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
+                    let testing = progress::lines(s, branch, Some(sub.id), clock.now(), None)?;
                     write_status(
                         &s.status(branch)?,
                         None,
@@ -2915,7 +2957,11 @@ fn submit_pull_group(
     let mut said_hold = None;
     // As `submit_pull`: a read the forge answered 5xx is made again, as
     // [`Unread`] bounds it, and said on stderr when it ends the wait.
-    let what = hashes(&opened.iter().map(|o| o.number).collect::<Vec<_>>());
+    let what = hashes(
+        &opened.iter().map(|o| o.number).collect::<Vec<_>>(),
+        None,
+        &mut BTreeSet::new(),
+    );
     let again = format!("sluice wait {branch}");
     let mut unread = Unread::default();
     // 122: what failed after a landing, said once the outcomes are.
@@ -3099,7 +3145,9 @@ fn failed_name(f: &sluice_core::records::FailedTask) -> String {
     name
 }
 
-fn detail(branch: &str, s: &Submission) -> String {
+/// What a row says of `s` after its columns, naming the submissions it
+/// names as `names` and `said` do.
+fn detail(branch: &str, s: &Submission, names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.
@@ -3118,13 +3166,13 @@ fn detail(branch: &str, s: &Submission) -> String {
             let tested = s
                 .tested
                 .as_ref()
-                .map(|t| combination(branch, &t.submissions))
+                .map(|t| combination(branch, &t.submissions, names, said))
                 .unwrap_or_default();
             // 117: what a held submission waits for, and until when.
             match &s.held {
                 Some(h) => format!(
                     "{tested}, held for {} until {}",
-                    combination(branch, &h.by),
+                    combination(branch, &h.by, names, said),
                     h.until
                 ),
                 None => tested,
@@ -3135,10 +3183,10 @@ fn detail(branch: &str, s: &Submission) -> String {
             .as_ref()
             .map(|c| {
                 let ids: Vec<u64> = c.with.iter().map(|w| w.id).collect();
-                format!("{} with {}", c.paths.join(", "), hashes(&ids))
+                format!("{} with {}", c.paths.join(", "), hashes(&ids, names, said))
             })
             .unwrap_or_default(),
-        State::Waiting => format!("after {}", hashes(&s.after)),
+        State::Waiting => format!("after {}", hashes(&s.after, names, said)),
         _ => String::new(),
     }
 }
@@ -3226,7 +3274,7 @@ fn write_status(
             s.state.word(),
             s.from.agent,
             s.from.worktree,
-            detail(&status.branch, s),
+            detail(&status.branch, s, None, &mut BTreeSet::new()),
         );
         writeln!(out, "{}", line.trim_end())?;
     }
@@ -3562,4 +3610,51 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
         v["release_failed"] = serde_json::json!(f);
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names() -> Names {
+        let mut names = Names::default();
+        names.insert(12, "Batch review cards");
+        names.insert(13, "unit/forecast");
+        names
+    }
+
+    /// 26: a line names a submission with its name the first time it shows
+    /// it, and by its number alone after.
+    #[test]
+    fn a_line_names_each_submission_once() {
+        let names = names();
+        let mut said = BTreeSet::new();
+        assert_eq!(
+            hashes(&[12, 13], Some(&names), &mut said),
+            "#12 Batch review cards, #13 unit/forecast"
+        );
+        assert_eq!(hashes(&[12, 14], Some(&names), &mut said), "#12, #14");
+        let mut said = BTreeSet::from([12]);
+        assert_eq!(
+            combination("main", &[12, 13], Some(&names), &mut said),
+            "main + #12 + #13 unit/forecast"
+        );
+        assert_eq!(
+            combination("main", &[12, 13], None, &mut BTreeSet::new()),
+            "main + #12 + #13"
+        );
+    }
+
+    /// 26: a name is kept as a line shows it, on one line; one that shows
+    /// as nothing leaves its submission to its number.
+    #[test]
+    fn a_name_is_kept_as_shown() {
+        let mut names = Names::default();
+        names.insert(12, "Batch review\ncards");
+        names.insert(13, "\n");
+        assert_eq!(
+            hashes(&[12, 13], Some(&names), &mut BTreeSet::new()),
+            "#12 Batch review cards, #13"
+        );
+    }
 }

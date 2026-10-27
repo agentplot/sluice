@@ -144,7 +144,7 @@ fn write_overview(
                 continue;
             }
             // ADR 0042: how far it has got, as of when the overview was read.
-            writeln!(out, "  {}", progress::testing_line(&b.branch, c, now))?;
+            writeln!(out, "  {}", progress::testing_line(&b.branch, c, now, None))?;
         }
         for r in b.recent.iter().rev().take(3) {
             writeln!(out, "  {}", recent_line(r))?;
@@ -386,7 +386,7 @@ fn recent_line(r: &serde_json::Value) -> String {
     match r["event"].as_str() {
         Some("landed") => format!(
             "{at}  landed {} as {}",
-            hashes(&ids(&r["ids"])),
+            hashes(&ids(&r["ids"]), None, &mut BTreeSet::new()),
             short(&r["to"])
         ),
         Some("blamed") => format!(
