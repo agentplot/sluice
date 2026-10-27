@@ -311,6 +311,27 @@ fn exec_runs_from_a_worktree_at_a_long_path() {
     );
     let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "echo $SLUICE_PORT_WEB"]);
     assert!(out.status.success(), "{}", text(&out));
+    // 35, rule core.30: its scratch is the repository's own, as short as
+    // any worktree's, and holds nothing of the worktree's path.
+    let out = s.sluice(&["exec", "bolt/x", "--", "sh", "-c", "echo $SLUICE_TMP"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let tmp = printed
+        .lines()
+        .find(|l| l.contains("/sluice/.tmp/"))
+        .unwrap_or_else(|| panic!("no scratch printed: {}", text(&out)));
+    let root = std::fs::canonicalize(s.repo.dir().join(".git")).unwrap();
+    let hex = std::fs::canonicalize(tmp)
+        .unwrap()
+        .strip_prefix(root.join("sluice/.tmp"))
+        .unwrap_or_else(|_| panic!("{tmp} is not under {}", root.display()))
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        hex.len() == 10 && hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+        "{tmp}"
+    );
+    assert!(!tmp.contains("a-rather-long-directory-name"), "{tmp}");
 
     let out = s.sluice(&["status", "--json"]);
     assert!(out.status.success(), "{}", text(&out));
@@ -492,13 +513,17 @@ fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
     assert!(!released.exists());
 
     // The next run, in another worktree, runs its stored release first,
-    // once, from its scratch directory with its port, and frees it.
-    let scratch = std::fs::canonicalize(s.repo.dir().join(".git/sluice/.tmp"))
-        .unwrap()
-        .join(sluice::runs::dir_name(&format!(
-            "session/{}",
-            canon_a.display()
-        )));
+    // once, from the scratch directory its record names with its port, and
+    // frees it (123, rule core.30).
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(s.repo.dir().join(format!(
+            ".git/sluice/.places/{}.json",
+            sluice::runs::flat_name(&format!("session/{}", canon_a.display()))
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    let scratch = std::fs::canonicalize(record["scratch"].as_str().unwrap()).unwrap();
     let out = sluice_in(&other, &["exec", "bolt/x", "--", "true"]);
     assert!(out.status.success(), "{}", text(&out));
     let said = text(&out);
@@ -511,6 +536,7 @@ fn the_next_exec_runs_a_removed_worktrees_stored_release_once() {
     );
     let once = format!("{} {a_port}\n", scratch.display());
     assert_eq!(ran_in(&released), once);
+    assert!(!scratch.exists(), "{} left", scratch.display());
     assert!(
         !ran_in(&tooled).contains(canon_a.to_str().unwrap())
             && !ran_in(&tooled).contains(scratch.to_str().unwrap()),

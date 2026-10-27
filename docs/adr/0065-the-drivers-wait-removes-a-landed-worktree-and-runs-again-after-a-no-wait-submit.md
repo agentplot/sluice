@@ -1,7 +1,7 @@
 ---
 number: 65
 title: The driver's wait removes a landed worktree and runs again after a no-wait submit; the core never removes one
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # The driver's wait removes a landed worktree and runs again after a no-wait submit; the core never removes one
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: madswan-design, on madswan-ops's signal of 2026-10-27 (afterthought/crew-state, madswan/main, 2026-10-27-madswan-ops-24b162ca/01-sluice-no-wait-leaves-landed-worktree) carrying the user's words, "The WLDN design agent, for some reason, is manually removing work trees. I think it's incorrectly using sluice"; the user's yes is asked on the record's card.
 Sources: statement clauses 25, 26, 50 and the C.5 worktrunk row; rules core.1, core.16, core.20; `crates/sluice/src/profiles/worktrunk/wt_submit.rs` on main at 2026-10-27, which releases and removes the worktree only when its own waiting submit exits landed; records 0018, 0024, 0041 (`sluice wait`).

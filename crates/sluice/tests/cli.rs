@@ -3802,57 +3802,35 @@ fn wait_finds_what_it_waits_on() {
     assert_eq!(json(&out)["error"]["message"], "no submission 9999");
 }
 
-/// A pause that moves the fakes' clock on a minute at each wait, for a
-/// wait that runs past [`sluice::UNANSWERED_FOR`].
-struct Minutes<'a>(&'a Fakes, Cell<usize>);
+/// A pause a wait never takes once a read or a round failed as the forge
+/// could not answer: the retry policy read again for it (rule core.29).
+struct Unpaused;
 
-impl Pause for Minutes<'_> {
+impl Pause for Unpaused {
     fn pause(&self) -> bool {
-        self.1.set(self.1.get() + 1);
-        assert!(self.1.get() < 50, "waited too long");
-        self.0.world.advance(chrono::Duration::minutes(1));
-        true
+        panic!("the wait paused to read again")
     }
 }
 
-/// A round the forge answered 5xx is run again: `sluice wait` and a
-/// waiting submit wait through a few such answers to the outcome.
+/// 134: a round whose call the forge could not answer for the retry
+/// policy's time, so that its seam answers 5xx once the policy is spent,
+/// ends `sluice wait` and a waiting submit at once: each says it could not
+/// read, on stderr with how long and the forge's words and on stdout with
+/// how to wait again, and exits 3, no outcome. The wait never reads again
+/// of its own (rule core.29); nothing was decided of the submission, which
+/// lands once the forge answers.
 #[test]
-fn a_wait_reads_again_through_a_forges_5xx() {
-    let f = setup();
-    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    f.world.unanswer_starts(3);
-    let (code, out) = sluice(&f, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    let tip = f.world.tip(BRANCH);
-    assert!(
-        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
-        "{out}"
-    );
-
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
-    f.world.unanswer_starts(3);
-    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--json"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert_eq!(json(&out)["state"], "landed");
-}
-
-/// Past five minutes of a forge's 5xx answers, `sluice wait` says it could
-/// not read, on stderr with the forge's words and on stdout with how to
-/// wait again, and exits 3: no outcome. Nothing was decided of the
-/// submission, which lands once the forge answers.
-#[test]
-fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
-    if let Some(err) = stderr_of("a_wait_past_five_minutes_of_5xx_says_it_could_not_read") {
+fn a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read() {
+    const TEST: &str = "a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read";
+    if let Some(err) = stderr_of(TEST) {
         let said: Vec<&str> = err
             .lines()
-            .filter(|l| l.starts_with("sluice: could not read #1 for 5m"))
+            .filter(|l| l.starts_with("sluice: could not read #"))
             .collect();
-        assert_eq!(said.len(), 2, "{err}");
+        assert_eq!(said.len(), 3, "{err}");
         for line in said {
             assert!(
-                line.contains(", so whether it landed is not known: starting a run in ")
+                line.contains(" for 0s, so whether it landed is not known: starting a run in ")
                     && line.ends_with(": 503 Service Unavailable"),
                 "{err}"
             );
@@ -3862,8 +3840,8 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
     let f = setup();
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    f.world.unanswer_starts(usize::MAX);
-    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1"]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1"]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     assert!(out.ends_with("could not read #1: sluice wait 1\n"), "{out}");
     assert!(
@@ -3871,24 +3849,69 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
         "{out}"
     );
 
-    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1", "--json"]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1", "--json"]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     let v = json(&out);
     assert_eq!(v["error"]["kind"], "internal");
     assert_eq!(v["error"]["next"], serde_json::json!(["sluice wait 1"]));
     let message = v["error"]["message"].as_str().unwrap();
-    assert!(message.starts_with("could not read #1 for 5m"), "{message}");
+    assert!(
+        message.starts_with("could not read #1 for 0s, so whether it landed is not known: "),
+        "{message}"
+    );
     assert!(message.ends_with(": 503 Service Unavailable"), "{message}");
     let (_, out) = sluice(&f, &["status", "1", "--json"]);
     assert_ne!(json(&out)["state"], "failed");
 
-    f.world.unanswer_starts(0);
-    assert_eq!(sluice(&f, &["wait", "1"]).0, LANDED);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert!(out.ends_with("could not read #2: sluice wait 2\n"), "{out}");
+
+    assert_eq!(sluice(&f, &["wait", "2"]).0, LANDED);
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["state"], "landed");
+}
+
+/// 134: Ctrl-C while a wait's call to a remote is between tries ends the
+/// retry policy's pauses, and the call fails as its last try did; the wait
+/// stops at once, as a wait stopped by Ctrl-C does, never as one that
+/// could not read, and the submission stays queued. Alone in a process of
+/// its own, which Ctrl-C reaches whole.
+#[test]
+fn a_wait_stopped_between_tries_is_a_stopped_wait() {
+    const TEST: &str = "a_wait_stopped_between_tries_is_a_stopped_wait";
+    if let Some(err) = stderr_of(TEST) {
+        assert!(!err.contains("could not read"), "{err}");
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.unanswer_starts(1);
+    sluice::stop_on_interrupt().unwrap();
+    nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1"]);
+    assert_eq!(
+        f.world.unanswered_starts_left(),
+        0,
+        "the round's call was made"
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert!(out.ends_with("still waiting: sluice wait 1\n"), "{out}");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert!(
+        !["failed", "landed", "withdrawn"].contains(&json(&out)["state"].as_str().unwrap()),
+        "{out}"
+    );
 }
 
 /// Pull request 7 into the branch, from any worktree, waiting; its forge
-/// answers 5xx to as many finds and follows as each count holds. It keeps
-/// the subject of each open.
+/// answers 5xx to as many finds and follows as each count holds, each as a
+/// retry policy spent after five minutes of them answers it. It keeps the
+/// subject of each open.
 struct Pull7 {
     finds: Cell<usize>,
     follows: Cell<usize>,
@@ -3910,10 +3933,13 @@ impl Pull7 {
             return Ok(());
         }
         left.set(left.get() - 1);
-        Err(
+        let e: anyhow::Error =
             sluice_seams::Unanswered("GET /repos/o/r/pulls/7: 503 Service Unavailable".into())
-                .into(),
-        )
+                .into();
+        Err(e.context(sluice::retry::Spent {
+            tries: 9,
+            lasted: std::time::Duration::from_secs(300),
+        }))
     }
 }
 
@@ -4108,29 +4134,21 @@ fn a_subject_takes_neither_check_nor_status() {
     }
 }
 
-/// Following a pull request, a find or a follow the forge answered 5xx is
-/// made again; past five minutes of such answers, `sluice wait` and a
-/// waiting submit say they could not read it and exit 3, never that it
-/// closed or failed.
+/// Following a pull request, a find or a follow the forge could not
+/// answer for the retry policy's time ends `sluice wait` and a waiting
+/// submit at once (134; rule core.29): each says it could not read the
+/// pull request, with how long it was tried, and exits 3, never that it
+/// closed or failed, and never reads again of its own.
 #[test]
-fn following_a_pull_request_reads_again_through_a_forges_5xx() {
+fn following_a_pull_request_the_forge_could_not_answer_says_it_could_not_read() {
     let f = pulls_setup();
-    let stop = Then(Cell::new(0), |n| n < 6);
-    let (code, out) = sluice_pulls(&f, &Pull7::new(2, 2), &stop, &["wait", BRANCH]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_eq!(
-        out,
-        format!("waiting\nstill open: #7; sluice wait {BRANCH}\n")
-    );
-
-    let pulls = Pull7::new(0, usize::MAX);
-    let (code, out) = sluice_pulls(&f, &pulls, &Minutes(&f, Cell::new(0)), &["wait", BRANCH]);
+    let (code, out) = sluice_pulls(&f, &Pull7::new(0, 1), &Unpaused, &["wait", BRANCH]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     assert_eq!(out, format!("could not read #7: sluice wait {BRANCH}\n"));
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(0, 1),
+        &Unpaused,
         &["wait", BRANCH, "--json"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");
@@ -4141,19 +4159,17 @@ fn following_a_pull_request_reads_again_through_a_forges_5xx() {
         serde_json::json!([format!("sluice wait {BRANCH}")])
     );
     let message = v["error"]["message"].as_str().unwrap();
-    assert!(message.starts_with("could not read #7 for 5m"), "{message}");
-    assert!(
-        message.ends_with(
-            ", so whether it landed is not known: GET /repos/o/r/pulls/7: 503 Service Unavailable"
-        ),
-        "{message}"
+    assert_eq!(
+        message,
+        "could not read #7 for 5m00s, so whether it landed is not known: \
+         GET /repos/o/r/pulls/7: 503 Service Unavailable"
     );
 
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("b"))]);
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(0, 1),
+        &Unpaused,
         &["submit", BRANCH, "--worktree", "unit/a"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");
@@ -4162,11 +4178,10 @@ fn following_a_pull_request_reads_again_through_a_forges_5xx() {
         format!("opened #7\ncould not read #7: sluice wait {BRANCH}\n")
     );
 
-    let pulls = Pull7::new(usize::MAX, 0);
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(1, 0),
+        &Unpaused,
         &["wait", BRANCH, "--worktree", "unit/a"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");

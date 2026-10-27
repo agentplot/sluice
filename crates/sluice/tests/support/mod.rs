@@ -13,9 +13,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Out of reach of whatever runs git under `c`, sluice included: the
 /// user's and the system's git config, so their credential helpers, and
 /// every prompt and askpass program. No test may reach the user's
-/// credentials or ask anyone anything.
+/// credentials or ask anyone anything. A sluice run under `c` skips the
+/// retry policy's pauses, which the fakes count tries through (134).
 pub fn isolated(c: &mut Command) -> &mut Command {
-    c.env("GIT_CONFIG_GLOBAL", "/dev/null")
+    c.env("SLUICE_RETRY_SLEEP", "record")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")

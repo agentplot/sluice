@@ -3,9 +3,19 @@
 //! installation for that repository alone, kept in this process's memory
 //! and bought again five minutes before it ends, or at once for a call
 //! GitHub refused it on. Nothing is written anywhere.
+//!
+//! Every call to the API runs under the retry policy (134; rule core.29),
+//! classed by what it does ([`Call`]): one GitHub never judged, a
+//! connection not made, is tried again; a call GitHub refused the
+//! installation's token on (401) is tried again on one bought afresh; a
+//! read, or a write that sets a state, is tried again whatever else
+//! failed but GitHub's answer; a write that makes something is not made
+//! again once GitHub may have taken it, a 5xx or a 429 among them, and
+//! fails [`Unanswered`], for its caller to read whether it was made.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,6 +26,7 @@ use serde_json::Value;
 use sluice_seams::Unanswered;
 
 use crate::instance::Forge;
+use crate::retry::{Failed, Judged, Kind, Policy};
 
 /// GitHub's API.
 pub const API: &str = "https://api.github.com";
@@ -111,6 +122,42 @@ struct Claims {
     iss: String,
 }
 
+/// What a call to the API does, which decides how it is tried again (134;
+/// rule core.29).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Call {
+    /// Changes nothing: a `GET`, a GraphQL query, a token bought.
+    Read,
+    /// Sets a state, which set twice is as set once: tried again as a
+    /// read is.
+    Set,
+    /// Makes or starts something: tried again only while GitHub never
+    /// took it.
+    Make,
+}
+
+impl Call {
+    /// The policy's kind of call this is.
+    fn kind(self) -> Kind {
+        match self {
+            Call::Read | Call::Set => Kind::Read,
+            Call::Make => Kind::Write,
+        }
+    }
+}
+
+/// What an API call authenticates as.
+#[derive(Clone, Copy)]
+pub enum Bearer<'a> {
+    /// The app itself, with a JWT.
+    App,
+    /// The app's installation on a repository, with its token: one bought
+    /// afresh for the next try when GitHub refuses it.
+    Repo(&'a Repo),
+    /// A token given, the operator's own.
+    Token(&'a str),
+}
+
 pub struct App {
     id: u64,
     key: EncodingKey,
@@ -120,12 +167,13 @@ pub struct App {
     tokens: RefCell<BTreeMap<Repo, Token>>,
     /// The app's slug, once read.
     slug: RefCell<Option<String>>,
+    policy: Rc<Policy>,
 }
 
 impl App {
     /// The app `id`, signing with the PEM private key `pem`, calling the
-    /// API at `api`.
-    pub fn new(id: u64, pem: &[u8], api: &str, now: Now) -> Result<App> {
+    /// API at `api`, each call under `policy`.
+    pub fn new(id: u64, pem: &[u8], api: &str, now: Now, policy: Rc<Policy>) -> Result<App> {
         let key = EncodingKey::from_rsa_pem(pem).context("the app's key is no RSA private key")?;
         let http = ureq::Agent::config_builder()
             .http_status_as_error(false)
@@ -141,15 +189,16 @@ impl App {
             http,
             tokens: RefCell::default(),
             slug: RefCell::default(),
+            policy,
         })
     }
 
-    /// The host's `[forge]` app.
-    pub fn open(forge: &Forge) -> Result<App> {
+    /// The host's `[forge]` app, each call under the command's `policy`.
+    pub fn open(forge: &Forge, policy: Rc<Policy>) -> Result<App> {
         let pem = std::fs::read(&forge.key)
             .with_context(|| format!("reading the app's key {}", forge.key.display()))?;
         let api = std::env::var(API_VAR).unwrap_or_else(|_| API.into());
-        App::new(forge.app_id, &pem, &api, Box::new(Utc::now))
+        App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
             .with_context(|| format!("[forge] key {}", forge.key.display()))
     }
 
@@ -179,7 +228,7 @@ impl App {
             return Ok(slug.clone());
         }
         let v = self
-            .get("/app", &self.jwt()?)
+            .get("/app", Bearer::App)
             .with_context(|| format!("reading app {}", self.id))?;
         let slug = v["slug"]
             .as_str()
@@ -194,7 +243,7 @@ impl App {
         let v = self
             .get(
                 &format!("/repos/{}/{}/installation", repo.owner, repo.name),
-                &self.jwt()?,
+                Bearer::App,
             )
             .with_context(|| format!("finding app {}'s installation on {repo}", self.id))?;
         let id = v["id"]
@@ -258,11 +307,14 @@ impl App {
     fn buy(&self, repo: &Repo) -> Result<Token> {
         let installation = self.installation(repo)?;
         let body = serde_json::json!({ "repositories": [repo.name] }).to_string();
+        // Buying a token changes nothing the repository holds: a read.
         let v = self
-            .post_api(
+            .send(
+                "POST",
+                Call::Read,
                 &format!("/app/installations/{}/access_tokens", installation.id),
-                &self.jwt()?,
-                &body,
+                Bearer::App,
+                Some(&body),
             )
             .with_context(|| format!("making a token for {repo}"))?;
         let bought = (self.now)();
@@ -286,21 +338,32 @@ impl App {
         Ok(t)
     }
 
-    /// `GET` an API path with a bearer token.
-    pub fn get(&self, path: &str, bearer: &str) -> Result<Value> {
-        self.send("GET", path, bearer, None)
+    /// `GET` an API path as `bearer`.
+    pub fn get(&self, path: &str, bearer: Bearer) -> Result<Value> {
+        self.send("GET", Call::Read, path, bearer, None)
     }
 
-    pub fn post_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
-        self.send("POST", path, bearer, Some(body))
+    /// `POST` to an API path as `bearer` a call that does what `call`
+    /// says.
+    pub fn post_api(&self, call: Call, path: &str, bearer: Bearer, body: &str) -> Result<Value> {
+        self.send("POST", call, path, bearer, Some(body))
     }
 
-    pub(super) fn patch_api(&self, path: &str, bearer: &str, body: &str) -> Result<Value> {
-        self.send("PATCH", path, bearer, Some(body))
+    /// `PATCH` an API path as `bearer`: every `PATCH` sluice makes sets a
+    /// state.
+    pub(super) fn patch_api(&self, path: &str, bearer: Bearer, body: &str) -> Result<Value> {
+        self.send("PATCH", Call::Set, path, bearer, Some(body))
     }
 
-    fn send(&self, method: &str, path: &str, bearer: &str, body: Option<&str>) -> Result<Value> {
-        let (status, v, text) = self.call(method, path, bearer, body)?;
+    fn send(
+        &self,
+        method: &str,
+        call: Call,
+        path: &str,
+        bearer: Bearer,
+        body: Option<&str>,
+    ) -> Result<Value> {
+        let (status, v, text) = self.answer(method, call, path, bearer, body)?;
         if !(200..300).contains(&status) {
             return Err(failed(method, path, status, &v, &text));
         }
@@ -308,8 +371,8 @@ impl App {
     }
 
     /// `GET` an API path; `None` when GitHub has nothing there (404).
-    pub(super) fn get_found(&self, path: &str, bearer: &str) -> Result<Option<Value>> {
-        let (status, v, text) = self.call("GET", path, bearer, None)?;
+    pub(super) fn get_found(&self, path: &str, bearer: Bearer) -> Result<Option<Value>> {
+        let (status, v, text) = self.answer("GET", Call::Read, path, bearer, None)?;
         match status {
             404 => Ok(None),
             200..=299 => Ok(Some(v)),
@@ -317,14 +380,75 @@ impl App {
         }
     }
 
-    /// One call: its status, its JSON, and its text.
+    /// GitHub's answer to a `call`, under the retry policy: its status,
+    /// its JSON and its text, for a success or any status GitHub would
+    /// answer again. A 5xx or a 429 is tried again, but on a call that
+    /// makes something, which GitHub may have taken; a 401 on the
+    /// installation's token is tried again on one bought afresh. The last
+    /// try's failure is the call's when the policy stops; a call that
+    /// makes something stopped with its answer not read fails
+    /// [`Unanswered`], saying so.
+    fn answer(
+        &self,
+        method: &str,
+        call: Call,
+        path: &str,
+        bearer: Bearer,
+        body: Option<&str>,
+    ) -> Result<(u16, Value, String)> {
+        // The last failure's words, for a token that could not be bought
+        // afresh after it.
+        let mut said = String::new();
+        self.policy
+            .run(call.kind(), |t| {
+                let auth = match bearer {
+                    Bearer::App => self.jwt(),
+                    Bearer::Repo(repo) if t.renew() => self
+                        .issue(repo, true)
+                        .map(|i| i.secret)
+                        .map_err(|e| anyhow!("{said}; and no token could be bought afresh: {e:#}")),
+                    Bearer::Repo(repo) => self.token(repo),
+                    Bearer::Token(token) => Ok(token.to_string()),
+                };
+                let auth = auth.map_err(|e| match call {
+                    // Nothing was sent: no answer to it went unread.
+                    Call::Make => Failed::new(Judged::Answered, anyhow!("{e:#}")),
+                    _ => Failed::new(Judged::Answered, e),
+                })?;
+                let (status, v, text) = self.call(method, path, &auth, body)?;
+                let judged = match status {
+                    500..=599 | 429 if call == Call::Make => Judged::Unknown,
+                    500..=599 | 429 => Judged::Never,
+                    401 if matches!(bearer, Bearer::Repo(_)) => Judged::Credential,
+                    _ => return Ok((status, v, text)),
+                };
+                let e = failed(method, path, status, &v, &text);
+                said = format!("{e:#}");
+                Err(Failed::new(judged, e))
+            })
+            .map_err(|s| match (call, s.judged) {
+                (Call::Make, Judged::Unknown) => {
+                    let words = format!("{:#}", s.error);
+                    let called = format!("{method} {path}: ");
+                    let words = words.strip_prefix(&called).unwrap_or(&words);
+                    Unanswered(format!(
+                        "GitHub's answer to {method} {path} was not read: {words}"
+                    ))
+                    .into()
+                }
+                _ => s.into_error(),
+            })
+    }
+
+    /// One call: its status, its JSON, and its text; a call that got no
+    /// answer read, how it stands.
     fn call(
         &self,
         method: &str,
         path: &str,
         bearer: &str,
         body: Option<&str>,
-    ) -> Result<(u16, Value, String)> {
+    ) -> Result<(u16, Value, String), Failed<anyhow::Error>> {
         let url = format!("{}{path}", self.api);
         let auth = format!("Bearer {bearer}");
         let resp = match (method, body) {
@@ -339,7 +463,10 @@ impl App {
                 let req = match method {
                     "POST" => self.http.post(&url),
                     "PATCH" => self.http.patch(&url),
-                    other => bail!("sluice makes no {other} call"),
+                    other => {
+                        let e = anyhow!("sluice makes no {other} call");
+                        return Err(Failed::new(Judged::Answered, e));
+                    }
                 };
                 req.header("Accept", "application/vnd.github+json")
                     .header("X-GitHub-Api-Version", "2022-11-28")
@@ -348,14 +475,39 @@ impl App {
                     .send(body.unwrap_or(""))
             }
         };
-        let mut resp = resp.with_context(|| format!("{method} {path}"))?;
+        let unread = |judged: Judged, e: anyhow::Error| {
+            Failed::new(judged, e.context(format!("{method} {path}")))
+        };
+        let mut resp = resp.map_err(|e| unread(sent(&e), e.into()))?;
         let status = resp.status().as_u16();
         let text = resp
             .body_mut()
             .read_to_string()
-            .with_context(|| format!("{method} {path}"))?;
+            .map_err(|e| unread(Judged::Unknown, e.into()))?;
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         Ok((status, v, text))
+    }
+}
+
+/// How a call that got no answer stands: never judged when no connection
+/// was made, and not known otherwise, since GitHub may have taken it.
+fn sent(e: &ureq::Error) -> Judged {
+    use std::io::ErrorKind;
+    match e {
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed => Judged::Never,
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => Judged::Never,
+        ureq::Error::Io(io)
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionRefused
+                    | ErrorKind::AddrNotAvailable
+                    | ErrorKind::HostUnreachable
+                    | ErrorKind::NetworkUnreachable
+            ) =>
+        {
+            Judged::Never
+        }
+        _ => Judged::Unknown,
     }
 }
 
@@ -426,7 +578,8 @@ mod tests {
     #[test]
     fn a_jwt_verifies_with_the_public_half() {
         let at = Utc::now();
-        let app = App::new(4242, KEY, API, Box::new(move || at)).unwrap();
+        let policy = Rc::new(Policy::command());
+        let app = App::new(4242, KEY, API, Box::new(move || at), policy).unwrap();
         let jwt = app.jwt().unwrap();
         let mut v = Validation::new(Algorithm::RS256);
         v.set_required_spec_claims(&["exp", "iat", "iss"]);
