@@ -17,7 +17,7 @@
 
 ## 4. The guide
 
-- [ ] 4.1 In `site/src/content/docs/guides/github-app.md`, after the paragraph on how sluice uses the token, say that GitHub sometimes refuses a token in its first seconds, that sluice then makes the fetch or push once more on a fresh token, and that a refusal that stands is reported with GitHub's words and what each token was (its app, repository, installation, scope and age), never the token; verify with the `site:prose` moon task clean.
+- [x] 4.1 In `site/src/content/docs/guides/github-app.md`, after the paragraph on how sluice uses the token, say that GitHub sometimes refuses a token in its first seconds, that sluice then makes the fetch or push once more on a fresh token, and that a refusal that stands is reported with GitHub's words and what each token was (its app, repository, installation, scope and age), never the token; verify with the `site:prose` moon task clean.
 
 ## 5. The gate
 
