@@ -3937,7 +3937,7 @@ fn following_a_pull_request_the_forge_could_not_answer_says_it_could_not_read() 
     assert_eq!(
         message,
         "could not read #7 for 5m00s, so whether it landed is not known: \
-         tried 9 times over 5m00s: GET /repos/o/r/pulls/7: 503 Service Unavailable"
+         GET /repos/o/r/pulls/7: 503 Service Unavailable"
     );
 
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("b"))]);

@@ -2053,8 +2053,9 @@ fn could_not_read(
 ) -> Result<i32> {
     let lasted = retry::lasted(e).as_secs() as i64;
     let text = format!(
-        "could not read {what} for {}, so whether it landed is not known: {e:#}",
-        progress::duration(lasted)
+        "could not read {what} for {}, so whether it landed is not known: {}",
+        progress::duration(lasted),
+        retry::unspent(e)
     );
     telemetry::error(&format!("sluice: {text}"));
     if json {

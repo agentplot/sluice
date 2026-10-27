@@ -857,7 +857,7 @@ read and how long it tried, apart from any outcome:
 
 ```console
 could not read #77: sluice wait main
-sluice: could not read #77 for 5m03s, so whether it landed is not known: tried 9 times over 5m03s: GET /repos/o/r/pulls/77: 503 Service Unavailable
+sluice: could not read #77 for 5m03s, so whether it landed is not known: GET /repos/o/r/pulls/77: 503 Service Unavailable
 ```
 
 Under `--json`, stdout holds the error document, with that command in its

@@ -131,6 +131,17 @@ pub fn lasted(e: &anyhow::Error) -> Duration {
         .map_or(Duration::ZERO, |s| s.lasted)
 }
 
+/// `e`'s words as `{:#}` says them, without its [`Spent`] context, for a
+/// line that says how long the call was tried in its own words.
+pub fn unspent(e: &anyhow::Error) -> String {
+    let spent = e.downcast_ref::<Spent>().map(Spent::to_string);
+    e.chain()
+        .map(|c| c.to_string())
+        .filter(|w| Some(w) != spent.as_ref())
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 /// The retry policy: its bound, the instant it ends at whatever the bound
 /// leaves, and how it pauses and reads the time.
 pub struct Policy {
@@ -518,11 +529,18 @@ mod tests {
         let e = stopped.into_error();
         assert_eq!(lasted(&e), slept);
         let words = format!("{e:#}");
-        assert_eq!(lasted(&e.context("following #7")), slept);
         assert!(
             words.ends_with(&format!("503 on try {}", spent.tries)),
             "{words}"
         );
+        assert_eq!(unspent(&e), format!("503 on try {}", spent.tries));
+        let e = e.context("following #7");
+        assert_eq!(lasted(&e), slept);
+        assert_eq!(
+            unspent(&e),
+            format!("following #7: 503 on try {}", spent.tries)
+        );
         assert_eq!(lasted(&anyhow::anyhow!("a fake's")), Duration::ZERO);
+        assert_eq!(unspent(&anyhow::anyhow!("a fake's")), "a fake's");
     }
 }
