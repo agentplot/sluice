@@ -406,6 +406,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
 | `branches[].recent_from` | each submission the recent lines name, a landing's `ids`, a blame's `id` and a conflict's `id` and `with`, mapped to the worktree it came from, as its `from.worktree` says, a pull request's as `pull/<n>`: `{"12": "unit/a", "13": "pull/41"}`. It's `{}` when the branch has no recent lines |
+| `branches[].recent_subjects` | the subject each submission `recent_from` names was given at its submit, as written, whether it is still queued or has moved to the finished records: `{"12": "Batch review cards"}`. A submission whose submit gave none has no key, and a reader names it by `recent_from`. It's `{}` when no recent submission has a subject |
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
@@ -462,7 +463,7 @@ may run it every few seconds.
 ```console
 $ sluice
 worktree unit/cards (crw-1-unit-2) at /home/me/shop.unit-cards
-#14 to bolt/concurrent-units · testing
+#14 Forecast concurrent units to bolt/concurrent-units · testing
 bolt/concurrent-units: 2 in the queue · testing 1 at once (up to 4)
 place: SLUICE_PORT_WEB=20000 · last run 2026-10-16T09:16:44Z
 next: sluice status 14
@@ -471,7 +472,8 @@ next: sluice withdraw 14 --as crw-1-unit-2
 
 `--json` prints one line, `sluice/home@1`, whose fields are only ever
 added to: `worktree` (`path`, `branch`, `agent`), `submission` (`id`,
-`branch`, `state`, `failed` with each test's `log`, `landed_as`),
+`branch`, `state`, `failed` with each test's `log`, `landed_as`, and
+`subject`, the submit's words as written, or null where it gave none),
 `branches[]` (`branch`, `depth`, `testing`, `parallel`, the overview's
 counts), `place` (`ports`, `last_run`) and `next`. Outside a worktree
 sluice can submit from, `worktree`, `submission` and `place` are null.
