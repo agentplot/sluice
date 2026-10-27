@@ -21,7 +21,7 @@ Tests run through sluice, as CLAUDE.md says: `sluice exec main -- cargo test -p 
 
 ## 4. The briefs and the guide
 
-- [ ] 4.1 In `plugins/sluice/scripts/session-context.sh`, tell an agent under worktrunk to wait with `wt submit <branch> --timeout 9m --json` as a background command, again while it exits 5, which removes its worktree once it lands, and never to remove a landed worktree by hand. Extend the note's assertion in `plugins/sluice/tests/hooks.sh` to match. Verify with `moon run plugin-sluice:hooks`.
+- [x] 4.1 In `plugins/sluice/scripts/session-context.sh`, tell an agent under worktrunk to wait with `wt submit <branch> --timeout 9m --json` as a background command, again while it exits 5, which removes its worktree once it lands, and never to remove a landed worktree by hand. Extend the note's assertion in `plugins/sluice/tests/hooks.sh` to match. Verify with `moon run plugin-sluice:hooks`.
 - [ ] 4.2 Update `plugins/sluice/skills/using-sluice/SKILL.md` and `references/submit.md` ("Who moves the queue", "Landing commits"), and `plugins/sluice/skills/setting-up-sluice/references/profiles/worktrunk.md`. Say that `wt submit` run again follows a standing submission under `--timeout`, with `sluice wait`'s exits, and removes the worktree on landing; that `sluice wait` removes nothing; and that a landed worktree is never removed by hand. Verify with `moon run plugin-sluice:validate` and `sluice exec main -- cargo test -p sluice --test plugin_docs`.
 - [ ] 4.3 Update `site/src/content/docs/guides/worktrunk.md` with the same, in the site's words: a run again, `--timeout`, its exits, and `sluice wait` keeping the worktree. Verify with `site:prose` (Vale) clear of warnings.
 
