@@ -9,11 +9,15 @@
 //! requests, while told to fail them, and answers a read of a pull
 //! request 503 as often as told to. It refuses a pull request whose body
 //! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
-//! it. Each test crate that includes it uses a part.
+//! it. Told to, it troubles the next calls of a method and path: answers
+//! them with a status, takes them and then answers a status, or cuts the
+//! connection once it read them, taken or not. Each test crate that
+//! includes it uses a part.
 
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +27,7 @@ use sluice::profiles::github::fake::FileForge;
 use sluice::profiles::github::forge::{Forge, Posting, Pull, Standing, Status};
 use sluice::profiles::github::Repo;
 
-use crate::support::http::{json, Answer, Fake, Request};
+use crate::support::http::{json, Answer, Fake, Request, CUT};
 
 pub const APP: u64 = 4242;
 pub const INSTALLATION: u64 = 7;
@@ -45,6 +49,29 @@ pub struct GitHub {
     failing: Arc<Mutex<Failing>>,
     /// How many reads of a pull request from now are answered 503.
     unavailable: Arc<AtomicUsize>,
+    /// The calls troubled from now.
+    troubles: Arc<Mutex<Vec<Troubled>>>,
+}
+
+/// What the fake does to a call it is told to trouble.
+#[derive(Clone, Copy, Debug)]
+pub enum Trouble {
+    /// Answers it with this status, taking nothing of it.
+    Status(u16),
+    /// Takes it, then answers it with this status, as GitHub may.
+    Taken(u16),
+    /// Reads it, takes it when `taken`, and cuts the connection with no
+    /// answer.
+    Cut { taken: bool },
+}
+
+/// The next `left` calls of `method` to a path starting `path`, troubled
+/// as `trouble` says.
+struct Troubled {
+    method: String,
+    path: String,
+    left: usize,
+    trouble: Trouble,
 }
 
 /// The calls the fake answers with an error while a test asks it to.
@@ -60,6 +87,15 @@ impl GitHub {
     /// The fake API over the fake GitHub kept in `file`; `bare` is the
     /// repository GitHub's git is, if any.
     pub fn start(file: &Path, bare: Option<&Path>) -> GitHub {
+        GitHub::start_on(
+            TcpListener::bind("127.0.0.1:0").expect("a port"),
+            file,
+            bare,
+        )
+    }
+
+    /// The fake on `listener`'s port.
+    pub fn start_on(listener: TcpListener, file: &Path, bare: Option<&Path>) -> GitHub {
         let forge = Arc::new(FileForge::new(file, &repo()));
         let held = forge.clone();
         let bare = bare.map(Path::to_path_buf);
@@ -69,9 +105,35 @@ impl GitHub {
         let fails = failing.clone();
         let unavailable = Arc::new(AtomicUsize::new(0));
         let left = unavailable.clone();
-        let fake = Fake::start(move |r| {
+        let troubles: Arc<Mutex<Vec<Troubled>>> = Arc::default();
+        let troubling = troubles.clone();
+        let fake = Fake::start_on(listener, move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
+            }
+            let trouble = troubling.lock().unwrap().iter_mut().find_map(|t| {
+                let hit = t.left > 0 && r.method == t.method && r.path.starts_with(&t.path);
+                hit.then(|| {
+                    t.left -= 1;
+                    t.trouble
+                })
+            });
+            let take = |r: &Request| {
+                let _ = answer(&held, bare.as_deref(), &fails.lock().unwrap(), r);
+            };
+            match trouble {
+                Some(Trouble::Status(status)) => return erring(status),
+                Some(Trouble::Taken(status)) => {
+                    take(r);
+                    return erring(status);
+                }
+                Some(Trouble::Cut { taken }) => {
+                    if taken {
+                        take(r);
+                    }
+                    return (CUT, vec![], String::new());
+                }
+                None => {}
             }
             let a_pull = r.method == "GET"
                 && r.path
@@ -95,7 +157,28 @@ impl GitHub {
             refuse,
             failing,
             unavailable,
+            troubles,
         }
+    }
+
+    /// Trouble the next `n` calls of `method` to a path starting `path` as
+    /// `trouble` says.
+    pub fn trouble(&self, method: &str, path: &str, n: usize, trouble: Trouble) {
+        self.troubles.lock().unwrap().push(Troubled {
+            method: method.into(),
+            path: path.into(),
+            left: n,
+            trouble,
+        });
+    }
+
+    /// How many calls of `method` to a path starting `path` the fake saw.
+    pub fn calls(&self, method: &str, path: &str) -> usize {
+        self.fake
+            .requests()
+            .iter()
+            .filter(|r| r.method == method && r.path.starts_with(path))
+            .count()
     }
 
     pub fn url(&self) -> &str {
@@ -309,6 +392,17 @@ fn run_json(id: u64, name: &str, p: &Posting) -> Value {
 
 fn not_found() -> Answer {
     json(404, json!({ "message": "Not Found" }))
+}
+
+/// GitHub answering `status`, in its words.
+fn erring(status: u16) -> Answer {
+    let why = match status {
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        429 => "API rate limit exceeded",
+        _ => "Server Error",
+    };
+    json(status, json!({ "message": why }))
 }
 
 /// GitHub failing a call of its own.

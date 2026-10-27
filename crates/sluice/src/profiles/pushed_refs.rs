@@ -11,6 +11,9 @@
 //! command fetches and pushes, carrying the
 //! host's credential helpers and SSH setup, or, where sluice has an
 //! [`Identity`] on the remote's forge, that identity's credentials alone.
+//! Every call it makes to the remote runs under the retry policy, which
+//! tries again what the remote never judged, a refused credential bought
+//! afresh, and never a push the remote answered (134; rule core.29).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -21,11 +24,13 @@ use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, ReadRefused, 
 
 use super::local_refs::LocalRefs;
 use crate::identity::{Credentials, Identity, PASSWORD_VAR, USERNAME_VAR};
+use crate::retry::{Failed, Judged, Kind, Policy};
 
 pub struct PushedRefs {
     local: LocalRefs,
     remote: String,
     speaker: Option<Speaker>,
+    policy: Rc<Policy>,
 }
 
 /// sluice's identity on the remote: the URL its git calls reach the
@@ -38,19 +43,20 @@ struct Speaker {
 
 impl PushedRefs {
     /// The repository holding `path`, whose branches live on `remote`,
-    /// reached with the host's own credentials. Refused when the
-    /// repository has no remote of that name.
+    /// reached with the host's own credentials under a command's retry
+    /// policy. Refused when the repository has no remote of that name.
     pub fn open(path: &Path, remote: &str) -> Result<Self> {
-        PushedRefs::open_as(path, remote, None)
+        PushedRefs::open_as(path, remote, None, Rc::new(Policy::command()))
     }
 
     /// As [`PushedRefs::open`], reaching the remote as `identity` where it
-    /// has one on the remote's forge; `program` is the `sluice` executable
-    /// git runs as its credential helper.
+    /// has one on the remote's forge, each call under `policy`; `program`
+    /// is the `sluice` executable git runs as its credential helper.
     pub fn open_as(
         path: &Path,
         remote: &str,
         identity: Option<(Rc<dyn Identity>, PathBuf)>,
+        policy: Rc<Policy>,
     ) -> Result<Self> {
         let local = LocalRefs::open(path)?;
         let out = git(local.git_dir(), &["remote"])?;
@@ -79,6 +85,7 @@ impl PushedRefs {
             local,
             remote: remote.into(),
             speaker,
+            policy,
         })
     }
 
@@ -103,59 +110,103 @@ impl PushedRefs {
         self.speaker.as_ref().map_or(&self.remote, |s| &s.url)
     }
 
-    /// git for the remote. With an identity, the user's credential helpers
-    /// are cleared for this call alone and sluice's is named in their
-    /// place, given the credentials in this call's environment; nothing is
-    /// written to a git config, so no other git finds them.
+    /// git for the remote, a read: a fetch or a listing. With an identity,
+    /// the user's credential helpers are cleared for this call alone and
+    /// sluice's is named in their place, given the credentials in this
+    /// call's environment; nothing is written to a git config, so no other
+    /// git finds them.
     ///
-    /// A read or a push the remote refuses the credentials on before it
-    /// answers for any ref is run once more on credentials made afresh,
-    /// since a forge may refuse ones it has just given, with the same
-    /// arguments: a push with its refspec and its lease (134, rules core.5,
-    /// core.29). A push the remote answered at the ref is never run again.
-    /// A refusal that stands has what each refused credential was added to
-    /// git's words, for whoever reports the failure.
+    /// The read runs under the retry policy, tried again whatever failed
+    /// but the remote's answer, on credentials made afresh after the
+    /// remote refused them, since a forge may refuse ones it has just given
+    /// (134, rule core.29). A refusal that stands has what each refused
+    /// credential was added to git's words, for whoever reports the
+    /// failure.
     pub(crate) fn remote_git(&self, args: &[&str]) -> Result<Output> {
-        let (out, note) = self.remote_git_noted(args)?;
-        Ok(match note {
-            Some(note) => told(out, &note),
-            None => out,
+        let called = self.call(Kind::Read, args)?;
+        Ok(match called.note {
+            Some(note) => told(called.out, &note),
+            None => called.out,
         })
     }
 
-    /// [`PushedRefs::remote_git`], with what each refused credential was
-    /// apart from git's words: sluice's, never the remote's (133).
-    fn remote_git_noted(&self, args: &[&str]) -> Result<(Output, Option<String>)> {
-        let Some(s) = &self.speaker else {
-            return Ok((git(self.local.git_dir(), args)?, None));
-        };
-        let given = s
-            .identity
-            .credentials(&s.url)
-            .with_context(|| format!("{} on {}", s.identity.name(), self.remote))?;
-        let out = self.git_as(s, &given, args)?;
-        if !stopped(&out) {
-            return Ok((out, None));
-        }
-        let fresh = match s.identity.renew(&s.url) {
-            Ok(c) => c,
-            Err(e) => {
-                let said = format!(
-                    "{} refused {}, and none could be made afresh: {e:#}",
-                    self.remote, given.about
-                );
-                return Ok((out, Some(said)));
+    /// git for the remote, a call of `kind`, under the retry policy: its
+    /// last try's output, what each credential the remote refused was,
+    /// apart from git's words (sluice's, never the remote's, 133), and how
+    /// the last try stands when it failed. A try after a credential the
+    /// remote refused carries one made afresh; the same arguments go every
+    /// time, so a push keeps its refspec and its lease (rule core.5).
+    fn call(&self, kind: Kind, args: &[&str]) -> Result<Called> {
+        // Why sluice could not make a try: git not run, or no credential.
+        let mut fault = None;
+        let mut unrenewed = None;
+        let mut refused: Vec<String> = Vec::new();
+        let mut last = None;
+        let ran = self.policy.run(kind, |t| {
+            let given = match &self.speaker {
+                None => None,
+                Some(s) if t.renew() => match s.identity.renew(&s.url) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        unrenewed = Some(e);
+                        return Err(Failed::new(Judged::Answered, ()));
+                    }
+                },
+                Some(s) => match s.identity.credentials(&s.url) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        let e = e.context(format!("{} on {}", s.identity.name(), self.remote));
+                        fault = Some(e);
+                        return Err(Failed::new(Judged::Answered, ()));
+                    }
+                },
+            };
+            let out = match self.git_as(given.as_ref(), args) {
+                Ok(out) if out.status.success() => return Ok(out),
+                Ok(out) => out,
+                Err(e) => {
+                    fault = Some(e);
+                    return Err(Failed::new(Judged::Answered, ()));
+                }
+            };
+            let judged = judged(&out, kind, self.speaker.is_some());
+            if let (Judged::Credential, Some(c)) = (judged, given) {
+                refused.push(c.about);
             }
+            last = Some(out);
+            Err(Failed::new(judged, ()))
+        });
+        let stopped = match ran {
+            Ok(out) => {
+                return Ok(Called {
+                    out,
+                    note: None,
+                    judged: None,
+                })
+            }
+            Err(stopped) => stopped,
         };
-        let again = self.git_as(s, &fresh, args)?;
-        if !stopped(&again) {
-            return Ok((again, None));
+        if let Some(e) = fault {
+            return Err(e);
         }
-        let said = format!(
-            "{} refused {}, then {}",
-            self.remote, given.about, fresh.about
-        );
-        Ok((again, Some(said)))
+        let out = last.expect("a try git failed");
+        let note =
+            match unrenewed {
+                Some(e) => Some(format!(
+                    "{} refused {}, and none could be made afresh: {e:#}",
+                    self.remote,
+                    refused.join(", then ")
+                )),
+                None if stopped.judged == Judged::Credential && !refused.is_empty() => Some(
+                    format!("{} refused {}", self.remote, refused.join(", then ")),
+                ),
+                None => None,
+            };
+        Ok(Called {
+            out,
+            note,
+            judged: Some(stopped.judged),
+        })
     }
 
     /// Fetch `refspec`, whose source is `asked`, with `flags` before the
@@ -165,12 +216,12 @@ impl PushedRefs {
         let mut args = vec!["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"];
         args.extend(flags);
         args.extend([self.target(), refspec]);
-        let (out, note) = self.remote_git_noted(&args)?;
+        let Called { out, note, .. } = self.call(Kind::Read, &args)?;
         if out.status.success() {
             return Ok(true);
         }
         let said = String::from_utf8_lossy(&out.stderr);
-        if said.contains("couldn't find remote ref") {
+        if said.contains(NO_SUCH_REF) {
             return Ok(false);
         }
         Err(ReadRefused {
@@ -182,8 +233,12 @@ impl PushedRefs {
         .into())
     }
 
-    /// git with sluice's helper alone, given `c`.
-    fn git_as(&self, s: &Speaker, c: &Credentials, args: &[&str]) -> Result<Output> {
+    /// git for the remote: with the host's own credentials when `given`
+    /// is `None`, and otherwise with sluice's helper alone, given them.
+    fn git_as(&self, given: Option<&Credentials>, args: &[&str]) -> Result<Output> {
+        let (Some(s), Some(c)) = (&self.speaker, given) else {
+            return git(self.local.git_dir(), args);
+        };
         let helper = format!("credential.helper={}", s.helper);
         let mut all = vec!["-c", "credential.helper=", "-c", &helper];
         all.extend(args);
@@ -192,6 +247,53 @@ impl PushedRefs {
             .env(PASSWORD_VAR, &c.password)
             .output()
             .with_context(|| format!("running git {}", args.join(" ")))
+    }
+
+    /// `git push` with `args` under the retry policy, setting the remote's
+    /// ref `name` to `to`, or removing it when `to` is `None`. A push the
+    /// remote never judged is tried again with the same `args`, so the
+    /// same refspec and lease (134; rules core.5, core.29). A push whose
+    /// answer git did not read is never made again: `name` is read once,
+    /// and the push is done when the remote holds `to`, or no `name` for a
+    /// removal (122; ADR 0017).
+    pub(crate) fn push(&self, args: &[&str], name: &str, to: Option<&str>) -> Result<Pushed> {
+        let called = self.call(Kind::Push, args)?;
+        let out = match called.note {
+            Some(note) => told(called.out, &note),
+            None => called.out,
+        };
+        match called.judged {
+            None => Ok(Pushed::Done),
+            Some(Judged::Unknown) => {
+                let shown = name.strip_prefix("refs/heads/").unwrap_or(name);
+                let holds = match self.holds(name) {
+                    Ok(at) if at.as_deref() == to => return Ok(Pushed::Done),
+                    Ok(Some(at)) => format!("{} holds {shown} at {at}", self.remote),
+                    Ok(None) => format!("{} has no {shown}", self.remote),
+                    Err(e) => format!("{e:#}"),
+                };
+                Ok(Pushed::Unanswered(out, holds))
+            }
+            Some(_) => Ok(Pushed::Refused(out)),
+        }
+    }
+
+    /// The revision the remote's ref `name` holds, listed under the retry
+    /// policy as a read; `None` when it has no such ref.
+    fn holds(&self, name: &str) -> Result<Option<String>> {
+        let out = self.remote_git(&["ls-remote", "--refs", self.target(), name])?;
+        if !out.status.success() {
+            bail!(
+                "listing {name} on {} failed: {}",
+                self.remote,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .find(|(_, r)| *r == name)
+            .map(|(at, _)| at.to_string()))
     }
 
     fn tracking(&self, branch: &str) -> String {
@@ -223,23 +325,119 @@ impl PushedRefs {
     /// session's own branch, which no policy protects, pushed for its
     /// pull request.
     pub fn push_branch(&self, rev: &Rev, branch: &str) -> Result<()> {
-        let refspec = format!("+{rev}:refs/heads/{branch}");
-        let out = self.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.target(),
-            &refspec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "pushing {branch} to {} failed: {}",
-                self.remote,
-                refusal(&out)
-            );
+        let name = format!("refs/heads/{branch}");
+        let refspec = format!("+{rev}:{name}");
+        let pushed = self.push(
+            &[
+                "push",
+                "--porcelain",
+                "--no-verify",
+                self.target(),
+                &refspec,
+            ],
+            &name,
+            Some(rev.as_str()),
+        )?;
+        if let Some(why) = pushed.why() {
+            bail!("pushing {branch} to {} failed: {why}", self.remote);
         }
         Ok(())
     }
+}
+
+/// A git call to the remote under the retry policy: its last try's output,
+/// what each credential the remote refused was, and how the last try stood
+/// when it failed.
+struct Called {
+    out: Output,
+    note: Option<String>,
+    judged: Option<Judged>,
+}
+
+/// How a push of [`PushedRefs::push`] ended.
+pub(crate) enum Pushed {
+    /// The remote took it, or holds what it set though its answer was
+    /// lost.
+    Done,
+    /// The remote answered it with a refusal, or it failed before it was
+    /// sent: git's output, with what each refused credential was.
+    Refused(Output),
+    /// Its answer was not read, and the remote does not hold what it set:
+    /// git's output, and what the remote holds.
+    Unanswered(Output, String),
+}
+
+impl Pushed {
+    /// Why the push was not done, for a report; `None` when it was.
+    pub(crate) fn why(&self) -> Option<String> {
+        match self {
+            Pushed::Done => None,
+            Pushed::Refused(out) => Some(refusal(out)),
+            Pushed::Unanswered(out, holds) => Some(format!(
+                "{}; the push went unanswered, and {holds}",
+                refusal(out)
+            )),
+        }
+    }
+}
+
+/// How a failed git call to the remote stands (134): answered, when git
+/// printed the remote's answer for a ref or the remote has no such ref; a
+/// credential refused before the remote answered for any ref; not known,
+/// when the call may have been sent with its answer lost; never judged,
+/// when no connection was made or the remote could not answer git's
+/// request for its refs, before anything of a push was sent; and not
+/// known for any wording sluice does not know, which is never pushed
+/// again. On the host's own credentials, which sluice cannot make afresh
+/// (`renewable` false), a refused push is answered.
+fn judged(out: &Output, kind: Kind, renewable: bool) -> Judged {
+    let err = String::from_utf8_lossy(&out.stderr);
+    if answered(out) || ANSWERED.iter().any(|w| err.contains(w)) {
+        Judged::Answered
+    } else if refused(out) {
+        match renewable || kind == Kind::Read {
+            true => Judged::Credential,
+            false => Judged::Answered,
+        }
+    } else if err.contains(UNANSWERED) {
+        Judged::Unknown
+    } else if NEVER.iter().any(|w| err.contains(w)) || unable(&err) {
+        Judged::Never
+    } else {
+        Judged::Unknown
+    }
+}
+
+/// What git prints when the remote has no ref a fetch asks for.
+const NO_SUCH_REF: &str = "couldn't find remote ref";
+
+/// What git prints for a call the remote answered with no line for a ref:
+/// a fetch's ref the remote lacks, and a removal of one it lacks, which
+/// git finds in the remote's listing.
+const ANSWERED: &[&str] = &[NO_SUCH_REF, "remote ref does not exist"];
+
+/// What git prints when a request it sent the remote over HTTP failed,
+/// git's `remote-curl.c`: after a push was sent, so its answer was lost.
+const UNANSWERED: &str = "RPC failed";
+
+/// What git and curl print when no connection to the remote was made.
+const NEVER: &[&str] = &[
+    "Could not resolve host",
+    "Could not resolve hostname",
+    "Failed to connect",
+    "Connection refused",
+    "Connection timed out",
+    "Operation timed out",
+];
+
+/// Whether git says the remote answered its request for the refs with a
+/// 5xx or a 429: unable to answer then, and nothing of a push sent.
+fn unable(err: &str) -> bool {
+    const SAID: &str = "The requested URL returned error: ";
+    err.match_indices(SAID).any(|(at, _)| {
+        let code = &err[at + SAID.len()..];
+        code.starts_with('5') || code.starts_with("429")
+    })
 }
 
 /// What git prints when the remote refuses a call's credentials over
@@ -250,6 +448,9 @@ const REFUSED: &[&str] = &[
     "not found",
     // 401
     "Authentication failed",
+    // 401, on the host's own credentials, when it has none to give
+    "could not read Username",
+    "could not read Password",
     // The requested URL returned error: …
     "error: 401",
     "error: 403",
@@ -271,12 +472,6 @@ fn refused(out: &Output) -> bool {
 /// failed git call of sluice's holds a tab.
 fn answered(out: &Output) -> bool {
     out.stdout.contains(&b'\t')
-}
-
-/// Whether the call failed on the remote's refusing its credentials before
-/// it answered for any ref, so the remote is as it was.
-fn stopped(out: &Output) -> bool {
-    !out.status.success() && refused(out) && !answered(out)
 }
 
 /// `out` with `said` on the line after what git printed on stderr.
@@ -402,9 +597,10 @@ impl Branch for PushedRefs {
     }
 
     /// 45, 46: push `to`, accepted only while the remote's branch is
-    /// `expected`. A refusal of the credential is made once more with the
-    /// same lease (134); a refusal at the ref is reported with what the
-    /// remote holds, never retried blind (rules core.5, core.29); any other
+    /// `expected`. A push the remote never judged, its credential refused
+    /// among them, is tried again under the retry policy with the same
+    /// lease (134); a refusal at the ref is reported with what the remote
+    /// holds, never retried blind (rules core.5, core.29); any other
     /// failure is an error, which leaves the landing for the next step to
     /// settle. An accepted push is the move, whatever the host's copy does
     /// next (122).
@@ -433,48 +629,42 @@ impl Branch for PushedRefs {
 impl PushedRefs {
     /// Set the branch to `to`, or remove it when `to` is `None`, accepted
     /// only while the remote's branch is `expected`, or absent when
-    /// `expected` is empty. A refusal of the credential is made once more
-    /// with the same lease (134); a refusal at the ref is reported with
-    /// what the remote holds, never retried blind (rules core.5, core.29).
-    /// A push whose answer git never read is never made again: the branch
-    /// is read, and the move is made when the remote holds `to` (122);
+    /// `expected` is empty. A push the remote never judged, its credential
+    /// refused among them, is tried again under the retry policy with the
+    /// same lease (134); a refusal at the ref is reported with what the
+    /// remote holds, never retried blind (rules core.5, core.29). A push
+    /// whose answer git never read is never made again: the branch is
+    /// read, and the move is made when the remote holds `to` (122);
     /// otherwise, and on any other failure, it is an error, which leaves a
     /// landing for the next step to settle.
     fn leased(&self, branch: &str, expected: &str, to: Option<&Rev>) -> Result<Moved> {
-        let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
-        let refspec = format!("{}:refs/heads/{branch}", to.map_or("", Rev::as_str));
-        let out = self.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            &lease,
-            self.target(),
-            &refspec,
-        ])?;
-        if out.status.success() {
-            return Ok(Moved::Moved);
+        let name = format!("refs/heads/{branch}");
+        let lease = format!("--force-with-lease={name}:{expected}");
+        let refspec = format!("{}:{name}", to.map_or("", Rev::as_str));
+        let pushed = self.push(
+            &[
+                "push",
+                "--porcelain",
+                "--no-verify",
+                &lease,
+                self.target(),
+                &refspec,
+            ],
+            &name,
+            to.map(Rev::as_str),
+        )?;
+        if let Pushed::Refused(out) = &pushed {
+            let report = String::from_utf8_lossy(&out.stdout);
+            let refused_at_the_ref = report
+                .lines()
+                .any(|l| l.starts_with('!') && l.contains("[rejected]"));
+            if refused_at_the_ref {
+                return Ok(Moved::Elsewhere(self.fetch(branch)?));
+            }
         }
-        let report = String::from_utf8_lossy(&out.stdout);
-        let refused_at_the_ref = report
-            .lines()
-            .any(|l| l.starts_with('!') && l.contains("[rejected]"));
-        if refused_at_the_ref {
-            return Ok(Moved::Elsewhere(self.fetch(branch)?));
+        match pushed.why() {
+            None => Ok(Moved::Moved),
+            Some(why) => bail!("pushing {branch} to {} failed: {why}", self.remote),
         }
-        let failed = format!(
-            "pushing {branch} to {} failed: {}",
-            self.remote,
-            refusal(&out)
-        );
-        if answered(&out) || refused(&out) {
-            bail!(failed);
-        }
-        let holds = match self.fetch(branch) {
-            Ok(at) if at.as_ref() == to => return Ok(Moved::Moved),
-            Ok(Some(at)) => format!("{} holds {branch} at {at}", self.remote),
-            Ok(None) => format!("{} has no {branch}", self.remote),
-            Err(e) => format!("{e:#}"),
-        };
-        bail!("{failed}; the push went unanswered, and {holds}")
     }
 }

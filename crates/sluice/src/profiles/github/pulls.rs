@@ -37,6 +37,7 @@ use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHE
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
+use crate::retry;
 use crate::{Followed, GroupRefused, Opened, Short};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
@@ -256,6 +257,8 @@ pub struct Pulls {
     locks: PathBuf,
     forge: Option<Rc<dyn Forge>>,
     identity: Option<(Rc<dyn Identity>, PathBuf)>,
+    /// The retry policy every call to a remote runs under (134).
+    retry: Rc<retry::Policy>,
     /// The pull requests the last intake read, by place.
     known: RefCell<BTreeMap<String, Known>>,
     /// Every pull request entry of the branches intake read, by id.
@@ -301,18 +304,21 @@ struct Target {
 impl Pulls {
     /// The pull requests of the repository whose git directory is `dir`
     /// and whose common directory is `common`, read and posted on
-    /// `forge`, and fetched as `identity` where it has one.
+    /// `forge`, and fetched as `identity` where it has one, each fetch and
+    /// push under `retry`.
     pub fn new(
         dir: &Path,
         common: &Path,
         forge: Option<Rc<dyn Forge>>,
         identity: Option<(Rc<dyn Identity>, PathBuf)>,
+        retry: Rc<retry::Policy>,
     ) -> Pulls {
         Pulls {
             dir: dir.to_path_buf(),
             locks: common.join("sluice").join(".intake"),
             forge,
             identity,
+            retry,
             known: RefCell::default(),
             entries: RefCell::default(),
             shown: RefCell::default(),
@@ -331,7 +337,7 @@ impl Pulls {
     }
 
     fn pushed(&self, remote: &str) -> Result<PushedRefs> {
-        PushedRefs::open_as(&self.dir, remote, self.identity.clone())
+        PushedRefs::open_as(&self.dir, remote, self.identity.clone(), self.retry.clone())
     }
 
     /// `branch`'s pull requests and where they are, at the revision the
@@ -2327,7 +2333,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
         let forge = Rc::new(FileForge::new(&dir.join("github.json"), &repo));
-        let pulls = Pulls::new(&dir, &dir, Some(forge.clone()), None);
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            Some(forge.clone()),
+            None,
+            Rc::new(retry::Policy::command()),
+        );
         let view = VerdictView {
             branch: "main".into(),
             id: 12,

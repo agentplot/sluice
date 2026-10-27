@@ -13,7 +13,7 @@ pub mod pulls;
 pub mod render;
 mod rest;
 
-pub use app::{App, Repo};
+pub use app::{App, Bearer, Call, Repo};
 pub use forge::Forge;
 
 use anyhow::Result;

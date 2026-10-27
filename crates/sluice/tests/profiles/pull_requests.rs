@@ -1023,9 +1023,10 @@ fn reviews_that_cannot_be_read_hold_no_other() {
 }
 
 /// A failure that is no one pull request's: GitHub answers an error for the
-/// list of `main`'s pull requests. Each round warns that taking in `main`'s
-/// pull requests failed, nothing is submitted or withdrawn, and the
-/// submission already queued is tested and lands.
+/// list of `main`'s pull requests on every try the retry policy makes (134).
+/// Each round warns that taking in `main`'s pull requests failed, after how
+/// many tries, nothing is submitted or withdrawn, and the submission
+/// already queued is tested and lands.
 #[test]
 fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     let g = OnGitHub::new("pr-no-list", "");
@@ -1037,7 +1038,8 @@ fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     loop {
         let said = g.round();
         assert!(
-            said.contains("sluice: warning: taking in main's pull requests: GET ")
+            said.contains("sluice: warning: taking in main's pull requests: tried ")
+                && said.contains(": GET /repos/o/r/pulls?state=open&base=main")
                 && said.contains("500 Server Error")
                 && !said.contains(&format!("pull/{n}: ")),
             "{said}"
