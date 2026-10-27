@@ -72,9 +72,7 @@ protected or any ref rejected, SHALL be the move refused and SHALL NOT
 be made again, whatever the remote said besides. A push whose answer
 git did not read, a connection cut or a server error after the push was
 sent, SHALL NOT be made again: what the remote holds decides it (24, 45,
-122). A server error the remote gave before the push was sent, while git
-asked it for its refs, is no answer to the push, and the push is tried
-again under the retry policy (134).
+122).
 
 #### Scenario: A protected branch is not pushed twice
 - **WHEN** a push to `main` is answered `[remote rejected] (protected branch hook declined)`
@@ -87,6 +85,11 @@ again under the retry policy (134).
 #### Scenario: A server error is not pushed again
 - **WHEN** the remote answers a push with `RPC failed; HTTP 500` after the push was sent
 - **THEN** one push was made, and what the remote holds of the branch decides whether the move was made
+
+### Requirement: A server error before the push is sent is no answer to it
+A server error the remote gave before the push was sent, while git
+asked it for its refs, is no answer to the push, and the push SHALL be
+tried again under the retry policy (134).
 
 #### Scenario: A server error before the push is tried again
 - **WHEN** the remote answers git's request for its refs with `The requested URL returned error: 503`, and accepts the next try
