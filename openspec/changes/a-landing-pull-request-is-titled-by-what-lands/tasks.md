@@ -9,7 +9,7 @@ main`.
 ## 1. The forge carries a title and names its own login
 
 - [x] 1.1 `Forge::edit` takes `title: Option<&str>` beside the body; `App::edit` (`rest.rs`) sends one `PATCH /repos/{owner}/{repo}/pulls/{number}` with `title` only when given, and `FileForge::edit` (`fake.rs`) sets it; update every caller to pass `None` for now. Verify: a unit test in `rest.rs` beside `opening_a_draft_or_ready` that the request body holds `title` only when given, and `crates/sluice/tests/profiles/forge.rs`'s edit check extended to read back a changed title, both green in `cli:test` and `cli:tools`.
-- [ ] 1.2 `Forge::login`: `App` reads `GET /app` with its JWT once per process through its one call path (core.29) and answers `<slug>[bot]`; `FileForge` answers `sluice`, the author `open` gives every request it opens. Verify: in `crates/sluice/tests/profiles/forge.rs`, the fake server answers `GET /app` with a `slug`, the test asserts the login and that a second `login` makes no second call, green in `cli:tools`.
+- [x] 1.2 `Forge::login`: `App` reads `GET /app` with its JWT once per process through its one call path (core.29) and answers `<slug>[bot]`; `FileForge` answers `sluice`, the author `open` gives every request it opens. Verify: in `crates/sluice/tests/profiles/forge.rs`, the fake server answers `GET /app` with a `slug`, the test asserts the login and that a second `login` makes no second call, green in `cli:tools`.
 
 ## 2. `--subject` on the command line
 

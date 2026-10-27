@@ -143,6 +143,10 @@ pub fn check_name(task: &str, system: Option<&str>) -> String {
 }
 
 pub trait Forge {
+    /// Who GitHub names as the author of a pull request sluice opens: a
+    /// request whose author it is, sluice opened.
+    fn login(&self) -> Result<String>;
+
     /// The open pull requests into `base`.
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>>;
 

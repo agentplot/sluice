@@ -118,6 +118,8 @@ pub struct App {
     now: Now,
     http: ureq::Agent,
     tokens: RefCell<BTreeMap<Repo, Token>>,
+    /// The app's slug, once read.
+    slug: RefCell<Option<String>>,
 }
 
 impl App {
@@ -138,6 +140,7 @@ impl App {
             now,
             http,
             tokens: RefCell::default(),
+            slug: RefCell::default(),
         })
     }
 
@@ -167,6 +170,23 @@ impl App {
             &claims,
             &self.key,
         )?)
+    }
+
+    /// The app's slug, which GitHub names its bot user after: read with
+    /// its JWT once in this process, and kept.
+    pub fn slug(&self) -> Result<String> {
+        if let Some(slug) = self.slug.borrow().as_ref() {
+            return Ok(slug.clone());
+        }
+        let v = self
+            .get("/app", &self.jwt()?)
+            .with_context(|| format!("reading app {}", self.id))?;
+        let slug = v["slug"]
+            .as_str()
+            .ok_or_else(|| anyhow!("GitHub gave app {} no slug", self.id))?
+            .to_string();
+        *self.slug.borrow_mut() = Some(slug.clone());
+        Ok(slug)
     }
 
     /// The app's installation on `repo`.

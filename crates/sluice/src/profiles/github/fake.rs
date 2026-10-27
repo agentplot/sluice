@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use super::app::Repo;
 use super::forge::{Check, Comment, Forge, Posted, Posting, Pull, Review, Standing};
 
+/// The author this fake gives every pull request sluice opens.
+pub const LOGIN: &str = "sluice";
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Held {
     pub next: u64,
@@ -185,6 +188,10 @@ impl FileForge {
 }
 
 impl Forge for FileForge {
+    fn login(&self) -> Result<String> {
+        Ok(LOGIN.into())
+    }
+
     fn pulls(&self, _: &Repo, base: &str) -> Result<Vec<Pull>> {
         Ok(self
             .held()?
@@ -285,7 +292,7 @@ impl Forge for FileForge {
     ) -> Result<Pull> {
         // GitHub reads the head from the branch as pushed; the test's push
         // is to a bare remote this fake cannot see, so it is named after.
-        let number = self.open_by("sluice", base, head_ref, "", draft, None)?;
+        let number = self.open_by(LOGIN, base, head_ref, "", draft, None)?;
         self.with_pull(number, |p| {
             p.title = title.into();
             p.body = body.into();
@@ -456,6 +463,7 @@ mod tests {
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
         let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
         assert!(!opened.draft);
+        assert_eq!(opened.author, f.login().unwrap());
         f.edit(&repo, opened.number, None, "new body").unwrap();
         let edited = f.by_ref("unit/b").unwrap().unwrap();
         assert_eq!(

@@ -191,6 +191,12 @@ fn posted(v: &Value) -> Option<Posted> {
 }
 
 impl Forge for App {
+    /// The app's bot user, which GitHub records as the author of every
+    /// pull request the app opens with its installation's token.
+    fn login(&self) -> Result<String> {
+        Ok(format!("{}[bot]", self.slug()?))
+    }
+
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>> {
         let path = Self::repo_path(repo, &format!("/pulls?state=open&base={base}"));
         self.all(repo, &path, Value::as_array)?
