@@ -827,6 +827,10 @@ fn held_then_marked_ready_by_a_person() {
     let new = g.push_from(&w, &[("fix.txt", "a fix\n")]);
     assert_eq!(g.of_after(n, 2).len(), 1);
     assert!(g.pull_from("unit/readied").draft);
+    // The ready-for-review event must be later than the withdrawal, to the
+    // second GitHub and the records keep: one in the second the submission
+    // was submitted and withdrawn in is the submit's own.
+    std::thread::sleep(Duration::from_millis(1100));
     g.gh.forge.set_draft(n, false).unwrap();
     let subs = g.of_after(n, 1);
     assert_eq!(subs.len(), 2, "{subs:?}");
