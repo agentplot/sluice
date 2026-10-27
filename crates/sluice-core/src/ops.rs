@@ -984,7 +984,7 @@ impl Sluice<'_> {
             failed_releases: line.doc.failed_releases.clone(),
             submissions: line.subs.into_values().collect(),
             warnings,
-            stale: self.seams.state.stale(branch),
+            stale: self.seams.state.stale(branch).map(|r| r.remote),
         })
     }
 }

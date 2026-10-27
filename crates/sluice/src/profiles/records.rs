@@ -12,7 +12,9 @@ use std::rc::Rc;
 use anyhow::{Context, Result};
 use sluice_core::policy::Policy;
 use sluice_core::records::{parse_lines, to_line, ResultLine, SetAside};
-use sluice_seams::{Changes, Guard, Rev, Setting, Snapshot, State, TaskLog, TaskProgress, Written};
+use sluice_seams::{
+    Changes, Guard, ReadRefused, Rev, Setting, Snapshot, State, TaskLog, TaskProgress, Written,
+};
 
 use super::branches::Branches;
 use super::local_files::LocalFiles;
@@ -401,7 +403,7 @@ impl State for Records {
         }
     }
 
-    fn stale(&self, branch: &str) -> Option<String> {
+    fn stale(&self, branch: &str) -> Option<ReadRefused> {
         let remote = self.routes.borrow().get(branch).cloned().flatten()?;
         let r = self.remotes.borrow().get(&remote).cloned()?;
         r.stale(branch)

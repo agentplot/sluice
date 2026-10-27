@@ -28,8 +28,8 @@ use std::rc::Rc;
 use anyhow::{anyhow, bail, Context, Result};
 use sluice_core::records::{parse_lines, to_line, ResultKind, ResultLine, RESULT_SCHEMA};
 use sluice_seams::{
-    Changes, Enforced, Guard, Rev, Snapshot, State, TaskLog, TaskProgress, Written, FINISHED,
-    KEPT_LOGS,
+    read_refused, Changes, Enforced, Guard, ReadRefused, Rev, Snapshot, State, TaskLog,
+    TaskProgress, Written, FINISHED, KEPT_LOGS,
 };
 
 use super::local_files::LocalFiles;
@@ -80,8 +80,9 @@ pub struct RemoteRefs {
     signers: BTreeMap<String, SignerKey>,
     signing: Option<Signing>,
     read: RefCell<BTreeMap<String, Read>>,
-    /// The branches whose last read could not reach the remote (80).
-    stale: RefCell<BTreeSet<String>>,
+    /// The branches whose last read could not reach the remote, and why
+    /// (80, 133).
+    stale: RefCell<BTreeMap<String, ReadRefused>>,
     /// Statements already verified, by their blob, so a round verifies
     /// only what it has not seen.
     verified: RefCell<BTreeMap<String, Option<Vec<ResultLine>>>>,
@@ -386,7 +387,13 @@ impl RemoteRefs {
                     "reading {name} from {} failed, so the state last fetched is read: {e:#}",
                     self.remote()
                 );
-                self.stale.borrow_mut().insert(branch.into());
+                let refused = read_refused(&e).cloned().unwrap_or_else(|| ReadRefused {
+                    remote: self.remote().into(),
+                    asked: name.clone(),
+                    said: format!("{e:#}"),
+                    note: None,
+                });
+                self.stale.borrow_mut().insert(branch.into(), refused);
                 Some(last.0)
             }
         };
@@ -850,11 +857,8 @@ impl State for RemoteRefs {
         Ok(())
     }
 
-    fn stale(&self, branch: &str) -> Option<String> {
-        self.stale
-            .borrow()
-            .contains(branch)
-            .then(|| self.remote().to_string())
+    fn stale(&self, branch: &str) -> Option<ReadRefused> {
+        self.stale.borrow().get(branch).cloned()
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {
