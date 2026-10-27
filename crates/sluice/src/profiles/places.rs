@@ -155,6 +155,11 @@ struct Made {
     /// started then: never started again (123).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gone_release: Option<String>,
+    /// Its scratch directory, named before it is made, at a path that does
+    /// not grow with the place's name (35, rule core.30); none on a record
+    /// an older sluice wrote, whose scratch is where that sluice put it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scratch: Option<PathBuf>,
 }
 
 impl Made {
@@ -176,8 +181,24 @@ impl Made {
             last_result: None,
             release_failed: None,
             gone_release: None,
+            scratch: None,
         }
     }
+}
+
+/// 35, rule core.30: the name of the scratch directory of the place
+/// `name`, the first 10 hex digits of the SHA-1 of its name, so its path
+/// is the same length for every place of the repository. Never a former
+/// scratch's name: every place's name holds a `/`, which a `dir_name`
+/// writes `+2F`, or is shortened with `+~`.
+fn scratch_name(name: &str) -> String {
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(name.as_bytes());
+    hasher
+        .try_finalize()
+        .expect("a place's name is no SHA-1 collision")
+        .to_hex_with_len(10)
+        .to_string()
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -662,6 +683,12 @@ impl Places {
         self.root().join(".tmp").join(dir_name(name))
     }
 
+    /// 35, rule core.30: where a place made now keeps its scratch, which
+    /// its record names before the directory is made.
+    fn new_scratch(&self, name: &str) -> PathBuf {
+        self.root().join(".tmp").join(scratch_name(name))
+    }
+
     fn read_record(&self, name: &str) -> Result<Option<Made>> {
         match std::fs::read(self.record(name)) {
             Ok(b) => Ok(Some(serde_json::from_slice(&b)?)),
@@ -874,7 +901,10 @@ impl Checkout for Places {
             self.release(name)?;
         }
         let record = self.record(name);
-        let mut made = Made::new(Kind::Made, METHOD);
+        let mut made = Made {
+            scratch: Some(self.new_scratch(name)),
+            ..Made::new(Kind::Made, METHOD)
+        };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
             "SLUICE_PLACE".to_string(),
@@ -1170,6 +1200,7 @@ impl Checkout for Places {
                 let mut made = Made {
                     branch: Some(branch.into()),
                     path: Some(path.clone()),
+                    scratch: Some(self.new_scratch(&name)),
                     ..Made::new(Kind::Session, "session")
                 };
                 // Written before the block is held, so a block names a record
@@ -1246,6 +1277,7 @@ impl Checkout for Places {
             branch: Some(branch.into()),
             last_run: Some(at.into()),
             revision: Some(rev.clone()),
+            scratch: Some(self.new_scratch(name)),
             ..Made::new(Kind::Preview, METHOD)
         };
         // Written before the block is held, so a block names a record that
@@ -1349,8 +1381,8 @@ impl Checkout for Places {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill, label, repository, slug, Kind, Made, Places};
-    use crate::runs::Runs;
+    use super::{fill, label, repository, scratch_name, slug, Kind, Made, Places};
+    use crate::runs::{dir_name, Runs};
     use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -1451,6 +1483,42 @@ mod tests {
         assert_eq!(made.path.as_deref(), Some(Path::new("/p")));
         let text = serde_json::to_string(&made).unwrap();
         assert!(!text.contains("caches"), "{text}");
+    }
+
+    /// 35, rule core.30: a scratch's name is 10 lower-case hex digits, one
+    /// name's always the same and two names' different, and never a
+    /// former scratch's name, which holds `+2F` or `+~`.
+    #[test]
+    fn a_scratch_name_is_ten_hex_digits_of_the_name() {
+        let names = [
+            "sluice/try/main/39".to_string(),
+            "session//Users/me/wt/a".to_string(),
+            "preview/0123456789ab".to_string(),
+            format!("session//{}", "w".repeat(300)),
+        ];
+        for name in &names {
+            let short = scratch_name(name);
+            assert_eq!(short.len(), 10, "{short}");
+            assert!(
+                short.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+                "{short}"
+            );
+            assert_eq!(short, scratch_name(name), "one name, two scratch names");
+            let former = dir_name(name);
+            assert!(former.contains("+2F") || former.contains("+~"), "{former}");
+            assert_ne!(short, former);
+        }
+        assert_ne!(scratch_name(&names[0]), scratch_name(&names[1]));
+    }
+
+    /// 35, rule core.30: a record an older sluice wrote names no scratch.
+    #[test]
+    fn an_older_record_names_no_scratch() {
+        let made: Made =
+            serde_json::from_str(r#"{"kind":"session","method":"session","path":"/w"}"#).unwrap();
+        assert_eq!(made.scratch, None);
+        let text = serde_json::to_string(&made).unwrap();
+        assert!(!text.contains("scratch"), "{text}");
     }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.
