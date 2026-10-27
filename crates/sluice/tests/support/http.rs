@@ -2,7 +2,7 @@
 //! with what the test's handler says and keeping every request it saw.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -37,33 +37,26 @@ pub struct Fake {
 
 impl Fake {
     pub fn start(handler: impl Fn(&Request) -> Answer + Send + Sync + 'static) -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        Fake::start_on(TcpListener::bind("127.0.0.1:0").expect("a port"), handler)
+    }
+
+    /// The fake on `listener`'s port: one that a test brings up on a port
+    /// nothing answered on before.
+    pub fn start_on(
+        listener: TcpListener,
+        handler: impl Fn(&Request) -> Answer + Send + Sync + 'static,
+    ) -> Fake {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let kept = seen.clone();
         let handler = Arc::new(handler);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
+                let Ok(stream) = stream else { continue };
                 let (kept, handler) = (kept.clone(), handler.clone());
                 // A connection of its own each: a client may open one and
                 // send nothing on it.
-                std::thread::spawn(move || {
-                    let Some(req) = read(&mut BufReader::new(&stream)) else {
-                        return;
-                    };
-                    kept.lock().unwrap().push(req.clone());
-                    let (status, headers, body) = handler(&req);
-                    if status == CUT {
-                        return;
-                    }
-                    let mut out = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
-                    for (k, v) in headers {
-                        out.push_str(&format!("{k}: {v}\r\n"));
-                    }
-                    out.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
-                    let _ = stream.write_all(out.as_bytes());
-                });
+                std::thread::spawn(move || answer(stream, &kept, &*handler));
             }
         });
         Fake { url, seen }
@@ -77,6 +70,42 @@ impl Fake {
     pub fn requests(&self) -> Vec<Request> {
         self.seen.lock().unwrap().clone()
     }
+}
+
+/// Answer the next `n` connections to `listener` with `handler`, one after
+/// another, then close it, so a connection to its port is refused: a
+/// remote that went away. Joined, every one was answered.
+pub fn serve(
+    listener: TcpListener,
+    n: usize,
+    handler: impl Fn(&Request) -> Answer + Send + 'static,
+) -> std::thread::JoinHandle<Vec<Request>> {
+    std::thread::spawn(move || {
+        let kept = Mutex::new(Vec::new());
+        for stream in listener.incoming().take(n) {
+            answer(stream.expect("a connection"), &kept, &handler);
+        }
+        kept.into_inner().unwrap()
+    })
+}
+
+/// Read one request from `stream`, keep it in `kept`, and write
+/// `handler`'s answer, or cut the connection.
+fn answer(mut stream: TcpStream, kept: &Mutex<Vec<Request>>, handler: &dyn Fn(&Request) -> Answer) {
+    let Some(req) = read(&mut BufReader::new(&stream)) else {
+        return;
+    };
+    kept.lock().unwrap().push(req.clone());
+    let (status, headers, body) = handler(&req);
+    if status == CUT {
+        return;
+    }
+    let mut out = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
+    for (k, v) in headers {
+        out.push_str(&format!("{k}: {v}\r\n"));
+    }
+    out.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+    let _ = stream.write_all(out.as_bytes());
 }
 
 fn read(r: &mut impl BufRead) -> Option<Request> {
