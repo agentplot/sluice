@@ -238,6 +238,21 @@ pub struct Status {
     /// 124, S64: this host's copy of the branch, while a round could not
     /// level it to the landing.
     pub copy: Option<crate::records::CopyBehind>,
+    /// 133: this host's refusal of the branch's remote, while it stands
+    /// (record 0061).
+    pub refused: Option<Refused>,
+}
+
+/// 133: what this host's rounds of a branch could not read of its remote,
+/// as the host keeps it: the ref and git's words its latest refused round
+/// met, since when and for how many rounds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Refused {
+    pub remote: String,
+    pub asked: String,
+    pub said: String,
+    pub since: String,
+    pub rounds: u64,
 }
 
 impl Status {
@@ -967,6 +982,19 @@ impl Sluice<'_> {
         };
         let mut warnings = policy.map(|p| p.warnings).unwrap_or_default();
         warnings.extend(kept_out.iter().map(|t| kept_out_warning(branch, t)));
+        let refused = self
+            .refusal(branch)?
+            .filter(|r| r.ended.is_none())
+            .and_then(|r| {
+                let latest = r.latest()?.clone();
+                Some(Refused {
+                    remote: r.remote,
+                    asked: latest.asked,
+                    said: latest.said,
+                    since: r.since,
+                    rounds: r.rounds,
+                })
+            });
         Ok(Status {
             branch: branch.into(),
             at,
@@ -985,6 +1013,7 @@ impl Sluice<'_> {
             submissions: line.subs.into_values().collect(),
             warnings,
             stale: self.seams.state.stale(branch).map(|r| r.remote),
+            refused,
         })
     }
 }
