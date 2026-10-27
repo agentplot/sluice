@@ -1064,12 +1064,16 @@ pub fn run(
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now(), None)?;
+                    let status = s.status(&branch)?;
+                    let names = status_names(&status, std::slice::from_ref(&sub));
+                    let testing =
+                        progress::lines(&s, &branch, Some(sub.id), clock.now(), Some(&names))?;
                     write_status(
-                        &s.status(&branch)?,
+                        &status,
                         pusher.as_ref(),
                         &testing,
                         &[sub],
+                        &names,
                         Some(&room),
                         out,
                     )?;
@@ -1112,8 +1116,17 @@ pub fn run(
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &target, None, clock.now(), None)?;
-                    write_status(&status, pusher.as_ref(), &testing, &shown, Some(&room), out)?;
+                    let names = status_names(&status, &shown);
+                    let testing = progress::lines(&s, &target, None, clock.now(), Some(&names))?;
+                    write_status(
+                        &status,
+                        pusher.as_ref(),
+                        &testing,
+                        &shown,
+                        &names,
+                        Some(&room),
+                        out,
+                    )?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
@@ -1473,6 +1486,10 @@ impl Names {
             self.0.insert(id, shown);
         }
     }
+
+    pub fn get(&self, id: u64) -> Option<&str> {
+        self.0.get(&id).map(String::as_str)
+    }
 }
 
 /// Each of `ids` as one line names it (26): `#12 Batch review cards` the
@@ -1480,7 +1497,7 @@ impl Names {
 /// `#12` after, or with no name; `said` holds what the line has named.
 pub(crate) fn named(ids: &[u64], names: Option<&Names>, said: &mut BTreeSet<u64>) -> Vec<String> {
     ids.iter()
-        .map(|&id| match names.and_then(|n| n.0.get(&id)) {
+        .map(|&id| match names.and_then(|n| n.get(id)) {
             Some(name) if said.insert(id) => format!("#{id} {name}"),
             _ => format!("#{id}"),
         })
@@ -2618,8 +2635,9 @@ fn submitted(
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
     } else {
-        let testing = progress::lines(s, branch, Some(sub.id), clock.now(), None)?;
-        write_status(&status, None, &testing, &[sub], None, out)?;
+        let names = status_names(&status, std::slice::from_ref(&sub));
+        let testing = progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
+        write_status(&status, None, &testing, &[sub], &names, None, out)?;
     }
     Ok(0)
 }
@@ -2734,12 +2752,16 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
-                    let testing = progress::lines(s, branch, Some(sub.id), clock.now(), None)?;
+                    let status = s.status(branch)?;
+                    let names = status_names(&status, std::slice::from_ref(&sub));
+                    let testing =
+                        progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
                     write_status(
-                        &s.status(branch)?,
+                        &status,
                         None,
                         &testing,
                         std::slice::from_ref(&sub),
+                        &names,
                         None,
                         out,
                     )?;
@@ -3191,14 +3213,30 @@ fn detail(branch: &str, s: &Submission, names: Option<&Names>, said: &mut BTreeS
     }
 }
 
+/// Each submission a branch's status may name (26): those in its live
+/// records, those moved to its finished records, and the rows it shows,
+/// which carry their own.
+fn status_names(status: &Status, subs: &[Submission]) -> Names {
+    let mut names = Names::default();
+    for (id, name) in &status.named {
+        names.insert(*id, name);
+    }
+    for s in status.submissions.iter().chain(subs) {
+        names.insert(s.id, s.name());
+    }
+    names
+}
+
 /// A branch's status as text: its counts, where it is pushed, its
 /// warnings, `testing`, a line per combination under test that is to be
-/// shown (ADR 0042), and a row per submission in `subs`.
+/// shown (ADR 0042), and a row per submission in `subs`, each beginning
+/// with its number and its name (26).
 fn write_status(
     status: &Status,
     pusher: Option<&Pusher>,
     testing: &[String],
     subs: &[Submission],
+    names: &Names,
     room: Option<&sluice_core::overview::Room>,
     out: &mut dyn Write,
 ) -> Result<()> {
@@ -3267,14 +3305,23 @@ fn write_status(
         .map(|s| s.id.to_string().len())
         .max()
         .unwrap_or(0);
+    let name = |s: &Submission| names.get(s.id).unwrap_or_default();
+    let nw = subs
+        .iter()
+        .map(|s| name(s).chars().count())
+        .max()
+        .unwrap_or(0);
     for s in subs {
+        // A row's own number stands alone in its detail.
+        let mut said = BTreeSet::from([s.id]);
         let line = format!(
-            "  #{:<iw$}  {:<8}  {:<aw$}  {:<ww$}   {}",
+            "  #{:<iw$} {:<nw$}  {:<8}  {:<aw$}  {:<ww$}   {}",
             s.id,
+            name(s),
             s.state.word(),
             s.from.agent,
             s.from.worktree,
-            detail(&status.branch, s, None, &mut BTreeSet::new()),
+            detail(&status.branch, s, Some(names), &mut said),
         );
         writeln!(out, "{}", line.trim_end())?;
     }

@@ -963,13 +963,13 @@ fn status_lists_the_queue() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], header);
     assert!(
-        lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")),
+        lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")),
         "{out}"
     );
     assert_eq!(
         lines[2..],
         [
-            format!("  #3  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
+            format!("  #3 unit/forecast  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
             format!("2 no longer in the queue: sluice status {BRANCH} --all"),
         ]
     );
@@ -978,13 +978,19 @@ fn status_lists_the_queue() {
     assert_eq!(code, 0);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], header);
-    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
-    assert_eq!(lines[2], "  #1  landed    crw-1-unit-1  unit/touches");
-    assert!(lines[3]
-        .starts_with("  #2  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "));
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")));
+    assert_eq!(
+        lines[2],
+        "  #1 unit/touches       landed    crw-1-unit-1  unit/touches"
+    );
+    assert!(lines[3].starts_with(
+        "  #2 unit/batch-review  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "
+    ));
     assert_eq!(
         lines[4],
-        format!("  #3  testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3")
+        format!(
+            "  #3 unit/forecast      testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3"
+        )
     );
 
     // `--json` lists the queue, `--all` the history, the landed #1 read
@@ -1465,10 +1471,10 @@ fn status_shows_a_combinations_progress() {
     three_submissions(&f);
     let (_, before) = sluice(&f, &["status", BRANCH]);
     assert!(
-        before
-            .lines()
-            .any(|l| l == format!("  testing {BRANCH} + #3").as_str()
-                || l.starts_with(&format!("  testing {BRANCH} + #3 · "))),
+        before.lines().any(
+            |l| l == format!("  testing {BRANCH} + #3 unit/forecast").as_str()
+                || l.starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · "))
+        ),
         "{before}"
     );
     let (_, json) = sluice(&f, &["status", "3", "--json"]);
@@ -1496,7 +1502,9 @@ fn status_shows_a_combinations_progress() {
     );
     sluice(&f, &["step", BRANCH]);
 
-    let head = format!("  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards 4m");
+    let head = format!(
+        "  testing {BRANCH} + #3 unit/forecast · 1/3 tasks · running tests:t-batch-cards 4m"
+    );
     let (_, text) = sluice(&f, &["status", BRANCH]);
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
@@ -1507,7 +1515,8 @@ fn status_shows_a_combinations_progress() {
     assert!(
         lines[at + 1..]
             .iter()
-            .any(|l| l.starts_with("  #3  testing ") && l.ends_with(&format!("{BRANCH} + #3"))),
+            .any(|l| l.starts_with("  #3 unit/forecast  testing ")
+                && l.ends_with(&format!("{BRANCH} + #3"))),
         "{text}"
     );
     let (_, text) = sluice(&f, &["status", "3"]);
@@ -1515,6 +1524,170 @@ fn status_shows_a_combinations_progress() {
     // A submission in no combination under test has no line.
     let (_, text) = sluice(&f, &["status", "1"]);
     assert!(!text.contains("  testing "), "{text}");
+}
+
+/// 23: submission `id` as if its submit gave `subject`, written on its
+/// live record, since no submit here takes one yet.
+fn give_subject(f: &Fakes, id: u64, subject: &str) {
+    let state = f.seams().state;
+    let _lock = state.wait_lock(BRANCH).unwrap();
+    let read = state.read(BRANCH).unwrap();
+    let path = format!("submissions/{id}.json");
+    let mut doc: serde_json::Value = serde_json::from_slice(&read.files[&path]).unwrap();
+    doc["subject"] = subject.into();
+    let mut changes = sluice_seams::Changes::default();
+    changes
+        .put
+        .insert(path, serde_json::to_vec_pretty(&doc).unwrap());
+    assert!(matches!(
+        state.write(BRANCH, read.version, changes).unwrap(),
+        sluice_seams::Written::Written(_)
+    ));
+}
+
+/// The column a row's state begins at.
+fn state_column(row: &str) -> usize {
+    [" queued ", " testing ", " waiting ", " landed ", " failed "]
+        .iter()
+        .find_map(|w| row.find(w))
+        .unwrap_or_else(|| panic!("no state in {row}"))
+}
+
+/// 26: each row begins with its number and its subject, or its branch
+/// where its submit gave none, padded so the columns after line up; a
+/// combination names each of its submissions once, a row's own number
+/// standing alone.
+#[test]
+fn status_names_each_submission_with_its_subject() {
+    let f = setup();
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/forecast", "agent-f", &[("plugin/b", Some("b"))]);
+    for w in ["unit/review", "unit/forecast"] {
+        sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    }
+    give_subject(&f, 1, "Batch review cards");
+    f.world.hold_runs(true);
+    sluice(&f, &["step", BRANCH]);
+
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    let lines: Vec<&str> = out.lines().collect();
+    let one = lines
+        .iter()
+        .find(|l| l.starts_with("  #1 "))
+        .unwrap_or_else(|| panic!("{out}"));
+    let two = lines
+        .iter()
+        .find(|l| l.starts_with("  #2 "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        one.starts_with("  #1 Batch review cards  testing   agent-r  unit/review   "),
+        "{out}"
+    );
+    assert!(one.ends_with(&format!("   {BRANCH} + #1")), "{out}");
+    assert!(two.starts_with("  #2 unit/forecast       "), "{out}");
+    assert_eq!(state_column(one), state_column(two), "{out}");
+    assert!(
+        lines.iter().any(|l| l.starts_with(&format!(
+            "  testing {BRANCH} + #1 Batch review cards + #2 unit/forecast · "
+        ))),
+        "{out}"
+    );
+
+    // One submission's status names the combination the same way.
+    let (_, out) = sluice(&f, &["status", "2"]);
+    assert!(
+        out.lines().any(|l| l.starts_with(&format!(
+            "  testing {BRANCH} + #1 Batch review cards + #2 unit/forecast"
+        ))),
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #2 unit/forecast  testing ")
+                && l.ends_with(&format!("{BRANCH} + #1 Batch review cards + #2"))),
+        "{out}"
+    );
+}
+
+/// 26: a subject is shown on its row's one line, each run of control
+/// characters a space, and kept as given under `--json`.
+#[test]
+fn status_shows_a_subject_on_one_line() {
+    let f = setup();
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/review", "--no-wait"],
+    );
+    give_subject(&f, 1, "Batch review\ncards\u{1b}[31m");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #1 Batch review cards [31m  queued ")),
+        "{out}"
+    );
+    assert!(!out.contains('\u{1b}'), "{out}");
+    let v = json(&sluice(&f, &["status", "1", "--json"]).1);
+    assert_eq!(v["subject"], "Batch review\ncards\u{1b}[31m");
+}
+
+/// 26, 130: a waiting submission names what it waits on by its subject,
+/// a landed one's read from the finished index, or the history's records
+/// under `--all`.
+#[test]
+fn status_names_what_a_submission_waits_on() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/review", "--no-wait"],
+    );
+    give_subject(&f, 1, "Batch review cards");
+    sluice(&f, &["run", "--rounds", "6"]);
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]).0,
+        FAILED
+    );
+    work(&f, "unit/cards", "agent-c", &[("plugin/c", Some("c"))]);
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/cards",
+            "--after",
+            "2,1",
+            "--no-wait",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    for args in [&["status", BRANCH][..], &["status", BRANCH, "--all"]] {
+        let (_, out) = sluice(&f, args);
+        let row = out
+            .lines()
+            .find(|l| l.starts_with("  #3 "))
+            .unwrap_or_else(|| panic!("{out}"));
+        assert!(
+            row.ends_with("   after #2 unit/b, #1 Batch review cards"),
+            "{out}"
+        );
+    }
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #1 Batch review cards  landed ")),
+        "{out}"
+    );
 }
 
 /// ADR 0036: the branches in the order the default branch's policy writes
@@ -4637,7 +4810,7 @@ fn status_and_overview_show_a_hold_while_it_lasts() {
                 &landing[..7]
             ),
             held.clone(),
-            "  #2  queued    agent-b  unit/b".to_string(),
+            "  #2 unit/b  queued    agent-b  unit/b".to_string(),
             format!("1 no longer in the queue: sluice status {BRANCH} --all"),
         ],
         "{out}"

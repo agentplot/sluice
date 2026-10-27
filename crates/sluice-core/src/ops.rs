@@ -223,6 +223,9 @@ pub struct Status {
     /// How many have moved to its finished records, which
     /// [`Sluice::history`] reads.
     pub finished: usize,
+    /// Each submission moved to its finished records by its name, as the
+    /// finished index keeps it, for a row that names one (26, 130).
+    pub named: BTreeMap<u64, String>,
     /// What the policy at `at` says that sluice reads differently than
     /// it is written.
     pub warnings: Vec<String>,
@@ -1009,6 +1012,11 @@ impl Sluice<'_> {
             held: line.doc.held.clone(),
             copy: line.doc.copies.get(&self.peer.name).cloned(),
             finished: line.finished.len(),
+            named: line
+                .finished
+                .values()
+                .map(|f| (f.id, f.name().to_string()))
+                .collect(),
             failed_releases: line.doc.failed_releases.clone(),
             submissions: line.subs.into_values().collect(),
             warnings,
