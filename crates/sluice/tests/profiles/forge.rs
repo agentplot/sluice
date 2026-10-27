@@ -8,6 +8,7 @@ mod support;
 #[path = "forge/github.rs"]
 mod github;
 
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -15,6 +16,7 @@ use serde_json::json;
 use sluice::identity::Identity;
 use sluice::profiles::github::check::{check, Finding};
 use sluice::profiles::github::{App, Repo};
+use sluice::retry::Policy;
 use support::http::{json, Fake, Request};
 
 const KEY: &[u8] = include_bytes!("forge/test-key.pem");
@@ -123,9 +125,21 @@ impl Forge {
     }
 }
 
+/// The retry policy, its pauses skipped.
+fn policy() -> Rc<Policy> {
+    Rc::new(Policy::command().recording())
+}
+
 fn app(fake: &Fake, clock: &Clock) -> App {
     let clock = clock.clone();
-    App::new(APP, KEY, fake.url(), Box::new(move || clock.now())).unwrap()
+    App::new(
+        APP,
+        KEY,
+        fake.url(),
+        Box::new(move || clock.now()),
+        policy(),
+    )
+    .unwrap()
 }
 
 fn minted(fake: &Fake) -> usize {
@@ -195,7 +209,7 @@ fn ticking(clock: &Clock) -> sluice::profiles::github::app::Now {
 fn credentials_say_what_their_token_is_and_renew_buys_one() {
     let clock = Clock::new();
     let fake = Forge::new(&clock).start();
-    let app = App::new(APP, KEY, fake.url(), ticking(&clock)).unwrap();
+    let app = App::new(APP, KEY, fake.url(), ticking(&clock), policy()).unwrap();
     let url = "https://github.com/o/r.git";
     let c = app.credentials(url).unwrap();
     assert_eq!(c.password, "token-1");
@@ -532,7 +546,7 @@ fn the_apps_pull_request_calls() {
     use sluice::profiles::github::forge::{approvals, Forge as _, Posting, Standing, Status};
     let dir = support::Scratch::new("forge-pulls");
     let gh = github::GitHub::start(&github::file(dir.path()), None);
-    let app = App::new(APP, KEY, gh.url(), Box::new(Utc::now)).unwrap();
+    let app = App::new(APP, KEY, gh.url(), Box::new(Utc::now), policy()).unwrap();
     let f = &gh.forge;
     let r = repo();
     let a = f
@@ -654,6 +668,7 @@ fn live_pull_request_calls() {
         &key,
         sluice::profiles::github::app::API,
         Box::new(Utc::now),
+        Rc::new(Policy::command()),
     )
     .unwrap();
     let base = std::env::var("SLUICE_GITHUB_TEST_BASE").unwrap_or_else(|_| "main".into());
@@ -770,7 +785,7 @@ fn the_pools_calls() {
         ("github".into(), Setting::Tables(vec![t]))
     };
     let kind = table(&[("workflow", ".github/workflows/sluice.yml")]);
-    let pool = Actions::new(std::rc::Rc::new(app(&fake, &clock)), dir.path());
+    let pool = Actions::new(Rc::new(app(&fake, &clock)), dir.path());
     pool.launch(&Launch {
         pool: "forge".into(),
         kind: kind.clone(),

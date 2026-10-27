@@ -107,7 +107,7 @@ impl Bound {
         // C.4: the app the host names is sluice's identity on GitHub, and
         // C.5: what reads and posts pull requests there.
         let app = match &instance.forge {
-            Some(f) => Some(Rc::new(github::App::open(f)?)),
+            Some(f) => Some(Rc::new(github::App::open(f, retry.clone())?)),
             None => None,
         };
         let app_for_pool = app.clone();
@@ -265,7 +265,7 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
         );
         return Ok(found);
     };
-    let app = match github::App::open(forge) {
+    let app = match github::App::open(forge, Rc::new(retry::Policy::command())) {
         Ok(a) => a,
         Err(e) => {
             said(false, format!("{e:#}"));

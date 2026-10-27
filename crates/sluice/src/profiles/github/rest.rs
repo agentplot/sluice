@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use super::app::{App, Repo};
+use super::app::{App, Bearer, Call, Repo};
 use super::forge::{
     Check, Comment, Forge, Posted, Posting, Pull, Review, Standing, Status, SLUICE_CHECK,
 };
@@ -30,11 +30,13 @@ impl App {
         path: &str,
         items: fn(&Value) -> Option<&Vec<Value>>,
     ) -> Result<Vec<Value>> {
-        let token = self.token(repo)?;
         let sep = if path.contains('?') { '&' } else { '?' };
         let mut out = Vec::new();
         for page in 1.. {
-            let v = self.get(&format!("{path}{sep}per_page={PAGE}&page={page}"), &token)?;
+            let v = self.get(
+                &format!("{path}{sep}per_page={PAGE}&page={page}"),
+                Bearer::Repo(repo),
+            )?;
             let got = items(&v).cloned().unwrap_or_default();
             let n = got.len();
             out.extend(got);
@@ -190,8 +192,10 @@ impl Forge for App {
     }
 
     fn pull(&self, repo: &Repo, number: u64) -> Result<Option<Pull>> {
-        let token = self.token(repo)?;
-        match self.get_found(&Self::repo_path(repo, &format!("/pulls/{number}")), &token)? {
+        match self.get_found(
+            &Self::repo_path(repo, &format!("/pulls/{number}")),
+            Bearer::Repo(repo),
+        )? {
             None => Ok(None),
             Some(v) => Ok(Some(pull(&v)?)),
         }
@@ -224,10 +228,9 @@ impl Forge for App {
                 standing: run_standing(r),
             })
             .collect();
-        let token = self.token(repo)?;
         let combined = self.get(
             &Self::repo_path(repo, &format!("/commits/{rev}/status?per_page={PAGE}")),
-            &token,
+            Bearer::Repo(repo),
         )?;
         for s in combined["statuses"].as_array().into_iter().flatten() {
             out.push(Check {
@@ -274,21 +277,21 @@ impl Forge for App {
         existing: Option<u64>,
         posting: &Posting,
     ) -> Result<()> {
-        let token = self.token(repo)?;
         let mut body = posting_json(name, posting);
         match existing {
             Some(id) => {
                 self.patch_api(
                     &Self::repo_path(repo, &format!("/check-runs/{id}")),
-                    &token,
+                    Bearer::Repo(repo),
                     &body.to_string(),
                 )?;
             }
             None => {
                 body["head_sha"] = json!(rev);
                 self.post_api(
+                    Call::Make,
                     &Self::repo_path(repo, "/check-runs"),
-                    &token,
+                    Bearer::Repo(repo),
                     &body.to_string(),
                 )?;
             }
@@ -310,20 +313,19 @@ impl Forge for App {
     }
 
     fn edit_comment(&self, repo: &Repo, id: u64, body: &str) -> Result<()> {
-        let token = self.token(repo)?;
         self.patch_api(
             &Self::repo_path(repo, &format!("/issues/comments/{id}")),
-            &token,
+            Bearer::Repo(repo),
             &json!({ "body": body }).to_string(),
         )?;
         Ok(())
     }
 
     fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
-        let token = self.token(repo)?;
         self.post_api(
+            Call::Make,
             &Self::repo_path(repo, &format!("/issues/{number}/comments")),
-            &token,
+            Bearer::Repo(repo),
             &json!({ "body": body }).to_string(),
         )?;
         Ok(())
@@ -338,20 +340,19 @@ impl Forge for App {
         body: &str,
         draft: bool,
     ) -> Result<Pull> {
-        let token = self.token(repo)?;
         let v = self.post_api(
+            Call::Make,
             &Self::repo_path(repo, "/pulls"),
-            &token,
+            Bearer::Repo(repo),
             &open_request(base, head_ref, title, body, draft).to_string(),
         )?;
         pull(&v)
     }
 
     fn edit(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
-        let token = self.token(repo)?;
         self.patch_api(
             &Self::repo_path(repo, &format!("/pulls/{number}")),
-            &token,
+            Bearer::Repo(repo),
             &json!({ "body": body }).to_string(),
         )?;
         Ok(())
@@ -364,10 +365,11 @@ impl Forge for App {
         if pull.node_id.is_empty() {
             bail!("GitHub gave {repo}'s pull request {number} no node id");
         }
-        let token = self.token(repo)?;
+        // Marking a draft or ready sets a state.
         let v = self.post_api(
+            Call::Set,
             "/graphql",
-            &token,
+            Bearer::Repo(repo),
             &draft_request(&pull.node_id, draft).to_string(),
         )?;
         graphql_reply(&v)
