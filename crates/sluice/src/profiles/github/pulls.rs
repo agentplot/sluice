@@ -2132,11 +2132,26 @@ impl Pulls {
             let body = description(&messages, agent, group.as_ref(), &compare);
             let (pull, word) = match existing {
                 Some(p) => {
-                    if p.body != body {
-                        forge.edit(&t.repo, p.number, None, &body)?;
+                    // C.5 pull request, 120: a subject retitles a request
+                    // sluice opened, never one a person opened; none leaves
+                    // the title as it is.
+                    let title = match subject {
+                        Some(s) if s != p.title && p.author == forge.login()? => Some(s),
+                        _ => None,
+                    };
+                    if p.body != body || title.is_some() {
+                        forge.edit(&t.repo, p.number, title, &body)?;
                     }
                     push()?;
-                    (Pull { body, ..p.clone() }, "updated")
+                    let title = title.map_or_else(|| p.title.clone(), String::from);
+                    (
+                        Pull {
+                            body,
+                            title,
+                            ..p.clone()
+                        },
+                        "updated",
+                    )
                 }
                 None => {
                     push()?;
