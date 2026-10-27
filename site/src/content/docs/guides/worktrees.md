@@ -50,9 +50,12 @@ For a clone you already have, ask the Claude Code plugin to set sluice up
 in it. In a plain clone, the repository's one working copy, it offers this
 layout before anything else, and goes on in the plain clone only if you
 tell it to. The commit that adds `.config/sluice.toml` then says you chose
-to keep it. Laying it out keeps the git directory in the folder as
-`project.git`, and moves the working copy into `project/main` on its
-branch, uncommitted changes and all. A worktree outside the folder keeps
+to keep it. In a clone that already has other worktrees, it makes the same
+offer and names the same costs. It then goes on with the repository as it
+is, without waiting for an answer, and lays it out whenever you ask.
+Laying it out keeps the git directory in the folder as `project.git`, and
+moves the working copy into `project/main` on its branch, uncommitted
+changes and all. A worktree outside the folder keeps
 working.
 
 Before anything moves, Claude names what it costs:
