@@ -547,6 +547,72 @@ fn a_bolt_only_fetched_here_lands_on_its_remote() {
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:b.txt")]);
 }
 
+/// 124, C.7 pushed refs: this host's `main` is from before
+/// `.config/sluice.toml`, while `origin/main` as fetched holds the policy
+/// naming origin; `sluice branch create` reads `main` as origin's and
+/// makes the bolt there at origin's `main`, leaving this host's `main`
+/// where it was.
+#[test]
+fn a_bolt_is_made_on_origin_from_a_main_this_host_holds_from_before_the_policy() {
+    let s = Setup::new("remote-bolt-stale-main", "origin");
+    let root = s.repo.rev("main~1");
+    s.repo.git(&["reset", "-q", "--hard", &root]);
+    let origins = s.remote_main();
+    assert_eq!(s.repo.rev("refs/remotes/origin/main"), origins);
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let made: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(made["created"], origins);
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), origins);
+    assert_eq!(s.repo.rev("main"), root);
+}
+
+/// 124: this host's `main` names origin and `upstream/main`, a second
+/// remote's as fetched, names upstream; nothing the host holds says which
+/// `main` is on, so a round lands nothing, runs nothing, moves neither
+/// remote's `main`, and names each remote with the ref that named it.
+#[test]
+fn two_remotes_named_for_main_land_nothing_and_are_named() {
+    let s = Setup::new("remote-two-remotes", "origin");
+    s.submit("a");
+    let upstream = Scratch::new("remote-two-remotes-upstream.git");
+    let at = upstream.path().to_str().unwrap();
+    s.repo.git(&["clone", "-q", "--bare", ".", at]);
+    s.repo.git(&["remote", "add", "upstream", at]);
+    let theirs = policy("upstream");
+    let named = s.repo.branch(
+        "upstream-policy",
+        "main",
+        &[(".config/sluice.toml", Some(theirs.as_str()))],
+    );
+    s.repo.git(&[
+        "push",
+        "-q",
+        "upstream",
+        &format!("{named}:refs/heads/main"),
+    ]);
+    s.repo.git(&["fetch", "-q", "upstream"]);
+    let origins = s.remote_main();
+
+    let out = s.sluice(&["step", "main"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("origin on main ("), "{}", text(&out));
+    assert!(
+        text(&out).contains("upstream on upstream/main ("),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(s.remote_main(), origins);
+    let upstreams = support::git_command()
+        .arg("--git-dir")
+        .arg(upstream.path())
+        .args(["rev-parse", "refs/heads/main"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&upstreams.stdout).trim(), named);
+    assert_eq!(s.runs(), 0);
+}
+
 fn remote_rev(s: &Setup, name: &str) -> String {
     let out = support::git_command()
         .arg("--git-dir")
