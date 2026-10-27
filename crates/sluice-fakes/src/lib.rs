@@ -666,6 +666,11 @@ impl World {
         self.0.borrow_mut().unanswered_starts = n;
     }
 
+    /// How many of those are still to fail.
+    pub fn unanswered_starts_left(&self) -> usize {
+        self.0.borrow().unanswered_starts
+    }
+
     /// The next start is refused at the host's bound, as when another
     /// repository's run took the last one after the round counted (71).
     pub fn refuse_next_start(&self) {
