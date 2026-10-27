@@ -80,7 +80,10 @@ crates/sluice/src/profiles/places.rs
 crates/sluice-seams/src/lib.rs
 crates/sluice-core/src/session.rs
 crates/sluice-core/src/ops.rs
+crates/sluice-core/Cargo.toml
+crates/sluice-core/moon.yml
 crates/sluice-fakes/src/lib.rs
+Cargo.lock
 crates/sluice/tests/profiles/places.rs
 crates/sluice/tests/exec.rs
 crates/sluice/tests/profiles/conformance.rs
