@@ -2448,37 +2448,56 @@ impl Sluice<'_> {
 
     /// 133: a round `refused` refused, counted in this host's refusal of
     /// the branch's remote, its cause added when no round of the refusal met
-    /// it before (design D4). The round's error stands whatever this does.
+    /// it before, and its lines written when the records can be (design D4,
+    /// D5). The round's error stands whatever this does.
     fn note_refused(&self, branch: &str, refused: &ReadRefused) {
         let noted = (|| {
-            let standing = self.refusal(branch)?;
+            let mut standing = self.refusal(branch)?;
+            if standing.as_ref().is_some_and(|r| r.ended.is_some()) {
+                // An end not yet in the log goes in before a refusal opens
+                // anew, when the records can be written.
+                self.write_refusal(branch)?;
+                standing = self.refusal(branch)?;
+            }
             let r = Refusal::refused(standing, refused, &self.now());
-            self.keep_refusal(branch, Some(&r))
+            self.keep_refusal(branch, Some(&r))?;
+            self.write_refusal(branch)
         })();
         if let Err(e) = noted {
             warn!(
                 sluice.branch = branch,
-                "keeping the refused read of {} failed: {e:#}", refused.remote
+                "keeping the refused read of {} in the log failed: {e:#}", refused.remote
             );
         }
     }
 
     /// 133: a round that read the branch and its records ends this host's
-    /// refusal of the remote (design D3).
+    /// refusal of the remote, and writes its end (design D5).
     fn note_read_again(&self, branch: &str) {
         let noted = (|| {
             let Some(mut r) = self.refusal(branch)? else {
                 return Ok(());
             };
             r.read_again(&self.now());
-            self.keep_refusal(branch, Some(&r))
+            self.keep_refusal(branch, Some(&r))?;
+            self.write_refusal(branch)
         })();
         if let Err(e) = noted {
             warn!(
                 sluice.branch = branch,
-                "keeping the end of a refused read failed: {e:#}"
+                "keeping the end of a refused read in the log failed: {e:#}"
             );
         }
+    }
+
+    /// The lines of this host's refusal not yet in the branch's log, in a
+    /// write holding nothing else, when the round's read of the records
+    /// reached them; otherwise they wait for the first write that can.
+    fn write_refusal(&self, branch: &str) -> Result<()> {
+        if self.seams.state.stale(branch).is_some() {
+            return Ok(());
+        }
+        self.write_refusal_lines(branch)
     }
 
     /// The name of the next place on the branch.
