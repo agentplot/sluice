@@ -235,6 +235,10 @@ pub struct Submission {
     /// Passed and waiting to land with a deeper candidate (117).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<Held>,
+    /// 23: the submitter's words for what lands, which its landing commit
+    /// names it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 /// What a passed submission waits for under a hold (117): the deeper

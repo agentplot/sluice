@@ -1112,6 +1112,7 @@ fn admit(
             landed_as: None,
             was: None,
             held: None,
+            subject: None,
         },
     );
     l.log(
