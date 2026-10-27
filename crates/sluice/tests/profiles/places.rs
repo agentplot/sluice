@@ -1527,3 +1527,54 @@ fn scratch_no_record_names_is_removed() {
     p.release(&name).unwrap();
     assert!(!former.exists());
 }
+
+/// 35, 123, rule core.30: a checkout's record that exists and cannot be
+/// read names its scratch still: the scratch of the place its file name
+/// reads back as is kept, of either form, while a directory no record
+/// names is removed; and while such a record's file name was cut short,
+/// so that it names no place, nothing is removed. The sweep succeeds
+/// both times.
+#[test]
+fn an_unreadable_record_keeps_its_scratch() {
+    let (repo, rev) = scratch("places-scratch-unreadable");
+    let p = places(&repo);
+    let held = p.materialize(NAME, &rev, &Settings::new()).unwrap();
+    std::fs::write(held.tmp.join("socket"), "").unwrap();
+    let record = record_path(&repo, NAME);
+    let written = std::fs::read(&record).unwrap();
+    std::fs::write(&record, "{\"kind\":").unwrap();
+    let root = repo.dir().join(".git/sluice/.tmp");
+    let former = root.join(sluice::runs::dir_name(NAME));
+    std::fs::create_dir_all(&former).unwrap();
+    let stray = root.join("0123abcdef");
+    std::fs::create_dir_all(&stray).unwrap();
+
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
+    assert!(
+        held.tmp.join("socket").exists(),
+        "an unreadable record's scratch was removed"
+    );
+    assert!(
+        former.is_dir(),
+        "an unreadable record's former scratch was removed"
+    );
+
+    let cut = repo.dir().join(format!(
+        ".git/sluice/.places/{}%~0123456789abcdef.json",
+        "x".repeat(160)
+    ));
+    std::fs::write(&cut, "").unwrap();
+    let strays = [root.join("fedcba9876"), root.join("session+2F+2Fgone")];
+    for s in &strays {
+        std::fs::create_dir_all(s).unwrap();
+    }
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), Vec::<PathBuf>::new());
+    for s in &strays {
+        assert!(s.is_dir(), "{} was removed", s.display());
+    }
+
+    std::fs::remove_file(&cut).unwrap();
+    std::fs::write(&record, written).unwrap();
+    p.release(NAME).unwrap();
+    assert!(!held.tmp.exists());
+}

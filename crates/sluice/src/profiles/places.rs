@@ -218,6 +218,36 @@ fn is_scratch_name(dir: &OsString) -> bool {
         .is_some_and(|d| d.len() == 10 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
 }
 
+/// What the records under `.places/` and `.previews/` name of the
+/// scratch root, so [`Places::remove_unnamed`] removes nothing a record
+/// may name.
+#[derive(Default)]
+struct Named {
+    /// The directories records name. Names alone are compared: every
+    /// scratch directory is in the one root, however a process spells its
+    /// path.
+    dirs: BTreeSet<OsString>,
+    /// A record names no scratch, or cannot be read, and its place's name
+    /// cannot be read back, its file name cut short: it may name any
+    /// directory of the former form.
+    former: bool,
+    /// A record cannot be read and its file name was cut short: it may
+    /// name any directory of the short form too.
+    short: bool,
+}
+
+impl Named {
+    /// Whether a record may name the scratch directory `dir`.
+    fn keeps(&self, dir: &OsString) -> bool {
+        self.dirs.contains(dir)
+            || if is_scratch_name(dir) {
+                self.short
+            } else {
+                self.former
+            }
+    }
+}
+
 /// The name of a candidate's place, read back from its record's file name
 /// `stem`; none for a name cut short, which says nothing of the name it
 /// was.
@@ -749,15 +779,16 @@ impl Places {
         Ok(out)
     }
 
-    /// The name of every scratch directory a record under `.places/` or
-    /// `.previews/` names: its `scratch`, or, for a record naming none,
-    /// its former path, from the place's name as `session_places`,
-    /// `preview_records` and `made` read it back. With it, whether a
-    /// record naming none could not be named, a candidate's whose file
-    /// name was cut short. Names alone are compared: every scratch
-    /// directory is in the one root, however a process spells its path.
-    fn named_scratch(&self) -> Result<(BTreeSet<OsString>, bool)> {
-        let (mut named, mut unread) = (BTreeSet::new(), false);
+    /// What every record under `.places/` or `.previews/` names of the
+    /// scratch root: its `scratch`, or, for a record naming none, its
+    /// former path, from the place's name as `session_places`,
+    /// `preview_records` and `made` read it back. A record that exists and
+    /// cannot be read names its scratch still (35, rule core.30): it is
+    /// warned of with the reader's words, and the place its file name
+    /// reads back as keeps its scratch of either form, or, for a file name
+    /// cut short, every directory is kept.
+    fn named_scratch(&self) -> Result<Named> {
+        let mut named = Named::default();
         for dir in [".places", ".previews"] {
             let dir = self.root().join(dir);
             let entries = match std::fs::read_dir(&dir) {
@@ -774,12 +805,31 @@ impl Places {
                 else {
                     continue;
                 };
-                let made: Made = match std::fs::read(&path) {
-                    Ok(b) => serde_json::from_slice(&b)
-                        .with_context(|| format!("reading {}", path.display()))?,
+                let read = match std::fs::read(&path) {
                     // Released meanwhile.
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(e.into()),
+                    read => read
+                        .map_err(anyhow::Error::from)
+                        .and_then(|b| Ok(serde_json::from_slice::<Made>(&b)?)),
+                };
+                let made = match read {
+                    Ok(made) => made,
+                    Err(e) => {
+                        tracing::warn!(
+                            "reading {}, whose checkout's scratch is kept: {e:#}",
+                            path.display()
+                        );
+                        match read_name(stem) {
+                            Some(name) => named
+                                .dirs
+                                .extend([scratch_name(&name), dir_name(&name)].map(OsString::from)),
+                            None => {
+                                named.former = true;
+                                named.short = true;
+                            }
+                        }
+                        continue;
+                    }
                 };
                 let name = match made.kind {
                     Kind::Session => made
@@ -796,14 +846,16 @@ impl Places {
                     (Some(scratch), _) => scratch.clone(),
                     (None, Some(name)) => self.scratch(&name, &made),
                     (None, None) => {
-                        unread = true;
+                        named.former = true;
                         continue;
                     }
                 };
-                named.extend(scratch.file_name().map(|n| n.to_os_string()));
+                named
+                    .dirs
+                    .extend(scratch.file_name().map(|n| n.to_os_string()));
             }
         }
-        Ok((named, unread))
+        Ok(named)
     }
 
     /// 123, rule core.30: remove each of `listed`, the scratch root's
@@ -813,16 +865,17 @@ impl Places {
     /// directory is made, so a listed directory's record, if it has one,
     /// is read, and a directory made since is in no listing: no lock is
     /// held against a place being made. While a record naming no scratch
-    /// cannot be named, only directories of the short form are removed.
-    /// One that cannot be removed is warned of and the rest go on.
+    /// cannot be named, only directories of the short form are removed,
+    /// and while one that cannot be read cannot be named, none. One that
+    /// cannot be removed is warned of and the rest go on.
     fn remove_unnamed(&self, listed: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-        let (named, unread) = self.named_scratch()?;
+        let named = self.named_scratch()?;
         let mut removed = Vec::new();
         for dir in listed {
             let Some(own) = dir.file_name().map(|n| n.to_os_string()) else {
                 continue;
             };
-            if named.contains(&own) || (unread && !is_scratch_name(&own)) {
+            if named.keeps(&own) {
                 continue;
             }
             match std::fs::remove_dir_all(&dir) {
