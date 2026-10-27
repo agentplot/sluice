@@ -108,11 +108,13 @@ impl PushedRefs {
     /// place, given the credentials in this call's environment; nothing is
     /// written to a git config, so no other git finds them.
     ///
-    /// A read the remote refuses the credentials on is run once more with
-    /// credentials made afresh, since a forge may refuse ones it has just
-    /// given; a push is never run again. A refusal that stands has what
-    /// each refused credential was added to git's words, for whoever
-    /// reports the failure.
+    /// A read or a push the remote refuses the credentials on before it
+    /// answers for any ref is run once more on credentials made afresh,
+    /// since a forge may refuse ones it has just given, with the same
+    /// arguments: a push with its refspec and its lease (134, rules core.5,
+    /// core.29). A push the remote answered at the ref is never run again.
+    /// A refusal that stands has what each refused credential was added to
+    /// git's words, for whoever reports the failure.
     pub(crate) fn remote_git(&self, args: &[&str]) -> Result<Output> {
         let Some(s) = &self.speaker else {
             return git(self.local.git_dir(), args);
@@ -122,12 +124,8 @@ impl PushedRefs {
             .credentials(&s.url)
             .with_context(|| format!("{} on {}", s.identity.name(), self.remote))?;
         let out = self.git_as(s, &given, args)?;
-        if out.status.success() || !refused(&out) {
+        if !stopped(&out) {
             return Ok(out);
-        }
-        if !reads(args) {
-            let said = format!("{} refused {}", self.remote, given.about);
-            return Ok(told(out, &said));
         }
         let fresh = match s.identity.renew(&s.url) {
             Ok(c) => c,
@@ -142,7 +140,7 @@ impl PushedRefs {
             }
         };
         let again = self.git_as(s, &fresh, args)?;
-        if again.status.success() || !refused(&again) {
+        if !stopped(&again) {
             return Ok(again);
         }
         Ok(told(
@@ -246,12 +244,6 @@ impl PushedRefs {
     }
 }
 
-/// Whether git `args` only read the remote: a fetch, or a listing of its
-/// refs.
-fn reads(args: &[&str]) -> bool {
-    matches!(args.first(), Some(&"fetch" | &"ls-remote"))
-}
-
 /// What git prints when the remote refuses a call's credentials over
 /// HTTP: 404, which GitHub answers a token that may not read the
 /// repository, 401 and 403.
@@ -274,6 +266,19 @@ const REFUSED: &[&str] = &[
 fn refused(out: &Output) -> bool {
     let err = String::from_utf8_lossy(&out.stderr);
     REFUSED.iter().any(|w| err.contains(w))
+}
+
+/// Whether git printed the remote's answer for a ref: a line of `git push
+/// --porcelain`, `<flag>\t<from>:<to>\t<summary>`. No other output of a
+/// failed git call of sluice's holds a tab.
+fn answered(out: &Output) -> bool {
+    out.stdout.contains(&b'\t')
+}
+
+/// Whether the call failed on the remote's refusing its credentials before
+/// it answered for any ref, so the remote is as it was.
+fn stopped(out: &Output) -> bool {
+    !out.status.success() && refused(out) && !answered(out)
 }
 
 /// `out` with `said` on the line after what git printed on stderr.
@@ -399,10 +404,12 @@ impl Branch for PushedRefs {
     }
 
     /// 45, 46: push `to`, accepted only while the remote's branch is
-    /// `expected`. A refusal is reported with what the remote holds, never
-    /// retried blind (rule core.5); any other failure is an error, which
-    /// leaves the landing for the next step to settle. An accepted push is
-    /// the move, whatever the host's copy does next (122).
+    /// `expected`. A refusal of the credential is made once more with the
+    /// same lease (134); a refusal at the ref is reported with what the
+    /// remote holds, never retried blind (rules core.5, core.29); any other
+    /// failure is an error, which leaves the landing for the next step to
+    /// settle. An accepted push is the move, whatever the host's copy does
+    /// next (122).
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
         let refspec = format!("{to}:refs/heads/{branch}");
         self.leased(branch, expected.as_str(), &refspec)
@@ -430,10 +437,11 @@ impl Branch for PushedRefs {
 
 impl PushedRefs {
     /// Push `refspec`, accepted only while the remote's branch is
-    /// `expected`, or absent when `expected` is empty. A refusal is
-    /// reported with what the remote holds, never retried blind (rule
-    /// core.5); any other failure is an error, which leaves a landing for
-    /// the next step to settle.
+    /// `expected`, or absent when `expected` is empty. A refusal of the
+    /// credential is made once more with the same lease (134); a refusal
+    /// at the ref is reported with what the remote holds, never retried
+    /// blind (rules core.5, core.29); any other failure is an error, which
+    /// leaves a landing for the next step to settle.
     fn leased(&self, branch: &str, expected: &str, refspec: &str) -> Result<Moved> {
         let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
         let out = self.remote_git(&[

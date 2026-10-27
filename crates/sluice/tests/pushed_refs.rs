@@ -385,7 +385,7 @@ fn pkt(s: &str) -> String {
 /// for a push.
 fn listing(service: &str, refs: &[(&str, &str)]) -> support::http::Answer {
     let caps = match service {
-        "git-receive-pack" => "report-status delete-refs ofs-delta",
+        "git-receive-pack" => "report-status delete-refs side-band-64k ofs-delta",
         _ => "multi_ack ofs-delta",
     };
     let zero = "0".repeat(40);
@@ -438,17 +438,29 @@ fn commands(r: &support::http::Request) -> Vec<(String, String, String)> {
 
 /// The fake's answer to a push it takes: every ref it names updated.
 fn received(r: &support::http::Request) -> support::http::Answer {
-    let ok: String = commands(r)
+    let ok: Vec<String> = commands(r)
         .iter()
-        .map(|(_, _, name)| pkt(&format!("ok {name}\n")))
+        .map(|(_, _, name)| format!("ok {name}"))
         .collect();
+    report(&ok, None)
+}
+
+/// The fake's report of a push: `unpack ok`, then `lines`, one for each
+/// ref, on side band 1, after `said` on side band 2, which git prints on
+/// stderr as the remote's.
+fn report(lines: &[String], said: Option<&str>) -> support::http::Answer {
+    let status: String = std::iter::once("unpack ok")
+        .chain(lines.iter().map(String::as_str))
+        .map(|l| pkt(&format!("{l}\n")))
+        .collect();
+    let said = said.map_or(String::new(), |s| pkt(&format!("\x02{s}\n")));
     (
         200,
         vec![(
             "Content-Type".into(),
             "application/x-git-receive-pack-result".into(),
         )],
-        format!("{}{ok}0000", pkt("unpack ok\n")),
+        format!("{said}{}0000", pkt(&format!("\x01{status}0000"))),
     )
 }
 
@@ -469,6 +481,15 @@ fn pushes(fake: &Fake) -> Vec<(String, Vec<(String, String, String)>)> {
         .iter()
         .filter(|r| is_push(r))
         .map(|r| (r.header("Authorization").unwrap_or("").into(), commands(r)))
+        .collect()
+}
+
+/// The `Authorization` of each listing the fake gave a push, in order.
+fn listed_for_push(fake: &Fake) -> Vec<String> {
+    fake.requests()
+        .iter()
+        .filter(|r| lists_for_push(r))
+        .filter_map(|r| r.header("Authorization").map(String::from))
         .collect()
 }
 
@@ -631,27 +652,197 @@ fn a_refusal_that_stands_names_both_credentials() {
     assert_eq!(given(&fake).len(), 2, "run no third time");
 }
 
-/// A push the remote refuses is never run again (rule core.5), and fails
-/// with the remote's words and what the refused credential was.
+/// 134, C.5: a session's branch the remote refuses on the identity's first
+/// token, as GitHub refuses one it has just given, is pushed once more on
+/// a fresh one.
 #[test]
-fn a_refused_push_is_not_run_again() {
-    let repo = Repo::new("refused-push");
+fn a_push_refused_on_its_token_is_made_once_more() {
+    let repo = Repo::new("push-renewed");
     let _bare = repo.bare_origin();
-    let fake = Fake::start(|r| match r.header("Authorization") {
-        None => ask(),
-        Some(_) => not_found(),
-    });
+    let base = repo.rev("main");
+    let head = repo.branch("unit/u", "main", &[("a", Some("1"))]);
+    let first = basic("fake-token");
+    let fake = {
+        let first = first.clone();
+        remote(move |a, r| match a == first {
+            true => not_found(),
+            false => takes(r, &[("refs/heads/main", &base)]),
+        })
+    };
     let url = format!("{}/o/r.git", fake.url());
     let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    p.push_branch(&rev(head.clone()), "unit/u").unwrap();
+    let fresh = basic(&identity.token(1));
+    assert_eq!(given(&fake), [first, fresh.clone(), fresh.clone()]);
+    let zero = "0".repeat(40);
+    assert_eq!(
+        pushes(&fake),
+        [(fresh, vec![(zero, head, "refs/heads/unit/u".into())])]
+    );
+    assert_eq!(identity.renewed.get(), 1);
+}
+
+/// 134: a push refused on a fresh token too fails with the remote's words
+/// and what each refused token was, and is made no third time.
+#[test]
+fn a_push_refused_twice_is_not_made_a_third_time() {
+    let repo = Repo::new("refused-push");
+    let _bare = repo.bare_origin();
+    let fake = remote(|_, _| not_found());
+    let token = format!("fake-token-{}", std::process::id());
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, &token));
     let p = as_identity(&repo, &identity);
     let head = rev(repo.rev("HEAD"));
     let err = format!("{:#}", p.push_branch(&head, "agent").unwrap_err());
     assert!(err.contains("Repository not found."), "{err}");
     assert!(
-        err.ends_with("origin refused the fake's token number 0"),
+        err.ends_with("origin refused the fake's token number 0, then the fake's token number 1"),
         "{err}"
     );
-    assert_eq!(given(&fake).len(), 1, "one push, never again");
+    assert!(!err.contains(&token), "a report carries no token: {err}");
+    assert_eq!(given(&fake).len(), 2, "two pushes, no third");
+    assert_eq!(identity.renewed.get(), 1);
+}
+
+/// 134, 45, 104, rule core.5: a leased push the remote refuses on the
+/// identity's first token is made once more on a fresh one with the same
+/// lease, and moves the branch; a branch made as a landing is.
+#[test]
+fn a_leased_push_refused_on_its_token_is_made_once_more() {
+    let repo = Repo::new("leased-renewed");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let local = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let to = landing(&local, &rev(base.clone()), &head);
+    let zero = "0".repeat(40);
+    for (branch, old, new) in [
+        ("bolt/x", zero, base.clone()),
+        ("main", base.clone(), to.as_str().to_string()),
+    ] {
+        let first = basic("fake-token");
+        let fake = {
+            let (first, base) = (first.clone(), base.clone());
+            remote(move |a, r| match is_push(r) && a == first {
+                true => not_found(),
+                false => takes(r, &[("refs/heads/main", &base)]),
+            })
+        };
+        let url = format!("{}/o/r.git", fake.url());
+        let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+        let p = as_identity(&repo, &identity);
+        let moved = match branch {
+            "main" => p.move_to("main", &rev(base.clone()), &to),
+            _ => p.make(branch, &rev(base.clone())),
+        };
+        assert_eq!(moved.unwrap(), Moved::Moved, "{branch}");
+        let command = vec![(old, new, format!("refs/heads/{branch}"))];
+        assert_eq!(
+            pushes(&fake),
+            [
+                (first, command.clone()),
+                (basic(&identity.token(1)), command)
+            ],
+            "{branch}: the refused push, then the same on a fresh token"
+        );
+        assert_eq!(identity.renewed.get(), 1);
+    }
+}
+
+/// 134, 46, rule core.5: a branch moved on the remote between a push
+/// refused on its token and the second is the second's lease refused: the
+/// move is elsewhere, and there is no third push.
+#[test]
+fn a_second_push_carries_the_first_ones_lease() {
+    let repo = Repo::new("leased-stale");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let moved = repo.branch("other", "main", &[("b", Some("2"))]);
+    let local = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let to = landing(&local, &rev(base.clone()), &head);
+    let first = basic("fake-token");
+    let fake = {
+        let (first, base, moved) = (first.clone(), base.clone(), moved.clone());
+        remote(move |a, r| match (a == first, is_push(r)) {
+            (true, true) => not_found(),
+            (true, false) => takes(r, &[("refs/heads/main", &base)]),
+            (false, _) => takes(r, &[("refs/heads/main", &moved)]),
+        })
+    };
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    assert_eq!(
+        p.move_to("main", &rev(base.clone()), &to).unwrap(),
+        Moved::Elsewhere(Some(rev(moved)))
+    );
+    assert_eq!(
+        pushes(&fake),
+        [(
+            first.clone(),
+            vec![(base, to.as_str().into(), "refs/heads/main".into())]
+        )],
+        "the second push went no further than the lease"
+    );
+    assert_eq!(
+        listed_for_push(&fake),
+        [first, basic(&identity.token(1))],
+        "a listing for each push, and no third"
+    );
+    assert_eq!(identity.renewed.get(), 1);
+}
+
+/// 134, 24, 45: a push the remote answered at the ref is the move refused
+/// and made once, whatever the remote said besides; so is one whose lease
+/// git found stale.
+#[test]
+fn a_push_refused_at_the_ref_is_made_once() {
+    let repo = Repo::new("refused-at-the-ref");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let head = rev(repo.branch("unit/u", "main", &[("a", Some("1"))]));
+    let moved = repo.branch("other", "main", &[("b", Some("2"))]);
+    let local = PushedRefs::open(repo.dir(), "origin").unwrap();
+    let to = landing(&local, &rev(base.clone()), &head);
+
+    let fake = {
+        let base = base.clone();
+        remote(move |_, r| match is_push(r) {
+            true => report(
+                &["ng refs/heads/main protected branch hook declined".into()],
+                Some("error: 403 Forbidden: refs/heads/main is protected"),
+            ),
+            false => takes(r, &[("refs/heads/main", &base)]),
+        })
+    };
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    let err = format!(
+        "{:#}",
+        p.move_to("main", &rev(base.clone()), &to).unwrap_err()
+    );
+    assert!(err.contains("protected branch hook declined"), "{err}");
+    assert!(err.contains("error: 403 Forbidden"), "{err}");
+    assert_eq!(pushes(&fake).len(), 1, "one push: {err}");
+    assert_eq!(identity.renewed.get(), 0);
+
+    let fake = {
+        let moved = moved.clone();
+        remote(move |_, r| takes(r, &[("refs/heads/main", &moved)]))
+    };
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    assert_eq!(
+        p.move_to("main", &rev(base), &to).unwrap(),
+        Moved::Elsewhere(Some(rev(moved)))
+    );
+    assert_eq!(listed_for_push(&fake), [basic("fake-token")], "one push");
+    assert!(pushes(&fake).is_empty(), "git found the lease stale");
     assert_eq!(identity.renewed.get(), 0);
 }
 
