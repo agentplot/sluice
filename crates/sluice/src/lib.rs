@@ -529,6 +529,11 @@ pub enum Followed {
         /// What each submission is called on a pull request, as
         /// [`Followed::Done`] names them.
         names: BTreeMap<u64, String>,
+        /// The revision the forge holds as its head; `None` when the forge
+        /// returned no pull to read it from.
+        head: Option<String>,
+        /// Whether it is a draft, which intake does not take in.
+        draft: bool,
     },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
@@ -2721,6 +2726,7 @@ fn submit_pull(
                 lines,
                 submission,
                 names,
+                ..
             }) => {
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the

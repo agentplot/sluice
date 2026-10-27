@@ -4,7 +4,7 @@ Tests run through sluice, as CLAUDE.md says: `sluice exec main -- cargo test -p 
 
 ## 1. A pull request's status names its head and draft mark
 
-- [ ] 1.1 Add the request's head (`Option<String>`) and draft mark to `Followed::Open` in `crates/sluice/src/lib.rs`. Fill them in the GitHub profile's `follow` (`crates/sluice/src/profiles/github/pulls.rs`) from the `Pull` it reads, and in the fake `PullRequests` in `crates/sluice/tests/cli.rs`. Verify that `cargo check -p sluice --tests` passes.
+- [x] 1.1 Add the request's head (`Option<String>`) and draft mark to `Followed::Open` in `crates/sluice/src/lib.rs`. Fill them in the GitHub profile's `follow` (`crates/sluice/src/profiles/github/pulls.rs`) from the `Pull` it reads, and in the fake `PullRequests` in `crates/sluice/tests/cli.rs`. Verify that `cargo check -p sluice --tests` passes.
 - [ ] 1.2 In `submit_pull`, under `PullMode::Status` with `--json`, add `head` and `draft` to the open pull request's document. Leave the `--no-wait` and wait documents as they are. Verify with a new test in `crates/sluice/tests/profiles/pull_requests.rs` for each scenario of "A pull request's status names its head and whether it is a draft" (waiting for a review: `head` and `draft` `false`; a draft: `draft` `true`). Check that the existing `--no-wait --json` exact-document tests still pass (`--test pull_requests`).
 
 ## 2. `wt submit` follows a standing submission

@@ -3847,6 +3847,8 @@ impl sluice::PullRequests for Pull7 {
             lines: Vec::new(),
             submission: None,
             names: Default::default(),
+            head: None,
+            draft: false,
         })
     }
 }
