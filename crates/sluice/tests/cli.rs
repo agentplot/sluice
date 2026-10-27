@@ -3767,10 +3767,12 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
 }
 
 /// Pull request 7 into the branch, from any worktree, waiting; its forge
-/// answers 5xx to as many finds and follows as each count holds.
+/// answers 5xx to as many finds and follows as each count holds. It counts
+/// the times it is opened.
 struct Pull7 {
     finds: Cell<usize>,
     follows: Cell<usize>,
+    opens: Cell<usize>,
 }
 
 impl Pull7 {
@@ -3778,6 +3780,7 @@ impl Pull7 {
         Pull7 {
             finds: Cell::new(finds),
             follows: Cell::new(follows),
+            opens: Cell::new(0),
         }
     }
 
@@ -3815,6 +3818,7 @@ impl sluice::PullRequests for Pull7 {
         _: &str,
         _: &str,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
+        self.opens.set(self.opens.get() + 1);
         Ok(Ok(sluice::Opened {
             number: 7,
             said: "opened #7".into(),
@@ -3881,6 +3885,58 @@ fn sluice_pulls(
     };
     let code = run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out).unwrap();
     (code, String::from_utf8(out).unwrap())
+}
+
+/// C.5 pull request: a subject is one line for one pull request. An empty
+/// one, one of two lines, or one given with several worktrees is a command
+/// line sluice cannot read, which pushes, opens and queues nothing.
+#[test]
+fn a_subject_is_one_line_for_one_pull_request() {
+    let f = pulls_setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+    let pulls = Pull7::new(0, 0);
+    let one = ["--worktree", "unit/b1", "--subject"];
+    for (args, why) in [
+        (&[&one[..], &[""]].concat(), "--subject is empty"),
+        (&[&one[..], &["  "]].concat(), "--subject is empty"),
+        (&[&one[..], &["one\ntwo"]].concat(), "a subject is one line"),
+        (
+            &[&one[..], &["one\r\ntwo"]].concat(),
+            "a subject is one line",
+        ),
+        (
+            &vec![
+                "--worktree",
+                "unit/b1",
+                "--worktree",
+                "unit/b2",
+                "--subject",
+                "Both",
+            ],
+            "--subject takes one worktree",
+        ),
+    ] {
+        let args = [&["submit", BRANCH][..], args].concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+        assert!(out.contains(why), "{args:?}: {out}");
+    }
+    assert_eq!(pulls.opens.get(), 0);
+    assert!(queued(&f).is_empty());
+}
+
+/// A subject titles what a submit opens: neither a forecast nor a
+/// worktree's status takes one.
+#[test]
+fn a_subject_takes_neither_check_nor_status() {
+    for flag in ["--check", "--status"] {
+        let e =
+            Cli::try_parse_from(["sluice", "submit", BRANCH, "--subject", "x", flag]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict);
+        let said = e.to_string();
+        assert!(said.contains("--subject") && said.contains(flag), "{said}");
+    }
 }
 
 /// Following a pull request, a find or a follow the forge answered 5xx is

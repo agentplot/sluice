@@ -97,6 +97,7 @@ const SUBMIT_AFTER_HELP: &str = "\
 Examples:
   $ sluice submit main
   $ sluice submit main --no-wait
+  $ sluice submit main --no-wait --subject \"Batch review cards\"   its pull request's title
   $ sluice submit main --after 12,14 --priority 5
   $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
 
@@ -219,6 +220,10 @@ pub enum Command {
         /// Return once submitted.
         #[arg(long)]
         no_wait: bool,
+        /// One line saying what lands: the title of the pull request this
+        /// submit opens, or of one it opened before.
+        #[arg(long, value_name = "TEXT", conflicts_with_all = ["check", "status"])]
+        subject: Option<String>,
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
@@ -809,6 +814,7 @@ pub fn run(
             after,
             priority,
             no_wait,
+            subject,
             check,
             head,
             status,
@@ -824,6 +830,23 @@ pub fn run(
                     "sluice submit: {flag} takes one worktree; give --worktree once with it"
                 )?;
                 return Ok(USAGE);
+            }
+            // C.5 pull request: a subject titles one request, in one line;
+            // what a group's requests are titled waits on the design (125).
+            if let Some(subject) = &subject {
+                let why = if subject.trim().is_empty() {
+                    Some("--subject is empty; a subject is one line saying what lands")
+                } else if subject.contains(['\n', '\r']) {
+                    Some("a subject is one line; --subject holds a line break")
+                } else if worktree.len() > 1 {
+                    Some("--subject takes one worktree; give --worktree once with it")
+                } else {
+                    None
+                };
+                if let Some(why) = why {
+                    writeln!(out, "sluice submit: {why}")?;
+                    return Ok(USAGE);
+                }
             }
             if worktree.len() > 1 {
                 let req = GroupRequest {
