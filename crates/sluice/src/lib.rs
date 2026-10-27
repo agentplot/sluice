@@ -3289,8 +3289,6 @@ pub(crate) fn copy_differs_line(copy: &CopyDiffers) -> String {
     )
 }
 
-/// 124, S64: this host's copy of `branch` left behind its landing, and
-/// why.
 /// 133: this host's refusal of the branch's remote, git's words on as
 /// many lines as git gave them.
 fn refused_lines(refused: &sluice_core::Refused) -> String {
@@ -3312,6 +3310,8 @@ fn refused_lines(refused: &sluice_core::Refused) -> String {
     text
 }
 
+/// 124, S64: this host's copy of `branch` left behind its landing, and
+/// why.
 fn copy_behind_line(branch: &str, copy: &CopyBehind) -> String {
     let at = copy.at.as_ref().map_or("nothing", |r| r.short());
     format!(
