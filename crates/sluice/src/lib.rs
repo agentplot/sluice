@@ -221,9 +221,10 @@ pub enum Command {
         #[arg(long)]
         no_wait: bool,
         /// One line saying what lands: the title of the pull request this
-        /// submit opens, or of one it opened before.
+        /// submit opens, or of one it opened before, and the name of its
+        /// landing; with several worktrees, once for each, in their order.
         #[arg(long, value_name = "TEXT", conflicts_with_all = ["check", "status"])]
-        subject: Option<String>,
+        subject: Vec<String>,
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
@@ -834,22 +835,26 @@ pub fn run(
                 )?;
                 return Ok(USAGE);
             }
-            // C.5 pull request: a subject titles one request, in one line;
-            // what a group's requests are titled waits on the design (125).
-            if let Some(subject) = &subject {
-                let why = if subject.trim().is_empty() {
-                    Some("--subject is empty; a subject is one line saying what lands")
-                } else if subject.contains(['\n', '\r']) {
-                    Some("a subject is one line; --subject holds a line break")
-                } else if worktree.len() > 1 {
-                    Some("--subject takes one worktree; give --worktree once with it")
-                } else {
-                    None
-                };
-                if let Some(why) = why {
-                    writeln!(out, "sluice submit: {why}")?;
-                    return Ok(USAGE);
-                }
+            // C.5 pull request, 23: a subject is one line; 125: a group
+            // gives one per worktree, in their order, or none.
+            let why = if subject.iter().any(|s| s.trim().is_empty()) {
+                Some("--subject is empty; a subject is one line saying what lands".to_string())
+            } else if subject.iter().any(|s| s.contains(['\n', '\r'])) {
+                Some("a subject is one line; --subject holds a line break".to_string())
+            } else if !subject.is_empty() && subject.len() != worktree.len() {
+                let given =
+                    |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+                Some(format!(
+                    "{} for {}; give one --subject per --worktree, in their order, or none",
+                    given(subject.len(), "subject"),
+                    given(worktree.len(), "worktree")
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                writeln!(out, "sluice submit: {why}")?;
+                return Ok(USAGE);
             }
             if worktree.len() > 1 {
                 let req = GroupRequest {
@@ -865,6 +870,7 @@ pub fn run(
                 return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
+            let subject = subject.into_iter().next();
             if check {
                 return forecast(
                     &s,

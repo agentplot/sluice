@@ -3937,43 +3937,67 @@ fn sluice_pulls(
     (code, String::from_utf8(out).unwrap())
 }
 
-/// C.5 pull request: a subject is one line for one pull request. An empty
-/// one, one of two lines, or one given with several worktrees is a command
-/// line sluice cannot read, which pushes, opens and queues nothing.
+/// C.5 pull request: a subject is one line. An empty one, or one of two
+/// lines, is a command line sluice cannot read, which pushes, opens and
+/// queues nothing.
 #[test]
-fn a_subject_is_one_line_for_one_pull_request() {
+fn a_subject_is_one_line() {
     let f = pulls_setup();
     work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
-    work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
     let pulls = Pull7::new(0, 0);
     let one = ["--worktree", "unit/b1", "--subject"];
-    for (args, why) in [
-        (&[&one[..], &[""]].concat(), "--subject is empty"),
-        (&[&one[..], &["  "]].concat(), "--subject is empty"),
-        (&[&one[..], &["one\ntwo"]].concat(), "a subject is one line"),
-        (
-            &[&one[..], &["one\r\ntwo"]].concat(),
-            "a subject is one line",
-        ),
-        (
-            &vec![
-                "--worktree",
-                "unit/b1",
-                "--worktree",
-                "unit/b2",
-                "--subject",
-                "Both",
-            ],
-            "--subject takes one worktree",
-        ),
+    for (subject, why) in [
+        ("", "--subject is empty"),
+        ("  ", "--subject is empty"),
+        ("one\ntwo", "a subject is one line"),
+        ("one\r\ntwo", "a subject is one line"),
     ] {
-        let args = [&["submit", BRANCH][..], args].concat();
+        let args = [&["submit", BRANCH][..], &one, &[subject]].concat();
         let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
         assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
         assert!(out.contains(why), "{args:?}: {out}");
     }
     assert!(pulls.subjects.borrow().is_empty());
     assert!(queued(&f).is_empty());
+}
+
+/// 125: a group takes one subject per worktree, in their order, or none;
+/// one subject for two worktrees, or any other count, is refused before
+/// anything is pushed, opened or queued, saying what to give.
+#[test]
+fn one_subject_for_two_worktrees_is_refused() {
+    let give = "give one --subject per --worktree, in their order, or none";
+    for f in [setup(), pulls_setup()] {
+        work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+        work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+        let pulls = Pull7::new(0, 0);
+        let two = ["--worktree", "unit/b1", "--worktree", "unit/b2"];
+        for (args, said) in [
+            (
+                [&two[..], &["--subject", "Both"]].concat(),
+                "1 subject for 2 worktrees",
+            ),
+            (
+                [
+                    &two[..],
+                    &["--subject", "a", "--subject", "b", "--subject", "c"],
+                ]
+                .concat(),
+                "3 subjects for 2 worktrees",
+            ),
+            (
+                vec!["--worktree", "unit/b1", "--subject", "a", "--subject", "b"],
+                "2 subjects for 1 worktree",
+            ),
+        ] {
+            let args = [&["submit", BRANCH, "--no-wait"][..], &args].concat();
+            let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+            assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+            assert_eq!(out, format!("sluice submit: {said}; {give}\n"), "{args:?}");
+        }
+        assert!(pulls.subjects.borrow().is_empty());
+        assert!(queued(&f).is_empty());
+    }
 }
 
 /// The subject reaches the pull request a submit opens, as written; a
