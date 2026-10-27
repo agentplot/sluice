@@ -1,8 +1,10 @@
 use std::path::Path;
-use std::time::Duration;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use sluice::profiles::Bound;
+use sluice::retry::Policy;
 use sluice::telemetry::Telemetry;
 use sluice::{run, Cli, Command, Sleep};
 use sluice_core::SystemClock;
@@ -88,9 +90,10 @@ fn main() {
         }
         std::process::exit(hook(cli));
     }
+    let retry = Rc::new(retry(&cli));
     let bound = match std::env::current_dir()
         .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::open(&dir))
+        .and_then(|dir| Bound::open(&dir, retry))
     {
         Ok(b) => b,
         Err(e) => {
@@ -184,6 +187,30 @@ fn hook(cli: Cli) -> i32 {
         }
     }
 }
+
+/// The retry policy every call to a remote runs under (134): a wait's five
+/// minutes, ending at its `--timeout`, for a waiting submit and `sluice
+/// wait`, and thirty seconds for anything else. Tests that run the binary
+/// set `SLUICE_RETRY_SLEEP=record` to skip its pauses.
+fn retry(cli: &Cli) -> Policy {
+    let policy = match &cli.command {
+        Some(Command::Wait { timeout, .. }) => Policy::waiting(timeout.map(|t| Instant::now() + t)),
+        Some(Command::Submit {
+            no_wait: false,
+            check: false,
+            status: false,
+            ..
+        }) => Policy::waiting(None),
+        _ => Policy::command(),
+    };
+    match std::env::var(RETRY_SLEEP_VAR).as_deref() {
+        Ok("record") => policy.recording(),
+        _ => policy,
+    }
+}
+
+/// Set to `record` in tests, the retry policy's pauses are skipped.
+const RETRY_SLEEP_VAR: &str = "SLUICE_RETRY_SLEEP";
 
 /// `put` sluice's hook, for this executable, in the repository holding the
 /// folder the command runs in.

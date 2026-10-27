@@ -3,6 +3,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
@@ -117,4 +118,143 @@ pub fn json(status: u16, body: serde_json::Value) -> Answer {
         vec![("Content-Type".into(), "application/json".into())],
         body.to_string(),
     )
+}
+
+/// How many times a handler took it, from 0: for an answer that changes
+/// after the first few requests.
+#[derive(Clone, Default)]
+pub struct Count(Arc<AtomicUsize>);
+
+impl Count {
+    /// The count before this take.
+    pub fn take(&self) -> usize {
+        self.0.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// A server unable to answer just then: GitHub's 503.
+pub fn unavailable() -> Answer {
+    (503, vec![], "Service Unavailable\n".into())
+}
+
+// git's smart HTTP, as far as a fake remote speaks it: its listing of
+// refs, a push's commands and its report.
+
+/// A repository with nothing in it, as git's smart HTTP lists one.
+pub fn empty_repository() -> Answer {
+    listing("git-upload-pack", &[])
+}
+
+/// `s` as a pkt-line.
+pub fn pkt(s: &str) -> String {
+    format!("{:04x}{s}", s.len() + 4)
+}
+
+/// The fake's refs, each a ref and its revision, as git's smart HTTP lists
+/// them for `service`: `git-upload-pack` for a fetch, `git-receive-pack`
+/// for a push.
+pub fn listing(service: &str, refs: &[(&str, &str)]) -> Answer {
+    let caps = match service {
+        "git-receive-pack" => "report-status delete-refs side-band-64k ofs-delta",
+        _ => "multi_ack ofs-delta",
+    };
+    let zero = "0".repeat(40);
+    let mut lines = match refs {
+        [] => vec![format!("{zero} capabilities^{{}}")],
+        _ => refs.iter().map(|(r, at)| format!("{at} {r}")).collect(),
+    };
+    lines[0] = format!("{}\0{caps}", lines[0]);
+    let body = format!(
+        "{}0000{}0000",
+        pkt(&format!("# service={service}\n")),
+        lines
+            .iter()
+            .map(|l| pkt(&format!("{l}\n")))
+            .collect::<String>()
+    );
+    (
+        200,
+        vec![(
+            "Content-Type".into(),
+            format!("application/x-{service}-advertisement"),
+        )],
+        body,
+    )
+}
+
+/// A push's commands, `(old, new, ref)` each, as git sends them at the
+/// head of a `POST /git-receive-pack`.
+pub fn commands(r: &Request) -> Vec<(String, String, String)> {
+    let body = r.body.as_bytes();
+    let mut at = 0;
+    let mut all = Vec::new();
+    while let Some(len) = body
+        .get(at..at + 4)
+        .and_then(|h| usize::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok())
+    {
+        if len < 4 {
+            break;
+        }
+        let line = String::from_utf8_lossy(&body[at + 4..at + len]);
+        let line = line.split('\0').next().unwrap().trim_end();
+        let mut words = line.split(' ').map(String::from);
+        if let (Some(old), Some(new), Some(name)) = (words.next(), words.next(), words.next()) {
+            all.push((old, new, name));
+        }
+        at += len;
+    }
+    all
+}
+
+/// The fake's answer to a push it takes: every ref it names updated.
+pub fn received(r: &Request) -> Answer {
+    let ok: Vec<String> = commands(r)
+        .iter()
+        .map(|(_, _, name)| format!("ok {name}"))
+        .collect();
+    report(&ok, None)
+}
+
+/// The fake's report of a push: `unpack ok`, then `lines`, one for each
+/// ref, on side band 1, after `said` on side band 2, which git prints on
+/// stderr as the remote's.
+pub fn report(lines: &[String], said: Option<&str>) -> Answer {
+    let status: String = std::iter::once("unpack ok")
+        .chain(lines.iter().map(String::as_str))
+        .map(|l| pkt(&format!("{l}\n")))
+        .collect();
+    let said = said.map_or(String::new(), |s| pkt(&format!("\x02{s}\n")));
+    (
+        200,
+        vec![(
+            "Content-Type".into(),
+            "application/x-git-receive-pack-result".into(),
+        )],
+        format!("{said}{}0000", pkt(&format!("\x01{status}0000"))),
+    )
+}
+
+/// Whether `r` lists the fake's refs for a push.
+pub fn lists_for_push(r: &Request) -> bool {
+    r.method == "GET" && r.path.ends_with("?service=git-receive-pack")
+}
+
+/// Whether `r` is a push: its commands and its objects.
+pub fn is_push(r: &Request) -> bool {
+    r.method == "POST" && r.path.ends_with("/git-receive-pack")
+}
+
+/// The answer of a fake remote holding `refs` and taking every push.
+pub fn takes(r: &Request, refs: &[(&str, &str)]) -> Answer {
+    if lists_for_push(r) {
+        listing("git-receive-pack", refs)
+    } else if is_push(r) {
+        received(r)
+    } else {
+        listing("git-upload-pack", refs)
+    }
 }
