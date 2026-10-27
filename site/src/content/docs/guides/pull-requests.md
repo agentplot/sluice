@@ -218,7 +218,7 @@ draft at its commit, so no round takes one of them alone. It names each
 one short of its conditions with what it lacks, and exits `2`:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
+$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait --subject "Runner credentials" --subject "Runner cache"
 pushed bolt/a · opened #51: Runner credentials
 pushed bolt/b · opened #52: Runner cache
 refused: #51 from ../bolt-a needs 1 review
