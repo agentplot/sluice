@@ -23,7 +23,7 @@ part exists.
 - **[core.6]** A candidate is formed from the branch's revision and the entries ahead of it, in order, and from nothing else.
 - **[core.17]** A candidate whose entries ahead land exactly as they were tested is the same candidate on the revision they land as: its tree, its runs and its verdict stand, and it is named as that revision extended by the entries still ahead of it.
 - **[core.27]** Which remote a branch is on is read from the policy at every revision of the branch the host holds, its own ref and each remote's tracking ref, never from the host's own ref alone and never by a fetch.
-- **[core.28]** A read of a remote the core could not make is logged on the branch with the remote's own words, once per distinct cause and host, with its end, and is never reported only to the process that met it. (Proposed 2026-10-26, record 0061, on the user's card; accepted only on their yes.)
+- **[core.28]** A read of a remote the core could not make is logged on the branch with the remote's own words, once per distinct cause and host, with its end, and is never reported only to the process that met it.
 - **[core.29]** A push the remote refused on the credential before any ref was negotiated is made once more with the lease and the expectation of the first, and a push refused at the ref or whose answer was not read is never made again. (Proposed 2026-10-26, record 0062, on the user's card; accepted only on their yes.)
 
 ### Verdicts and attribution
