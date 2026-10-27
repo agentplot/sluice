@@ -829,6 +829,27 @@ pub enum Event {
         #[serde(rename = "copy")]
         at: Rev,
     },
+    /// 133: a read of the branch's remote a round on `host` could not
+    /// make, once per distinct ref asked and words said while it stands.
+    /// Its `at` is when it happened, which a line written late keeps.
+    #[serde(rename = "read-refused")]
+    ReadRefused {
+        host: String,
+        remote: String,
+        asked: String,
+        said: String,
+    },
+    /// 133: the first round on `host` that read the remote again: when the
+    /// refusal began, how many seconds it stood and how many rounds it
+    /// refused.
+    #[serde(rename = "read-again")]
+    ReadAgain {
+        host: String,
+        remote: String,
+        since: String,
+        stood: u64,
+        rounds: u64,
+    },
     /// A landing that found the branch elsewhere (24; rule core.5).
     Refused {
         ids: Vec<u64>,
@@ -1165,6 +1186,49 @@ mod tests {
         );
         let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
         assert_eq!(back.into_iter().map(|l| l.event).collect::<Vec<_>>(), lines);
+    }
+
+    /// 133: a refused read and its end are the spec's lines.
+    #[test]
+    fn a_refused_read_and_its_end_are_log_lines() {
+        let lines = [
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-10-26T09:16:40Z".into(),
+                event: Event::ReadRefused {
+                    host: "build-1".into(),
+                    remote: "origin".into(),
+                    asked: "refs/heads/main".into(),
+                    said: "remote: Repository not found.\n\
+                           fatal: repository 'https://github.com/acme/app.git/' not found"
+                        .into(),
+                },
+            },
+            LogLine {
+                schema: LOG_SCHEMA.into(),
+                at: "2026-10-26T09:46:40Z".into(),
+                event: Event::ReadAgain {
+                    host: "build-1".into(),
+                    remote: "origin".into(),
+                    since: "2026-10-26T09:16:40Z".into(),
+                    stood: 1800,
+                    rounds: 12,
+                },
+            },
+        ];
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(to_line(l)).unwrap())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:16:40Z\",\"event\":\"read-refused\",\"host\":\"build-1\",\"remote\":\"origin\",\"asked\":\"refs/heads/main\",\"said\":\"remote: Repository not found.\\nfatal: repository 'https://github.com/acme/app.git/' not found\"}\n",
+                "{\"schema\":\"sluice/log@1\",\"at\":\"2026-10-26T09:46:40Z\",\"event\":\"read-again\",\"host\":\"build-1\",\"remote\":\"origin\",\"since\":\"2026-10-26T09:16:40Z\",\"stood\":1800,\"rounds\":12}\n",
+            ]
+        );
+        let back: Vec<LogLine> = parse_lines(text.concat().as_bytes()).unwrap();
+        assert_eq!(back, lines);
     }
 
     #[test]
