@@ -232,6 +232,11 @@ struct Inner {
     gone_releases: Vec<String>,
     /// Places whose runs stored no release command.
     stored_none: BTreeSet<String>,
+    /// Every removal of scratch no record names fails from now, with this.
+    unnamed_scratch_fails: Option<String>,
+    /// Each removal of scratch no record names asked of the place seam,
+    /// with how many places were held then.
+    unnamed_scratch_asks: Vec<usize>,
     /// Candidates' places whose checkout was deleted by hand.
     deleted: BTreeSet<String>,
     /// How each session place's release at its asking failed.
@@ -1086,6 +1091,18 @@ impl World {
     /// succeed again.
     pub fn release_fails(&self, message: Option<&str>) {
         self.0.borrow_mut().release_fails = message.map(str::to_string);
+    }
+
+    /// Every removal of scratch no record names fails from now, saying
+    /// `message`; `None` lets it succeed again.
+    pub fn unnamed_scratch_fails(&self, message: Option<&str>) {
+        self.0.borrow_mut().unnamed_scratch_fails = message.map(str::to_string);
+    }
+
+    /// Each removal of scratch no record names asked, with how many places
+    /// were held then.
+    pub fn unnamed_scratch_asks(&self) -> Vec<usize> {
+        self.0.borrow().unnamed_scratch_asks.clone()
     }
 
     /// The release of the place `name` fails from now, saying `message`;
@@ -2008,6 +2025,18 @@ impl Checkout for FakeCheckout {
         }
         self.free(name)?;
         Ok(gone)
+    }
+
+    /// The fake keeps no scratch directories: there is none to remove,
+    /// unless the world says the removal fails.
+    fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>> {
+        let mut inner = self.0 .0.borrow_mut();
+        let held = inner.places.len();
+        inner.unnamed_scratch_asks.push(held);
+        match &inner.unnamed_scratch_fails {
+            Some(m) => bail!("{m}"),
+            None => Ok(Vec::new()),
+        }
     }
 
     fn preview(

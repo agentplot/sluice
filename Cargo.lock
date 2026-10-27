@@ -2896,6 +2896,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sluice-fakes",
  "sluice-seams",
  "toml",
  "tracing",

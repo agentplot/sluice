@@ -64,9 +64,20 @@
 //! What made each place is recorded before the place is made, at
 //! `<common>/sluice/.places/<name>.json`, so `release` needs no policy and
 //! touches only what that record names: every path and branch it touches
-//! is derived from the place's name, never searched for (rule core.16).
+//! is derived from the place's name or read from its record, never
+//! searched for (rule core.16).
+//!
+//! A place's scratch directory, its checks' `SLUICE_TMP`, is
+//! `<common>/sluice/.tmp/` and 10 hex digits of the SHA-1 of its name, the
+//! same length for every place whatever its name or its worktree's
+//! location (35). Its record names it before it is made, and every run,
+//! release and gone release reads it from there (rule core.30). A record
+//! an older sluice wrote names none: its scratch stays where that sluice
+//! put it, `.tmp/` and the place's name as one directory name, until the
+//! place is released.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs::File;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -155,6 +166,11 @@ struct Made {
     /// started then: never started again (123).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gone_release: Option<String>,
+    /// Its scratch directory, named before it is made, at a path that does
+    /// not grow with the place's name (35, rule core.30); none on a record
+    /// an older sluice wrote, whose scratch is where that sluice put it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scratch: Option<PathBuf>,
 }
 
 impl Made {
@@ -176,8 +192,74 @@ impl Made {
             last_result: None,
             release_failed: None,
             gone_release: None,
+            scratch: None,
         }
     }
+}
+
+/// 35, rule core.30: the name of the scratch directory of the place
+/// `name`, the first 10 hex digits of the SHA-1 of its name, so its path
+/// is the same length for every place of the repository. Never a former
+/// scratch's name: every place's name holds a `/`, which a `dir_name`
+/// writes `+2F`, or is shortened with `+~`.
+fn scratch_name(name: &str) -> String {
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(name.as_bytes());
+    hasher
+        .try_finalize()
+        .expect("a place's name is no SHA-1 collision")
+        .to_hex_with_len(10)
+        .to_string()
+}
+
+/// Whether `dir` is named as [`scratch_name`] names a scratch directory.
+fn is_scratch_name(dir: &OsString) -> bool {
+    dir.to_str()
+        .is_some_and(|d| d.len() == 10 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+}
+
+/// What the records under `.places/` and `.previews/` name of the
+/// scratch root, so [`Places::remove_unnamed`] removes nothing a record
+/// may name.
+#[derive(Default)]
+struct Named {
+    /// The directories records name. Names alone are compared: every
+    /// scratch directory is in the one root, however a process spells its
+    /// path.
+    dirs: BTreeSet<OsString>,
+    /// A record names no scratch, or cannot be read, and its place's name
+    /// cannot be read back, its file name cut short: it may name any
+    /// directory of the former form.
+    former: bool,
+    /// A record cannot be read and its file name was cut short: it may
+    /// name any directory of the short form too.
+    short: bool,
+}
+
+impl Named {
+    /// Whether a record may name the scratch directory `dir`.
+    fn keeps(&self, dir: &OsString) -> bool {
+        self.dirs.contains(dir)
+            || if is_scratch_name(dir) {
+                self.short
+            } else {
+                self.former
+            }
+    }
+}
+
+/// The name of a candidate's place, read back from its record's file name
+/// `stem`; none for a name cut short, which says nothing of the name it
+/// was.
+fn read_name(stem: &str) -> Option<String> {
+    if stem.contains("%~") {
+        return None;
+    }
+    Some(
+        stem.replace("%2F", "/")
+            .replace("%2E", ".")
+            .replace("%25", "%"),
+    )
 }
 
 /// The ports `[checkout] ports` names, from `ports_from`.
@@ -450,7 +532,7 @@ impl Places {
                 .path
                 .clone()
                 .ok_or_else(|| anyhow!("place {name} names no worktree"))?,
-            tmp: self.tmp(name),
+            tmp: self.scratch(name, made),
             env,
         })
     }
@@ -500,7 +582,7 @@ impl Places {
                 .path
                 .clone()
                 .unwrap_or_else(|| self.worktree_path(name)),
-            tmp: self.tmp(name),
+            tmp: self.scratch(name, made),
             env,
         })
     }
@@ -569,14 +651,18 @@ impl Places {
         Ok(names)
     }
 
-    /// Let go of what a place held beyond its checkout: its scratch
-    /// directory, its block of ports and its record.
-    fn let_go(&self, name: &str, block: Option<u32>) -> Result<()> {
-        let tmp = self.tmp(name);
-        if tmp.exists() {
-            std::fs::remove_dir_all(&tmp)?;
+    /// Let go of what a place held beyond its checkout: the scratch
+    /// directory its record `made` names, its block of ports and its
+    /// record. With no record, no scratch is removed: one no record names
+    /// is [`Checkout::remove_unnamed_scratch`]'s (123, rule core.30).
+    fn let_go(&self, name: &str, made: Option<&Made>) -> Result<()> {
+        if let Some(made) = made {
+            let tmp = self.scratch(name, made);
+            if tmp.exists() {
+                std::fs::remove_dir_all(&tmp)?;
+            }
         }
-        if let Some(n) = block {
+        if let Some(n) = made.and_then(|m| m.block) {
             free_block(&self.blocks()?, n, &self.record(name))?;
         }
         // A session's record is removed under the lock `ran` writes it
@@ -658,8 +744,150 @@ impl Places {
         self.root().join(places_dir(name)).join(dir_name(name))
     }
 
-    fn tmp(&self, name: &str) -> PathBuf {
-        self.root().join(".tmp").join(dir_name(name))
+    /// 35, rule core.30: the scratch directory of the place `name`, as its
+    /// record `made` names it; a record an older sluice wrote names none,
+    /// and its scratch is where that sluice put it, the place's name as one
+    /// directory name.
+    fn scratch(&self, name: &str, made: &Made) -> PathBuf {
+        made.scratch
+            .clone()
+            .unwrap_or_else(|| self.root().join(".tmp").join(dir_name(name)))
+    }
+
+    /// 35, rule core.30: where a place made now keeps its scratch, which
+    /// its record names before the directory is made.
+    fn new_scratch(&self, name: &str) -> PathBuf {
+        self.root().join(".tmp").join(scratch_name(name))
+    }
+
+    /// Every directory under the repository's scratch root as it is now:
+    /// what [`Places::remove_unnamed`] may remove.
+    fn list_scratch(&self) -> Result<Vec<PathBuf>> {
+        let dir = self.root().join(".tmp");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for e in entries {
+            let e = e?;
+            if e.file_type()?.is_dir() {
+                out.push(e.path());
+            }
+        }
+        Ok(out)
+    }
+
+    /// What every record under `.places/` or `.previews/` names of the
+    /// scratch root: its `scratch`, or, for a record naming none, its
+    /// former path, from the place's name as `session_places`,
+    /// `preview_records` and `made` read it back. A record that exists and
+    /// cannot be read names its scratch still (35, rule core.30): it is
+    /// warned of with the reader's words, and the place its file name
+    /// reads back as keeps its scratch of either form, or, for a file name
+    /// cut short, every directory is kept.
+    fn named_scratch(&self) -> Result<Named> {
+        let mut named = Named::default();
+        for dir in [".places", ".previews"] {
+            let dir = self.root().join(dir);
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+            };
+            for e in entries {
+                let path = e?.path();
+                let Some(stem) = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_suffix(".json"))
+                else {
+                    continue;
+                };
+                let read = match std::fs::read(&path) {
+                    // Released meanwhile.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    read => read
+                        .map_err(anyhow::Error::from)
+                        .and_then(|b| Ok(serde_json::from_slice::<Made>(&b)?)),
+                };
+                let made = match read {
+                    Ok(made) => made,
+                    Err(e) => {
+                        tracing::warn!(
+                            "reading {}, whose checkout's scratch is kept: {e:#}",
+                            path.display()
+                        );
+                        match read_name(stem) {
+                            Some(name) => named
+                                .dirs
+                                .extend([scratch_name(&name), dir_name(&name)].map(OsString::from)),
+                            None => {
+                                named.former = true;
+                                named.short = true;
+                            }
+                        }
+                        continue;
+                    }
+                };
+                let name = match made.kind {
+                    Kind::Session => made
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .map(|p| format!("{SESSION}{p}")),
+                    Kind::Preview => made.revision.as_ref().map(|rev| {
+                        format!("{PREVIEW}{}", &rev.as_str()[..rev.as_str().len().min(12)])
+                    }),
+                    Kind::Made => read_name(stem),
+                };
+                let scratch = match (&made.scratch, name) {
+                    (Some(scratch), _) => scratch.clone(),
+                    (None, Some(name)) => self.scratch(&name, &made),
+                    (None, None) => {
+                        named.former = true;
+                        continue;
+                    }
+                };
+                named
+                    .dirs
+                    .extend(scratch.file_name().map(|n| n.to_os_string()));
+            }
+        }
+        Ok(named)
+    }
+
+    /// 123, rule core.30: remove each of `listed`, the scratch root's
+    /// directories as [`Places::list_scratch`] found them, that no record
+    /// names now, and return those removed. Records are read after the
+    /// listing, and a place's record names its scratch before the
+    /// directory is made, so a listed directory's record, if it has one,
+    /// is read, and a directory made since is in no listing: no lock is
+    /// held against a place being made. While a record naming no scratch
+    /// cannot be named, only directories of the short form are removed,
+    /// and while one that cannot be read cannot be named, none. One that
+    /// cannot be removed is warned of and the rest go on.
+    fn remove_unnamed(&self, listed: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+        let named = self.named_scratch()?;
+        let mut removed = Vec::new();
+        for dir in listed {
+            let Some(own) = dir.file_name().map(|n| n.to_os_string()) else {
+                continue;
+            };
+            if named.keeps(&own) {
+                continue;
+            }
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => removed.push(dir),
+                // Removed meanwhile, by its place's release.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!("removing {}, which no checkout names: {e}", dir.display())
+                }
+            }
+        }
+        Ok(removed)
     }
 
     fn read_record(&self, name: &str) -> Result<Option<Made>> {
@@ -874,7 +1102,10 @@ impl Checkout for Places {
             self.release(name)?;
         }
         let record = self.record(name);
-        let mut made = Made::new(Kind::Made, METHOD);
+        let mut made = Made {
+            scratch: Some(self.new_scratch(name)),
+            ..Made::new(Kind::Made, METHOD)
+        };
         self.write_record(name, &made)?;
         let mut env = BTreeMap::from([(
             "SLUICE_PLACE".to_string(),
@@ -889,7 +1120,7 @@ impl Checkout for Places {
                 env.insert(env_name(p), (first + i as u16).to_string());
             }
         }
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -924,10 +1155,9 @@ impl Checkout for Places {
             else {
                 continue;
             };
-            // A name cut short says nothing of the name it was.
-            if stem.contains("%~") {
+            let Some(name) = read_name(stem) else {
                 continue;
-            }
+            };
             let made: Made = match std::fs::read(&path) {
                 Ok(b) => serde_json::from_slice(&b)
                     .with_context(|| format!("reading {}", path.display()))?,
@@ -937,10 +1167,6 @@ impl Checkout for Places {
             if made.kind != Kind::Made {
                 continue;
             }
-            let name = stem
-                .replace("%2F", "/")
-                .replace("%2E", ".")
-                .replace("%25", "%");
             out.push(name);
         }
         out.sort();
@@ -968,7 +1194,7 @@ impl Checkout for Places {
                 }
             }
         }
-        self.let_go(name, made.and_then(|m| m.block))
+        self.let_go(name, made.as_ref())
     }
 
     fn gone(&self, name: &str) -> Result<bool> {
@@ -992,11 +1218,12 @@ impl Checkout for Places {
             }
         }
         // A session's worktree stays (25, rule core.16).
-        self.let_go(name, made.and_then(|m| m.block))
+        self.let_go(name, made.as_ref())
     }
 
     fn release_gone(&self, name: &str) -> Result<GoneRelease> {
-        // 123: noted before it starts, so it never starts twice.
+        // 123: noted before it starts, so it never starts twice; it runs in
+        // the scratch the record names (rule core.30).
         let start = {
             let _lock = self.lock_records()?;
             match self.read_record(name)? {
@@ -1004,14 +1231,13 @@ impl Checkout for Places {
                     made.gone_release =
                         Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
                     self.write_record(name, &made)?;
-                    true
+                    Some(self.scratch(name, &made))
                 }
-                _ => false,
+                _ => None,
             }
         };
         let mut gone = GoneRelease::default();
-        if start {
-            let tmp = self.tmp(name);
+        if let Some(tmp) = start {
             std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
             match self.runs.release_gone(name, &tmp) {
                 Ok(ran) => gone.ran = ran,
@@ -1023,6 +1249,11 @@ impl Checkout for Places {
         }
         self.free(name)?;
         Ok(gone)
+    }
+
+    fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>> {
+        let listed = self.list_scratch()?;
+        self.remove_unnamed(listed)
     }
 
     fn adopted(&self, worktree: &str) -> Result<Option<Adopted>> {
@@ -1066,7 +1297,7 @@ impl Checkout for Places {
                 }
             };
             self.runs.remove_all_with(name, with)?;
-            self.let_go(name, made.block)?;
+            self.let_go(name, Some(&made))?;
             Ok(released)
         })();
         // 123: held at once: no round releases a session's place (25).
@@ -1170,6 +1401,7 @@ impl Checkout for Places {
                 let mut made = Made {
                     branch: Some(branch.into()),
                     path: Some(path.clone()),
+                    scratch: Some(self.new_scratch(&name)),
                     ..Made::new(Kind::Session, "session")
                 };
                 // Written before the block is held, so a block names a record
@@ -1194,7 +1426,7 @@ impl Checkout for Places {
         // result; the one before is not this run's.
         made.last_result = None;
         self.write_record(&name, &made)?;
-        let tmp = self.tmp(&name);
+        let tmp = self.scratch(&name, &made);
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut env = made.ports.clone();
         env.insert(
@@ -1246,6 +1478,7 @@ impl Checkout for Places {
             branch: Some(branch.into()),
             last_run: Some(at.into()),
             revision: Some(rev.clone()),
+            scratch: Some(self.new_scratch(name)),
             ..Made::new(Kind::Preview, METHOD)
         };
         // Written before the block is held, so a block names a record that
@@ -1269,7 +1502,7 @@ impl Checkout for Places {
             );
         }
         self.write_record(name, &made)?;
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -1317,7 +1550,7 @@ impl Checkout for Places {
             return Err(e);
         }
         self.remove_worktree(&self.worktree_path(name))?;
-        let tmp = self.tmp(name);
+        let tmp = self.scratch(name, &made);
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)?;
         }
@@ -1349,8 +1582,8 @@ impl Checkout for Places {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill, label, repository, slug, Kind, Made, Places};
-    use crate::runs::Runs;
+    use super::{fill, label, repository, scratch_name, slug, Kind, Made, Places};
+    use crate::runs::{dir_name, Runs};
     use sluice_seams::{Checkout, LastResult, Rev, RunKind, RunOutcome};
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -1379,16 +1612,14 @@ mod tests {
         let places = Places::new(&root, Runs::new(&root, "sluice".into()))
             .with_blocks(root.join("not-a-dir/blocks"));
         let name = "try/main/90";
-        places
-            .write_record(name, &Made::new(Kind::Made, "worktree"))
-            .unwrap();
-        places.let_go(name, None).unwrap();
+        let made = Made::new(Kind::Made, "worktree");
+        places.write_record(name, &made).unwrap();
+        places.let_go(name, Some(&made)).unwrap();
         assert!(!places.record(name).exists());
         let session = format!("session/{}", root.join("wt").display());
-        places
-            .write_record(&session, &Made::new(Kind::Session, "session"))
-            .unwrap();
-        places.let_go(&session, None).unwrap();
+        let made = Made::new(Kind::Session, "session");
+        places.write_record(&session, &made).unwrap();
+        places.let_go(&session, Some(&made)).unwrap();
         assert!(!places.record(&session).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1451,6 +1682,70 @@ mod tests {
         assert_eq!(made.path.as_deref(), Some(Path::new("/p")));
         let text = serde_json::to_string(&made).unwrap();
         assert!(!text.contains("caches"), "{text}");
+    }
+
+    /// 35, rule core.30: a scratch's name is 10 lower-case hex digits, one
+    /// name's always the same and two names' different, and never a
+    /// former scratch's name, which holds `+2F` or `+~`.
+    #[test]
+    fn a_scratch_name_is_ten_hex_digits_of_the_name() {
+        let names = [
+            "sluice/try/main/39".to_string(),
+            "session//Users/me/wt/a".to_string(),
+            "preview/0123456789ab".to_string(),
+            format!("session//{}", "w".repeat(300)),
+        ];
+        for name in &names {
+            let short = scratch_name(name);
+            assert_eq!(short.len(), 10, "{short}");
+            assert!(
+                short.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+                "{short}"
+            );
+            assert_eq!(short, scratch_name(name), "one name, two scratch names");
+            let former = dir_name(name);
+            assert!(former.contains("+2F") || former.contains("+~"), "{former}");
+            assert_ne!(short, former);
+        }
+        assert_ne!(scratch_name(&names[0]), scratch_name(&names[1]));
+    }
+
+    /// 35, rule core.30: a record an older sluice wrote names no scratch.
+    #[test]
+    fn an_older_record_names_no_scratch() {
+        let made: Made =
+            serde_json::from_str(r#"{"kind":"session","method":"session","path":"/w"}"#).unwrap();
+        assert_eq!(made.scratch, None);
+        let text = serde_json::to_string(&made).unwrap();
+        assert!(!text.contains("scratch"), "{text}");
+    }
+
+    /// 123, rule core.30: a place made after the scratch root was listed
+    /// keeps its scratch, its record written first; a directory the
+    /// listing held that no record names is removed.
+    #[test]
+    fn a_scratch_made_after_the_listing_is_kept() {
+        let root = std::env::temp_dir().join(format!("sluice-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let places = Places::new(&root, Runs::new(&root, "sluice".into()));
+        let stray = root.join("sluice/.tmp/0123456789");
+        std::fs::create_dir_all(&stray).unwrap();
+        let listed = places.list_scratch().unwrap();
+        assert_eq!(listed, vec![stray.clone()]);
+
+        let name = "sluice/try/main/7";
+        let made = Made {
+            scratch: Some(places.new_scratch(name)),
+            ..Made::new(Kind::Made, "git-worktree")
+        };
+        places.write_record(name, &made).unwrap();
+        let tmp = places.scratch(name, &made);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        assert_eq!(places.remove_unnamed(listed).unwrap(), vec![stray.clone()]);
+        assert!(tmp.is_dir(), "a scratch made after the listing was removed");
+        assert!(!stray.exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// 99: a name is one label of lower-case letters, digits and hyphens.

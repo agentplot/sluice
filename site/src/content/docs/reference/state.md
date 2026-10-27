@@ -41,7 +41,13 @@ readable with plain tools whether or not sluice is running.
                        addresses, when it was made and its command's run; for a
                        failed preview, what its command printed and nothing held
   .previews/<preview>/ a preview's checkout, kept until it is released
-  .tmp/<checkout>/     the checkout's scratch, SLUICE_TMP; a worktree keeps its own across runs
+  .tmp/<code>/         a checkout's scratch, SLUICE_TMP, which its record names:
+                       a short code made from the checkout's name, the same
+                       length for every checkout; a worktree keeps its own
+                       across runs. A checkout an older sluice made keeps its
+                       scratch under the checkout's name until it is released.
+                       A directory here that no record names is removed by
+                       the next round or sluice exec on the host
   .runs/<checkout>/    a candidate's run, or a preview's command
   .runs/<worktree>/<n>/
                        each run an agent started in its worktree, numbered;
