@@ -1342,3 +1342,135 @@ fn a_gone_checkout_is_freed_whatever_its_stored_release_did() {
     left_behind(&repo, &third);
     assert!(p.made().unwrap().is_empty());
 }
+
+/// Where a candidate's or a session's place's record is.
+fn record_path(repo: &Repo, name: &str) -> PathBuf {
+    repo.dir().join(format!(
+        ".git/sluice/.places/{}.json",
+        sluice::runs::flat_name(name)
+    ))
+}
+
+/// A place's record, as it is written.
+fn record_of(repo: &Repo, name: &str) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(record_path(repo, name)).unwrap()).unwrap()
+}
+
+/// Whether `path` is the repository's scratch root and 10 hex digits.
+fn short_scratch(repo: &Repo, path: &std::path::Path) -> bool {
+    let name = path.file_name().unwrap().to_string_lossy();
+    path.parent() == Some(&repo.dir().join(".git/sluice/.tmp"))
+        && name.len() == 10
+        && name.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// 35, 34, rule core.30: a candidate's checkout's record names its
+/// scratch, under the repository's own state and 10 hex digits long, and
+/// its checks are given that directory; its release removes the directory
+/// and the record.
+#[test]
+fn a_place_names_its_scratch_on_its_record() {
+    let (repo, rev) = scratch("places-scratch-record");
+    let p = places(&repo);
+    let place = p.materialize(NAME, &rev, &Settings::new()).unwrap();
+    let named = PathBuf::from(record_of(&repo, NAME)["scratch"].as_str().unwrap());
+    assert!(short_scratch(&repo, &named), "{}", named.display());
+    assert_eq!(place.tmp, named);
+    assert!(place.tmp.is_dir());
+
+    p.release(NAME).unwrap();
+    assert!(!place.tmp.exists(), "{} left", place.tmp.display());
+    assert!(!record_path(&repo, NAME).exists());
+}
+
+/// 35, 34, rule core.30: a worktree is given one scratch on every run, of
+/// the same length as another worktree's and not the same, holding
+/// nothing of the worktree's path.
+#[test]
+fn a_worktree_keeps_one_short_scratch() {
+    let (repo, _) = scratch("places-scratch-keep");
+    let p = places(&repo);
+    let session = repo.dir().with_extension("session");
+    let other = another_session(&repo, "other-with-a-longer-name");
+    let adopt = |w: &PathBuf| {
+        p.adopt(
+            w.to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap()
+    };
+    let (a, b) = (adopt(&session), adopt(&other));
+    assert_eq!(adopt(&session).tmp, a.tmp);
+    assert_eq!(adopt(&other).tmp, b.tmp);
+    assert_ne!(a.tmp, b.tmp);
+    for (place, worktree) in [(&a, &session), (&b, &other)] {
+        assert!(short_scratch(&repo, &place.tmp), "{}", place.tmp.display());
+        let tmp = place.tmp.to_string_lossy();
+        let worktree = std::fs::canonicalize(worktree).unwrap();
+        assert!(!tmp.contains(worktree.to_str().unwrap()), "{tmp}");
+        let own = worktree.file_name().unwrap().to_string_lossy();
+        assert!(!tmp.contains(own.as_ref()), "{tmp}");
+    }
+    p.release(&a.name).unwrap();
+    p.release(&b.name).unwrap();
+}
+
+/// 35, 34, rule core.30: a worktree's checkout an older sluice adopted,
+/// whose record names no scratch, keeps its scratch at the checkout's name
+/// as one directory name until it is released, which removes it; adopted
+/// again, it is given a short one.
+#[test]
+fn a_place_from_before_keeps_its_scratch_until_released() {
+    let (repo, _) = scratch("places-scratch-before");
+    let p = places(&repo);
+    let session = std::fs::canonicalize(repo.dir().with_extension("session")).unwrap();
+    let name = format!("session/{}", session.display());
+    let record = record_path(&repo, &name);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(
+        &record,
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": session,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let former = repo
+        .dir()
+        .join(".git/sluice/.tmp")
+        .join(sluice::runs::dir_name(&name));
+    std::fs::create_dir_all(&former).unwrap();
+    std::fs::write(former.join("kept"), "").unwrap();
+
+    let adopt = || {
+        p.adopt(
+            session.to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap()
+    };
+    let place = adopt();
+    assert_eq!(place.name, name);
+    assert_eq!(place.tmp, former);
+    assert!(former.join("kept").exists(), "its scratch was emptied");
+    assert!(record_of(&repo, &name).get("scratch").is_none());
+
+    p.release_session(&name, None).unwrap();
+    assert!(!former.exists(), "{} left", former.display());
+
+    let next = adopt();
+    assert!(short_scratch(&repo, &next.tmp), "{}", next.tmp.display());
+    assert!(next.tmp.is_dir());
+    assert_eq!(
+        record_of(&repo, &name)["scratch"].as_str(),
+        next.tmp.to_str()
+    );
+    p.release(&name).unwrap();
+}
