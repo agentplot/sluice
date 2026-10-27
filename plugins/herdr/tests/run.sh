@@ -617,6 +617,54 @@ sed "s|$common|REPO|" "$t/frame" >"$t/got"
 diff -u "$here/docs/board.frame" "$t/got" >"$t/diff" || fail "the frame differs: $(cat "$t/diff")"
 pass
 
+# #12 given a subject, #13 none from unit/forecast, under test for 130 s of
+# 900 s; changed by the jq in $1.
+named_doc() {
+  doc ".branches[0].depth = 2 | .branches[0].submissions = [
+      {id: 12, state: \"testing\", subject: \"Batch review cards\", from: {agent: \"claude\", worktree: \"unit/review\"}},
+      {id: 13, state: \"testing\", from: {agent: \"claude\", worktree: \"unit/forecast\"}}]
+    | .branches[0].candidates = [{id: \"c1\", submissions: [12, 13], revision: \"x\", state: \"testing\",
+        started: \"2026-10-16T19:43:00Z\", limit: 900, targets: [\"#check-fast\"], executor: \"sandbox\", ran: 0, replayed: 0, failed: []}]
+    | ${1:-.}"
+}
+
+fresh 'status: a combination names its submissions'
+feed "$(named_doc)"
+frame_of "$work" --once >"$t/frame"
+grep -qxF '    ▶ testing main + #12 Batch review cards + #13 unit/forecast  2m10s / 15m' "$t/frame" ||
+  fail "without tasks: $(cat "$t/frame")"
+feed "$(named_doc '.branches[0].candidates[0].tasks = [{target: "a:test", state: "passed"}, {target: "b:test", state: "running"}]')"
+frame_of "$work" --once >"$t/frame"
+grep -qxF '    ▶ testing main + #12 Batch review cards + #13 unit/forecast  1/2 ▓▓▓▓▓░░░░░  2m10s / 15m' "$t/frame" ||
+  fail "with tasks: $(cat "$t/frame")"
+pass
+
+fresh 'status: a landing of two names both'
+feed "$(doc '.branches[0].recent = [{schema: "sluice/log@1", at: "2026-10-16T19:44:00Z", event: "landed", ids: [12, 13], to: "c41e8f2aa0"}]
+  | .branches[0].recent_subjects = {"12": "Batch review cards"} | .branches[0].recent_from = {"12": "unit/review", "13": "unit/forecast"}')"
+frame_of "$work" --once >"$t/frame"
+grep -qxF '    ✓ 19:44 #12 Batch review cards, #13 unit/forecast landed as c41e8f2' "$t/frame" || fail "the landing reads: $(cat "$t/frame")"
+pass
+
+fresh 'status: a document that names no subjects names numbers'
+feed "$(doc '.branches[0].recent = [{schema: "sluice/log@1", at: "2026-10-16T19:44:00Z", event: "landed", ids: [11], to: "9ecc34a1b2"}]')"
+frame_of "$work" --once >"$t/frame"
+grep -qxF '    ✓ 19:44 #11 landed as 9ecc34a' "$t/frame" || fail "the landing reads: $(cat "$t/frame")"
+pass
+
+fresh 'status: a subject with control characters stays on its line'
+# #14 queued with the subject $1, a jq string.
+queued14() { doc ".branches[0].depth = 1 | .branches[0].submissions = [{id: 14, state: \"queued\", subject: $1, from: {agent: \"herdr\", worktree: \"pull/41\"}}]"; }
+feed "$(queued14 '"Herdr\npopup\u001b[31m"')"
+frame_of "$work" --once >"$t/frame"
+grep -qxF '    #14 Herdr popup [31m  queued    PR 41 herdr' "$t/frame" || fail "the row reads: $(cat "$t/frame")"
+grep -q "$(printf '\033')" "$t/frame" && fail "the subject's escape reached the frame: $(cat -v "$t/frame")"
+# Painted, the popup holds the same escapes as with a plain subject.
+painted() { printf '%s\n' "$1" | jq -L "$plugin/lib" -r --argjson now "$NOW" 'include "words"; rows($now; true; null)[] | .text' | tr -cd '\033' | wc -c; }
+[ "$(painted "$(queued14 '"Herdr\npopup\u001b[31m"')")" = "$(painted "$(queued14 '"Herdr popup"')")" ] ||
+  fail "the subject changed the popup's colors"
+pass
+
 fresh 'status: tasks redraw with the version unmoved'
 feed "$testing95"
 (
@@ -810,7 +858,7 @@ printf q | LINES=20 SLUICE_HERDR_DIR=$work sh "$plugin/bin/status.sh" >"$t/out"
 first=$(awk 'BEGIN{RS="\f"} NR==1' "$t/out")
 [ "$(printf '%s\n' "$first" | wc -l)" -le 20 ] || fail "the frame is taller than 20 lines: $first"
 printf '%s' "$first" | grep -q '^main at 9ecc34a · 3 submissions' || fail "the branch's heading went: $first"
-printf '%s' "$first" | grep -q '▶ testing main + #12 overview-docs + #13 plugin-board  19/30' || fail "the combination went: $first"
+printf '%s' "$first" | grep -q '▶ testing main + #12 Batch review cards + #13 plugin-board  19/30' || fail "the combination went: $first"
 printf '%s' "$first" | grep -q '^        ✗ a:failed ' || fail "the failed task went: $first"
 printf '%s' "$first" | grep -q '^        … b:running ' || fail "the running task went: $first"
 printf '%s' "$first" | grep -q '^        … 18 passed, 10 waiting$' || fail "the tasks are not counted: $first"
@@ -909,10 +957,22 @@ seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
 # The copy stands alone: nothing in it names the plugin's own directory.
 grep -rqF "$plugin" "$HERDR_PLUGIN_STATE_DIR/segment" && fail "the copy names the plugin's directory"
 out=$(cd "$work" && env -u HERDR_PLUGIN_ROOT -u HERDR_PLUGIN_STATE_DIR sh "$seg")
-[ "$out" = 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa' ] || fail "the segment printed: $out"
+[ "$out" = 'sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa' ] || fail "the segment printed: $out"
 feed "$(doc '.host = "host-a"')"
 out=$(cd "$work" && sh "$seg")
 [ -z "$out" ] || fail "with no queue it printed: $out"
+pass
+
+fresh 'status: the segment names what waits and the last event'
+feed "$(doc '.branches[0].depth = 2 | .branches[0].submissions = [
+    {id: 14, state: "queued", subject: "Herdr popup", from: {agent: "herdr", worktree: "pull/41"}},
+    {id: 15, state: "queued", from: {agent: "claude", worktree: "unit/toasts"}}]
+  | .branches[0].recent = [{schema: "sluice/log@1", at: "2026-10-16T19:41:00Z", event: "landed", ids: [11], to: "9ecc34a1b2"}]
+  | .branches[0].recent_subjects = {"11": "Fix the dates"} | .branches[0].recent_from = {"11": "unit/dates"}')"
+SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
+out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
+[ "$out" = 'sluice main · 2 submissions · #14 Herdr popup, #15 unit/toasts waiting · last #11 Fix the dates landed as 9ecc34a' ] ||
+  fail "the segment printed: $out"
 pass
 
 fresh "status: another repository's document leaves the segment alone"
@@ -921,7 +981,7 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 # Another repository's document that is not JSON, beside the focused one's.
 echo '{"schema": "sluice/overview@1", "host": "host-a", "repo' >"$S/docs/host-a--other-1.json"
 out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
-[ "$out" = 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa' ] ||
+[ "$out" = 'sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa' ] ||
   fail "beside another repository's broken document the segment printed: $out"
 pass
 
@@ -970,7 +1030,7 @@ pass
 fresh 'status: the band says when checks hold the queue back'
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
 seg=$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh
-band='sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa'
+band='sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa'
 segment_with() {
   # $1 the document's changes, as jq
   feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $1")"
@@ -1100,7 +1160,7 @@ pass
 
 fresh 'status: the segment counts held places'
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null
-band='sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa'
+band='sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ 2m10s/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa'
 feed "$(printf '%s\n' "$board" | jq -c --arg r "$common" ".repository = \$r | $held48")"
 out=$(cd "$work" && sh "$HERDR_PLUGIN_STATE_DIR/segment/bin/segment.sh")
 [ "$out" = "$band · 1 held: release failed" ] || fail "beside a queue the segment printed: $out"
@@ -1156,7 +1216,7 @@ cmd=$(HOME=$home HERDR_PLUGIN_STATE_DIR=$st sh "$plugin/bin/setup.sh" </dev/null
 # server's home, socket and PATH, nothing else, so the clock is the host's
 # own and the time under test is however long ago the board's run started.
 out=$(cd "$work" && env -i HOME="$home" HERDR_SOCKET_PATH="$sock" PATH="$PATH" /bin/sh -lc "$cmd")
-case $out in 'sluice main · 3 submissions · testing main + #12 overview-docs + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 pull/41 waiting · last #9 blamed on 4f1c2aa') ;;
+case $out in 'sluice main · 3 submissions · testing main + #12 Batch review cards + #13 plugin-board 3/5 ▓▓▓▓▓▓░░░░ '*'/15m · #14 Herdr popup waiting · last #9 unit/sidebar blamed on 4f1c2aa') ;;
 *) fail "with only the server's environment it printed: $out" ;;
 esac
 pass
