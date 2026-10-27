@@ -305,3 +305,97 @@ fn with_the_state_on_the_refusing_remote_both_lines_land_in_the_first_write_afte
     assert_eq!(refusal_lines(&h).len(), 2, "no line is written twice");
     assert_eq!(kept(&h), None);
 }
+
+/// The log's `read-refused` and `read-again` lines, each as its event's
+/// name and, for an end, how many rounds it counted.
+fn refusal_kinds(h: &Harness) -> Vec<(&'static str, u64)> {
+    refusal_lines(h)
+        .into_iter()
+        .map(|(_, e)| match e {
+            Event::ReadAgain { rounds, .. } => ("read-again", rounds),
+            _ => ("read-refused", 0),
+        })
+        .collect()
+}
+
+/// A landed bolt whose host's refusal of `main` ended after two rounds,
+/// its end not yet in the log: the write that would carry it failed.
+fn ended_unwritten() -> Harness {
+    let (h, id) = queued();
+    h.settle();
+    assert_eq!(h.sub(id).state, State::Landed);
+    h.w().refuse_reads(BRANCH, Some(NOT_FOUND));
+    for _ in 0..2 {
+        assert!(round(&h).is_err());
+        h.w().advance(chrono::Duration::minutes(5));
+    }
+    h.w().refuse_reads(BRANCH, None);
+    h.w().crash_next_write();
+    round(&h).unwrap();
+    h.w().advance(chrono::Duration::minutes(5));
+    let r = kept(&h).unwrap();
+    assert!(r.ended.is_some(), "{r:?}");
+    assert_eq!(refusal_kinds(&h), [("read-refused", 0)]);
+    h
+}
+
+/// satisfies: 133, 80, 73
+#[test]
+fn an_end_whose_write_failed_is_kept_when_the_state_is_then_refused() {
+    let h = ended_unwritten();
+    h.w().refuse_state_reads(BRANCH, Some(UNAVAILABLE));
+    let err = round(&h).unwrap_err();
+    assert_eq!(read_refused(&err).unwrap().asked, state_ref());
+    let r = kept(&h).unwrap();
+    assert_eq!((r.rounds, r.ended, r.earlier.len()), (1, None, 1));
+    assert_eq!(r.earlier[0].rounds, 2);
+    assert_eq!(
+        refusal_kinds(&h).len(),
+        1,
+        "the log gains nothing meanwhile"
+    );
+    h.w().advance(chrono::Duration::minutes(5));
+    h.w().refuse_state_reads(BRANCH, None);
+    round(&h).unwrap();
+    assert_eq!(
+        refusal_kinds(&h),
+        [
+            ("read-refused", 0),
+            ("read-again", 2),
+            ("read-refused", 0),
+            ("read-again", 1),
+        ],
+        "the earlier end is written before the refusal after it"
+    );
+    let lines = refusal_lines(&h);
+    assert_eq!(lines[2].1, refused(HOST, &state_ref(), UNAVAILABLE));
+    assert!(
+        lines.windows(2).all(|w| w[0].0 <= w[1].0),
+        "each at when it happened: {lines:?}"
+    );
+    assert_eq!(kept(&h), None);
+}
+
+/// satisfies: 133
+#[test]
+fn a_refused_round_is_counted_when_its_write_fails() {
+    let h = ended_unwritten();
+    h.w().refuse_reads(BRANCH, Some(UNAVAILABLE));
+    h.w().crash_next_write();
+    assert!(round(&h).is_err());
+    let r = kept(&h).unwrap();
+    assert_eq!((r.rounds, r.ended, r.earlier.len()), (1, None, 1));
+    assert_eq!(refusal_kinds(&h).len(), 1);
+    assert!(round(&h).is_err());
+    assert_eq!(
+        refusal_kinds(&h),
+        [("read-refused", 0), ("read-again", 2), ("read-refused", 0)]
+    );
+    assert_eq!(
+        refusal_lines(&h)[2].1,
+        refused(HOST, &branch_ref(), UNAVAILABLE)
+    );
+    let r = kept(&h).unwrap();
+    assert_eq!((r.rounds, r.earlier.len()), (2, 0));
+    assert!(r.causes.iter().all(|c| c.logged));
+}

@@ -24,6 +24,11 @@ pub struct Refusal {
     pub causes: Vec<Cause>,
     /// When a round read the remote again; `None` while it stands.
     pub ended: Option<String>,
+    /// Refusals of this host that ended before it opened, oldest first,
+    /// whose lines are not all in the branch's log yet: kept until a write
+    /// carries them, so a refusal that opens anew drops none of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<Refusal>,
 }
 
 /// One ref asked for and what git said of its refusal (133).
@@ -49,17 +54,26 @@ impl Refusal {
 
     /// `standing`, this host's refusal before a round refused at `now` by
     /// `read`: the round counted, and its cause added when no round met it
-    /// before. A refusal that ended opens anew.
+    /// before. A refusal that ended opens anew, keeping the ended one among
+    /// the earlier until its lines are written.
     pub fn refused(standing: Option<Refusal>, read: &ReadRefused, now: &str) -> Refusal {
         let mut r = match standing {
             Some(r) if r.ended.is_none() => r,
-            _ => Refusal {
-                remote: read.remote.clone(),
-                since: now.into(),
-                rounds: 0,
-                causes: Vec::new(),
-                ended: None,
-            },
+            standing => {
+                let mut earlier = Vec::new();
+                if let Some(mut ended) = standing {
+                    earlier.append(&mut ended.earlier);
+                    earlier.push(ended);
+                }
+                Refusal {
+                    remote: read.remote.clone(),
+                    since: now.into(),
+                    rounds: 0,
+                    causes: Vec::new(),
+                    ended: None,
+                    earlier,
+                }
+            }
         };
         r.rounds += 1;
         let met = r
@@ -97,25 +111,28 @@ impl Refusal {
     }
 
     /// The lines of it not yet in the branch's log, each with when it
-    /// happened, `host`'s, in that order: a `read-refused` for each cause
-    /// not logged, and a `read-again` once it ended.
+    /// happened, `host`'s, in that order: the earlier refusals' first, then
+    /// a `read-refused` for each cause not logged, and a `read-again` once
+    /// it ended.
     pub fn unwritten(&self, host: &str) -> Vec<(String, Event)> {
+        let mut lines: Vec<(String, Event)> = self
+            .earlier
+            .iter()
+            .flat_map(|r| r.unwritten(host))
+            .collect();
         let mut causes: Vec<&Cause> = self.causes.iter().filter(|c| !c.logged).collect();
         causes.sort_by(|a, b| a.at.cmp(&b.at));
-        let mut lines: Vec<(String, Event)> = causes
-            .into_iter()
-            .map(|c| {
-                (
-                    c.at.clone(),
-                    Event::ReadRefused {
-                        host: host.into(),
-                        remote: self.remote.clone(),
-                        asked: c.asked.clone(),
-                        said: c.said.clone(),
-                    },
-                )
-            })
-            .collect();
+        lines.extend(causes.into_iter().map(|c| {
+            (
+                c.at.clone(),
+                Event::ReadRefused {
+                    host: host.into(),
+                    remote: self.remote.clone(),
+                    asked: c.asked.clone(),
+                    said: c.said.clone(),
+                },
+            )
+        }));
         if let Some(ended) = &self.ended {
             lines.push((
                 ended.clone(),
@@ -132,11 +149,12 @@ impl Refusal {
     }
 
     /// What is kept once [`Refusal::unwritten`]'s lines are written: every
-    /// cause logged, and nothing once it ended.
+    /// cause logged, no earlier refusal, and nothing once it ended.
     pub fn written(mut self) -> Option<Refusal> {
         if self.ended.is_some() {
             return None;
         }
+        self.earlier.clear();
         for c in &mut self.causes {
             c.logged = true;
         }
@@ -243,8 +261,9 @@ mod tests {
                 }
             )]
         );
+        assert_eq!(r.written(), None);
         let again = Refusal::refused(
-            Some(r.clone()),
+            None,
             &read("refs/heads/main", NOT_FOUND),
             "2026-10-26T10:00:00Z",
         );
@@ -253,7 +272,62 @@ mod tests {
             (1, "2026-10-26T10:00:00Z")
         );
         assert_eq!(again.unwritten("build-1").len(), 1);
-        assert_eq!(r.written(), None);
+    }
+
+    /// 133: a refusal that opens anew while the end before it is not yet
+    /// in the log keeps that end, and any cause of it not logged, until a
+    /// write carries them, first, in the order they happened; once written,
+    /// none of them is kept.
+    #[test]
+    fn a_refusal_opened_anew_keeps_the_unwritten_lines_before_it() {
+        let mut first = Refusal::refused(
+            None,
+            &read("refs/heads/main", NOT_FOUND),
+            "2026-10-26T09:16:40Z",
+        );
+        first.read_again("2026-10-26T09:46:40Z");
+        let mut second = Refusal::refused(
+            Some(first),
+            &read("refs/sluice/state/main", UNAVAILABLE),
+            "2026-10-26T10:00:00Z",
+        );
+        second.read_again("2026-10-26T10:05:00Z");
+        let third = Refusal::refused(
+            Some(second),
+            &read("refs/heads/main", NOT_FOUND),
+            "2026-10-26T10:10:00Z",
+        );
+        assert_eq!(
+            (third.rounds, third.since.as_str(), third.earlier.len()),
+            (1, "2026-10-26T10:10:00Z", 2)
+        );
+        let lines: Vec<(String, &str)> = third
+            .unwritten("build-1")
+            .into_iter()
+            .map(|(at, e)| {
+                let kind = match e {
+                    Event::ReadRefused { .. } => "read-refused",
+                    Event::ReadAgain { .. } => "read-again",
+                    _ => "other",
+                };
+                (at[11..].to_string(), kind)
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("09:16:40Z".to_string(), "read-refused"),
+                ("09:46:40Z".to_string(), "read-again"),
+                ("10:00:00Z".to_string(), "read-refused"),
+                ("10:05:00Z".to_string(), "read-again"),
+                ("10:10:00Z".to_string(), "read-refused"),
+            ]
+        );
+        let back = Refusal::parse(&third.to_bytes()).unwrap();
+        assert_eq!(back, third);
+        let kept = third.written().unwrap();
+        assert!(kept.earlier.is_empty());
+        assert!(kept.unwritten("build-1").is_empty());
     }
 
     /// The document round-trips as the records seam keeps it.

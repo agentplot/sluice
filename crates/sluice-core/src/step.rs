@@ -2449,17 +2449,13 @@ impl Sluice<'_> {
     /// 133: a round `refused` refused, counted in this host's refusal of
     /// the branch's remote, its cause added when no round of the refusal met
     /// it before, and its lines written when the records can be (design D4,
-    /// D5). The round's error stands whatever this does.
+    /// D5). The round is kept before any write is tried, and a refusal that
+    /// ended with lines still unwritten is kept inside the one that opens
+    /// anew until a write carries them. The round's error stands whatever
+    /// this does.
     fn note_refused(&self, branch: &str, refused: &ReadRefused) {
         let noted = (|| {
-            let mut standing = self.refusal(branch)?;
-            if standing.as_ref().is_some_and(|r| r.ended.is_some()) {
-                // An end not yet in the log goes in before a refusal opens
-                // anew, when the records can be written.
-                self.write_refusal(branch)?;
-                standing = self.refusal(branch)?;
-            }
-            let r = Refusal::refused(standing, refused, &self.now());
+            let r = Refusal::refused(self.refusal(branch)?, refused, &self.now());
             self.keep_refusal(branch, Some(&r))?;
             self.write_refusal(branch)
         })();
