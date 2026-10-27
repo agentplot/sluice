@@ -908,3 +908,96 @@ fn a_push_the_remote_takes_is_one_push() {
     );
     assert_eq!(identity.renewed.get(), 0);
 }
+
+/// 134, 122, 104: a branch made whose push git read no answer to, the
+/// remote failing on it, is not pushed again; what the remote holds then
+/// decides: made when it holds the branch at the revision pushed, failed
+/// naming its absence otherwise.
+#[test]
+fn a_branch_made_with_no_answer_is_what_the_remote_holds() {
+    let repo = Repo::new("made-unanswered");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let at = repo.branch("unit/u", "main", &[("a", Some("1"))]);
+    for made in [true, false] {
+        let fake = {
+            let (base, at) = (base.clone(), at.clone());
+            remote(move |_, r| {
+                if lists_for_push(r) {
+                    listing("git-receive-pack", &[("refs/heads/main", &base)])
+                } else if is_push(r) {
+                    (500, vec![], "the server failed\n".into())
+                } else if made {
+                    let refs = [
+                        ("refs/heads/bolt/x", at.as_str()),
+                        ("refs/heads/main", &base),
+                    ];
+                    listing("git-upload-pack", &refs)
+                } else {
+                    listing("git-upload-pack", &[("refs/heads/main", &base)])
+                }
+            })
+        };
+        let url = format!("{}/o/r.git", fake.url());
+        let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+        let p = as_identity(&repo, &identity);
+        let moved = p.make("bolt/x", &rev(at.clone()));
+        if made {
+            assert_eq!(moved.unwrap(), Moved::Moved);
+        } else {
+            let err = format!("{:#}", moved.unwrap_err());
+            assert!(err.contains("pushing bolt/x to origin failed"), "{err}");
+            assert!(
+                err.ends_with("the push went unanswered, and origin has no bolt/x"),
+                "{err}"
+            );
+        }
+        assert_eq!(pushes(&fake).len(), 1, "made: {made}, one push");
+        assert_eq!(identity.renewed.get(), 0);
+    }
+}
+
+/// 134, 122, 105: a branch removed whose push's answer was lost, the
+/// connection cut, and which the remote no longer holds is removed: its
+/// local branch and remote-tracking ref go as an answered removal's do.
+#[test]
+fn a_branch_removed_with_no_answer_is_what_the_remote_holds() {
+    let repo = Repo::new("removed-unanswered");
+    let _bare = repo.bare_origin();
+    let base = repo.rev("main");
+    let at = repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    repo.git(&["update-ref", "refs/remotes/origin/bolt/x", &at]);
+    let fake = {
+        let (base, at) = (base.clone(), at.clone());
+        remote(move |_, r| {
+            if lists_for_push(r) {
+                let refs = [
+                    ("refs/heads/bolt/x", at.as_str()),
+                    ("refs/heads/main", &base),
+                ];
+                listing("git-receive-pack", &refs)
+            } else if is_push(r) {
+                (support::http::CUT, vec![], String::new())
+            } else {
+                listing("git-upload-pack", &[("refs/heads/main", &base)])
+            }
+        })
+    };
+    let url = format!("{}/o/r.git", fake.url());
+    let identity = Rc::new(FakeIdentity::new(&url, "fake-token"));
+    let p = as_identity(&repo, &identity);
+    assert_eq!(p.remove("bolt/x", &rev(at.clone())).unwrap(), Moved::Moved);
+    let zero = "0".repeat(40);
+    assert_eq!(
+        pushes(&fake),
+        [(
+            basic("fake-token"),
+            vec![(at, zero, "refs/heads/bolt/x".into())]
+        )],
+        "one push"
+    );
+    for gone in ["refs/heads/bolt/x", "refs/remotes/origin/bolt/x"] {
+        let out = repo.git_raw(&["rev-parse", "--verify", "-q", gone]);
+        assert!(!out.status.success(), "{gone} is left");
+    }
+}

@@ -12,8 +12,8 @@
 
 ## 3. A leased push with no answer reads the branch
 
-- [ ] 3.1 In `leased`, when the push failed with no ref's answer and no credential refusal (a cut connection, a server error), fetch the branch: return `Moved::Moved` when it holds the pushed revision, or is absent for a removal (deleting the local branch and tracking ref as `remove` does), and otherwise fail saying the push went unanswered and naming what the remote holds, or the fetch's failure; never push again. Verify with 3.2.
-- [ ] 3.2 Tests: a `make` whose POST the fake answers 500 (or cuts) while its upload-pack listing then shows the branch at the pushed revision returns `Moved::Moved` after one push; the same with the listing showing no branch fails naming the unanswered push and the branch's absence, after one push; a `remove` whose answer is lost and whose listing shows no branch returns `Moved::Moved` and leaves no local branch or tracking ref. Run `sluice exec main -- cargo test -p sluice --test pushed_refs`.
+- [x] 3.1 In `leased`, when the push failed with no ref's answer and no credential refusal (a cut connection, a server error), fetch the branch: return `Moved::Moved` when it holds the pushed revision, or is absent for a removal (deleting the local branch and tracking ref as `remove` does), and otherwise fail saying the push went unanswered and naming what the remote holds, or the fetch's failure; never push again. Verify with 3.2.
+- [x] 3.2 Tests: a `make` whose POST the fake answers 500 (or cuts) while its upload-pack listing then shows the branch at the pushed revision returns `Moved::Moved` after one push; the same with the listing showing no branch fails naming the unanswered push and the branch's absence, after one push; a `remove` whose answer is lost and whose listing shows no branch returns `Moved::Moved` and leaves no local branch or tracking ref. Run `sluice exec main -- cargo test -p sluice --test pushed_refs`.
 
 ## 4. The guide
 

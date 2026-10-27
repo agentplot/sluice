@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::rc::Rc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
@@ -411,22 +411,19 @@ impl Branch for PushedRefs {
     /// settle. An accepted push is the move, whatever the host's copy does
     /// next (122).
     fn move_to(&self, branch: &str, expected: &Rev, to: &Rev) -> Result<Moved> {
-        let refspec = format!("{to}:refs/heads/{branch}");
-        self.leased(branch, expected.as_str(), &refspec)
+        self.leased(branch, expected.as_str(), Some(to))
     }
 
     /// branches-1 104: push `at` as the branch, leased on its being absent
     /// (`--force-with-lease=<ref>:` with nothing after the colon).
     fn make(&self, branch: &str, at: &Rev) -> Result<Moved> {
-        let refspec = format!("{at}:refs/heads/{branch}");
-        self.leased(branch, "", &refspec)
+        self.leased(branch, "", Some(at))
     }
 
     /// branches-1 105: delete the remote's branch, leased on `expected`;
     /// once it is gone, so are its local branch and remote-tracking ref.
     fn remove(&self, branch: &str, expected: &Rev) -> Result<Moved> {
-        let refspec = format!(":refs/heads/{branch}");
-        let moved = self.leased(branch, expected.as_str(), &refspec)?;
+        let moved = self.leased(branch, expected.as_str(), None)?;
         if moved == Moved::Moved {
             self.local.delete_ref(&format!("refs/heads/{branch}"))?;
             self.local.delete_ref(&self.tracking(branch))?;
@@ -436,36 +433,50 @@ impl Branch for PushedRefs {
 }
 
 impl PushedRefs {
-    /// Push `refspec`, accepted only while the remote's branch is
-    /// `expected`, or absent when `expected` is empty. A refusal of the
-    /// credential is made once more with the same lease (134); a refusal
-    /// at the ref is reported with what the remote holds, never retried
-    /// blind (rules core.5, core.29); any other failure is an error, which
-    /// leaves a landing for the next step to settle.
-    fn leased(&self, branch: &str, expected: &str, refspec: &str) -> Result<Moved> {
+    /// Set the branch to `to`, or remove it when `to` is `None`, accepted
+    /// only while the remote's branch is `expected`, or absent when
+    /// `expected` is empty. A refusal of the credential is made once more
+    /// with the same lease (134); a refusal at the ref is reported with
+    /// what the remote holds, never retried blind (rules core.5, core.29).
+    /// A push whose answer git never read is never made again: the branch
+    /// is read, and the move is made when the remote holds `to` (122);
+    /// otherwise, and on any other failure, it is an error, which leaves a
+    /// landing for the next step to settle.
+    fn leased(&self, branch: &str, expected: &str, to: Option<&Rev>) -> Result<Moved> {
         let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
+        let refspec = format!("{}:refs/heads/{branch}", to.map_or("", Rev::as_str));
         let out = self.remote_git(&[
             "push",
             "--porcelain",
             "--no-verify",
             &lease,
             self.target(),
-            refspec,
+            &refspec,
         ])?;
         if out.status.success() {
             return Ok(Moved::Moved);
         }
         let report = String::from_utf8_lossy(&out.stdout);
-        let refused = report
+        let refused_at_the_ref = report
             .lines()
             .any(|l| l.starts_with('!') && l.contains("[rejected]"));
-        if refused {
+        if refused_at_the_ref {
             return Ok(Moved::Elsewhere(self.fetch(branch)?));
         }
-        Err(anyhow!(
+        let failed = format!(
             "pushing {branch} to {} failed: {}",
             self.remote,
             refusal(&out)
-        ))
+        );
+        if answered(&out) || refused(&out) {
+            bail!(failed);
+        }
+        let holds = match self.fetch(branch) {
+            Ok(at) if at.as_ref() == to => return Ok(Moved::Moved),
+            Ok(Some(at)) => format!("{} holds {branch} at {at}", self.remote),
+            Ok(None) => format!("{} has no {branch}", self.remote),
+            Err(e) => format!("{e:#}"),
+        };
+        bail!("{failed}; the push went unanswered, and {holds}")
     }
 }
