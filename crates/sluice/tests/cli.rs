@@ -1365,7 +1365,7 @@ fn overview_shows_every_branch_at_a_glance() {
             &tip.0[..7]
         )
     );
-    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")));
 }
 
 /// 26, 49, 61: the overview names the worktree each submission its recent
@@ -1436,6 +1436,90 @@ fn overview_names_the_subjects_of_recent_submissions() {
     );
 }
 
+/// 26: the overview's text names each submission of a landing, a blame,
+/// a conflict and a combination under test by its subject, or where it
+/// came from where its submit gave none.
+#[test]
+fn overview_names_each_submission_with_its_subject() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    let submit = |w: &str| sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    let recent = |f: &Fakes| -> Vec<String> {
+        sluice(f, &["overview"])
+            .1
+            .lines()
+            .filter(|l| l.starts_with("  20"))
+            .map(|l| {
+                l.split_once("  ")
+                    .unwrap()
+                    .1
+                    .split_once("  ")
+                    .unwrap()
+                    .1
+                    .to_string()
+            })
+            .collect()
+    };
+
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    submit("unit/a");
+    submit("unit/b");
+    give_subject(&f, 2, "Batch review cards");
+    sluice(&f, &["run", "--rounds", "6"]);
+    let to = &f.world.tip(BRANCH).0[..7];
+    assert_eq!(
+        recent(&f),
+        [format!("landed #1 unit/a, #2 Batch review cards as {to}")]
+    );
+
+    work(
+        &f,
+        "unit/c",
+        "agent-c",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    submit("unit/c");
+    give_subject(&f, 3, "Fix the forecast's dates");
+    sluice(&f, &["run", "--rounds", "6"]);
+    let blamed = recent(&f);
+    assert!(
+        blamed[0].starts_with("blamed #3 Fix the forecast's dates on "),
+        "{blamed:?}"
+    );
+    sluice(&f, &["withdraw", "3", "--as", "agent-c"]);
+
+    f.world.hold_runs(true);
+    work(
+        &f,
+        "unit/d",
+        "agent-d",
+        &[("plugin/lib/plan.py", Some("one"))],
+    );
+    work(
+        &f,
+        "unit/e",
+        "agent-e",
+        &[("plugin/lib/plan.py", Some("two"))],
+    );
+    submit("unit/d");
+    submit("unit/e");
+    give_subject(&f, 5, "Herdr popup");
+    sluice(&f, &["step", BRANCH]);
+    let (_, out) = sluice(&f, &["overview"]);
+    assert_eq!(
+        recent(&f)[0],
+        "conflict #5 Herdr popup on plugin/lib/plan.py",
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with(&format!("  testing {BRANCH} + #4 unit/d · "))),
+        "{out}"
+    );
+}
+
 /// ADR 0028: a combination under test carries its run's tasks, as a
 /// round kept them, and its text line says how many have ended.
 #[test]
@@ -1491,7 +1575,7 @@ fn overview_shows_a_combinations_tasks() {
     let (_, text) = sluice(&f, &["overview"]);
     assert!(
         text.lines().any(|l| l.starts_with(&format!(
-            "  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards · "
+            "  testing {BRANCH} + #3 unit/forecast · 1/3 tasks · running tests:t-batch-cards · "
         ))),
         "{text}"
     );
