@@ -1,7 +1,10 @@
 # landing-subject Specification
 
 ## Purpose
-TBD - created by archiving change a-landing-pull-request-is-titled-by-what-lands. Update Purpose after archive.
+Lets a submitter name what lands, in one line of their own words, so
+the landing commit names the work by that subject, or by the submitted
+branch where none was given, whether or not the branch takes pull
+requests (23).
 
 ## Requirements
 
