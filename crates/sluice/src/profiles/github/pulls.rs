@@ -1925,7 +1925,7 @@ impl crate::PullRequests for Pulls {
         subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         Ok(
-            match self.opening(seams, clock, &[worktree.to_string()], branch, subject)? {
+            match self.opening(seams, clock, &[worktree.to_string()], branch, &[subject])? {
                 Ok(mut opened) => Ok(opened.remove(0)),
                 Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
                 Err(GroupRefused::Short { .. }) => {
@@ -1940,9 +1940,22 @@ impl crate::PullRequests for Pulls {
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
+        subjects: &[String],
         branch: &str,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
-        self.opening(seams, clock, worktrees, branch, None)
+        // 125: one subject per worktree, in their order, or none.
+        let subjects: Vec<Option<&str>> = if subjects.is_empty() {
+            vec![None; worktrees.len()]
+        } else if subjects.len() == worktrees.len() {
+            subjects.iter().map(|s| Some(s.as_str())).collect()
+        } else {
+            bail!(
+                "a group submit to {branch} gives {} subjects for {} worktrees",
+                subjects.len(),
+                worktrees.len()
+            );
+        };
+        self.opening(seams, clock, worktrees, branch, &subjects)
     }
 
     fn find(
@@ -2038,15 +2051,15 @@ impl Pulls {
     /// written for its head before its branch is pushed, a new one opened
     /// a draft with it once its branch is. Then the group is taken whole or left drafts
     /// ([`Pulls::take_act`]). One worktree is marked one of no group and
-    /// marked ready, for intake to take on its conditions; only one is
-    /// given a `subject` to title its request with.
+    /// marked ready, for intake to take on its conditions. Each worktree's
+    /// of `subjects`, one per worktree, titles its request where given.
     fn opening(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
-        subject: Option<&str>,
+        subjects: &[Option<&str>],
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
@@ -2105,7 +2118,9 @@ impl Pulls {
         // Each request as the act leaves it, and when its last submission
         // left the queue, for the group's taking.
         let mut acted = Vec::new();
-        for (k, (session, submitted)) in sessions.iter().zip(&submitted).enumerate() {
+        for (k, ((session, submitted), &subject)) in
+            sessions.iter().zip(&submitted).zip(subjects).enumerate()
+        {
             let head_ref = session.from.worktree.clone();
             let head = &submitted.head;
             let agent = &session.from.agent;

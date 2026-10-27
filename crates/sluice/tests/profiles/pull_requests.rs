@@ -2335,6 +2335,58 @@ fn a_group_submit_opens_every_pull_request_marked() {
     assert!(pull.body.contains("<!-- sluice: agent=unit/g1 -->"));
 }
 
+/// 125: two worktrees submitted with a subject each: each pull request is
+/// opened titled by its own, in the worktrees' order; submitted again
+/// with the subjects the other way round, each sluice opened takes its
+/// new one.
+#[test]
+fn two_requests_two_subjects() {
+    let g = OnGitHub::new("pr-group-subjects", "");
+    let ws = g.sessions(&["a", "b"]);
+    let subjects = [
+        "--subject",
+        "Batch review cards",
+        "--subject",
+        "Card filters",
+    ];
+    let out = g.submit_group(&ws, &[&["--no-wait"][..], &subjects].concat());
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    for (name, title) in [("a", "Batch review cards"), ("b", "Card filters")] {
+        let pull = g.pull_of(name);
+        assert_eq!(pull.title, title);
+        assert!(
+            said.contains(&format!(
+                "pushed unit/{name} · opened #{}: {title}",
+                pull.number
+            )),
+            "{said}"
+        );
+    }
+    let swapped = [
+        "--subject",
+        "Card filters",
+        "--subject",
+        "Batch review cards",
+    ];
+    let out = g.submit_group(&ws, &[&["--no-wait"][..], &swapped].concat());
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(g.pull_of("a").title, "Card filters");
+    assert_eq!(g.pull_of("b").title, "Batch review cards");
+}
+
+/// 125: two worktrees submitted with no subject: each pull request is
+/// titled by its own branch.
+#[test]
+fn two_requests_no_subjects() {
+    let g = OnGitHub::new("pr-group-no-subjects", "");
+    let ws = g.sessions(&["a", "b"]);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(g.pull_of("a").title, "unit/a");
+    assert_eq!(g.pull_of("b").title, "unit/b");
+}
+
 /// Whether pull request `n` is a draft, as GitHub holds it now.
 fn is_draft(g: &OnGitHub, n: u64) -> bool {
     g.gh.forge.pull(&github::repo(), n).unwrap().unwrap().draft

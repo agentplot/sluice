@@ -570,15 +570,18 @@ pub trait PullRequests {
     ) -> Result<Result<Opened, SubmitRefusal>>;
 
     /// 125: push each of `worktrees`' branches and open or update its
-    /// pull request into `branch`, in order, each marked one of the group,
-    /// or none of them when any worktree is refused; then, for more than
-    /// one, mark each ready and queue them all in one write, or, when any
-    /// falls short of its conditions, leave each a draft and queue none.
+    /// pull request into `branch`, in order, each marked one of the group
+    /// and titled by its own of `subjects`, which are empty or one per
+    /// worktree, or none of them when any worktree is refused; then, for
+    /// more than one, mark each ready and queue them all in one write, or,
+    /// when any falls short of its conditions, leave each a draft and
+    /// queue none.
     fn open_group(
         &self,
         _seams: Seams<'_>,
         _clock: &dyn Clock,
         _worktrees: &[String],
+        _subjects: &[String],
         branch: &str,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         anyhow::bail!("{branch} takes no pull requests")
@@ -2916,7 +2919,7 @@ fn submit_pull_group(
 ) -> Result<i32> {
     let seams = s.seams();
     let branch = &req.branch;
-    let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
+    let opened = match pulls.open_group(seams, clock, &req.worktrees, &req.subjects, branch)? {
         Ok(o) => o,
         Err(GroupRefused::Worktrees(refused)) => {
             return refused_group(s, &req, &refused, &(), json, out)
