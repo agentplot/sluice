@@ -32,6 +32,11 @@ sluice reads the policy from the branch before a landing, so the change that
 adds `remote` lands on this host only. Push the branch to the remote by hand
 that once; sluice pushes every landing after it.
 
+sluice tells which remote a branch is on from every copy of it on the host,
+its own and what it last fetched from each remote: a host that has fetched the
+branch but whose own copy is old, or from before the policy, needs only a
+`git fetch`. Two copies naming different remotes are refused, naming both.
+
 A branch made later under a pattern with `remote`, such as a bolt, is never
 pushed by hand: `sluice branch create bolt/<b> --from main` makes it on the
 remote as sluice's app, and `sluice branch delete bolt/<b>` deletes it once it
