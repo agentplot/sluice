@@ -126,8 +126,8 @@ Every session can already work from a working copy of its own here, so
 the setup offers the move and goes on as the repository stands (126).
 
 1. Run the plan on the folder `kind` named, as for the only working copy,
-   naming this session's process, and with worktrunk's `worktree-path`
-   template checked as part of it:
+   naming this session's process, and, when worktrunk is used, with its
+   `worktree-path` template checked as part of it:
 
    ```sh
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/lay-out.sh" plan <the folder> --session-pid "$PPID"
