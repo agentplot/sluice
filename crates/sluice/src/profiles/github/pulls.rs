@@ -2043,7 +2043,7 @@ impl Pulls {
         clock: &dyn Clock,
         worktrees: &[String],
         branch: &str,
-        _subject: Option<&str>,
+        subject: Option<&str>,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
@@ -2137,14 +2137,12 @@ impl Pulls {
                 }
                 None => {
                     push()?;
-                    let title = messages
-                        .first()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or(&head_ref)
-                        .to_string();
+                    // C.5 pull request: titled by what lands, the subject
+                    // or the branch's name, never a commit's message.
+                    let title = subject.unwrap_or(&head_ref);
                     // A group's request is opened a draft, which the act
                     // marks ready only once it takes the group (125).
-                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
+                    let p = forge.open(&t.repo, branch, &head_ref, title, &body, n > 1)?;
                     (p, "opened")
                 }
             };

@@ -317,6 +317,12 @@ impl OnGitHub {
 
     /// A session's worktree on `unit/<name>` off `main`, with no commit.
     fn worktree(&self, name: &str) -> PathBuf {
+        self.worktree_on(name, &format!("unit/{name}"))
+    }
+
+    /// A worktree named for `name` on the new branch `branch` off `main`,
+    /// with no commit.
+    fn worktree_on(&self, name: &str, branch: &str) -> PathBuf {
         let dir = self.repo.dir().with_extension(format!("s-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         self.repo.git(&[
@@ -324,7 +330,7 @@ impl OnGitHub {
             "add",
             "-q",
             "-b",
-            &format!("unit/{name}"),
+            branch,
             dir.to_str().unwrap(),
             "main",
         ]);
@@ -1243,10 +1249,11 @@ fn submit_opens_then_updates_a_pull_request() {
         "{}",
         pull.body
     );
-    assert_eq!(pull.title, "Change r.txt");
+    // C.5 pull request: titled by the branch's name, given no subject.
+    assert_eq!(pull.title, "unit/review");
     assert!(
         said.contains(&format!(
-            "pushed unit/review · opened #{}: Change r.txt",
+            "pushed unit/review · opened #{}: unit/review",
             pull.number
         )),
         "{said}"
@@ -1266,6 +1273,64 @@ fn submit_opens_then_updates_a_pull_request() {
     assert_eq!(held.pulls.len(), 1);
     assert_eq!(held.pulls[0].head, again);
     assert!(w.exists());
+}
+
+/// C.5 pull request: a bolt's branch submitted with no subject is titled
+/// by its name, never by its first commit, its proposal's.
+#[test]
+fn a_bolt_submitted_with_no_subject_is_titled_by_its_branch() {
+    let g = OnGitHub::new("pr-bolt-title", "reviews = 1");
+    let w = g.worktree_on("bolt-title", "bolt/review-cards");
+    g.commit_message(&w, "proposal.md", "docs(openspec): propose review-cards");
+    g.commit_message(&w, "cards.txt", "feat(cards): batch review cards");
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("bolt/review-cards");
+    assert_eq!(pull.title, "bolt/review-cards");
+    assert!(
+        text(&out).contains(&format!("opened #{}: bolt/review-cards", pull.number)),
+        "{}",
+        text(&out)
+    );
+}
+
+/// C.5 pull request: a session submitted with a subject is titled by it,
+/// as written.
+#[test]
+fn a_session_submitted_with_a_subject_is_titled_by_it() {
+    let g = OnGitHub::new("pr-subject", "reviews = 1");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!(pull.title, "Batch review cards");
+    assert!(
+        text(&out).contains(&format!(
+            "pushed unit/review · opened #{}: Batch review cards",
+            pull.number
+        )),
+        "{}",
+        text(&out)
+    );
+}
+
+/// C.5 pull request: whatever titles it, the description holds every
+/// commit's message whole, oldest first, and the title is neither's.
+#[test]
+fn the_description_still_carries_the_commits() {
+    let g = OnGitHub::new("pr-subject-body", "reviews = 1");
+    let w = g.worktree("cards");
+    g.commit_message(&w, "one.txt", "Add the first card\n\nWith its reasons.");
+    g.commit_message(&w, "two.txt", "Add the second card");
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/cards");
+    assert_eq!(
+        pull.body,
+        "Add the first card\n\nWith its reasons.\n\nAdd the second card\n\n\
+         <!-- sluice: agent=unit/cards -->"
+    );
+    assert_eq!(pull.title, "Batch review cards");
 }
 
 /// A message of `chars` characters: `subject`, a blank line, a body.
@@ -1596,7 +1661,7 @@ fn no_wait_says_its_submission() {
     let id = g.of(n)[0]["id"].as_u64().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    let opened = format!("pushed unit/worded · opened #{n}: Change worded.txt");
+    let opened = format!("pushed unit/worded · opened #{n}: unit/worded");
     let at = lines.iter().position(|l| *l == opened).expect(&stdout);
     assert_eq!(
         lines.get(at + 1).copied(),
@@ -2124,9 +2189,7 @@ fn a_group_submit_opens_every_pull_request_marked() {
         assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
         let n = pull.number;
         assert!(
-            said.contains(&format!(
-                "pushed unit/{name} · opened #{n}: Change {name}.txt"
-            )),
+            said.contains(&format!("pushed unit/{name} · opened #{n}: unit/{name}")),
             "{said}"
         );
         assert!(
@@ -2192,7 +2255,7 @@ fn a_group_submit_queues_three_pull_requests_in_order() {
     let lines: Vec<&str> = said.lines().collect();
     for (k, name) in names.iter().enumerate() {
         let opened = format!(
-            "pushed unit/{name} · opened #{}: Change {name}.txt · marked ready for review",
+            "pushed unit/{name} · opened #{}: unit/{name} · marked ready for review",
             ns[k]
         );
         let at = lines
