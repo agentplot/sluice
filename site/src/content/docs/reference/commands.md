@@ -837,14 +837,27 @@ command line: an unknown command, flag or value, or a missing argument. `64` is 
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
 
-A waiting submit or `sluice wait` whose read the forge answers with a 5xx,
-GitHub unable to answer at the time, reads again, a pause apart, for five
-minutes. Past them it exits `3` as well, saying it could not read, apart
-from any outcome:
+sluice tries a call to a remote again when the remote never answered it:
+a connection not made, a server error such as a 5xx, a token refused.
+That holds for every call, a git fetch or push or a call to GitHub's
+API, and sluice pauses longer before each try. It tries for five minutes in a waiting submit or
+`sluice wait`, ending sooner at `--timeout` or Ctrl-C, and for thirty
+seconds in any other command. A push whose answer was lost is never
+pushed again: sluice reads the branch on the remote, and what it holds
+says whether the push was made. A check run, a comment or a pull request
+whose answer was lost is looked for on GitHub before it is made again,
+so it is never made twice. A workflow's run is never started twice. A
+run whose start went unanswered shows as started in the branch's log,
+with GitHub's words, and sluice starts it again only when no job for it
+appears.
+
+A waiting submit or `sluice wait` whose read GitHub still cannot answer
+once those five minutes are spent exits `3` as well, saying it could not
+read and how long it tried, apart from any outcome:
 
 ```console
 could not read #77: sluice wait main
-sluice: could not read #77 for 5m03s, so whether it landed is not known: GET /repos/o/r/pulls/77: 503 Service Unavailable
+sluice: could not read #77 for 5m03s, so whether it landed is not known: tried 9 times over 5m03s: GET /repos/o/r/pulls/77: 503 Service Unavailable
 ```
 
 Under `--json`, stdout holds the error document, with that command in its
