@@ -33,4 +33,4 @@
 
 ## 6. The gate
 
-- [ ] 6.1 `grep -rn "thread::sleep" crates/sluice/src/profiles/pushed_refs.rs crates/sluice/src/profiles/remote_refs.rs crates/sluice/src/profiles/github/` finds only the token's settle in `app.rs`, no `renew(` call remains outside the policy's credential step, and no `post_api` call in `rest.rs` or `actions.rs` is retried outside the policy; then commit and run the gate's checks with `sluice exec main`; every task passes.
+- [x] 6.1 `grep -rn "thread::sleep" crates/sluice/src/profiles/pushed_refs.rs crates/sluice/src/profiles/remote_refs.rs crates/sluice/src/profiles/github/` finds only the token's settle in `app.rs`, no `renew(` call remains outside the policy's credential step, and no `post_api` call in `rest.rs` or `actions.rs` is retried outside the policy; then commit and run the gate's checks with `sluice exec main`; every task passes.
