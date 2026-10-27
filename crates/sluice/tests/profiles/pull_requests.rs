@@ -1459,6 +1459,81 @@ fn a_subject_on_a_request_opened_by_hand_leaves_its_title() {
     );
 }
 
+/// The message of the commit `sub`, a submission of `main`, landed as on
+/// GitHub.
+fn landing_message(g: &OnGitHub, sub: &Value) -> String {
+    let landed = sub["landed_as"].as_str().expect("landed");
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(g.bare.path())
+        .args(["log", "-1", "--format=%B", landed])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Step until pull request `n`'s submission lands; returns it.
+fn landed(g: &OnGitHub, n: u64) -> Value {
+    g.step_until("landed", |g| g.of(n).iter().any(|s| s["state"] == "landed"));
+    g.of(n)
+        .into_iter()
+        .find(|s| s["state"] == "landed")
+        .unwrap()
+}
+
+/// 23, 118: a request a submit opened with a subject is taken with its
+/// title as the submission's subject, so its landing commit names the
+/// work by it, its trailers still naming the request's place.
+#[test]
+fn a_request_sluice_opened_with_a_subject_lands_named_by_it() {
+    let g = OnGitHub::new("pr-land-subject", "");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/review").number;
+    let sub = landed(&g, n);
+    let m = landing_message(&g, &sub);
+    let id = &sub["id"];
+    assert_eq!(
+        m.lines().next(),
+        Some(format!("chore(land): #{id} Batch review cards").as_str()),
+        "{m}"
+    );
+    let from = format!(
+        "\nSluice-From: {} (pull/{n})\n",
+        sub["from"]["agent"].as_str().unwrap()
+    );
+    assert!(m.contains(&from), "{m}");
+}
+
+/// 23, 120: a request a person opened lands named by the title they
+/// gave it.
+#[test]
+fn a_request_a_person_opened_lands_named_by_its_title() {
+    let g = OnGitHub::new("pr-land-title", "");
+    let (n, _) = g.by_hand("unit/hand", &[("h.txt", Some("h\n"))], false);
+    g.gh.forge
+        .edit(
+            &github::repo(),
+            n,
+            Some("Review cards, first pass"),
+            "Hand work.",
+        )
+        .unwrap();
+    let sub = landed(&g, n);
+    let m = landing_message(&g, &sub);
+    assert_eq!(
+        m.lines().next(),
+        Some(format!("chore(land): #{} Review cards, first pass", sub["id"]).as_str()),
+        "{m}"
+    );
+}
+
 /// A message of `chars` characters: `subject`, a blank line, a body.
 fn long_message(subject: &str, chars: usize) -> String {
     let body = "x".repeat(chars - subject.chars().count() - 2);
