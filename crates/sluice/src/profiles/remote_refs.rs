@@ -16,7 +16,9 @@
 //! What a host keeps of its own, its locks, its runs' tasks (ADR 0028)
 //! and the logs it read, is in `<common>/sluice-remote/<remote>/`, a
 //! `local files` of its own. A replay is recorded there too: it is no
-//! one's observation (core.9), so no signer signs it.
+//! one's observation (core.9), so no signer signs it. Beside it, what the
+//! host observed of each branch (73) and a refusal of its reads that
+//! stands (133), under `observed/` and `refused/`.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -486,13 +488,23 @@ impl RemoteRefs {
 
     /// Where this host keeps what it last saw of `branch` (73).
     fn observation(&self, branch: &str) -> Result<PathBuf> {
+        self.own_file("observed", branch)
+    }
+
+    /// Where this host keeps a refusal of its reads of `branch` (133).
+    fn refusal_file(&self, branch: &str) -> Result<PathBuf> {
+        self.own_file("refused", branch)
+    }
+
+    /// `branch`'s file under `what` in what this host keeps of the remote.
+    fn own_file(&self, what: &str, branch: &str) -> Result<PathBuf> {
         state_ref(branch)?;
         Ok(self
             .pushed
             .git_dir()
             .join("sluice-remote")
             .join(self.remote())
-            .join("observed")
+            .join(what)
             .join(format!("{branch}.json")))
     }
 }
@@ -662,26 +674,9 @@ impl State for RemoteRefs {
     }
 
     fn fetch_heads(&self, _branch: &str) -> Result<()> {
-        let spec = format!(
-            "+refs/sluice/heads/*:refs/sluice-fetched/{}/heads/*",
-            self.remote()
-        );
-        let out = self.pushed.remote_git(&[
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--prune",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "fetching the submitted heads from {} failed: {}",
-                self.remote(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        let asked = "refs/sluice/heads/*";
+        let spec = format!("+{asked}:refs/sluice-fetched/{}/heads/*", self.remote());
+        self.pushed.fetch_spec(asked, &spec, &["--prune"])?;
         Ok(())
     }
 
@@ -808,26 +803,12 @@ impl State for RemoteRefs {
 
     fn fetch_candidates(&self, branch: &str) -> Result<()> {
         state_ref(branch)?;
+        let asked = format!("refs/sluice/combinations/{branch}/*");
         let spec = format!(
-            "+refs/sluice/combinations/{branch}/*:refs/sluice-fetched/{}/combinations/{branch}/*",
+            "+{asked}:refs/sluice-fetched/{}/combinations/{branch}/*",
             self.remote()
         );
-        let out = self.pushed.remote_git(&[
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--prune",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "fetching {branch}'s combinations from {} failed: {}",
-                self.remote(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        self.pushed.fetch_spec(&asked, &spec, &["--prune"])?;
         Ok(())
     }
 
@@ -859,6 +840,30 @@ impl State for RemoteRefs {
 
     fn stale(&self, branch: &str) -> Option<ReadRefused> {
         self.stale.borrow().get(branch).cloned()
+    }
+
+    fn refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        match std::fs::read(self.refusal_file(branch)?) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn keep_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        let path = self.refusal_file(branch)?;
+        let Some(doc) = doc else {
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.into()),
+            };
+        };
+        std::fs::create_dir_all(path.parent().expect("a parent"))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, doc)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {

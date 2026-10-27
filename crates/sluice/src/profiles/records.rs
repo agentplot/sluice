@@ -409,6 +409,20 @@ impl State for Records {
         r.stale(branch)
     }
 
+    fn refusal(&self, branch: &str) -> Result<Option<Vec<u8>>> {
+        match self.route(branch)? {
+            None => self.local.refusal(branch),
+            Some(r) => r.refusal(branch),
+        }
+    }
+
+    fn keep_refusal(&self, branch: &str, doc: Option<&[u8]>) -> Result<()> {
+        match self.route(branch)? {
+            None => self.local.keep_refusal(branch, doc),
+            Some(r) => r.keep_refusal(branch, doc),
+        }
+    }
+
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
         match self.route(branch)? {
             None => self.local.read_finished(branch, name),

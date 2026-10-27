@@ -9,11 +9,14 @@ mod support;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::pushed_refs::PushedRefs;
 use sluice::profiles::remote_refs::{RemoteRefs, SignerKey, Signing};
 use sluice::signing::ssh;
 use sluice_core::records::{parse_lines, to_line, ResultKind, ResultLine, RESULT_SCHEMA};
-use sluice_seams::{Changes, Enforced, Outcome, Rev, State, TaskLog, Written, KEPT_LOGS};
+use sluice_seams::{
+    read_refused, Changes, Enforced, Outcome, Rev, State, TaskLog, Written, KEPT_LOGS,
+};
 use ssh_key::{Algorithm, PrivateKey};
 use support::{Repo, Scratch};
 
@@ -127,6 +130,88 @@ fn appends_and_finished_records_keep_their_places() {
         h.read_finished("bolt/x", "7.json").unwrap().unwrap(),
         b"{\"id\":7}\n"
     );
+}
+
+/// 80, 133: a state fetch the remote refuses reads the state last fetched,
+/// and says why: the remote, the ref asked for and git's words; the
+/// records' other fetches are refused reads too, and the next read that
+/// reaches the remote is current again.
+#[test]
+fn a_refused_state_fetch_is_stale_with_why() {
+    let (a, bare, _b) = two_hosts("rr-refused");
+    let h = host(&a, BTreeMap::new(), None);
+    {
+        let _g = h.lock("main").unwrap().unwrap();
+        h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
+    }
+    assert_eq!(h.read("main").unwrap().version, 1);
+    assert_eq!(h.stale("main"), None);
+    let aside = bare.path().with_extension("aside");
+    std::fs::rename(bare.path(), &aside).unwrap();
+    assert_eq!(h.read("main").unwrap().version, 1, "the state last fetched");
+    let stale = h.stale("main").expect("a stale read");
+    assert_eq!(stale.remote, "origin");
+    assert_eq!(stale.asked, "refs/sluice/state/main");
+    assert!(
+        stale
+            .said
+            .contains("does not appear to be a git repository"),
+        "{stale:?}"
+    );
+    for e in [
+        h.fetch_heads("main").unwrap_err(),
+        h.fetch_candidates("main").unwrap_err(),
+    ] {
+        let refused = read_refused(&e).expect("a refused read");
+        assert_eq!(refused.remote, "origin");
+        assert!(refused.asked.starts_with("refs/sluice/"), "{refused:?}");
+    }
+    std::fs::rename(&aside, bare.path()).unwrap();
+    assert_eq!(h.read("main").unwrap().version, 1);
+    assert_eq!(h.stale("main"), None);
+}
+
+/// 133: this host's refusal of a branch's remote is kept beside what it
+/// observed, replaced and removed whole, by either profile; it is never
+/// a branch's records.
+#[test]
+fn each_profile_keeps_a_refusal_beside_the_records() {
+    let (a, _bare, _b) = two_hosts("rr-kept");
+    let h = host(&a, BTreeMap::new(), None);
+    let local = LocalFiles::new(&a.dir().join(".git"));
+    {
+        let _g = local.lock("bolt/x").unwrap().unwrap();
+        local
+            .write("bolt/x", 0, put(&[("branch.json", "{}\n")]))
+            .unwrap();
+    }
+    let at = [
+        a.dir()
+            .join(".git/sluice-remote/origin/refused/bolt/x.json"),
+        a.dir().join(".git/sluice/.refused/bolt/x.json"),
+    ];
+    for (s, at) in [(&h as &dyn State, &at[0]), (&local, &at[1])] {
+        assert_eq!(s.refusal("bolt/x").unwrap(), None);
+        s.keep_refusal("bolt/x", Some(b"{\"rounds\":1}\n")).unwrap();
+        assert_eq!(std::fs::read(at).unwrap(), b"{\"rounds\":1}\n");
+        s.keep_refusal("bolt/x", Some(b"{\"rounds\":2}\n")).unwrap();
+        assert_eq!(
+            s.refusal("bolt/x").unwrap().as_deref(),
+            Some(&b"{\"rounds\":2}\n"[..])
+        );
+        s.keep_refusal("main", Some(b"{}\n")).unwrap();
+        s.keep_refusal("bolt/x", None).unwrap();
+        assert_eq!(s.refusal("bolt/x").unwrap(), None);
+        assert!(!at.exists());
+        s.keep_refusal("bolt/x", None).unwrap();
+    }
+    assert_eq!(local.branches().unwrap(), ["bolt/x"]);
+    assert!(!local
+        .read("bolt/x")
+        .unwrap()
+        .files
+        .keys()
+        .any(|k| k.contains("refused")));
 }
 
 /// Submission ids are numbered once across every host.
