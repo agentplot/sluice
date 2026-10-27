@@ -6,6 +6,10 @@
 //! lines, so `notify` has nothing to deliver beyond the core's record. When
 //! a waiting submit lands, `wt-submit` removes the session's worktree as
 //! `wt merge` does (C.4): the driver's, never the core's (rule core.16).
+//! Run again where the worktree's submission at its head stands, it submits
+//! nothing and follows that submission with `sluice wait`, under its own
+//! `--timeout`, removing the worktree on the same terms once it lands (C.5
+//! worktrunk; record 0065): `sluice wait` itself removes nothing.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -393,13 +397,15 @@ pub fn removes_on_landing(worktree: &Path) -> bool {
 
 /// Session-runs-1 clause 95, C.5 worktrunk: `sluice release` in the
 /// landed session's worktree, before worktrunk removes it, so a
-/// `post-remove` hook finds nothing of its runs left.
+/// `post-remove` hook finds nothing of its runs left. What it says goes to
+/// stderr, so a `--json` submit's stdout stays its one document.
 pub fn release(worktree: &Path) -> Result<()> {
     let status = Command::new("sluice")
         .arg("release")
         .arg("--worktree")
         .arg(worktree)
         .stdin(Stdio::null())
+        .stdout(std::io::stderr())
         .status()
         .context("running sluice release")?;
     if !status.success() {
@@ -410,13 +416,15 @@ pub fn release(worktree: &Path) -> Result<()> {
 
 /// `wt remove` of the landed session's worktree, in the foreground so it is
 /// gone when `wt submit` exits; its branch goes with it once merged. Its
-/// own hooks need approval as any `wt remove`'s do.
+/// own hooks need approval as any `wt remove`'s do. What it says goes to
+/// stderr, as [`release`]'s does.
 pub fn remove(worktree: &Path) -> Result<()> {
     let status = Command::new("wt")
         .arg("-C")
         .arg(worktree)
         .args(["remove", "--foreground"])
         .stdin(Stdio::null())
+        .stdout(std::io::stderr())
         .status()
         .context("running wt remove")?;
     if !status.success() {
