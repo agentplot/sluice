@@ -91,6 +91,11 @@ crates/sluice-core/src/ops.rs
 crates/sluice-core/src/text.rs
 crates/sluice-core/src/policy.rs
 crates/sluice-conformance/src/**
+crates/sluice-conformance/tests/copies.rs
+crates/sluice-conformance/tests/peers.rs
+crates/sluice-conformance/tests/places.rs
+crates/sluice-conformance/tests/scenarios.rs
+crates/sluice-conformance/tests/verdicts.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/profiles/github/pulls.rs
 crates/sluice/src/profiles/github/forge.rs
@@ -103,5 +108,6 @@ site/src/content/docs/guides/pull-requests.md
 site/src/content/docs/reference/commands.md
 site/src/content/docs/reference/configuration.md
 plugins/sluice/skills/using-sluice/SKILL.md
+plugins/sluice/skills/using-sluice/references/submit.md
 plugins/sluice/skills/setting-up-sluice/references/profiles/worktrunk.md
 ```
