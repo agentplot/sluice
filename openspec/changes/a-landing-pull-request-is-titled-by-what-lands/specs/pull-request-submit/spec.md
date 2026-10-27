@@ -47,30 +47,20 @@ description and marks the request ready as it does for any request
 - **WHEN** a person opened a pull request from `unit/review` titled `Review cards, first pass`, and an agent on `unit/review` runs `wt submit main --no-wait --subject "Batch review cards"`
 - **THEN** the pull request is still titled `Review cards, first pass`, its description holds the branch's commits, and it is ready for review at the head submitted
 
-### Requirement: A subject is one line given to one pull request
+### Requirement: A subject is one line
 `--subject` SHALL take one line of text. A subject that is empty or
-holds a line break, or `--subject` given with `--check`, `--status` or
-more than one `--worktree`, SHALL be refused as a command line sluice
-cannot read, exit 64, before anything is pushed or opened.
+holds a line break, or `--subject` given with `--check` or `--status`,
+SHALL be refused as a command line sluice cannot read, exit 64, before
+anything is pushed or opened.
 
 #### Scenario: Two lines
 - **WHEN** an agent runs `sluice submit main --subject "$(printf 'one\ntwo')"`
 - **THEN** it exits 64, saying a subject is one line, and nothing is pushed or opened
 
-#### Scenario: A group submit
-- **WHEN** an agent runs `sluice submit main --worktree ../a --worktree ../b --subject "Both"`
-- **THEN** it exits 64, saying `--subject` takes one worktree, and nothing is pushed or opened
+#### Scenario: An empty subject
+- **WHEN** an agent runs `sluice submit main --subject ""`
+- **THEN** it exits 64, saying the subject is empty, and nothing is pushed or opened
 
-### Requirement: A subject on a branch with no pull requests titles nothing
-A submit with `--subject` to a branch that takes no pull requests SHALL
-submit as it would without it, and SHALL warn, as it warns of anything
-else beneath its answer, that the branch opens no pull request, so the
-subject titles nothing.
-
-#### Scenario: A local branch
-- **WHEN** an agent runs `sluice submit bolt/x --no-wait --subject "Batch review cards"` and `bolt/x` has no `pull_requests`
-- **THEN** the submission is queued as without the subject, it exits 0, and a `warning:` line beneath the answer says `bolt/x` opens no pull request and the subject titles nothing
-
-#### Scenario: A local branch, in one document
-- **WHEN** the same submit is run with `--json`
-- **THEN** it prints one document whose `warnings` holds that sentence
+#### Scenario: With a check
+- **WHEN** an agent runs `sluice submit main --check --subject "Batch review cards"`
+- **THEN** it exits 64 and nothing is forecast, pushed or opened
