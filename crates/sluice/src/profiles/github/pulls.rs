@@ -801,6 +801,7 @@ impl Pulls {
                 branch: branch.into(),
                 after: Vec::new(),
                 priority: 0,
+                subject: None,
             })?;
             return Ok(Considered::from(match accepted {
                 Ok(a) => {
@@ -972,6 +973,7 @@ impl Pulls {
                     worktrees: by_k.values().map(|p| place(p.number)).collect(),
                     after: Vec::new(),
                     priority: 0,
+                    subjects: Vec::new(),
                 };
                 match s.submit_group(&req)? {
                     Ok(accepted) => {
@@ -1109,6 +1111,7 @@ impl Pulls {
             worktrees: acted.iter().map(|(p, _)| place(p.number)).collect(),
             after: Vec::new(),
             priority: 0,
+            subjects: Vec::new(),
         };
         let accepted = match s.submit_group(&req)? {
             Ok(accepted) => accepted,

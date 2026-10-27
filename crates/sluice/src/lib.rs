@@ -857,6 +857,7 @@ pub fn run(
                     worktrees: worktree,
                     after,
                     priority,
+                    subjects: Vec::new(),
                 };
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
@@ -900,6 +901,7 @@ pub fn run(
                     branch,
                     after,
                     priority,
+                    subject: None,
                 },
                 subject.as_deref(),
                 no_wait,
