@@ -27,6 +27,10 @@ readable with plain tools whether or not sluice is running.
     lock               held by a round of this branch
   .logs/bolt/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
+  .refused/bolt/concurrent-units.json
+                       while this host's rounds can't read the branch's remote:
+                       what they couldn't read, since when, for how many rounds,
+                       and which of it the log holds yet
   .places/<checkout>.json
                        a checkout's record: its kind, path, branch, ports, the
                        block of ports it holds on the host and, for a
@@ -152,7 +156,9 @@ holds, so two hosts that sign as one signer never lose each other's.
 What only this host keeps, its locks, its runs' tasks and copies of the
 logs it kept, is in `.git/sluice-remote/<remote>/`. A result moon
 replayed is kept there too: a replay is nobody's observation, so nobody
-signs it.
+signs it. Beside them, `refused/<branch>.json` holds what this host's
+rounds couldn't read of the remote while that lasts, as `.refused/` does
+for a branch whose state is on the host.
 
 Read any of it with git, on any host:
 
@@ -304,6 +310,27 @@ this host's branch holds:
 {"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
 {"schema":"sluice/log@1","event":"copy-levelled","host":"build-2","copy":"c43609b8e1"}
 ```
+
+`read-refused` is logged when a round can't read the branch, or its
+state, from the branch's remote. It names the host, the remote, the ref
+the round asked for and what git said, whole. It's logged once for each
+ref and words while that host's rounds are refused, never once a round,
+and each host logs its own. The first round on that host that reads the
+remote again logs `read-again`. `since` is when the first round was
+refused, `stood` how many seconds since then, and `rounds` how many of
+that host's rounds it refused:
+
+```json
+{"schema":"sluice/log@1","event":"read-refused","host":"build-1","remote":"origin","asked":"refs/heads/main","said":"remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found"}
+{"schema":"sluice/log@1","event":"read-again","host":"build-1","remote":"origin","since":"2026-10-26T09:16:40Z","stood":1800,"rounds":12}
+```
+
+A round that can't read the branch or its state forms, starts and lands
+nothing, and says why to whoever ran it, as before. When the state is on
+the remote that refused it, the round can't write these events either.
+The host keeps them, and its first write to the state after writes them,
+each with the time it happened. So an event written late can read
+earlier than the one before it.
 
 `released` is logged when a combination's checkout is released. One
 freed at the operator's `--accept-failure` carries `accepted`, what had

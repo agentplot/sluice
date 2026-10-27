@@ -1018,6 +1018,69 @@ fn status_reads_the_revision_the_records_saw() {
     assert_eq!(v["at"], seen.0);
 }
 
+/// 133, record 0061: while this host's rounds of the branch are refused,
+/// status says what could not be read, from where, since when, for how
+/// many rounds and what git said, on as many lines as git said it; once a
+/// round reads the remote again it says nothing of it. A state read
+/// answered from what was last fetched still says so (80).
+#[test]
+fn status_shows_this_hosts_refusal_while_it_stands() {
+    let f = setup();
+    sluice(&f, &["step", BRANCH]);
+    let said = "remote: Repository not found.\n\
+                fatal: repository 'https://github.com/acme/app.git/' not found";
+    f.world.refuse_reads(BRANCH, Some(said));
+    for _ in 0..3 {
+        assert!(f.sluice().step(BRANCH).is_err());
+    }
+    let kept: serde_json::Value =
+        serde_json::from_str(&f.world.refusal(BRANCH).expect("a refusal kept")).unwrap();
+    let since = kept["since"].as_str().unwrap();
+    let (code, out) = sluice(&f, &["status", BRANCH]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(&format!(
+            "this host could not read refs/heads/{BRANCH} from origin since {since}, 3 rounds: \
+             remote: Repository not found.\n  \
+             fatal: repository 'https://github.com/acme/app.git/' not found\n"
+        )),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["refused"],
+        serde_json::json!({
+            "remote": "origin",
+            "asked": format!("refs/heads/{BRANCH}"),
+            "said": said,
+            "since": since,
+            "rounds": 3,
+        })
+    );
+
+    f.world.refuse_reads(BRANCH, None);
+    f.sluice().step(BRANCH).unwrap();
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(!out.contains("could not read"), "{out}");
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v.get("refused").is_none(), "{v}");
+
+    f.world
+        .refuse_state_reads(BRANCH, Some("error: RPC failed; HTTP 503"));
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        out.contains("origin could not be reached: this is the state last fetched from it"),
+        "{out}"
+    );
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["stale"],
+        "origin"
+    );
+}
+
 /// Clauses 130, 131: a landed submission leaves the live records in the
 /// write that tells its outcome, is read by its number, still counts as
 /// landed for an `after`, still counts toward its worktree's attempts,

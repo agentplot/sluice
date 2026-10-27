@@ -14,6 +14,9 @@ use anyhow::Result;
 pub struct Credentials {
     pub username: String,
     pub password: String,
+    /// What they are, never the secret: whose, for what, and how old, for
+    /// a report of the remote's refusing them.
+    pub about: String,
 }
 
 /// An identity sluice has on a forge.
@@ -27,6 +30,10 @@ pub trait Identity {
 
     /// Credentials for `url`, one [`Identity::url`] gave.
     fn credentials(&self, url: &str) -> Result<Credentials>;
+
+    /// Credentials for `url` made afresh, never ones given before: for a
+    /// call the remote refused the last ones on.
+    fn renew(&self, url: &str) -> Result<Credentials>;
 }
 
 /// The variables a git call of sluice's is given its credentials in, read

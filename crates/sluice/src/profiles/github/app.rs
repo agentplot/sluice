@@ -1,6 +1,8 @@
 //! The app's JWT and its installation tokens. A JWT lasts ten minutes; an
-//! installation token an hour, kept in this process's memory and bought
-//! again five minutes before it ends. Nothing is written anywhere.
+//! installation token an hour, bought from the repository's own
+//! installation for that repository alone, kept in this process's memory
+//! and bought again five minutes before it ends, or at once for a call
+//! GitHub refused it on. Nothing is written anywhere.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -27,6 +29,10 @@ const JWT_LIFE: i64 = 600;
 const JWT_SKEW: i64 = 60;
 /// How long before its end a token is bought again.
 const REFRESH: TimeDelta = TimeDelta::minutes(5);
+/// How old a token bought for a refused call is before it is handed over:
+/// GitHub may refuse a token for its first seconds, until all its servers
+/// know it (Octokit's auth-app waits as long for the same reason).
+const SETTLE: TimeDelta = TimeDelta::seconds(5);
 
 /// The time now; a test's own clock in tests.
 pub type Now = Box<dyn Fn() -> DateTime<Utc>>;
@@ -80,9 +86,22 @@ pub struct Installation {
     pub permissions: BTreeMap<String, String>,
 }
 
+#[derive(Clone)]
 struct Token {
     secret: String,
     ends: DateTime<Utc>,
+    bought: DateTime<Utc>,
+    installation: u64,
+    /// What GitHub said the token reaches, in its words.
+    scope: String,
+}
+
+/// An installation token, and what it is for a report of its refusal.
+pub struct Issued {
+    pub secret: String,
+    /// The app, the repository, the installation it was bought from, its
+    /// scope and its age; never the secret.
+    pub about: String,
 }
 
 #[derive(Serialize)]
@@ -175,12 +194,48 @@ impl App {
     /// An installation token for `repo`, bought when this process has
     /// none that lasts five minutes more.
     pub fn token(&self, repo: &Repo) -> Result<String> {
+        Ok(self.held(repo)?.secret)
+    }
+
+    /// A token for `repo` as [`App::token`] gives it, or, `fresh`, one
+    /// bought now whatever this process holds, which replaces it: for a
+    /// call GitHub refused the last one on. A fresh token is handed over
+    /// once it is [`SETTLE`] old.
+    pub fn issue(&self, repo: &Repo, fresh: bool) -> Result<Issued> {
+        let t = if fresh {
+            let t = self.buy(repo)?;
+            if let Ok(wait) = (SETTLE - ((self.now)() - t.bought)).to_std() {
+                std::thread::sleep(wait);
+            }
+            t
+        } else {
+            self.held(repo)?
+        };
+        let age = ((self.now)() - t.bought).num_seconds().max(0);
+        Ok(Issued {
+            about: format!(
+                "app {}'s token for {repo} from installation {}, scoped to {}, bought {age}s ago",
+                self.id, t.installation, t.scope
+            ),
+            secret: t.secret,
+        })
+    }
+
+    /// The token this process holds for `repo` while it lasts five
+    /// minutes more, or one bought now.
+    fn held(&self, repo: &Repo) -> Result<Token> {
         let now = (self.now)();
         if let Some(t) = self.tokens.borrow().get(repo) {
             if t.ends - now > REFRESH {
-                return Ok(t.secret.clone());
+                return Ok(t.clone());
             }
         }
+        self.buy(repo)
+    }
+
+    /// A token bought now from `repo`'s installation for `repo` alone,
+    /// kept for the next call on `repo`.
+    fn buy(&self, repo: &Repo) -> Result<Token> {
         let installation = self.installation(repo)?;
         let body = serde_json::json!({ "repositories": [repo.name] }).to_string();
         let v = self
@@ -190,6 +245,7 @@ impl App {
                 &body,
             )
             .with_context(|| format!("making a token for {repo}"))?;
+        let bought = (self.now)();
         let secret = v["token"]
             .as_str()
             .ok_or_else(|| anyhow!("GitHub gave no token for {repo}"))?
@@ -199,14 +255,15 @@ impl App {
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .ok_or_else(|| anyhow!("GitHub gave a token for {repo} with no end"))?
             .with_timezone(&Utc);
-        self.tokens.borrow_mut().insert(
-            repo.clone(),
-            Token {
-                secret: secret.clone(),
-                ends,
-            },
-        );
-        Ok(secret)
+        let t = Token {
+            secret,
+            ends,
+            bought,
+            installation: installation.id,
+            scope: scope(repo, &v)?,
+        };
+        self.tokens.borrow_mut().insert(repo.clone(), t.clone());
+        Ok(t)
     }
 
     /// `GET` an API path with a bearer token.
@@ -280,6 +337,48 @@ impl App {
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         Ok((status, v, text))
     }
+}
+
+/// What a token GitHub gave for `repo` reaches, in GitHub's words: its
+/// repositories, then each permission. A token whose repositories leave
+/// out `repo` is refused, since it is used for `repo` alone.
+fn scope(repo: &Repo, v: &Value) -> Result<String> {
+    let names: Vec<&str> = v["repositories"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["full_name"].as_str())
+        .collect();
+    let full = repo.to_string();
+    if v["repositories"].is_array() && !names.iter().any(|n| n.eq_ignore_ascii_case(&full)) {
+        bail!(
+            "GitHub gave a token for {repo} that reaches {}, not {repo}",
+            if names.is_empty() {
+                "no repository".to_string()
+            } else {
+                names.join(", ")
+            }
+        );
+    }
+    let reaches = if names.is_empty() {
+        match v["repository_selection"].as_str() {
+            Some(s) => format!("{s} repositories"),
+            None => "repositories GitHub did not list".to_string(),
+        }
+    } else {
+        names.join(", ")
+    };
+    let granted: Vec<String> = v["permissions"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some(format!("{k}: {}", v.as_str()?)))
+        .collect();
+    Ok(if granted.is_empty() {
+        reaches
+    } else {
+        format!("{reaches} with {}", granted.join(", "))
+    })
 }
 
 /// A call GitHub answered with `status`, not a success, in its words: a

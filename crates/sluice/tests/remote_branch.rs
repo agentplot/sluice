@@ -67,6 +67,47 @@ impl Setup {
         Setup::with(name, &policy("").replace("remote = \"\"\n", ""))
     }
 
+    /// As [`Setup::new`] on `origin`, with `main`'s state on the remote: a
+    /// policy naming one signer, whose key this host signs with as the
+    /// host `name` (C.6).
+    fn signed(name: &str) -> Setup {
+        use ssh_key::{Algorithm, LineEnding, PrivateKey};
+        let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+        let line = format!("a {}", key.public_key().to_openssh().unwrap());
+        let policy = policy("origin").replace(
+            "[branches.main]\n",
+            &format!("[signers.a]\nssh = \"{line}\"\n\n[branches.main]\ntrust = [\"a\"]\n"),
+        );
+        let s = Setup::with(name, &policy);
+        let path = s.config.path().join("signing");
+        key.write_openssh_file(&path, LineEnding::LF).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::create_dir_all(s.config.path().join("sluice")).unwrap();
+        std::fs::write(
+            s.config.path().join("sluice/config.toml"),
+            format!(
+                "[signing]\nsigner = \"a\"\nkey = {:?}\n\n[peers]\nname = \"{name}\"\n",
+                path.display().to_string()
+            ),
+        )
+        .unwrap();
+        s
+    }
+
+    /// The file `path` of `main`'s state on the remote, as another host
+    /// reads it.
+    fn remote_state(&self, path: &str) -> String {
+        let out = support::git_command()
+            .arg("--git-dir")
+            .arg(self.origin.path())
+            .args(["show", &format!("refs/sluice/state/main:{path}")])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     fn with(name: &str, policy: &str) -> Setup {
         let repo = Repo::new(name);
         let seen = Scratch::new(&format!("{name}-seen"));
@@ -240,6 +281,24 @@ impl Setup {
         ]);
     }
 
+    /// `main`'s records, where the remote's side of a push can copy them.
+    fn records(&self) -> PathBuf {
+        self.repo.dir().join(".git/sluice/main")
+    }
+
+    /// Step `main` until a step fails; what it said.
+    fn step_until_failed(&self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let out = self.sluice(&["step", "main"]);
+            if !out.status.success() {
+                return text(&out);
+            }
+            assert!(Instant::now() < deadline, "{}", self.status());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     /// A records file of `main` holds `word`.
     fn logged(&self, word: &str) -> bool {
         let dir = self.repo.dir().join(".git/sluice/main");
@@ -359,22 +418,156 @@ fn a_push_that_never_reached_the_remote_lands_on_the_next_round() {
     );
     let before = s.remote_main();
     s.submit("a");
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let failed = loop {
-        let out = s.sluice(&["step", "main"]);
-        if !out.status.success() {
-            break text(&out);
-        }
-        assert!(Instant::now() < deadline, "{}", s.status());
-        std::thread::sleep(Duration::from_millis(200));
-    };
+    let failed = s.step_until_failed();
     assert!(failed.contains("pushing main to origin failed"), "{failed}");
+    assert_eq!(s.states(), ["landing"], "not landed");
     std::fs::rename(&aside, s.origin.path()).unwrap();
     assert_eq!(s.remote_main(), before);
     s.step_until_out();
     assert_eq!(s.states(), ["landed"]);
     assert_eq!(s.runs(), 1, "no new run");
     assert_eq!(s.repo.rev("main"), s.remote_main());
+}
+
+/// 22, 122, 124, I4: when the remote's side of the landing's push has
+/// received it, the remote holds the landing and the records still say
+/// the submission is landing: landed is written only once the remote has
+/// moved, and the host's copy is levelled to it after.
+#[test]
+fn landed_is_written_only_once_the_remote_holds_the_landing() {
+    let s = Setup::new("remote-landed-after", "origin");
+    let at_push = s.seen.path().join("at-push");
+    s.on_next_push(
+        &format!(
+            "mkdir -p {at}/submissions\n\
+             git --git-dir {origin} rev-parse refs/heads/main > {at}/remote\n\
+             cp {records}/submissions/*.json {at}/submissions/\n\
+             cp {records}/log.jsonl {at}/log.jsonl\n",
+            at = at_push.display(),
+            origin = s.origin.path().display(),
+            records = s.records().display(),
+        ),
+        true,
+    );
+    let before = s.remote_main();
+    s.submit("a");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    let landed = s.remote_main();
+    assert_ne!(landed, before);
+    assert_eq!(s.status()["submissions"][0]["landed_as"], landed.as_str());
+
+    let remote = std::fs::read_to_string(at_push.join("remote")).unwrap();
+    assert_eq!(remote.trim(), landed, "the remote held the landing");
+    let subs: Vec<serde_json::Value> = std::fs::read_dir(at_push.join("submissions"))
+        .unwrap()
+        .map(|e| serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap())
+        .collect();
+    let states: Vec<&str> = subs.iter().map(|x| x["state"].as_str().unwrap()).collect();
+    assert_eq!(
+        states,
+        ["landing"],
+        "and the records did not yet say landed"
+    );
+    let log = std::fs::read_to_string(at_push.join("log.jsonl")).unwrap();
+    assert!(!log.contains("\"event\":\"landed\""), "{log}");
+    assert!(s.logged("\"event\":\"landed\""));
+    assert_eq!(s.repo.rev("main"), landed, "the copy is levelled to it");
+}
+
+/// 22, 122, 124, I4: a push the remote refuses by a rule of its own lands
+/// nothing: the round says the remote's own words, the submission is left
+/// landing and never told landed, and neither the remote nor the host's
+/// copy moves. Once the remote takes the push, the next round lands it,
+/// with no new run.
+#[test]
+fn a_push_the_remote_refuses_leaves_the_submission_unlanded_with_its_words() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Setup::new("remote-rule", "origin");
+    let words = "main takes no push but the queue's identity";
+    let hook = s.origin.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, format!("#!/bin/sh\necho \"{words}\" >&2\nexit 1\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let before = s.remote_main();
+    s.submit("a");
+    let failed = s.step_until_failed();
+    assert!(failed.contains("pushing main to origin failed"), "{failed}");
+    assert!(failed.contains(words), "{failed}");
+    assert!(failed.contains("pre-receive hook declined"), "{failed}");
+    assert_eq!(s.states(), ["landing"]);
+    assert!(s.status()["submissions"][0]["landed_as"].is_null());
+    assert!(!s.logged("\"event\":\"landed\""));
+    assert_eq!(s.remote_main(), before);
+    assert_eq!(
+        s.repo.rev("main"),
+        before,
+        "the copy is written at no other time"
+    );
+
+    // A waiter is told the words, and not that it landed.
+    let id = s.status()["submissions"][0]["id"].to_string();
+    let out = s.sluice(&["wait", &id, "--timeout", "30s", "--json"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains(words), "{}", text(&out));
+    assert_eq!(s.states(), ["landing"]);
+
+    std::fs::remove_file(&hook).unwrap();
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(s.runs(), 1, "no new run");
+    let landed = s.remote_main();
+    assert_eq!(s.repo.rev(&format!("{landed}^1")), before);
+    assert_eq!(s.repo.rev("main"), landed);
+}
+
+/// 124, 6, rule core.6: after a landing, this host's copy of `main`
+/// stands where it was before it, and git's lock keeps any round from
+/// levelling it (S64). A session cut from the copy submits; its candidate
+/// is formed on the remote's revision, which holds the first landing, and
+/// lands there, and the copy is written only once its lock is gone, to
+/// the landing.
+#[test]
+fn a_submit_with_the_copy_behind_is_formed_on_the_remotes_revision() {
+    let s = Setup::new("remote-copy-behind", "origin");
+    let made = s.repo.rev("main");
+    s.submit("a");
+    s.step_until_out();
+    let first = s.remote_main();
+    assert_eq!(s.repo.rev("main"), first);
+    // As an older sluice left it, past the protection.
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        "refs/heads/main",
+        &made,
+    ]);
+    let lock = s.repo.dir().join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+
+    s.submit("b");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed", "landed"], "{}", s.status());
+    let second = s.remote_main();
+    assert_eq!(
+        s.repo.rev(&format!("{second}^1")),
+        first,
+        "formed on origin's"
+    );
+    for n in ["a", "b"] {
+        s.repo
+            .git(&["cat-file", "-e", &format!("{second}:{n}.txt")]);
+    }
+    assert_eq!(s.runs(), 2);
+    assert_eq!(s.repo.rev("main"), made, "the copy is left behind");
+    assert!(s.logged("copy-behind"));
+
+    std::fs::remove_file(&lock).unwrap();
+    let out = s.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(s.repo.rev("main"), second, "levelled to the landing");
+    assert!(s.logged("copy-levelled"));
 }
 
 /// A failed fetch lands nothing and says so; the checks already running
@@ -408,6 +601,173 @@ fn a_failed_fetch_lands_nothing_and_says_so() {
     s.step_until_out();
     assert_eq!(s.states(), ["landed"]);
     assert_eq!(s.runs(), 1, "the run kept running and its verdict stood");
+}
+
+/// `main`'s log lines of `event`, as JSON.
+fn events(log: &str, event: &str) -> Vec<serde_json::Value> {
+    log.lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|l| l["event"] == event)
+        .collect()
+}
+
+/// 133: with the remote moved away, a waiting submit's round says why its
+/// fetch failed as before, and `main`'s log holds one `read-refused` line
+/// however many rounds are refused; once the remote is back, one round
+/// logs `read-again` with the rounds it counted.
+#[test]
+fn a_refused_fetch_is_logged_once_and_its_end_with_the_rounds() {
+    let s = Setup::new("remote-refused", "origin");
+    std::fs::write(s.seen.path().join("hold"), "").unwrap();
+    let dir = s.sessions.path().join("a");
+    s.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "unit/a",
+        dir.to_str().unwrap(),
+        "main",
+    ]);
+    std::fs::write(dir.join("a.txt"), "a").unwrap();
+    s.repo.git(&["-C", dir.to_str().unwrap(), "add", "-A"]);
+    s.repo
+        .git(&["-C", dir.to_str().unwrap(), "commit", "-q", "-m", "a"]);
+    let waiting = s
+        .command(&dir)
+        .args(["submit", "main"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while s.runs() == 0 {
+        assert!(Instant::now() < deadline, "the check never started");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let aside = s.origin.path().with_extension("aside");
+    std::fs::rename(s.origin.path(), &aside).unwrap();
+    let out = waiting.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("fetching main from origin failed"),
+        "{}",
+        text(&out)
+    );
+    for _ in 0..3 {
+        let out = s.sluice(&["step", "main"]);
+        assert!(!out.status.success());
+        assert!(
+            text(&out).contains("fetching main from origin failed"),
+            "{}",
+            text(&out)
+        );
+    }
+    let log = || std::fs::read_to_string(s.records().join("log.jsonl")).unwrap();
+    let refused = events(&log(), "read-refused");
+    assert_eq!(refused.len(), 1, "{}", log());
+    assert_eq!(refused[0]["remote"], "origin");
+    assert_eq!(refused[0]["asked"], "refs/heads/main");
+    let said = refused[0]["said"].as_str().unwrap();
+    assert!(
+        said.contains("does not appear to be a git repository"),
+        "{said}"
+    );
+    assert!(!said.starts_with("fetching"), "git's words alone: {said}");
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(s.repo.dir().join(".git/sluice/.refused/main.json")).unwrap(),
+    )
+    .unwrap();
+    let rounds = kept["rounds"].as_u64().unwrap();
+    assert!(rounds >= 3, "{kept}");
+
+    std::fs::rename(&aside, s.origin.path()).unwrap();
+    let out = s.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let again = events(&log(), "read-again");
+    assert_eq!(again.len(), 1, "{}", log());
+    assert_eq!(again[0]["host"], refused[0]["host"]);
+    assert_eq!(again[0]["since"], refused[0]["at"]);
+    assert_eq!(again[0]["rounds"], rounds);
+    assert!(!s.repo.dir().join(".git/sluice/.refused/main.json").exists());
+    std::fs::write(s.seen.path().join("go"), "").unwrap();
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    assert_eq!(events(&log(), "read-refused").len(), 1);
+}
+
+/// 133, 80, 73: with `main`'s state on the remote too, the rounds while it
+/// is away write nothing, and both lines land in the first write after it
+/// is back, each timed when it happened.
+#[test]
+fn with_the_state_on_the_remote_both_lines_land_in_the_first_write_after() {
+    let s = Setup::signed("remote-refused-state");
+    s.submit("a");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    // Rounds until one writes nothing more.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let before = s.remote_state("version");
+        let out = s.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        if s.remote_state("version") == before {
+            break;
+        }
+        assert!(Instant::now() < deadline, "main never settled");
+    }
+    let version: u64 = s.remote_state("version").trim().parse().unwrap();
+    let aside = s.origin.path().with_extension("aside");
+    std::fs::rename(s.origin.path(), &aside).unwrap();
+    for _ in 0..3 {
+        let out = s.sluice(&["step", "main"]);
+        assert!(!out.status.success());
+        assert!(
+            text(&out).contains("fetching refs/sluice/state/main from origin failed"),
+            "{}",
+            text(&out)
+        );
+    }
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            s.repo
+                .dir()
+                .join(".git/sluice-remote/origin/refused/main.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept["rounds"], 3, "{kept}");
+    std::fs::rename(&aside, s.origin.path()).unwrap();
+    assert_eq!(
+        s.remote_state("version").trim(),
+        version.to_string(),
+        "nothing was written while the remote was away"
+    );
+    let out = s.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        s.remote_state("version").trim(),
+        (version + 1).to_string(),
+        "one write"
+    );
+    let log = s.remote_state("log.jsonl");
+    let refused = events(&log, "read-refused");
+    let again = events(&log, "read-again");
+    assert_eq!((refused.len(), again.len()), (1, 1), "{log}");
+    assert_eq!(refused[0]["host"], "remote-refused-state");
+    assert_eq!(refused[0]["asked"], "refs/sluice/state/main");
+    assert_eq!(refused[0]["at"], kept["since"], "timed when it happened");
+    assert_eq!(again[0]["since"], kept["since"]);
+    assert_eq!(again[0]["rounds"], 3);
+    assert!(again[0]["at"].as_str() >= refused[0]["at"].as_str());
+    let out = s.sluice(&["step", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        events(&s.remote_state("log.jsonl"), "read-refused").len(),
+        1,
+        "no line is written twice"
+    );
 }
 
 /// C.7: a `remote` the repository does not have lands nothing, and both
