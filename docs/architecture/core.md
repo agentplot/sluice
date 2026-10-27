@@ -44,7 +44,7 @@ part exists.
 - **[core.19]** A preview is made only at a revision its branch has landed, and decides nothing: its command is never recorded as a run, read by a gate, or waited on by a submission.
 - **[core.20]** The core writes no working copy it neither made nor adopted: a worktree that has checked out a branch sluice lands on is reported, never moved, and never stops a landing.
 - **[core.23]** An instance claims no run while a place it made belongs to a candidate with a verdict, an obsolete one, or a claim it no longer holds, until each such place is released or held.
-- **[core.30]** A place's scratch is at a path that does not grow with the place's name or its checkout's location, and the place's record names it. (Proposed 2026-10-27, record 0063, on the user's card; accepted only on their yes.)
+- **[core.30]** A place's scratch is at a path that does not grow with the place's name or its checkout's location, and the place's record names it.
 
 ### Design and records
 

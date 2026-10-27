@@ -1,7 +1,7 @@
 ---
 number: 63
 title: A place's scratch is at a short path that does not grow with the place's name, and its record names it
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # A place's scratch is at a short path that does not grow with the place's name, and its record names it
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: madswan-design, on slc-2-conductor's question of 2026-10-27 for the chore `the-lay-out-suite-runs-from-any-worktree` (signal 2026-10-27-slc-1-conductor-648c1025/01); the user's yes is asked on the record's card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 34, 35, 123, C.4 sandbox and container rows; `crates/sluice/src/profiles/places.rs` `tmp`, `root`, `Made`, `crates/sluice/src/runs.rs` `dir_name`, `shortened`, `KEPT`, `plugins/sluice/tests/lay-out.sh` lines 46 to 51, as origin/main held them on 2026-10-27 (2dfb2e4b); rules core.10, core.17.
