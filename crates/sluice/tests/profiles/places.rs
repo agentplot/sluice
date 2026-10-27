@@ -1474,3 +1474,56 @@ fn a_place_from_before_keeps_its_scratch_until_released() {
     );
     p.release(&name).unwrap();
 }
+
+/// 123, rule core.30: of the repository's scratch directories, only the
+/// one no record names is removed; a held worktree's checkout's scratch,
+/// and the former-name scratch of a checkout whose record names none, are
+/// left as they were.
+#[test]
+fn scratch_no_record_names_is_removed() {
+    let (repo, _) = scratch("places-scratch-sweep");
+    let p = places(&repo);
+    let held = p
+        .adopt(
+            repo.dir().with_extension("session").to_str().unwrap(),
+            "bolt/x",
+            &Settings::new(),
+            "2026-10-27T09:00:00Z",
+        )
+        .unwrap();
+    std::fs::write(held.tmp.join("socket"), "").unwrap();
+
+    let before = std::fs::canonicalize(another_session(&repo, "before")).unwrap();
+    let name = format!("session/{}", before.display());
+    std::fs::write(
+        record_path(&repo, &name),
+        serde_json::json!({
+            "kind": "session",
+            "method": "session",
+            "branch": "bolt/x",
+            "path": before,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let root = repo.dir().join(".git/sluice/.tmp");
+    let former = root.join(sluice::runs::dir_name(&name));
+    std::fs::create_dir_all(&former).unwrap();
+    std::fs::write(former.join("kept"), "").unwrap();
+
+    let stray = root.join("0123abcdef");
+    std::fs::create_dir_all(stray.join("deep")).unwrap();
+
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), vec![stray.clone()]);
+    assert!(!stray.exists());
+    assert!(
+        held.tmp.join("socket").exists(),
+        "a held scratch was removed"
+    );
+    assert!(former.join("kept").exists(), "a former scratch was removed");
+    assert_eq!(p.remove_unnamed_scratch().unwrap(), Vec::<PathBuf>::new());
+
+    p.release(&held.name).unwrap();
+    p.release(&name).unwrap();
+    assert!(!former.exists());
+}
