@@ -78,7 +78,8 @@ its release SHALL remove that directory.
 When a round or `sluice exec` releases the checkouts abandoned on its
 host, it SHALL remove every directory under `sluice/.tmp/` that no
 checkout's record names, and SHALL leave every directory a record names,
-an older record's former path among them.
+an older record's former path among them, and every directory a record
+that exists and cannot be read may name (35 as amended).
 
 #### Scenario: A stray directory and a held checkout's
 
@@ -97,3 +98,15 @@ an older record's former path among them.
 - **THEN** the checkout's scratch is not removed
   (`a_scratch_made_after_the_listing_is_kept` in
   `crates/sluice/src/profiles/places.rs`)
+
+#### Scenario: A checkout's record that cannot be read
+
+- **WHEN** a checkout's record exists and cannot be read, and
+  `sluice/.tmp/` holds that checkout's scratch and a directory no record
+  names
+- **THEN** the stray directory is removed, the unreadable checkout's
+  scratch is kept, the record is reported by its path with the reader's
+  words, and the cleanup succeeds (35 as amended at agentplot/blueprints
+  9f35001; rule core.30 as amended at sluice 4c29e618;
+  `an_unreadable_record_keeps_its_scratch` in
+  `crates/sluice/tests/profiles/places.rs`)

@@ -105,6 +105,14 @@ unless the checkout was released meanwhile, when its removal is the
 release's own; a `NotFound` from either is no error. So the sweep needs no
 lock against `materialize`, `adopt` or `preview`.
 
+A record that exists and cannot be read names its scratch still (35 as
+amended at agentplot/blueprints 9f35001; rule core.30 as amended at
+sluice 4c29e618): the sweep warns of it by its path with the reader's
+words, keeps both the short and the former directory of the checkout its
+file name reads back as, and goes on removing the rest; a cut-short file
+name that reads back as no checkout keeps every directory while it is
+there.
+
 A record naming no scratch names its former path, which needs the
 checkout's name: a session's from its `path`, a preview's from its
 `revision` as `preview_records` reads it, a candidate's from its record's

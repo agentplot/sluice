@@ -33,7 +33,9 @@ core.30 binds it.
   again.
 - A directory under `sluice/.tmp/` that no record names is removed by the
   next round or run on the host, as an abandoned checkout is, and a
-  directory a record names is never removed that way (123).
+  directory a record names is never removed that way (123); a record
+  that cannot be read still names its scratch, which is kept, and the
+  record is reported (35 as amended).
 - The lay-out suite's guard stays, for a host whose sluice predates this
   change, and says that is why it refuses.
 - The state reference page says how a checkout's scratch is named.
