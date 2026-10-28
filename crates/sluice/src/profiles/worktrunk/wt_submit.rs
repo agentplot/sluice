@@ -1,23 +1,28 @@
 //! `wt-submit`: `wt submit <branch> [args]` is `sluice submit <branch>
 //! [args]`, with the same output and exit; once a waiting submit exits as
-//! landed and sluice's record says its head landed, the session's worktree
-//! is released with `sluice release` and then removed as `wt merge`
-//! removes it (C.4; session-runs-1 clause 95), unless `--no-remove` is
-//! given or worktrunk's `[merge] remove` is false.
+//! landed and sluice's record says its submission landed, the session's
+//! worktree is released with `sluice release` and then removed as `wt
+//! merge` removes it (C.4; session-runs-1 clause 95), unless `--no-remove`
+//! is given or worktrunk's `[merge] remove` is false.
 //!
-//! Run again where the worktree's last submission to the branch is of its
-//! head and stands, undecided or landed, or its pull request is open and
-//! ready there, a waiting `wt submit` submits nothing: it follows that
-//! submission with `sluice wait <branch>`, whose output and exit are its
-//! own, under `--timeout` when given, and removes the worktree on the same
-//! terms once it lands (C.5 worktrunk; record 0065). A run naming
-//! `--after` or `--priority` asks for a new submission, and makes one.
+//! A submit from one worktree first reads what stands: the worktree's last
+//! submission to the branch, at the revision sluice says a submit from it
+//! would send now (124), undecided or landed, or its pull request open and
+//! ready there. Where one stands it submits nothing: a waiting run follows
+//! it with `sluice wait <branch>`, whose output and exit are its own, and
+//! removes the worktree on the same terms once it lands; a `--no-wait` run
+//! answers with `sluice submit <branch> --status`; a run naming `--after`
+//! or `--priority` is refused, since only a new head submits again. Where
+//! none stands it submits; under `--timeout`, without waiting, and then
+//! follows the new submission under that limit (C.5 worktrunk; record
+//! 0065). Where what stands cannot be read, it submits nothing.
 
 use std::ffi::OsString;
-use std::process::Command;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
 use sluice::profiles::worktrunk::{
-    follows_only, landed, release, remove, removes_on_landing, standing_in, Standing, Submit,
+    landed, release, remove, removes_on_landing, standing_in, Single, Standing, Submit,
 };
 use sluice::{INTERNAL, LANDED, USAGE};
 
@@ -27,81 +32,144 @@ fn main() {
         eprintln!("wt submit: {why}");
         std::process::exit(USAGE);
     }
-    // What a waiting run follows rather than submits; never a guess, since
-    // a submit at the same head withdraws the one standing (67).
-    let follows = match &submit.waiting {
-        Some(w) if !w.orders => match standing_in(&w.branch, &w.worktree) {
-            Ok(Standing::Nothing) if w.timeout.is_some() => {
-                let none = "none stands at this worktree's head";
-                eprintln!("wt submit: {}", follows_only(&w.branch, none));
-                std::process::exit(USAGE);
-            }
-            Ok(Standing::Nothing) => None,
-            Ok(standing) => Some(standing),
-            Err(e) => {
-                eprintln!(
-                    "wt submit: could not read whether a submission stands, so nothing was \
-                     submitted: {e}"
-                );
-                std::process::exit(INTERNAL);
-            }
-        },
-        _ => None,
+    let Some(one) = &submit.single else {
+        std::process::exit(run(&submit.sluice));
     };
-    let args: Vec<OsString> = match (&follows, &submit.waiting) {
-        (Some(standing), Some(w)) => {
-            match standing {
-                Standing::PullRequest(n) => {
-                    eprintln!("wt submit: following pull request #{n}, already open at this head");
+    // Never a guess: a submit at the revision standing withdraws it (67).
+    let standing = match standing_in(&one.branch, &one.worktree) {
+        Ok(standing) => standing,
+        Err(e) => {
+            eprintln!(
+                "wt submit: could not read whether a submission stands, so nothing was \
+                 submitted: {e}"
+            );
+            std::process::exit(INTERNAL);
+        }
+    };
+    let code = match standing {
+        Standing::Nothing if one.waits && one.timeout.is_some() => {
+            // A first submit under a time limit: submitted without waiting,
+            // what that says on stderr, so stdout is the wait's one
+            // document; then followed.
+            let mut args = submit.sluice.clone();
+            args.push("--no-wait".into());
+            let out = match Command::new("sluice")
+                .args(&args)
+                .stdin(Stdio::null())
+                .stderr(Stdio::inherit())
+                .output()
+            {
+                Ok(out) => out,
+                Err(err) => {
+                    eprintln!("wt submit: running sluice: {err}");
+                    std::process::exit(127);
                 }
-                Standing::Submission { id, .. } => {
-                    eprintln!(
-                        "wt submit: following submission {id}, already submitted at this head"
-                    );
-                }
-                Standing::Nothing => {}
+            };
+            let code = out.status.code().unwrap_or(1);
+            if code != 0 {
+                let _ = std::io::stdout().write_all(&out.stdout);
+                std::process::exit(code);
             }
+            let _ = std::io::stderr().write_all(&out.stdout);
+            follow(one)
+        }
+        Standing::Nothing => run(&submit.sluice),
+        standing if one.orders => {
+            let why = match standing {
+                Standing::Submission { id, .. } => format!(
+                    "submission {id} stands at this revision; change its place with \
+                     sluice amend {id}"
+                ),
+                _ => format!(
+                    "{} stands at this revision, and only a new head submits again",
+                    named(&standing)
+                ),
+            };
+            eprintln!("wt submit: {why}");
+            std::process::exit(USAGE);
+        }
+        _ if !one.waits => {
+            // Answered with what stands, and nothing removed: only a run
+            // that waits removes.
             let mut args: Vec<OsString> = vec![
-                "wait".into(),
-                w.branch.clone().into(),
+                "submit".into(),
+                one.branch.clone().into(),
+                "--status".into(),
                 "--worktree".into(),
-                w.worktree.clone().into(),
+                one.worktree.clone().into(),
             ];
-            if let Some(t) = &w.timeout {
-                args.extend(["--timeout".into(), t.clone()]);
-            }
-            if w.json {
+            if one.json {
                 args.push("--json".into());
             }
-            args
+            std::process::exit(run(&args));
         }
-        _ => submit.sluice.clone(),
+        standing => {
+            let what = match standing {
+                Standing::PullRequest(_) => "already open",
+                _ => "already submitted",
+            };
+            eprintln!(
+                "wt submit: following {}, {what} at this revision",
+                named(&standing)
+            );
+            follow(one)
+        }
     };
-    let code = match Command::new("sluice").args(&args).status() {
+    if code == LANDED && one.waits && one.remove {
+        let w = one.worktree.as_path();
+        if !landed(&one.branch, w) {
+            eprintln!(
+                "wt submit: sluice records no landing of this worktree's head, so it was kept"
+            );
+        } else if removes_on_landing(w) {
+            // A driver that removes a session's place releases it first.
+            if let Err(e) = release(w) {
+                eprintln!(
+                    "wt submit: landed, but the worktree was not released, so it was kept: {e}"
+                );
+            } else if let Err(e) = remove(w) {
+                eprintln!("wt submit: landed, but the worktree was not removed: {e}");
+            }
+        }
+    }
+    std::process::exit(code);
+}
+
+/// `sluice` with `args`, its output and exit the run's.
+fn run(args: &[OsString]) -> i32 {
+    match Command::new("sluice").args(args).status() {
         Ok(s) => s.code().unwrap_or(1),
         Err(err) => {
             eprintln!("wt submit: running sluice: {err}");
             std::process::exit(127);
         }
-    };
-    if code == LANDED {
-        if let Some(waiting) = submit.waiting.as_ref().filter(|w| w.remove) {
-            let w = waiting.worktree.as_path();
-            if !landed(&waiting.branch, w) {
-                eprintln!(
-                    "wt submit: sluice records no landing of this worktree's head, so it was kept"
-                );
-            } else if removes_on_landing(w) {
-                // A driver that removes a session's place releases it first.
-                if let Err(e) = release(w) {
-                    eprintln!(
-                        "wt submit: landed, but the worktree was not released, so it was kept: {e}"
-                    );
-                } else if let Err(e) = remove(w) {
-                    eprintln!("wt submit: landed, but the worktree was not removed: {e}");
-                }
-            }
-        }
     }
-    std::process::exit(code);
+}
+
+/// `sluice wait <branch>` from the worktree, under `--timeout` and `--json`
+/// when given: it follows the worktree's last submission, a pull request
+/// not yet taken in among them, as no `sluice wait <id>` can.
+fn follow(one: &Single) -> i32 {
+    let mut args: Vec<OsString> = vec![
+        "wait".into(),
+        one.branch.clone().into(),
+        "--worktree".into(),
+        one.worktree.clone().into(),
+    ];
+    if let Some(t) = &one.timeout {
+        args.extend(["--timeout".into(), t.clone()]);
+    }
+    if one.json {
+        args.push("--json".into());
+    }
+    run(&args)
+}
+
+/// What stands, as the run names it.
+fn named(standing: &Standing) -> String {
+    match standing {
+        Standing::Submission { id, .. } => format!("submission {id}"),
+        Standing::PullRequest(n) => format!("pull request #{n}"),
+        Standing::Nothing => "nothing".to_string(),
+    }
 }
