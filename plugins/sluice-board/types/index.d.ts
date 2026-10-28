@@ -195,7 +195,6 @@ export type Mine = {
 };
 
 export type Outcome = {
-  key: string;
   branch: string;
   id: number;
   word: "landed" | "failed" | "conflict";
