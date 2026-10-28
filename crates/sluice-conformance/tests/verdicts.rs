@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use sluice_conformance::{policy, shared, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultKind, ResultLine, State};
 use sluice_core::{KeptOut, SubmitRefusal};
-use sluice_seams::{Outcome, Told};
+use sluice_seams::{Decided, Outcome};
 
 fn results(h: &Harness) -> Vec<ResultLine> {
     sluice_core::records::parse_lines(h.w().results_log().as_bytes()).unwrap()
@@ -115,7 +115,7 @@ fn no_blame_until_every_candidate_ahead_has_a_verdict() {
     // #2's combination failed, but #1's has no verdict: no one is blamed,
     // nothing lands.
     assert!(!h.events().iter().any(|e| matches!(e, Event::Blamed { .. })));
-    assert!(h.w().told().is_empty());
+    assert!(h.w().delivered().is_empty());
     assert!(h.w().moves().is_empty());
     assert_eq!(h.sub(two).state, State::Testing);
 
@@ -144,9 +144,9 @@ fn a_run_past_its_time_limit_is_recorded_as_timed_out_and_read_as_failed() {
     let s = h.sub(one);
     assert_eq!(s.state, State::Failed);
     assert_eq!(s.result.as_deref(), Some("timed out"));
-    match &h.w().told_to("agent-a")[0].told {
-        Told::Failed { timed_out, .. } => assert!(timed_out),
-        other => panic!("told {other:?}"),
+    match &h.w().delivered_to("agent-a")[0].decided {
+        Decided::Failed { timed_out, .. } => assert!(timed_out),
+        other => panic!("delivered {other:?}"),
     }
     assert_eq!(h.w().live_runs(), 0);
     assert!(h.w().live_places().is_empty());
@@ -186,14 +186,14 @@ fn a_check_the_time_limit_cut_off_is_recorded_under_no_key_and_the_same_head_lan
         !lines.iter().any(|r| r.task == "b:test"),
         "nothing under b:test's key: {lines:?}"
     );
-    match &h.w().told_to("agent-a")[0].told {
-        Told::Failed {
+    match &h.w().delivered_to("agent-a")[0].decided {
+        Decided::Failed {
             failed, timed_out, ..
         } => {
             assert!(timed_out);
             assert_eq!(failed, &["b:test"]);
         }
-        other => panic!("told {other:?}"),
+        other => panic!("delivered {other:?}"),
     }
 
     h.w().ends_in_time("b:test");
@@ -474,9 +474,9 @@ fn a_required_check_the_run_left_without_a_result_is_no_pass() {
     h.settle();
     assert_eq!(h.sub(one).state, State::Failed);
     assert!(results(&h).iter().all(|r| r.task != "b:test"));
-    match &h.w().told()[0].told {
-        Told::Failed { failed, .. } => assert_eq!(failed, &vec!["b:test".to_string()]),
-        other => panic!("told {other:?}"),
+    match &h.w().delivered()[0].decided {
+        Decided::Failed { failed, .. } => assert_eq!(failed, &vec!["b:test".to_string()]),
+        other => panic!("delivered {other:?}"),
     }
 }
 

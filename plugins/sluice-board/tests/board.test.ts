@@ -7,6 +7,7 @@ import {
   checkLines,
   checkRows,
   clearText,
+  collectedWords,
   commitBase,
   conflictLines,
   conflictText,
@@ -14,6 +15,7 @@ import {
   emptyLines,
   errorLine,
   errorMessage,
+  failedName,
   finishedWords,
   flakyLines,
   flipped,
@@ -46,7 +48,6 @@ import {
   pullOf,
   pullsOf,
   recentInWay,
-  recentKeys,
   rewatchWait,
   shown,
   signature,
@@ -55,7 +56,6 @@ import {
   taskLines,
   unreadReason,
   WATCH_SINCE,
-  wakeText,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
 import { NOW, overview, withChecks, withHeld, withRelease, withTasks } from "./fixture";
@@ -633,23 +633,30 @@ describe("this session's submissions", () => {
 });
 
 describe("outcomes", () => {
-  test("a blame of this session's submission is told once", () => {
-    const before = overview();
-    const mine = learn(before, ME);
-    const told = recentKeys(before);
-    const after: Overview = overview();
-    after.branches[0]!.recent.push({
+  /** The fixture, then #13 blamed. */
+  function blamed13(): Overview {
+    const d = overview();
+    d.branches[0]!.recent.push({
       schema: "sluice/log@1",
       at: "2026-10-16T19:50:00Z",
       event: "blamed",
       id: 13,
       combination: "9a03c1e5d2",
     });
-    const found = outcomes(after, mine, told);
-    expect(found.length).toBe(1);
-    expect(found[0]!.word).toBe("failed");
-    expect(found[0]!.id).toBe(13);
-    expect(outcomes(after, mine, [...told, found[0]!.key])).toEqual([]);
+    return d;
+  }
+
+  test("a blame of this session's submission the overview before did not show", () => {
+    const before = overview();
+    const found = outcomes(before, blamed13(), learn(before, ME));
+    expect(found).toEqual([
+      { branch: "main", id: 13, word: "failed", combination: "9a03c1e5d2", paths: undefined },
+    ]);
+  });
+
+  test("an outcome the overview before showed already is none", () => {
+    const mine = learn(overview(), ME);
+    expect(outcomes(blamed13(), blamed13(), mine)).toEqual([]);
   });
 
   test("another session's landing is not this one's", () => {
@@ -660,26 +667,64 @@ describe("outcomes", () => {
       ids: [14],
       to: "aaaaaaa",
     });
-    expect(outcomes(after, learn(overview(), ME), recentKeys(overview()))).toEqual([]);
-  });
-
-  test("the wake names the blamed tests and their logs", () => {
-    const text = wakeText(
-      { key: "k", branch: "main", id: 13, word: "failed", combination: "9a03c1e5d2" },
-      [{ task: "cli:test", log: "/r/sluice.git/sluice/.logs/main/c7/cli:test.log" }],
-    );
-    expect(text).toContain("#13 to main failed: cli:test on 9a03c1e");
-    expect(text).toContain("Log of cli:test: /r/sluice.git/sluice/.logs/main/c7/cli:test.log");
-    expect(text).toContain("sluice exec main");
+    expect(outcomes(overview(), after, learn(overview(), ME))).toEqual([]);
   });
 
   test("a failure names the system it failed on", () => {
-    const text = wakeText(
-      { key: "k", branch: "main", id: 13, word: "failed", combination: "9a03c1e5d2" },
-      [{ task: "cli:build", log: "/l/cli:build.log", system: "linux-arm64" }, { task: "cli:test" }],
+    expect(failedName({ task: "cli:build", system: "linux-arm64" })).toBe(
+      "cli:build (linux-arm64)",
     );
-    expect(text).toContain("failed: cli:build (linux-arm64), cli:test on 9a03c1e");
-    expect(text).toContain("Log of cli:build (linux-arm64): /l/cli:build.log");
+    expect(failedName({ task: "cli:test" })).toBe("cli:test");
+  });
+});
+
+describe("what sluice inbox printed", () => {
+  const LANDED = "[sluice] #13 landed on main as abc1234.\npassed · landed as abc1234";
+
+  test("exit 0 with words: the turn is sluice's words, trailing blank lines trimmed", () => {
+    expect(collectedWords({ exitCode: 0, stdout: `${LANDED}\n\n`, stderr: "" })).toEqual({
+      text: LANDED,
+      toast: null,
+    });
+  });
+
+  test("exit 0 with nothing: no turn and no toast", () => {
+    expect(collectedWords({ exitCode: 0, stdout: "", stderr: "" })).toEqual({
+      text: null,
+      toast: null,
+    });
+    expect(collectedWords({ exitCode: 0, stdout: "\n", stderr: "" })).toEqual({
+      text: null,
+      toast: null,
+    });
+  });
+
+  test("exit 3: the turn, and a toast of the branch sluice could not read", () => {
+    const stderr = "sluice: could not read bolt/x's records: it is gone\n";
+    expect(collectedWords({ exitCode: 3, stdout: `${LANDED}\n`, stderr })).toEqual({
+      text: LANDED,
+      toast: "sluice: could not read bolt/x's records: it is gone",
+    });
+  });
+
+  test("a sluice with no inbox: no turn, and a toast in its words", () => {
+    const stderr = "error: unrecognized subcommand 'inbox'\n\nUsage: sluice <COMMAND>\n";
+    expect(collectedWords({ exitCode: 2, stdout: "", stderr })).toEqual({
+      text: null,
+      toast:
+        "sluice: couldn't collect this session's outcomes: error: unrecognized subcommand 'inbox'",
+    });
+    expect(collectedWords({ exitCode: 1, stdout: "", stderr: "" })).toEqual({
+      text: null,
+      toast: "sluice: couldn't collect this session's outcomes: it exited 1",
+    });
+  });
+
+  test("no run: no turn, and a toast saying so", () => {
+    expect(collectedWords(null)).toEqual({
+      text: null,
+      toast: "sluice: couldn't collect this session's outcomes: it could not be run",
+    });
   });
 });
 

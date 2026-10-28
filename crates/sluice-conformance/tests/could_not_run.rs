@@ -4,7 +4,7 @@
 
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
 use sluice_core::records::{Event, ResultLine, State};
-use sluice_seams::{Outcome, RunOutcome, Told};
+use sluice_seams::{Decided, Outcome, RunOutcome};
 
 fn results(h: &Harness) -> Vec<ResultLine> {
     sluice_core::records::parse_lines(h.w().results_log().as_bytes()).unwrap()
@@ -53,7 +53,7 @@ fn a_check_that_could_not_run_records_nothing_and_runs_again() {
     );
     assert!(results(&h).iter().all(|r| r.task != "a:test"));
     assert_ne!(h.sub(one).state, State::Failed);
-    assert!(h.w().told().is_empty(), "nobody is blamed");
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
 
     h.w().cannot_run("a:test", None);
     h.settle();
@@ -79,9 +79,9 @@ fn checks_that_could_not_run_three_runs_in_a_row_are_blamed_with_why() {
     assert_eq!(failed[0].task, "a:test");
     assert!(failed[0].hash.is_empty(), "no key: it has no result");
     assert_eq!(failed[0].not_run.as_deref(), Some("the engine is down"));
-    match &h.told_to("agent-a")[0].told {
-        Told::Failed { failed, .. } => assert_eq!(failed, &vec!["a:test".to_string()]),
-        other => panic!("told {other:?}"),
+    match &h.delivered_to("agent-a")[0].decided {
+        Decided::Failed { failed, .. } => assert_eq!(failed, &vec!["a:test".to_string()]),
+        other => panic!("delivered {other:?}"),
     }
     assert!(results(&h).iter().all(|r| r.task != "a:test"));
 }
@@ -125,7 +125,7 @@ fn a_host_that_is_not_ready_records_nothing_and_holds_the_queue() {
     }
     assert!(refused > 0, "the start was refused");
     assert!(results(&h).is_empty());
-    assert!(h.w().told().is_empty());
+    assert!(h.w().delivered().is_empty());
     assert_ne!(h.sub(one).state, State::Failed);
 
     h.w().not_ready(false);

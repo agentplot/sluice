@@ -205,7 +205,7 @@ names.
 
 `branch.json` holds the queue's own state: the revision its
 combinations are formed on, the combinations, a landing under way and
-the outcomes still to tell. Two fields say what a round reads the
+the outcomes still to deliver. Two fields say what a round reads the
 branch against:
 
 - `landed`: the revision every later read of the branch must contain.
@@ -241,7 +241,8 @@ over them.
   "branch": "bolt/concurrent-units",
   "head": "8d41b6c2e5",
   "from": { "agent": "crw-1-unit-2", "worktree": "unit/batch-review",
-            "path": "/home/me/wt/unit-batch-review" },
+            "path": "/home/me/wt/unit-batch-review", "host": "build-1",
+            "session": "herdr:w1:p2@/tmp/herdr/herdr.sock" },
   "submitted": "2026-10-11T09:16:40Z",
   "after": [],
   "priority": 0,
@@ -251,7 +252,8 @@ over them.
   "result": "failed",
   "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
                "log": ".git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log" } ],
-  "told": "2026-10-11T09:21:55Z"
+  "delivered": "2026-10-11T09:21:55Z",
+  "delivered_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
 }
 ```
 
@@ -268,6 +270,39 @@ is the branch the work was submitted from; `from.path` is the worktree
 itself, for a reader to match a submission to the session that made it.
 A submission written by an older sluice has no `path`.
 
+`from.host` is the host the submit ran on, by the name its peers know
+it by, and `from.session` is the session it ran in. Under herdr that's
+`herdr:<pane>@<socket>`: the pane and the herdr server it's on. A
+submit run in no herdr pane has no `session`. The round that decides
+the outcome types a notice into that pane, one line to the agent there,
+when the round runs on the same host:
+
+```text
+[sluice] #13 failed on bolt/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
+```
+
+`delivered` is when the outcome was delivered, and `delivered_to` is
+who it was delivered to. An outcome is delivered only when something
+put it before the session that submitted it. herdr took the notice into
+the pane, and `delivered_to` is the session. The pull request was
+posted on, and it's `pull/41`. `sluice inbox` printed it, or a wait on
+the submission reported it, and it's the session's herdr pane, as
+`herdr:<pane>@<socket>`, or the worktree's path where the session runs
+in no herdr pane.
+
+Until then the outcome is pending: the submission stands decided with
+neither field. The log has one `pending` event saying why it wasn't
+delivered: the submit ran in no pane or on another host, or herdr
+refused the notice, in herdr's words. No round pushes it again;
+`sluice inbox` or a wait delivers it.
+
+A submission written by an older sluice may say `told` and `told_to`
+for the same two fields, or `told` alone; sluice reads them as
+`delivered` and `delivered_to`, and writes the new names. An outcome
+the round has yet to push waits in `branch.json`'s `outbox`, each item
+holding it under the key `told`, which an older sluice on another host
+still reads.
+
 A passed submission waiting under its branch's [`hold`](/sluice/reference/configuration/#hold)
 has `"held": { "by": [12, 13, 14], "until": "2026-10-11T09:26:40Z" }`:
 the longer combination it waits for, by its submissions, and when the
@@ -275,7 +310,7 @@ hold runs out. Nothing reads it to decide; the round decides from the
 branch's record, where each combination that passed has `passed_at`.
 
 A submission that has landed or been withdrawn moves, unchanged, from
-`submissions/` to `.finished/` in the same write that tells its outcome,
+`submissions/` to `.finished/` in the same write that records its outcome,
 once no combination or landing still names it. A round, `sluice
 overview`, `sluice` alone and `sluice status <branch>` read only the
 branch's own record, `submissions/` and `finished.jsonl`, so they cost
@@ -313,6 +348,15 @@ run:
 `landing` is written before the branch moves and `landed` after, so a
 round that crashes between the two is finished correctly by the next
 one.
+
+`delivered` is logged when a submission's outcome is delivered.
+`pending` is logged once when it isn't, with `why` in the words of whatever didn't
+deliver it, and no round tries again:
+
+```json
+{"schema":"sluice/log@1","event":"delivered","id":12,"notification":"12:landed"}
+{"schema":"sluice/log@1","event":"pending","id":13,"notification":"13:failed","why":"agent is blocked"}
+```
 
 `held` is logged once for each revision a held branch is read at, with
 the landing it lacks, and `accepted` when the operator accepts that

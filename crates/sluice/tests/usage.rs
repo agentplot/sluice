@@ -2,14 +2,13 @@
 //! and help and the version still exit 0. The command line is read before
 //! any repository is opened, so these run nothing else.
 
+mod support;
+
 use std::process::{Command, Output};
 
 fn sluice(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sluice"))
+    support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .unwrap()
 }
@@ -129,12 +128,9 @@ fn a_command_still_takes_the_telemetry_flags() {
     // Outside any repository: read past the command line, it fails as
     // sluice (3), never as a flag it cannot read (64).
     let dir = std::env::temp_dir();
-    let out = Command::new(env!("CARGO_BIN_EXE_sluice"))
+    let out = support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
         .args(["submit", "main", "--check", "--otel-logs", "tail"])
         .current_dir(&dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CEILING_DIRECTORIES", &dir)
         .output()
         .unwrap();

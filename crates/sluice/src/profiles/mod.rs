@@ -57,7 +57,7 @@ impl sluice_seams::Driver for Drivers {
         }
     }
 
-    fn notify(&self, n: &sluice_seams::Notification) -> Result<()> {
+    fn notify(&self, n: &sluice_seams::Notification) -> Result<sluice_seams::Delivery> {
         match github::pulls::number(&n.to.worktree) {
             Some(_) => self.pulls.notify(n),
             None => self.worktrunk.notify(n),
@@ -134,6 +134,9 @@ impl Bound {
         let state = if guarding { state.guarding() } else { state };
         let jobs = instance.jobs();
         let caches = instance.caches.clone();
+        // 51: the host a session's submit is recorded on, as its peers
+        // name it.
+        let host = instance.peers.name.clone().unwrap_or_else(checks::hostname);
         Ok(Bound {
             // A session's place's release command is the check seam's to
             // build; the binding hands the builder over (rule core.2).
@@ -157,7 +160,7 @@ impl Bound {
             },
             branch,
             driver: Drivers {
-                worktrunk: worktrunk::Worktrunk,
+                worktrunk: worktrunk::Worktrunk::new(host),
                 pulls: pulls.clone(),
             },
             state,

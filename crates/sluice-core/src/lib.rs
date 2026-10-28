@@ -33,8 +33,8 @@ use crate::refused::Refusal;
 
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Lookup, Refused, Requester, Status, SubmitRefusal, SubmitRequest, SubmittedHead,
-    WithdrawRefusal, Withdrew,
+    Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitRefusal, SubmitRequest,
+    SubmittedHead, Unread, WithdrawRefusal, Withdrew,
 };
 pub use step::{Round, Step};
 
@@ -389,25 +389,6 @@ impl<'a> Sluice<'a> {
             }
         }
         Ok(Found::Unfound(unread))
-    }
-}
-
-/// A branch a lookup passed by, and the words its read was refused with,
-/// whole (26, 133).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Unread {
-    pub branch: String,
-    pub refused: String,
-}
-
-impl Unread {
-    /// `branch`, refused with `e`, worded as the overview words a branch
-    /// it could not read.
-    pub fn of(branch: &str, e: &anyhow::Error) -> Unread {
-        Unread {
-            branch: branch.into(),
-            refused: format!("{e:#}"),
-        }
     }
 }
 

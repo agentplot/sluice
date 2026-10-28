@@ -1,10 +1,12 @@
 // sluice's queue inside a Claude Code session: a band above the prompt, a
-// pane on /sluice, a status line, and a turn that tells an idle session its
-// submission's outcome, or that its work has come to conflict. Everything is
-// read from `sluice overview --json --watch` (sluice/overview@1; ADR 0023),
-// never from a one-shot read of the records in its place (129), and from
-// `sluice submit --check` for its own worktree: the board decides nothing and
-// writes nothing of sluice's.
+// pane on /sluice, a status line, and a turn that delivers an idle session its
+// submission's outcome in sluice's words, or that its work has come to
+// conflict. Everything is read from `sluice overview --json --watch`
+// (sluice/overview@1; ADR 0023), never from a one-shot read of the records in
+// its place (129), from `sluice submit --check` for its own worktree, and
+// from `sluice inbox`, which alone records an outcome as delivered to the
+// session (51): the board decides nothing and writes nothing of sluice's but
+// through a sluice command.
 
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
@@ -20,13 +22,14 @@ import type {
   OverviewFailed,
   OverviewTask,
 } from "../types";
-import type { CheckRow } from "./board";
+import type { CheckRow, Collected } from "./board";
 import {
   bandLines,
   cannotFollow,
   checkLines,
   checkRows,
   clearText,
+  collectedWords,
   combination,
   commitBase,
   conflictLines,
@@ -68,7 +71,6 @@ import {
   pullOf,
   pullsOf,
   recentInWay,
-  recentKeys,
   recentWords,
   rewatchWait,
   shown,
@@ -80,7 +82,6 @@ import {
   testing,
   unlistedHeld,
   unreadReason,
-  wakeText,
 } from "./board";
 
 const PANE = "sluice";
@@ -103,7 +104,6 @@ const NOT_YET: Forecasting = { key: null, head: null, told: null, branch: null, 
 
 const doc = atom({ plugin: "sluice-board", key: "doc" } as const, null);
 const mine = atom({ plugin: "sluice-board", key: "mine" } as const, NO_ONE);
-const told = atom({ plugin: "sluice-board", key: "told" } as const, []);
 const isHidden = atom({ plugin: "sluice-board", key: "isHidden" } as const, false);
 const now = atom({ plugin: "sluice-board", key: "now" } as const, 0);
 const remotes = atom({ plugin: "sluice-board", key: "remotes" } as const, {});
@@ -199,28 +199,29 @@ async function learnRemotes($: $, next: Overview, cwd: string) {
   }
 }
 
-/** A new overview: learn this session's submissions, tell new outcomes. */
-async function take($: $, next: Overview, cwd: string, how: How) {
+/**
+ * A new overview: learn this session's submissions, and raise each outcome
+ * of theirs the overview before it did not show. The board keeps no list of
+ * its own of what the session was given (51): it asks sluice, at its first
+ * overview, the first this load takes, and on each new outcome of the
+ * session's.
+ */
+async function take($: $, next: Overview, cwd: string, how: How, loaded: boolean) {
   await update($, error, () => null);
   await update($, unread, () => null);
   await update($, cannot, () => null);
   await update($, absent, () => false);
   await learnRemotes($, next, cwd);
-  const first = (await read($, doc)) === null;
+  const prev = await read($, doc);
   await update($, doc, () => next);
   const known = learn(next, await read($, mine));
   await update($, mine, () => known);
   $.ui.status(statusLine(next, known, await read($, named), await $.clock.now()));
-  if (how.forecast) void forecast($, how.wake, first);
-  if (first) {
-    // What happened before the session started is not news.
-    await update($, told, (list) => [...new Set([...list, ...recentKeys(next)])]);
-    return;
-  }
-  for (const o of outcomes(next, known, await read($, told))) {
-    await update($, told, (list) => [...list, o.key].slice(-500));
-    await tell($, o, cwd, how.wake);
-  }
+  if (how.forecast) void forecast($, how.wake, prev === null);
+  // What happened before the first overview is sluice's to tell, not news.
+  const found = prev === null ? [] : outcomes(prev, next, known);
+  for (const o of found) raise($, o);
+  if (how.wake && (prev === null || loaded || found.length > 0)) void collect($, cwd);
 }
 
 /** What a command printed as JSON, or null when it is none. */
@@ -242,6 +243,39 @@ async function output($: $, argv: string[], cwd: string): Promise<string | null>
 // once it has ended.
 let running = false;
 let again = false;
+// One collect at a time: however many are wanted while one runs, one more is
+// made once it has ended.
+let collecting = false;
+let collectAgain = false;
+
+/**
+ * Collect the session's pending outcomes from sluice (51; ADR 0068, record
+ * 0070), and start a turn with its words, as printed: `sluice inbox` in the
+ * session's worktree marks each outcome it prints delivered, and prints
+ * nothing for one the round's notice or an earlier collect delivered. A
+ * branch it could not read, or a collect it refused, is a toast.
+ */
+async function collect($: $, cwd: string) {
+  if (collecting) {
+    collectAgain = true;
+    return;
+  }
+  collecting = true;
+  try {
+    do {
+      collectAgain = false;
+      const root = (await read($, mine)).root ?? cwd;
+      const got: Collected = await $.process
+        .run(["sluice", "inbox"], { cwd: root, timeoutMs: 120_000 })
+        .catch(() => null);
+      const { text, toast } = collectedWords(got);
+      if (text !== null) await $.prompt.submit({ text }).catch(() => undefined);
+      if (toast !== null) $.ui.toast(toast);
+    } while (collectAgain);
+  } finally {
+    collecting = false;
+  }
+}
 
 /** 64: forecast the session's worktree when what it rests on has moved. */
 async function forecast($: $, wake: boolean, quiet: boolean) {
@@ -321,7 +355,12 @@ async function forecastOnce($: $, wake: boolean, quiet: boolean) {
   }
 }
 
-async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
+/**
+ * An outcome of the session's, for the user on the host: a toast, and for a
+ * blame the host's notification. Neither tells the session, and neither
+ * marks anything (51).
+ */
+function raise($: $, o: Outcome) {
   const word =
     o.word === "landed"
       ? `landed on ${o.branch}`
@@ -329,19 +368,8 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
         ? "was blamed"
         : "conflicts";
   $.ui.toast(`sluice: #${o.id} ${word}`);
-  let failed: { task: string; log?: string }[] = [];
-  if (o.word === "failed") {
-    const got = await $.process
-      .run(["sluice", "status", String(o.id), "--json"], { cwd })
-      .catch(() => null);
-    try {
-      failed = got && got.exitCode === 0 ? (JSON.parse(got.stdout).failed ?? []) : [];
-    } catch {
-      failed = [];
-    }
+  if (o.word === "failed")
     void $.ui.notify(`#${o.id} failed on ${o.branch}`, { title: "sluice" }).catch(() => undefined);
-  }
-  if (wake) await $.prompt.submit({ text: wakeText(o, failed) });
 }
 
 // Whether the board's watch loop runs, once a load; how it follows sluice
@@ -372,8 +400,12 @@ async function see($: $, next: unknown, cwd: string, chosen: How): Promise<boole
     return false;
   }
   if (isOverview(next)) {
+    // The first overview this load takes: after a reload, the board's state
+    // keeps the last overview, and the session's outcomes are collected all
+    // the same.
+    const loaded = following === null;
     following ??= await follow($, cwd, chosen);
-    await take($, next, cwd, following);
+    await take($, next, cwd, following, loaded);
     return false;
   }
   const said = errorLine(next);
@@ -452,7 +484,7 @@ async function feed($: $, cwd: string, chosen: How) {
     if (end && noWatch(end.stderr)) {
       // A sluice older than its watch: the board names it, which reads no records.
       // It stands in for the queue, which stays to be drawn again once a
-      // watch prints the next overview, and outcomes are told then.
+      // watch prints the next overview, and outcomes are collected then.
       const version = await output($, ["sluice", "--version"], cwd);
       await update($, cannot, () => ({ version: version?.split("\n")[0] || null }));
       $.ui.status(undefined);
