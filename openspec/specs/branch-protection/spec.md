@@ -90,7 +90,10 @@ sluice reaches a branch's remote. Of the policy it SHALL read only the
 names a signer: which branches are guarded and where their records are.
 It SHALL pass over every other table and field, known to it or not, so
 a host whose settings a newer sluice wrote is guarded by an older hook
-as before. Every other command reads both in full, as before (124).
+as before. Every other command reads the host's settings in full, and
+reads the policy in full at the revision its gate is read from; to decide
+which remote a branch is on, every command reads the policy as the
+protection does (124; record 0069).
 
 #### Scenario: A host setting the hook does not know changes nothing it guards
 - **WHEN** the host's `~/.config/sluice/config.toml` holds `[runs] cores = 12` and a table `[later]` with `x = 1`, which no sluice yet reads, and someone runs `git update-ref refs/heads/bolt/x <unit/a's revision>`
@@ -111,6 +114,10 @@ as before. Every other command reads both in full, as before (124).
 #### Scenario: Every other command still refuses a field it does not know
 - **WHEN** the host's settings hold `[runs] later = 1` and someone runs `sluice status`
 - **THEN** it fails naming the settings file and the field, as it did before
+
+#### Scenario: Every other command still refuses a policy field at the branch's revision
+- **WHEN** the policy at `bolt/x`'s revision, in local refs, holds a `[[checkout.cache]]` table and a submission to `bolt/x` is waiting
+- **THEN** `sluice step bolt/x` lands nothing and names the table, as it did before
 
 ### Requirement: Settings or a policy the protection cannot read pass the transaction, said once
 Host settings or a policy the protection cannot read at all, whether not
