@@ -2662,7 +2662,20 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
         ));
     }
     if json {
-        let mut doc = serde_json::json!({ "outcomes": marked });
+        // Each element is the record `sluice wait <id> --json` prints, as
+        // this run marks it, with the notice the round pushes for it: a
+        // contract a caller reads, which only gains fields.
+        let outcomes = pending
+            .outcomes
+            .iter()
+            .zip(&marked)
+            .map(|(o, sub)| {
+                let mut v = serde_json::to_value(sub)?;
+                v["notice"] = words::notice(sub.id, &o.branch, &o.decided).into();
+                Ok(v)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut doc = serde_json::json!({ "outcomes": outcomes });
         if !pending.unread.is_empty() {
             let unread: Vec<_> = pending
                 .unread

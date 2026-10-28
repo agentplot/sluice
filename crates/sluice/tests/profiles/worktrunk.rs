@@ -1266,4 +1266,225 @@ fn inbox_in_a_detached_worktree_delivers_nothing() {
     let out = inbox(&s, &a, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(text(&out), "");
+    let out = inbox(&s, &a, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// `sluice inbox --json` in `dir`: its one element, after asserting the
+/// document holds one and no `unread`, and the fields every element holds
+/// whatever its state (the contract a caller reads, which only gains
+/// fields).
+fn collected_one(s: &Scratch, dir: &Path) -> serde_json::Value {
+    let out = inbox(s, dir, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.get("unread").is_none(), "{v}");
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    let e = outcomes[0].clone();
+    let path = std::fs::canonicalize(dir).unwrap();
+    assert!(e["id"].is_u64(), "{e}");
+    assert_eq!(e["branch"], "bolt/x", "{e}");
+    assert!(e["delivered"].is_string(), "{e}");
+    assert_eq!(e["delivered_to"], path.to_str().unwrap(), "{e}");
+    assert!(e["from"]["worktree"].is_string(), "{e}");
+    assert_eq!(e["from"]["path"], path.to_str().unwrap(), "{e}");
+    let notice = e["notice"].as_str().unwrap();
+    assert!(
+        notice.starts_with(&format!("[sluice] #{} ", e["id"])),
+        "{e}"
+    );
+    assert_eq!(notice.lines().count(), 1, "{e}");
+    e
+}
+
+/// 51, 135; inbox spec, "The JSON document is a contract": a landing, a
+/// blame and a conflict, each collected as its record with `notice`, and
+/// by its state `landed_as`; `result` and `failed[].task`;
+/// `conflict.paths` and `conflict.with[].id`.
+#[test]
+fn inbox_json_holds_the_contracts_fields_for_each_outcome() {
+    let s = Scratch::new("wt-inbox-contract");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("broken", "x\n")]);
+    let d = s.session("d", &[("same.txt", "d\n")]);
+    let c = s.session("c", &[("same.txt", "c\n")]);
+    let ids: Vec<u64> = [&a, &b, &d, &c]
+        .iter()
+        .map(|w| id(&s.wt_submit(w, &["--no-wait", "--json"])))
+        .collect();
+    let (na, nb, nd, nc) = (ids[0], ids[1], ids[2], ids[3]);
+    for n in &ids {
+        s.decide(*n);
+    }
+
+    let e = collected_one(&s, &a);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(na), &"landed".into())
+    );
+    let landed_as = e["landed_as"].as_str().unwrap();
+    assert_eq!(landed_as, s.status(na)["landed_as"], "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("landed"), "{e}");
+
+    let e = collected_one(&s, &b);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(nb), &"failed".into())
+    );
+    assert_eq!(e["result"], "failed", "{e}");
+    assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("failed"), "{e}");
+
+    let e = collected_one(&s, &c);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(nc), &"conflict".into())
+    );
+    assert_eq!(
+        e["conflict"]["paths"],
+        serde_json::json!(["same.txt"]),
+        "{e}"
+    );
+    assert_eq!(e["conflict"]["with"][0]["id"], nd, "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("conflicts"), "{e}");
+}
+
+/// 51, 135: a session in a herdr pane whose push herdr refused collects
+/// its outcome by `sluice inbox`, marked delivered to the pane it collects
+/// in; no later round prompts any pane for it.
+#[test]
+fn inbox_in_a_herdr_pane_delivers_to_that_pane_and_no_round_pushes_it() {
+    let s = Scratch::new("wt-inbox-pane");
+    s.herdr.refuses(
+        1,
+        r#"{"error":{"code":"agent_blocked","message":"agent is blocked"}}"#,
+    );
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p1");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert!(v.get("delivered").is_none(), "{v}");
+    assert_eq!(s.herdr.calls().len(), 1, "the refused push");
+
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["inbox"])
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        text(&out).starts_with(&format!("[sluice] #{n} landed")),
+        "{}",
+        text(&out)
+    );
+    let to = format!("herdr:w1:p2@{}", socket.display());
+    let record = s.status(n);
+    assert_eq!(record["delivered_to"], to.as_str(), "{record}");
+
+    for _ in 0..2 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(s.herdr.calls().len(), 1, "no round pushed it");
+    assert_eq!(s.status(n)["delivered_to"], to.as_str());
+}
+
+/// 50, 20; outcome-delivery spec, "No other pane is prompted": of two
+/// submissions tested together, only the blamed one's pane is sent the
+/// failure, and the other's pane nothing of it.
+#[test]
+fn of_two_tested_together_only_the_blamed_ones_pane_is_sent_the_failure() {
+    let s = Scratch::new("wt-push-two");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("broken", "x\n")]);
+    let (one, _) = s.submit_from_pane(&a, "w1:p2");
+    let (two, _) = s.submit_from_pane(&b, "w1:p3");
+    assert_eq!(s.decide(one)["state"], "landed");
+    let v = s.decide(two);
+    assert_eq!(v["state"], "failed", "{v}");
+    let together = v["tested"]["submissions"].as_array().unwrap();
+    assert!(
+        together.contains(&one.into()) && together.contains(&two.into()),
+        "tested together: {v}"
+    );
+
+    let calls = s.herdr.calls();
+    let to = |pane: &str| -> Vec<String> {
+        calls
+            .iter()
+            .filter(|c| c[0].contains(&format!("<{pane}>")))
+            .map(|c| c[0].clone())
+            .collect()
+    };
+    let p3 = to("w1:p3");
+    assert_eq!(p3.len(), 1, "{calls:?}");
+    assert!(p3[0].contains(&format!("#{two} failed")), "{p3:?}");
+    let p2 = to("w1:p2");
+    assert_eq!(p2.len(), 1, "{calls:?}");
+    assert!(p2[0].contains(&format!("#{one} landed")), "{p2:?}");
+    assert!(!p2[0].contains(&format!("#{two}")), "{p2:?}");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+}
+
+/// 51, 135; inbox spec, "A place submitted with no session collects its
+/// outcome by inbox": a caller that submits with `sluice submit --no-wait
+/// --json` in no pane and never waits, rounds run by `sluice step`, then
+/// `sluice inbox --json` twice. `sluice step` is as it was.
+#[test]
+fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
+    let s = Scratch::new("wt-inbox-caller");
+    let submit = |dir: &Path| {
+        let out = s
+            .command(env!("CARGO_BIN_EXE_sluice"), dir)
+            .args(["submit", "bolt/x", "--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        id(&out)
+    };
+    let pending_for = |n: u64| s.logged("pending").iter().filter(|l| l["id"] == n).count();
+
+    // A blame.
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = submit(&b);
+    assert!(s.status(n)["from"].get("session").is_none());
+    assert_eq!(s.decide(n)["state"], "failed");
+    assert_eq!(pending_for(n), 1);
+    for _ in 0..2 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(pending_for(n), 1, "no further attempt");
+    assert!(s.herdr.calls().is_empty());
+    let e = collected_one(&s, &b);
+    assert_eq!(e["id"], n, "{e}");
+    assert_eq!(e["state"], "failed", "{e}");
+    assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+    assert!(
+        e["notice"].as_str().unwrap().contains(&format!("#{n}")),
+        "{e}"
+    );
+    let again = inbox(&s, &b, &["--json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+
+    // A landing.
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = submit(&a);
+    assert_eq!(s.decide(n)["state"], "landed");
+    assert_eq!(pending_for(n), 1);
+    let e = collected_one(&s, &a);
+    assert_eq!(e["id"], n, "{e}");
+    assert_eq!(e["state"], "landed", "{e}");
+    assert_eq!(e["landed_as"], s.tip().as_str(), "{e}");
+    let again = inbox(&s, &a, &["--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
 }
