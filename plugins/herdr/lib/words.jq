@@ -1,5 +1,7 @@
 # What the plugin says, from sluice/overview@1 documents: the same words as
 # plugins/sluice-board/hooks/board.ts, so a blame reads the same in both.
+# The popup and the segment name each submission by its subject, or its
+# branch, beside its number (26), where the board does not yet.
 
 # A repository's name, as name_of in common.sh gives it.
 def repo_name: sub("/\\.git$"; "") | split("/") | last | sub("\\.git$"; "");
@@ -22,7 +24,39 @@ def since($now): if . == null then null
 
 def plural($n; $word): "\($n) \($word)\(if $n == 1 then "" else "s" end)";
 
-def combination($branch): [$branch] + map("#\(.)") | join("+");
+# --- A submission's name ----------------------------------------------
+
+# A name on one line: each run of control characters one space, the ends
+# trimmed, as sluice's own text shows it.
+def one_line: gsub("\\p{Cc}+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "");
+
+# The name submission . of the branch $b is shown by (26): one in its
+# chain by its subject, else its branch; a recent one by recent_subjects,
+# else recent_from; null where the document gives neither, as an older
+# sluice's does.
+def name_of($b): . as $id | tostring as $k
+  | (first($b.submissions[]? | select(.id == $id) | .subject // .from.worktree)
+      // ($b.recent_subjects // {})[$k] // ($b.recent_from // {})[$k])
+  | if type == "string" then one_line | select(. != "") else empty end;
+
+# `#12 Batch review cards`, or `#12` with no name.
+def named($b): "#\(.)" + ([name_of($b)] | if length > 0 then " " + .[0] else "" end);
+
+# A line from its pieces, strings and submissions' numbers, each
+# submission named the first time the line shows it and by its number
+# alone after (26).
+def said($b): reduce .[] as $p ({said: {}, text: ""};
+    if ($p | type) == "number" then ($p | tostring) as $k
+      | if .said[$k] then .text += "#\($p)" else .text += ($p | named($b)) | .said[$k] = true end
+    else .text += $p end) | .text;
+
+# Lists of pieces as one, $sep between each.
+def joined($sep): reduce .[] as $p (null; if . == null then $p else . + [$sep] + $p end) // [];
+
+# `main + #12 Batch review cards + #13 unit/forecast`: the numbers of a
+# combination's submissions on the branch $b, as pieces, and as a line.
+def combination_pieces($b): [$b.branch] + map(" + ", .);
+def combination($b): combination_pieces($b) | said($b);
 
 # --- A combination's tasks --------------------------------------------
 
@@ -67,11 +101,13 @@ def waiting: (testing | map(.submissions[]) ) as $under
 
 def short: if type == "string" then .[0:7] else "" end;
 
-# What a recent log line says, in a few words.
-def recent_words: if .event == "landed" then "\((.ids // []) | map("#\(.)") | join(" ")) landed as \(.to | short)"
-  elif .event == "blamed" then "#\(.id) blamed on \(.combination | short)"
-  elif .event == "conflict" then "#\(.id) conflict · \((.paths // []) | join(", "))"
-  else (.event | tostring) end;
+# What a recent log line of the branch $b says, in a few words, as pieces,
+# and as a line.
+def recent_pieces: if .event == "landed" then ((.ids // []) | [.[] | ", ", .][1:]) + [" landed as \(.to | short)"]
+  elif .event == "blamed" then [.id, " blamed on \(.combination | short)"]
+  elif .event == "conflict" then [.id, " conflict · \((.paths // []) | join(", "))"]
+  else [.event | tostring] end;
+def recent_words($b): recent_pieces | said($b);
 
 # The last part of a worktree's path, its name in a row.
 def base_name: sub("/+$"; "") | split("/") | last;
@@ -141,16 +177,16 @@ def checks_words($room): if $room.sessions == 1 then "1 slot to an agent's check
 # how many of its places are held because their release failed.
 def branch_line($now; $room; $held): . as $b | testing as $under
   | if ($b | busy | not) and $held == 0 then null
-    else ["sluice \($b.branch)", plural($b.depth; "submission")]
+    else [["sluice \($b.branch)"], [plural($b.depth; "submission")]]
       + ($under | map((.started | since($now)) as $took
-          | "testing \(.submissions | combination($b.branch))"
-            + (progress | if . then " " + . else "" end)
-            + (if $took == null then "" else " \($took | duration)" + (if .limit then "/\(.limit | limit)" else "" end) end)))
-      + ($b | waiting | if length > 0 then [(map("#\(.)") | join(" ")) + " waiting"] else [] end)
-      + ($b.recent | if length > 0 then ["last \(.[-1] | recent_words)"] else [] end)
-      + (if $b | held_back($room) then [checks_words($room)] else [] end)
-      + (if $held > 0 then [held_words($held)] else [] end)
-      | join(" · ") end;
+          | ["testing "] + (.submissions | combination_pieces($b))
+            + [(progress | if . then " " + . else "" end)
+              + (if $took == null then "" else " \($took | duration)" + (if .limit then "/\(.limit | limit)" else "" end) end)]))
+      + ($b | waiting | if length > 0 then [[.[] | ", ", .][1:] + [" waiting"]] else [] end)
+      + ($b.recent | if length > 0 then [["last "] + (.[-1] | recent_pieces)] else [] end)
+      + (if $b | held_back($room) then [[checks_words($room)]] else [] end)
+      + (if $held > 0 then [[held_words($held)]] else [] end)
+      | joined(" · ") | said($b) end;
 
 # A branch the document lists no records of, as one with nothing queued.
 def no_records: {branch: ., depth: 0, window: 0, candidates: [], submissions: [], recent: []};
@@ -233,25 +269,26 @@ def rows($now; $color; $named): . as $d
           | if ($shown | length) > 0 then
               ("  TESTING" | paint($color; "1") | row("heading"))
               , ($under[] | . as $c | (.started | since($now)) as $took
-                  | ("    ▶ testing \(.submissions | combination($b.branch))"
+                  | ("    ▶ testing \(.submissions | combination($b))"
                       + (progress | if . then "  " + . else "" end)
                       + (if $took == null then "" else "  \($took | duration)" + (if .limit then " / \(.limit | limit)" else "" end) end) | paint($color; "33") | row("candidate"))
                   , ("        \(.targets | join(" "))\(if .executor then " · \(.executor)" else "" end)" | paint($color; "2") | row("candidate"))
                   , candidate_rows($c; $color)[])
               , ($b.candidates[] | select(.state == "formed")
-                  | "        formed, not running: \(.submissions | combination($b.branch))" | paint($color; "2") | row("candidate"))
+                  | "        formed, not running: \(.submissions | combination($b))" | paint($color; "2") | row("candidate"))
             else empty end )
       , ( if ($b.submissions | length) > 0 then
-            ("  QUEUED" | paint($color; "1") | row("heading"))
+            ([$b.submissions[].id | named($b) | length] | max) as $width
+            | ("  QUEUED" | paint($color; "1") | row("heading"))
             , ($b.submissions[] | (.from.worktree | pull_of) as $pull
-                | ("    #\(.id) \(.state + "         " | .[0:9]) \(if $pull then "PR \($pull)" else .from.worktree end) \(.from.agent)" | row("submission"))
+                | ("    \(.id | named($b) | pad_end($width))  \(.state + "         " | .[0:9]) \(if $pull then "PR \($pull)" else .from.worktree end) \(.from.agent)" | row("submission"))
                   + (if .from.path then {url: "sluice-herdr:focus?path=\(.from.path | @uri)"} else {} end))
           else empty end )
       , ( if ($b.recent | length) > 0 then
             ("  RECENT" | paint($color; "1") | row("recent"))
             , ($b.recent | reverse | .[0:5] | to_entries[] | .key as $age | .value
                 | (if .event == "landed" then ["✓", "32"] elif .event == "blamed" then ["✗", "31"] else ["⚠", "33"] end) as [$mark, $c]
-                | "    \($mark) \(.at[11:16]) \(recent_words)" | paint($color; $c) | row("event") + {age: $age})
+                | "    \($mark) \(.at[11:16]) \(recent_words($b))" | paint($color; $c) | row("event") + {age: $age})
             , ([$b.candidates[] | select(any(.failed[]; .log))] | last // empty
                 | .failed[] | select(.log)
                 | ("      log of \(.task)\(if .system then " (\(.system))" else "" end): \(.log)" | row("failure"))
