@@ -10,12 +10,28 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// herdr's variables, which every pane it runs sets (51).
+pub const HERDR: [&str; 8] = [
+    "HERDR_ENV",
+    "HERDR_SESSION",
+    "HERDR_SOCKET_PATH",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_AGENT",
+    "HERDR_BIN_PATH",
+];
+
 /// Out of reach of whatever runs git under `c`, sluice included: the
 /// user's and the system's git config, so their credential helpers, and
 /// every prompt and askpass program. No test may reach the user's
 /// credentials or ask anyone anything. A sluice run under `c` skips the
-/// retry policy's pauses, which the fakes count tries through (134).
+/// retry policy's pauses, which the fakes count tries through (134), and
+/// is in no herdr pane, so it records none and pushes into none (51).
 pub fn isolated(c: &mut Command) -> &mut Command {
+    for v in HERDR {
+        c.env_remove(v);
+    }
     c.env("SLUICE_RETRY_SLEEP", "record")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")

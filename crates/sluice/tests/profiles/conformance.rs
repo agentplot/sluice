@@ -275,6 +275,9 @@ impl Driver for Sessions {
         if let Some(agent) = self.agents.borrow().get(worktree) {
             s.from.agent = agent.clone();
         }
+        // The rig's sessions are in no pane: run in-process, the driver
+        // would name the one this test runs in (51).
+        s.from.session = None;
         Ok(s)
     }
 

@@ -135,6 +135,9 @@ impl Bound {
         let state = if guarding { state.guarding() } else { state };
         let jobs = instance.jobs();
         let caches = instance.caches.clone();
+        // 51: the host a session's submit is recorded on, as its peers
+        // name it.
+        let host = instance.peers.name.clone().unwrap_or_else(checks::hostname);
         Ok(Bound {
             // A session's place's release command is the check seam's to
             // build; the binding hands the builder over (rule core.2).
@@ -158,7 +161,7 @@ impl Bound {
             },
             branch,
             driver: Drivers {
-                worktrunk: worktrunk::Worktrunk,
+                worktrunk: worktrunk::Worktrunk::new(host),
                 pulls: pulls.clone(),
             },
             state,

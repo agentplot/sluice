@@ -97,9 +97,14 @@ impl Scratch {
     }
 
     fn command(&self, program: &str, dir: &Path) -> Command {
+        self.command_under(Command::new(program), dir)
+    }
+
+    /// `c` as a test runs it, whatever its parent gave it: isolated, with
+    /// the scratch's own config and state.
+    fn command_under(&self, mut c: Command, dir: &Path) -> Command {
         let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let mut c = Command::new(program);
         support::isolated(&mut c)
             .current_dir(dir)
             .env("PATH", path)
@@ -359,6 +364,66 @@ fn the_submitter_is_the_agent_or_the_branch() {
     assert_eq!(s.status(one)["from"]["worktree"], "unit/a");
     assert_eq!(s.status(two)["from"]["agent"], "crw-1-unit-1");
     assert_eq!(s.status(two)["from"]["worktree"], "unit/b");
+}
+
+/// 51: a submit in a herdr pane records the pane on its server, and the
+/// host as its peers name it; one in no pane records no session.
+#[test]
+fn a_submit_records_the_pane_it_ran_in_and_its_host() {
+    let s = Scratch::new("wt-pane");
+    std::fs::write(
+        s.config.join("sluice/config.toml"),
+        "[runs]\nmax = 2\n\n[peers]\nname = \"box-1\"\n",
+    )
+    .unwrap();
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let submit = |dir: &Path| {
+        let mut c = s.command("wt", dir);
+        c.args(["submit", "bolt/x", "--no-wait", "--json"]);
+        c
+    };
+    let one = id(&submit(&a)
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .output()
+        .unwrap());
+    let from = &s.status(one)["from"];
+    assert_eq!(
+        from["session"],
+        format!("herdr:w1:p2@{}", socket.display()).as_str(),
+        "{from}"
+    );
+    assert_eq!(from["host"], "box-1");
+
+    let two = id(&submit(&b)
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_SOCKET_PATH")
+        .output()
+        .unwrap());
+    let from = &s.status(two)["from"];
+    assert!(from.get("session").is_none(), "{from}");
+    assert_eq!(from["host"], "box-1");
+}
+
+/// 51: a test's sluice is in no pane, whatever pane its parent is in.
+#[test]
+fn a_tests_submit_records_no_pane_its_parent_is_in() {
+    let s = Scratch::new("wt-isolated");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let mut parent = Command::new("wt");
+    for v in support::HERDR {
+        parent.env(v, "set");
+    }
+    parent.env("HERDR_PANE_ID", "w1:p2");
+    let out = s
+        .command_under(parent, &a)
+        .args(["submit", "bolt/x", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    let from = &s.status(id(&out))["from"];
+    assert!(from.get("session").is_none(), "{from}");
 }
 
 /// A submission names the worktree it came from by its path, and the
