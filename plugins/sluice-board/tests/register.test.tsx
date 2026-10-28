@@ -157,8 +157,9 @@ function host(
 /**
  * The host's `sluice overview --json --watch`, as the test drives it: each
  * watch stays open, printing what the test hands it, until the test ends it;
- * while `failing`, one fails to start. It keeps when each watch started and
- * ended, by the mocked clock.
+ * while `failing`, one fails to start, and while `refusing`, one writes it to
+ * stderr and exits 2 at once. It keeps when each watch started and ended, by
+ * the mocked clock.
  */
 function watches(on: On, clock: MockClock) {
   type Piece = { stream: "stdout" | "stderr"; text: string };
@@ -170,6 +171,7 @@ function watches(on: On, clock: MockClock) {
   let open: Open | null = null;
   const w = {
     failing: false,
+    refusing: null as string | null,
     started: [] as number[],
     ended: [] as number[],
     isOpen: () => open !== null,
@@ -200,7 +202,13 @@ function watches(on: On, clock: MockClock) {
   on("process.spawn", async function* () {
     w.started.push(clock.now());
     if (w.failing) throw new Error("sluice: command not found");
-    const me: Open = { pieces: [], ended: null, wake: () => undefined };
+    const me: Open = w.refusing
+      ? {
+          pieces: [{ stream: "stderr", text: w.refusing }],
+          ended: { code: 2, signal: null },
+          wake: () => undefined,
+        }
+      : { pieces: [], ended: null, wake: () => undefined };
     open = me;
     try {
       for (;;) {
@@ -1235,6 +1243,49 @@ test("a watch already open: /sluice starts no second one", async ($, on) => {
   expect(await paneTexts($)).toEqual(["Reading sluice…"]);
 });
 
+/** What a sluice older than its watch writes, refusing the command or the argument. */
+const NO_OVERVIEW =
+  "error: unrecognized subcommand 'overview'\n\nUsage: sluice <COMMAND>\n\nFor more information, try '--help'.\n";
+const NO_WATCH =
+  "error: unexpected argument '--watch' found\n\nUsage: sluice overview [OPTIONS]\n\nFor more information, try '--help'.\n";
+const VERSION = "sluice --version";
+
+test("a watch refused for having no watch asks sluice its version, and no other end does", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen(), { [VERSION]: "sluice 0.11.2\n" });
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // Killed, exited with sluice's words, could not be started: no version asked.
+  await watch.end();
+  await clock.advance(1000);
+  await watch.exit(3, "sluice: not a git repository\n");
+  watch.failing = true;
+  await clock.advance(2000);
+  watch.failing = false;
+  await clock.advance(4000);
+  await watch.exit(2, "error: unexpected argument '--json' found\n");
+  expect(watch.started).toHaveLength(4);
+  expect(ran.filter((r) => r === VERSION)).toEqual([]);
+  // Refused as a sluice with no `overview`, then with no `--watch`: once each.
+  await clock.advance(8000);
+  await watch.exit(2, NO_OVERVIEW);
+  expect(ran.filter((r) => r === VERSION)).toEqual([VERSION]);
+  watch.refusing = NO_WATCH;
+  await clock.advance(16000);
+  expect(watch.started).toHaveLength(6);
+  expect(ran.filter((r) => r === VERSION)).toEqual([VERSION, VERSION]);
+  // /sluice, where the board can't follow, starts the next watch at once.
+  watch.refusing = null;
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toHaveLength(7);
+  expect(watch.isOpen()).toBe(true);
+  expect(ran.filter((r) => r.startsWith("sluice overview"))).toEqual([]);
+});
+
 test("the first queue comes from the watch, and nothing reads the records in its place", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
@@ -1314,11 +1365,15 @@ test("a named branch with no records keeps its line, and no 'Nothing submitted y
   await pane.unmount();
 });
 
-/** A host whose watch the test drives, each command it runs kept in `ran`. */
+/**
+ * A host whose watch the test drives, each command it runs kept in `ran`; a
+ * command `more` names prints what it says there.
+ */
 function watchedHost(
   on: On,
   clock: MockClock,
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
+  more: Record<string, string> = {},
 ) {
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
@@ -1326,6 +1381,8 @@ function watchedHost(
     const argv = e.argv.join(" ");
     ran.push(argv);
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
+    const answer = more[argv];
+    if (answer !== undefined) return out(answer);
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });

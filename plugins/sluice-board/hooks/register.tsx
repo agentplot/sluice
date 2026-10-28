@@ -55,6 +55,7 @@ import {
   limit,
   moving,
   namedFirst,
+  noWatch,
   openedText,
   outcomes,
   plural,
@@ -112,6 +113,8 @@ const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const
 const error = atom({ plugin: "sluice-board", key: "error" } as const, null);
 // Why sluice could not be read, while the board has no overview.
 const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
+// The host's sluice has no watch, and the version it names itself by.
+const cannot = atom({ plugin: "sluice-board", key: "cannot" } as const, null);
 
 type Detail = OpenedTest;
 
@@ -195,6 +198,7 @@ async function learnRemotes($: $, next: Overview, cwd: string) {
 async function take($: $, next: Overview, cwd: string, how: How) {
   await update($, error, () => null);
   await update($, unread, () => null);
+  await update($, cannot, () => null);
   await learnRemotes($, next, cwd);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
@@ -413,8 +417,14 @@ async function feed($: $, cwd: string, chosen: How) {
   for (;;) {
     const started = await $.clock.now();
     const { end, said } = await watch($, cwd, chosen);
-    // While the board has no overview, the pane says why this one gave none.
-    if (!said && (await read($, doc)) === null) await update($, unread, () => unreadReason(end));
+    if (end && noWatch(end.stderr)) {
+      // A sluice older than its watch: the board names it, which reads no records.
+      const version = await output($, ["sluice", "--version"], cwd);
+      await update($, cannot, () => ({ version: version?.split("\n")[0] || null }));
+    } else if (!said && (await read($, doc)) === null) {
+      // While the board has no overview, the pane says why this one gave none.
+      await update($, unread, () => unreadReason(end));
+    }
     const ms = rewatchWait(wait, (await $.clock.now()) - started);
     wait = ms;
     // `/sluice` cuts the wait short; the waits after it grow on all the same.
@@ -483,8 +493,9 @@ export const register: Register = (on, options) => {
       return { text: "sluice's pane is closed." };
     }
     // Where the board has no queue, the next watch starts now rather than
-    // after its wait: sluice may be set up since. An open watch has no wait.
-    if ((await read($, doc)) === null) wake?.();
+    // after its wait: sluice may be set up, or upgraded, since. An open watch
+    // has no wait.
+    if ((await read($, doc)) === null || (await read($, cannot)) !== null) wake?.();
     const inline = !e.presentation.isFullscreen;
     const opened = await $.ui.open({
       id: PANE,
