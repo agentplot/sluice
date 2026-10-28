@@ -113,15 +113,16 @@ the record once without waiting, and `sluice submit main --status` this
 worktree's last submission or its pull request.
 
 A session that starts again, after a restart or on another host, runs
-`sluice inbox` once to be told the outcomes of its submissions it missed,
-in place of keeping a `sluice wait` for each. It tells every submission
-from this worktree's branch, on any branch, that landed, was blamed or
-conflicts and that nothing has told it yet, each in the line a round types
-into the session's pane and then what `sluice wait <id>` prints, and marks
-each told. An outcome already told, by that line or an earlier `sluice
-inbox`, it answers with nothing: it prints nothing and exits `0`
-(`{"outcomes":[]}` under `--json`). It exits `3` when a branch's records
-could not be read, after telling the rest.
+`sluice inbox` once to collect the outcomes of its submissions it
+missed, in place of keeping a `sluice wait` for each. It collects every
+submission from this worktree's branch, on any branch, that landed, was
+blamed or conflicts and is still pending, each printed as its notice,
+the line a round types into the session's pane, then what `sluice wait
+<id>` prints, and marks each delivered. An outcome is delivered once,
+by that line, a wait in this worktree that reported it, or an earlier
+`sluice inbox`: for one already delivered it prints nothing and exits
+`0` (`{"outcomes":[]}` under `--json`). It exits `3` when a branch's
+records could not be read, after delivering the rest.
 
 ```sh
 sluice inbox                              # once, when the session starts again

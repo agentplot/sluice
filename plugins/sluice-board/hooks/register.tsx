@@ -1,5 +1,5 @@
 // sluice's queue inside a Claude Code session: a band above the prompt, a
-// pane on /sluice, a status line, and a turn that tells an idle session its
+// pane on /sluice, a status line, and a turn that delivers an idle session its
 // submission's outcome in sluice's words, or that its work has come to
 // conflict. Everything is read from `sluice overview --json --watch`
 // (sluice/overview@1; ADR 0023), never from a one-shot read of the records in

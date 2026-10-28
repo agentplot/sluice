@@ -195,7 +195,7 @@ names.
 
 `branch.json` holds the queue's own state: the revision its
 combinations are formed on, the combinations, a landing under way and
-the outcomes still to tell. Two fields say what a round reads the
+the outcomes still to deliver. Two fields say what a round reads the
 branch against:
 
 - `landed`: the revision every later read of the branch must contain.

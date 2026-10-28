@@ -79,15 +79,15 @@ sluice's queue inside a Claude Code session.
   while a checkout, worktree or preview is held because its release failed,
   and with nothing queued says that alone: `sluice: 1 held: release failed`.
 - **Wake**: when one of this session's submissions lands, fails or
-  conflicts, a toast. The board then asks sluice, with `sluice inbox`, to
-  tell the session what nothing has told it yet, and starts a turn with
-  sluice's words; where the multiplexer the session runs in has been given
-  the outcome already, sluice tells nothing and no turn starts. The board
-  asks too when the session starts, so a session that restarted is told
-  what it missed. Turn the asking and the turn off with the `wake` option
-  in `/config`: the outcome then waits for another way to be told. The
-  board needs a sluice with `sluice inbox`, and says so in a toast where
-  it has none.
+  conflicts, a toast. The board then collects the session's pending
+  outcomes with `sluice inbox`, and starts a turn with sluice's words;
+  where the outcome was delivered already, by the notice sluice typed
+  into the session's pane or by a wait, `sluice inbox` prints nothing and
+  no turn starts. The board collects too when the session starts, so a
+  session that restarted gets what it missed. Turn the collecting and the
+  turn off with the `wake` option in `/config`: the outcome then stays
+  pending for the session's own `sluice inbox` or a wait. The board needs
+  a sluice with `sluice inbox`, and says so in a toast where it has none.
 - **Forecast**: while this session's worktree has commits ahead of its
   branch and no submission of its own queued, the board runs `sluice
   submit <branch> --check --json` whenever the head, the branch or the
@@ -128,7 +128,7 @@ Where sluice isn't set up in the repository, with no records and no
 branch, the host's own or a remote's as last fetched, holding
 `.config/sluice.toml`, the watch says so and ends. The board drops any
 queue, error or reason it held: the band and the status line stay empty,
-nothing is forecast or told, and it starts no further watch. `/sluice`
+nothing is forecast or collected, and it starts no further watch. `/sluice`
 reads once more, the pane saying `Reading sluice…` while it does, then
 `sluice isn't set up in this repository.` and `Ask Claude to set sluice
 up in this repository.` Where that watch finds sluice set up, the board
