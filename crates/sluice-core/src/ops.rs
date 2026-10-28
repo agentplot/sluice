@@ -1156,7 +1156,7 @@ impl<'a> Sluice<'a> {
         let mut unread = Vec::new();
         let mut holding = Vec::new();
         for b in branches {
-            match self.pending_on(&b, me) {
+            match self.pending_on(&b, me, None) {
                 Ok(found) if found.is_empty() => {}
                 Ok(_) => holding.push(b),
                 Err(e) => unread.push(Unread {
@@ -1170,7 +1170,7 @@ impl<'a> Sluice<'a> {
         let mut outcomes = Vec::new();
         for b in holding {
             locks.push(state.wait_lock(&b)?);
-            match self.pending_on(&b, me) {
+            match self.pending_on(&b, me, None) {
                 Ok(found) => outcomes.extend(found),
                 Err(e) => unread.push(Unread {
                     branch: b,
@@ -1188,17 +1188,49 @@ impl<'a> Sluice<'a> {
         })
     }
 
-    /// `me`'s pending outcomes on `branch`, in submission order.
-    fn pending_on(&self, branch: &str, me: &Submitter) -> Result<Vec<PendingOutcome>> {
+    /// 51: submission `id` of `branch`, when it is `me`'s and pending, as
+    /// [`Sluice::pending`] finds and locks each of `me`'s: what a wait that
+    /// reported it marks delivered. Another's submission, one delivered
+    /// already or one not decided is not found, and nothing is locked.
+    pub fn pending_one<'s>(
+        &'s self,
+        branch: &str,
+        id: u64,
+        me: &Submitter,
+    ) -> Result<Pending<'s, 'a>> {
+        let mut locks = Vec::new();
+        let mut outcomes = Vec::new();
+        if !self.pending_on(branch, me, Some(id))?.is_empty() {
+            locks.push(self.seams.state.wait_lock(branch)?);
+            outcomes = self.pending_on(branch, me, Some(id))?;
+        }
+        Ok(Pending {
+            sluice: self,
+            at: self.now(),
+            outcomes,
+            unread: Vec::new(),
+            _locks: locks,
+        })
+    }
+
+    /// `me`'s pending outcomes on `branch`, in submission order: only
+    /// submission `only`, when it is given.
+    fn pending_on(
+        &self,
+        branch: &str,
+        me: &Submitter,
+        only: Option<u64>,
+    ) -> Result<Vec<PendingOutcome>> {
         let line = self.read_line(branch)?;
         let mut found = Vec::new();
         let mine = |from: &Submitter| {
             from.worktree == me.worktree || from.head.as_deref() == Some(me.worktree.as_str())
         };
+        let named = |id: u64| only.is_none_or(|o| o == id);
         for s in line
             .subs
             .values()
-            .filter(|s| s.delivered.is_none() && mine(&s.from))
+            .filter(|s| named(s.id) && s.delivered.is_none() && mine(&s.from))
         {
             if !matches!(s.state, State::Landed | State::Failed | State::Conflict) {
                 continue;
@@ -1220,7 +1252,8 @@ impl<'a> Sluice<'a> {
         // 130: a blame or a conflict stays live, so only a landing is read
         // from the finished records, each by its own name (131).
         for f in line.finished.values() {
-            if f.state != State::Landed
+            if !named(f.id)
+                || f.state != State::Landed
                 || f.worktree != me.worktree
                 || line.subs.contains_key(&f.id)
             {
@@ -1929,6 +1962,83 @@ mod tests {
         assert_eq!(h.writes.get(), before);
         assert_eq!(line(&h).subs[&2].delivered, None);
         assert_eq!(found(&h, "unit-a"), [2]);
+    }
+
+    fn found_one(h: &Host, id: u64, worktree: &str) -> Vec<u64> {
+        let s = h.sluice();
+        let pending = s.pending_one(BRANCH, id, &me(worktree)).unwrap();
+        pending.outcomes.iter().map(|o| o.submission.id).collect()
+    }
+
+    /// 51: a wait reporting its own worktree's pending outcome finds that
+    /// submission alone, by its branch or the branch its pull request was
+    /// opened from, and a landing moved to the finished records too.
+    #[test]
+    fn the_narrowed_collect_finds_the_askers_pending_submission() {
+        let h = Host::new();
+        keep(&h, &decided(1, "unit-a", State::Failed));
+        keep(&h, &decided(2, "unit-a", State::Landed));
+        let mut pull = decided(3, "pull/7", State::Failed);
+        pull.from.head = Some("unit-a".into());
+        keep(&h, &pull);
+        assert_eq!(found_one(&h, 2, "unit-a"), [2]);
+        assert_eq!(found_one(&h, 1, "unit-a"), [1]);
+        assert_eq!(found_one(&h, 3, "unit-a"), [3]);
+        let landed = decided(5, "unit-a", State::Landed);
+        let index = crate::records::to_line(&crate::records::FinishedLine {
+            id: 5,
+            state: State::Landed,
+            worktree: "unit-a".into(),
+            subject: None,
+        });
+        {
+            let mut records = h.records.borrow_mut();
+            records.files.insert(
+                crate::records::finished_file(5),
+                crate::records::to_document(&landed),
+            );
+            records
+                .files
+                .insert(crate::records::FINISHED_INDEX.into(), index);
+        }
+        assert_eq!(found_one(&h, 5, "unit-a"), [5]);
+    }
+
+    /// 20, 51: a wait on another worktree's submission, on one delivered
+    /// already, on one not decided or on no submission finds nothing.
+    #[test]
+    fn the_narrowed_collect_finds_nothing_not_the_askers_to_deliver() {
+        let h = Host::new();
+        keep(&h, &decided(1, "unit-b", State::Failed));
+        let mut delivered = decided(2, "unit-a", State::Landed);
+        delivered.delivered = Some("2026-10-23T11:00:00Z".into());
+        keep(&h, &delivered);
+        keep(&h, &decided(3, "unit-a", State::Queued));
+        assert!(found_one(&h, 1, "unit-a").is_empty());
+        assert!(found_one(&h, 2, "unit-a").is_empty());
+        assert!(found_one(&h, 3, "unit-a").is_empty());
+        assert!(found_one(&h, 9, "unit-a").is_empty());
+        assert_eq!(found_one(&h, 1, "unit-b"), [1]);
+    }
+
+    /// 51: marking the narrowed collect marks the one submission named and
+    /// leaves the asker's others pending.
+    #[test]
+    fn the_narrowed_collect_marks_only_the_one_named() {
+        let h = Host::new();
+        keep(&h, &decided(1, "unit-a", State::Failed));
+        keep(&h, &decided(2, "unit-a", State::Landed));
+        let s = h.sluice();
+        let pending = s.pending_one(BRANCH, 2, &me("unit-a")).unwrap();
+        assert_eq!(
+            pending.marked("/w/unit-a")[0].delivered_to.as_deref(),
+            Some("/w/unit-a")
+        );
+        pending.mark("/w/unit-a").unwrap();
+        let two = s.state(2).unwrap().unwrap();
+        assert_eq!(two.delivered_to.as_deref(), Some("/w/unit-a"));
+        assert_eq!(s.state(1).unwrap().unwrap().delivered, None);
+        assert_eq!(found(&h, "unit-a"), [1]);
     }
 
     /// Rule core.11: a branch whose records cannot be read is named with
