@@ -418,7 +418,7 @@ fn run_again_follows_its_submission_and_removes_on_landing() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(
         String::from_utf8_lossy(&out.stderr).contains(&format!(
-            "wt submit: following submission {one}, already submitted at this head"
+            "wt submit: following submission {one}, already submitted at this revision"
         )),
         "{}",
         text(&out)
@@ -488,18 +488,21 @@ fn run_again_once_landed_keeps_under_no_remove() {
     let _ = std::fs::remove_file(&log);
 }
 
-/// Out of time, then landed: a run again under `--timeout` exits 5 with
-/// the submission's record and keeps the worktree; a later one exits 0
-/// once it lands, and the worktree is gone.
+/// A first submit under a time limit: `wt submit --timeout` submits
+/// without waiting, then follows; out of time it exits 5 with only that
+/// submission's record on stdout and keeps the worktree. A later run makes
+/// no new submission, exits 0 once it lands, and the worktree is gone.
 #[test]
-fn run_again_out_of_time_then_landed() {
-    let s = Scratch::new("wt-again-timeout");
+fn a_first_submit_under_a_time_limit_submits_then_follows() {
+    let s = Scratch::new("wt-first-timeout");
     let a = s.session("a", &[("slow", "x\n")]);
-    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     let out = s.wt_submit(&a, &["--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let record: serde_json::Value =
         serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    let subs = s.subs_from("a");
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    let one = subs[0]["id"].as_u64().unwrap();
     assert_eq!(record["id"], one, "{record}");
     assert!(
         record["state"] == "queued" || record["state"] == "testing",
@@ -554,29 +557,101 @@ fn run_again_after_a_blame_submits_the_same_head() {
     assert!(b.join("broken").exists());
 }
 
-/// `--timeout` follows a submission already made: with none, or with
-/// `--no-wait`, it exits 64, submits nothing and names how to make one.
+/// `--timeout` bounds a wait: with `--no-wait` it exits 64, saying so,
+/// and submits nothing.
 #[test]
-fn a_time_limit_with_nothing_to_follow_is_refused() {
-    let s = Scratch::new("wt-again-nothing");
+fn a_time_limit_without_waiting_is_refused() {
+    let s = Scratch::new("wt-nowait-timeout");
     let a = s.session("a", &[("a.txt", "a\n")]);
-    for given in [&["--timeout", "9m"][..], &["--no-wait", "--timeout", "9m"]] {
-        let out = s.wt_submit(&a, given);
-        assert_eq!(
-            out.status.code(),
-            Some(sluice::USAGE),
-            "{given:?}: {}",
-            text(&out)
-        );
-        assert!(
-            text(&out).contains("wt submit bolt/x --no-wait"),
-            "{given:?}: {}",
-            text(&out)
-        );
-        assert!(s.subs_from("a").is_empty(), "{given:?}");
-    }
-    let out = s.sluice(&["status", "bolt/x"]);
-    assert!(!text(&out).contains("unit/a"), "{}", text(&out));
+    let out = s.wt_submit(&a, &["--no-wait", "--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
+    assert!(
+        text(&out).contains("--timeout is for a run that waits"),
+        "{}",
+        text(&out)
+    );
+    assert!(s.subs_from("a").is_empty());
+    assert!(a.join("a.txt").exists());
+}
+
+/// Record 0065: a `--no-wait` run again where a submission stands answers
+/// with its record and exits 0, submitting nothing and withdrawing nothing.
+#[test]
+fn a_no_wait_run_again_answers_with_what_stands() {
+    let s = Scratch::new("wt-nowait-again");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&a, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["id"], one, "{record}");
+    assert_eq!(record["state"], "queued", "{record}");
+    let subs = s.subs_from("a");
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(s.status(one)["state"], "queued");
+}
+
+/// Landed, then a `--no-wait` run again: it answers with the `landed`
+/// record and keeps the worktree, since only a run that waits removes.
+#[test]
+fn a_no_wait_run_again_once_landed_keeps_the_worktree() {
+    let s = Scratch::new("wt-nowait-landed");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(one);
+    let out = s.wt_submit(&a, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["id"], one, "{record}");
+    assert_eq!(record["state"], "landed", "{record}");
+    assert_eq!(s.subs_from("a").len(), 1);
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+}
+
+/// Only a new head submits again: a run naming `--after` where a
+/// submission stands exits 64, names `sluice amend <id>`, and withdraws
+/// nothing.
+#[test]
+fn a_place_in_the_queue_where_one_stands_is_refused() {
+    let s = Scratch::new("wt-again-after");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let two = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&a, &["--no-wait", "--after", &two.to_string()]);
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("sluice amend {one}")),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(s.status(one)["state"], "queued");
+    assert_eq!(s.subs_from("a").len(), 1);
+}
+
+/// Where sluice's status cannot be read, a run that would submit submits
+/// nothing and exits 3 with sluice's words: a submit at the revision
+/// standing would withdraw it (67).
+#[test]
+fn an_unread_status_submits_nothing() {
+    let s = Scratch::new("wt-unread");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let version = s.repo.dir().join(".git/sluice/bolt/x/version");
+    let kept = std::fs::read(&version).unwrap();
+    std::fs::write(&version, "unreadable\n").unwrap();
+    let out = s.wt_submit(&a, &["--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::INTERNAL), "{}", text(&out));
+    assert!(
+        text(&out).contains("could not read whether a submission stands, so nothing was submitted"),
+        "{}",
+        text(&out)
+    );
+    std::fs::write(&version, kept).unwrap();
+    assert_eq!(s.status(one)["state"], "queued");
+    assert_eq!(s.subs_from("a").len(), 1);
     assert!(a.join("a.txt").exists());
 }
 
