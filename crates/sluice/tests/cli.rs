@@ -2470,6 +2470,105 @@ fn a_watch_stopped_while_a_failure_stands() {
     assert_failure(&lines[0], UNREADABLE);
 }
 
+/// 129: a wait that is the reader and cannot read another branch's
+/// records writes the failure as the reader's document, and goes on
+/// waiting on its own submission.
+#[test]
+fn a_reader_wait_writes_a_read_it_could_not_make() {
+    let f = setup();
+    f.world.hold_runs(true);
+    let other = "bolt/other";
+    f.world.init(other, &[(".config/sluice.toml", POLICY)]);
+    for n in 1..=3 {
+        let (path, worktree) = (format!("plugin/{n}"), format!("unit/{n}"));
+        let head = f.world.work(&f.world.tip(other), &[(&path, Some("n"))]);
+        f.world.session(&worktree, "agent", &head);
+        sluice(&f, &["submit", other, "--worktree", &worktree, "--no-wait"]);
+    }
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.fail_state_reads(other, Some(UNREADABLE));
+    let written = RefCell::new(None);
+    let between = |_: usize| *written.borrow_mut() = readers_doc();
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "4"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_failure(&written.into_inner().expect("a document"), UNREADABLE);
+    assert!(out.ends_with("still waiting: sluice wait 4\n"), "{out}");
+    let (_, status) = sluice(&f, &["status", "4", "--json"]);
+    assert_eq!(json(&status)["state"], "testing");
+}
+
+/// Submissions 1 to 7 queued on the branch, each from a worktree of its
+/// own.
+fn seven_queued(f: &Fakes) {
+    for n in 1..=7 {
+        let (path, worktree) = (format!("plugin/{n}"), format!("unit/{n}"));
+        work(f, &worktree, "agent", &[(&path, Some("n"))]);
+        sluice(f, &["submit", BRANCH, "--worktree", &worktree, "--no-wait"]);
+    }
+}
+
+/// 129: a follower wait reads nothing from the reader's failure, and no
+/// record in its place: its own records, which say `#7` withdrawn, would
+/// have ended it.
+#[test]
+fn a_follower_wait_passes_over_the_readers_failure() {
+    let f = setup();
+    f.world.hold_runs(true);
+    seven_queued(&f);
+    let doc = seven_testing();
+    let _reader = reader_of(REPOSITORY, &doc);
+    let between = |n: usize| {
+        if n == 1 {
+            sluice(&f, &["withdraw", "7"]);
+            rewrite_readers_doc(&failure("HTTP 503"));
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "7"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("testing {BRANCH} + #7 · ")),
+        "{out}"
+    );
+    assert_eq!(lines[1], "still waiting: sluice wait 7");
+}
+
+/// 129: out of time while the reader's document is its failure, a
+/// follower's `--json` is its record as the last overview it read held it.
+#[test]
+fn a_follower_wait_out_of_time_on_a_failure() {
+    let f = setup();
+    f.world.hold_runs(true);
+    seven_queued(&f);
+    let doc = seven_testing();
+    let _reader = reader_of(REPOSITORY, &doc);
+    let step = Then(Cell::new(0), |n| {
+        if n == 1 {
+            sluice(&f, &["withdraw", "7"]);
+            rewrite_readers_doc(&failure("HTTP 503"));
+        }
+        true
+    });
+    let (code, out) = sluice_with(&f, &step, &["wait", "7", "--timeout", "30s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert!(step.0.get() > 1, "{out}");
+    let held = &doc["branches"][0]["submissions"][0];
+    assert_eq!(json(&out), *held);
+    assert_eq!(held["state"], "testing");
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();

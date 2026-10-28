@@ -44,11 +44,11 @@
 
 ## 3. Waits beside a failed read
 
-- [ ] 3.1 In `Reading::read` (`crates/sluice/src/lib.rs`), the reader
+- [x] 3.1 In `Reading::read` (`crates/sluice/src/lib.rs`), the reader
   wait's failed read writes the error document as the reader's document
   before reading its own branch as it does now. Verified by the scenario
   "A wait that is the reader cannot read the queues" (`cli:test`).
-- [ ] 3.2 In `Reading::read`, a follower wait treats a document with no
+- [x] 3.2 In `Reading::read`, a follower wait treats a document with no
   `branches` array as no whole document: it keeps its last view and reads
   no record. Verified by the scenarios "The reader cannot read while a
   wait follows" and "Out of time on a failure" (`cli:test`), the first

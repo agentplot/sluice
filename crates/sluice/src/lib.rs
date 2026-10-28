@@ -2219,7 +2219,7 @@ impl Reading {
     }
 
     /// Read `sub` again, and its branch's part of the overview. A follower
-    /// with no whole document to read says nothing new.
+    /// with no whole overview to read says nothing new.
     fn read(&mut self, s: &Sluice<'_>, waiting: &Waiting<'_>, sub: &mut Submission) -> Result<()> {
         let (id, branch) = (sub.id, sub.branch.clone());
         // The reader's document, when it was read from one.
@@ -2231,15 +2231,23 @@ impl Reading {
                     None
                 }
                 // Another branch's part, or the host's, could not be read:
-                // its own, as a wait alone reads them, and nothing written.
-                Err(_) => {
+                // the failure is the reader's document, in the words it was
+                // refused with (133), and its own part is read as a wait
+                // alone reads it. Ctrl-C reaching the git a read runs is no
+                // failure of the queues'.
+                Err(e) => {
+                    if !INTERRUPTED.load(Ordering::SeqCst) {
+                        lead.write(&told::document(Kind::Internal, &format!("{e:#}"), &[]))?;
+                    }
                     self.view = s.branch_view_of(&branch).ok();
                     *sub = record(s, id, &branch)?;
                     return Ok(());
                 }
             },
             Reader::Follow(follow) => {
-                let Some(doc) = follow.read() else {
+                // The reader's read that failed is no whole document either:
+                // the last view stands, and no record is read for it (129).
+                let Some(doc) = follow.read().filter(|d| d["branches"].is_array()) else {
                     return Ok(());
                 };
                 self.view = branch_in(&doc, &branch);
