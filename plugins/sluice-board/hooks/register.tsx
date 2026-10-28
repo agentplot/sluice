@@ -23,6 +23,7 @@ import type {
 import type { CheckRow } from "./board";
 import {
   bandLines,
+  cannotFollow,
   checkLines,
   checkRows,
   clearText,
@@ -419,8 +420,11 @@ async function feed($: $, cwd: string, chosen: How) {
     const { end, said } = await watch($, cwd, chosen);
     if (end && noWatch(end.stderr)) {
       // A sluice older than its watch: the board names it, which reads no records.
+      // It stands in for the queue, which stays to be drawn again once a
+      // watch prints the next overview, and outcomes are told then.
       const version = await output($, ["sluice", "--version"], cwd);
       await update($, cannot, () => ({ version: version?.split("\n")[0] || null }));
+      $.ui.status(undefined);
     } else if (!said && (await read($, doc)) === null) {
       // While the board has no overview, the pane says why this one gave none.
       await update($, unread, () => unreadReason(end));
@@ -532,7 +536,13 @@ export const register: Register = (on, options) => {
     const d = await read($, doc);
     await read($, now);
     const said = await read($, error);
-    const lines = said !== null ? [said] : bandLines(d, await $.clock.now(), await read($, named));
+    const old = await read($, cannot);
+    const lines =
+      old !== null
+        ? [cannotFollow(old.version)]
+        : said !== null
+          ? [said]
+          : bandLines(d, await $.clock.now(), await read($, named));
     if (lines.length === 0 || (await read($, isHidden)) || e.props.hasSurvey) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
     return (
@@ -571,6 +581,18 @@ export const register: Register = (on, options) => {
           onPress={() => $.ui.close({ id: PANE })}
         />
       ) : null;
+    // A host's sluice with no watch: that, in place of anything read.
+    const old = await read($, cannot);
+    if (old !== null)
+      return (
+        <Box flexDirection="column">
+          <Box gap={1}>
+            <Text>{cannotFollow(old.version)}</Text>
+            {close}
+          </Box>
+          <Text>Ask Claude to upgrade sluice.</Text>
+        </Box>
+      );
     const d = await read($, doc);
     const m = await read($, mine);
     const bases = await read($, remotes);

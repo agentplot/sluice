@@ -13,7 +13,7 @@
 ## 3. The can't-follow line
 
 - [x] 3.1 On a watch that ended with `noWatch` true, `feed` runs `sluice --version` and keeps its first line, or null, in a `cannot` atom; the next overview clears it; verify with a `register.test.tsx` test that `sluice --version` runs after such an end and not after any other.
-- [ ] 3.2 While `cannot` is set, the band shows `cannotFollow(...)` as its one line, the pane shows it and `Ask Claude to upgrade sluice.` in place of the queue, and the status line is cleared with `$.ui.status(undefined)`; `doc` and `told` are left as they are, so the next overview redraws the queue and tells what was decided meanwhile; verify with `register.test.tsx` tests for "An older sluice on the host", "No version to name", "The host's sluice replaced by one with no watch" and "The host's sluice upgraded" (including an outcome decided while it couldn't follow, told once the queue is back).
+- [x] 3.2 While `cannot` is set, the band shows `cannotFollow(...)` as its one line, the pane shows it and `Ask Claude to upgrade sluice.` in place of the queue, and the status line is cleared with `$.ui.status(undefined)`; `doc` and `told` are left as they are, so the next overview redraws the queue and tells what was decided meanwhile; verify with `register.test.tsx` tests for "An older sluice on the host", "No version to name", "The host's sluice replaced by one with no watch" and "The host's sluice upgraded" (including an outcome decided while it couldn't follow, told once the queue is back).
 - [ ] 3.3 Run the board project's checks, `sluice exec main -- moon run sluice-board:typecheck sluice-board:validate sluice-board:test`, and verify all pass.
 
 ## 4. Documentation

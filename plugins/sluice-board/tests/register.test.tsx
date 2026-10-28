@@ -1286,6 +1286,97 @@ test("a watch refused for having no watch asks sluice its version, and no other 
   expect(ran.filter((r) => r.startsWith("sluice overview"))).toEqual([]);
 });
 
+const UPGRADE = "Ask Claude to upgrade sluice.";
+const OLD = "can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12 or later";
+
+test("an older sluice on the host: the band and the pane say the board can't follow it", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen, { [VERSION]: "sluice 0.11.2\n" });
+  watch.refusing = NO_OVERVIEW;
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(await bandOf($)).toEqual([OLD]);
+  expect(seen.status).toEqual([undefined]);
+  await $.command.run(slash(false));
+  const pane = await mountPane($, INLINE);
+  expect((await pane.findAll({ type: "Text" })).map((t) => t.text)).toEqual([OLD, UPGRADE]);
+  expect(await pane.find({ type: "Button", key: "close" })).toBeDefined();
+  await pane.unmount();
+  // The board keeps trying the watch, and reads nothing in its place.
+  await startedAgainAfter(clock, watch, 2000);
+  expect(await bandOf($)).toEqual([OLD]);
+  expect(ran.filter((r) => r.startsWith("sluice overview"))).toEqual([]);
+});
+
+test("no version to name: the band says this sluice", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.exit(2, NO_WATCH);
+  expect(ran).toContain(VERSION);
+  const line = "can't follow this sluice: it has no watch; the board needs sluice 0.12 or later";
+  expect(await bandOf($)).toEqual([line]);
+  expect(await paneTexts($)).toEqual([line, UPGRADE]);
+});
+
+test("the host's sluice replaced by one with no watch: the line takes the queue's place", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen, { [VERSION]: "sluice 0.11.2\n" });
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(justSetUp());
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  expect(seen.status.at(-1)).toBe("sluice: 1 submission");
+  await watch.end();
+  watch.refusing = NO_OVERVIEW;
+  await clock.advance(1000);
+  expect(await bandOf($)).toEqual([OLD]);
+  expect(await paneTexts($)).toEqual([OLD, UPGRADE]);
+  expect(seen.status.at(-1)).toBeUndefined();
+});
+
+test("the host's sluice upgraded: the queue comes back, and what was decided meanwhile is told", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen, { [VERSION]: "sluice 0.11.2\n" });
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // #13, this session's, is queued; then the host's sluice can't be followed.
+  await watch.print(queued13());
+  await watch.end();
+  watch.refusing = NO_OVERVIEW;
+  await clock.advance(1000);
+  expect(await bandOf($)).toEqual([OLD]);
+  expect(seen.prompts).toEqual([]);
+  // Upgraded: the next watch prints #13 landed while the board couldn't follow.
+  watch.refusing = null;
+  await clock.advance(2000);
+  expect(watch.isOpen()).toBe(true);
+  await watch.print(landed13());
+  expect(seen.toasts).toContain("sluice: #13 landed on main");
+  expect(seen.prompts).toEqual(["[sluice] Your submission #13 landed on main as 5d6e7f8."]);
+  const band = await bandOf($);
+  expect(band).toHaveLength(1);
+  expect(band[0]).toMatch(
+    /^sluice main · 2 submissions · #12 #14 waiting · last #13 landed as 5d6e7f8/,
+  );
+  expect(seen.status.at(-1)).toBe("sluice: 2 submissions");
+  expect(await paneTexts($)).toContain("QUEUED");
+});
+
 test("the first queue comes from the watch, and nothing reads the records in its place", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
