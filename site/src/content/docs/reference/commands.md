@@ -841,6 +841,85 @@ the one `sluice submit --status --json` prints,
 request waits for. Once its submission is decided, it prints the
 submission's record.
 
+## `sluice untold`
+
+`sluice untold`, run in a worktree, tells the session working there each
+outcome of its submissions that nothing has told it yet. It tells every
+submission from the worktree's branch, on any branch, that landed, was
+blamed or conflicts. A pull request opened from that branch counts as
+the branch's. A withdrawn submission, and one still queued or under
+test, is not told.
+
+A session that starts again, after a restart or on another machine,
+runs `sluice untold` once, in place of keeping a `sluice wait` for each
+submission it made:
+
+```console
+$ sluice untold
+[sluice] #12 landed on main as b7d2e94.
+testing main + #12 · 12 tasks to run, 0 replayed
+passed · landed as b7d2e94
+
+[sluice] #13 failed on bolt/cards: cli:test. sluice wait 13 shows why.
+testing bolt/cards + #13 · 3 tasks to run, 0 replayed
+failed: cli:test
+  on bolt/cards + #13 (e20a6f9)
+  log of cli:test: .git/sluice/.logs/bolt/cards/c4/cli:test.log
+the agent working in unit/cards fixes it there and submits again
+```
+
+Each outcome opens with the one-line message sluice types into the
+session's herdr pane when a round decides it, then what `sluice wait
+<id>` prints for it. A blank line comes between outcomes.
+
+Each outcome it tells is marked told on its submission, with when and
+to which session: `told` and `told_to` in [the
+submission's record](/sluice/reference/state/#a-submission). So an
+outcome is told once, whichever comes first, the message typed into
+the pane or `sluice untold`. Run again, it prints nothing. While it tells and
+marks, it holds each branch's lock, so no round types the same outcome
+into the pane meanwhile. One stopped before it marks tells the outcome
+again the next time, in the same words.
+
+Under `--json`, it prints one document, each outcome the submission's
+record as `sluice wait <id> --json` prints it, with `told` and
+`told_to` set, and `{"outcomes":[]}` when there is nothing to tell:
+
+```json
+{
+  "outcomes": [
+    {
+      "schema": "sluice/submission@1",
+      "id": 12,
+      "branch": "main",
+      "head": "4f0c1d2e9a",
+      "from": { "agent": "crw-1-unit-2", "worktree": "unit/cards",
+                "path": "/home/me/wt/unit-cards" },
+      "submitted": "2026-10-28T09:12:03Z",
+      "after": [],
+      "priority": 0,
+      "attempt": 1,
+      "state": "landed",
+      "tested": { "combination": "9ab3d07c11", "on": "c41e8f2d90", "submissions": [12] },
+      "result": "passed",
+      "told": "2026-10-28T10:02:41Z",
+      "told_to": "/home/me/wt/unit-cards",
+      "landed_as": "b7d2e94f03"
+    }
+  ]
+}
+```
+
+A branch whose records it cannot read stops no other: it tells what it
+could read, says which branch it could not and why on stderr, `sluice:
+could not read bolt/cards's records: …`, and exits `3`. Under `--json`,
+the document adds `unread`, `[{"branch","error"}]`.
+
+It exits `0` whether it told anything or not, and `3` when a branch's
+records could not be read or sluice itself failed. A worktree on no
+branch has submitted nothing: `sluice untold` there prints nothing and
+exits `0`.
+
 ## Exit codes
 
 | exit | meaning |

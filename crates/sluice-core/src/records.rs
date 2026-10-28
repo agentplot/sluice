@@ -265,6 +265,53 @@ impl Submission {
     pub fn name(&self) -> &str {
         self.subject.as_deref().unwrap_or(&self.from.worktree)
     }
+
+    /// 51: the outcome a round tells of it, read from its record as the
+    /// round's outbox item holds it; `None` for a submission that has not
+    /// landed, been blamed or met a conflict, which the round tells nothing
+    /// of, and for a record lacking what its outcome names.
+    pub fn told_outcome(&self) -> Option<Told> {
+        match self.state {
+            State::Landed => Some(Told::Landed {
+                landed_as: self.landed_as.clone()?,
+            }),
+            State::Failed => {
+                let tested = self.tested.as_ref()?;
+                Some(Told::Failed {
+                    failed: self.failed.iter().map(|f| f.task.clone()).collect(),
+                    combination: tested.combination.clone(),
+                    submissions: tested.submissions.clone(),
+                    timed_out: self.result.as_deref() == Some("timed out"),
+                    logs: self
+                        .failed
+                        .iter()
+                        .filter_map(|f| {
+                            f.log.clone().map(|at| TaskLog {
+                                task: f.task.clone(),
+                                text: at,
+                            })
+                        })
+                        .collect(),
+                })
+            }
+            State::Conflict => {
+                let conflict = self.conflict.as_ref()?;
+                Some(Told::Conflict {
+                    paths: conflict.paths.clone(),
+                    with: conflict.with.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// 51: the notification its outcome is told under, `<id>:<outcome>`,
+    /// as the round's outbox names it, so a repeat is known as one; `None`
+    /// where [`Submission::told_outcome`] is.
+    pub fn notification(&self) -> Option<String> {
+        self.told_outcome()
+            .map(|told| format!("{}:{}", self.id, told.word()))
+    }
 }
 
 /// What a passed submission waits for under a hold (117): the deeper
@@ -1491,6 +1538,119 @@ mod tests {
         let text = serde_json::to_string(&line).unwrap();
         assert!(text.contains("\"event\":\"untold\""), "{text}");
         assert_eq!(serde_json::from_str::<LogLine>(&text).unwrap(), line);
+    }
+
+    /// 51: a landed, blamed or conflicting submission's record names the
+    /// outcome its round's outbox item holds, under the same notification.
+    #[test]
+    fn a_decided_submission_names_the_outcome_its_round_tells() {
+        let landed = Submission {
+            state: State::Landed,
+            landed_as: Some(Rev::new("abc1234")),
+            ..submission(None)
+        };
+        assert_eq!(
+            landed.told_outcome(),
+            Some(Told::Landed {
+                landed_as: Rev::new("abc1234")
+            })
+        );
+        assert_eq!(landed.notification().as_deref(), Some("12:landed"));
+
+        let failed = Submission {
+            state: State::Failed,
+            tested: Some(Tested {
+                combination: Rev::new("c1"),
+                on: Rev::new("b1"),
+                submissions: vec![11, 12],
+            }),
+            result: Some("failed".into()),
+            failed: vec![
+                FailedTask {
+                    task: "cli:test".into(),
+                    hash: "h".into(),
+                    log: Some("logs/c1/cli-test.log".into()),
+                    flaky: None,
+                    system: None,
+                    not_run: None,
+                },
+                FailedTask {
+                    task: "core:test".into(),
+                    hash: String::new(),
+                    log: None,
+                    flaky: None,
+                    system: None,
+                    not_run: None,
+                },
+            ],
+            ..submission(None)
+        };
+        assert_eq!(
+            failed.told_outcome(),
+            Some(Told::Failed {
+                failed: vec!["cli:test".into(), "core:test".into()],
+                combination: Rev::new("c1"),
+                submissions: vec![11, 12],
+                timed_out: false,
+                logs: vec![TaskLog {
+                    task: "cli:test".into(),
+                    text: "logs/c1/cli-test.log".into(),
+                }],
+            })
+        );
+        assert_eq!(failed.notification().as_deref(), Some("12:failed"));
+
+        let timed_out = Submission {
+            result: Some("timed out".into()),
+            ..failed
+        };
+        assert!(matches!(
+            timed_out.told_outcome(),
+            Some(Told::Failed {
+                timed_out: true,
+                ..
+            })
+        ));
+
+        let with = vec![Contested {
+            id: 11,
+            from: submission(None).from,
+        }];
+        let conflict = Submission {
+            state: State::Conflict,
+            conflict: Some(ConflictRecord {
+                paths: vec!["src/lib.rs".into()],
+                with: with.clone(),
+            }),
+            ..submission(None)
+        };
+        assert_eq!(
+            conflict.told_outcome(),
+            Some(Told::Conflict {
+                paths: vec!["src/lib.rs".into()],
+                with,
+            })
+        );
+        assert_eq!(conflict.notification().as_deref(), Some("12:conflict"));
+    }
+
+    /// 51: a submission queued or withdrawn has no outcome a round tells.
+    #[test]
+    fn a_queued_or_withdrawn_submission_names_no_outcome() {
+        let queued = submission(None);
+        assert_eq!((queued.told_outcome(), queued.notification()), (None, None));
+        let withdrawn = Submission {
+            state: State::Withdrawn,
+            withdrawn: Some(Withdrawal {
+                by: "a".into(),
+                at: "t".into(),
+            }),
+            ..submission(None)
+        };
+        assert_eq!(
+            (withdrawn.told_outcome(), withdrawn.notification()),
+            (None, None)
+        );
     }
 
     /// A flaky failure recorded before its times and hosts reads with

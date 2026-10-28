@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use sluice_seams::{Contested, Formed, HostCopy, Rev, Session};
+use sluice_seams::{Contested, Formed, Guard, HostCopy, Rev, Session, Submitter, Told};
 
 use crate::line::Line;
 use crate::order::{self, Entry};
@@ -1041,6 +1041,209 @@ impl Sluice<'_> {
     }
 }
 
+/// 51, 135: one of a session's outcomes nothing has told it yet, as read
+/// under its branch's lock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UntoldOutcome {
+    pub branch: String,
+    /// Its record as read, untold.
+    pub submission: Submission,
+    pub told: Told,
+    /// What it is told under: its outbox item's id where one stands, else
+    /// the one the round's outbox gives it (51: a repeat known as one).
+    pub notification: String,
+}
+
+/// A branch whose records could not be read, in the reader's words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unread {
+    pub branch: String,
+    pub error: String,
+}
+
+/// 51, 135: a session's untold outcomes, with the lock of each branch that
+/// holds one, so no round pushes one of them while they are told.
+/// [`Untold::mark`] marks them told; dropped without it, it marks nothing
+/// and lets the locks go, and each is told again by whatever tells it next.
+pub struct Untold<'s, 'a> {
+    sluice: &'s Sluice<'a>,
+    /// When they are told: what [`Untold::mark`] records.
+    pub at: String,
+    /// In branch, then submission, order.
+    pub outcomes: Vec<UntoldOutcome>,
+    /// The branches it could not read; every other was read (rule core.11).
+    pub unread: Vec<Unread>,
+    _locks: Vec<Box<dyn Guard + 'a>>,
+}
+
+impl Untold<'_, '_> {
+    /// Each outcome's record as [`Untold::mark`] writes it, told at
+    /// [`Untold::at`] to `told_to`.
+    pub fn marked(&self, told_to: &str) -> Vec<Submission> {
+        self.outcomes
+            .iter()
+            .map(|o| Submission {
+                told: Some(self.at.clone()),
+                told_to: Some(told_to.into()),
+                ..o.submission.clone()
+            })
+            .collect()
+    }
+
+    /// 51: mark each outcome told to `told_to`, one write per branch: its
+    /// record, live or finished, takes `told` and `told_to`, its outbox
+    /// item goes, and the log says it was told, under that item's id or
+    /// the round's. One told since it was read, by another host, is left.
+    pub fn mark(self, told_to: &str) -> Result<()> {
+        let mut by_branch: BTreeMap<&str, Vec<&UntoldOutcome>> = BTreeMap::new();
+        for o in &self.outcomes {
+            by_branch.entry(&o.branch).or_default().push(o);
+        }
+        for (branch, outcomes) in by_branch {
+            self.sluice.update(branch, |l| {
+                for o in &outcomes {
+                    let id = o.submission.id;
+                    let notification;
+                    if let Some(s) = l.subs.get(&id) {
+                        if s.told.is_some() {
+                            continue;
+                        }
+                        notification = match l.doc.outbox.iter().position(|i| i.submission == id) {
+                            Some(n) => l.doc.outbox.remove(n).id,
+                            None => o.notification.clone(),
+                        };
+                        let s = l.sub_mut(id);
+                        s.told = Some(self.at.clone());
+                        s.told_to = Some(told_to.into());
+                    } else {
+                        let Some(mut s) = self.sluice.finished_sub(branch, id)? else {
+                            continue;
+                        };
+                        if s.told.is_some() {
+                            continue;
+                        }
+                        notification = o.notification.clone();
+                        s.told = Some(self.at.clone());
+                        s.told_to = Some(told_to.into());
+                        l.rewritten.insert(id, s);
+                    }
+                    l.log(&self.at, Event::Told { id, notification });
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Sluice<'a> {
+    /// 51, 135: every outcome of `me`'s submissions on any branch not yet
+    /// told it: each landed, blamed or conflicting submission whose
+    /// submitter's work, or the branch its pull request was opened from,
+    /// is `me`'s, and whose `told` is unset. Read from the live records and
+    /// from the finished records of `me`'s own landings alone (131), then
+    /// read again under the lock of each branch holding one, taken in the
+    /// branches' order so two askers never wait on each other. A branch it
+    /// cannot read is among the unread and the others are read still (rule
+    /// core.11). Nothing is written until [`Untold::mark`].
+    pub fn untold<'s>(&'s self, me: &Submitter) -> Result<Untold<'s, 'a>> {
+        let mut branches = self.seams.state.branches()?;
+        branches.sort();
+        branches.dedup();
+        let mut unread = Vec::new();
+        let mut holding = Vec::new();
+        for b in branches {
+            match self.untold_on(&b, me) {
+                Ok(found) if found.is_empty() => {}
+                Ok(_) => holding.push(b),
+                Err(e) => unread.push(Unread {
+                    branch: b,
+                    error: format!("{e:#}"),
+                }),
+            }
+        }
+        let state = self.seams.state;
+        let mut locks = Vec::new();
+        let mut outcomes = Vec::new();
+        for b in holding {
+            locks.push(state.wait_lock(&b)?);
+            match self.untold_on(&b, me) {
+                Ok(found) => outcomes.extend(found),
+                Err(e) => unread.push(Unread {
+                    branch: b,
+                    error: format!("{e:#}"),
+                }),
+            }
+        }
+        unread.sort_by(|x, y| x.branch.cmp(&y.branch));
+        Ok(Untold {
+            sluice: self,
+            at: self.now(),
+            outcomes,
+            unread,
+            _locks: locks,
+        })
+    }
+
+    /// `me`'s untold outcomes on `branch`, in submission order.
+    fn untold_on(&self, branch: &str, me: &Submitter) -> Result<Vec<UntoldOutcome>> {
+        let line = self.read_line(branch)?;
+        let mut found = Vec::new();
+        let mine = |from: &Submitter| {
+            from.worktree == me.worktree || from.head.as_deref() == Some(me.worktree.as_str())
+        };
+        for s in line
+            .subs
+            .values()
+            .filter(|s| s.told.is_none() && mine(&s.from))
+        {
+            if !matches!(s.state, State::Landed | State::Failed | State::Conflict) {
+                continue;
+            }
+            let item = line.doc.outbox.iter().find(|o| o.submission == s.id);
+            let (Some(told), Some(notification)) = (
+                item.map(|o| o.told.to_told()).or_else(|| s.told_outcome()),
+                item.map(|o| o.id.clone()).or_else(|| s.notification()),
+            ) else {
+                continue;
+            };
+            found.push(UntoldOutcome {
+                branch: branch.into(),
+                submission: s.clone(),
+                told,
+                notification,
+            });
+        }
+        // 130: a blame or a conflict stays live, so only a landing is read
+        // from the finished records, each by its own name (131).
+        for f in line.finished.values() {
+            if f.state != State::Landed
+                || f.worktree != me.worktree
+                || line.subs.contains_key(&f.id)
+            {
+                continue;
+            }
+            let Some(s) = self.finished_sub(branch, f.id)? else {
+                continue;
+            };
+            if s.told.is_some() {
+                continue;
+            }
+            let (Some(told), Some(notification)) = (s.told_outcome(), s.notification()) else {
+                continue;
+            };
+            found.push(UntoldOutcome {
+                branch: branch.into(),
+                submission: s,
+                told,
+                notification,
+            });
+        }
+        found.sort_by_key(|o| o.submission.id);
+        Ok(found)
+    }
+}
+
 /// ADR 0044: the required checks the latest run of each system said its
 /// task runner keeps out of CI, so never runs.
 pub fn kept_out(log: &[crate::records::LogLine]) -> Vec<String> {
@@ -1193,6 +1396,8 @@ mod tests {
         next_id: Cell<u64>,
         /// The policy every revision holds.
         policy: RefCell<String>,
+        /// Branches with records that cannot be read.
+        unreadable: RefCell<Vec<String>>,
     }
 
     impl Host {
@@ -1327,7 +1532,10 @@ mod tests {
             Ok(Box::new(Held))
         }
 
-        fn read(&self, _: &str) -> Result<Snapshot> {
+        fn read(&self, branch: &str) -> Result<Snapshot> {
+            if self.unreadable.borrow().iter().any(|b| b == branch) {
+                anyhow::bail!("remote: Repository not found.");
+            }
             let records = self.records.borrow();
             Ok(Snapshot {
                 version: records.version,
@@ -1375,7 +1583,9 @@ mod tests {
         }
 
         fn branches(&self) -> Result<Vec<String>> {
-            Ok(vec![BRANCH.into()])
+            let mut all = self.unreadable.borrow().clone();
+            all.push(BRANCH.into());
+            Ok(all)
         }
 
         fn allocate_id(&self) -> Result<u64> {
@@ -1531,6 +1741,210 @@ mod tests {
 
     fn line(h: &Host) -> Line {
         Line::load(BRANCH, Records::read(h, BRANCH).unwrap()).unwrap()
+    }
+
+    /// Submission `id` of `main`, from `worktree`, in `state`, as decided:
+    /// a landing with its commit, a blame with its combination.
+    fn decided(id: u64, worktree: &str, state: State) -> Submission {
+        let mut s: Submission = serde_json::from_value(serde_json::json!({
+            "schema": SUBMISSION_SCHEMA, "id": id, "branch": BRANCH, "head": format!("h{id}"),
+            "from": { "agent": "a", "worktree": worktree },
+            "submitted": "t", "after": [], "priority": 0, "attempt": 1,
+            "state": state.word(),
+        }))
+        .unwrap();
+        match state {
+            State::Landed => s.landed_as = Some(Rev::new(format!("landed-{id}"))),
+            State::Failed => {
+                s.tested = Some(crate::records::Tested {
+                    combination: Rev::new(format!("c{id}")),
+                    on: Rev::new("tip"),
+                    submissions: vec![id],
+                });
+                s.result = Some("failed".into());
+            }
+            _ => {}
+        }
+        s
+    }
+
+    fn keep(h: &Host, s: &Submission) {
+        h.records.borrow_mut().files.insert(
+            crate::records::submission_file(s.id),
+            crate::records::to_document(s),
+        );
+    }
+
+    fn me(worktree: &str) -> Submitter {
+        Submitter {
+            agent: "a".into(),
+            worktree: worktree.into(),
+            path: None,
+            head: None,
+            host: None,
+            session: None,
+        }
+    }
+
+    fn found(h: &Host, worktree: &str) -> Vec<u64> {
+        let s = h.sluice();
+        let untold = s.untold(&me(worktree)).unwrap();
+        untold.outcomes.iter().map(|o| o.submission.id).collect()
+    }
+
+    /// 51: a session is told its own work's outcomes, by its branch or the
+    /// branch its pull request was opened from, and not another's.
+    #[test]
+    fn another_worktrees_outcome_is_not_found() {
+        let h = Host::new();
+        keep(&h, &decided(1, "unit-b", State::Failed));
+        keep(&h, &decided(2, "unit-a", State::Landed));
+        let mut pull = decided(3, "pull/7", State::Failed);
+        pull.from.head = Some("unit-a".into());
+        keep(&h, &pull);
+        assert_eq!(found(&h, "unit-a"), [2, 3]);
+        assert_eq!(found(&h, "unit-b"), [1]);
+        assert!(found(&h, "unit-c").is_empty());
+    }
+
+    /// 51: a submission withdrawn, still queued or told already is no
+    /// outcome to tell.
+    #[test]
+    fn a_withdrawn_queued_or_told_submission_is_not_found() {
+        let h = Host::new();
+        keep(&h, &decided(1, "unit-a", State::Withdrawn));
+        keep(&h, &decided(2, "unit-a", State::Queued));
+        keep(&h, &decided(3, "unit-a", State::Testing));
+        let mut told = decided(4, "unit-a", State::Failed);
+        told.told = Some("2026-10-23T11:00:00Z".into());
+        keep(&h, &told);
+        assert!(found(&h, "unit-a").is_empty());
+    }
+
+    /// 51, 130, 131: a landing moved to the finished records untold is
+    /// found by its index line, and marked in its own record, the index
+    /// left as it was.
+    #[test]
+    fn a_finished_untold_landing_is_found_and_marked_in_its_record() {
+        let h = Host::new();
+        let landed = decided(5, "unit-a", State::Landed);
+        let index = crate::records::to_line(&crate::records::FinishedLine {
+            id: 5,
+            state: State::Landed,
+            worktree: "unit-a".into(),
+            subject: None,
+        });
+        {
+            let mut records = h.records.borrow_mut();
+            records.files.insert(
+                crate::records::finished_file(5),
+                crate::records::to_document(&landed),
+            );
+            records
+                .files
+                .insert(crate::records::FINISHED_INDEX.into(), index.clone());
+        }
+        let s = h.sluice();
+        let untold = s.untold(&me("unit-a")).unwrap();
+        assert_eq!(untold.outcomes.len(), 1);
+        assert_eq!(untold.outcomes[0].notification, "5:landed");
+        assert_eq!(
+            untold.outcomes[0].told,
+            Told::Landed {
+                landed_as: Rev::new("landed-5")
+            }
+        );
+        untold.mark("/w/unit-a").unwrap();
+        let back = s.state(5).unwrap().unwrap();
+        assert_eq!(back.told.as_deref(), Some("2026-10-23T12:00:00Z"));
+        assert_eq!(back.told_to.as_deref(), Some("/w/unit-a"));
+        assert_eq!(
+            h.records.borrow().files[crate::records::FINISHED_INDEX],
+            index
+        );
+        let log = String::from_utf8(h.records.borrow().files["log.jsonl"].clone()).unwrap();
+        assert!(
+            log.contains("\"event\":\"told\",\"id\":5,\"notification\":\"5:landed\""),
+            "{log}"
+        );
+        assert!(found(&h, "unit-a").is_empty(), "told once");
+    }
+
+    /// 51: an outcome whose outbox item stands is told under that item's
+    /// id, and marking it removes the item, so no round pushes it.
+    #[test]
+    fn marking_removes_the_outbox_item_and_logs_its_id() {
+        let h = Host::new();
+        let failed = decided(4, "unit-a", State::Failed);
+        keep(&h, &failed);
+        let mut doc = crate::records::BranchDoc::new(BRANCH);
+        doc.outbox.push(crate::records::OutboxItem {
+            id: "4:failed".into(),
+            submission: 4,
+            told: crate::records::ToldRecord::Failed {
+                failed: vec!["cli:test".into()],
+                combination: Rev::new("c4"),
+                submissions: vec![4],
+                timed_out: false,
+                logs: Vec::new(),
+            },
+        });
+        h.records.borrow_mut().files.insert(
+            crate::records::BRANCH_FILE.into(),
+            crate::records::to_document(&doc),
+        );
+        let s = h.sluice();
+        let untold = s.untold(&me("unit-a")).unwrap();
+        assert_eq!(untold.outcomes[0].notification, "4:failed");
+        assert!(matches!(
+            &untold.outcomes[0].told,
+            Told::Failed { failed, .. } if failed == &["cli:test"]
+        ));
+        untold.mark("herdr:w1:p2@/run/herdr.sock").unwrap();
+        let l = line(&h);
+        assert!(l.doc.outbox.is_empty());
+        assert_eq!(
+            l.subs[&4].told_to.as_deref(),
+            Some("herdr:w1:p2@/run/herdr.sock")
+        );
+        let log = String::from_utf8(h.records.borrow().files["log.jsonl"].clone()).unwrap();
+        assert!(log.contains("\"notification\":\"4:failed\""), "{log}");
+    }
+
+    /// 51: an ask dropped before it marks writes nothing, so the outcome
+    /// is told again by whatever tells it next.
+    #[test]
+    fn an_ask_dropped_without_marking_leaves_it_untold() {
+        let h = Host::new();
+        keep(&h, &decided(2, "unit-a", State::Landed));
+        let before = h.writes.get();
+        {
+            let s = h.sluice();
+            let untold = s.untold(&me("unit-a")).unwrap();
+            assert_eq!(untold.outcomes.len(), 1);
+        }
+        assert_eq!(h.writes.get(), before);
+        assert_eq!(line(&h).subs[&2].told, None);
+        assert_eq!(found(&h, "unit-a"), [2]);
+    }
+
+    /// Rule core.11: a branch whose records cannot be read is named with
+    /// the reader's words, and every other branch is read still.
+    #[test]
+    fn an_unreadable_branch_is_named_and_the_others_read() {
+        let h = Host::new();
+        h.unreadable.borrow_mut().push("bolt/x".into());
+        keep(&h, &decided(2, "unit-a", State::Landed));
+        let s = h.sluice();
+        let untold = s.untold(&me("unit-a")).unwrap();
+        assert_eq!(untold.outcomes.len(), 1);
+        assert_eq!(
+            untold.unread,
+            [Unread {
+                branch: "bolt/x".into(),
+                error: "remote: Repository not found.".into(),
+            }]
+        );
     }
 
     /// 125: a dirty second place refuses the act whole: nothing is
