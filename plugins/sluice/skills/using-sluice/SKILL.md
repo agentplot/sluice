@@ -81,6 +81,29 @@ call's limit, and end no turn while the submission is undecided. A
 waiting `sluice submit main` is for a person at a terminal or a script,
 which nothing else needs to reach.
 
+Under worktrunk, one command submits and waits, started the same way:
+
+```sh
+wt submit main --timeout 9m --json         # in the background, again for as long as it exits 5
+```
+
+Its first run submits, as `sluice submit main --no-wait` does, with that
+answer on stderr, then follows the submission as `sluice wait main` does,
+with the same output, record and exits. Run again, it submits nothing
+where the worktree's submission stands: queued, under test or landed, of
+the revision a submit from the worktree would send now, or its pull
+request open and ready there. That revision is `sends` in `sluice submit
+main --status --json`. It follows that submission, and once it lands it
+releases the worktree and removes it, at once when it had already landed.
+`sluice wait` removes nothing, so never wait with it and then remove the
+landed worktree by hand. `wt submit main --no-wait --json` run again
+answers with what stands, as `wt submit main --status --json` prints it,
+and submits nothing. Only a new head submits again: where a submission
+stands, `--after` or `--priority` exits `64` and names `sluice amend
+<id>`. `--timeout` with `--no-wait`, `--check` or `--status` exits `64`
+too. A new commit, or a submission that was blamed, conflicted or was
+withdrawn, is submitted again.
+
 Each `sluice wait --json` prints the submission's record however it ends:
 read its `state` and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`, `passed` or
 `landing`; run `sluice wait` again. Never search `sluice status <branch>`'s
@@ -155,8 +178,9 @@ A background agent you start to work in a worktree, with the Agent tool's
 it. Tell it there to commit its work when it is done and submit it through
 sluice from that worktree, with `sluice submit <branch>` naming the branch
 it lands on, waiting as above (`--no-wait --json`, then `sluice wait <id>
---timeout 9m --json` in its background, again for as long as it exits
-`5`), and to report the outcome to you. The rest of the prompt is yours, written for
+--timeout 9m --json`, or under worktrunk `wt submit <branch> --timeout 9m
+--json`, in its background, again for as long as it exits `5`), and to
+report the outcome to you. The rest of the prompt is yours, written for
 the work.
 
 Work left committed in a worktree whose agent has ended is submitted by an

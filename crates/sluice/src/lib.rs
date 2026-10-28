@@ -135,8 +135,9 @@ Exit codes:
   130  stopped with Ctrl-C; the submission stays queued";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
-/// read is a command line sluice cannot read (64).
-fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
+/// read is a command line sluice cannot read (64). `wt submit`'s own
+/// `--timeout` is read by it too.
+pub fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
     sluice_core::policy::parse_duration(text).map_err(|e| format!("{e:#}"))
 }
 
@@ -537,6 +538,11 @@ pub enum Followed {
         /// What each submission is called on a pull request, as
         /// [`Followed::Done`] names them.
         names: BTreeMap<u64, String>,
+        /// The revision the forge holds as its head; `None` when the forge
+        /// returned no pull to read it from.
+        head: Option<String>,
+        /// Whether it is a draft, which intake does not take in.
+        draft: bool,
     },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
@@ -2282,27 +2288,41 @@ impl Reading {
     }
 
     /// Read `sub` again, and its branch's part of the overview. A follower
-    /// with no whole document to read says nothing new.
+    /// with no whole overview to read says nothing new.
     fn read(&mut self, s: &Sluice<'_>, waiting: &Waiting<'_>, sub: &mut Submission) -> Result<()> {
         let (id, branch) = (sub.id, sub.branch.clone());
         // The reader's document, when it was read from one.
         let followed = match &mut self.reader {
             Reader::Lead(lead) => match overview::document(s, waiting.host, waiting.clock) {
                 Ok((branches, doc)) => {
-                    lead.write(&doc)?;
-                    self.view = branches.into_iter().find(|b| b.branch == branch);
+                    // Ctrl-C reaching the git a branch's read runs is no
+                    // refusal of that branch's (26).
+                    if !INTERRUPTED.load(Ordering::SeqCst) {
+                        lead.write(&doc)?;
+                    }
+                    self.view = branches
+                        .into_iter()
+                        .find(|b| b.branch == branch && b.unread.is_none());
                     None
                 }
-                // Another branch's part, or the host's, could not be read:
-                // its own, as a wait alone reads them, and nothing written.
-                Err(_) => {
+                // The records, or the host's part, could not be read: the
+                // failure is the reader's document, in the words it was
+                // refused with (133), and its own part is read as a wait
+                // alone reads it. Ctrl-C reaching the git a read runs is no
+                // failure of the queues'.
+                Err(e) => {
+                    if !INTERRUPTED.load(Ordering::SeqCst) {
+                        lead.write(&told::document(Kind::Internal, &format!("{e:#}"), &[]))?;
+                    }
                     self.view = s.branch_view_of(&branch).ok();
                     *sub = record(s, id, &branch)?;
                     return Ok(());
                 }
             },
             Reader::Follow(follow) => {
-                let Some(doc) = follow.read() else {
+                // The reader's read that failed is no whole document either:
+                // the last view stands, and no record is read for it (129).
+                let Some(doc) = follow.read().filter(|d| d["branches"].is_array()) else {
                     return Ok(());
                 };
                 self.view = branch_in(&doc, &branch);
@@ -2335,13 +2355,16 @@ fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
         .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))
 }
 
-/// `branch`'s part of an overview document; `None` when it has none.
+/// `branch`'s part of an overview document; `None` when it has none, or
+/// when the reader could not read it (26).
 fn branch_in(doc: &serde_json::Value, branch: &str) -> Option<BranchView> {
     let b = doc["branches"]
         .as_array()?
         .iter()
         .find(|b| b["branch"] == branch)?;
-    serde_json::from_value(b.clone()).ok()
+    serde_json::from_value::<BranchView>(b.clone())
+        .ok()
+        .filter(|b| b.unread.is_none())
 }
 
 /// 122: submission `id` as landed, when its work is on its branch: its
@@ -2647,6 +2670,20 @@ fn last_submitted(
     Ok(found.ok_or(from.worktree))
 }
 
+/// `doc` with `sends`: the revision a submit from `worktree` would send
+/// now, as the core decides it (124), so a driver reading `--status
+/// --json` can tell whether the submission stands at it without deciding
+/// that itself (record 0065; rule core.27).
+fn with_sends(
+    mut doc: serde_json::Value,
+    s: &Sluice<'_>,
+    worktree: &str,
+) -> Result<serde_json::Value> {
+    let session = s.seams().driver.session(worktree)?;
+    doc["sends"] = serde_json::to_value(s.submitted_head(&session)?.head)?;
+    Ok(doc)
+}
+
 fn submitted(
     s: &Sluice<'_>,
     clock: &dyn Clock,
@@ -2666,7 +2703,8 @@ fn submitted(
     };
     let status = s.status(branch)?;
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        let doc = with_sends(serde_json::to_value(&sub)?, s, worktree)?;
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = status_names(&status, std::slice::from_ref(&sub));
         let testing = progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
@@ -2783,7 +2821,8 @@ fn submit_pull(
         match followed {
             Some(Followed::Done(sub, names)) => {
                 if status && json {
-                    writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+                    let doc = with_sends(serde_json::to_value(&sub)?, s, worktree)?;
+                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     return Ok(0);
                 }
                 if status {
@@ -2820,6 +2859,8 @@ fn submit_pull(
                 lines,
                 submission,
                 names,
+                head,
+                draft,
             }) => {
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the
@@ -2852,7 +2893,17 @@ fn submit_pull(
                 }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
-                    if json && (no_wait || status) {
+                    if json && status {
+                        // Its head and draft mark, for a driver to tell
+                        // whether it stands at what the worktree would send
+                        // (record 0065).
+                        let doc = serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": now.0,
+                            "head": head, "draft": draft,
+                        });
+                        let doc = with_sends(doc, s, worktree)?;
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else if json && no_wait {
                         let doc = serde_json::json!({
                             "pull_request": number, "branch": branch, "state": now.0,
                         });

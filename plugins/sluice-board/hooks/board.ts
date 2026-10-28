@@ -25,15 +25,35 @@ export function isOverview(v: unknown): v is Overview {
 }
 
 /**
- * `sluice: <message>`, one line, for the error document a failing overview
- * prints (`{"error":{"kind","message","next"}}`); null for anything else.
+ * Whether `v` is the overview a watch ends on where the repository has no
+ * sluice: no records, and no branch the host holds with its policy (129).
  */
-export function errorLine(v: unknown): string | null {
+export function notSetUp(v: unknown): boolean {
+  return isOverview(v) && v.set_up === false;
+}
+
+/** What the pane says where `/sluice`'s watch, too, found no sluice in the repository. */
+export const NOT_SET_UP_LINES = [
+  "sluice isn't set up in this repository.",
+  "Ask Claude to set sluice up in this repository.",
+] as const;
+
+/**
+ * The message of the error document a failing overview prints
+ * (`{"error":{"kind","message","next"}}`), on one line; null for anything else.
+ */
+export function errorMessage(v: unknown): string | null {
   const e = typeof v === "object" && v !== null ? (v as { error?: unknown }).error : undefined;
   const message =
     typeof e === "object" && e !== null ? (e as { message?: unknown }).message : undefined;
   if (typeof message !== "string") return null;
-  return `sluice: ${message.trim().replace(/\s*\n\s*/g, " ")}`;
+  return message.trim().replace(/\s*\n\s*/g, " ");
+}
+
+/** `sluice: <message>`, the band's one line for an error document; null for anything else. */
+export function errorLine(v: unknown): string | null {
+  const message = errorMessage(v);
+  return message === null ? null : `sluice: ${message}`;
 }
 
 /** The hosts serving a remote: how many, their room, and any lapsed. */
@@ -821,17 +841,68 @@ export function openedText(isFullscreen: boolean): string {
     : "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.";
 }
 
+/** The first wait before the watch is started again, and the longest. */
+const REWATCH_FIRST = 1000;
+const REWATCH_MOST = 60_000;
+
 /**
- * Why `sluice overview --json` gave no overview: the command could not be
- * started (`got` null), else sluice's first line on stderr, else its exit.
+ * How long to wait before starting `sluice overview --json --watch` again,
+ * from the last wait (null before the first) and how long the watch that
+ * ended was open, in milliseconds: a second, then twice the last wait, at
+ * most a minute. A watch ends only when killed, replaced or its repository
+ * is gone, and a new one follows the host's reader (129; ADR 0056).
+ *
+ * The count starts over only after a watch open a minute: one that prints
+ * an error and exits at once, as a sluice whose repository is gone does,
+ * would otherwise be started again every second, a faster poll than the
+ * one this replaces; this way the board starts about one a minute at most.
  */
-export function unreadReason(got: { exitCode: number; stderr: string } | null): string {
+export function rewatchWait(last: number | null, open: number): number {
+  if (last === null || open >= REWATCH_MOST) return REWATCH_FIRST;
+  return Math.min(last * 2, REWATCH_MOST);
+}
+
+/** The sluice that first had `overview --watch`, the one place the board names it. */
+export const WATCH_SINCE = "0.12";
+
+/**
+ * Whether a watch ended because the host's sluice has no watch: clap
+ * refusing `overview` as a command or `--watch` as an argument, as a sluice
+ * older than 0.12 does.
+ */
+export function noWatch(stderr: string): boolean {
+  return (
+    stderr.includes("unrecognized subcommand 'overview'") ||
+    stderr.includes("unexpected argument '--watch'")
+  );
+}
+
+/**
+ * The band's one line where the host's sluice has no watch, naming the
+ * version it printed (`sluice 0.11.2`), or `this sluice` when it printed none.
+ */
+export function cannotFollow(version: string | null): string {
+  const which = version?.trim() || "this sluice";
+  return `can't follow ${which}: it has no watch; the board needs sluice ${WATCH_SINCE} or later`;
+}
+
+/**
+ * Why a watch ended with no overview: the command could not be started
+ * (`got` null), else sluice's first line on stderr, else its exit, or the
+ * signal that ended it.
+ */
+export function unreadReason(
+  got: { exitCode: number | null; signal?: string | null; stderr: string } | null,
+): string {
   if (!got) return "the sluice command was not found";
   const line = got.stderr
     .split("\n")
     .map((l) => l.trim())
     .find((l) => l !== "");
-  return line ?? `sluice overview exited ${got.exitCode}`;
+  if (line !== undefined) return line;
+  return got.exitCode !== null
+    ? `sluice overview exited ${got.exitCode}`
+    : `sluice overview was ended by ${got.signal ?? "a signal"}`;
 }
 
 /**

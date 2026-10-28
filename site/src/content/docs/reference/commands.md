@@ -11,7 +11,7 @@ sidebar:
 | `sluice submit <branch>` | Queue this worktree's head and wait for the outcome; to a branch with pull requests, open one for it instead. `--no-wait` returns once queued or opened; `--status` reports where the last submission from this worktree stands; `--check` only reports whether it would conflict, and `--check --head <branch>` whether a branch no worktree holds would; `--after 2,5` lands it after those; `--json` for scripts. `--subject <text>`, one line saying what lands, titles the pull request it opens and names its landing commit. `--worktree <path>` given more than once submits each worktree's head as one act, in that order, with one `--subject` per `--worktree` or none ([below](#submitting-several-worktrees-as-one-act)). |
 | `sluice wait <id>` | Wait for a submission's outcome, running sluice's rounds meanwhile, as a waiting submit does; `sluice wait <branch>` for this worktree's last submission to it. `--timeout 9m` returns after that long with the submission as it stands, and exits `5`; `--json` prints its record. One watch or wait of the repository on the host reads the queue, and the others follow what it read. |
 | `sluice status <branch>` | The queue: each submission still in it, by its number and its subject, its agent, its worktree and its state, with how many are in it. Each combination under test says how far it has got. `--all` for every submission the branch has had. It reads the branch where its records last saw it, as `sluice overview` does, and never fetches the branch. A branch whose state is on its remote is read from there; when the remote can't be reached, it shows the state last fetched and says so. For a branch on a remote, a round sets this host's own branch of that name to each landing. When it couldn't, status says above the queue which revision this host's branch holds, the landing it lacks and why, until a round sets it. `--json` carries the same under `copy`. While this host's rounds can't read the branch or its state from its remote, status says so above the queue. It says what they couldn't read, from which remote, since when and for how many rounds. Below that is what git said, on as many lines as git said it. It says so until a round reads the remote again. `--json` carries the same under `refused`: `remote`, `asked`, `said`, `since` and `rounds`. A branch with no records and no such branch exits 1. It lists the checkouts held because their release failed, each with what failed and how many times it was tried. `sluice status <id>` for one. `sluice status` alone lists every worktree sluice holds ports or runs for. `--json` for tools. |
-| `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. One watch or wait of the repository on the host reads the queue, and the others follow what it read. A watch of a newer sluice takes over the reading from an older one. `sluice overview` alone always reads it itself. |
+| `sluice overview` | Every branch's queue at a glance: the combinations under test, the submissions still queued, the latest landings, blames and conflicts, and the worktrees and previews held. `--json` for tools; `--json --watch` prints it again each time it changes. A read of the queue it couldn't make is printed as one line, the error document with what it was refused. The watch reads again a second later. It ends only when it's stopped, when its repository is gone, or where the repository has no sluice: no state, and no branch here or a remote's as last fetched holding `.config/sluice.toml`. Its last line is then the overview with `"set_up": false`, and it exits `0`; nothing is fetched to tell. One watch or wait of the repository on the host reads the queue, and the others follow what it read. A watch of a newer sluice takes over the reading from an older one. `sluice overview` alone always reads it itself. |
 | `sluice run` | Work every branch's queue until stopped. On a host whose config names a [`[signing]`](/sluice/reference/configuration/#signing) key, it also takes runs of the branches that trust its signer. |
 | `sluice step <branch>` | One round of a branch's work, then exit: for cron, CI or a hook. Says `led` when another host keeps the branch, and `held` when the revision it reads lacks the branch's last landing ([below](#sluice-branch)). `--json` for scripts. |
 | `sluice amend <id>` | Reorder a queued submission (`--after`, `--priority`) until it is under test. `--json` for scripts. |
@@ -404,6 +404,12 @@ A checkout another host made is held on that host, and its commands are
 given to run there. One whose branch has no state comes after the
 branches, under `<branch> · no records`.
 
+A branch whose policy, revision or state couldn't be read is shown as
+`<branch> could not be read:` and what refused it, in its own words,
+such as a policy sluice no longer accepts. Every other branch is shown
+as usual. The overview fails whole only when it can't list the
+branches' state at all.
+
 `--json` prints one document, `sluice/overview@1`, for a pane, a status
 line or a script. Fields are only ever added to it.
 
@@ -420,9 +426,11 @@ line or a script. Fields are only ever added to it.
 | `branches[].recent_subjects` | the subject each submission `recent_from` names was given at its submit, as written, whether it is still queued or has moved to the finished records: `{"12": "Batch review cards"}`. A submission whose submit gave none has no key, and a reader names it by `recent_from`. It's `{}` when no recent submission has a subject |
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
+| `branches[].unread` | when the branch's policy, revision or state couldn't be read: what refused it, in its own words. Nothing else of the branch is read, so its other fields are empty; left out otherwise |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
+| `set_up` | `false` on a watch's last line, where the repository has no sluice: no branch has state, and no branch here or a remote's as last fetched holds `.config/sluice.toml`. Left out otherwise |
 | `room` | the host's runs: `bound`, `queue` (this repository's combinations under test), `sessions` (every `sluice exec` and preview command running on the host) and `reserve` (the part of the bound `[runs] reserved` keeps from `sluice exec`) |
 
 A combination's `tasks` say how far its tests have got and decide
@@ -458,6 +466,14 @@ until stopped. A reader finds what happened since its last line by
 comparing `recent`. A branch's revision is the one its state last saw,
 never fetched, so a branch on a remote costs it nothing to watch.
 
+The watch ends where the repository has no sluice: no branch has state,
+and no branch here, nor any remote's as last fetched, holds
+`.config/sluice.toml`. Its last line is the overview with `"set_up":
+false`, and it exits `0`. Nothing is fetched to tell, and a policy
+written in a worktree but committed on no branch doesn't count. A
+repository set up with nothing submitted yet is watched as usual. A
+watch that follows the reader prints that same last line and ends too.
+
 A submission's `from.path` names the worktree it came from, so a pane
 or a session can find its own submissions in the document.
 
@@ -486,7 +502,7 @@ added to: `worktree` (`path`, `branch`, `agent`), `submission` (`id`,
 `branch`, `state`, `failed` with each test's `log`, `landed_as`, and
 `subject`, the submit's words as written, or null where it gave none),
 `branches[]` (`branch`, `depth`, `testing`, `parallel`, the overview's
-counts), `place` (`ports`, `last_run`) and `next`. Outside a worktree
+counts, and `unread` as the overview gives it), `place` (`ports`, `last_run`) and `next`. Outside a worktree
 sluice can submit from, `worktree`, `submission` and `place` are null.
 A submission from before `from.path` was recorded names no worktree and
 is not shown. A pull request still waiting for review or checks has no

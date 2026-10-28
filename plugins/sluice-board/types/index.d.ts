@@ -159,6 +159,8 @@ export type Overview = {
   room?: Room;
   /** The hosts serving a remote, by their last sign of life. */
   hosts?: OverviewHost[];
+  /** `false` on a watch's last line where the repository has no sluice (129); absent otherwise. */
+  set_up?: false;
 };
 
 /** A preview of a landed revision, and the addresses its stack answers on. */
@@ -258,8 +260,18 @@ declare module "claude-code" {
       forecasting: Forecasting;
       /** The band's line for the overview's last error, until a document comes. */
       error: string | null;
-      /** Why the last `sluice overview --json` gave no overview, or null when it did. */
+      /** Why the board's watch gave no overview, while it has none; null once one comes. */
       unread: string | null;
+      /**
+       * The host's sluice has no watch: the first line its `--version` printed,
+       * or null when it printed none; the whole null once a watch prints an overview.
+       */
+      cannot: { version: string | null } | null;
+      /**
+       * The last watch said the repository has no sluice (129): nothing of
+       * sluice's is shown, and only `/sluice` starts the next watch.
+       */
+      absent: boolean;
     };
   }
 }

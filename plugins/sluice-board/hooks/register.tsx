@@ -1,9 +1,10 @@
 // sluice's queue inside a Claude Code session: a band above the prompt, a
 // pane on /sluice, a status line, and a turn that tells an idle session its
 // submission's outcome, or that its work has come to conflict. Everything is
-// read from `sluice overview --json` (sluice/overview@1), streamed by
-// `--watch` (ADR 0023), and from `sluice submit --check` for its own
-// worktree: the board decides nothing and writes nothing of sluice's.
+// read from `sluice overview --json --watch` (sluice/overview@1; ADR 0023),
+// never from a one-shot read of the records in its place (129), and from
+// `sluice submit --check` for its own worktree: the board decides nothing and
+// writes nothing of sluice's.
 
 import type { EngineInterface, Register } from "claude-code";
 import { atom, read, update } from "claude-code";
@@ -22,6 +23,7 @@ import type {
 import type { CheckRow } from "./board";
 import {
   bandLines,
+  cannotFollow,
   checkLines,
   checkRows,
   clearText,
@@ -32,6 +34,7 @@ import {
   duration,
   emptyLines,
   errorLine,
+  errorMessage,
   failedName,
   flakyLines,
   flipped,
@@ -52,7 +55,10 @@ import {
   learn,
   limit,
   moving,
+  NOT_SET_UP_LINES,
   namedFirst,
+  notSetUp,
+  noWatch,
   openedText,
   outcomes,
   plural,
@@ -64,6 +70,7 @@ import {
   recentInWay,
   recentKeys,
   recentWords,
+  rewatchWait,
   shown,
   signature,
   since,
@@ -109,6 +116,10 @@ const forecasting = atom({ plugin: "sluice-board", key: "forecasting" } as const
 const error = atom({ plugin: "sluice-board", key: "error" } as const, null);
 // Why sluice could not be read, while the board has no overview.
 const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
+// The host's sluice has no watch, and the version it names itself by.
+const cannot = atom({ plugin: "sluice-board", key: "cannot" } as const, null);
+// The last watch said the repository has no sluice (129).
+const absent = atom({ plugin: "sluice-board", key: "absent" } as const, false);
 
 type Detail = OpenedTest;
 
@@ -188,17 +199,12 @@ async function learnRemotes($: $, next: Overview, cwd: string) {
   }
 }
 
-/**
- * A new document: learn this session's submissions, tell new outcomes. An
- * error document is the band's one line, and the last document stays.
- */
-async function take($: $, next: unknown, cwd: string, how: How) {
-  if (!isOverview(next)) {
-    const said = errorLine(next);
-    if (said !== null) await update($, error, () => said);
-    return;
-  }
+/** A new overview: learn this session's submissions, tell new outcomes. */
+async function take($: $, next: Overview, cwd: string, how: How) {
   await update($, error, () => null);
+  await update($, unread, () => null);
+  await update($, cannot, () => null);
+  await update($, absent, () => false);
   await learnRemotes($, next, cwd);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
@@ -338,56 +344,142 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
   if (wake) await $.prompt.submit({ text: wakeText(o, failed) });
 }
 
-/** `sluice overview --json --watch` for the session's life, else a poll. */
-async function feed($: $, cwd: string, how: How) {
+// Whether the board's watch loop runs, once a load; how it follows sluice
+// once a watch has printed its first overview; and, while the loop waits to
+// start the next watch, what starts it at once.
+let watching = false;
+let following: How | null = null;
+let wake: (() => void) | null = null;
+
+/**
+ * A line a watch printed: an overview, the first of which sets the board up
+ * to follow sluice; one saying the repository has no sluice, which drops
+ * whatever the board showed; or an error document, the band's one line while
+ * the last overview stays, and while the board has none the pane's reason,
+ * which it answers true for. A line that is none of these is passed over, and
+ * the watch kept.
+ */
+async function see($: $, next: unknown, cwd: string, chosen: How): Promise<boolean> {
+  if (notSetUp(next)) {
+    // 129: nothing of sluice's where it isn't set up: no queue, no line, no
+    // forecast, no turn, and no further watch until /sluice.
+    await update($, doc, () => null);
+    await update($, error, () => null);
+    await update($, unread, () => null);
+    await update($, cannot, () => null);
+    await update($, absent, () => true);
+    $.ui.status(undefined);
+    return false;
+  }
+  if (isOverview(next)) {
+    following ??= await follow($, cwd, chosen);
+    await take($, next, cwd, following);
+    return false;
+  }
+  const said = errorLine(next);
+  if (said === null) return false;
+  await update($, error, () => said);
+  if ((await read($, doc)) !== null) return false;
+  await update($, unread, () => errorMessage(next));
+  return true;
+}
+
+/** How a watch ended: its exit, or the signal that ended it, and what it wrote to stderr. */
+type Ended = { exitCode: number | null; signal: string | null; stderr: string };
+
+/** As much of a watch's stderr as the board keeps: its first words say why it ended. */
+const STDERR_KEPT = 4096;
+
+/**
+ * One `sluice overview --json --watch`, each line taken as it comes, until
+ * it ends: how it ended, or null when it could not be started or its stream
+ * broke; and whether it printed the pane's reason.
+ */
+async function watch($: $, cwd: string, chosen: How) {
+  let said = false;
+  let stderr = "";
   try {
+    const stream = $.process.spawn({ argv: ["sluice", "overview", "--json", "--watch"], cwd });
     let rest = "";
-    for await (const chunk of $.process.spawn({
-      argv: ["sluice", "overview", "--json", "--watch"],
-      cwd,
-    })) {
-      if (chunk.stream !== "stdout") continue;
+    for await (const chunk of stream) {
+      if (chunk.stream === "stderr") {
+        if (stderr.length < STDERR_KEPT) stderr += chunk.text;
+        continue;
+      }
       rest += chunk.text;
       let nl = rest.indexOf("\n");
       while (nl >= 0) {
         const line = rest.slice(0, nl).trim();
         rest = rest.slice(nl + 1);
-        if (line) await take($, JSON.parse(line), cwd, how);
+        if (line && (await see($, parsed(line), cwd, chosen))) said = true;
         nl = rest.indexOf("\n");
       }
     }
+    const { code, signal } = await stream.result;
+    const end: Ended = { exitCode: code, signal, stderr };
+    return { end, said };
   } catch {
-    // Spawning failed or the stream broke: poll instead.
+    return { end: null, said };
   }
-  $.clock.every(3000, async () => {
-    const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    // A failing overview prints its error document on stdout too.
-    if (got) await take($, parsed(got.stdout), cwd, how);
-  });
 }
-
-/** `sluice overview --json` once: the overview, or null with why kept in `unread`. */
-async function probe($: $, cwd: string): Promise<Overview | null> {
-  const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-  // Only a document with branches is an overview.
-  const opening = got && got.exitCode === 0 ? parsed(got.stdout) : null;
-  const ok = isOverview(opening);
-  await update($, unread, () => (ok ? null : unreadReason(got)));
-  return ok ? opening : null;
-}
-
-// The session's directory, kept for /sluice, which carries none; and whether
-// the board follows sluice yet: once a load, however many reads succeed.
-let dir: string | null = null;
-let following = false;
 
 /**
- * Follow sluice from its first overview: the band, the pane, the wake and
- * the forecast, as the options turn them on.
+ * `sluice overview --json --watch` from the session's start for its life,
+ * one at a time, its first overview the board's first queue: when it ends or
+ * can't be started, it is started again after a wait that grows
+ * (`rewatchWait`), never replaced by a read of the records in its place. A
+ * watch ends only when killed, replaced, its repository is gone, or where the
+ * repository has no sluice, and a new one follows the host's reader (129; ADR
+ * 0056). After one that said the repository has no sluice, only `/sluice`
+ * starts the next.
  */
-async function follow($: $, cwd: string, first: Overview, chosen: How) {
-  if (following) return;
-  following = true;
+async function feed($: $, cwd: string, chosen: How) {
+  let wait: number | null = null;
+  for (;;) {
+    const started = await $.clock.now();
+    await update($, absent, () => false);
+    const { end, said } = await watch($, cwd, chosen);
+    if (await read($, absent)) {
+      // Asked for, the next watch reads afresh: once it finds sluice, its
+      // first wait is a second.
+      wait = null;
+      await new Promise<void>((done) => {
+        wake = () => done();
+      });
+      wake = null;
+      continue;
+    }
+    if (end && noWatch(end.stderr)) {
+      // A sluice older than its watch: the board names it, which reads no records.
+      // It stands in for the queue, which stays to be drawn again once a
+      // watch prints the next overview, and outcomes are told then.
+      const version = await output($, ["sluice", "--version"], cwd);
+      await update($, cannot, () => ({ version: version?.split("\n")[0] || null }));
+      $.ui.status(undefined);
+    } else if (!said && (await read($, doc)) === null) {
+      // While the board has no overview, the pane says why this one gave none.
+      await update($, unread, () => unreadReason(end));
+    }
+    const ms = rewatchWait(wait, (await $.clock.now()) - started);
+    wait = ms;
+    // `/sluice` cuts the wait short; the waits after it grow on all the same.
+    await new Promise<void>((done) => {
+      const timer = $.clock.after(ms, done);
+      wake = () => {
+        timer.cancel();
+        done();
+      };
+    });
+    wake = null;
+  }
+}
+
+/**
+ * Set the board up to follow sluice, once a load, on the first overview a
+ * watch prints: the session's worktree and branch, its remotes, and the wake
+ * and the forecast as the options turn them on.
+ */
+async function follow($: $, cwd: string, chosen: How): Promise<How> {
   const top = await $.process
     .run(["git", "rev-parse", "--show-toplevel"], { cwd })
     .catch(() => null);
@@ -404,15 +496,7 @@ async function follow($: $, cwd: string, first: Overview, chosen: How) {
   await update($, remotes, (all) => ({ ...all, origin: base }));
   // A session whose orchestrator forecasts for it turns this off.
   const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
-  const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
-  await take($, first, cwd, how);
-  void feed($, cwd, how);
-  // Elapsed times move while something is under test or an agent's check
-  // goes, and a finished check leaves the pane a quarter hour on.
-  $.clock.every(5000, async () => {
-    const t = await $.clock.now();
-    if (moving(await read($, doc), t)) await update($, now, () => t);
-  });
+  return { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
 }
 
 export const register: Register = (on, options) => {
@@ -421,10 +505,17 @@ export const register: Register = (on, options) => {
   on("session.start", async ($, e, next) => {
     const started = await next(e);
     await $.command.register({ name: "sluice", description: "Show sluice's queue in a pane" });
-    dir = e.cwd;
-    // Only where sluice can be read; /sluice tries again where it can't.
-    const first = await probe($, e.cwd);
-    if (first) await follow($, e.cwd, first, chosen);
+    if (!watching) {
+      watching = true;
+      // It ends only when the engine refuses it, as once the mod is unloaded.
+      void feed($, e.cwd, chosen).catch(() => undefined);
+      // Elapsed times move while something is under test or an agent's check
+      // goes, and a finished check leaves the pane a quarter hour on.
+      $.clock.every(5000, async () => {
+        const t = await $.clock.now();
+        if (moving(await read($, doc), t)) await update($, now, () => t);
+      });
+    }
     return started;
   });
 
@@ -436,11 +527,10 @@ export const register: Register = (on, options) => {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };
     }
-    // Where sluice could not be read, read it again: it may be set up now.
-    if (!following && dir !== null && (await read($, doc)) === null) {
-      const first = await probe($, dir);
-      if (first) await follow($, dir, first, chosen);
-    }
+    // Where the board has no queue, the next watch starts now rather than
+    // after its wait: sluice may be set up, or upgraded, since. An open watch
+    // has no wait.
+    if ((await read($, doc)) === null || (await read($, cannot)) !== null) wake?.();
     const inline = !e.presentation.isFullscreen;
     const opened = await $.ui.open({
       id: PANE,
@@ -477,7 +567,13 @@ export const register: Register = (on, options) => {
     const d = await read($, doc);
     await read($, now);
     const said = await read($, error);
-    const lines = said !== null ? [said] : bandLines(d, await $.clock.now(), await read($, named));
+    const old = await read($, cannot);
+    const lines =
+      old !== null
+        ? [cannotFollow(old.version)]
+        : said !== null
+          ? [said]
+          : bandLines(d, await $.clock.now(), await read($, named));
     if (lines.length === 0 || (await read($, isHidden)) || e.props.hasSurvey) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
     return (
@@ -516,13 +612,35 @@ export const register: Register = (on, options) => {
           onPress={() => $.ui.close({ id: PANE })}
         />
       ) : null;
+    // A host's sluice with no watch: that, in place of anything read.
+    const old = await read($, cannot);
+    if (old !== null)
+      return (
+        <Box flexDirection="column">
+          <Box gap={1}>
+            <Text>{cannotFollow(old.version)}</Text>
+            {close}
+          </Box>
+          <Text>Ask Claude to upgrade sluice.</Text>
+        </Box>
+      );
     const d = await read($, doc);
     const m = await read($, mine);
     const bases = await read($, remotes);
     await read($, now);
     if (!d) {
-      // No overview: why sluice could not be read, and what to do; or the
-      // session's first read is still under way.
+      // No overview: sluice isn't set up here; why sluice could not be read,
+      // and what to do; or the session's first read is still under way.
+      if (await read($, absent))
+        return (
+          <Box flexDirection="column">
+            <Box gap={1}>
+              <Text>{NOT_SET_UP_LINES[0]}</Text>
+              {close}
+            </Box>
+            <Text>{NOT_SET_UP_LINES[1]}</Text>
+          </Box>
+        );
       const why = await read($, unread);
       if (why === null)
         return (

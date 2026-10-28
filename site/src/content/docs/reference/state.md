@@ -121,7 +121,14 @@ One process on the host reads a repository's queues for every watch and
 wait of it. The first `sluice overview --json --watch`, `sluice wait` or
 waiting `sluice submit` of the repository holds its `readers/` lock. It
 keeps the overview in the file beside it, rewritten whole each time it
-changes, so nothing reads half of one. Every other watch of the
+changes, so nothing reads half of one. A read of the queues it couldn't
+make goes in the file in its place, as the error document `sluice
+overview --json` prints when it fails. It holds the words the read was
+refused with, and the reader reads again at its next look. Where the
+repository has no sluice, the file holds the watch's last document, the
+overview with `"set_up": false`, and the watch ends. The next watch or
+wait to hold the lock removes that file before it reads, so nothing that
+starts once sluice is set up ends on it. Every other watch of the
 repository on the host follows that file and reads no state of its own.
 Every other wait takes its submission's progress from that file and
 still runs sluice's rounds, which read the branch's state as they always

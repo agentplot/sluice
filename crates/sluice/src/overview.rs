@@ -2,10 +2,12 @@
 //! pane or a status line (26, 49; ADR 0023). A reader only: it releases,
 //! counts and writes nothing (rules core.11, core.14), so `sluice
 //! previews`' own tidying is left to it. A watch writes only the reader's
-//! document in the host's state, when it is the reader (129; ADR 0056).
+//! document in the host's state, when it is the reader, and ends where
+//! the repository has no sluice (129; ADR 0056).
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use chrono::SecondsFormat;
@@ -15,8 +17,9 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::reader::{untimed, Reader};
-use crate::{hashes, held_line, progress, sessions_json, Names, Pause, STOPPED};
+use crate::reader::{no_sluice, untimed, Reader};
+use crate::told::{self, Kind};
+use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -81,16 +84,34 @@ pub fn run(
     // (rule core.25). A watch of a newer sluice than the reader's takes
     // its lease (129): the older reader lets go and follows, and the
     // newer watch reads from its next tick.
-    let mut reader = Reader::take(&host.readers()?, &host.repository()?, host.version())?;
+    let repository = host.repository()?;
+    let mut reader = Reader::take(&host.readers()?, &repository, host.version())?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
     let mut last: Option<serde_json::Value> = None;
+    // 129: it ends only when stopped, when its output is closed, when its
+    // repository is gone, or where the repository has no sluice; anything
+    // else that fails is tried again at the next tick, which is its cadence
+    // and no retry (rule core.29).
     loop {
         let doc = match &mut reader {
             Reader::Lead(lead) => {
-                let (_, doc) = document(s, host, clock)?;
-                lead.write(&doc)?;
+                let doc = match read(s, host, clock) {
+                    // Ctrl-C reaches the git a read runs in the foreground:
+                    // a branch's read it ended is no refusal of the branch's
+                    // (26).
+                    _ if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
+                    Ok(doc) => doc,
+                    Err(e) if host.repository_gone(&repository) => return Err(e),
+                    // The read it could not make is its document, in the
+                    // words it was refused with (133), as a failing
+                    // overview prints it.
+                    Err(e) => told::document(Kind::Internal, &format!("{e:#}"), &[]),
+                };
+                // What it read is printed all the same; the reader's last
+                // document stands for a write that failed until one succeeds.
+                let _ = lead.write(&doc);
                 Some(doc)
             }
             Reader::Follow(follow) => follow.read(),
@@ -102,13 +123,31 @@ pub fn run(
                 out.flush()?;
                 last = Some(now);
             }
+            // 129: the repository has no sluice, as the reader read it or
+            // as this watch did: the document saying so is the last line.
+            if no_sluice(&doc) {
+                return Ok(0);
+            }
         }
         if !pause.pause() {
             return Ok(STOPPED);
         }
-        // A watch may take an older reader's lease.
-        reader.step(true)?;
+        // A watch may take an older reader's lease; a lock it could not
+        // try leaves it as it was.
+        let _ = reader.step(true);
     }
+}
+
+/// The reader's document of one tick: the overview, which says
+/// `"set_up": false` where the records list no branch and no branch the
+/// host holds, its own or a remote's as last fetched, has the policy (129).
+/// A check of the branches that fails is a read it could not make (133).
+fn read(s: &Sluice<'_>, host: &dyn Host, clock: &dyn Clock) -> Result<serde_json::Value> {
+    let (branches, mut doc) = document(s, host, clock)?;
+    if branches.is_empty() && !host.holds_policy()? {
+        doc["set_up"] = false.into();
+    }
+    Ok(doc)
 }
 
 /// The overview as text: a line per branch, its combinations under test,
@@ -127,6 +166,18 @@ fn write_overview(
         .and_then(|at| at.parse().ok())
         .unwrap_or_default();
     for b in branches {
+        // 26: a branch that could not be read is shown with the refusal,
+        // in its words, and nothing read of it.
+        if let Some(why) = &b.unread {
+            writeln!(
+                out,
+                "{} could not be read: {}",
+                b.branch,
+                why.replace('\n', "\n  ")
+            )?;
+            write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+            continue;
+        }
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
         let up_to = b
