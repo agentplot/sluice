@@ -139,6 +139,40 @@ fn appends_and_finished_records_keep_their_places() {
     );
 }
 
+/// 51, 130: a write putting a finished record that is there replaces it,
+/// read back as written by name and with the rest, on another host too,
+/// and the live index is left as it was.
+#[test]
+fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
+    let (a, _bare, b) = two_hosts("rr-finished-again");
+    let (ha, hb) = (
+        host(&a, BTreeMap::new(), None),
+        host(&b, BTreeMap::new(), None),
+    );
+    let index = "{\"id\":5,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n";
+    let mut c = put(&[(".finished/5.json", "{\"id\":5}\n")]);
+    c.append
+        .insert("finished.jsonl".into(), index.as_bytes().to_vec());
+    assert_eq!(ha.write("bolt/x", 0, c).unwrap(), Written::Written(1));
+    let delivered = "{\"id\":5,\"delivered\":\"2026-10-28T09:00:00Z\"}\n";
+    let mut c = put(&[(".finished/5.json", delivered)]);
+    c.append.insert("log.jsonl".into(), b"delivered\n".to_vec());
+    assert_eq!(ha.write("bolt/x", 1, c).unwrap(), Written::Written(2));
+    for h in [&ha, &hb] {
+        assert_eq!(
+            h.read_finished("bolt/x", "5.json").unwrap().unwrap(),
+            delivered.as_bytes()
+        );
+        let all = h.read_all_finished("bolt/x").unwrap();
+        assert_eq!(all.keys().collect::<Vec<_>>(), ["5.json"]);
+        assert_eq!(all["5.json"], delivered.as_bytes());
+        assert_eq!(
+            h.read("bolt/x").unwrap().files["finished.jsonl"],
+            index.as_bytes()
+        );
+    }
+}
+
 /// 80, 133: a state fetch the remote refuses reads the state last fetched,
 /// and says why: the remote, the ref asked for and git's words; the
 /// records' other fetches are refused reads too, and the next read that

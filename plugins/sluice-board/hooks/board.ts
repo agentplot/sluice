@@ -594,37 +594,31 @@ export function learn(doc: Overview, mine: Mine): Mine {
   return more.length === 0 ? mine : { ...mine, ids: [...own, ...more] };
 }
 
-/** A recent line's identity, so an outcome is told once. */
+/** A recent line's identity, so two overviews are compared line by line. */
 export function key(branch: string, r: Recent): string {
   return `${branch}:${r.event}:${r.id ?? (r.ids ?? []).join(",")}:${r.at}`;
 }
 
-/** Every recent line of the document, keyed. */
-export function recentKeys(doc: Overview): string[] {
-  return doc.branches.flatMap((b) => b.recent.map((r) => key(b.branch, r)));
-}
-
 /**
- * The outcomes of this session's submissions the document shows that have
- * not been told: a landing, a blame or a conflict naming one of `mine.ids`.
+ * The outcomes of this session's submissions that `next` shows and `prev`
+ * did not: a landing, a blame or a conflict naming one of `mine.ids`.
  */
-export function outcomes(doc: Overview, mine: Mine, told: readonly string[]): Outcome[] {
+export function outcomes(prev: Overview, next: Overview, mine: Mine): Outcome[] {
   const out: Outcome[] = [];
   const own = mine.ids ?? [];
-  for (const b of doc.branches) {
+  const before = new Set(prev.branches.flatMap((b) => b.recent.map((r) => key(b.branch, r))));
+  for (const b of next.branches) {
     for (const r of b.recent) {
-      const k = key(b.branch, r);
-      if (told.includes(k)) continue;
+      if (before.has(key(b.branch, r))) continue;
       if (r.event === "landed") {
         for (const id of r.ids ?? []) {
           if (own.includes(id)) {
-            out.push({ key: k, branch: b.branch, id, word: "landed", to: String(r.to ?? "") });
+            out.push({ branch: b.branch, id, word: "landed", to: String(r.to ?? "") });
           }
         }
       } else if ((r.event === "blamed" || r.event === "conflict") && r.id !== undefined) {
         if (own.includes(r.id)) {
           out.push({
-            key: k,
             branch: b.branch,
             id: r.id,
             word: r.event === "blamed" ? "failed" : "conflict",
@@ -679,24 +673,27 @@ export function statusLine(
   return `sluice: ${plural(queued, "submission")}${yours}${checks}${held}`;
 }
 
-/** The prompt that tells an idle session its submission's outcome. */
-export function wakeText(o: Outcome, failed: OverviewFailed[]): string {
-  if (o.word === "landed") {
-    return `[sluice] Your submission #${o.id} landed on ${o.branch} as ${(o.to ?? "").slice(0, 7)}.`;
+/** What a `sluice inbox` run gave: its exit and output, or null when it did not run. */
+export type Collected = { exitCode: number; stdout: string; stderr: string } | null;
+
+/**
+ * What the board does with a `sluice inbox` run (51): the turn's text,
+ * sluice's words as printed, or null when it printed nothing; and the toast,
+ * when sluice could not read a branch or the collect failed.
+ */
+export function collectedWords(got: Collected): { text: string | null; toast: string | null } {
+  const said = got?.stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  if (got && (got.exitCode === 0 || got.exitCode === 3)) {
+    const lines = got.stdout.split("\n");
+    while (lines.length > 0 && lines.at(-1)!.trim() === "") lines.pop();
+    const text = lines.join("\n");
+    return { text: text === "" ? null : text, toast: got.exitCode === 3 ? (said ?? null) : null };
   }
-  if (o.word === "conflict") {
-    return [
-      `[sluice] Your submission #${o.id} to ${o.branch} conflicts: ${(o.paths ?? []).join(", ")}.`,
-      `Merge ${o.branch} into your worktree, resolve, commit, and submit again (check first with \`sluice submit --check ${o.branch}\`).`,
-    ].join("\n");
-  }
-  const tasks = failed.map(failedName).join(", ") || "its tests";
-  const logs = failed.filter((f) => f.log).map((f) => `Log of ${failedName(f)}: ${f.log}`);
-  return [
-    `[sluice] Your submission #${o.id} to ${o.branch} failed: ${tasks}${o.combination ? ` on ${o.combination.slice(0, 7)}` : ""}.`,
-    ...logs,
-    `Read the log, reproduce with \`sluice exec ${o.branch}\`, fix, commit, and submit again.`,
-  ].join("\n");
+  const why = said ?? (got ? `it exited ${got.exitCode}` : "it could not be run");
+  return { text: null, toast: `sluice: couldn't collect this session's outcomes: ${why}` };
 }
 
 /**

@@ -1,10 +1,10 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
-//! a pull request (ADR 0044), and a required check that can never pass
-//! (ADR 0050).
+//! a pull request (ADR 0044), a required check that can never pass (ADR
+//! 0050), and an outcome's notice to its session (51).
 
 use sluice_core::records::{FlakyKey, Recorded};
 use sluice_core::KeptOut;
-use sluice_seams::Outcome;
+use sluice_seams::{Decided, Outcome};
 
 /// `passed` or `failed`.
 pub fn outcome(o: Outcome) -> &'static str {
@@ -120,6 +120,46 @@ pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
     )
 }
 
+/// 51: an outcome's notice, one line, the same whether the round pushes it
+/// into the submitting session or the session collects it by `sluice
+/// inbox`: the submission, its branch and its outcome, and for a failure
+/// or a conflict the command that shows the rest. It opens `[sluice]`, so
+/// it is never taken for the user's typing.
+pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
+    match decided {
+        Decided::Landed { landed_as } => {
+            format!(
+                "[sluice] #{id} landed on {branch} as {}.",
+                landed_as.short()
+            )
+        }
+        Decided::Failed {
+            failed, timed_out, ..
+        } => {
+            let what = if *timed_out {
+                ": timed out".to_string()
+            } else if failed.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", failed.join(", "))
+            };
+            format!("[sluice] #{id} failed on {branch}{what}. sluice wait {id} shows why.")
+        }
+        Decided::Conflict { paths, with } => {
+            let mut text = format!("[sluice] #{id} conflicts on {branch}");
+            if !with.is_empty() {
+                let ids: Vec<String> = with.iter().map(|c| format!("#{}", c.id)).collect();
+                text.push_str(&format!(" with {}", ids.join(", ")));
+            }
+            if !paths.is_empty() {
+                text.push_str(&format!(" in {}", paths.join(", ")));
+            }
+            text.push_str(&format!(". sluice wait {id} shows it."));
+            text
+        }
+    }
+}
+
 /// Could-not-run-1 115: a check that could not run, and why.
 pub fn could_not_run(task: &str, why: &str) -> String {
     format!("{task} could not run: {why}")
@@ -155,6 +195,8 @@ pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> Strin
 
 #[cfg(test)]
 mod tests {
+    use sluice_seams::{Contested, Rev, Submitter};
+
     use super::*;
 
     fn kept(task: &str, line: usize) -> KeptOut {
@@ -236,5 +278,57 @@ mod tests {
             "{two}"
         );
         assert!(!two.contains("your worktree"), "{two}");
+    }
+
+    /// 51: each outcome is one line naming the submission, its branch and
+    /// its outcome, a failure and a conflict the command showing the rest.
+    #[test]
+    fn an_outcomes_notice_is_one_line() {
+        let landed = Decided::Landed {
+            landed_as: Rev::new("abc1234def"),
+        };
+        assert_eq!(
+            notice(12, "main", &landed),
+            "[sluice] #12 landed on main as abc1234."
+        );
+        let failed = |timed_out| Decided::Failed {
+            failed: vec!["cli:test".into(), "core:test".into()],
+            combination: Rev::new("c13"),
+            submissions: vec![13],
+            timed_out,
+            logs: Vec::new(),
+        };
+        assert_eq!(
+            notice(13, "main", &failed(false)),
+            "[sluice] #13 failed on main: cli:test, core:test. sluice wait 13 shows why."
+        );
+        assert_eq!(
+            notice(13, "main", &failed(true)),
+            "[sluice] #13 failed on main: timed out. sluice wait 13 shows why."
+        );
+        let from = Submitter {
+            agent: "a".into(),
+            worktree: "unit/b".into(),
+            path: None,
+            head: None,
+            host: None,
+            session: None,
+        };
+        let conflict = Decided::Conflict {
+            paths: vec!["src/lib.rs".into()],
+            with: vec![Contested { id: 11, from }],
+        };
+        assert_eq!(
+            notice(14, "main", &conflict),
+            "[sluice] #14 conflicts on main with #11 in src/lib.rs. sluice wait 14 shows it."
+        );
+        let with_the_branch = Decided::Conflict {
+            paths: vec!["src/lib.rs".into()],
+            with: Vec::new(),
+        };
+        assert_eq!(
+            notice(14, "main", &with_the_branch),
+            "[sluice] #14 conflicts on main in src/lib.rs. sluice wait 14 shows it."
+        );
     }
 }
