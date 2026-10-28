@@ -253,3 +253,73 @@ fn a_submission_lands_by_another_host() {
         String::from_utf8_lossy(&heads.stdout)
     );
 }
+
+/// 124, 27; record 0069: two hosts share origin, whose `main` names
+/// `[signers.box]` with box's key and `remote = "origin"`; the second
+/// host's own `main`, moved past the protection, adds a
+/// `[[checkout.cache]]` table to that policy, which sluice refuses. The
+/// second host still reads `main`'s state from origin, and its rounds,
+/// signing as box, count box's runs by the key origin's policy names and
+/// land the first host's submission on origin.
+#[test]
+fn a_host_whose_own_main_is_refused_counts_the_remotes_signers() {
+    let (ka, kbox) = (
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+        PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap(),
+    );
+    let policy = format!(
+        "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+         [signers.box]\nssh = \"{}\"\n\n\
+         [branches.main]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = [\"box\"]\n",
+        line("box", &kbox)
+    );
+    let a = Repo::new("refused-own-a");
+    a.write(".config/sluice.toml", &policy);
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "sluice's policy"]);
+    let origin = a.bare_origin();
+    let b = Repo::clone_of(origin.path(), "refused-own-b");
+    let theirs = b.rev("refs/remotes/origin/main");
+    // As an older sluice left it, past the protection.
+    b.write(
+        ".config/sluice.toml",
+        &format!("{policy}\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"),
+    );
+    b.git(&["add", "-A"]);
+    b.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-q",
+        "-m",
+        "a cache",
+    ]);
+    assert_ne!(b.rev("main"), theirs);
+    let host_a = Host::new(a, "refused-own-a", "a", &ka);
+    let host_b = Host::new(b, "refused-own-b", "box", &kbox);
+
+    let id = host_a.submit("x");
+    let out = host_b.sluice(&["status", "main", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(host_b.state_of(id), "queued");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while host_b.state_of(id) != "landed" {
+        let out = host_b.sluice(&["step", "main"]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert!(
+            Instant::now() < deadline,
+            "never landed: {}",
+            host_b.state_of(id)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(host_a.state_of(id), "landed");
+    assert!(refs_under(&origin, "refs/sluice/runs/").contains("refs/sluice/runs/box"));
+    let landed = support::git_command()
+        .arg("--git-dir")
+        .arg(origin.path())
+        .args(["log", "-1", "--format=%s", "main"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&landed.stdout).contains(&format!("#{id}")));
+}
