@@ -173,7 +173,7 @@ longer, unique among the repository's previews.
 
 | key | meaning |
 |---|---|
-| `subject` | The first line of a landing commit: `{id}` the submission, `{from}` the agent's branch, `{agent}`, `{to}` the branch landed on. The default is the conventional `chore(land): #{id} {from}`. |
+| `subject` | The first line of a landing commit: `{id}` the submission, `{from}` what lands, `{agent}`, `{to}` the branch landed on. `{from}` is the submit's `--subject`, or the title of the pull request it was taken from. With neither, it is the agent's branch, which the commit's `Sluice-From` trailer names either way. The default is the conventional `chore(land): #{id} {from}`. |
 
 ## `[systems]`: what a test runs on
 

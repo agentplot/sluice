@@ -13,16 +13,20 @@ dir=${2:-}
 # Read as sluice/overview@1 with every list it may leave out made empty;
 # anything else is logged and the last good state kept. What a held
 # place's release printed is kept to its last line with anything on it,
+# and each run of control characters in a subject made one space (26),
 # before control characters go, which would join its lines into one.
 doc=$(jq -c -e 'def last_line: if type == "string"
       then ([splits("\n") | select(test("\\S"))] | last // "") | sub("^\\s+"; "") | sub("\\s+$"; "")
       else "" end;
+  def spaced: if type == "string" then gsub("\\p{Cc}+"; " ") else . end;
   def release_failed: if (.release_failed | type) == "object" then .release_failed.failed |= last_line else del(.release_failed) end;
   select(.schema == "sluice/overview@1" and (.host | type) == "string"
     and (.repository | type) == "string" and ((.branches // []) | type) == "array")
   | .branches = [(.branches // [])[] | select(type == "object" and (.branch | type) == "string")
       | .depth //= 0 | .recent = [(.recent // [])[] | objects]
-      | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}]
+      | .submissions = [(.submissions // [])[] | objects | select(.id != null) | .from //= {}
+          | if has("subject") then .subject |= spaced else . end]
+      | if (.recent_subjects | type) == "object" then .recent_subjects |= map_values(spaced) else . end
       | .candidates = [(.candidates // [])[] | objects | .submissions //= [] | .targets //= [] | .failed //= []
           | .tasks = [(.tasks // [])[] | objects | select((.target | type) == "string")]]
       | .held_checkouts = [(.held_checkouts // [])[] | objects | select((.place | type) == "string") | .failed |= last_line]]

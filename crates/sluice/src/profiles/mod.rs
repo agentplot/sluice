@@ -27,6 +27,7 @@ use anyhow::{Context, Result};
 
 use crate::identity::Identity;
 use crate::instance::Instance;
+use crate::retry;
 
 /// The profiles the walkthrough's setup names, for the repository holding
 /// a directory.
@@ -66,28 +67,47 @@ impl sluice_seams::Driver for Drivers {
 
 impl Bound {
     /// Bind the repository holding `dir`, a worktree or a git directory,
-    /// for this executable and this instance's settings.
-    pub fn open(dir: &Path) -> Result<Self> {
-        Bound::open_with(dir, std::env::current_exe()?, Instance::read()?)
+    /// for this executable and this instance's settings, every call to a
+    /// remote under the command's `retry` policy (134).
+    pub fn open(dir: &Path, retry: Rc<retry::Policy>) -> Result<Self> {
+        Bound::open_with(dir, std::env::current_exe()?, Instance::read()?, retry)
     }
 
     /// `program` is the `sluice` executable that supervises check runs.
-    pub fn open_with(dir: &Path, program: PathBuf, instance: Instance) -> Result<Self> {
-        Bound::bind(dir, program, instance, false)
+    pub fn open_with(
+        dir: &Path,
+        program: PathBuf,
+        instance: Instance,
+        retry: Rc<retry::Policy>,
+    ) -> Result<Self> {
+        Bound::bind(dir, program, instance, false, retry)
     }
 
     /// 124: bind the repository holding `dir` for branch protection's hook:
     /// the host's settings and each policy read only as far as guarding
-    /// needs, every other field passed over (ADR 0059).
-    pub fn guarding(dir: &Path) -> Result<Self> {
-        Bound::bind(dir, std::env::current_exe()?, Instance::guarding()?, true)
+    /// needs, every other field passed over (ADR 0059), every call to a
+    /// remote under the command's `retry` policy (134).
+    pub fn guarding(dir: &Path, retry: Rc<retry::Policy>) -> Result<Self> {
+        Bound::bind(
+            dir,
+            std::env::current_exe()?,
+            Instance::guarding()?,
+            true,
+            retry,
+        )
     }
 
-    fn bind(dir: &Path, program: PathBuf, instance: Instance, guarding: bool) -> Result<Self> {
+    fn bind(
+        dir: &Path,
+        program: PathBuf,
+        instance: Instance,
+        guarding: bool,
+        retry: Rc<retry::Policy>,
+    ) -> Result<Self> {
         // C.4: the app the host names is sluice's identity on GitHub, and
         // C.5: what reads and posts pull requests there.
         let app = match &instance.forge {
-            Some(f) => Some(Rc::new(github::App::open(f)?)),
+            Some(f) => Some(Rc::new(github::App::open(f, retry.clone())?)),
             None => None,
         };
         let app_for_pool = app.clone();
@@ -95,7 +115,7 @@ impl Bound {
             .clone()
             .map(|a| (a as Rc<dyn Identity>, program.clone()));
         let forge = app.map(|a| a as Rc<dyn github::Forge>);
-        let branch = branches::Branches::open_as(dir, identity.clone())?;
+        let branch = branches::Branches::open_as(dir, identity.clone(), retry.clone())?;
         let branch = if guarding { branch.guarding() } else { branch };
         let common = branch.common_dir()?;
         let pulls = Rc::new(github::pulls::Pulls::new(
@@ -103,12 +123,13 @@ impl Bound {
             &common,
             forge,
             identity.clone(),
+            retry.clone(),
         ));
         // C.6: a branch's records are on its remote when its policy names
         // signers, and this host's own files otherwise.
         let state = records::Records::new(
             &common,
-            branches::Branches::open_as(dir, identity.clone())?,
+            branches::Branches::open_as(dir, identity.clone(), retry.clone())?,
             instance.signing.clone(),
         );
         let state = if guarding { state.guarding() } else { state };
@@ -166,12 +187,13 @@ pub fn forge_check(
     branch: Option<&str>,
     json: bool,
     out: &mut dyn Write,
+    retry: Rc<retry::Policy>,
 ) -> Result<i32> {
     let branch = match branch {
         Some(b) => b.to_string(),
         None => checked_out(dir)?,
     };
-    let found = forge_findings(dir, &branch)?;
+    let found = forge_findings(dir, &branch, retry)?;
     let ok = found.iter().all(|f| f.ok);
     if json {
         let checks: Vec<serde_json::Value> = found
@@ -198,7 +220,11 @@ pub fn forge_check(
 
 /// Each thing `sluice forge check` checks for `branch`, up to the first
 /// that stops the rest.
-fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding>> {
+fn forge_findings(
+    dir: &Path,
+    branch: &str,
+    retry: Rc<retry::Policy>,
+) -> Result<Vec<github::check::Finding>> {
     let mut found = Vec::new();
     let mut said = |ok: bool, what: String| found.push(github::check::Finding { ok, what });
     let instance = match Instance::read() {
@@ -216,7 +242,7 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
         );
         return Ok(found);
     };
-    let branches = branches::Branches::open(dir)?;
+    let branches = branches::Branches::open_as(dir, None, retry.clone())?;
     let remote = match branches.remote(branch)? {
         Some(r) => Some(r),
         // A bolt not yet made is checked before it is: its rules on the
@@ -244,7 +270,7 @@ fn forge_findings(dir: &Path, branch: &str) -> Result<Vec<github::check::Finding
         );
         return Ok(found);
     };
-    let app = match github::App::open(forge) {
+    let app = match github::App::open(forge, retry) {
         Ok(a) => a,
         Err(e) => {
             said(false, format!("{e:#}"));

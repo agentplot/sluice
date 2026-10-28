@@ -18,7 +18,9 @@ wt submit bolt/x                          # after
   did, following `[merge] remove` in `.config/wt.toml`; `--no-remove` keeps
   them. Before removing, it runs `sluice release` in the worktree.
 - It takes everything `sluice submit` takes: `--check`, `--no-wait`,
-  `--status`, `--after`, `--json`.
+  `--status`, `--after`, `--subject`, `--json`. `--subject` titles the pull
+  request a submit opens, or names the landing commit on a branch without
+  pull requests.
 - `--timeout 9m` is its own: it submits as `--no-wait` does, then follows
   the submission as `sluice wait <branch>` does, with its output and exits,
   exit `5` when the time runs out. An agent with capped tool calls runs

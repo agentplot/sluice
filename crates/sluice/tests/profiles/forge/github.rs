@@ -1,6 +1,7 @@
 //! A fake of GitHub's API for one repository, `o/r`, on a port the system
-//! picks: the app's installation and tokens, and the pull request calls
-//! the app makes, answered from a [`FileForge`]. Given the bare
+//! picks: the app, its installation and tokens, and the pull request calls
+//! the app makes, answered from a [`FileForge`]; a request the file holds
+//! as sluice's shows the app's bot user as its author. Given the bare
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
 //! GitHub does. It marks a pull request a draft or ready for review
@@ -9,23 +10,29 @@
 //! requests, while told to fail them, and answers a read of a pull
 //! request 503 as often as told to. It refuses a pull request whose body
 //! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
-//! it. Each test crate that includes it uses a part.
+//! it. Told to, it troubles the next calls of a method and path: answers
+//! them with a status, takes them and then answers a status, or cuts the
+//! connection once it read them, taken or not. Each test crate that
+//! includes it uses a part.
 
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use sluice::profiles::github::fake::FileForge;
+use sluice::profiles::github::fake::{FileForge, LOGIN};
 use sluice::profiles::github::forge::{Forge, Posting, Pull, Standing, Status};
 use sluice::profiles::github::Repo;
 
-use crate::support::http::{json, Answer, Fake, Request};
+use crate::support::http::{json, Answer, Fake, Request, CUT};
 
 pub const APP: u64 = 4242;
+/// The app's slug, which GitHub names its bot user after.
+pub const SLUG: &str = "sluice";
 pub const INSTALLATION: u64 = 7;
 /// The pull request calls' prefix.
 const REPO: &str = "/repos/o/r";
@@ -45,6 +52,29 @@ pub struct GitHub {
     failing: Arc<Mutex<Failing>>,
     /// How many reads of a pull request from now are answered 503.
     unavailable: Arc<AtomicUsize>,
+    /// The calls troubled from now.
+    troubles: Arc<Mutex<Vec<Troubled>>>,
+}
+
+/// What the fake does to a call it is told to trouble.
+#[derive(Clone, Copy, Debug)]
+pub enum Trouble {
+    /// Answers it with this status, taking nothing of it.
+    Status(u16),
+    /// Takes it, then answers it with this status, as GitHub may.
+    Taken(u16),
+    /// Reads it, takes it when `taken`, and cuts the connection with no
+    /// answer.
+    Cut { taken: bool },
+}
+
+/// The next `left` calls of `method` to a path starting `path`, troubled
+/// as `trouble` says.
+struct Troubled {
+    method: String,
+    path: String,
+    left: usize,
+    trouble: Trouble,
 }
 
 /// The calls the fake answers with an error while a test asks it to.
@@ -60,6 +90,15 @@ impl GitHub {
     /// The fake API over the fake GitHub kept in `file`; `bare` is the
     /// repository GitHub's git is, if any.
     pub fn start(file: &Path, bare: Option<&Path>) -> GitHub {
+        GitHub::start_on(
+            TcpListener::bind("127.0.0.1:0").expect("a port"),
+            file,
+            bare,
+        )
+    }
+
+    /// The fake on `listener`'s port.
+    pub fn start_on(listener: TcpListener, file: &Path, bare: Option<&Path>) -> GitHub {
         let forge = Arc::new(FileForge::new(file, &repo()));
         let held = forge.clone();
         let bare = bare.map(Path::to_path_buf);
@@ -69,9 +108,35 @@ impl GitHub {
         let fails = failing.clone();
         let unavailable = Arc::new(AtomicUsize::new(0));
         let left = unavailable.clone();
-        let fake = Fake::start(move |r| {
+        let troubles: Arc<Mutex<Vec<Troubled>>> = Arc::default();
+        let troubling = troubles.clone();
+        let fake = Fake::start_on(listener, move |r| {
             if let Some(b) = &bare {
                 sync(&held, b);
+            }
+            let trouble = troubling.lock().unwrap().iter_mut().find_map(|t| {
+                let hit = t.left > 0 && r.method == t.method && r.path.starts_with(&t.path);
+                hit.then(|| {
+                    t.left -= 1;
+                    t.trouble
+                })
+            });
+            let take = |r: &Request| {
+                let _ = answer(&held, bare.as_deref(), &fails.lock().unwrap(), r);
+            };
+            match trouble {
+                Some(Trouble::Status(status)) => return erring(status),
+                Some(Trouble::Taken(status)) => {
+                    take(r);
+                    return erring(status);
+                }
+                Some(Trouble::Cut { taken }) => {
+                    if taken {
+                        take(r);
+                    }
+                    return (CUT, vec![], String::new());
+                }
+                None => {}
             }
             let a_pull = r.method == "GET"
                 && r.path
@@ -95,7 +160,28 @@ impl GitHub {
             refuse,
             failing,
             unavailable,
+            troubles,
         }
+    }
+
+    /// Trouble the next `n` calls of `method` to a path starting `path` as
+    /// `trouble` says.
+    pub fn trouble(&self, method: &str, path: &str, n: usize, trouble: Trouble) {
+        self.troubles.lock().unwrap().push(Troubled {
+            method: method.into(),
+            path: path.into(),
+            left: n,
+            trouble,
+        });
+    }
+
+    /// How many calls of `method` to a path starting `path` the fake saw.
+    pub fn calls(&self, method: &str, path: &str) -> usize {
+        self.fake
+            .requests()
+            .iter()
+            .filter(|r| r.method == method && r.path.starts_with(path))
+            .count()
     }
 
     pub fn url(&self) -> &str {
@@ -248,13 +334,23 @@ pub fn set_ref(bare: &Path, name: &str, to: &str) {
     );
 }
 
+/// Who GitHub shows as a pull request's author: the app's bot user for one
+/// the file holds as sluice's.
+fn author(p: &Pull) -> String {
+    if p.author == LOGIN {
+        format!("{SLUG}[bot]")
+    } else {
+        p.author.clone()
+    }
+}
+
 fn pull_json(p: &Pull) -> Value {
     json!({
         "number": p.number,
         "node_id": p.node_id,
         "title": p.title,
         "body": p.body,
-        "user": { "login": p.author },
+        "user": { "login": author(p) },
         "draft": p.draft,
         "state": if p.open { "open" } else { "closed" },
         "head": { "sha": p.head, "ref": p.head_ref, "repo": { "full_name": p.head_repo } },
@@ -311,6 +407,17 @@ fn not_found() -> Answer {
     json(404, json!({ "message": "Not Found" }))
 }
 
+/// GitHub answering `status`, in its words.
+fn erring(status: u16) -> Answer {
+    let why = match status {
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        429 => "API rate limit exceeded",
+        _ => "Server Error",
+    };
+    json(status, json!({ "message": why }))
+}
+
 /// GitHub failing a call of its own.
 fn server_error() -> Answer {
     json(500, json!({ "message": "Server Error" }))
@@ -348,6 +455,9 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
     }
     let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
     let m = r.method.as_str();
+    if path == "/app" {
+        return json(200, json!({ "id": APP, "slug": SLUG }));
+    }
     if path == format!("{REPO}/installation") {
         return json(
             200,
@@ -410,7 +520,12 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
         ("PATCH", ["pulls", n]) => {
             let n: u64 = n.parse().unwrap();
             forge
-                .edit(&repo, n, body["body"].as_str().unwrap_or_default())
+                .edit(
+                    &repo,
+                    n,
+                    body["title"].as_str(),
+                    body["body"].as_str().unwrap_or_default(),
+                )
                 .unwrap();
             json(200, pull_json(&forge.pull(&repo, n).unwrap().unwrap()))
         }

@@ -17,6 +17,7 @@ pub mod profiles;
 pub mod progress;
 pub mod protect;
 pub mod reader;
+pub mod retry;
 pub mod runs;
 pub mod scrub;
 pub mod sessions;
@@ -25,7 +26,7 @@ pub mod telemetry;
 pub mod told;
 pub mod words;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -53,9 +54,10 @@ pub const INTERNAL: i32 = 3;
 pub const WITHDRAWN: i32 = 4;
 /// `sluice wait --timeout` ran out with the submission undecided.
 pub const WAITING: i32 = 5;
-/// How long a waiting submit or `sluice wait` reads again, a pause apart,
-/// through a forge's 5xx answers before it says it could not read
-/// ([`INTERNAL`]); what it could not read decides nothing.
+/// How long a waiting submit or `sluice wait` gives each call to a remote,
+/// tried again under the retry policy through a forge's 5xx answers and
+/// whatever else the remote never judged, before it says it could not read
+/// ([`INTERNAL`]) (134); what it could not read decides nothing.
 pub const UNANSWERED_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 /// A command line sluice cannot read: an unknown command, flag or value.
 /// Kept apart from [`CONFLICT`], so a mistyped flag is never read as a
@@ -97,6 +99,7 @@ const SUBMIT_AFTER_HELP: &str = "\
 Examples:
   $ sluice submit main
   $ sluice submit main --no-wait
+  $ sluice submit main --no-wait --subject \"Batch review cards\"   its pull request's title
   $ sluice submit main --after 12,14 --priority 5
   $ sluice submit main --worktree ../b1 --worktree ../b2   both heads as one act
 
@@ -220,6 +223,11 @@ pub enum Command {
         /// Return once submitted.
         #[arg(long)]
         no_wait: bool,
+        /// One line saying what lands: the title of the pull request this
+        /// submit opens, or of one it opened before, and the name of its
+        /// landing; with several worktrees, once for each, in their order.
+        #[arg(long, value_name = "TEXT", conflicts_with_all = ["check", "status"])]
+        subject: Vec<String>,
         /// Only say whether it would conflict; submit nothing.
         #[arg(long)]
         check: bool,
@@ -558,25 +566,30 @@ pub trait PullRequests {
     fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
 
     /// Push `worktree`'s branch and open its pull request into `branch`,
-    /// or update the one open.
+    /// or update the one open; `subject`, the submitter's line saying what
+    /// lands, titles it.
     fn open(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktree: &str,
         branch: &str,
+        subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>>;
 
     /// 125: push each of `worktrees`' branches and open or update its
-    /// pull request into `branch`, in order, each marked one of the group,
-    /// or none of them when any worktree is refused; then, for more than
-    /// one, mark each ready and queue them all in one write, or, when any
-    /// falls short of its conditions, leave each a draft and queue none.
+    /// pull request into `branch`, in order, each marked one of the group
+    /// and titled by its own of `subjects`, which are empty or one per
+    /// worktree, or none of them when any worktree is refused; then, for
+    /// more than one, mark each ready and queue them all in one write, or,
+    /// when any falls short of its conditions, leave each a draft and
+    /// queue none.
     fn open_group(
         &self,
         _seams: Seams<'_>,
         _clock: &dyn Clock,
         _worktrees: &[String],
+        _subjects: &[String],
         branch: &str,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
         anyhow::bail!("{branch} takes no pull requests")
@@ -618,6 +631,7 @@ impl PullRequests for () {
         _: &dyn Clock,
         _: &str,
         branch: &str,
+        _: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         anyhow::bail!("{branch} takes no pull requests")
     }
@@ -815,6 +829,7 @@ pub fn run(
             after,
             priority,
             no_wait,
+            subject,
             check,
             head,
             status,
@@ -831,12 +846,34 @@ pub fn run(
                 )?;
                 return Ok(USAGE);
             }
+            // C.5 pull request, 23: a subject is one line; 125: a group
+            // gives one per worktree, in their order, or none.
+            let why = if subject.iter().any(|s| s.trim().is_empty()) {
+                Some("--subject is empty; a subject is one line saying what lands".to_string())
+            } else if subject.iter().any(|s| s.contains(['\n', '\r'])) {
+                Some("a subject is one line; --subject holds a line break".to_string())
+            } else if !subject.is_empty() && subject.len() != worktree.len() {
+                let given =
+                    |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+                Some(format!(
+                    "{} for {}; give one --subject per --worktree, in their order, or none",
+                    given(subject.len(), "subject"),
+                    given(worktree.len(), "worktree")
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                writeln!(out, "sluice submit: {why}")?;
+                return Ok(USAGE);
+            }
             if worktree.len() > 1 {
                 let req = GroupRequest {
                     branch,
                     worktrees: worktree,
                     after,
                     priority,
+                    subjects: subject,
                 };
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
@@ -844,6 +881,7 @@ pub fn run(
                 return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
+            let subject = subject.into_iter().next();
             if check {
                 return forecast(
                     &s,
@@ -860,7 +898,10 @@ pub fn run(
                 let mode = if status {
                     PullMode::Status
                 } else {
-                    PullMode::Open { no_wait }
+                    PullMode::Open {
+                        no_wait,
+                        subject: subject.as_deref(),
+                    }
                 };
                 return submit_pull(&s, pulls, clock, &worktree, &branch, mode, json, pause, out);
             }
@@ -877,6 +918,7 @@ pub fn run(
                     branch,
                     after,
                     priority,
+                    subject,
                 },
                 no_wait,
                 json,
@@ -1070,12 +1112,16 @@ pub fn run(
                     let branch = sub.branch.clone();
                     let pusher = pushers.pusher(&branch)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &branch, Some(sub.id), clock.now())?;
+                    let status = s.status(&branch)?;
+                    let names = status_names(&status, std::slice::from_ref(&sub));
+                    let testing =
+                        progress::lines(&s, &branch, Some(sub.id), clock.now(), Some(&names))?;
                     write_status(
-                        &s.status(&branch)?,
+                        &status,
                         pusher.as_ref(),
                         &testing,
                         &[sub],
+                        &names,
                         Some(&room),
                         out,
                     )?;
@@ -1118,8 +1164,17 @@ pub fn run(
                 } else {
                     let pusher = pushers.pusher(&target)?;
                     let room = s.room(host.reserved())?;
-                    let testing = progress::lines(&s, &target, None, clock.now())?;
-                    write_status(&status, pusher.as_ref(), &testing, &shown, Some(&room), out)?;
+                    let names = status_names(&status, &shown);
+                    let testing = progress::lines(&s, &target, None, clock.now(), Some(&names))?;
+                    write_status(
+                        &status,
+                        pusher.as_ref(),
+                        &testing,
+                        &shown,
+                        &names,
+                        Some(&room),
+                        out,
+                    )?;
                     let earlier =
                         (status.submissions.len() + status.finished).saturating_sub(shown.len());
                     if shown.is_empty() {
@@ -1190,7 +1245,7 @@ pub fn run(
                         };
                         let text = format!(
                             "--after names no queued submission: {}; {queue} lists the queue",
-                            hashes(&ids)
+                            hashes(&ids, None, &mut BTreeSet::new())
                         );
                         (text, vec![queue])
                     }
@@ -1411,7 +1466,13 @@ pub fn run(
         Command::Branch { command } => branch::run(&s, command, out),
         Command::Forge {
             command: ForgeCommand::Check { branch, json },
-        } => profiles::forge_check(&std::env::current_dir()?, branch.as_deref(), json, out),
+        } => profiles::forge_check(
+            &std::env::current_dir()?,
+            branch.as_deref(),
+            json,
+            out,
+            std::rc::Rc::new(retry::Policy::command()),
+        ),
         Command::Credential { operation } => {
             identity::helper(&operation, &mut std::io::stdin().lock(), out)?;
             Ok(0)
@@ -1456,18 +1517,64 @@ pub(crate) fn held_json(hold: &BranchHold) -> serde_json::Value {
     serde_json::json!({ "read": hold.read, "lacks": hold.lacks, "since": hold.since })
 }
 
-pub(crate) fn hashes(ids: &[u64]) -> String {
-    ids.iter()
-        .map(|i| format!("#{i}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+/// Each submission's name as a view's lines show it (26), by its number:
+/// its subject, or the branch it was submitted from, on one line.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names(BTreeMap<u64, String>);
+
+impl Names {
+    /// Each of `subs` by its own name.
+    pub fn of<'a>(subs: impl IntoIterator<Item = &'a Submission>) -> Names {
+        let mut names = Names::default();
+        for s in subs {
+            names.insert(s.id, s.name());
+        }
+        names
+    }
+
+    /// Names `id` by `name`, as a line shows it; a name that shows as
+    /// nothing leaves `id` to its number.
+    pub fn insert(&mut self, id: u64, name: &str) {
+        let shown = sluice_core::text::shown(name);
+        if !shown.is_empty() {
+            self.0.insert(id, shown);
+        }
+    }
+
+    pub fn get(&self, id: u64) -> Option<&str> {
+        self.0.get(&id).map(String::as_str)
+    }
 }
 
-/// `bolt/x + #12 + #13`
-fn combination(branch: &str, ids: &[u64]) -> String {
+/// Each of `ids` as one line names it (26): `#12 Batch review cards` the
+/// first time the line shows it, where `names` has a name for it, and
+/// `#12` after, or with no name; `said` holds what the line has named.
+pub(crate) fn named(ids: &[u64], names: Option<&Names>, said: &mut BTreeSet<u64>) -> Vec<String> {
+    ids.iter()
+        .map(|&id| match names.and_then(|n| n.get(id)) {
+            Some(name) if said.insert(id) => format!("#{id} {name}"),
+            _ => format!("#{id}"),
+        })
+        .collect()
+}
+
+/// `#12 Batch review cards, #13 unit/forecast`, or `#12, #13` with no
+/// `names`.
+pub(crate) fn hashes(ids: &[u64], names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
+    named(ids, names, said).join(", ")
+}
+
+/// `bolt/x + #12 Batch review cards + #13 unit/forecast`, or `bolt/x + #12
+/// + #13` with no `names`.
+fn combination(
+    branch: &str,
+    ids: &[u64],
+    names: Option<&Names>,
+    said: &mut BTreeSet<u64>,
+) -> String {
     let mut s = branch.to_string();
-    for i in ids {
-        s.push_str(&format!(" + #{i}"));
+    for n in named(ids, names, said) {
+        s.push_str(&format!(" + {n}"));
     }
     s
 }
@@ -1525,7 +1632,7 @@ fn refusal(
         SubmitRefusal::UnknownAfter(ids) => {
             format!(
                 "refused: --after names no submission to {branch}: {}",
-                hashes(ids)
+                hashes(ids, None, &mut BTreeSet::new())
             )
         }
         SubmitRefusal::NoHead(from) => format!("refused: no branch {from} to forecast"),
@@ -1623,6 +1730,8 @@ pub(crate) fn forecast_text(f: &Forecast, branch: &str) -> String {
     }
 }
 
+/// `sluice submit` to a branch with no pull requests: the subject, where
+/// given, names the work its landing commit lands (23).
 #[allow(clippy::too_many_arguments)]
 fn submit(
     s: &Sluice<'_>,
@@ -1784,10 +1893,10 @@ fn submit_group(
                 stopped = Some(code);
                 subs.push(sub);
             }
-            Waited::Unread(sub, unread) => {
+            Waited::Unread(sub, e) => {
                 // Said on stderr; the act's answer holds it as it stands.
                 let (what, again) = (format!("#{}", sub.id), format!("sluice wait {}", sub.id));
-                let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
                 stopped = Some(code);
                 subs.push(sub);
             }
@@ -1930,7 +2039,7 @@ fn short_group(
         writeln!(
             out,
             "nothing submitted: {} are drafts at their heads",
-            hashes(&numbers)
+            hashes(&numbers, None, &mut BTreeSet::new())
         )?;
         writeln!(
             out,
@@ -1997,9 +2106,9 @@ fn await_submission(
             }
             return Ok(code);
         }
-        Waited::Unread(sub, unread) => {
+        Waited::Unread(sub, e) => {
             let again = format!("sluice wait {}", sub.id);
-            return could_not_read(&unread, &format!("#{}", sub.id), &again, waiting.json, out);
+            return could_not_read(&e, &format!("#{}", sub.id), &again, waiting.json, out);
         }
         Waited::Undecided(sub, code) => (sub, code),
     };
@@ -2019,59 +2128,41 @@ enum Waited {
     /// As it stands when the wait's time ran out ([`WAITING`]) or it was
     /// stopped ([`STOPPED`]).
     Undecided(Submission, i32),
-    /// As last read, when the forge answered 5xx for [`UNANSWERED_FOR`].
-    Unread(Submission, Unread),
+    /// As last read, when a round failed as the forge could not answer
+    /// for the retry policy's time.
+    Unread(Submission, anyhow::Error),
 }
 
-/// A forge's 5xx answers to a wait's reads, in a row: when the first came,
-/// and the last with when it came. The wait reads again through them for
-/// [`UNANSWERED_FOR`], and a read answered ends the run.
-#[derive(Default)]
-struct Unread {
-    since: Option<chrono::DateTime<chrono::Utc>>,
-    last: Option<(chrono::DateTime<chrono::Utc>, anyhow::Error)>,
-}
-
-impl Unread {
-    /// After a read failed with `e`: `Ok(true)` to read again after the
-    /// next pause, `e` being a forge's 5xx answer within [`UNANSWERED_FOR`]
-    /// of the first in a row; `Ok(false)` once that has passed, the wait
-    /// ending as it could not read; `e` itself for any other failure.
-    fn again(&mut self, clock: &dyn Clock, e: anyhow::Error) -> Result<bool> {
-        if !sluice_seams::unanswered(&e) {
-            return Err(e);
-        }
-        let now = clock.now();
-        let since = *self.since.get_or_insert(now);
-        self.last = Some((now, e));
-        Ok(now - since < UNANSWERED_FOR)
-    }
-
-    /// A read answered: the run of 5xx answers, if any, is over.
-    fn answered(&mut self) {
-        *self = Unread::default();
+/// `e`, a wait's read or round that failed, when it failed as a forge
+/// could not answer for as long as the retry policy tried, which ends the
+/// wait as it could not read (134; rule core.29); any other failure is
+/// the wait's own.
+fn unread(e: anyhow::Error) -> Result<anyhow::Error> {
+    if sluice_seams::unanswered(&e) {
+        Ok(e)
+    } else {
+        Err(e)
     }
 }
 
-/// A wait that could not read `what` (`unread`, the forge's 5xx answers):
-/// said on stderr, on its own line beginning `sluice: could not read`, and
-/// apart from any outcome, which only the records give; exit
-/// [`INTERNAL`], with `again` to wait once more. Under `--json`, the error
-/// document in place of the record.
+/// A wait that could not read `what` (`e`, the forge's last answer once
+/// the retry policy stopped): said on stderr, on its own line beginning
+/// `sluice: could not read`, with how long it was tried, and apart from
+/// any outcome, which only the records give; exit [`INTERNAL`], with
+/// `again` to wait once more. Under `--json`, the error document in place
+/// of the record.
 fn could_not_read(
-    unread: &Unread,
+    e: &anyhow::Error,
     what: &str,
     again: &str,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (lasted, cause) = match (&unread.last, unread.since) {
-        (Some((at, e)), Some(since)) => ((*at - since).num_seconds(), format!(": {e:#}")),
-        _ => (0, String::new()),
-    };
+    let lasted = retry::lasted(e).as_secs() as i64;
     let text = format!(
-        "could not read {what} for {}, so whether it landed is not known{cause}",
-        progress::duration(lasted)
+        "could not read {what} for {}, so whether it landed is not known: {}",
+        progress::duration(lasted),
+        retry::unspent(e)
     );
     telemetry::error(&format!("sluice: {text}"));
     if json {
@@ -2085,8 +2176,10 @@ fn could_not_read(
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. A round the forge answered 5xx is run
-/// again, as [`Unread`] bounds it. Without `--json`, it says the
+/// already decided runs nothing. Each call a round makes to a remote is
+/// tried again under the retry policy for the wait's five minutes (134);
+/// a round that still fails as the forge could not answer ends the wait as
+/// it could not read. Without `--json`, it says the
 /// submission's state, or its combination's progress, each time either
 /// moves (ADR 0042). It reads them as [`Reading`] does (129).
 fn wait_on(
@@ -2102,7 +2195,6 @@ fn wait_on(
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let mut first = true;
-    let mut unread = Unread::default();
     // Decided already: nothing read again, and no round run.
     if sub.state.is_out() {
         return Ok(Waited::Decided(sub, None));
@@ -2122,10 +2214,10 @@ fn wait_on(
             if said.as_ref() != Some(&now) {
                 match own {
                     Some(c) => {
-                        let line = progress::testing_line(&branch, c, waiting.clock.now());
+                        let line = progress::testing_line(&branch, c, waiting.clock.now(), None);
                         writeln!(out, "{line}")?;
                     }
-                    None => match detail(&branch, &sub) {
+                    None => match detail(&branch, &sub, None, &mut BTreeSet::new()) {
                         d if d.is_empty() => writeln!(out, "#{id} {}", sub.state.word())?,
                         d => writeln!(out, "#{id} {} · {d}", sub.state.word())?,
                     },
@@ -2148,7 +2240,6 @@ fn wait_on(
         }
         match s.round(&branch) {
             Ok(round) => {
-                unread.answered();
                 exec::tell_abandoned(out, waiting.json, &round.released)?;
                 exec::tell_releases(out, waiting.json, &round.releases)?;
             }
@@ -2160,10 +2251,7 @@ fn wait_on(
                 if let Some(sub) = landed(s, id) {
                     return Ok(Waited::Decided(sub, Some(e)));
                 }
-                if unread.again(waiting.clock, e)? {
-                    continue;
-                }
-                return Ok(Waited::Unread(sub, unread));
+                return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
         reading.reader.lead_once_free()?;
@@ -2597,17 +2685,22 @@ fn submitted(
         let doc = with_sends(serde_json::to_value(&sub)?, s, worktree)?;
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
-        let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
-        write_status(&status, None, &testing, &[sub], None, out)?;
+        let names = status_names(&status, std::slice::from_ref(&sub));
+        let testing = progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
+        write_status(&status, None, &testing, &[sub], &names, None, out)?;
     }
     Ok(0)
 }
 
 /// What `submit_pull` does with a worktree's pull request.
 #[derive(Clone, Copy)]
-enum PullMode {
-    /// Open or update it, then follow it to its outcome unless `no_wait`.
-    Open { no_wait: bool },
+enum PullMode<'a> {
+    /// Open or update it, titled by `subject` where given, then follow it
+    /// to its outcome unless `no_wait`.
+    Open {
+        no_wait: bool,
+        subject: Option<&'a str>,
+    },
     /// Only say where it stands.
     Status,
     /// Follow it to its outcome, or until `deadline`: `sluice wait
@@ -2621,8 +2714,10 @@ enum PullMode {
 /// push the worktree's branch and open or update its pull request, which
 /// waits for its conditions; then follow it, reporting each state it
 /// reaches, to its outcome. [`PullMode::Status`] only says where it
-/// stands; [`PullMode::Wait`] follows the one open. While it waits, a
-/// read the forge answered 5xx is made again, as [`Unread`] bounds it.
+/// stands; [`PullMode::Wait`] follows the one open. While it waits, each
+/// read is tried again under the retry policy for the wait's five minutes
+/// (134), and one that still fails as the forge could not answer ends the
+/// wait as it could not read.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -2630,35 +2725,32 @@ fn submit_pull(
     clock: &dyn Clock,
     worktree: &str,
     branch: &str,
-    mode: PullMode,
+    mode: PullMode<'_>,
     json: bool,
     pause: &dyn Pause,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let seams = s.seams();
     let status = matches!(mode, PullMode::Status);
-    let no_wait = matches!(mode, PullMode::Open { no_wait: true });
+    let no_wait = matches!(mode, PullMode::Open { no_wait: true, .. });
     let opens = matches!(mode, PullMode::Open { .. });
     let again = format!("sluice wait {branch}");
     // 124: how the host's copy differed from what the submit opened.
     let mut copy = None;
     let number = if !opens {
-        let mut unread = Unread::default();
-        let found = loop {
-            let e = match pulls.find(seams, clock, branch, worktree) {
-                Ok(found) => break found,
-                Err(e) => e,
-            };
-            let PullMode::Wait { deadline } = mode else {
-                return Err(e);
-            };
-            let what = format!("the pull request from {worktree} into {branch}");
-            if !unread.again(clock, e)? || deadline.is_some_and(|d| clock.now() >= d) {
-                return could_not_read(&unread, &what, &again, json, out);
-            }
-            if !pause.pause() {
-                could_not_read(&unread, &what, &again, json, out)?;
-                return Ok(STOPPED);
+        let found = match pulls.find(seams, clock, branch, worktree) {
+            Ok(found) => found,
+            Err(e) => {
+                let PullMode::Wait { .. } = mode else {
+                    return Err(e);
+                };
+                let what = format!("the pull request from {worktree} into {branch}");
+                let code = could_not_read(&unread(e)?, &what, &again, json, out)?;
+                // Ctrl-C ended the retry policy's pauses.
+                if INTERRUPTED.load(Ordering::SeqCst) {
+                    return Ok(STOPPED);
+                }
+                return Ok(code);
             }
         };
         match found {
@@ -2671,7 +2763,11 @@ fn submit_pull(
             }
         }
     } else {
-        match pulls.open(seams, clock, worktree, branch)? {
+        let subject = match mode {
+            PullMode::Open { subject, .. } => subject,
+            _ => None,
+        };
+        match pulls.open(seams, clock, worktree, branch, subject)? {
             Ok(o) => {
                 if !json {
                     writeln!(out, "{}", o.said)?;
@@ -2690,7 +2786,6 @@ fn submit_pull(
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let what = format!("#{number}");
-    let mut unread = Unread::default();
     // The submission the pull request was last read taken in as.
     let mut taken: Option<u64> = None;
     loop {
@@ -2698,14 +2793,10 @@ fn submit_pull(
         let followed = match pulls.follow(seams, clock, branch, number) {
             Ok(f) => Some(f),
             Err(e) if no_wait || status => return Err(e),
-            Err(e) => {
-                if !unread.again(clock, e)? {
-                    return could_not_read(&unread, &what, &again, json, out);
-                }
-                None
-            }
+            // Ctrl-C ended the retry policy's pauses: stopped, below.
+            Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+            Err(e) => return could_not_read(&unread(e)?, &what, &again, json, out),
         };
-        let read = followed.is_some();
         match followed {
             Some(Followed::Done(sub, names)) => {
                 if status && json {
@@ -2714,12 +2805,16 @@ fn submit_pull(
                     return Ok(0);
                 }
                 if status {
-                    let testing = progress::lines(s, branch, Some(sub.id), clock.now())?;
+                    let status = s.status(branch)?;
+                    let names = status_names(&status, std::slice::from_ref(&sub));
+                    let testing =
+                        progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
                     write_status(
-                        &s.status(branch)?,
+                        &status,
                         None,
                         &testing,
                         std::slice::from_ref(&sub),
+                        &names,
                         None,
                         out,
                     )?;
@@ -2832,6 +2927,9 @@ fn submit_pull(
             }
             Ok(code)
         };
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return still(out, STOPPED);
+        }
         if let PullMode::Wait { deadline: Some(d) } = mode {
             if clock.now() >= d {
                 return still(out, WAITING);
@@ -2839,9 +2937,6 @@ fn submit_pull(
         }
         match s.round(branch) {
             Ok(round) => {
-                if read {
-                    unread.answered();
-                }
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
@@ -2870,9 +2965,7 @@ fn submit_pull(
                     after_landing(&e);
                     return Ok(code);
                 }
-                if !unread.again(clock, e)? {
-                    return could_not_read(&unread, &what, &again, json, out);
-                }
+                return could_not_read(&unread(e)?, &what, &again, json, out);
             }
         }
         if !pause.pause() {
@@ -2903,7 +2996,7 @@ fn submit_pull_group(
 ) -> Result<i32> {
     let seams = s.seams();
     let branch = &req.branch;
-    let opened = match pulls.open_group(seams, clock, &req.worktrees, branch)? {
+    let opened = match pulls.open_group(seams, clock, &req.worktrees, &req.subjects, branch)? {
         Ok(o) => o,
         Err(GroupRefused::Worktrees(refused)) => {
             return refused_group(s, &req, &refused, &(), json, out)
@@ -2947,16 +3040,18 @@ fn submit_pull_group(
     let mut last: Vec<Option<(String, Vec<String>)>> = vec![None; opened.len()];
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
-    // As `submit_pull`: a read the forge answered 5xx is made again, as
-    // [`Unread`] bounds it, and said on stderr when it ends the wait.
-    let what = hashes(&opened.iter().map(|o| o.number).collect::<Vec<_>>());
+    // As `submit_pull`: a read the forge could not answer for the retry
+    // policy's time ends the wait, said on stderr.
+    let what = hashes(
+        &opened.iter().map(|o| o.number).collect::<Vec<_>>(),
+        None,
+        &mut BTreeSet::new(),
+    );
     let again = format!("sluice wait {branch}");
-    let mut unread = Unread::default();
     // 122: what failed after a landing, said once the outcomes are.
     let mut after = Vec::new();
     let stopped = 'wait: loop {
         intake(pulls, seams, clock, branch);
-        let mut read = true;
         for (i, o) in opened.iter().enumerate() {
             if decided[i].is_some() {
                 continue;
@@ -2964,14 +3059,12 @@ fn submit_pull_group(
             let followed = match pulls.follow(seams, clock, branch, o.number) {
                 Ok(f) => f,
                 Err(e) if no_wait => return Err(e),
+                // Ctrl-C ended the retry policy's pauses.
+                Err(_) if INTERRUPTED.load(Ordering::SeqCst) => break 'wait Some(STOPPED),
                 Err(e) => {
-                    if !unread.again(clock, e)? {
-                        let code =
-                            could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
-                        break 'wait Some(code);
-                    }
-                    read = false;
-                    continue;
+                    let e = unread(e)?;
+                    let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
+                    break 'wait Some(code);
                 }
             };
             match followed {
@@ -2995,9 +3088,6 @@ fn submit_pull_group(
         }
         match s.round(branch) {
             Ok(round) => {
-                if read {
-                    unread.answered();
-                }
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
@@ -3037,8 +3127,9 @@ fn submit_pull_group(
                     if decided.iter().all(Option::is_some) {
                         break None;
                     }
-                } else if !unread.again(clock, e)? {
-                    let code = could_not_read(&unread, &what, &again, false, &mut std::io::sink())?;
+                } else {
+                    let e = unread(e)?;
+                    let code = could_not_read(&e, &what, &again, false, &mut std::io::sink())?;
                     break Some(code);
                 }
             }
@@ -3133,7 +3224,9 @@ fn failed_name(f: &sluice_core::records::FailedTask) -> String {
     name
 }
 
-fn detail(branch: &str, s: &Submission) -> String {
+/// What a row says of `s` after its columns, naming the submissions it
+/// names as `names` and `said` do.
+fn detail(branch: &str, s: &Submission, names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.
@@ -3152,13 +3245,13 @@ fn detail(branch: &str, s: &Submission) -> String {
             let tested = s
                 .tested
                 .as_ref()
-                .map(|t| combination(branch, &t.submissions))
+                .map(|t| combination(branch, &t.submissions, names, said))
                 .unwrap_or_default();
             // 117: what a held submission waits for, and until when.
             match &s.held {
                 Some(h) => format!(
                     "{tested}, held for {} until {}",
-                    combination(branch, &h.by),
+                    combination(branch, &h.by, names, said),
                     h.until
                 ),
                 None => tested,
@@ -3169,22 +3262,38 @@ fn detail(branch: &str, s: &Submission) -> String {
             .as_ref()
             .map(|c| {
                 let ids: Vec<u64> = c.with.iter().map(|w| w.id).collect();
-                format!("{} with {}", c.paths.join(", "), hashes(&ids))
+                format!("{} with {}", c.paths.join(", "), hashes(&ids, names, said))
             })
             .unwrap_or_default(),
-        State::Waiting => format!("after {}", hashes(&s.after)),
+        State::Waiting => format!("after {}", hashes(&s.after, names, said)),
         _ => String::new(),
     }
 }
 
+/// Each submission a branch's status may name (26): those in its live
+/// records, those moved to its finished records, and the rows it shows,
+/// which carry their own.
+fn status_names(status: &Status, subs: &[Submission]) -> Names {
+    let mut names = Names::default();
+    for (id, name) in &status.named {
+        names.insert(*id, name);
+    }
+    for s in status.submissions.iter().chain(subs) {
+        names.insert(s.id, s.name());
+    }
+    names
+}
+
 /// A branch's status as text: its counts, where it is pushed, its
 /// warnings, `testing`, a line per combination under test that is to be
-/// shown (ADR 0042), and a row per submission in `subs`.
+/// shown (ADR 0042), and a row per submission in `subs`, each beginning
+/// with its number and its name (26).
 fn write_status(
     status: &Status,
     pusher: Option<&Pusher>,
     testing: &[String],
     subs: &[Submission],
+    names: &Names,
     room: Option<&sluice_core::overview::Room>,
     out: &mut dyn Write,
 ) -> Result<()> {
@@ -3253,14 +3362,23 @@ fn write_status(
         .map(|s| s.id.to_string().len())
         .max()
         .unwrap_or(0);
+    let name = |s: &Submission| names.get(s.id).unwrap_or_default();
+    let nw = subs
+        .iter()
+        .map(|s| name(s).chars().count())
+        .max()
+        .unwrap_or(0);
     for s in subs {
+        // A row's own number stands alone in its detail.
+        let mut said = BTreeSet::from([s.id]);
         let line = format!(
-            "  #{:<iw$}  {:<8}  {:<aw$}  {:<ww$}   {}",
+            "  #{:<iw$} {:<nw$}  {:<8}  {:<aw$}  {:<ww$}   {}",
             s.id,
+            name(s),
             s.state.word(),
             s.from.agent,
             s.from.worktree,
-            detail(&status.branch, s),
+            detail(&status.branch, s, Some(names), &mut said),
         );
         writeln!(out, "{}", line.trim_end())?;
     }
@@ -3596,4 +3714,51 @@ fn worktree_json(p: &SessionPlace) -> serde_json::Value {
         v["release_failed"] = serde_json::json!(f);
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names() -> Names {
+        let mut names = Names::default();
+        names.insert(12, "Batch review cards");
+        names.insert(13, "unit/forecast");
+        names
+    }
+
+    /// 26: a line names a submission with its name the first time it shows
+    /// it, and by its number alone after.
+    #[test]
+    fn a_line_names_each_submission_once() {
+        let names = names();
+        let mut said = BTreeSet::new();
+        assert_eq!(
+            hashes(&[12, 13], Some(&names), &mut said),
+            "#12 Batch review cards, #13 unit/forecast"
+        );
+        assert_eq!(hashes(&[12, 14], Some(&names), &mut said), "#12, #14");
+        let mut said = BTreeSet::from([12]);
+        assert_eq!(
+            combination("main", &[12, 13], Some(&names), &mut said),
+            "main + #12 + #13 unit/forecast"
+        );
+        assert_eq!(
+            combination("main", &[12, 13], None, &mut BTreeSet::new()),
+            "main + #12 + #13"
+        );
+    }
+
+    /// 26: a name is kept as a line shows it, on one line; one that shows
+    /// as nothing leaves its submission to its number.
+    #[test]
+    fn a_name_is_kept_as_shown() {
+        let mut names = Names::default();
+        names.insert(12, "Batch review\ncards");
+        names.insert(13, "\n");
+        assert_eq!(
+            hashes(&[12, 13], Some(&names), &mut BTreeSet::new()),
+            "#12 Batch review cards, #13"
+        );
+    }
 }

@@ -317,6 +317,12 @@ impl OnGitHub {
 
     /// A session's worktree on `unit/<name>` off `main`, with no commit.
     fn worktree(&self, name: &str) -> PathBuf {
+        self.worktree_on(name, &format!("unit/{name}"))
+    }
+
+    /// A worktree named for `name` on the new branch `branch` off `main`,
+    /// with no commit.
+    fn worktree_on(&self, name: &str, branch: &str) -> PathBuf {
         let dir = self.repo.dir().with_extension(format!("s-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         self.repo.git(&[
@@ -324,7 +330,7 @@ impl OnGitHub {
             "add",
             "-q",
             "-b",
-            &format!("unit/{name}"),
+            branch,
             dir.to_str().unwrap(),
             "main",
         ]);
@@ -530,6 +536,7 @@ fn a_pull_request_opened_by_hand() {
         .edit(
             &github::repo(),
             n,
+            None,
             "Hand work.\n\n<!-- sluice: agent=crw-1-unit-1 -->",
         )
         .unwrap();
@@ -1023,9 +1030,10 @@ fn reviews_that_cannot_be_read_hold_no_other() {
 }
 
 /// A failure that is no one pull request's: GitHub answers an error for the
-/// list of `main`'s pull requests. Each round warns that taking in `main`'s
-/// pull requests failed, nothing is submitted or withdrawn, and the
-/// submission already queued is tested and lands.
+/// list of `main`'s pull requests on every try the retry policy makes (134).
+/// Each round warns that taking in `main`'s pull requests failed, after how
+/// many tries, nothing is submitted or withdrawn, and the submission
+/// already queued is tested and lands.
 #[test]
 fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     let g = OnGitHub::new("pr-no-list", "");
@@ -1037,7 +1045,8 @@ fn a_failed_list_ends_intake_and_the_queue_still_lands() {
     loop {
         let said = g.round();
         assert!(
-            said.contains("sluice: warning: taking in main's pull requests: GET ")
+            said.contains("sluice: warning: taking in main's pull requests: tried ")
+                && said.contains(": GET /repos/o/r/pulls?state=open&base=main")
                 && said.contains("500 Server Error")
                 && !said.contains(&format!("pull/{n}: ")),
             "{said}"
@@ -1242,10 +1251,11 @@ fn submit_opens_then_updates_a_pull_request() {
         "{}",
         pull.body
     );
-    assert_eq!(pull.title, "Change r.txt");
+    // C.5 pull request: titled by the branch's name, given no subject.
+    assert_eq!(pull.title, "unit/review");
     assert!(
         said.contains(&format!(
-            "pushed unit/review · opened #{}: Change r.txt",
+            "pushed unit/review · opened #{}: unit/review",
             pull.number
         )),
         "{said}"
@@ -1265,6 +1275,265 @@ fn submit_opens_then_updates_a_pull_request() {
     assert_eq!(held.pulls.len(), 1);
     assert_eq!(held.pulls[0].head, again);
     assert!(w.exists());
+}
+
+/// C.5 pull request: a bolt's branch submitted with no subject is titled
+/// by its name, never by its first commit, its proposal's.
+#[test]
+fn a_bolt_submitted_with_no_subject_is_titled_by_its_branch() {
+    let g = OnGitHub::new("pr-bolt-title", "reviews = 1");
+    let w = g.worktree_on("bolt-title", "bolt/review-cards");
+    g.commit_message(&w, "proposal.md", "docs(openspec): propose review-cards");
+    g.commit_message(&w, "cards.txt", "feat(cards): batch review cards");
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("bolt/review-cards");
+    assert_eq!(pull.title, "bolt/review-cards");
+    assert!(
+        text(&out).contains(&format!("opened #{}: bolt/review-cards", pull.number)),
+        "{}",
+        text(&out)
+    );
+}
+
+/// C.5 pull request: a session submitted with a subject is titled by it,
+/// as written.
+#[test]
+fn a_session_submitted_with_a_subject_is_titled_by_it() {
+    let g = OnGitHub::new("pr-subject", "reviews = 1");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!(pull.title, "Batch review cards");
+    assert!(
+        text(&out).contains(&format!(
+            "pushed unit/review · opened #{}: Batch review cards",
+            pull.number
+        )),
+        "{}",
+        text(&out)
+    );
+}
+
+/// C.5 pull request: whatever titles it, the description holds every
+/// commit's message whole, oldest first, and the title is neither's.
+#[test]
+fn the_description_still_carries_the_commits() {
+    let g = OnGitHub::new("pr-subject-body", "reviews = 1");
+    let w = g.worktree("cards");
+    g.commit_message(&w, "one.txt", "Add the first card\n\nWith its reasons.");
+    g.commit_message(&w, "two.txt", "Add the second card");
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/cards");
+    assert_eq!(
+        pull.body,
+        "Add the first card\n\nWith its reasons.\n\nAdd the second card\n\n\
+         <!-- sluice: agent=unit/cards -->"
+    );
+    assert_eq!(pull.title, "Batch review cards");
+}
+
+/// The calls that read the app's login.
+fn logins(g: &OnGitHub) -> usize {
+    g.gh.fake
+        .requests()
+        .iter()
+        .filter(|r| r.path == "/app")
+        .count()
+}
+
+/// C.5 pull request: sluice opened the request titled by its branch; a
+/// new head submitted with a subject retitles it.
+#[test]
+fn a_new_head_with_a_subject_retitles_it() {
+    let g = OnGitHub::new("pr-retitle", "reviews = 1");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/review").number;
+    assert_eq!(g.pull_from("unit/review").title, "unit/review");
+    let head = g.commit_in(&w, &[("r2.txt", "r2\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!((pull.number, pull.head.as_str()), (n, head.as_str()));
+    assert_eq!(pull.title, "Batch review cards");
+    assert!(
+        text(&out).contains(&format!("updated #{n}: Batch review cards")),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(g.gh.forge.held().unwrap().pulls.len(), 1);
+}
+
+/// C.5 pull request: a new head submitted with no subject leaves the
+/// title as it is, and asks nothing of who opened it.
+#[test]
+fn a_new_head_with_no_subject_keeps_the_title() {
+    let g = OnGitHub::new("pr-keep-title", "reviews = 1");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let head = g.commit_in(&w, &[("r2.txt", "r2\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!(pull.head, head);
+    assert_eq!(pull.title, "Batch review cards");
+    assert!(
+        text(&out).contains(&format!("updated #{}: Batch review cards", pull.number)),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(logins(&g), 0);
+}
+
+/// A worktree on `unit/<name>` with one commit of `message`, pushed to
+/// GitHub, and a pull request from it opened by `author` and titled
+/// `title`, a draft; returns the worktree and the request's number.
+fn opened_by(g: &OnGitHub, author: &str, name: &str, message: &str, title: &str) -> (PathBuf, u64) {
+    let w = g.worktree(name);
+    let head = g.commit_message(&w, &format!("{name}.txt"), message);
+    let branch = format!("unit/{name}");
+    g.repo.git(&[
+        "push",
+        "-q",
+        "origin",
+        &format!("{branch}:refs/heads/{branch}"),
+    ]);
+    let n =
+        g.gh.forge
+            .open_by(author, "main", &branch, &head, true, None)
+            .unwrap();
+    g.gh.forge
+        .edit(&github::repo(), n, Some(title), "")
+        .unwrap();
+    (w, n)
+}
+
+/// C.5 pull request: a request sluice opened while it titled them by the
+/// first commit is retitled by the next subject.
+#[test]
+fn a_request_opened_before_titles_changed_is_retitled() {
+    let g = OnGitHub::new("pr-old-title", "reviews = 1");
+    let proposal = "docs(openspec): propose review";
+    let (w, n) = opened_by(&g, "sluice", "review", proposal, proposal);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!(pull.number, n);
+    assert_eq!(pull.title, "Batch review cards");
+    assert!(pull.body.starts_with(proposal), "{}", pull.body);
+    assert_eq!(logins(&g), 1);
+}
+
+/// 120: a request a person opened keeps their title, whatever the subject;
+/// the submit still writes its description and marks it ready at the head
+/// submitted.
+#[test]
+fn a_subject_on_a_request_opened_by_hand_leaves_its_title() {
+    let g = OnGitHub::new("pr-hand-title", "reviews = 1");
+    let (w, n) = opened_by(
+        &g,
+        "person",
+        "review",
+        "Change r.txt",
+        "Review cards, first pass",
+    );
+    let head = github::rev(g.bare.path(), "refs/heads/unit/review").unwrap();
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/review");
+    assert_eq!(pull.number, n);
+    assert_eq!(pull.title, "Review cards, first pass");
+    assert!(
+        pull.body.starts_with("Change r.txt\n\n<!-- sluice: agent="),
+        "{}",
+        pull.body
+    );
+    assert!(!pull.draft && pull.head == head, "{pull:?}");
+    assert!(
+        text(&out).contains(&format!("updated #{n}: Review cards, first pass")),
+        "{}",
+        text(&out)
+    );
+}
+
+/// The message of the commit `sub`, a submission of `main`, landed as on
+/// GitHub.
+fn landing_message(g: &OnGitHub, sub: &Value) -> String {
+    let landed = sub["landed_as"].as_str().expect("landed");
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(g.bare.path())
+        .args(["log", "-1", "--format=%B", landed])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Step until pull request `n`'s submission lands; returns it.
+fn landed(g: &OnGitHub, n: u64) -> Value {
+    g.step_until("landed", |g| g.of(n).iter().any(|s| s["state"] == "landed"));
+    g.of(n)
+        .into_iter()
+        .find(|s| s["state"] == "landed")
+        .unwrap()
+}
+
+/// 23, 118: a request a submit opened with a subject is taken with its
+/// title as the submission's subject, so its landing commit names the
+/// work by it, its trailers still naming the request's place.
+#[test]
+fn a_request_sluice_opened_with_a_subject_lands_named_by_it() {
+    let g = OnGitHub::new("pr-land-subject", "");
+    let w = g.session("review", &[("r.txt", "r\n")]);
+    let out = g.wt_submit(&w, &["--no-wait", "--subject", "Batch review cards"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/review").number;
+    let sub = landed(&g, n);
+    let m = landing_message(&g, &sub);
+    let id = &sub["id"];
+    assert_eq!(
+        m.lines().next(),
+        Some(format!("chore(land): #{id} Batch review cards").as_str()),
+        "{m}"
+    );
+    let from = format!(
+        "\nSluice-From: {} (pull/{n})\n",
+        sub["from"]["agent"].as_str().unwrap()
+    );
+    assert!(m.contains(&from), "{m}");
+}
+
+/// 23, 120: a request a person opened lands named by the title they
+/// gave it.
+#[test]
+fn a_request_a_person_opened_lands_named_by_its_title() {
+    let g = OnGitHub::new("pr-land-title", "");
+    let (n, _) = g.by_hand("unit/hand", &[("h.txt", Some("h\n"))], false);
+    g.gh.forge
+        .edit(
+            &github::repo(),
+            n,
+            Some("Review cards, first pass"),
+            "Hand work.",
+        )
+        .unwrap();
+    let sub = landed(&g, n);
+    let m = landing_message(&g, &sub);
+    assert_eq!(
+        m.lines().next(),
+        Some(format!("chore(land): #{} Review cards, first pass", sub["id"]).as_str()),
+        "{m}"
+    );
 }
 
 /// A message of `chars` characters: `subject`, a blank line, a body.
@@ -1740,7 +2009,7 @@ fn no_wait_says_its_submission() {
     let id = g.of(n)[0]["id"].as_u64().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    let opened = format!("pushed unit/worded · opened #{n}: Change worded.txt");
+    let opened = format!("pushed unit/worded · opened #{n}: unit/worded");
     let at = lines.iter().position(|l| *l == opened).expect(&stdout);
     assert_eq!(
         lines.get(at + 1).copied(),
@@ -2268,9 +2537,7 @@ fn a_group_submit_opens_every_pull_request_marked() {
         assert_eq!(*token.get_or_insert(t.clone()), t, "one group");
         let n = pull.number;
         assert!(
-            said.contains(&format!(
-                "pushed unit/{name} · opened #{n}: Change {name}.txt"
-            )),
+            said.contains(&format!("pushed unit/{name} · opened #{n}: unit/{name}")),
             "{said}"
         );
         assert!(
@@ -2288,6 +2555,58 @@ fn a_group_submit_opens_every_pull_request_marked() {
     let pull = g.pull_of("g1");
     assert_eq!(group_mark(&pull.body), None, "{}", pull.body);
     assert!(pull.body.contains("<!-- sluice: agent=unit/g1 -->"));
+}
+
+/// 125: two worktrees submitted with a subject each: each pull request is
+/// opened titled by its own, in the worktrees' order; submitted again
+/// with the subjects the other way round, each sluice opened takes its
+/// new one.
+#[test]
+fn two_requests_two_subjects() {
+    let g = OnGitHub::new("pr-group-subjects", "");
+    let ws = g.sessions(&["a", "b"]);
+    let subjects = [
+        "--subject",
+        "Batch review cards",
+        "--subject",
+        "Card filters",
+    ];
+    let out = g.submit_group(&ws, &[&["--no-wait"][..], &subjects].concat());
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    for (name, title) in [("a", "Batch review cards"), ("b", "Card filters")] {
+        let pull = g.pull_of(name);
+        assert_eq!(pull.title, title);
+        assert!(
+            said.contains(&format!(
+                "pushed unit/{name} · opened #{}: {title}",
+                pull.number
+            )),
+            "{said}"
+        );
+    }
+    let swapped = [
+        "--subject",
+        "Card filters",
+        "--subject",
+        "Batch review cards",
+    ];
+    let out = g.submit_group(&ws, &[&["--no-wait"][..], &swapped].concat());
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(g.pull_of("a").title, "Card filters");
+    assert_eq!(g.pull_of("b").title, "Batch review cards");
+}
+
+/// 125: two worktrees submitted with no subject: each pull request is
+/// titled by its own branch.
+#[test]
+fn two_requests_no_subjects() {
+    let g = OnGitHub::new("pr-group-no-subjects", "");
+    let ws = g.sessions(&["a", "b"]);
+    let out = g.submit_group(&ws, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(g.pull_of("a").title, "unit/a");
+    assert_eq!(g.pull_of("b").title, "unit/b");
 }
 
 /// Whether pull request `n` is a draft, as GitHub holds it now.
@@ -2336,7 +2655,7 @@ fn a_group_submit_queues_three_pull_requests_in_order() {
     let lines: Vec<&str> = said.lines().collect();
     for (k, name) in names.iter().enumerate() {
         let opened = format!(
-            "pushed unit/{name} · opened #{}: Change {name}.txt · marked ready for review",
+            "pushed unit/{name} · opened #{}: unit/{name} · marked ready for review",
             ns[k]
         );
         let at = lines
@@ -2761,6 +3080,7 @@ fn a_round_between_a_groups_opens_submits_none() {
             .edit(
                 &github::repo(),
                 n,
+                None,
                 &format!("<!-- sluice: agent=ops -->\n<!-- sluice: group=t {k}/3 head={head} -->"),
             )
             .unwrap();

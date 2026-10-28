@@ -80,6 +80,7 @@ fn places_of_two_lines_on_one_host_never_collide() {
         branch: other.into(),
         after: vec![],
         priority: 0,
+        subject: None,
     })
     .unwrap()
     .unwrap();

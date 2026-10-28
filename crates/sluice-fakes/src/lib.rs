@@ -179,6 +179,9 @@ struct Inner {
     seen_beats: BTreeMap<(String, String), (String, String)>,
     /// Every run started on a pool, in order (88).
     launches: Vec<sluice_seams::Launch>,
+    /// How the next start on a pool fails: `true` as a dispatch whose
+    /// answer was not read (134), `false` as one the forge refused.
+    launch_fails: Option<bool>,
     /// The pool jobs that ended, by claim (77, 88).
     jobs_ended: BTreeSet<String>,
     /// Every branch a pool was woken for, in order (111).
@@ -668,6 +671,11 @@ impl World {
         self.0.borrow_mut().unanswered_starts = n;
     }
 
+    /// How many of those are still to fail.
+    pub fn unanswered_starts_left(&self) -> usize {
+        self.0.borrow().unanswered_starts
+    }
+
     /// The next start is refused at the host's bound, as when another
     /// repository's run took the last one after the round counted (71).
     pub fn refuse_next_start(&self) {
@@ -814,6 +822,14 @@ impl World {
     /// Every run started on a pool.
     pub fn launches(&self) -> Vec<sluice_seams::Launch> {
         self.0.borrow().launches.clone()
+    }
+
+    /// The next start on a pool fails: `unanswered`, as a dispatch whose
+    /// answer was not read, which the forge may have taken and which is
+    /// kept among the launches (134); otherwise as one the forge refused,
+    /// which starts nothing.
+    pub fn fail_next_launch(&self, unanswered: bool) {
+        self.0.borrow_mut().launch_fails = Some(unanswered);
     }
 
     /// The pool's job under `claim` has ended: lost, cancelled, or done.
@@ -1608,8 +1624,19 @@ impl Tests for FakeTests {
     }
 
     fn launch(&self, launch: &sluice_seams::Launch) -> Result<()> {
-        self.0 .0.borrow_mut().launches.push(launch.clone());
-        Ok(())
+        let mut inner = self.0 .0.borrow_mut();
+        let path = format!("dispatching {} for {}", launch.pool, launch.claim);
+        match inner.launch_fails.take() {
+            Some(false) => bail!("{path}: 404 Not Found"),
+            Some(true) => {
+                inner.launches.push(launch.clone());
+                Err(Unanswered(format!("{path}: its answer was not read: 502 Bad Gateway")).into())
+            }
+            None => {
+                inner.launches.push(launch.clone());
+                Ok(())
+            }
+        }
     }
 
     fn job_alive(

@@ -36,6 +36,18 @@ fn a_missing_argument_exits_usage() {
     assert_eq!(sluice(&["submit"]).status.code(), Some(sluice::USAGE));
 }
 
+/// A subject with a forecast or a status is a command line sluice cannot
+/// read, said on stderr.
+#[test]
+fn a_subject_with_check_or_status_exits_usage() {
+    for flag in ["--check", "--status"] {
+        let out = sluice(&["submit", "main", "--subject", "x", flag]);
+        assert_eq!(out.status.code(), Some(sluice::USAGE), "{flag}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("--subject"), "{err}");
+    }
+}
+
 #[test]
 fn help_and_version_exit_zero() {
     for args in [&["--help"][..], &["submit", "--help"], &["--version"]] {

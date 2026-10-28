@@ -435,6 +435,7 @@ impl Real {
                 systems: None,
                 caches: vec![moon_cache],
             },
+            std::rc::Rc::new(sluice::retry::Policy::command().recording()),
         )
         .expect("the profiles bind");
         let Bound {

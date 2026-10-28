@@ -176,6 +176,7 @@ pub trait Rig {
                 branch: BRANCH.into(),
                 after: after.to_vec(),
                 priority,
+                subject: None,
             })
             .expect("submit runs")
     }
@@ -197,6 +198,7 @@ pub trait Rig {
                 worktrees: worktrees.iter().map(|w| self.place(w)).collect(),
                 after: after.to_vec(),
                 priority,
+                subjects: Vec::new(),
             })
             .expect("submit runs")
     }
