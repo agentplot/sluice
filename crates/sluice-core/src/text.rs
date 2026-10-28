@@ -1,4 +1,5 @@
-//! What a landing commit says (23; ADR 0006; walkthrough section 8).
+//! What a landing commit says (23; ADR 0006; walkthrough section 8), and
+//! how a subject is shown on a person's line (26).
 
 use crate::records::{Candidate, Submission};
 
@@ -46,6 +47,27 @@ pub fn landing_message(subject: &str, to: &str, sub: &Submission, verdict: &Cand
         ran = verdict.ran,
         replayed = verdict.replayed,
     )
+}
+
+/// A submission's name as a line shows it (26): each run of line breaks
+/// or other control characters one space, so the name stays on its line
+/// and paints nothing, and the ends trimmed. Never what a record or a
+/// JSON document holds, which keeps the submitter's words as written.
+pub fn shown(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut run = false;
+    for c in name.chars() {
+        if c.is_control() {
+            if !run {
+                out.push(' ');
+            }
+            run = true;
+        } else {
+            out.push(c);
+            run = false;
+        }
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]
@@ -123,6 +145,18 @@ mod tests {
         assert_eq!(
             first_line("{agent}: {from} on {to}", &s),
             "crw-1-unit-1: Fill {to} and {id} in { on bolt/x"
+        );
+    }
+
+    #[test]
+    fn a_subject_is_shown_on_one_line() {
+        assert_eq!(shown("Batch review\ncards"), "Batch review cards");
+        assert_eq!(shown("Batch review\r\n\ncards\n"), "Batch review cards");
+        assert_eq!(shown("Batch\treview cards"), "Batch review cards");
+        assert_eq!(shown("\u{1b}[31mBatch\u{1b}[0m"), "[31mBatch [0m");
+        assert_eq!(
+            shown("Fix the forecast's dates"),
+            "Fix the forecast's dates"
         );
     }
 }

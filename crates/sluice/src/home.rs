@@ -4,6 +4,7 @@
 //! cut to the worktree by the path it submits from (ADR 0023). A reader
 //! only, as the overview is (rules core.11, core.14).
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -14,6 +15,7 @@ use sluice_core::Sluice;
 use sluice_seams::{SessionPlace, Submitter};
 
 use crate::exec::Host;
+use crate::{hashes, Names};
 
 /// The commands that follow from where the worktree stands.
 fn next(from: Option<&Submitter>, sub: Option<&Submission>) -> Vec<String> {
@@ -52,6 +54,7 @@ fn submission_json(s: &Submission) -> serde_json::Value {
         "state": s.state.word(),
         "failed": failed,
         "landed_as": s.landed_as,
+        "subject": s.subject,
     })
 }
 
@@ -150,13 +153,9 @@ fn write_home(
                 .landed_as
                 .as_ref()
                 .map_or(String::new(), |r| format!(" as {}", r.short()));
-            writeln!(
-                out,
-                "#{} to {} · {}{landed}",
-                s.id,
-                s.branch,
-                s.state.word()
-            )?;
+            // 26: by its number and its subject, or its branch.
+            let named = hashes(&[s.id], Some(&Names::of([s])), &mut BTreeSet::new());
+            writeln!(out, "{named} to {} · {}{landed}", s.branch, s.state.word())?;
             for f in &s.failed {
                 let log = f.log.as_deref().unwrap_or("no log");
                 writeln!(out, "  failed {}: {log}", f.task)?;

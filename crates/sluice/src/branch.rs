@@ -4,6 +4,7 @@
 //! `sluice branch accept` (121): the operator accepts the revision a held
 //! branch is read at.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 
 use anyhow::Result;
@@ -62,7 +63,7 @@ fn create(
             Kind::Refused,
             format!(
                 "refused: {branch}'s records still queue {}; withdraw them first",
-                crate::hashes(&ids)
+                crate::hashes(&ids, None, &mut BTreeSet::new())
             ),
         ),
         MakeRefusal::Present(at) => (
@@ -110,7 +111,7 @@ fn delete(
             Kind::Refused,
             format!(
                 "refused: {} still queued on {branch}; wait for them to land, or withdraw them",
-                crate::hashes(&ids)
+                crate::hashes(&ids, None, &mut BTreeSet::new())
             ),
         ),
         RemoveRefusal::LandingUnfinished => (
