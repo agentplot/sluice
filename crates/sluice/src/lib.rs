@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use reader::Reader;
+use reader::{Driver, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
@@ -1020,34 +1020,75 @@ pub fn run(
         Command::Run { rounds } => {
             let s = s.serving(Serves::Every);
             s.check_host_systems()?;
+            // 135: the repository's one driver on the host, and so its
+            // reader (129): a run that finds another live drives nothing,
+            // and looks again at each pass.
+            let (readers, repository) = (host.readers()?, host.repository()?);
+            let mut driver: Option<Driver> = None;
+            let mut reader: Option<Reader> = None;
+            let mut said_beside = false;
             let mut n = 0;
             // 121: each branch's hold as last said, so it is said once.
             let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
             loop {
-                // 97, previews-1 101: every pass, whether or not a branch
-                // has a queue.
-                exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
-                preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
-                let mut branches = seams.state.branches()?;
-                match pulls.branches(seams) {
-                    Ok(b) => branches.extend(b),
-                    Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
+                if driver.is_none() {
+                    driver = Driver::take(&readers, &repository)?;
                 }
-                branches.sort();
-                branches.dedup();
-                for branch in branches {
-                    intake(pulls, seams, clock, &branch);
-                    let status = s.status(&branch)?;
-                    if status.submissions.iter().any(|x| !x.state.is_out()) {
-                        let round = s.round(&branch)?;
-                        exec::tell_abandoned(out, false, &round.released)?;
-                        preview::tell_dropped(out, false, &round.previews)?;
-                        exec::tell_releases(out, false, &round.releases)?;
-                        if matches!(round.step, Step::Stepped | Step::Held) {
-                            let said = said.entry(branch.clone()).or_default();
-                            tell_hold(out, &branch, round.held.as_ref(), said)?;
+                if driver.is_some() {
+                    // Its part in reading: no other process drives. A lock it
+                    // could not try leaves it following, as a watch.
+                    match &mut reader {
+                        Some(r) => {
+                            let _ = r.step(false);
+                        }
+                        None => reader = Some(Reader::take_given(&readers, &repository, false)?),
+                    }
+                    // 97, previews-1 101: every pass, whether or not a branch
+                    // has a queue.
+                    exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
+                    preview::tell_dropped(out, false, &s.release_unusable_previews()?)?;
+                    let mut branches = seams.state.branches()?;
+                    match pulls.branches(seams) {
+                        Ok(b) => branches.extend(b),
+                        Err(e) => telemetry::warn(&format!("sluice: warning: {e:#}")),
+                    }
+                    branches.sort();
+                    branches.dedup();
+                    for branch in branches {
+                        intake(pulls, seams, clock, &branch);
+                        let status = s.status(&branch)?;
+                        if status.submissions.iter().any(|x| !x.state.is_out()) {
+                            let round = s.round(&branch)?;
+                            exec::tell_abandoned(out, false, &round.released)?;
+                            preview::tell_dropped(out, false, &round.previews)?;
+                            exec::tell_releases(out, false, &round.releases)?;
+                            if matches!(round.step, Step::Stepped | Step::Held) {
+                                let said = said.entry(branch.clone()).or_default();
+                                tell_hold(out, &branch, round.held.as_ref(), said)?;
+                            }
                         }
                     }
+                    // 129: the reader's document every watch and wait on the
+                    // host follows, each pass, queue or none; a read it could
+                    // not make is its document, in the words it was refused
+                    // with (133), and the pass goes on. Ctrl-C reaching the git
+                    // a read runs is no failure of the queues'.
+                    if let Some(Reader::Lead(lead)) = &mut reader {
+                        let doc = overview::read(&s, host, clock).unwrap_or_else(|e| {
+                            told::document(Kind::Internal, &format!("{e:#}"), &[])
+                        });
+                        if !INTERRUPTED.load(Ordering::SeqCst) {
+                            // The last document stands for a write that failed
+                            // until one succeeds.
+                            let _ = lead.write(&doc);
+                        }
+                    }
+                } else if !said_beside {
+                    telemetry::warn(
+                        "sluice: another sluice run drives this repository on this host; \
+                         this one runs nothing while it does",
+                    );
+                    said_beside = true;
                 }
                 n += 1;
                 if rounds.is_some_and(|r| n >= r) {

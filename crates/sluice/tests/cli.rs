@@ -3449,6 +3449,134 @@ fn step_under_json() {
 }
 
 // ---------------------------------------------------------------------------
+// The host's driver: sluice run (135; ADR 0068)
+// ---------------------------------------------------------------------------
+
+/// The repository's driver on the fakes' host, the test's own, until
+/// dropped: a `sluice run` living in another process.
+fn driver() -> sluice::reader::Driver {
+    sluice::reader::Driver::take(&support::readers(), REPOSITORY)
+        .unwrap()
+        .expect("no driver of the repository yet")
+}
+
+/// Whether a driver of the repository lives on the fakes' host.
+fn driver_live() -> bool {
+    sluice::reader::driver_live(&support::readers(), REPOSITORY)
+}
+
+/// What a run beside a live driver says on stderr.
+const BESIDE: &str =
+    "sluice: another sluice run drives this repository on this host; this one runs nothing while it does";
+
+/// Submission `id`'s state, as its record says.
+fn state_of(f: &Fakes, id: u64) -> serde_json::Value {
+    let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+    json(&out)["state"].clone()
+}
+
+/// 135: a second run beside the driver says so once on stderr, and runs
+/// no round at any pass while the driver lives.
+#[test]
+fn two_runs_at_once() {
+    if let Some(err) = stderr_of("two_runs_at_once") {
+        let said: Vec<&str> = err.lines().filter(|l| l.starts_with("sluice: ")).collect();
+        assert_eq!(said, [BESIDE], "{err}");
+        return;
+    }
+    let f = one_queued();
+    let _driver = driver();
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 1,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["run"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(pause.n.get(), 2, "{out}");
+    assert_eq!(state_of(&f, 1), "queued");
+    assert!(f.world.started().is_empty());
+}
+
+/// 135: one pass from cron beside the driver exits 0, having run no
+/// round: the submission is queued still, and nothing started.
+#[test]
+fn one_pass_from_cron_beside_a_driver() {
+    let f = one_queued();
+    let _driver = driver();
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!((code, out.as_str()), (0, ""));
+    assert_eq!(state_of(&f, 1), "queued");
+    assert!(f.world.started().is_empty());
+    assert!(driver_live());
+}
+
+/// 135: once the driver stops, the run waiting beside it drives at its
+/// next pass, and the rounds land the submission.
+#[test]
+fn the_first_run_stops() {
+    let f = one_queued();
+    let first = RefCell::new(Some(driver()));
+    let between = |n: usize| {
+        if n == 1 {
+            assert!(f.world.started().is_empty());
+            drop(first.borrow_mut().take());
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 6,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["run"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(state_of(&f, 1), "landed");
+    assert!(!driver_live());
+}
+
+/// 129, 135: the driver is the reader: with nothing queued, its pass
+/// writes the whole overview as the reader's document, as a one-shot
+/// overview reads it but for its time.
+#[test]
+fn a_driver_with_nothing_queued() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    rewrite_readers_doc(&serde_json::json!({ "put": "by the test" }));
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!((code, out.as_str()), (0, ""));
+    let (_, overview) = sluice(&f, &["overview", "--json"]);
+    let doc = readers_doc().expect("the driver's document");
+    let untimed = sluice::reader::untimed;
+    assert_eq!(untimed(&doc), untimed(&json(&overview)));
+    assert_eq!(doc["branches"][0]["branch"], BRANCH, "{doc}");
+    // It let both places go as it ended.
+    assert!(!driver_live());
+    assert!(reader_free());
+}
+
+/// Whether the reader's lock is free: the test can take it.
+fn reader_free() -> bool {
+    matches!(
+        sluice::reader::Reader::take(&support::readers(), REPOSITORY).unwrap(),
+        sluice::reader::Reader::Lead(_)
+    )
+}
+
+/// 129, 133: a driver's read of the overview that fails is its document,
+/// in the words it was refused with; the pass goes on, and the run exits
+/// as it would.
+#[test]
+fn a_driver_whose_read_fails_writes_the_failure() {
+    let f = setup();
+    f.world.fail_ref_list(Some(UNREADABLE));
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!((code, out.as_str()), (0, ""));
+    assert_failure(&readers_doc().expect("the driver's document"), UNREADABLE);
+}
+
+// ---------------------------------------------------------------------------
 // sluice exec (session-runs-1 clauses 89 to 93)
 // ---------------------------------------------------------------------------
 

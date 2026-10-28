@@ -33,7 +33,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 2. `sluice run` drives and reads
 
-- [ ] 2.1 In `Command::Run` (`crates/sluice/src/lib.rs`), keep or take
+- [x] 2.1 In `Command::Run` (`crates/sluice/src/lib.rs`), keep or take
   the `Driver` at the start of each pass:
   - Without it, say once on stderr that another `sluice run` drives this
     repository on this host. Run nothing that pass. Count the pass toward
@@ -48,7 +48,7 @@ committed, run the gate with `sluice exec main`.
     submission is still `queued`, and nothing is started.
   - "The first run stops": the lock is released and the next pass runs
     the round.
-- [ ] 2.2 After each pass's rounds, where `sluice run` holds the reader's
+- [x] 2.2 After each pass's rounds, where `sluice run` holds the reader's
   place, write the reader's document from the function the watch's
   reader uses. Make `overview::read` reachable from `lib.rs`. A read that
   fails writes the failure document and the pass goes on.

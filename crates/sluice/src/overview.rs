@@ -139,7 +139,11 @@ pub fn run(
 /// `"set_up": false` where the records list no branch and no branch the
 /// host holds, its own or a remote's as last fetched, has the policy (129).
 /// A check of the branches that fails is a read it could not make (133).
-fn read(s: &Sluice<'_>, host: &dyn Host, clock: &dyn Clock) -> Result<serde_json::Value> {
+pub(crate) fn read(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+) -> Result<serde_json::Value> {
     let (branches, mut doc) = document(s, host, clock)?;
     if branches.is_empty() && !host.holds_policy()? {
         doc["set_up"] = false.into();
