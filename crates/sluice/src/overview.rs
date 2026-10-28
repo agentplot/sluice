@@ -94,9 +94,11 @@ pub fn run(
         let doc = match &mut reader {
             Reader::Lead(lead) => {
                 let doc = match document(s, host, clock) {
+                    // Ctrl-C reaches the git a read runs in the foreground:
+                    // a branch's read it ended is no refusal of the branch's
+                    // (26).
+                    _ if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                     Ok((_, doc)) => doc,
-                    // Ctrl-C reaches the git a read runs in the foreground.
-                    Err(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                     Err(e) if host.repository_gone(&repository) => return Err(e),
                     // The read it could not make is its document, in the
                     // words it was refused with (133), as a failing
@@ -142,6 +144,18 @@ fn write_overview(
         .and_then(|at| at.parse().ok())
         .unwrap_or_default();
     for b in branches {
+        // 26: a branch that could not be read is shown with the refusal,
+        // in its words, and nothing read of it.
+        if let Some(why) = &b.unread {
+            writeln!(
+                out,
+                "{} could not be read: {}",
+                b.branch,
+                why.replace('\n', "\n  ")
+            )?;
+            write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+            continue;
+        }
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
         let up_to = b

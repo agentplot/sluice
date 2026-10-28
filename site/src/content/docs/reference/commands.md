@@ -396,6 +396,12 @@ A checkout another host made is held on that host, and its commands are
 given to run there. One whose branch has no state comes after the
 branches, under `<branch> · no records`.
 
+A branch whose policy, revision or state couldn't be read is shown as
+`<branch> could not be read:` and what refused it, in its own words,
+such as a policy sluice no longer accepts. Every other branch is shown
+as usual. The overview fails whole only when it can't list the
+branches' state at all.
+
 `--json` prints one document, `sluice/overview@1`, for a pane, a status
 line or a script. Fields are only ever added to it.
 
@@ -411,6 +417,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].recent_from` | each submission the recent lines name, a landing's `ids`, a blame's `id` and a conflict's `id` and `with`, mapped to the worktree it came from, as its `from.worktree` says, a pull request's as `pull/<n>`: `{"12": "unit/a", "13": "pull/41"}`. It's `{}` when the branch has no recent lines |
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
+| `branches[].unread` | when the branch's policy, revision or state couldn't be read: what refused it, in its own words. Nothing else of the branch is read, so its other fields are empty; left out otherwise |
 | `sessions[]` | the worktrees held, each with how its last run ended (`last_result`), and those that have checked out a branch sluice lands on (`holds_queued_branch`), as `sluice status --json` lists them |
 | `sessions[].run` | while a `sluice exec` runs in the worktree: `started`, `command` for a run of a command, and `tasks`, as a combination's, while the moon runner says them |
 | `previews[]` | the previews on the host, as `sluice previews --json` lists them |
@@ -476,7 +483,7 @@ next: sluice withdraw 14 --as crw-1-unit-2
 added to: `worktree` (`path`, `branch`, `agent`), `submission` (`id`,
 `branch`, `state`, `failed` with each test's `log`, `landed_as`),
 `branches[]` (`branch`, `depth`, `testing`, `parallel`, the overview's
-counts), `place` (`ports`, `last_run`) and `next`. Outside a worktree
+counts, and `unread` as the overview gives it), `place` (`ports`, `last_run`) and `next`. Outside a worktree
 sluice can submit from, `worktree`, `submission` and `place` are null.
 A submission from before `from.path` was recorded names no worktree and
 is not shown. A pull request still waiting for review or checks has no

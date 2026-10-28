@@ -169,6 +169,16 @@ fn write_home(
         writeln!(out, "no branch has records here")?;
     }
     for (c, held) in counts.iter().zip(held) {
+        // 26: as the overview shows a branch that could not be read.
+        if let Some(why) = &c.unread {
+            writeln!(
+                out,
+                "{} could not be read: {}",
+                c.branch,
+                why.replace('\n', "\n  ")
+            )?;
+            continue;
+        }
         let up_to = c
             .parallel
             .map_or(String::new(), |p| format!(" (up to {p})"));
