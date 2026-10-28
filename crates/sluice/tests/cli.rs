@@ -3729,6 +3729,54 @@ fn a_wait_was_the_reader() {
     );
 }
 
+/// 135: a wait beside `sluice run` runs no round, and reports the outcome
+/// the run's rounds decide. The run's passes come between the wait's
+/// ticks, and the test's hold of the driver's lock stands for the run's
+/// process living on between them.
+#[test]
+fn a_wait_beside_a_driver_that_lands_it() {
+    let f = one_queued();
+    f.world.hold_runs(true);
+    let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(state_of(&f, 1), "testing");
+    let held = RefCell::new(Some(driver()));
+    let between = |n: usize| {
+        if n == 1 {
+            // The wait's first tick ran no round of its own.
+            assert_eq!(f.world.started().len(), 1);
+            drop(held.borrow_mut().take());
+            f.world.complete_all();
+            for _ in 0..6 {
+                if state_of(&f, 1) == "landed" {
+                    break;
+                }
+                let (code, out) = sluice(&f, &["run", "--rounds", "1"]);
+                assert_eq!(code, 0, "{out}");
+            }
+            assert_eq!(state_of(&f, 1), "landed");
+            *held.borrow_mut() = Some(driver());
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 10,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(pause.n.get(), 1, "{out}");
+    assert!(
+        out.starts_with(&format!("testing {BRANCH} + #1 · ")),
+        "{out}"
+    );
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+}
+
 /// 135: once the driver a wait follows stops, the wait runs rounds again
 /// from its next tick, and its own round lands the submission.
 #[test]

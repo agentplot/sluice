@@ -110,7 +110,7 @@ committed, run the gate with `sluice exec main`.
   waiting submit beside a held driver, which takes the request in at its
   first pass and runs no round after. The existing pull-request tests
   must pass unchanged.
-- [ ] 4.3 With a real `sluice run` started by the test in a fakes
+- [x] 4.3 With a real `sluice run` started by the test in a fakes
   repository, check that `sluice wait <n>` on a queued submission
   reports `passed · landed as <rev>` and exits 0 once the run's round
   lands it.
