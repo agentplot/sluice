@@ -24,12 +24,6 @@ compile_cache_variables = [
   "SCCACHE_DIR",
 ]
 
-# A place starts from the build of the last candidate that passed with the
-# same lock file and compiler (35; section 5, Caches).
-[[checkout.cache]]
-key = ["Cargo.lock", ".prototools"]
-paths = ["target"]
-
 [executor]
 kind = "sandbox"
 # The integration tests listen on localhost; nothing reaches further.
