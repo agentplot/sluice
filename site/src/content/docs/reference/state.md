@@ -76,6 +76,11 @@ every repository on the host and never pushed:
   readers/<repository>.json
                        the overview it last read, as `sluice overview --json`
                        prints it, for every other watch and wait to follow
+  readers/<repository>.version
+                       the version of sluice that holds the lock
+  readers/<repository>.lease
+                       held by a watch of a newer sluice until it takes over
+                       the reading
   running/.lock        held while a run is counted against the bound
   running/<run>.json   each run going on the host, every repository's:
                        a submission's or an agent's, its repository, its
@@ -130,8 +135,13 @@ still runs sluice's rounds, which read the branch's state as they always
 do. It reads its submission's own file once, when the submission leaves
 the queue, to say how it ended. When the one holding the lock stops, however
 it stops, the lock goes with it: the next watch or wait takes over
-within its next look, a second for a watch, three for a wait. The file
-names take the repository's git directory, which all its worktrees
+within its next look, a second for a watch, three for a wait. A watch of
+a newer sluice than the one holding the lock takes over from it within a
+few seconds. It holds the lease, and the older one lets go at its next
+look and follows it from then on; the newer one reads from its own next
+look. A sluice from before the lease takes no part: it names no version
+and never looks at the lease, so it reads until its watch or wait ends,
+and newer watches follow it meanwhile. The file names take the repository's git directory, which all its worktrees
 share, written as one file name as a checkout's is. `sluice overview`
 alone always reads the state itself.
 

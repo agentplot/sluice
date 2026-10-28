@@ -2333,7 +2333,9 @@ fn wait_on(
                 return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
-        reading.reader.lead_once_free()?;
+        // A wait takes no lease, but lets go of the lock once a newer
+        // watch has taken its; it follows from then on.
+        reading.reader.step(false)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }
@@ -2343,7 +2345,9 @@ fn wait_on(
 /// repository on the host is its reader, which reads the records and
 /// writes the whole overview for the others; every other wait reads them
 /// from the reader's document, and its own record only once a document no
-/// longer holds it, as when it has left the queue.
+/// longer holds it, as when it has left the queue. A wait that is the
+/// reader lets go once a newer watch has taken its lease, and follows from
+/// then on as any other wait.
 struct Reading {
     reader: Reader,
     /// Its branch's part of the overview, as last read.
@@ -2356,7 +2360,7 @@ struct Reading {
 impl Reading {
     fn take(host: &dyn exec::Host) -> Result<Reading> {
         Ok(Reading {
-            reader: Reader::take(&host.readers()?, &host.repository()?)?,
+            reader: Reader::take(&host.readers()?, &host.repository()?, host.version())?,
             view: None,
             lacked: None,
         })
