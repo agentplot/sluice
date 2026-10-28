@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    read_refused, AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification,
-    Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
+    read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Moved,
+    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -34,9 +34,9 @@ use crate::order::{self, Entry};
 use crate::overview::Room;
 use crate::policy::{Rules, POLICY_PATH};
 use crate::records::{
-    BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, Event, FailedTask, Held,
-    LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind, ResultLine, RunState,
-    State, SystemRun, Tested, ToldRecord,
+    BranchHold, Candidate, CandidateState, ConflictRecord, CopyBehind, DecidedRecord, Event,
+    FailedTask, Held, LandingCommitRecord, LandingIntent, OutboxItem, Recorded, ResultKind,
+    ResultLine, RunState, State, SystemRun, Tested,
 };
 use crate::refused::Refusal;
 use crate::release::{ReleaseOutcome, Releasing};
@@ -190,7 +190,7 @@ impl Sluice<'_> {
             }
             Decided::Held => {
                 // 121: nothing new to start or land; an earlier round's
-                // outcomes are still told and its places released.
+                // outcomes are still pushed and its places released.
                 info_span!("sluice.perform").in_scope(|| {
                     self.perform_releases(branch, releases)?;
                     self.perform_outbox(branch)
@@ -396,7 +396,7 @@ impl Sluice<'_> {
                         let item = OutboxItem {
                             id: format!("{}:landed", c.id),
                             submission: c.id,
-                            told: ToldRecord::Landed {
+                            outcome: DecidedRecord::Landed {
                                 landed_as: c.commit.clone(),
                             },
                         };
@@ -504,36 +504,61 @@ impl Sluice<'_> {
         }
     }
 
-    /// 50, 51: tell each outcome to its submission's session alone, and
-    /// confirm it told; a step that stops between the two tells it again,
-    /// under the same id.
+    /// 50, 51: push each outcome's notice to its submission's session
+    /// alone, once: marked delivered only when its driver delivered it, and
+    /// an outcome not delivered left decided and pending, for `sluice inbox`
+    /// or a wait, with nothing pushed again. A step that stops
+    /// between a delivery and its record pushes it again, under the same id.
     fn perform_outbox(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            // ADR 0044: the report as it stands, for a driver that shows
-            // one; a read that fails tells the outcome without it.
-            let report = self.verdict_of(branch, item.submission).ok().flatten();
-            self.seams.driver.notify(&Notification {
-                id: item.id.clone(),
-                submission: item.submission,
-                branch: branch.into(),
-                to: sub.from.clone(),
-                told: item.told.to_told(),
-                report,
-            })?;
+            let delivery = if sub.delivered.is_some() {
+                // 51: no push of an outcome already delivered.
+                None
+            } else {
+                // ADR 0044: the report as it stands, for a driver that shows
+                // one; a read that fails pushes the outcome without it.
+                let report = self.verdict_of(branch, item.submission).ok().flatten();
+                Some(self.seams.driver.notify(&Notification {
+                    id: item.id.clone(),
+                    submission: item.submission,
+                    branch: branch.into(),
+                    to: sub.from.clone(),
+                    decided: item.outcome.to_decided(),
+                    report,
+                })?)
+            };
             let now = self.now();
             self.update(branch, |l| {
-                if let Some(n) = l.doc.outbox.iter().position(|o| o.id == item.id) {
-                    l.doc.outbox.remove(n);
-                    l.sub_mut(item.submission).told = Some(now.clone());
-                    l.log(
-                        &now,
-                        Event::Told {
-                            id: item.submission,
-                            notification: item.id.clone(),
-                        },
-                    );
+                let Some(n) = l.doc.outbox.iter().position(|o| o.id == item.id) else {
+                    return Ok(());
+                };
+                l.doc.outbox.remove(n);
+                match &delivery {
+                    None => {}
+                    Some(Delivery::Delivered { to }) => {
+                        let s = l.sub_mut(item.submission);
+                        s.delivered = Some(now.clone());
+                        s.delivered_to = Some(to.clone());
+                        l.log(
+                            &now,
+                            Event::Delivered {
+                                id: item.submission,
+                                notification: item.id.clone(),
+                            },
+                        );
+                    }
+                    Some(Delivery::Undelivered { why }) => {
+                        l.log(
+                            &now,
+                            Event::Pending {
+                                id: item.submission,
+                                notification: item.id.clone(),
+                                why: why.clone(),
+                            },
+                        );
+                    }
                 }
                 Ok(())
             })?;
@@ -839,7 +864,8 @@ impl Sluice<'_> {
                     failed: Vec::new(),
                     conflict: None,
                     withdrawn: None,
-                    told: None,
+                    delivered: None,
+                    delivered_to: None,
                     landed_as: None,
                     was: Some(old.id),
                     ..old
@@ -1530,7 +1556,7 @@ impl Sluice<'_> {
         line.doc.outbox.push(OutboxItem {
             id: format!("{id}:conflict"),
             submission: id,
-            told: ToldRecord::Conflict { paths, with },
+            outcome: DecidedRecord::Conflict { paths, with },
         });
     }
 
@@ -1565,7 +1591,7 @@ impl Sluice<'_> {
         line.doc.outbox.push(OutboxItem {
             id: format!("{id}:failed"),
             submission: id,
-            told: ToldRecord::Failed {
+            outcome: DecidedRecord::Failed {
                 failed: c.failed.iter().map(|f| f.task.clone()).collect(),
                 combination: c.revision.clone(),
                 submissions: c.submissions.clone(),

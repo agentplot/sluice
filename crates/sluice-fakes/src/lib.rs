@@ -17,9 +17,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
-    Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network, NotRun,
-    Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
+    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Formed,
+    GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network,
+    NotRun, Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
     ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace,
     Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
     Unanswered, Written,
@@ -265,7 +265,11 @@ struct Inner {
     worktrees: BTreeMap<String, Session>,
     /// Worktrees with a branch checked out: the branch and the revision.
     checked_out: BTreeMap<String, (String, Rev)>,
-    told: Vec<Notification>,
+    delivered: Vec<Notification>,
+    /// Agents whose sessions take no outcome (51), and every notification
+    /// pushed to them, kept apart from those delivered.
+    undelivering: BTreeSet<String>,
+    undelivered: Vec<Notification>,
     crash_notify: bool,
     // the records
     lines: BTreeMap<String, Line>,
@@ -1252,6 +1256,8 @@ impl World {
                     worktree: worktree.into(),
                     path: None,
                     head: None,
+                    host: None,
+                    session: None,
                 },
                 dirty: Vec::new(),
                 detached: false,
@@ -1324,6 +1330,29 @@ impl World {
             .head = Some(head.into());
     }
 
+    /// The session's place records `session`, the name its driver gives
+    /// the session that submits from it (51).
+    pub fn in_session(&self, worktree: &str, session: &str) {
+        self.0
+            .borrow_mut()
+            .worktrees
+            .get_mut(worktree)
+            .expect("a session's place")
+            .from
+            .session = Some(session.into());
+    }
+
+    /// 51: `agent`'s sessions take no outcome from now: each notify is
+    /// answered undelivered, and kept with [`World::undelivered`].
+    pub fn not_delivering(&self, agent: &str) {
+        self.0.borrow_mut().undelivering.insert(agent.into());
+    }
+
+    /// Every notification not delivered, in order.
+    pub fn undelivered(&self) -> Vec<Notification> {
+        self.0.borrow().undelivered.clone()
+    }
+
     /// The next notification is delivered and the process stops before
     /// it is confirmed.
     pub fn crash_after_next_notify(&self) {
@@ -1331,13 +1360,13 @@ impl World {
     }
 
     /// Every notification delivered, in order.
-    pub fn told(&self) -> Vec<Notification> {
-        self.0.borrow().told.clone()
+    pub fn delivered(&self) -> Vec<Notification> {
+        self.0.borrow().delivered.clone()
     }
 
     /// The notifications delivered to `agent`.
-    pub fn told_to(&self, agent: &str) -> Vec<Notification> {
-        self.told()
+    pub fn delivered_to(&self, agent: &str) -> Vec<Notification> {
+        self.delivered()
             .into_iter()
             .filter(|n| n.to.agent == agent)
             .collect()
@@ -2271,13 +2300,25 @@ impl Driver for FakeDriver {
             .ok_or_else(|| anyhow!("no place {worktree}"))
     }
 
-    fn notify(&self, notification: &Notification) -> Result<()> {
+    /// 51: delivered to the session its submitter recorded, or to its
+    /// agent where it recorded none, unless the agent's sessions take
+    /// nothing.
+    fn notify(&self, notification: &Notification) -> Result<Delivery> {
         let mut inner = self.0 .0.borrow_mut();
-        inner.told.push(notification.clone());
-        if std::mem::take(&mut inner.crash_notify) {
-            bail!("crashed after telling {}", notification.id);
+        let to = &notification.to;
+        if inner.undelivering.contains(&to.agent) {
+            inner.undelivered.push(notification.clone());
+            return Ok(Delivery::Undelivered {
+                why: format!("{} takes nothing", to.agent),
+            });
         }
-        Ok(())
+        inner.delivered.push(notification.clone());
+        if std::mem::take(&mut inner.crash_notify) {
+            bail!("crashed after delivering {}", notification.id);
+        }
+        Ok(Delivery::Delivered {
+            to: to.session.clone().unwrap_or_else(|| to.agent.clone()),
+        })
     }
 }
 
@@ -2639,6 +2680,42 @@ impl Clock for FakeClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sluice_seams::Decided;
+
+    /// 51: the driver fake delivers to the session its submitter recorded,
+    /// or its agent where it recorded none, and an agent whose sessions
+    /// take nothing is answered undelivered, kept apart from those delivered.
+    #[test]
+    fn the_driver_delivers_to_the_session_or_answers_undelivered() {
+        let f = Fakes::new();
+        let head = Rev::new("h");
+        f.world.session("unit/a", "agent-a", &head);
+        f.world.session("unit/b", "agent-b", &head);
+        f.world.in_session("unit/a", "pane-1");
+        let to = |worktree: &str| Notification {
+            id: format!("{worktree}:landed"),
+            submission: 1,
+            branch: "main".into(),
+            to: f.driver.session(worktree).unwrap().from,
+            decided: Decided::Landed {
+                landed_as: head.clone(),
+            },
+            report: None,
+        };
+        let delivered = |to: &str| Delivery::Delivered { to: to.into() };
+        assert_eq!(f.driver.notify(&to("unit/a")).unwrap(), delivered("pane-1"));
+        assert_eq!(
+            f.driver.notify(&to("unit/b")).unwrap(),
+            delivered("agent-b")
+        );
+        f.world.not_delivering("agent-b");
+        assert!(matches!(
+            f.driver.notify(&to("unit/b")).unwrap(),
+            Delivery::Undelivered { .. }
+        ));
+        assert_eq!(f.world.delivered().len(), 2);
+        assert_eq!(f.world.undelivered(), [to("unit/b")]);
+    }
 
     /// The check fake counts the host's session runs while they run, and
     /// never one that has ended.

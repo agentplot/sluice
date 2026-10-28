@@ -103,10 +103,11 @@ combination passes.
   not a deployment ([previews](https://agentplot.github.io/sluice/guides/previews/)).
 - **No daemon.** sluice keeps nothing running itself. A waiting `sluice
   submit` drives the queue while it waits; `sluice run`, or `sluice
-  step` from cron, does the same for a host. What a preview leaves up,
-  the repository's own tools keep until its release. Every decision is
-  written to plain files before it is acted on, so a crash at any point
-  resumes cleanly.
+  step` from cron, does the same for a host. Where `sluice run` is
+  running on a host, waits and watches follow it and run no rounds of
+  their own. What a preview leaves up, the repository's own tools keep
+  until its release. Every decision is written to plain files before it
+  is acted on, so a crash at any point resumes cleanly.
 
 ## Install
 

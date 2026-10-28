@@ -428,3 +428,41 @@ fn a_finished_submission_moves_out_of_the_live_records_all_or_nothing() {
     assert!(!branch.join("submissions/4.json").exists());
     assert!(branch.join(".finished/4.json").exists());
 }
+
+/// 51, 130: a write putting a finished record that is there replaces it,
+/// read back as written by name and with the rest, and the live index is
+/// left as it was.
+#[test]
+fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
+    let dir = Scratch::new("finished-again");
+    let s = LocalFiles::new(dir.path());
+    let index = "{\"id\":5,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n";
+    write(
+        &s,
+        "bolt/x",
+        changes(
+            &[(".finished/5.json", "{\"id\":5}\n")],
+            &[("finished.jsonl", index)],
+        ),
+    );
+    let delivered = "{\"id\":5,\"delivered\":\"2026-10-28T09:00:00Z\"}\n";
+    write(
+        &s,
+        "bolt/x",
+        changes(
+            &[(".finished/5.json", delivered)],
+            &[("log.jsonl", "delivered\n")],
+        ),
+    );
+    assert_eq!(
+        s.read_finished("bolt/x", "5.json").unwrap().unwrap(),
+        delivered.as_bytes()
+    );
+    let all = s.read_all_finished("bolt/x").unwrap();
+    assert_eq!(all.keys().collect::<Vec<_>>(), ["5.json"]);
+    assert_eq!(all["5.json"], delivered.as_bytes());
+    assert_eq!(
+        s.read("bolt/x").unwrap().files["finished.jsonl"],
+        index.as_bytes()
+    );
+}

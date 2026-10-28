@@ -56,7 +56,7 @@ fn two_queued_under(refused: &str) -> (Harness, u64, u64) {
 fn unread() -> Vec<Unread> {
     vec![Unread {
         branch: REFUSED.into(),
-        refused: WORDS.into(),
+        error: WORDS.into(),
     }]
 }
 
