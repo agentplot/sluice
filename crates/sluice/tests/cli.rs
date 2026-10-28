@@ -5030,6 +5030,8 @@ impl sluice::PullRequests for Pull7 {
             lines: Vec::new(),
             submission: None,
             names: Default::default(),
+            head: None,
+            draft: false,
         })
     }
 }
@@ -6787,4 +6789,84 @@ fn a_waiting_submit_from_a_bolt_carries_its_copy_under_json() {
     let v = json(&out);
     assert_eq!(v["head"], serde_json::json!(level), "{v}");
     assert!(v.get("copy").is_none(), "{v}");
+}
+
+/// 124, record 0065: `--status --json` names `sends`, what a submit from
+/// the worktree would send now; from a worktree on its own branch, its
+/// head.
+#[test]
+fn status_sends_the_worktrees_head_from_its_own_branch() {
+    let f = setup();
+    let head = f
+        .world
+        .work(&f.world.tip(BRANCH), &[("plugin/a", Some("a"))]);
+    f.world.session("unit/a", "agent-a", &head);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/a",
+            "--status",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    let v = json(&out);
+    assert_eq!(
+        (v["id"].as_u64(), v["state"].as_str()),
+        (Some(1), Some("queued")),
+        "{v}"
+    );
+    assert_eq!(v["sends"], serde_json::json!(head), "{v}");
+    assert_eq!(v["head"], v["sends"], "{v}");
+}
+
+/// 124, record 0065: from a worktree on a branch sluice lands on, its copy
+/// behind, `sends` is the remote's revision, the submission's `head`, not
+/// the worktree's; and reading it moves nothing (rule core.4).
+#[test]
+fn status_sends_the_remotes_revision_from_a_bolt() {
+    let f = Fakes::new();
+    let on_origin = POLICY.replace("parallel = 4\n", "parallel = 4\nremote = \"origin\"\n");
+    f.world.init(
+        BRANCH,
+        &[
+            (".config/sluice.toml", on_origin.as_str()),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.on_remote(BRANCH);
+    f.world.init(
+        "main",
+        &[(
+            ".config/sluice.toml",
+            "[branches.main]\nrequired = [\"#gate\"]\nremote = \"origin\"\n",
+        )],
+    );
+    let made = f.world.tip(BRANCH);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/a"]);
+    assert_eq!(code, LANDED, "{out}");
+    let landing = f.world.tip(BRANCH);
+    f.world.set_copy(BRANCH, Some(&made));
+    f.world.session(BRANCH, "ops", &made);
+
+    let (code, out) = sluice(&f, &["submit", "main", "--worktree", BRANCH, "--no-wait"]);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = sluice(
+        &f,
+        &["submit", "main", "--worktree", BRANCH, "--status", "--json"],
+    );
+    assert_eq!(code, 0, "{out}");
+    let v = json(&out);
+    assert_eq!(v["sends"], serde_json::json!(landing), "{v}");
+    assert_eq!(v["head"], v["sends"], "{v}");
+    assert_ne!(v["sends"], serde_json::json!(made), "{v}");
+    assert_eq!(f.world.copy_of(BRANCH), Some(made));
+    assert_eq!(f.world.tip(BRANCH), landing);
 }
