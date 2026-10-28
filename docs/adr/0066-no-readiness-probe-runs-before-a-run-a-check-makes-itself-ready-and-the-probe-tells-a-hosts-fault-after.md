@@ -1,7 +1,7 @@
 ---
 number: 66
 title: No readiness probe runs before a run; a check makes itself ready, and the probe tells a host's fault from the code's after a failure
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # No readiness probe runs before a run; a check makes itself ready, and the probe tells a host's fault from the code's after a failure
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it, and revised the same day on their note; accepted only on their yes.
+Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: the user, on the record's first card (2026-10-27): "this just seems to smell. a test could just make itself ready too", which settles that a check readies itself and no probe stands before a run; madswan-design, on wldn-design's reading of 2026-10-27 relayed by swancloud-design (afterthought/crew-state, swancloud/main, signal 2026-10-27-swancloud-operator-dcf318e8/01), for the shape; the user's yes is asked on the record's card.
 Sources: statement clauses 66, 84, 114, 115; `crates/sluice/src/profiles/checks.rs` on main at 2026-10-27 (`READY_LIMIT`, sixty seconds; the probe run before the plan, the run refused when it fails or runs out of time; the probe run again after a failed run for 114); chuck-herdr-alpha, 2026-10-27 22:15 to 22:38Z: main's combination of 847, 848 and 850 refused three times, "the host is not ready to run the checks: [tests] ready `bun run infra/ministack/host-ready.ts`" past 60 s, under a load of 47 to 152 on 16 cores, the same probe answering in 3 to 5 s by hand in a warm checkout.
