@@ -52,4 +52,4 @@ ends with its tests passing.
 
 ## 7. Integration
 
-- [ ] 7.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate outcomes-are-delivered`; verify both pass.
+- [x] 7.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate outcomes-are-delivered`; verify both pass.
