@@ -1387,6 +1387,47 @@ mod refused_alone {
         assert_eq!(v["state"], "landed", "{v}");
     }
 
+    /// 26, S64: `bolt/b`'s policy refused on the host's own ref and on
+    /// origin's, so whichever copy a round reads refuses it. A bounded
+    /// `sluice run` lands the submission on `main`, and, its last round
+    /// having passed `bolt/b` by, exits 3 as a step of `bolt/b` would,
+    /// naming it on stderr with the refusal's words.
+    #[test]
+    fn a_bounded_run_lands_main_and_exits_3_naming_the_refused_bolt() {
+        let s = Setup::new("refused-alone-run", "origin");
+        s.repo.git(&["branch", "bolt/b", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/b:refs/heads/bolt/b"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        id(&s.submit_to("b", "bolt/b", "bolt/b"));
+        let on_main = id(&s.submit_to("a", "main", "main"));
+        refuse_own_ref(&s, "bolt/b");
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            "bolt/b:refs/heads/bolt/b",
+        ]);
+        let out = s.sluice(&["status", "bolt/b"]);
+        assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
+
+        let out = s.sluice(&["run", "--rounds", "2"]);
+        assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.lines().any(|l| l.starts_with("sluice: bolt/b: ")
+                && l.contains("Remove [[checkout.cache]] from .config/sluice.toml")),
+            "{}",
+            text(&out)
+        );
+        let out = s.sluice(&["status", &on_main, "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["state"], "landed", "{v}");
+    }
+
     /// 26: the host's own `main`, the default branch, holds a policy this
     /// sluice refuses, while the state is on origin and this host has read
     /// it before. The branches are listed all the same: `sluice wait` on a
