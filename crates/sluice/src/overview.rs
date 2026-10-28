@@ -18,7 +18,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::reader::{driver_live, no_sluice, untimed, Reader};
+use crate::reader::{no_sluice, untimed, Drives, Reader};
 use crate::told::{self, Kind};
 use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
@@ -82,10 +82,13 @@ pub fn run(
     // 129: the first watch or wait of the repository on the host reads its
     // queues and writes each document it prints; every other follows that
     // document, reading nothing itself, until it finds the lock free
-    // (rule core.25). Where `sluice run` lives on the host, the place is
-    // its: the watch follows it, and one that read lets go (135).
+    // (rule core.25). A watch of a newer sluice than the reader's takes
+    // its lease (129): the older reader lets go and follows, and the
+    // newer watch reads from its next tick. Where `sluice run` lives on the
+    // host, the place is its: the watch follows it, and one that read lets
+    // go (135).
     let (readers, repository) = (host.readers()?, host.repository()?);
-    let mut reader = Reader::take(&readers, &repository)?;
+    let mut reader = Reader::take(&readers, &repository, host.version())?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
@@ -132,8 +135,9 @@ pub fn run(
         if !pause.pause() {
             return Ok(STOPPED);
         }
-        // A lock it could not try leaves it following.
-        let _ = reader.step(driver_live(&readers, &repository));
+        // A watch may take an older reader's lease; a lock it could not
+        // try leaves it as it was.
+        let _ = reader.step(true, Drives::probe(&readers, &repository));
     }
 }
 
