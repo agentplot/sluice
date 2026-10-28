@@ -1217,7 +1217,7 @@ pub fn run(
             }
             Err(r) => {
                 let (why, next) = match r {
-                    AmendRefusal::NoSuchSubmission => {
+                    AmendRefusal::NoSuchSubmission(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     AmendRefusal::NotYours => (
@@ -1272,7 +1272,7 @@ pub fn run(
             }
             Err(r) => {
                 let (why, next) = match r {
-                    WithdrawRefusal::NoSuchSubmission => {
+                    WithdrawRefusal::NoSuchSubmission(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     WithdrawRefusal::NotYours => (
