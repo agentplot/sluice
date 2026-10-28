@@ -120,7 +120,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 5. Documentation
 
-- [ ] 5.1 Update `site/src/content/docs/reference/commands.md`:
+- [x] 5.1 Update `site/src/content/docs/reference/commands.md`:
   - The `sluice wait` row: it follows a running `sluice run` and runs
     no rounds of its own there.
   - The `sluice run` row: one per repository on a host; a second one
@@ -134,7 +134,7 @@ committed, run the gate with `sluice exec main`.
 
   Verify: `moon run site:prose` passes with no Vale warning, and no
   passage of the page says a wait always runs rounds.
-- [ ] 5.2 Update `site/src/content/docs/reference/state.md`:
+- [x] 5.2 Update `site/src/content/docs/reference/state.md`:
   - Add `readers/<repository>.driver` to the host's state map.
   - In the paragraph on the one reader, say that a running `sluice
     run` is the reader and every wait follows it and runs no rounds of
