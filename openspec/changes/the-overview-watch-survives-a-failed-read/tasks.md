@@ -67,6 +67,6 @@
 
 ## 5. The gate
 
-- [ ] 5.1 Run the gate's checks with `sluice exec main` once the work is
+- [x] 5.1 Run the gate's checks with `sluice exec main` once the work is
   committed, and see `cli:test`, `fakes:test`, `site:prose`,
   `root:format` and `root:lint` pass.
