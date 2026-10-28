@@ -1005,6 +1005,17 @@ pub struct Submitter {
     /// own submission, and in records written before it (ADR 0025).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<String>,
+    /// 51: the host the submit ran on, as its peers name it, so a round on
+    /// another host pushes nothing into a session it cannot reach; `None`
+    /// in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// 51: the session that submitted, as the driver names it, for the
+    /// round that decides the outcome to push it there; the core shows it
+    /// and never reads into it (rule core.1). `None` for a submit run in no
+    /// session the driver can reach, and in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// A session's place as its driver sees it.
@@ -1209,13 +1220,26 @@ pub struct Notification {
     pub report: Option<VerdictView>,
 }
 
+/// 51: whether a notify delivered its outcome, which alone marks it told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Delivered to this session, as the driver names it.
+    Delivered { to: String },
+    /// Not delivered, and why, in the carrier's words.
+    Undelivered { why: String },
+}
+
 pub trait Driver {
     /// 2, 47: the head of a session's place, who holds it, and anything
     /// the place holds beyond its commits.
     fn session(&self, worktree: &str) -> Result<Session>;
 
-    /// 50: deliver an outcome to that entry's session and no other.
-    fn notify(&self, notification: &Notification) -> Result<()>;
+    /// 50, 51: deliver an outcome to that entry's session and no other,
+    /// and say whether it was. A carrier asked that answered no is
+    /// `Undelivered`, which no round tries again; `Err` is sluice's own
+    /// failure, such as a forge write the retry policy gave up on, and
+    /// leaves the outcome for the next round.
+    fn notify(&self, notification: &Notification) -> Result<Delivery>;
 }
 
 // ---------------------------------------------------------------------------

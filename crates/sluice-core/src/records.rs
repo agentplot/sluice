@@ -235,8 +235,14 @@ pub struct Submission {
     pub conflict: Option<ConflictRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
+    /// 51: when its outcome was delivered into its session; `None` while
+    /// it stands untold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub told: Option<String>,
+    /// 51: the session its outcome was delivered to, as the driver named
+    /// it; `None` while untold, and in records told before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
     /// Its id in this host's own records, before the branch's records
@@ -932,6 +938,13 @@ pub enum Event {
         id: u64,
         notification: String,
     },
+    /// 51: an outcome its driver did not deliver, and why in the carrier's
+    /// words; it stands decided and untold, and no round pushes it again.
+    Untold {
+        id: u64,
+        notification: String,
+        why: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1429,6 +1442,55 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// 51: a submitter recorded before sessions were reads with no host
+    /// and no session and writes back byte for byte; one with both reads
+    /// back as it was written.
+    #[test]
+    fn a_submitter_recorded_before_sessions_reads_as_it_was() {
+        let old = r#"{"agent":"a","worktree":"unit/review","path":"/w/review"}"#;
+        let from: Submitter = serde_json::from_str(old).unwrap();
+        assert_eq!((&from.host, &from.session), (&None, &None));
+        assert_eq!(serde_json::to_string(&from).unwrap(), old);
+
+        let both = Submitter {
+            host: Some("deneb".into()),
+            session: Some("herdr:w1:p2@/run/herdr.sock".into()),
+            ..from
+        };
+        let text = serde_json::to_string(&both).unwrap();
+        assert_eq!(serde_json::from_str::<Submitter>(&text).unwrap(), both);
+    }
+
+    /// 51: a submission told before `told_to` was kept reads with none and
+    /// writes back unchanged; the `untold` line round-trips.
+    #[test]
+    fn a_submission_told_before_its_session_reads_as_it_was() {
+        let old = submission(None);
+        let mut doc = String::from_utf8(to_document(&old)).unwrap();
+        doc = doc.replacen(
+            "\"state\": \"queued\"",
+            "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\"",
+            1,
+        );
+        let told: Submission = serde_json::from_str(&doc).unwrap();
+        assert_eq!(told.told.as_deref(), Some("2026-10-27T10:00:00Z"));
+        assert_eq!(told.told_to, None);
+        assert_eq!(String::from_utf8(to_document(&told)).unwrap(), doc);
+
+        let line = LogLine {
+            schema: LOG_SCHEMA.into(),
+            at: "2026-10-28T09:00:00Z".into(),
+            event: Event::Untold {
+                id: 15,
+                notification: "15-landed".into(),
+                why: "agent is blocked".into(),
+            },
+        };
+        let text = serde_json::to_string(&line).unwrap();
+        assert!(text.contains("\"event\":\"untold\""), "{text}");
+        assert_eq!(serde_json::from_str::<LogLine>(&text).unwrap(), line);
     }
 
     /// A flaky failure recorded before its times and hosts reads with
