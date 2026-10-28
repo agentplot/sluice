@@ -2133,7 +2133,7 @@ fn readers_doc() -> Option<serde_json::Value> {
 /// A live reader of `repository`, the test's own, until dropped; its
 /// document `doc`.
 fn reader_of(repository: &str, doc: &serde_json::Value) -> sluice::reader::Lead {
-    match sluice::reader::Reader::take(&support::readers(), repository).unwrap() {
+    match sluice::reader::Reader::take(&support::readers(), repository, sluice::VERSION).unwrap() {
         sluice::reader::Reader::Lead(mut lead) => {
             lead.write(doc).unwrap();
             lead

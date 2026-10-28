@@ -2248,7 +2248,7 @@ fn wait_on(
                 return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
-        reading.reader.lead_once_free()?;
+        reading.reader.step(false)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }
@@ -2271,7 +2271,7 @@ struct Reading {
 impl Reading {
     fn take(host: &dyn exec::Host) -> Result<Reading> {
         Ok(Reading {
-            reader: Reader::take(&host.readers()?, &host.repository()?)?,
+            reader: Reader::take(&host.readers()?, &host.repository()?, crate::VERSION)?,
             view: None,
             lacked: None,
         })

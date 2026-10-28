@@ -79,7 +79,7 @@ pub fn run(
     // queues and writes each document it prints; every other follows that
     // document, reading nothing itself, until it finds the lock free
     // (rule core.25).
-    let mut reader = Reader::take(&host.readers()?, &host.repository()?)?;
+    let mut reader = Reader::take(&host.readers()?, &host.repository()?, crate::VERSION)?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
@@ -104,7 +104,7 @@ pub fn run(
         if !pause.pause() {
             return Ok(STOPPED);
         }
-        reader.lead_once_free()?;
+        reader.step(true)?;
     }
 }
 
