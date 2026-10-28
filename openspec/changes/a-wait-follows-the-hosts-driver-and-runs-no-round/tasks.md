@@ -145,7 +145,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 6. Gate
 
-- [ ] 6.1 Commit, then run the gate's checks with `sluice exec main`.
+- [x] 6.1 Commit, then run the gate's checks with `sluice exec main`.
 
   Verify: every task passes. These include `cli:test`, `site:prose` and
   `root:format`.
