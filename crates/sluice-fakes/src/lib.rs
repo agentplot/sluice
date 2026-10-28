@@ -123,6 +123,9 @@ struct Inner {
     /// with, by host and branch: a read answers what is held, stale, and a
     /// write fails (80, 133).
     refused_state: BTreeMap<(String, String), String>,
+    /// The words each branch's records fail to be read with, by branch: no
+    /// answer at all, as when git cannot read them on a loaded host (129).
+    failed_state: BTreeMap<String, String>,
     /// Each host's refusal document of a branch, by host and branch (133).
     refusals: BTreeMap<(String, String), Vec<u8>>,
     crash: Option<Crash>,
@@ -775,6 +778,17 @@ impl World {
         match said {
             Some(said) => inner.refused_state.insert(key, said.into()),
             None => inner.refused_state.remove(&key),
+        };
+    }
+
+    /// From now, every read of `branch`'s records fails with `said`, with
+    /// nothing answered from what was last read; with `None`, they are
+    /// read again (129).
+    pub fn fail_state_reads(&self, branch: &str, said: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        match said {
+            Some(said) => inner.failed_state.insert(branch.into(), said.into()),
+            None => inner.failed_state.remove(branch),
         };
     }
 
@@ -2311,6 +2325,9 @@ impl State for FakeState {
 
     fn read(&self, branch: &str) -> Result<Snapshot> {
         let inner = self.0 .0.borrow();
+        if let Some(said) = inner.failed_state.get(branch) {
+            bail!("{said}");
+        }
         if let Some(said) = World::state_refused(&inner, branch) {
             // 80: answered from what was last read, when there is any.
             if !inner.lines.get(branch).is_some_and(|l| l.version > 0) {
@@ -2337,6 +2354,9 @@ impl State for FakeState {
 
     fn read_all_finished(&self, branch: &str) -> Result<BTreeMap<String, Vec<u8>>> {
         let inner = self.0 .0.borrow();
+        if let Some(said) = inner.failed_state.get(branch) {
+            bail!("{said}");
+        }
         Ok(inner
             .lines
             .get(branch)
@@ -2712,6 +2732,26 @@ mod tests {
         f.world.be_host("fake-host");
         f.state.keep_refusal("main", None).unwrap();
         assert_eq!(f.world.refusal("main"), None);
+    }
+
+    /// 129: a branch's records fail to be read with the words given, read
+    /// before or not, until told otherwise; another branch's are read.
+    #[test]
+    fn a_read_of_the_records_fails_until_cleared() {
+        let f = Fakes::new();
+        f.world.init("main", &[("x", "1")]);
+        {
+            let _g = f.state.lock("main").unwrap().unwrap();
+            f.state.write("main", 0, Changes::default()).unwrap();
+        }
+        let said = "fatal: unable to read 4b825dc6: Resource temporarily unavailable";
+        f.world.fail_state_reads("main", Some(said));
+        let err = f.state.read("main").unwrap_err();
+        assert_eq!(format!("{err:#}"), said);
+        assert!(f.state.read_finished("main", "1").is_err());
+        assert_eq!(f.state.read("other").unwrap().version, 0);
+        f.world.fail_state_reads("main", None);
+        assert_eq!(f.state.read("main").unwrap().version, 1);
     }
 
     fn last(outcome: sluice_seams::RunOutcome) -> LastResult {

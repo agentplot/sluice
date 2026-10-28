@@ -2,7 +2,7 @@
 
 ## 1. What the tests need
 
-- [ ] 1.1 In `crates/sluice-fakes`, give the world a way to make reads
+- [x] 1.1 In `crates/sluice-fakes`, give the world a way to make reads
   of the queues fail with given words, from now until told otherwise,
   as `refuse_state_reads` is set and cleared: a read of any branch's
   records, through the records seam, then returns an error carrying the
