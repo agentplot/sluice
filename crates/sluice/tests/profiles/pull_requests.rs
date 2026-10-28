@@ -1169,6 +1169,20 @@ fn landed_and_merged_by_landing() {
         .contains("## sluice: landed on main as "));
 }
 
+/// 51: a landed pull request's outcome is delivered to the request, and
+/// its submission is told to it.
+#[test]
+fn a_landed_requests_outcome_is_told_to_it() {
+    let g = OnGitHub::new("pr-told", "");
+    let (n, _) = g.by_hand("unit/told", &[("t.txt", Some("t\n"))], false);
+    g.step_until("told", |g| {
+        g.of(n).first().is_some_and(|s| s["told"].is_string())
+    });
+    let s = &g.of(n)[0];
+    assert_eq!(s["state"], "landed", "{s}");
+    assert_eq!(s["told_to"], format!("pull/{n}").as_str(), "{s}");
+}
+
 /// Two rounds with nothing changed between them post nothing the second
 /// time.
 #[test]
