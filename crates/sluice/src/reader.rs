@@ -82,12 +82,13 @@ struct Files {
 
 impl Reader {
     /// The part in reading `repository` among the readers in `dir`, for a
-    /// sluice of `version`: the lead when no live process holds its lock,
-    /// a follower otherwise.
+    /// sluice of `version`: the lead when no live process holds its lock
+    /// or its lease, a follower otherwise, which takes no lease until its
+    /// first step.
     pub fn take(dir: &Path, repository: &str, version: &str) -> Result<Reader> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let name = flat_name(repository);
-        let follow = Follow {
+        let mut follow = Follow {
             // A name kept whole is up to 246 bytes, so no file of it adds
             // more than `.version`'s eight bytes, nor reaches 255.
             files: Files {
@@ -101,7 +102,8 @@ impl Reader {
             version: version.to_string(),
             lease: None,
         };
-        Ok(match follow.try_lead()? {
+        // A free lock is the lease holder's, when a newer watch holds it.
+        Ok(match follow.step(false)? {
             Some(lead) => Reader::Lead(lead),
             None => Reader::Follow(follow),
         })
@@ -440,6 +442,28 @@ mod tests {
         other.step(true).unwrap();
         assert!(is_lead(&other));
         assert_eq!(files(&other).reader_version().as_deref(), Some(OLD));
+    }
+
+    /// 129: while another holds the lease, a watch or a wait that starts
+    /// beside the free lock follows, of whatever version, and leaves the
+    /// lock to it; once that holder is dropped, as its process ends, the
+    /// next to start leads.
+    #[test]
+    fn a_take_leaves_a_free_lock_to_the_lease_holder() {
+        let s = Scratch::new("take-left");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        new.step(true).unwrap();
+        old.step(true).unwrap();
+        assert!(!is_lead(&old) && holds_lease(&new));
+        for version in [OLD, NEW, "0.54.0"] {
+            let started = Reader::take(&s.0, REPO, version).unwrap();
+            assert!(!is_lead(&started) && !holds_lease(&started), "{version}");
+        }
+        drop(new);
+        let next = Reader::take(&s.0, REPO, OLD).unwrap();
+        assert!(is_lead(&next));
+        assert_eq!(files(&next).reader_version().as_deref(), Some(OLD));
     }
 
     /// 129: a lead whose lease was taken, following from then on, never
