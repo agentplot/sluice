@@ -922,6 +922,8 @@ mod tests {
             worktree: worktree.into(),
             path: path.map(Into::into),
             head: head.map(Into::into),
+            host: None,
+            session: None,
         };
         let here = Here {
             path: "/w/unit",

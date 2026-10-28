@@ -57,7 +57,7 @@ impl sluice_seams::Driver for Drivers {
         }
     }
 
-    fn notify(&self, n: &sluice_seams::Notification) -> Result<()> {
+    fn notify(&self, n: &sluice_seams::Notification) -> Result<sluice_seams::Delivery> {
         match github::pulls::number(&n.to.worktree) {
             Some(_) => self.pulls.notify(n),
             None => self.worktrunk.notify(n),

@@ -1133,6 +1133,7 @@ fn admit(
             conflict: None,
             withdrawn: None,
             told: None,
+            told_to: None,
             landed_as: None,
             was: None,
             held: None,
@@ -1169,10 +1170,11 @@ mod tests {
 
     use chrono::{DateTime, TimeZone, Utc};
     use sluice_seams::{
-        Adopted, Branch, Changes, CheckedOut, Checkout, Driver, GoneRelease, Guard, HostRun,
-        LandingCommit, LastResult, Moved, Notification, Place, Platform, PreviewPlace, Progress,
-        ReleasePolicy, Released, RunHandle, RunReport, RunRequest, Running, SessionPlace, Settings,
-        Snapshot, State as Records, Submitter, TaskLog, TaskProgress, Tests, Written, FINISHED,
+        Adopted, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, GoneRelease, Guard,
+        HostRun, LandingCommit, LastResult, Moved, Notification, Place, Platform, PreviewPlace,
+        Progress, ReleasePolicy, Released, RunHandle, RunReport, RunRequest, Running, SessionPlace,
+        Settings, Snapshot, State as Records, Submitter, TaskLog, TaskProgress, Tests, Written,
+        FINISHED,
     };
 
     use super::*;
@@ -1212,6 +1214,8 @@ mod tests {
                         worktree: worktree.into(),
                         path: None,
                         head: None,
+                        host: None,
+                        session: None,
                     },
                     dirty: Vec::new(),
                     detached: false,
@@ -1267,7 +1271,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("no place {worktree}"))
         }
 
-        fn notify(&self, _: &Notification) -> Result<()> {
+        fn notify(&self, _: &Notification) -> Result<Delivery> {
             unreachable!("a submit tells no one")
         }
     }

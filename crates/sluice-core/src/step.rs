@@ -24,8 +24,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
-    read_refused, AtBound, Contested, Formed, HostCopy, LandingCommit, Moved, Notification,
-    Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
+    read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Moved,
+    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -504,36 +504,60 @@ impl Sluice<'_> {
         }
     }
 
-    /// 50, 51: tell each outcome to its submission's session alone, and
-    /// confirm it told; a step that stops between the two tells it again,
-    /// under the same id.
+    /// 50, 51: tell each outcome to its submission's session alone, once:
+    /// told only when its driver delivered it, and an outcome not delivered
+    /// left decided and untold, with nothing pushed again. A step that stops
+    /// between a delivery and its record pushes it again, under the same id.
     fn perform_outbox(&self, branch: &str) -> Result<()> {
         let line = self.read_line(branch)?;
         for item in line.doc.outbox.clone() {
             let sub = line.sub(item.submission)?;
-            // ADR 0044: the report as it stands, for a driver that shows
-            // one; a read that fails tells the outcome without it.
-            let report = self.verdict_of(branch, item.submission).ok().flatten();
-            self.seams.driver.notify(&Notification {
-                id: item.id.clone(),
-                submission: item.submission,
-                branch: branch.into(),
-                to: sub.from.clone(),
-                told: item.told.to_told(),
-                report,
-            })?;
+            let delivery = if sub.told.is_some() {
+                // 51: no push to a session already told.
+                None
+            } else {
+                // ADR 0044: the report as it stands, for a driver that shows
+                // one; a read that fails tells the outcome without it.
+                let report = self.verdict_of(branch, item.submission).ok().flatten();
+                Some(self.seams.driver.notify(&Notification {
+                    id: item.id.clone(),
+                    submission: item.submission,
+                    branch: branch.into(),
+                    to: sub.from.clone(),
+                    told: item.told.to_told(),
+                    report,
+                })?)
+            };
             let now = self.now();
             self.update(branch, |l| {
-                if let Some(n) = l.doc.outbox.iter().position(|o| o.id == item.id) {
-                    l.doc.outbox.remove(n);
-                    l.sub_mut(item.submission).told = Some(now.clone());
-                    l.log(
-                        &now,
-                        Event::Told {
-                            id: item.submission,
-                            notification: item.id.clone(),
-                        },
-                    );
+                let Some(n) = l.doc.outbox.iter().position(|o| o.id == item.id) else {
+                    return Ok(());
+                };
+                l.doc.outbox.remove(n);
+                match &delivery {
+                    None => {}
+                    Some(Delivery::Delivered { to }) => {
+                        let s = l.sub_mut(item.submission);
+                        s.told = Some(now.clone());
+                        s.told_to = Some(to.clone());
+                        l.log(
+                            &now,
+                            Event::Told {
+                                id: item.submission,
+                                notification: item.id.clone(),
+                            },
+                        );
+                    }
+                    Some(Delivery::Undelivered { why }) => {
+                        l.log(
+                            &now,
+                            Event::Untold {
+                                id: item.submission,
+                                notification: item.id.clone(),
+                                why: why.clone(),
+                            },
+                        );
+                    }
                 }
                 Ok(())
             })?;
@@ -840,6 +864,7 @@ impl Sluice<'_> {
                     conflict: None,
                     withdrawn: None,
                     told: None,
+                    told_to: None,
                     landed_as: None,
                     was: Some(old.id),
                     ..old
