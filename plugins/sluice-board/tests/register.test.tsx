@@ -1165,6 +1165,76 @@ test("the watch prints only its failure: the pane gives its message, until an ov
   expect(await paneTexts($)).toContain("QUEUED");
 });
 
+test("sluice set up during the session: /sluice starts the watch at once, which shows the queue", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  watch.failing = true;
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  watch.failing = false;
+  await $.command.run(slash(true));
+  await clock.settle();
+  // Started at once, the clock unmoved, and nothing read in its place.
+  expect(watch.started).toEqual([NOW, NOW]);
+  expect(watch.isOpen()).toBe(true);
+  await watch.print(justSetUp());
+  const pane = await mountPane($);
+  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["QUEUED"]);
+  expect(await pane.find({ type: "Text", text: /#3 queued\s+w3 claude/ })).toBeDefined();
+  await pane.unmount();
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  expect(ran.filter((r) => r.startsWith("sluice overview"))).toEqual([]);
+  // With the queue shown, /sluice waits the watch's wait out like any other.
+  await watch.end();
+  await $.command.run(slash(true));
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toHaveLength(2);
+  await startedAgainAfter(clock, watch, 2000);
+});
+
+test("still failing: /sluice tries the watch again at once, and the pane says why", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  watch.failing = true;
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toEqual([NOW, NOW]);
+  expect(await paneTexts($)).toEqual([
+    "sluice could not be read here: the sluice command was not found",
+    ASK,
+  ]);
+  // Cutting a wait short is the user's asking: the next wait grows all the same.
+  await startedAgainAfter(clock, watch, 2000);
+  // Two at once start one.
+  await $.command.run(slash(true));
+  await Promise.all([$.command.run(slash(true)), $.command.run(slash(true))]);
+  await clock.settle();
+  expect(watch.started).toHaveLength(4);
+});
+
+test("a watch already open: /sluice starts no second one", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toEqual([NOW]);
+  expect(watch.isOpen()).toBe(true);
+  expect(await paneTexts($)).toEqual(["Reading sluice…"]);
+});
+
 test("the first queue comes from the watch, and nothing reads the records in its place", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);

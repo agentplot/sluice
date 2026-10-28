@@ -334,10 +334,12 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
   if (wake) await $.prompt.submit({ text: wakeText(o, failed) });
 }
 
-// Whether the board's watch loop runs, once a load; and how it follows
-// sluice once a watch has printed its first overview.
+// Whether the board's watch loop runs, once a load; how it follows sluice
+// once a watch has printed its first overview; and, while the loop waits to
+// start the next watch, what starts it at once.
 let watching = false;
 let following: How | null = null;
+let wake: (() => void) | null = null;
 
 /**
  * A line a watch printed: an overview, the first of which sets the board up
@@ -415,7 +417,15 @@ async function feed($: $, cwd: string, chosen: How) {
     if (!said && (await read($, doc)) === null) await update($, unread, () => unreadReason(end));
     const ms = rewatchWait(wait, (await $.clock.now()) - started);
     wait = ms;
-    await new Promise<void>((done) => $.clock.after(ms, done));
+    // `/sluice` cuts the wait short; the waits after it grow on all the same.
+    await new Promise<void>((done) => {
+      const timer = $.clock.after(ms, done);
+      wake = () => {
+        timer.cancel();
+        done();
+      };
+    });
+    wake = null;
   }
 }
 
@@ -472,6 +482,9 @@ export const register: Register = (on, options) => {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };
     }
+    // Where the board has no queue, the next watch starts now rather than
+    // after its wait: sluice may be set up since. An open watch has no wait.
+    if ((await read($, doc)) === null) wake?.();
     const inline = !e.presentation.isFullscreen;
     const opened = await $.ui.open({
       id: PANE,
