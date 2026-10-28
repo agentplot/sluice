@@ -7129,6 +7129,9 @@ mod refused_alone {
     /// The branch whose records cannot be read, listed before [`BRANCH`].
     const REFUSED: &str = "bolt/b";
 
+    /// Another bolt, listed after `bolt/b`.
+    const OTHER: &str = "bolt/c";
+
     /// Submission 1 queued on [`BRANCH`] and 2 on `bolt/b`; with
     /// `refused`, every read of `bolt/b`'s records then fails with
     /// [`UNREADABLE`].
@@ -7230,5 +7233,208 @@ mod refused_alone {
         let (code, out) = sluice(&f, &["wait", "9999"]);
         assert_eq!(code, FAILED, "{out}");
         assert_eq!(out, "no submission 9999\n");
+    }
+
+    /// The line `sluice run` says a branch it passed by with.
+    fn passed_by(words: &str) -> String {
+        format!("{REFUSED} could not be read, passed by: {words}")
+    }
+
+    /// A submission from `worktree` to `branch`, on its tip.
+    fn submit_to(f: &Fakes, branch: &str, worktree: &str, path: &str) {
+        let head = f.world.work(&f.world.tip(branch), &[(path, Some("n"))]);
+        f.world.session(worktree, "agent", &head);
+        let (code, out) = sluice(f, &["submit", branch, "--worktree", worktree, "--no-wait"]);
+        assert_eq!(code, 0, "{out}");
+    }
+
+    /// [`queued`], with another bolt's submission queued as well.
+    fn two_bolts_queued() -> Fakes {
+        let f = queued(true);
+        f.world.init(OTHER, &[(".config/sluice.toml", POLICY)]);
+        submit_to(&f, OTHER, "unit/c", "plugin/c");
+        f
+    }
+
+    /// The state of submission `id`, as `sluice status <id>` reads it.
+    fn state_of(f: &Fakes, id: u64) -> String {
+        let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+        json(&out)["state"].as_str().unwrap_or_default().to_string()
+    }
+
+    /// 26, S64, rule core.14: `sluice run` passes by the branch it cannot
+    /// read, says so once while the same words stand, and lands every
+    /// other branch's work.
+    #[test]
+    fn sluice_run_passes_a_branch_by_and_lands_the_rest() {
+        let f = two_bolts_queued();
+        let (code, out) = sluice(&f, &["run", "--rounds", "3"]);
+        assert_eq!(code, 0, "{out}");
+        let said: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with(&format!("{REFUSED} ")))
+            .collect();
+        assert_eq!(said, [passed_by(UNREADABLE)], "{out}");
+        assert_eq!(state_of(&f, 1), "landed", "{out}");
+        assert_eq!(state_of(&f, 3), "landed", "{out}");
+    }
+
+    /// 26, 121: a branch read on one pass and refused again on the next
+    /// is said again.
+    #[test]
+    fn sluice_run_says_a_branch_refused_anew_again() {
+        let f = two_bolts_queued();
+        let between = |n: usize| match n {
+            1 => f.world.fail_state_reads(REFUSED, None),
+            2 => f.world.fail_state_reads(REFUSED, Some(UNREADABLE)),
+            _ => {}
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 3,
+            between: &between,
+        };
+        let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "3"]);
+        assert_eq!(code, 0, "{out}");
+        let said = out.lines().filter(|l| *l == passed_by(UNREADABLE)).count();
+        assert_eq!(said, 2, "{out}");
+    }
+
+    /// A fakes' host whose config names the systems it runs (87).
+    struct Naming {
+        host: support::FakeHost,
+        systems: Vec<String>,
+    }
+
+    impl sluice::exec::Host for Naming {
+        fn reserved(&self) -> usize {
+            self.host.reserved()
+        }
+
+        fn peer(&self) -> sluice_core::Peer {
+            sluice_core::Peer {
+                systems: Some(self.systems.clone()),
+                ..self.host.peer()
+            }
+        }
+
+        fn worktree(&self, dir: &str) -> anyhow::Result<String> {
+            self.host.worktree(dir)
+        }
+
+        fn lock_sessions(&self) -> anyhow::Result<Box<dyn std::any::Any>> {
+            self.host.lock_sessions()
+        }
+
+        fn begin_session(
+            &self,
+            held: &dyn std::any::Any,
+            run: &sluice::sessions::SessionRun,
+        ) -> anyhow::Result<()> {
+            self.host.begin_session(held, run)
+        }
+
+        fn end_session(&self, worktree: &str) -> anyhow::Result<()> {
+            self.host.end_session(worktree)
+        }
+
+        fn session_tasks(
+            &self,
+            worktree: &str,
+            tasks: &[sluice_seams::TaskProgress],
+        ) -> anyhow::Result<()> {
+            self.host.session_tasks(worktree, tasks)
+        }
+
+        fn run_dir(&self, run: &sluice_seams::RunHandle) -> Option<std::path::PathBuf> {
+            self.host.run_dir(run)
+        }
+
+        fn end_run(&self, run: &sluice_seams::RunHandle) -> anyhow::Result<()> {
+            self.host.end_run(run)
+        }
+
+        fn revision(&self, rev: &str) -> anyhow::Result<Option<String>> {
+            self.host.revision(rev)
+        }
+
+        fn name(&self) -> String {
+            self.host.name()
+        }
+
+        fn repository(&self) -> anyhow::Result<String> {
+            self.host.repository()
+        }
+
+        fn repository_gone(&self, repository: &str) -> bool {
+            self.host.repository_gone(repository)
+        }
+
+        fn holds_policy(&self) -> anyhow::Result<bool> {
+            self.host.holds_policy()
+        }
+
+        fn readers(&self) -> anyhow::Result<std::path::PathBuf> {
+            self.host.readers()
+        }
+
+        fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
+            self.host.default_branch()
+        }
+    }
+
+    /// 26, 87, S64, rule core.14: on a host whose config names its
+    /// systems, `sluice run` checks them against every branch's policy it
+    /// can read, passes by the one whose policy this sluice refuses, and
+    /// runs the rest's rounds.
+    #[test]
+    fn sluice_run_on_a_host_naming_its_systems_runs_past_a_refused_policy() {
+        let f = queued(false);
+        f.world.hand_commit(
+            BRANCH,
+            &[(
+                POLICY_PATH,
+                Some(&format!(
+                    "{POLICY}\n[systems]\nlinux-x64 = {{ os = \"linux\", arch = \"x86_64\" }}\n"
+                )),
+            )],
+        );
+        f.world.hand_commit(
+            REFUSED,
+            &[(
+                POLICY_PATH,
+                Some(&format!(
+                    "{POLICY}\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"
+                )),
+            )],
+        );
+        let host = Naming {
+            host: support::FakeHost {
+                world: f.world.clone(),
+                reserved: 0,
+            },
+            systems: vec!["linux-x64".into()],
+        };
+        let cli = Cli::try_parse_from(["sluice", "run", "--rounds", "1"]).unwrap();
+        let mut out = Vec::new();
+        let code = run(
+            cli,
+            f.seams(),
+            &host,
+            &(),
+            &(),
+            &f.clock,
+            &Rounds(Cell::new(0)),
+            &mut out,
+        )
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(code, 0, "{out}");
+        assert!(
+            out.lines().any(|l| l.starts_with(&passed_by(""))
+                && l.contains("Remove [[checkout.cache]] from .config/sluice.toml")),
+            "{out}"
+        );
+        assert_eq!(f.world.started().len(), 1, "{BRANCH}'s run started: {out}");
     }
 }
