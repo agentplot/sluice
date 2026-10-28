@@ -1570,6 +1570,77 @@ fn status_names_a_draft() {
     assert_eq!(doc["draft"], true, "{doc}");
 }
 
+/// Record 0065: run again under a time limit while its pull request waits
+/// for a review, `wt submit` pushes nothing and edits nothing; it follows
+/// the request as `sluice wait main` does, out of time with the document
+/// `--status` prints.
+#[test]
+fn run_again_follows_a_pull_request_waiting_for_a_review() {
+    let g = OnGitHub::new("pr-again-review", "reviews = 1");
+    let w = g.session("again", &[("a.txt", "a\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/again");
+    let n = pull.number;
+    let pushed = github::rev(g.bare.path(), "refs/heads/unit/again");
+    let writes = || {
+        let edit = format!("/repos/o/r/pulls/{n}");
+        g.gh.fake
+            .requests()
+            .iter()
+            .filter(|r| (r.method == "PATCH" && r.path == edit) || r.path == "/graphql")
+            .count()
+    };
+    let before = writes();
+    let out = g.wt_submit(&w, &["--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "pull_request": n, "branch": "main", "state": "waiting: needs 1 review",
+        })
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains(&format!(
+            "wt submit: following pull request #{n}, already open at this head"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("pushed"), "{said}");
+    assert_eq!(writes(), before);
+    assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/again"), pushed);
+    assert!(!g.pull_from("unit/again").draft);
+    assert!(w.exists());
+}
+
+/// Record 0065: a pull request sent back as a draft stands no more, so a
+/// run again with nothing committed submits: it marks the request ready
+/// for review at that head, and intake takes that head again.
+#[test]
+fn run_again_marks_a_draft_ready() {
+    let g = OnGitHub::new("pr-again-draft", "");
+    let w = g.session("drafted", &[("broken", "x\n")]);
+    let out = g.wt_submit(&w, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let pull = g.pull_from("unit/drafted");
+    assert!(pull.draft, "{pull:?}");
+
+    let out = g.wt_submit(&w, &[]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(!said.contains("following"), "{said}");
+    assert!(
+        said.contains(&format!("updated #{}", pull.number))
+            && said.contains("marked ready for review"),
+        "{said}"
+    );
+    let subs = g.of(pull.number);
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[1]["head"], pull.head.as_str());
+}
+
 /// No wait, its conditions hold: the submit answers with the submission
 /// sluice took the pull request in as, from its checkout `pull/<n>` at the
 /// head pushed, with the pull request beside it; `sluice wait <id>`
