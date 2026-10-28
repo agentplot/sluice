@@ -11,7 +11,7 @@
     "wake": {
       "type": "boolean",
       "title": "Wake on an outcome",
-      "description": "Start a turn telling an idle session when its submission lands, fails or conflicts.",
+      "description": "Ask sluice to tell this session its submissions' outcomes that nothing has told it, and start a turn with sluice's words.",
       "default": true
     },
     "forecast": {

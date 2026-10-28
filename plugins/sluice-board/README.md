@@ -78,9 +78,16 @@ sluice's queue inside a Claude Code session.
   ([below](#naming-a-sessions-branch)). It ends `· 1 held: release failed`
   while a checkout, worktree or preview is held because its release failed,
   and with nothing queued says that alone: `sluice: 1 held: release failed`.
-- **Wake**: when this session's submission lands, fails or conflicts, a
-  toast, and a turn telling the session the outcome, the blamed tests and
-  their logs. Turn the turn off with the `wake` option in `/config`.
+- **Wake**: when one of this session's submissions lands, fails or
+  conflicts, a toast. The board then asks sluice, with `sluice untold`, to
+  tell the session what nothing has told it yet, and starts a turn with
+  sluice's words; where the multiplexer the session runs in has been given
+  the outcome already, sluice tells nothing and no turn starts. The board
+  asks too when the session starts, so a session that restarted is told
+  what it missed. Turn the asking and the turn off with the `wake` option
+  in `/config`: the outcome then waits for another way to be told. The
+  board needs a sluice with `sluice untold`, and says so in a toast where
+  it has none.
 - **Forecast**: while this session's worktree has commits ahead of its
   branch and no submission of its own queued, the board runs `sluice
   submit <branch> --check --json` whenever the head, the branch or the
@@ -104,7 +111,7 @@ and then twice as long each time, up to a minute; a watch that stayed
 open a minute or more is followed by a second's wait again. Nothing is
 read in between: the band, the pane and the status line keep the last
 queue read until a watch prints the next, and an outcome decided
-meanwhile is told then.
+meanwhile is asked for then.
 Where sluice has records of no branch, the pane says nothing has
 been submitted yet, and that a submission shows there from when an agent
 in a worktree runs `sluice submit <branch>` until it lands. Where sluice
@@ -134,7 +141,7 @@ line and `Ask Claude to upgrade sluice.` in place of the queue, and the
 status line is empty, even where the board showed a queue before. The
 board keeps starting the watch as above, and `/sluice` starts it at
 once, so once sluice is upgraded the next watch's queue takes the line's
-place, and an outcome decided meanwhile is told then.
+place, and an outcome decided meanwhile is asked for then.
 A submission is this session's when its
 `from.path` is the session's worktree, or the session's own `sluice
 submit` / `wt submit` printed its number or its pull request.
