@@ -1330,11 +1330,10 @@ mod refused_alone {
     }
 
     /// The host's own `branch` moved, past the protection, to a commit
-    /// whose policy adds a `[[checkout.cache]]` table, which this sluice
-    /// refuses; the remote's copy is left clean (S64). The commit is made
-    /// in a worktree of its own, so the repository's HEAD still names its
+    /// whose policy is `edit` of the one it holds. The commit is made in a
+    /// worktree of its own, so the repository's HEAD still names its
     /// default branch.
-    fn refuse_own_ref(s: &Setup, branch: &str) {
+    fn own_policy(s: &Setup, branch: &str, edit: impl Fn(&str) -> String) {
         let dir = s
             .sessions
             .path()
@@ -1343,11 +1342,10 @@ mod refused_alone {
         s.repo
             .git(&["worktree", "add", "-q", "--detach", dir, branch]);
         let policy = Path::new(dir).join(".config/sluice.toml");
-        let mut text = std::fs::read_to_string(&policy).unwrap();
-        text.push_str("\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n");
-        std::fs::write(&policy, text).unwrap();
+        let text = std::fs::read_to_string(&policy).unwrap();
+        std::fs::write(&policy, edit(&text)).unwrap();
         s.repo
-            .git(&["-C", dir, "commit", "-q", "-am", "a checkout cache"]);
+            .git(&["-C", dir, "commit", "-q", "-am", "a refused policy"]);
         let at = s.repo.git(&["-C", dir, "rev-parse", "HEAD"]);
         s.repo.git(&[
             "-c",
@@ -1358,15 +1356,33 @@ mod refused_alone {
         ]);
     }
 
+    /// The host's own `branch` and origin's moved, past the protection, to
+    /// a commit whose policy adds a `[[checkout.cache]]` table, which this
+    /// sluice refuses: the host's own copy holds it as on deneb (S64), and
+    /// origin's, since the routing passes over the own copy's other fields
+    /// and reads the policy whole on the remote (record 0069), so the
+    /// branch is refused whichever copy a read takes.
+    fn refuse(s: &Setup, branch: &str) {
+        own_policy(s, branch, |p| format!("{p}{CACHE}"));
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/heads/{branch}"),
+        ]);
+    }
+
     /// The record a `sluice wait --json` ended with.
     fn waited(out: &Output) -> serde_json::Value {
         serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(out)))
     }
 
     /// 26, S64, rule core.11: the deneb case. The host's own ref of
-    /// `bolt/b`, a branch with state, holds a policy this sluice refuses
-    /// while origin's is clean; `sluice wait` on a submission to `main`
-    /// finds it past `bolt/b` and follows it to its landing.
+    /// `bolt/b`, a branch with state, holds a policy this sluice refuses,
+    /// and origin's as well; `sluice wait` on a submission to `main` finds
+    /// it past `bolt/b` and follows it to its landing.
     #[test]
     fn a_wait_on_main_passes_a_bolt_whose_own_ref_is_refused() {
         let s = Setup::new("refused-alone-wait", "origin");
@@ -1376,7 +1392,7 @@ mod refused_alone {
         s.repo.git(&["fetch", "-q", "origin"]);
         id(&s.submit_to("b", "bolt/b", "bolt/b"));
         let on_main = id(&s.submit_to("a", "main", "main"));
-        refuse_own_ref(&s, "bolt/b");
+        refuse(&s, "bolt/b");
         let out = s.sluice(&["status", "bolt/b"]);
         assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
 
@@ -1401,15 +1417,7 @@ mod refused_alone {
         s.repo.git(&["fetch", "-q", "origin"]);
         id(&s.submit_to("b", "bolt/b", "bolt/b"));
         let on_main = id(&s.submit_to("a", "main", "main"));
-        refuse_own_ref(&s, "bolt/b");
-        s.repo.git(&[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "push",
-            "-q",
-            "origin",
-            "bolt/b:refs/heads/bolt/b",
-        ]);
+        refuse(&s, "bolt/b");
         let out = s.sluice(&["status", "bolt/b"]);
         assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
 
@@ -1429,10 +1437,12 @@ mod refused_alone {
     }
 
     /// 26: the host's own `main`, the default branch, holds a policy this
-    /// sluice refuses, while the state is on origin and this host has read
-    /// it before. The branches are listed all the same: `sluice wait` on a
-    /// submission to `bolt/a` follows it to its landing, and the overview
-    /// shows `main` with its refusal and `bolt/a` whole.
+    /// sluice refuses where the routing reads it, `main`'s remote no
+    /// remote's name (record 0069), while the state is on origin and this
+    /// host has read it before. The branches are listed all the same:
+    /// `sluice wait` on a submission to `bolt/a` follows it to its
+    /// landing, and the overview shows `main` with its refusal and `bolt/a`
+    /// whole.
     #[test]
     fn a_refused_main_hides_no_branch_this_host_has_read() {
         let s = Setup::signing("refused-alone-main", &["main", "bolt/*"]);
@@ -1444,7 +1454,9 @@ mod refused_alone {
             .git(&["push", "-q", "origin", "bolt/a:refs/heads/bolt/a"]);
         s.repo.git(&["fetch", "-q", "origin"]);
         let on_bolt = id(&s.submit_to("a", "bolt/a", "bolt/a"));
-        refuse_own_ref(&s, "main");
+        own_policy(&s, "main", |p| {
+            p.replacen("remote = \"origin\"", "remote = 1", 1)
+        });
         let out = s.sluice(&["status", "main"]);
         assert!(!out.status.success(), "main still reads: {}", text(&out));
 
@@ -1469,7 +1481,7 @@ mod refused_alone {
         assert!(
             part("main")["unread"]
                 .as_str()
-                .is_some_and(|w| w.contains("Remove [[checkout.cache]]")),
+                .is_some_and(|w| w.contains("remote must be the name of a git remote")),
             "{v}"
         );
         assert!(part("bolt/a").get("unread").is_none(), "{v}");
