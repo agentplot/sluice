@@ -75,6 +75,25 @@ call's limit, and end no turn while the submission is undecided. A
 waiting `sluice submit main` is for a person at a terminal or a script,
 which nothing else needs to reach.
 
+Under worktrunk, wait with `wt submit` run again, the same way:
+
+```sh
+wt submit main --no-wait --json            # submit, as above
+wt submit main --timeout 9m --json         # in the background, again for as long as it exits 5
+```
+
+Run again where the worktree's submission at its head stands, queued,
+under test or landed, or its pull request is open and ready there, `wt
+submit` submits nothing: it follows that submission as `sluice wait main`
+does, with the same output, record and exits, and once it lands it
+releases the worktree and removes it, at once when it had already landed.
+`sluice wait` removes nothing, so never wait with it and then remove the
+landed worktree by hand. `--timeout` only follows: where nothing stands, or
+with `--no-wait`, `--check`, `--status`, `--after` or `--priority`, it exits
+`64` and submits nothing. A new commit, or a submission that was blamed,
+conflicted or was withdrawn, is submitted again by `wt submit main
+--no-wait`.
+
 Each `sluice wait --json` prints the submission's record however it ends:
 read its `state` and the exit. Exit `5` leaves it `queued`, `waiting`, `testing`, `passed` or
 `landing`; run `sluice wait` again. Never search `sluice status <branch>`'s
@@ -147,8 +166,9 @@ A background agent you start to work in a worktree, with the Agent tool's
 it. Tell it there to commit its work when it is done and submit it through
 sluice from that worktree, with `sluice submit <branch>` naming the branch
 it lands on, waiting as above (`--no-wait --json`, then `sluice wait <id>
---timeout 9m --json` in its background, again for as long as it exits
-`5`), and to report the outcome to you. The rest of the prompt is yours, written for
+--timeout 9m --json`, or under worktrunk `wt submit <branch> --timeout 9m
+--json`, in its background, again for as long as it exits `5`), and to
+report the outcome to you. The rest of the prompt is yours, written for
 the work.
 
 Work left committed in a worktree whose agent has ended is submitted by an

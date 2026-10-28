@@ -19,6 +19,18 @@ wt submit bolt/x                          # after
   them. Before removing, it runs `sluice release` in the worktree.
 - It takes everything `sluice submit` takes: `--check`, `--no-wait`,
   `--status`, `--after`, `--json`.
+- Run again in a worktree whose submission at its head is queued, under
+  test or landed, or whose pull request is open and ready there, it submits
+  nothing: it follows that submission as `sluice wait <branch>` does, with
+  its output and exits, and removes the worktree on landing on the same
+  terms. `--timeout 9m` bounds that wait, exit `5` when it runs out, so an
+  agent with capped tool calls submits with `wt submit bolt/x --no-wait
+  --json` and then runs `wt submit bolt/x --timeout 9m --json` in its
+  background, again while it exits `5`. Where nothing stands, `--timeout`
+  exits `64` and submits nothing.
+- `sluice wait` removes nothing: a worktree waited on with it stays after
+  its landing. Never remove a landed worktree by hand; run `wt submit`
+  again.
 
 ## Hooks in `.config/wt.toml`
 
