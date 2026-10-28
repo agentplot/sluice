@@ -102,19 +102,33 @@ row is pressed, and a second press SHALL fold it.
   tasks, and a press then a second press of its row shows the tasks and
   hides them again
 
-### Requirement: A session's outcome is delivered in sluice's words
+### Requirement: The board tells the host's user of a session's outcome
 
 A submission is the session's when its `from.path` is the session's
 worktree, or the session's own `sluice submit` or `wt submit` printed its
 number or its pull request. When an overview shows a landing, blame or
 conflict of one of the session's submissions that the overview before it
 did not show, the board SHALL raise a toast, and SHALL raise the host's
-notification for a blame. While waking is on, it SHALL then collect the
-session's pending outcomes by `sluice inbox` run in the session's
-worktree, and SHALL start a turn whose text is what sluice printed, as
-printed, and no turn when sluice printed nothing. The turn SHALL hold
-none of the board's own words. The toast and the notification are the
-host's user's and SHALL NOT be taken as a delivery to the session.
+notification for a blame.
+
+#### Scenario: Blamed, told to the host's user
+
+- **WHEN** the session's submission #13 is blamed for `cli:test`
+- **THEN** a toast says `sluice: #13 was blamed`, and the host's
+  notification is raised
+
+#### Scenario: Another session's outcome
+
+- **WHEN** an overview shows submission #20, not the session's, landed
+- **THEN** the board raises no toast and runs no `sluice inbox`
+
+### Requirement: A session's outcome is delivered in sluice's words
+
+While waking is on, once the board has raised the toast for one of the
+session's outcomes, it SHALL collect the session's pending outcomes by
+`sluice inbox` run in the session's worktree, and SHALL start a turn
+whose text is what sluice printed, as printed, and no turn when sluice
+printed nothing. The turn SHALL hold none of the board's own words.
 
 #### Scenario: Blamed while idle
 
@@ -131,10 +145,17 @@ host's user's and SHALL NOT be taken as a delivery to the session.
   notice into the session's pane, and `sluice inbox` prints nothing
 - **THEN** a toast says `sluice: #13 landed on main`, and no turn starts
 
-#### Scenario: Another session's outcome
+### Requirement: The toast is no delivery to the session
 
-- **WHEN** an overview shows submission #20, not the session's, landed
-- **THEN** the board raises no toast and runs no `sluice inbox`
+The toast and the notification are the host's user's and SHALL NOT be
+taken as a delivery to the session.
+
+#### Scenario: Toasted, still pending
+
+- **WHEN** a toast has said `sluice: #13 was blamed` and the
+  notification was raised, and `sluice inbox` then prints #13's notice
+- **THEN** a turn starts whose text is what `sluice inbox` printed, and
+  #13's outcome is not counted delivered by the toast
 
 ### Requirement: The band says when checks hold the queue back
 
