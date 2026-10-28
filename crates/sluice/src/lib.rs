@@ -2254,7 +2254,7 @@ fn wait_on(
                 return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
-        reading.reader.lead_once_free()?;
+        reading.reader.step(false)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }

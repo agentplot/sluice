@@ -131,7 +131,7 @@ pub fn run(
             return Ok(STOPPED);
         }
         // A lock it could not try leaves it following.
-        let _ = reader.lead_once_free();
+        let _ = reader.step(false);
     }
 }
 

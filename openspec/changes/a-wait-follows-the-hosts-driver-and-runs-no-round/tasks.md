@@ -6,7 +6,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 1. The driver's lock and the reader's step
 
-- [ ] 1.1 In `crates/sluice/src/reader.rs`, add the driver's file,
+- [x] 1.1 In `crates/sluice/src/reader.rs`, add the driver's file,
   `readers/<repository>.driver`, beside the reader's files (design: "The
   driver holds a lock of its own"):
   - `driver_live(dir, repository)` probes with a shared lock and drops
@@ -19,7 +19,7 @@ committed, run the gate with `sluice exec main`.
   reads as live; that a dropped one reads as not live; that a probe does
   not block a driver taking the lock; and that a second `Driver` taken
   while one is held reads as another's.
-- [ ] 1.2 Replace `Reader::lead_once_free` with `Reader::step(others_drive:
+- [x] 1.2 Replace `Reader::lead_once_free` with `Reader::step(others_drive:
   bool)`:
   - A reader lets go and follows when `others_drive` is true.
   - A follower takes a free lock only when `others_drive` is false.
