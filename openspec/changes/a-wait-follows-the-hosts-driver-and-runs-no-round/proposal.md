@@ -105,6 +105,7 @@ crates/sluice/src/reader.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/overview.rs
 crates/sluice/tests/cli.rs
+crates/sluice/tests/profiles/pull_requests.rs
 crates/sluice/tests/support/mod.rs
 site/src/content/docs/reference/commands.md
 site/src/content/docs/reference/state.md
