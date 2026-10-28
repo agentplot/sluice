@@ -7118,3 +7118,117 @@ fn status_sends_the_remotes_revision_from_a_bolt() {
     assert_eq!(f.world.copy_of(BRANCH), Some(made));
     assert_eq!(f.world.tip(BRANCH), landing);
 }
+
+// ---------------------------------------------------------------------------
+// A branch that cannot be read is refused alone (26, S64)
+// ---------------------------------------------------------------------------
+
+mod refused_alone {
+    use super::*;
+
+    /// The branch whose records cannot be read, listed before [`BRANCH`].
+    const REFUSED: &str = "bolt/b";
+
+    /// Submission 1 queued on [`BRANCH`] and 2 on `bolt/b`; with
+    /// `refused`, every read of `bolt/b`'s records then fails with
+    /// [`UNREADABLE`].
+    fn queued(refused: bool) -> Fakes {
+        let f = setup();
+        f.world.init(REFUSED, &[(".config/sluice.toml", POLICY)]);
+        work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+        let head = f
+            .world
+            .work(&f.world.tip(REFUSED), &[("plugin/b", Some("b"))]);
+        f.world.session("unit/b", "agent-b", &head);
+        sluice(
+            &f,
+            &["submit", REFUSED, "--worktree", "unit/b", "--no-wait"],
+        );
+        if refused {
+            f.world.fail_state_reads(REFUSED, Some(UNREADABLE));
+        }
+        f
+    }
+
+    /// 26, S64: a wait on a submission to another branch finds it past
+    /// the branch that cannot be read and follows it to its landing.
+    #[test]
+    fn a_wait_follows_its_submission_past_a_branch_that_cannot_be_read() {
+        let f = queued(true);
+        let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+        assert_eq!(code, LANDED, "{out}");
+        let v = json(&out);
+        assert_eq!(
+            (v["id"].clone(), v["state"].clone()),
+            (1.into(), "landed".into())
+        );
+    }
+
+    /// 26: status, amend and withdraw answer for a submission on another
+    /// branch as when the branch that cannot be read reads, and say
+    /// nothing of it.
+    #[test]
+    fn status_amend_and_withdraw_answer_as_when_every_branch_reads() {
+        let answers = |f: &Fakes| -> Vec<(i32, String)> {
+            [
+                &["status", "1"][..],
+                &["status", "1", "--json"],
+                &["amend", "1", "--priority", "1"],
+                &["amend", "1", "--priority", "2", "--json"],
+                &["withdraw", "1"],
+            ]
+            .iter()
+            .map(|args| sluice(f, args))
+            .collect()
+        };
+        let past = answers(&queued(true));
+        assert_eq!(past, answers(&queued(false)));
+        for (code, out) in &past {
+            assert_eq!(*code, 0, "{out}");
+            assert!(!out.contains(REFUSED), "{out}");
+        }
+    }
+
+    /// 26: a number on the branch that cannot be read is on none of the
+    /// branches read: said so with the branch and its words, never no
+    /// submission, exit 3; under `--json`, the internal error document.
+    #[test]
+    fn a_number_on_the_branch_that_cannot_be_read_names_it() {
+        let f = queued(true);
+        let named = format!("{REFUSED} could not be read: {UNREADABLE}");
+        let (code, out) = sluice(&f, &["wait", "2"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        assert_eq!(
+            out,
+            format!("submission 2 is on none of the branches sluice could read\n{named}\n")
+        );
+
+        let (code, out) = sluice(&f, &["status", "2", "--json"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        let v = json(&out);
+        assert_eq!(v["error"]["kind"], "internal", "{v}");
+        assert_eq!(
+            v["error"]["message"],
+            format!("submission 2 is on none of the branches sluice could read; {named}")
+        );
+        assert_eq!(v["error"]["next"], serde_json::json!(["sluice overview"]));
+
+        for args in [&["amend", "2", "--priority", "1"][..], &["withdraw", "2"]] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(code, sluice::INTERNAL, "{args:?}: {out}");
+            assert!(out.ends_with(&format!("{named}\n")), "{args:?}: {out}");
+            assert!(!out.contains("no submission"), "{args:?}: {out}");
+        }
+    }
+
+    /// 26: with every branch read, a number on none is still no
+    /// submission, exit 1.
+    #[test]
+    fn a_number_on_no_branch_when_every_branch_reads_is_no_submission() {
+        let f = queued(false);
+        let (code, out) = sluice(&f, &["wait", "9999"]);
+        assert_eq!(code, FAILED, "{out}");
+        assert_eq!(out, "no submission 9999\n");
+    }
+}
