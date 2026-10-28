@@ -13,6 +13,6 @@
   "tested": { "combination": "e20a6f9b48", "on": "c41e8f2d90", "submissions": [12, 13] },
   "result": "failed",
   "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21" } ],
-  "told": "2026-10-11T09:21:55Z",
-  "told_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
+  "delivered": "2026-10-11T09:21:55Z",
+  "delivered_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
 }
