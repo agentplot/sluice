@@ -15,7 +15,7 @@
 ## 3. Say it to the operator
 
 - [x] 3.1 In `site/src/content/docs/reference/state.md`, name `readers/<repository>.version` (the version of sluice that holds the lock) and `readers/<repository>.lease` (held by a watch of a newer sluice until it takes over the reading) in the file listing. In the paragraph on the one process that reads, add that a watch of a newer sluice takes over from an older one within a few seconds and the older one follows it, and that a sluice from before this takes no part, so it reads until its watch ends. Verify with `moon run site:prose`, every warning cleared.
-- [ ] 3.2 In `site/src/content/docs/reference/commands.md`, in `sluice overview`'s row, after "the others follow what it read", add that a watch of a newer sluice takes over the reading from an older one. Verify with `moon run site:prose`, every warning cleared.
+- [x] 3.2 In `site/src/content/docs/reference/commands.md`, in `sluice overview`'s row, after "the others follow what it read", add that a watch of a newer sluice takes over the reading from an older one. Verify with `moon run site:prose`, every warning cleared.
 
 ## 4. The gate
 
