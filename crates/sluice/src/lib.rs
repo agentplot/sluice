@@ -877,7 +877,9 @@ pub fn run(
                     subjects: subject,
                 };
                 if takes_pulls(&s, &req.branch)? {
-                    return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
+                    return submit_pull_group(
+                        &s, host, pulls, clock, req, no_wait, json, pause, out,
+                    );
                 }
                 return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
             }
@@ -904,7 +906,9 @@ pub fn run(
                         subject: subject.as_deref(),
                     }
                 };
-                return submit_pull(&s, pulls, clock, &worktree, &branch, mode, json, pause, out);
+                return submit_pull(
+                    &s, host, pulls, clock, &worktree, &branch, mode, json, pause, out,
+                );
             }
             if status {
                 return submitted(&s, clock, &worktree, &branch, json, out);
@@ -952,7 +956,7 @@ pub fn run(
                 Err(_) if takes_pulls(&s, &target)? => {
                     let mode = PullMode::Wait { deadline };
                     return submit_pull(
-                        &s, pulls, clock, &worktree, &target, mode, json, pause, out,
+                        &s, host, pulls, clock, &worktree, &target, mode, json, pause, out,
                     );
                 }
                 Err(_) => match last_submitted(&s, &worktree, &target)? {
@@ -2407,6 +2411,18 @@ impl Reading {
     }
 }
 
+/// A probe of whether `sluice run` drives the host's repository, each
+/// call a probe at that moment (135): the host's readers and repository
+/// are read once, and a host that cannot say where they are reads as
+/// having no driver, so a wait runs rounds rather than wait on nothing.
+fn driven_by(host: &dyn exec::Host) -> impl Fn() -> bool {
+    let at = host.readers().ok().zip(host.repository().ok());
+    move || {
+        at.as_ref()
+            .is_some_and(|(dir, repository)| reader::driver_live(dir, repository))
+    }
+}
+
 /// Submission `id`'s record, from the records of `branch`.
 fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
     s.state(id)?
@@ -2796,10 +2812,13 @@ enum PullMode<'a> {
 /// stands; [`PullMode::Wait`] follows the one open. While it waits, each
 /// read is tried again under the retry policy for the wait's five minutes
 /// (134), and one that still fails as the forge could not answer ends the
-/// wait as it could not read.
+/// wait as it could not read. Where `sluice run` lives on the host, it
+/// waits as [`wait_on`] does, running no round, and takes requests in only
+/// at a submit's first pass, which is its own act (135).
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pulls: &dyn PullRequests,
     clock: &dyn Clock,
     worktree: &str,
@@ -2867,8 +2886,18 @@ fn submit_pull(
     let what = format!("#{number}");
     // The submission the pull request was last read taken in as.
     let mut taken: Option<u64> = None;
+    let probe = driven_by(host);
+    let mut first = true;
     loop {
-        intake(pulls, seams, clock, branch);
+        // 135: probed once a pass. The first pass's intake is a submit's
+        // own, and `--status`'s: the answer names what it took in. Every
+        // other, and all of `sluice wait <branch>`'s, is the driver's
+        // while it lives.
+        let driven = probe();
+        if !driven || first && !matches!(mode, PullMode::Wait { .. }) {
+            intake(pulls, seams, clock, branch);
+        }
+        first = false;
         let followed = match pulls.follow(seams, clock, branch, number) {
             Ok(f) => Some(f),
             Err(e) if no_wait || status => return Err(e),
@@ -3014,15 +3043,17 @@ fn submit_pull(
                 return still(out, WAITING);
             }
         }
-        match s.round(branch) {
-            Ok(round) => {
+        let round = if driven { None } else { Some(s.round(branch)) };
+        match round {
+            None => {}
+            Some(Ok(round)) => {
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
                     tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return still(out, STOPPED);
                 }
@@ -3060,11 +3091,13 @@ fn submit_pull(
 /// submission said after its pull request, or none when any falls short
 /// of its conditions, each such named. It says where each stands; then,
 /// unless `no_wait`, it follows each, taking pull requests in and running
-/// rounds as a waiting pull-request submit does, until every one is
+/// rounds as a waiting pull-request submit does, or leaving both to
+/// `sluice run` where it lives on the host (135), until every one is
 /// decided, and reports each one's outcome in the order given.
 #[allow(clippy::too_many_arguments)]
 fn submit_pull_group(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pulls: &dyn PullRequests,
     clock: &dyn Clock,
     req: GroupRequest,
@@ -3129,8 +3162,15 @@ fn submit_pull_group(
     let again = format!("sluice wait {branch}");
     // 122: what failed after a landing, said once the outcomes are.
     let mut after = Vec::new();
+    let probe = driven_by(host);
+    let mut first = true;
     let stopped = 'wait: loop {
-        intake(pulls, seams, clock, branch);
+        // 135: as `submit_pull`, the first pass's intake the submit's own.
+        let driven = probe();
+        if !driven || first {
+            intake(pulls, seams, clock, branch);
+        }
+        first = false;
         for (i, o) in opened.iter().enumerate() {
             if decided[i].is_some() {
                 continue;
@@ -3165,15 +3205,17 @@ fn submit_pull_group(
         if no_wait || decided.iter().all(Option::is_some) {
             break None;
         }
-        match s.round(branch) {
-            Ok(round) => {
+        let round = if driven { None } else { Some(s.round(branch)) };
+        match round {
+            None => {}
+            Some(Ok(round)) => {
                 exec::tell_abandoned(out, json, &round.released)?;
                 exec::tell_releases(out, json, &round.releases)?;
                 if !json && matches!(round.step, Step::Stepped | Step::Held) {
                     tell_hold(out, branch, round.held.as_ref(), &mut said_hold)?;
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     break Some(STOPPED);
                 }

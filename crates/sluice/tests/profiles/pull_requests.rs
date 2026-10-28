@@ -444,6 +444,16 @@ impl OnGitHub {
         }
         self.of(n)
     }
+
+    /// The repository's driver on the host, the test's own, until
+    /// dropped: a `sluice run` living beside the commands it starts (135).
+    fn driver(&self) -> sluice::reader::Driver {
+        let readers = self.state.path().join("sluice").join("readers");
+        let repository = std::fs::canonicalize(self.repo.dir().join(".git")).unwrap();
+        sluice::reader::Driver::take(&readers, repository.to_str().unwrap())
+            .unwrap()
+            .expect("no driver of the repository yet")
+    }
 }
 
 fn text(out: &Output) -> String {
@@ -2082,6 +2092,91 @@ fn wait_follows_a_pull_requests_submission() {
         "{record}"
     );
     assert!(record.get("pull_request").is_none(), "{record}");
+}
+
+/// 135: beside a live driver, `sluice wait <branch>` takes no pull request
+/// in and runs no round: a request ready to be taken in is still not, out
+/// of time.
+#[test]
+fn a_wait_on_a_pull_request_beside_a_driver() {
+    let g = OnGitHub::new("pr-wait-driver", "reviews = 1");
+    let w = g.session("driven", &[("d.txt", "d\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let pull = g.pull_from("unit/driven");
+    g.gh.forge
+        .review(pull.number, "reviewer", "APPROVED", &pull.head)
+        .unwrap();
+    let _driver = g.driver();
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["wait", "main", "--timeout", "2s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["pull_request"], pull.number, "{doc}");
+    assert!(g.of(pull.number).is_empty(), "{:?}", g.subs());
+}
+
+/// 135: a pull request's submit beside a live driver is the submit's own
+/// act: it opens the pull request, takes it in, and answers with its
+/// submission, as where no driver lives.
+#[test]
+fn a_pull_requests_submit_beside_a_driver() {
+    let g = OnGitHub::new("pr-submit-driver", "");
+    let w = g.session("submitted", &[("s.txt", "s\n")]);
+    let _driver = g.driver();
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let n = g.pull_from("unit/submitted").number;
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], id);
+    assert_eq!(subs[0]["state"], "queued");
+}
+
+/// 135: a pull request's waiting submit beside a live driver takes its
+/// request in at its first pass, and runs no round after: its submission
+/// stays queued while the driver lives.
+#[test]
+fn a_pull_requests_waiting_submit_beside_a_driver() {
+    let g = OnGitHub::new("pr-waiting-driver", "");
+    let w = g.session("waiting", &[("w.txt", "w\n")]);
+    let _driver = g.driver();
+    let mut child = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--json"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(60);
+    let n = loop {
+        if let Some(p) = g.gh.forge.by_ref("unit/waiting").unwrap() {
+            if !g.of(p.number).is_empty() {
+                break p.number;
+            }
+        }
+        assert!(Instant::now() < until, "never taken in");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Two passes more of the submit's, each of which would land it.
+    std::thread::sleep(Duration::from_secs(7));
+    let alive = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(alive, "the submit ended beside the driver");
+    let subs = g.of(n);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["state"], "queued", "{subs:?}");
 }
 
 #[test]

@@ -96,7 +96,7 @@ committed, run the gate with `sluice exec main`.
   - A waiting `sluice submit` and a group submit beside a held driver,
     which run no round.
   - "A wait follows a watch": no driver, so rounds run as before.
-- [ ] 4.2 In `submit_pull` and `submit_pull_group`, probe once per pass:
+- [x] 4.2 In `submit_pull` and `submit_pull_group`, probe once per pass:
   - Keep the first pass's intake for a submit and `--status`.
   - Skip every later intake, and every round, while a driver lives.
   - Under `PullMode::Wait`, take nothing in at all while a driver lives.
