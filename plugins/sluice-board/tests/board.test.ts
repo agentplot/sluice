@@ -42,6 +42,7 @@ import {
   pullsOf,
   recentInWay,
   recentKeys,
+  rewatchWait,
   shown,
   signature,
   statusLine,
@@ -715,6 +716,23 @@ describe("hosts", () => {
     expect(hostsLine([{ host: "box", held: 0, room: 4, lapsed: false }])).toBe(
       "1 host, room for 4",
     );
+  });
+});
+
+describe("the watch started again", () => {
+  test("the wait doubles from a second to a minute for watches that end at once", () => {
+    const waits: number[] = [];
+    let last: number | null = null;
+    for (let i = 0; i < 8; i++) {
+      last = rewatchWait(last, 0);
+      waits.push(last);
+    }
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+  });
+
+  test("a watch open a minute starts the count over; one open less does not", () => {
+    expect(rewatchWait(60000, 600_000)).toBe(1000);
+    expect(rewatchWait(4000, 59_999)).toBe(8000);
   });
 });
 

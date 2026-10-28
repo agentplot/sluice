@@ -251,7 +251,10 @@ off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 
 It reads everything from `sluice overview --json --watch`, so it needs
-sluice 0.12 or later. The band and the status line stay silent in a
+sluice 0.12 or later. When the watch ends, the board starts it again,
+waiting a second and then longer each time up to a minute, and never
+polls; the band and the pane keep the last queue read meanwhile.
+The band and the status line stay silent in a
 repository with no queue. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 

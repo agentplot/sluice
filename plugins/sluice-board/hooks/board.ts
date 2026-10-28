@@ -821,6 +821,27 @@ export function openedText(isFullscreen: boolean): string {
     : "sluice's queue is open above the prompt. Esc, its close button or /sluice again closes it.";
 }
 
+/** The first wait before the watch is started again, and the longest. */
+const REWATCH_FIRST = 1000;
+const REWATCH_MOST = 60_000;
+
+/**
+ * How long to wait before starting `sluice overview --json --watch` again,
+ * from the last wait (null before the first) and how long the watch that
+ * ended was open, in milliseconds: a second, then twice the last wait, at
+ * most a minute. A watch ends only when killed, replaced or its repository
+ * is gone, and a new one follows the host's reader (129; ADR 0056).
+ *
+ * The count starts over only after a watch open a minute: one that prints
+ * an error and exits at once, as a sluice whose repository is gone does,
+ * would otherwise be started again every second, a faster poll than the
+ * one this replaces; this way the board starts about one a minute at most.
+ */
+export function rewatchWait(last: number | null, open: number): number {
+  if (last === null || open >= REWATCH_MOST) return REWATCH_FIRST;
+  return Math.min(last * 2, REWATCH_MOST);
+}
+
 /**
  * Why `sluice overview --json` gave no overview: the command could not be
  * started (`got` null), else sluice's first line on stderr, else its exit.

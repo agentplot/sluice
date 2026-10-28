@@ -1,5 +1,5 @@
 import type { On } from "claude-code";
-import type { Engine, TestBody } from "claude-code/testing";
+import type { Engine, MockClock, TestBody } from "claude-code/testing";
 import { expect, mock, test } from "claude-code/testing";
 
 import type { Flaky, Mine, Overview } from "../types";
@@ -154,6 +154,58 @@ function host(
     seen.prompts.push(e.text);
     return { text: e.text };
   });
+}
+
+/**
+ * The host's `sluice overview --json --watch`, as the test drives it: each
+ * watch stays open, printing what the test hands it, until the test ends it;
+ * while `failing`, one fails to start. It keeps when each watch started and
+ * ended, by the mocked clock.
+ */
+function watches(on: On, clock: MockClock) {
+  type Open = { lines: string[]; ended: boolean; wake: () => void };
+  let open: Open | null = null;
+  const w = {
+    failing: false,
+    started: [] as number[],
+    ended: [] as number[],
+    isOpen: () => open !== null,
+    /** Prints `text` on the open watch as it is. */
+    async say(text: string) {
+      open!.lines.push(text);
+      open!.wake();
+      await clock.settle();
+    },
+    /** Prints `d` on the open watch, as one line. */
+    print(d: object) {
+      return w.say(`${JSON.stringify(d)}\n`);
+    },
+    /** Ends the open watch, as one killed ends. */
+    async end() {
+      open!.ended = true;
+      open!.wake();
+      await clock.settle();
+    },
+  };
+  on("process.spawn", async function* () {
+    w.started.push(clock.now());
+    if (w.failing) throw new Error("sluice: command not found");
+    const me: Open = { lines: [], ended: false, wake: () => undefined };
+    open = me;
+    try {
+      for (;;) {
+        const text = me.lines.shift();
+        if (text !== undefined) yield { stream: "stdout" as const, text };
+        else if (me.ended) break;
+        else await new Promise<void>((woken) => (me.wake = woken));
+      }
+    } finally {
+      if (open === me) open = null;
+      w.ended.push(clock.now());
+    }
+    return { value: { code: null, signal: "SIGTERM" } };
+  });
+  return w;
 }
 
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120 } as never;
@@ -834,25 +886,23 @@ const GONE = {
   error: { kind: "internal", message: "reading the records of main: it is gone", next: [] },
 };
 
-test("an overview's error is one line in the band, from --watch or a poll, until a document comes", async ($, on) => {
+test("an overview's error is one line in the band, from --watch, until a document comes", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  // The watch prints a document, then fails; the poll answers `once`.
-  let once = { exitCode: 0, stdout: JSON.stringify(overview()) };
+  const reads: string[] = [];
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
-    if (argv === "sluice overview --json") return { value: { ...once, stderr: "", ...WHOLE } };
+    if (argv === "sluice overview --json") {
+      reads.push(argv);
+      return { value: { exitCode: 0, stdout: JSON.stringify(overview()), stderr: "", ...WHOLE } };
+    }
     if (argv === "git rev-parse --show-toplevel")
       return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: "", ...WHOLE } };
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });
-  on("process.spawn", async function* () {
-    yield { stream: "stdout" as const, text: `${JSON.stringify(overview())}\n` };
-    yield { stream: "stdout" as const, text: `${JSON.stringify(GONE)}\n` };
-    return { value: { code: 3, signal: null } };
-  });
+  const watch = watches(on, clock);
   on("ui.status", () => ({ value: undefined }));
   const band = async () => {
     const b = await $.ui.mount({
@@ -869,19 +919,27 @@ test("an overview's error is one line in the band, from --watch or a poll, until
 
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  // The watch prints a document, then fails.
+  await watch.print(overview());
+  await watch.print(GONE);
+  await watch.end();
   expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
 
-  await clock.advance(3000);
+  // The watch started again prints a document, then fails.
+  await clock.advance(1000);
+  await watch.print(overview());
   expect((await band()).some((t) => QUEUE.test(t))).toBe(true);
-
-  once = { exitCode: 3, stdout: JSON.stringify(GONE) };
-  await clock.advance(3000);
+  await watch.print(GONE);
+  await watch.end();
   expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
 
-  // A poll that prints nothing it can read leaves the band as it was.
-  once = { exitCode: 3, stdout: "" };
-  await clock.advance(3000);
+  // A watch that prints a line it can't read leaves the band as it was, and stays open.
+  await clock.advance(2000);
+  await watch.say("not a document\n");
   expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
+  expect(watch.started).toHaveLength(3);
+  expect(watch.isOpen()).toBe(true);
+  expect(reads).toHaveLength(1);
 });
 
 /** The engine's record of the open panes, and of each open the board asked for. */
@@ -1193,6 +1251,172 @@ test("two good reads of sluice start one watch between them", async ($, on) => {
   expect(n.watches).toBe(1);
 });
 
+/**
+ * A host whose first read of the overview is `first`, each read kept in
+ * `ran`, and whose watch the test drives.
+ */
+function watchedHost(
+  on: On,
+  clock: MockClock,
+  first: Overview,
+  seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
+) {
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e) => {
+    const argv = e.argv.join(" ");
+    ran.push(argv);
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
+    if (argv === "sluice overview --json") return out(JSON.stringify(first));
+    if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
+    return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+  });
+  on("ui.status", ($, e) => {
+    seen.status.push(e.text);
+    return { value: undefined };
+  });
+  on("ui.toast", ($, e) => {
+    seen.toasts.push(e.text);
+    return { value: undefined };
+  });
+  on("prompt.submit", ($, e) => {
+    seen.prompts.push(e.text);
+    return { text: e.text };
+  });
+  return watches(on, clock);
+}
+
+/** Moves the clock `ms` on, and finds the watch started again then and not before. */
+async function startedAgainAfter(clock: MockClock, watch: ReturnType<typeof watches>, ms: number) {
+  const n = watch.started.length;
+  await clock.advance(ms - 1);
+  expect(watch.started).toHaveLength(n);
+  await clock.advance(1);
+  expect(watch.started).toHaveLength(n + 1);
+}
+
+/** The fixture with nothing under test, and #13, this session's, queued. */
+function queued13(): Overview {
+  const d = overview();
+  const main = d.branches[0]!;
+  main.candidates = [];
+  for (const s of main.submissions) s.state = "queued";
+  return d;
+}
+
+/** The same, then #13 landed as 5d6e7f8a9b. */
+function landed13(): Overview {
+  const d = queued13();
+  const main = d.branches[0]!;
+  main.submissions = main.submissions.filter((s) => s.id !== 13);
+  main.depth = 2;
+  main.recent.push({
+    schema: "sluice/log@1",
+    at: "2026-10-16T19:46:00Z",
+    event: "landed",
+    ids: [13],
+    to: "5d6e7f8a9b",
+  });
+  return d;
+}
+
+const READ = "sluice overview --json";
+
+test("a watch that ends is started again a second later, and what it prints is told", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, queued13(), seen);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(queued13());
+  await clock.advance(5000);
+  await watch.end();
+
+  await startedAgainAfter(clock, watch, 1000);
+  expect(watch.started[1]! - watch.ended[0]!).toBe(1000);
+  await watch.print(landed13());
+  expect(seen.toasts).toContain("sluice: #13 landed on main");
+  expect(seen.prompts).toEqual(["[sluice] Your submission #13 landed on main as 5d6e7f8."]);
+  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+});
+
+test("a watch that can't be started is tried 1, 2, 4, 8, 16 and 32 s apart, then every minute, and nothing read between", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  watch.failing = true;
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  for (const gap of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
+    await startedAgainAfter(clock, watch, gap);
+  expect(watch.started.slice(1).map((t, i) => t - watch.started[i]!)).toEqual([
+    1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000,
+  ]);
+  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: "sluice main · 1 submission · #3 waiting" }),
+  ).toBeDefined();
+  await band.unmount();
+});
+
+test("a watch killed after ten minutes is started again a second later", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await clock.advance(600_000);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+  expect(watch.started).toEqual([NOW, NOW + 601_000]);
+});
+
+test("a watch open ten minutes after the waits grew to a minute is started again a second later", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  watch.failing = true;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  for (const gap of [1000, 2000, 4000, 8000, 16000, 32000])
+    await startedAgainAfter(clock, watch, gap);
+  // The next wait is a minute, and that watch stays open.
+  watch.failing = false;
+  await startedAgainAfter(clock, watch, 60_000);
+  expect(watch.isOpen()).toBe(true);
+  await clock.advance(600_000);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+});
+
+test("/sluice twice with the watch open leaves one watch running", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, overview(), nothingSeen());
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toHaveLength(1);
+  expect(watch.isOpen()).toBe(true);
+  // No other is started until it ends.
+  await clock.advance(60_000);
+  expect(watch.started).toHaveLength(1);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+});
+
 test("a failure opens in place, folds, and moves no one", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
@@ -1425,7 +1649,7 @@ test(
   conflictOpens([], "in the way: what main has landed"),
 );
 
-/** What a forecast host answers, changed as a test goes. */
+/** What a forecast host answers, changed as a test goes; `doc` is its first read. */
 type World = { doc: Overview; head: string; answer: object; forecasts: number };
 
 /** The fixture with #13, this session's, gone from main's queue. */
@@ -1446,12 +1670,13 @@ const WITH_217 = {
 };
 
 /**
- * A host whose overview is `w.doc`, read by a poll every 3 s (the watch
- * ends at once), whose worktree is 4 commits ahead at `w.head`, and whose
- * forecast says `w.answer`.
+ * A host whose first read of the overview is `w.doc`, and whose watch the
+ * test hands each later document to; whose worktree is 4 commits ahead at
+ * `w.head`, and whose forecast says `w.answer`.
  */
 function forecastHost(
   on: On,
+  clock: MockClock,
   w: World,
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
 ) {
@@ -1470,11 +1695,6 @@ function forecastHost(
     }
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });
-  on("process.spawn", async function* () {
-    // The watch ends at once, so the board polls.
-    yield* [];
-    return { value: { code: 1, signal: null } };
-  });
   on("ui.status", ($, e) => {
     seen.status.push(e.text);
     return { value: undefined };
@@ -1488,6 +1708,7 @@ function forecastHost(
     seen.prompts.push(e.text);
     return { text: e.text };
   });
+  return watches(on, clock);
 }
 
 function nothingSeen() {
@@ -1569,15 +1790,14 @@ test("main landing a change to the same lines starts one turn, once, a reload in
   await clock.set(NOW);
   const w: World = { doc: free(), head: "h1", answer: CLEAR, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(w.forecasts).toBe(1);
   expect(seen.prompts).toEqual([]);
 
-  w.doc = free("b2c3d4e5f6");
   w.answer = LANDED;
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(w.forecasts).toBe(2);
   expect(seen.prompts).toEqual([
     "[sluice] Your work would conflict with what main has landed, in docs/builds.md. " +
@@ -1586,12 +1806,12 @@ test("main landing a change to the same lines starts one turn, once, a reload in
   expect(seen.toasts).toContain("sluice: your work would conflict with main in docs/builds.md");
 
   // Nothing it rests on moved: no forecast.
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(w.forecasts).toBe(2);
 
   // A reload tells nothing again.
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(seen.prompts).toHaveLength(1);
 });
 
@@ -1607,7 +1827,7 @@ test("a conflict with a queued submission names it, and its failing clears it on
   });
   const w: World = { doc: d0, head: "h1", answer: CLEAR, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(w.forecasts).toBe(0);
@@ -1626,9 +1846,8 @@ test("a conflict with a queued submission names it, and its failing clears it on
     id: 220,
     paths: ["docs/builds.md"],
   });
-  w.doc = d1;
   w.answer = WITH_217;
-  await clock.advance(3000);
+  await watch.print(d1);
   expect(seen.prompts.some((p) => p.includes("with #217 (bolt/runner), in docs/builds.md"))).toBe(
     true,
   );
@@ -1637,13 +1856,12 @@ test("a conflict with a queued submission names it, and its failing clears it on
   // #217 fails; the head has not moved.
   const d2 = free();
   d2.branches[0]!.recent = d1.branches[0]!.recent;
-  w.doc = d2;
   w.answer = CLEAR;
-  await clock.advance(3000);
+  await watch.print(d2);
   expect(seen.prompts.slice(told)).toEqual([
     "[sluice] Your work no longer conflicts with main or anything queued. #220 can be submitted again: `sluice submit main`.",
   ]);
-  await clock.advance(3000);
+  await watch.print(d2);
   expect(seen.prompts).toHaveLength(told + 1);
 });
 
@@ -1658,7 +1876,7 @@ test("the forecast's conflict is a row under its branch, kept across a reload un
   });
   const w: World = { doc: d1, head: "h1", answer: WITH_217, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(w.forecasts).toBe(1);
@@ -1695,15 +1913,14 @@ test("the forecast's conflict is a row under its branch, kept across a reload un
 
   // A reload keeps it.
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  await clock.advance(3000);
+  await watch.print(d1);
   pane = await mount();
   expect(await pane.find({ type: "Text", text: row })).toBeDefined();
   await pane.unmount();
 
   // #217 fails: the next forecast finds no conflict, and the row goes.
-  w.doc = free();
   w.answer = CLEAR;
-  await clock.advance(3000);
+  await watch.print(free());
   pane = await mount();
   expect(await pane.find({ type: "Text", text: /your work would conflict/ })).toBeUndefined();
   await pane.unmount();
@@ -1714,17 +1931,16 @@ test("a conflict cleared by the agent's own merge starts no turn", async ($, on)
   await clock.set(NOW);
   const w: World = { doc: free(), head: "h1", answer: CLEAR, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  w.doc = free("b2c3d4e5f6");
   w.answer = LANDED;
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(seen.prompts).toHaveLength(1);
 
   w.head = "h2";
   w.answer = CLEAR;
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(w.forecasts).toBe(3);
   expect(seen.prompts).toHaveLength(1);
 });
@@ -1734,7 +1950,7 @@ test("a conflict there when the session starts is a toast, not a turn", async ($
   await clock.set(NOW);
   const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(w.forecasts).toBe(1);
@@ -1752,7 +1968,7 @@ test("a forecast conflict with no paths and a session state with no ids draw as 
   });
   const w: World = { doc: free(), head: "h1", answer: { conflict: { with: [] } }, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, w, seen);
+  forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(w.forecasts).toBe(1);
@@ -1779,11 +1995,10 @@ test("SLUICE_FORECAST=0 turns forecasting off", async ($, on) => {
   await clock.set(NOW);
   mock.env(on, { SLUICE_FORECAST: "0" });
   const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
-  forecastHost(on, w, nothingSeen());
+  const watch = forecastHost(on, clock, w, nothingSeen());
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  w.doc = free("b2c3d4e5f6");
-  await clock.advance(3000);
+  await watch.print(free("b2c3d4e5f6"));
   expect(w.forecasts).toBe(0);
 });
 
@@ -1794,11 +2009,10 @@ test(
     const clock = mock.clock(on);
     await clock.set(NOW);
     const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
-    forecastHost(on, w, nothingSeen());
+    const watch = forecastHost(on, clock, w, nothingSeen());
     await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
     await clock.settle();
-    w.doc = free("b2c3d4e5f6");
-    await clock.advance(3000);
+    await watch.print(free("b2c3d4e5f6"));
     expect(w.forecasts).toBe(0);
   },
 );
