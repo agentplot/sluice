@@ -116,16 +116,25 @@ impl Follow {
             .filter(Value::is_object)
     }
 
-    /// The lead, once the reader has stopped and the lock is free.
+    /// The lead, once the reader has stopped and the lock is free. An
+    /// earlier reader's document saying the repository had no sluice is
+    /// removed before the lead reads, so no watch that starts meanwhile
+    /// ends on it; a removal that fails is passed over, as the lead's first
+    /// write replaces it (129).
     pub fn try_lead(&self) -> Result<Option<Lead>> {
         let path = &self.files.lock;
         let lock = File::create(path).with_context(|| format!("creating {}", path.display()))?;
         match lock.try_lock() {
-            Ok(()) => Ok(Some(Lead {
-                _lock: lock,
-                files: self.files.clone(),
-                last: None,
-            })),
+            Ok(()) => {
+                if self.read().is_some_and(|doc| no_sluice(&doc)) {
+                    let _ = std::fs::remove_file(&self.files.doc);
+                }
+                Ok(Some(Lead {
+                    _lock: lock,
+                    files: self.files.clone(),
+                    last: None,
+                }))
+            }
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(e)) => {
                 Err(e).with_context(|| format!("locking {}", path.display()))
@@ -262,6 +271,30 @@ mod tests {
         let follow = follow(Reader::take(&s.0, &repository).unwrap());
         lead.write(&doc("2026-10-25T09:00:00Z", 1)).unwrap();
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
+    }
+
+    /// 129: an earlier reader's document saying the repository had no
+    /// sluice is gone once a lead takes the lock; any other stays for the
+    /// followers until the lead writes.
+    #[test]
+    fn a_lead_removes_an_earlier_readers_finding_of_no_sluice() {
+        let s = Scratch::new("no-sluice");
+        let mut ended = doc("2026-10-25T09:00:00Z", 0);
+        ended["branches"] = serde_json::json!([]);
+        ended["set_up"] = false.into();
+        let mut first = lead(Reader::take(&s.0, REPO).unwrap());
+        first.write(&ended).unwrap();
+        let next = follow(Reader::take(&s.0, REPO).unwrap());
+        assert_eq!(next.read(), Some(ended.clone()));
+        drop(first);
+        let mut second = next.try_lead().unwrap().expect("the lock, its holder gone");
+        assert_eq!(next.read(), None);
+        assert!(!next.files.doc.exists());
+
+        second.write(&doc("2026-10-25T09:00:01Z", 1)).unwrap();
+        drop(second);
+        let _third = lead(Reader::take(&s.0, REPO).unwrap());
+        assert_eq!(next.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
     }
 
     /// A half-written temporary file is never read: a follower reads the

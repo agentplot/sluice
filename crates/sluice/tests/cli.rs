@@ -3190,6 +3190,61 @@ fn a_follower_ends_on_a_document_saying_the_repository_has_no_sluice() {
     assert_eq!(lines, [doc, ended], "{out}");
 }
 
+/// 129: once sluice is set up, a watch that ended leaves nothing that
+/// ends the next: it reads the queues again and goes on.
+#[test]
+fn a_watch_goes_on_once_sluice_is_set_up_after_one_ended() {
+    let f = never_set_up();
+    let once = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &once, &["overview", "--json", "--watch"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(readers_doc().expect("a document")["set_up"], false);
+    f.world.hand_commit("main", &[(POLICY_PATH, Some(POLICY))]);
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert!(lines[0].get("set_up").is_none(), "{out}");
+    assert_eq!(readers_doc().as_ref(), Some(&lines[0]));
+}
+
+/// 129: a watch that starts after a new reader took the lock, and before
+/// it wrote, follows: it ends on no earlier reader's finding, and prints
+/// the new reader's document once it is written.
+#[test]
+fn a_watch_that_starts_while_the_new_reader_reads_follows_it() {
+    let f = setup();
+    let doc = seven_testing();
+    rewrite_readers_doc(&no_sluice_doc());
+    let reader = match sluice::reader::Reader::take(&support::readers(), REPOSITORY).unwrap() {
+        sluice::reader::Reader::Lead(lead) => RefCell::new(lead),
+        sluice::reader::Reader::Follow(_) => panic!("a reader of {REPOSITORY} already"),
+    };
+    let between = |n: usize| {
+        if n == 2 {
+            reader.borrow_mut().write(&doc).unwrap();
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, [doc], "{out}");
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();
