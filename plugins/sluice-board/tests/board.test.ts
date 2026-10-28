@@ -34,8 +34,10 @@ import {
   latest,
   learn,
   moving,
+  NOT_SET_UP_LINES,
   namedFirst,
   namedLine,
+  notSetUp,
   noWatch,
   openedText,
   outcomes,
@@ -770,6 +772,26 @@ describe("a sluice with no watch", () => {
       expect(cannotFollow(none)).toBe(
         "can't follow this sluice: it has no watch; the board needs sluice 0.12 or later",
       );
+  });
+});
+
+describe("a repository with no sluice", () => {
+  test("is told from an overview with set_up false, and from nothing else", () => {
+    const ended: Overview = { ...overview(), branches: [], set_up: false };
+    expect(notSetUp(ended)).toBe(true);
+    expect(isOverview(ended)).toBe(true);
+    expect(notSetUp(overview())).toBe(false);
+    expect(notSetUp({ ...overview(), branches: [] })).toBe(false);
+    const failed = { error: { kind: "internal", message: "gone", next: [] }, set_up: false };
+    for (const v of [failed, { set_up: false }, null, "set_up", {}])
+      expect(notSetUp(v)).toBe(false);
+  });
+
+  test("the pane says so, and how to set it up", () => {
+    expect([...NOT_SET_UP_LINES]).toEqual([
+      "sluice isn't set up in this repository.",
+      "Ask Claude to set sluice up in this repository.",
+    ]);
   });
 });
 

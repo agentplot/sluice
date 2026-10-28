@@ -25,6 +25,20 @@ export function isOverview(v: unknown): v is Overview {
 }
 
 /**
+ * Whether `v` is the overview a watch ends on where the repository has no
+ * sluice: no records, and no branch the host holds with its policy (129).
+ */
+export function notSetUp(v: unknown): boolean {
+  return isOverview(v) && v.set_up === false;
+}
+
+/** What the pane says where `/sluice`'s watch, too, found no sluice in the repository. */
+export const NOT_SET_UP_LINES = [
+  "sluice isn't set up in this repository.",
+  "Ask Claude to set sluice up in this repository.",
+] as const;
+
+/**
  * The message of the error document a failing overview prints
  * (`{"error":{"kind","message","next"}}`), on one line; null for anything else.
  */

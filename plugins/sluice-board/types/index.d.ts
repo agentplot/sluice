@@ -159,6 +159,8 @@ export type Overview = {
   room?: Room;
   /** The hosts serving a remote, by their last sign of life. */
   hosts?: OverviewHost[];
+  /** `false` on a watch's last line where the repository has no sluice (129); absent otherwise. */
+  set_up?: false;
 };
 
 /** A preview of a landed revision, and the addresses its stack answers on. */
