@@ -10,7 +10,7 @@ the work is committed.
 
 ## 1. The records
 
-- [ ] 1.1 In `crates/sluice-core/src/records.rs`, add `Submission::told_outcome() -> Option<Told>`, the outcome a round would tell for a landed, failed or conflicting submission, from its record (`landed_as`; failed checks, tested combination and its submissions, timed out from `result`, logs; conflict paths and submissions), and `Submission::notification()`, `<id>:landed|failed|conflict`, the id the round's outbox gives it (design, "The words"; "Marking told"); verify unit tests for each of the three states, a timed-out failure, and `None` for queued and withdrawn.
+- [x] 1.1 In `crates/sluice-core/src/records.rs`, add `Submission::told_outcome() -> Option<Told>`, the outcome a round would tell for a landed, failed or conflicting submission, from its record (`landed_as`; failed checks, tested combination and its submissions, timed out from `result`, logs; conflict paths and submissions), and `Submission::notification()`, `<id>:landed|failed|conflict`, the id the round's outbox gives it (design, "The words"; "Marking told"); verify unit tests for each of the three states, a timed-out failure, and `None` for queued and withdrawn.
 - [ ] 1.2 In `crates/sluice-core/src/line.rs`, let a `Line` carry finished submissions changed in this write, which `changes` puts at `finished_file(id)` with no index line and no removal; verify a unit test that a finished submission marked told is one `put` of its finished file and that the index and live files are untouched.
 
 ## 2. The core tells a session its untold outcomes
