@@ -35,4 +35,4 @@ crate, `herdr`, or `site`.
 
 ## 5. The whole
 
-- [ ] 5.1 Run the gate's checks with `sluice exec main` on the committed tree; verify every task passes.
+- [x] 5.1 Run the gate's checks with `sluice exec main` on the committed tree; verify every task passes.
