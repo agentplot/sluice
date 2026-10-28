@@ -21,4 +21,4 @@
 
 ## 4. The gate
 
-- [ ] 4.1 Once the work is committed, run the gate's checks with `sluice exec main`, and verify every task passes, `root:format` and `root:lint` among them.
+- [x] 4.1 Once the work is committed, run the gate's checks with `sluice exec main`, and verify every task passes, `root:format` and `root:lint` among them.
