@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use reader::{Driver, Reader};
+use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
@@ -1040,13 +1040,21 @@ pub fn run(
                     driver = Driver::take(&readers, &repository)?;
                 }
                 if driver.is_some() {
-                    // Its part in reading: no other process drives. A lock it
-                    // could not try leaves it following, as a watch.
+                    // Its part in reading: it drives, so the place is its,
+                    // whatever lease a newer watch holds, and it takes none. A
+                    // lock it could not try leaves it following, as a watch.
                     match &mut reader {
                         Some(r) => {
-                            let _ = r.step(false);
+                            let _ = r.step(false, Drives::Itself);
                         }
-                        None => reader = Some(Reader::take_given(&readers, &repository, false)?),
+                        None => {
+                            reader = Some(Reader::take_given(
+                                &readers,
+                                &repository,
+                                host.version(),
+                                Drives::Itself,
+                            )?)
+                        }
                     }
                     // 97, previews-1 101: every pass, whether or not a branch
                     // has a queue.
@@ -2306,7 +2314,15 @@ fn wait_on(
                 }
             }
         }
-        reading.reader.step(driven)?;
+        // A wait takes no lease, but lets go of the lock once a newer
+        // watch has taken its, or once a driver lives; it follows from then
+        // on.
+        let drives = if driven {
+            Drives::Another
+        } else {
+            Drives::Nobody
+        };
+        reading.reader.step(false, drives)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }
@@ -2317,7 +2333,9 @@ fn wait_on(
 /// writes the whole overview for the others, unless `sluice run` lives on
 /// the host, which is the reader there (135); every other wait reads them
 /// from the reader's document, and its own record only once a document no
-/// longer holds it, as when it has left the queue.
+/// longer holds it, as when it has left the queue. A wait that is the
+/// reader lets go once a newer watch has taken its lease, and follows from
+/// then on as any other wait.
 struct Reading {
     reader: Reader,
     /// Where the host's readers and drivers keep their files, and the
@@ -2335,7 +2353,7 @@ impl Reading {
     fn take(host: &dyn exec::Host) -> Result<Reading> {
         let (readers, repository) = (host.readers()?, host.repository()?);
         Ok(Reading {
-            reader: Reader::take(&readers, &repository)?,
+            reader: Reader::take(&readers, &repository, host.version())?,
             readers,
             repository,
             view: None,

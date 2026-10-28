@@ -2225,7 +2225,7 @@ fn readers_doc() -> Option<serde_json::Value> {
 /// A live reader of `repository`, the test's own, until dropped; its
 /// document `doc`.
 fn reader_of(repository: &str, doc: &serde_json::Value) -> sluice::reader::Lead {
-    match sluice::reader::Reader::take(&support::readers(), repository).unwrap() {
+    match sluice::reader::Reader::take(&support::readers(), repository, sluice::VERSION).unwrap() {
         sluice::reader::Reader::Lead(mut lead) => {
             lead.write(doc).unwrap();
             lead
@@ -2644,6 +2644,257 @@ fn watch_leads_once_the_readers_wait_ends() {
     }
     assert_eq!(led["branches"], serde_json::json!([]), "{out}");
     assert_eq!(readers_doc().as_ref(), Some(led));
+}
+
+/// The repository's reader's part as a sluice of `version`, the test's
+/// own: another process on the host, until dropped.
+fn reader_as(version: &str) -> sluice::reader::Reader {
+    sluice::reader::Reader::take(&support::readers(), REPOSITORY, version).unwrap()
+}
+
+fn is_reader(r: &sluice::reader::Reader) -> bool {
+    matches!(r, sluice::reader::Reader::Lead(_))
+}
+
+/// Write `doc` as `r`, the reader.
+fn write_as(r: &mut sluice::reader::Reader, doc: &serde_json::Value) {
+    match r {
+        sluice::reader::Reader::Lead(lead) => lead.write(doc).unwrap(),
+        sluice::reader::Reader::Follow(_) => panic!("a follower, where it should read"),
+    }
+}
+
+/// Whether a process holds the repository's reader's lease.
+fn leased() -> bool {
+    let lease = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(readers_file(REPOSITORY, "lease"))
+        .unwrap();
+    match lease.try_lock() {
+        Ok(()) => false,
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(e) => panic!("locking the lease: {e}"),
+    }
+}
+
+/// The version of sluice the repository's reader names.
+fn readers_version() -> Option<String> {
+    let bytes = std::fs::read(readers_file(REPOSITORY, "version")).ok()?;
+    let named: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    named["version"].as_str().map(String::from)
+}
+
+/// 129: a watch of a newer sluice than the live reader's follows it, takes
+/// its lease at its next tick, and is the reader at its own next tick once
+/// the older reader has let go, naming its version.
+#[test]
+fn a_newer_watch_takes_an_older_readers_lease() {
+    let f = setup();
+    let doc = seven_testing();
+    let older = RefCell::new(reader_as("0.52.0"));
+    write_as(&mut older.borrow_mut(), &doc);
+    support::set_version("0.53.0");
+    let written = RefCell::new(None);
+    let between = |n: usize| match n {
+        2 => {
+            assert!(leased(), "the watch took no lease");
+            let mut older = older.borrow_mut();
+            older.step(true, sluice::reader::Drives::Nobody).unwrap();
+            assert!(!is_reader(&older), "the older reader kept reading");
+        }
+        3 => {
+            *written.borrow_mut() = readers_doc();
+            assert_eq!(readers_version().as_deref(), Some("0.53.0"));
+            assert!(!leased(), "the lease kept once the watch reads");
+            older
+                .borrow_mut()
+                .step(true, sluice::reader::Drives::Nobody)
+                .unwrap();
+            assert!(!is_reader(&older.borrow()));
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0], doc);
+    // Read from the records, which hold no submission.
+    assert_eq!(lines[1]["branches"], serde_json::json!([]), "{out}");
+    assert_eq!(written.into_inner().as_ref(), Some(&lines[1]));
+}
+
+/// 129: a watch of the live reader's own version follows it for as long as
+/// it runs, and never takes its lease.
+#[test]
+fn a_watch_of_the_same_version_follows() {
+    let f = setup();
+    let doc = seven_testing();
+    let reader = RefCell::new(reader_as("0.53.0"));
+    write_as(&mut reader.borrow_mut(), &doc);
+    support::set_version("0.53.0");
+    let between = |_: usize| {
+        assert!(!leased(), "the lease of a reader of its own version");
+        let mut reader = reader.borrow_mut();
+        reader.step(true, sluice::reader::Drives::Nobody).unwrap();
+        assert!(is_reader(&reader));
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, std::slice::from_ref(&doc), "{out}");
+    assert_eq!(readers_doc(), Some(doc));
+}
+
+/// 129: once a newer watch has taken its lease, the older one that is the
+/// reader lets go at its next tick and reads nothing more itself: the line
+/// it prints with `#7` queued is the document the newer one wrote.
+#[test]
+fn an_older_watch_follows_once_its_lease_is_taken() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let seven = seven_testing();
+    support::set_version("0.52.0");
+    let newer = RefCell::new(None);
+    let at_lease = RefCell::new(None);
+    let between = |n: usize| match n {
+        1 => {
+            let mut r = reader_as("0.53.0");
+            assert!(!is_reader(&r));
+            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            assert!(leased(), "no lease taken of an older reader");
+            *at_lease.borrow_mut() = readers_doc();
+            // What the older watch would write, were it to read again.
+            sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+            *newer.borrow_mut() = Some(r);
+        }
+        2 => {
+            assert_eq!(readers_doc(), *at_lease.borrow(), "written after its lease");
+            let mut newer = newer.borrow_mut();
+            let r = newer.as_mut().unwrap();
+            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            write_as(r, &seven);
+            assert!(!leased());
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &between,
+    };
+    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0]["branches"], serde_json::json!([]), "{out}");
+    assert_eq!(lines[1], seven);
+    assert_eq!(readers_version().as_deref(), Some("0.53.0"));
+}
+
+/// 129: a wait of an older sluice that is the reader lets go once a newer
+/// watch takes its lease, and goes on as a follower wait: it says its
+/// combination's progress from the document the newer one writes, and
+/// ends as a follower wait does.
+#[test]
+fn an_older_wait_follows_once_its_lease_is_taken() {
+    let f = setup();
+    f.world.hold_runs(true);
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    let three = one_testing(3);
+    support::set_version("0.52.0");
+    let newer = RefCell::new(None);
+    let at_lease = RefCell::new(None);
+    let between = |n: usize| match n {
+        1 => {
+            assert!(readers_doc().is_some(), "the wait is no reader");
+            let mut r = reader_as("0.53.0");
+            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            assert!(leased(), "no lease taken of an older reader");
+            *at_lease.borrow_mut() = readers_doc();
+            // What the older wait would write, were it to read again.
+            sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+            *newer.borrow_mut() = Some(r);
+        }
+        2 => {
+            assert_eq!(readers_doc(), *at_lease.borrow(), "written after its lease");
+            let mut newer = newer.borrow_mut();
+            let r = newer.as_mut().unwrap();
+            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            write_as(r, &three);
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    let [.., progress, last] = lines[..] else {
+        panic!("{out}");
+    };
+    assert!(
+        progress.starts_with(&format!(
+            "testing {BRANCH} + #1 · 3/5 tasks · running t3:test"
+        )),
+        "{out}"
+    );
+    assert_eq!(last, "still waiting: sluice wait 1");
+    assert_eq!(readers_version().as_deref(), Some("0.53.0"));
+}
+
+/// 129: a wait of a newer sluice than the live reader's takes no lease: it
+/// follows the reader's document until it ends, and the older reader stays
+/// the reader.
+#[test]
+fn a_newer_wait_never_takes_a_lease() {
+    let f = setup();
+    f.world.hold_runs(true);
+    for i in 1..=7 {
+        let (worktree, path) = (format!("unit/{i}"), format!("plugin/{i}"));
+        work(&f, &worktree, &format!("agent-{i}"), &[(&path, Some("x"))]);
+        sluice(
+            &f,
+            &["submit", BRANCH, "--worktree", &worktree, "--no-wait"],
+        );
+    }
+    let doc = seven_testing();
+    let reader = RefCell::new(reader_as("0.52.0"));
+    write_as(&mut reader.borrow_mut(), &doc);
+    support::set_version("0.53.0");
+    let between = |_: usize| {
+        assert!(!leased(), "a wait took the lease");
+        let mut reader = reader.borrow_mut();
+        reader.step(true, sluice::reader::Drives::Nobody).unwrap();
+        assert!(is_reader(&reader));
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 49,
+        between: &between,
+    };
+    // The fakes' clock moves a second at every read: time enough for the
+    // wait to pause, and be looked at, a few times before it runs out.
+    let (code, out) = sluice_with(&f, &pause, &["wait", "7", "--timeout", "10s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert!(pause.n.get() > 1, "{out}");
+    assert_eq!(json(&out), doc["branches"][0]["submissions"][0]);
+    assert_eq!(readers_version().as_deref(), Some("0.52.0"));
+    assert_eq!(readers_doc(), Some(doc));
 }
 
 // ---------------------------------------------------------------------------
@@ -3225,7 +3476,7 @@ fn a_watch_that_starts_while_the_new_reader_reads_follows_it() {
     let f = setup();
     let doc = seven_testing();
     rewrite_readers_doc(&no_sluice_doc());
-    let reader = match sluice::reader::Reader::take(&support::readers(), REPOSITORY).unwrap() {
+    let reader = match reader_as(sluice::VERSION) {
         sluice::reader::Reader::Lead(lead) => RefCell::new(lead),
         sluice::reader::Reader::Follow(_) => panic!("a reader of {REPOSITORY} already"),
     };
@@ -3560,7 +3811,13 @@ fn a_driver_with_nothing_queued() {
 /// would.
 fn reader_free() -> bool {
     matches!(
-        sluice::reader::Reader::take_given(&support::readers(), REPOSITORY, false).unwrap(),
+        sluice::reader::Reader::take_given(
+            &support::readers(),
+            REPOSITORY,
+            sluice::VERSION,
+            sluice::reader::Drives::Itself,
+        )
+        .unwrap(),
         sluice::reader::Reader::Lead(_)
     )
 }
@@ -3577,11 +3834,13 @@ fn a_driver_whose_read_fails_writes_the_failure() {
     assert_failure(&readers_doc().expect("the driver's document"), UNREADABLE);
 }
 
-/// The reader's place, taken as the driver takes it, given that no other
-/// process drives; its document `doc`.
+/// The reader's place, taken as the driver takes it, the place its own;
+/// its document `doc`.
 fn driver_reads(doc: &serde_json::Value) -> sluice::reader::Lead {
     let readers = support::readers();
-    match sluice::reader::Reader::take_given(&readers, REPOSITORY, false).unwrap() {
+    let itself = sluice::reader::Drives::Itself;
+    let taken = sluice::reader::Reader::take_given(&readers, REPOSITORY, sluice::VERSION, itself);
+    match taken.unwrap() {
         sluice::reader::Reader::Lead(mut lead) => {
             lead.write(doc).unwrap();
             lead
