@@ -258,6 +258,14 @@ is the branch the work was submitted from; `from.path` is the worktree
 itself, for a reader to match a submission to the session that made it.
 A submission written by an older sluice has no `path`.
 
+`told` is when the submission's outcome was told to the session that
+submitted it, and `told_to` which session it was told to. Both are left
+out while the outcome stands untold. `sluice untold` sets them when it
+tells a session an outcome nothing had told it: `told_to` is then the
+session's herdr pane, as `herdr:<pane>@<socket>`, or the worktree's path
+where the session runs in no herdr pane. A submission an older sluice
+told has `told` and no `told_to`.
+
 A passed submission waiting under its branch's [`hold`](/sluice/reference/configuration/#hold)
 has `"held": { "by": [12, 13, 14], "until": "2026-10-11T09:26:40Z" }`:
 the longer combination it waits for, by its submissions, and when the
