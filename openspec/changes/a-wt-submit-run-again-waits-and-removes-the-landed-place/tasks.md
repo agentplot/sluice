@@ -17,7 +17,7 @@ Tests run through sluice, as CLAUDE.md says: `sluice exec main -- cargo test -p 
 
 ## 3. `sluice wait` removes nothing
 
-- [ ] 3.1 Add a test to `crates/sluice/tests/profiles/worktrunk.rs`, through the worktrunk front door: a worktree that ran `sluice exec main` submits with `wt submit main --no-wait`, and `sluice wait <id>` runs to its landing. It exits 0, the worktree still exists at its head, and `sluice status` still lists its ports. Verify with `sluice exec main -- cargo test -p sluice --test worktrunk`.
+- [x] 3.1 Add a test to `crates/sluice/tests/profiles/worktrunk.rs`, through the worktrunk front door: a worktree that ran `sluice exec main` submits with `wt submit main --no-wait`, and `sluice wait <id>` runs to its landing. It exits 0, the worktree still exists at its head, and `sluice status` still lists its ports. Verify with `sluice exec main -- cargo test -p sluice --test worktrunk`.
 
 ## 4. The briefs and the guide
 

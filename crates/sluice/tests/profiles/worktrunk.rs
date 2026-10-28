@@ -617,6 +617,58 @@ fn a_commit_while_followed_keeps_the_worktree() {
     assert!(a.join("more.txt").exists(), "{}", text(&out));
 }
 
+/// Record 0065, 25: `sluice wait` is the core's, and removes no worktree.
+/// A worktree that ran `sluice exec` submits with `wt submit --no-wait`,
+/// and `sluice wait <id>` follows it to its landing: it exits 0, and the
+/// worktree is still there at its head, its ports still held.
+#[test]
+fn sluice_wait_removes_nothing() {
+    let policy = format!("{POLICY}\n[checkout]\nports = [\"web\"]\nports_from = \"41600\"\n");
+    let s = Scratch::with_policy("wt-wait-keeps", &policy);
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let canon = std::fs::canonicalize(&a).unwrap();
+    let held = || {
+        let out = s.sluice(&["status", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        doc["worktrees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|w| w["worktree"] == canon.to_str().unwrap())
+            .cloned()
+            .unwrap_or_else(|| panic!("not held: {doc}"))
+    };
+    let ports = held()["ports"].clone();
+    assert!(ports["SLUICE_PORT_WEB"].is_string(), "{ports}");
+    let head = s
+        .repo
+        .git(&["-C", a.to_str().unwrap(), "rev-parse", "HEAD"]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &one.to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    assert_eq!(s.status(one)["state"], "landed");
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    assert_eq!(
+        s.repo
+            .git(&["-C", a.to_str().unwrap(), "rev-parse", "HEAD"]),
+        head
+    );
+    let after = held();
+    assert_eq!(after["ports"], ports, "{after}");
+    assert_eq!(after["removed"], false, "{after}");
+}
+
 /// 5, 60: Ctrl-C to a waiting submit ends the wait alone: the submission
 /// stays queued and its run goes on, and later rounds land it.
 #[test]
