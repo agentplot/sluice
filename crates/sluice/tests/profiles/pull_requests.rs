@@ -1355,7 +1355,8 @@ fn a_new_commit_submitted_again_is_described() {
 }
 
 /// Submitted again at the same head: the second submit does not edit the
-/// pull request's description.
+/// pull request's description; the request stands there, so `wt submit`
+/// answers with it (record 0065).
 #[test]
 fn submitted_again_at_the_same_head_edits_nothing() {
     let g = OnGitHub::new("pr-same-head", "reviews = 1");
@@ -1375,7 +1376,7 @@ fn submitted_again_at_the_same_head_edits_nothing() {
     let out = g.wt_submit(&w, &["--no-wait"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(
-        text(&out).contains(&format!("updated #{n}")),
+        text(&out).contains("waiting: needs 1 review"),
         "{}",
         text(&out)
     );
@@ -1606,7 +1607,7 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
         said.contains(&format!(
-            "wt submit: following pull request #{n}, already open at this head"
+            "wt submit: following pull request #{n}, already open at this revision"
         )),
         "{said}"
     );
@@ -1614,6 +1615,39 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
     assert_eq!(writes(), before);
     assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/again"), pushed);
     assert!(!g.pull_from("unit/again").draft);
+    assert!(w.exists());
+}
+
+/// Record 0065: run again without waiting while its pull request waits
+/// for a review, `wt submit` pushes nothing and edits nothing; it answers
+/// with the request as `--status` prints it, and exits 0.
+#[test]
+fn run_again_without_waiting_answers_with_a_pull_request() {
+    let g = OnGitHub::new("pr-again-no-wait", "reviews = 1");
+    let w = g.session("asked", &[("a.txt", "a\n")]);
+    let out = g.wt_submit(&w, &["--no-wait"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let n = g.pull_from("unit/asked").number;
+    let pushed = github::rev(g.bare.path(), "refs/heads/unit/asked");
+    let writes = || {
+        let edit = format!("/repos/o/r/pulls/{n}");
+        g.gh.fake
+            .requests()
+            .iter()
+            .filter(|r| (r.method == "PATCH" && r.path == edit) || r.path == "/graphql")
+            .count()
+    };
+    let before = writes();
+    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    assert_eq!(doc["pull_request"], n, "{doc}");
+    assert_eq!(doc["branch"], "main", "{doc}");
+    assert_eq!(doc["state"], "waiting: needs 1 review", "{doc}");
+    assert!(!text(&out).contains("pushed"), "{}", text(&out));
+    assert_eq!(writes(), before);
+    assert_eq!(github::rev(g.bare.path(), "refs/heads/unit/asked"), pushed);
+    assert!(!g.pull_from("unit/asked").draft);
     assert!(w.exists());
 }
 
@@ -2770,7 +2804,8 @@ fn a_round_between_a_groups_opens_submits_none() {
 /// want of reviews leaves three drafts; the second is closed, and the
 /// others approved and marked ready for review by a person. They are not
 /// submitted and say they wait for it, until a submit names one of them
-/// again, alone.
+/// again, alone: `sluice submit`'s, since `wt submit` answers with a
+/// request open and ready at its head (record 0065).
 #[test]
 fn one_of_a_group_closed_holds_the_rest() {
     let g = OnGitHub::new("pr-group-closed", "reviews = 1");
@@ -2793,7 +2828,11 @@ fn one_of_a_group_closed_holds_the_rest() {
             "waiting for its group: the request marked 2/3, not open"
         );
     }
-    let out = g.wt_submit(&ws[0], &["--no-wait"]);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &ws[0])
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     approve(&g, ns[0]);
     g.step();
@@ -2926,8 +2965,14 @@ fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
         )),
         "{said}"
     );
-    // Under --json, the pull request's document carries the same.
-    let out = g.wt_submit(&w, &["--no-wait", "--json"]);
+    // Under --json, the pull request's document carries the same: a
+    // submit's, since `wt submit` run again answers with the request open
+    // and ready at what it would send (record 0065).
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["pull_request"], pull.number, "{v}");
