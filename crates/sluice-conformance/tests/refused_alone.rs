@@ -1,13 +1,15 @@
 //! A branch whose records cannot be read is refused alone: a lookup by
 //! number, an amend and a withdrawal go on past it to every branch that
 //! reads, and say which branches were not read only when the number is on
-//! none of those that were (26), over the fakes.
+//! none of those that were; a round of another branch runs past it, and
+//! leaves its places for a later pass (26, rule core.14), over the fakes.
 
-use sluice_conformance::{policy, Harness, Rig, BRANCH};
+use sluice_conformance::{policy, previewed, Harness, Rig, BRANCH};
 use sluice_core::records::State;
 use sluice_core::{
-    AmendRefusal, Lookup, Requester, SubmitRequest, Unread, WithdrawRefusal, Withdrew,
+    AmendRefusal, Lookup, Requester, Serves, Step, SubmitRequest, Unread, WithdrawRefusal, Withdrew,
 };
+use sluice_seams::Settings;
 
 /// The branch whose records cannot be read, listed before `bolt/x`.
 const REFUSED: &str = "bolt/b";
@@ -35,13 +37,15 @@ fn submit_to(h: &Harness, branch: &str, worktree: &str, path: &str) -> u64 {
 /// A bolt and `bolt/b`, one submission queued on each: the harness, and
 /// the ids on `bolt/x` and on `bolt/b`.
 fn two_queued() -> (Harness, u64, u64) {
+    two_queued_under(&policy(false, "fail", 4))
+}
+
+/// [`two_queued`], `bolt/b` under `refused`'s policy.
+fn two_queued_under(refused: &str) -> (Harness, u64, u64) {
     let h = Harness::bolt();
     h.w().init(
         REFUSED,
-        &[
-            (".config/sluice.toml", &policy(false, "fail", 4)),
-            ("a/lib", "a1"),
-        ],
+        &[(".config/sluice.toml", refused), ("a/lib", "a1")],
     );
     let x = submit_to(&h, BRANCH, "unit/x", "a/x");
     let b = submit_to(&h, REFUSED, "unit/b", "a/b");
@@ -123,4 +127,86 @@ fn a_number_on_no_branch_when_every_branch_reads_names_none() {
         s.withdraw(9999, &Requester::Operator).unwrap(),
         Err(WithdrawRefusal::NoSuchSubmission(vec![]))
     );
+}
+
+/// satisfies: 26, 71, rule core.14
+#[test]
+fn a_round_serving_every_branch_runs_past_a_branch_that_cannot_be_read() {
+    let (h, x, _) = two_queued();
+    h.w().fail_state_reads(REFUSED, Some(WORDS));
+    let s = h.sluice().serving(Serves::Every);
+    assert_eq!(s.step(BRANCH).expect("the round runs"), Step::Stepped);
+    assert_eq!(h.started().len(), 1, "its run started");
+    for _ in 0..16 {
+        s.step(BRANCH).expect("the round runs");
+    }
+    assert_eq!(h.sub(x).state, State::Landed);
+}
+
+/// Whether `bolt/b`'s log names `place`.
+fn logged_on_refused(h: &Harness, place: &str) -> bool {
+    h.w()
+        .file(REFUSED, "log.jsonl")
+        .is_some_and(|log| log.contains(&format!("\"place\":\"{place}\"")))
+}
+
+/// satisfies: 26, 123, rule core.14
+#[test]
+fn a_removed_worktrees_checkout_on_a_branch_that_cannot_be_read_waits_for_it() {
+    let (h, x, _) = two_queued();
+    let s = h.sluice();
+    s.seams()
+        .checkout
+        .adopt(
+            &h.place("unit/b"),
+            REFUSED,
+            &Settings::new(),
+            "2026-10-28T09:00:00Z",
+        )
+        .expect("the place is equipped");
+    h.remove_worktree("unit/b");
+    let gone = s.session_places().unwrap();
+    assert!(gone.len() == 1 && gone[0].gone, "{gone:?}");
+    let name = gone[0].name.clone();
+    h.w().fail_state_reads(REFUSED, Some(WORDS));
+
+    // The rounds of bolt/x run, and keep the checkout on bolt/b.
+    h.settle();
+    assert_eq!(h.sub(x).state, State::Landed);
+    assert_eq!(s.session_places().unwrap(), gone);
+    assert_eq!(h.gone_releases_of(&name), 0);
+
+    // The first round after bolt/b reads releases it, and logs it there.
+    h.w().fail_state_reads(REFUSED, None);
+    h.step();
+    assert!(s.session_places().unwrap().is_empty());
+    assert_eq!(h.gone_releases_of(&name), 1);
+    assert!(logged_on_refused(&h, &name));
+}
+
+/// satisfies: 26, previews-1 101, rule core.14
+#[test]
+fn an_unusable_preview_on_a_branch_that_cannot_be_read_waits_for_it() {
+    let (h, x, _) = two_queued_under(&previewed(&policy(false, "fail", 4), "make preview"));
+    let s = h.sluice();
+    let rev = h.w().tip(REFUSED);
+    h.w().preview_fails(true);
+    let plan = s.preview_plan(REFUSED, &rev).unwrap().unwrap();
+    let (place, made) = s.make_preview(&plan).unwrap();
+    s.start_preview(&plan, place).unwrap();
+    h.w().fail_state_reads(REFUSED, Some(WORDS));
+
+    // The rounds of bolt/x run, and keep the preview on bolt/b.
+    h.settle();
+    assert_eq!(h.sub(x).state, State::Landed);
+    assert!(h.w().preview_releases().is_empty());
+    let kept = s.preview_of(&rev).unwrap().expect("kept");
+    assert_eq!(kept.failed, None, "not released");
+
+    // The first round after bolt/b reads releases it, and logs it there.
+    h.w().fail_state_reads(REFUSED, None);
+    h.step();
+    assert_eq!(h.w().preview_releases().len(), 1);
+    assert!(s.preview_of(&rev).unwrap().unwrap().failed.is_some());
+    assert!(logged_on_refused(&h, &made.name));
 }
