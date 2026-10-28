@@ -1,13 +1,13 @@
 import { describe, expect, test } from "claude-code/testing";
 
 import {
-  askedWords,
   bandLines,
   bar,
   cannotFollow,
   checkLines,
   checkRows,
   clearText,
+  collectedWords,
   commitBase,
   conflictLines,
   conflictText,
@@ -678,22 +678,22 @@ describe("outcomes", () => {
   });
 });
 
-describe("what sluice untold told", () => {
+describe("what sluice inbox printed", () => {
   const LANDED = "[sluice] #13 landed on main as abc1234.\npassed · landed as abc1234";
 
   test("exit 0 with words: the turn is sluice's words, trailing blank lines trimmed", () => {
-    expect(askedWords({ exitCode: 0, stdout: `${LANDED}\n\n`, stderr: "" })).toEqual({
+    expect(collectedWords({ exitCode: 0, stdout: `${LANDED}\n\n`, stderr: "" })).toEqual({
       text: LANDED,
       toast: null,
     });
   });
 
   test("exit 0 with nothing: no turn and no toast", () => {
-    expect(askedWords({ exitCode: 0, stdout: "", stderr: "" })).toEqual({
+    expect(collectedWords({ exitCode: 0, stdout: "", stderr: "" })).toEqual({
       text: null,
       toast: null,
     });
-    expect(askedWords({ exitCode: 0, stdout: "\n", stderr: "" })).toEqual({
+    expect(collectedWords({ exitCode: 0, stdout: "\n", stderr: "" })).toEqual({
       text: null,
       toast: null,
     });
@@ -701,29 +701,29 @@ describe("what sluice untold told", () => {
 
   test("exit 3: the turn, and a toast of the branch sluice could not read", () => {
     const stderr = "sluice: could not read bolt/x's records: it is gone\n";
-    expect(askedWords({ exitCode: 3, stdout: `${LANDED}\n`, stderr })).toEqual({
+    expect(collectedWords({ exitCode: 3, stdout: `${LANDED}\n`, stderr })).toEqual({
       text: LANDED,
       toast: "sluice: could not read bolt/x's records: it is gone",
     });
   });
 
-  test("a sluice with no untold: no turn, and a toast in its words", () => {
-    const stderr = "error: unrecognized subcommand 'untold'\n\nUsage: sluice <COMMAND>\n";
-    expect(askedWords({ exitCode: 2, stdout: "", stderr })).toEqual({
+  test("a sluice with no inbox: no turn, and a toast in its words", () => {
+    const stderr = "error: unrecognized subcommand 'inbox'\n\nUsage: sluice <COMMAND>\n";
+    expect(collectedWords({ exitCode: 2, stdout: "", stderr })).toEqual({
       text: null,
       toast:
-        "sluice: couldn't ask for this session's outcomes: error: unrecognized subcommand 'untold'",
+        "sluice: couldn't collect this session's outcomes: error: unrecognized subcommand 'inbox'",
     });
-    expect(askedWords({ exitCode: 1, stdout: "", stderr: "" })).toEqual({
+    expect(collectedWords({ exitCode: 1, stdout: "", stderr: "" })).toEqual({
       text: null,
-      toast: "sluice: couldn't ask for this session's outcomes: it exited 1",
+      toast: "sluice: couldn't collect this session's outcomes: it exited 1",
     });
   });
 
   test("no run: no turn, and a toast saying so", () => {
-    expect(askedWords(null)).toEqual({
+    expect(collectedWords(null)).toEqual({
       text: null,
-      toast: "sluice: couldn't ask for this session's outcomes: it could not be run",
+      toast: "sluice: couldn't collect this session's outcomes: it could not be run",
     });
   });
 });

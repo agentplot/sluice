@@ -4,7 +4,7 @@
 // conflict. Everything is read from `sluice overview --json --watch`
 // (sluice/overview@1; ADR 0023), never from a one-shot read of the records in
 // its place (129), from `sluice submit --check` for its own worktree, and
-// from `sluice untold`, which alone records an outcome as given to the
+// from `sluice inbox`, which alone records an outcome as delivered to the
 // session (51): the board decides nothing and writes nothing of sluice's but
 // through a sluice command.
 
@@ -22,14 +22,14 @@ import type {
   OverviewFailed,
   OverviewTask,
 } from "../types";
-import type { Asked, CheckRow } from "./board";
+import type { CheckRow, Collected } from "./board";
 import {
-  askedWords,
   bandLines,
   cannotFollow,
   checkLines,
   checkRows,
   clearText,
+  collectedWords,
   combination,
   commitBase,
   conflictLines,
@@ -221,7 +221,7 @@ async function take($: $, next: Overview, cwd: string, how: How, loaded: boolean
   // What happened before the first overview is sluice's to tell, not news.
   const found = prev === null ? [] : outcomes(prev, next, known);
   for (const o of found) raise($, o);
-  if (how.wake && (prev === null || loaded || found.length > 0)) void ask($, cwd);
+  if (how.wake && (prev === null || loaded || found.length > 0)) void collect($, cwd);
 }
 
 /** What a command printed as JSON, or null when it is none. */
@@ -243,37 +243,37 @@ async function output($: $, argv: string[], cwd: string): Promise<string | null>
 // once it has ended.
 let running = false;
 let again = false;
-// One ask at a time: however many are wanted while one runs, one more is made
-// once it has ended.
-let asking = false;
-let askAgain = false;
+// One collect at a time: however many are wanted while one runs, one more is
+// made once it has ended.
+let collecting = false;
+let collectAgain = false;
 
 /**
- * Ask sluice to tell the session its untold outcomes (51; ADR 0068), and
- * start a turn with its words, as printed: `sluice untold` in the session's
- * worktree records each outcome it prints as given, and prints nothing for one
- * the round's push or an earlier ask gave. A branch it could not read, or an
- * ask it refused, is a toast.
+ * Collect the session's pending outcomes from sluice (51; ADR 0068, record
+ * 0070), and start a turn with its words, as printed: `sluice inbox` in the
+ * session's worktree marks each outcome it prints delivered, and prints
+ * nothing for one the round's notice or an earlier collect delivered. A
+ * branch it could not read, or a collect it refused, is a toast.
  */
-async function ask($: $, cwd: string) {
-  if (asking) {
-    askAgain = true;
+async function collect($: $, cwd: string) {
+  if (collecting) {
+    collectAgain = true;
     return;
   }
-  asking = true;
+  collecting = true;
   try {
     do {
-      askAgain = false;
+      collectAgain = false;
       const root = (await read($, mine)).root ?? cwd;
-      const got: Asked = await $.process
-        .run(["sluice", "untold"], { cwd: root, timeoutMs: 120_000 })
+      const got: Collected = await $.process
+        .run(["sluice", "inbox"], { cwd: root, timeoutMs: 120_000 })
         .catch(() => null);
-      const { text, toast } = askedWords(got);
+      const { text, toast } = collectedWords(got);
       if (text !== null) await $.prompt.submit({ text }).catch(() => undefined);
       if (toast !== null) $.ui.toast(toast);
-    } while (askAgain);
+    } while (collectAgain);
   } finally {
-    asking = false;
+    collecting = false;
   }
 }
 
@@ -401,7 +401,8 @@ async function see($: $, next: unknown, cwd: string, chosen: How): Promise<boole
   }
   if (isOverview(next)) {
     // The first overview this load takes: after a reload, the board's state
-    // keeps the last overview, and sluice is asked all the same.
+    // keeps the last overview, and the session's outcomes are collected all
+    // the same.
     const loaded = following === null;
     following ??= await follow($, cwd, chosen);
     await take($, next, cwd, following, loaded);
@@ -483,7 +484,7 @@ async function feed($: $, cwd: string, chosen: How) {
     if (end && noWatch(end.stderr)) {
       // A sluice older than its watch: the board names it, which reads no records.
       // It stands in for the queue, which stays to be drawn again once a
-      // watch prints the next overview, and outcomes are asked for then.
+      // watch prints the next overview, and outcomes are collected then.
       const version = await output($, ["sluice", "--version"], cwd);
       await update($, cannot, () => ({ version: version?.split("\n")[0] || null }));
       $.ui.status(undefined);

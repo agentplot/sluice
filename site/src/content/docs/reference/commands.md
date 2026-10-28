@@ -841,9 +841,9 @@ the one `sluice submit --status --json` prints,
 request waits for. Once its submission is decided, it prints the
 submission's record.
 
-## `sluice untold`
+## `sluice inbox`
 
-`sluice untold`, run in a worktree, tells the session working there each
+`sluice inbox`, run in a worktree, tells the session working there each
 outcome of its submissions that nothing has told it yet. It tells every
 submission from the worktree's branch, on any branch, that landed, was
 blamed or conflicts. A pull request opened from that branch counts as
@@ -851,11 +851,11 @@ the branch's. A withdrawn submission, and one still queued or under
 test, is not told.
 
 A session that starts again, after a restart or on another machine,
-runs `sluice untold` once, in place of keeping a `sluice wait` for each
+runs `sluice inbox` once, in place of keeping a `sluice wait` for each
 submission it made:
 
 ```console
-$ sluice untold
+$ sluice inbox
 [sluice] #12 landed on main as b7d2e94.
 testing main + #12 · 12 tasks to run, 0 replayed
 passed · landed as b7d2e94
@@ -876,7 +876,7 @@ Each outcome it tells is marked told on its submission, with when and
 to which session: `told` and `told_to` in [the
 submission's record](/sluice/reference/state/#a-submission). So an
 outcome is told once, whichever comes first, the message typed into
-the pane or `sluice untold`. Run again, it prints nothing. While it tells and
+the pane or `sluice inbox`. Run again, it prints nothing. While it tells and
 marks, it holds each branch's lock, so no round types the same outcome
 into the pane meanwhile. One stopped before it marks tells the outcome
 again the next time, in the same words.
@@ -917,7 +917,7 @@ the document adds `unread`, `[{"branch","error"}]`.
 
 It exits `0` whether it told anything or not, and `3` when a branch's
 records could not be read or sluice itself failed. A worktree on no
-branch has submitted nothing: `sluice untold` there prints nothing and
+branch has submitted nothing: `sluice inbox` there prints nothing and
 exits `0`.
 
 ## Exit codes

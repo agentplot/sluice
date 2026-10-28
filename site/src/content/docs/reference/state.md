@@ -276,11 +276,11 @@ it was delivered to. herdr taking the line into the pane is the
 delivery. A pull request's outcome is delivered to the pull request,
 `pull/41`. An outcome that wasn't delivered has neither field: the
 submit ran in no pane or on another host, or herdr refused the line.
-That submission stands decided and untold, and the log says why. A
+That submission stands decided and pending, and the log says why. A
 submission written by an older sluice may have `told` with no
 `told_to`.
 
-`sluice untold` sets them when it tells a session an outcome nothing
+`sluice inbox` sets them when it tells a session an outcome nothing
 had told it: `told_to` is then the session's herdr pane, as
 `herdr:<pane>@<socket>`, or the worktree's path where the session runs
 in no herdr pane.
@@ -331,13 +331,13 @@ run:
 round that crashes between the two is finished correctly by the next
 one.
 
-`told` is logged when a submission's outcome is delivered. `untold` is
-logged once when it isn't, with `why` in the words of whatever didn't
+`delivered` is logged when a submission's outcome is delivered.
+`pending` is logged once when it isn't, with `why` in the words of whatever didn't
 deliver it, and no round tries again:
 
 ```json
-{"schema":"sluice/log@1","event":"told","id":12,"notification":"12:landed"}
-{"schema":"sluice/log@1","event":"untold","id":13,"notification":"13:failed","why":"agent is blocked"}
+{"schema":"sluice/log@1","event":"delivered","id":12,"notification":"12:landed"}
+{"schema":"sluice/log@1","event":"pending","id":13,"notification":"13:failed","why":"agent is blocked"}
 ```
 
 `held` is logged once for each revision a held branch is read at, with

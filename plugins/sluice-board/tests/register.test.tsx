@@ -60,47 +60,47 @@ const ran: string[] = [];
 type Answer = { exitCode: number; stdout: string; stderr: string };
 
 /**
- * What the host's `sluice untold` answers, run after run, each host setting
- * it afresh: `answers` in turn, then nothing told; while `held` is set, a run
- * waits on it before it answers. The worktree each run was asked in is kept.
+ * What the host's `sluice inbox` answers, run after run, each host setting
+ * it afresh: `answers` in turn, then nothing pending; while `held` is set, a
+ * run waits on it before it answers. The worktree each run ran in is kept.
  */
-const untold = {
+const inbox = {
   answers: [] as Answer[],
   held: null as Promise<void> | null,
-  asked: [] as (string | undefined)[],
+  ranIn: [] as (string | undefined)[],
 };
 
-const UNTOLD = "sluice untold";
+const INBOX = "sluice inbox";
 
-/** The host's answer to `sluice untold`, run in `cwd`, as `untold` says. */
-async function untoldRun(cwd: string | undefined) {
-  untold.asked.push(cwd);
-  const answer = untold.answers.shift() ?? { exitCode: 0, stdout: "", stderr: "" };
-  if (untold.held) await untold.held;
+/** The host's answer to `sluice inbox`, run in `cwd`, as `inbox` says. */
+async function inboxRun(cwd: string | undefined) {
+  inbox.ranIn.push(cwd);
+  const answer = inbox.answers.shift() ?? { exitCode: 0, stdout: "", stderr: "" };
+  if (inbox.held) await inbox.held;
   return { value: { ...answer, ...WHOLE } };
 }
 
-/** A host's `sluice untold` tells nothing until the test says otherwise. */
-function untoldAfresh() {
-  untold.answers = [];
-  untold.held = null;
-  untold.asked = [];
+/** A host's `sluice inbox` prints nothing until the test says otherwise. */
+function inboxAfresh() {
+  inbox.answers = [];
+  inbox.held = null;
+  inbox.ranIn = [];
 }
 
-/** What `sluice untold` printed for #13's blame: the push's line, then the wait's. */
+/** What `sluice inbox` printed for #13's blame: the notice, then the wait's lines. */
 const BLAME13 = [
   "[sluice] #13 failed on main: cli:test. sluice wait 13 shows why.",
   "failed · blamed for cli:test on e20a6f9",
   `  cli:test  log: ${LOG}`,
 ].join("\n");
 
-/** What `sluice untold` printed for #13's landing. */
+/** What `sluice inbox` printed for #13's landing. */
 const LANDED13 = ["[sluice] #13 landed on main as 5d6e7f8.", "passed · landed as 5d6e7f8"].join(
   "\n",
 );
 
-/** `sluice untold`'s answer telling `text`, as it prints it. */
-function telling(text: string): Answer {
+/** `sluice inbox`'s answer printing `text`, as it prints it. */
+function printing(text: string): Answer {
   return { exitCode: 0, stdout: `${text}\n`, stderr: "" };
 }
 
@@ -124,8 +124,8 @@ function blamedWithLog(log: string, f?: Flaky): Overview {
 /**
  * A host where sluice answers from `docs`, streamed by its watch in turn, and
  * the session was started with the variables `env`; a command `more` names
- * prints what it says there, before any other answer; `sluice untold`
- * answers as `untold` says.
+ * prints what it says there, before any other answer; `sluice inbox`
+ * answers as `inbox` says.
  */
 function host(
   on: On,
@@ -135,7 +135,7 @@ function host(
   more: Record<string, string> = {},
 ) {
   mock.env(on, env);
-  untoldAfresh();
+  inboxAfresh();
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
@@ -144,7 +144,7 @@ function host(
     const answer = more[argv];
     if (answer !== undefined)
       return { value: { exitCode: 0, stdout: answer, stderr: "", ...WHOLE } };
-    if (argv === UNTOLD) return untoldRun(e.init?.cwd);
+    if (argv === INBOX) return inboxRun(e.init?.cwd);
     if (argv === `tail -n 20 -- ${LOG}`)
       return { value: { exitCode: 0, stdout: "first\nlast line\n", stderr: "", ...WHOLE } };
     if (argv === "sluice status 9 --json") {
@@ -922,31 +922,31 @@ test("a blame of this session's submission is a toast, and one turn in sluice's 
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [overview(), blamed()], seen);
-  // The first overview's ask finds nothing untold; the blame's finds it.
-  untold.answers = [telling(""), telling(BLAME13)];
+  // The first overview's collect finds nothing pending; the blame's finds it.
+  inbox.answers = [printing(""), printing(BLAME13)];
   ran.length = 0;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(seen.toasts).toEqual(["sluice: #13 was blamed"]);
   expect(seen.prompts).toEqual([BLAME13]);
-  // Asked in the session's worktree; the board reads no record of #13 for the turn.
-  expect(untold.asked).toEqual([ROOT, ROOT]);
+  // Run in the session's worktree; the board reads no record of #13 for the turn.
+  expect(inbox.ranIn).toEqual([ROOT, ROOT]);
   expect(ran).not.toContain("sluice status 13 --json");
 });
 
-test("under a multiplexer the push has come: a toast, and no turn", async ($, on) => {
+test("under a multiplexer the notice has come: a toast, and no turn", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [queued13(), landed13()], seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  expect(untold.asked).toHaveLength(2);
+  expect(inbox.ranIn).toHaveLength(2);
   expect(seen.toasts).toEqual(["sluice: #13 landed on main"]);
   expect(seen.prompts).toEqual([]);
 });
 
-test("another session's landing is no toast and no ask", async ($, on) => {
+test("another session's landing is no toast and no collect", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
@@ -961,48 +961,48 @@ test("another session's landing is no toast and no ask", async ($, on) => {
   host(on, [overview(), after], seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  // The first overview's ask alone.
-  expect(untold.asked).toHaveLength(1);
+  // The first overview's collect alone.
+  expect(inbox.ranIn).toHaveLength(1);
   expect(seen.toasts).toEqual([]);
   expect(seen.prompts).toEqual([]);
 });
 
-test("the session's start asks once, and its turn is sluice's words, with no toast", async ($, on) => {
+test("the session's start collects once, and its turn is sluice's words, with no toast", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [landed13()], seen);
-  untold.answers = [telling(LANDED13)];
+  inbox.answers = [printing(LANDED13)];
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  expect(untold.asked).toEqual([ROOT]);
+  expect(inbox.ranIn).toEqual([ROOT]);
   expect(seen.prompts).toEqual([LANDED13]);
   expect(seen.toasts).toEqual([]);
 });
 
-test("nothing untold at the session's start starts no turn", async ($, on) => {
+test("nothing pending at the session's start starts no turn", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [landed13()], seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  expect(untold.asked).toHaveLength(1);
+  expect(inbox.ranIn).toHaveLength(1);
   expect(seen.prompts).toEqual([]);
 });
 
 test(
-  "the wake can be turned off: a toast, and nothing asked",
+  "the wake can be turned off: a toast, and nothing collected",
   { options: { wake: false } },
   async ($, on) => {
     const clock = mock.clock(on);
     await clock.set(NOW);
     const seen = nothingSeen();
     host(on, [overview(), blamed()], seen);
-    untold.answers = [telling(BLAME13)];
+    inbox.answers = [printing(BLAME13)];
     await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
     await clock.settle();
-    expect(untold.asked).toEqual([]);
+    expect(inbox.ranIn).toEqual([]);
     expect(seen.prompts).toEqual([]);
     expect(seen.toasts).toContain("sluice: #13 was blamed");
   },
@@ -1014,25 +1014,25 @@ test("a branch sluice could not read: the turn, and a toast of sluice's line", a
   const seen = nothingSeen();
   host(on, [queued13(), landed13()], seen);
   const unread = "sluice: could not read bolt/x's records: it is gone";
-  untold.answers = [telling(""), { exitCode: 3, stdout: `${LANDED13}\n`, stderr: `${unread}\n` }];
+  inbox.answers = [printing(""), { exitCode: 3, stdout: `${LANDED13}\n`, stderr: `${unread}\n` }];
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(seen.prompts).toEqual([LANDED13]);
   expect(seen.toasts).toEqual(["sluice: #13 landed on main", unread]);
 });
 
-test("a sluice with no untold: no turn, and a toast in its words", async ($, on) => {
+test("a sluice with no inbox: no turn, and a toast in its words", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [queued13()], seen);
-  const refused = "error: unrecognized subcommand 'untold'\n\nUsage: sluice <COMMAND>\n";
-  untold.answers = [{ exitCode: 2, stdout: "", stderr: refused }];
+  const refused = "error: unrecognized subcommand 'inbox'\n\nUsage: sluice <COMMAND>\n";
+  inbox.answers = [{ exitCode: 2, stdout: "", stderr: refused }];
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   expect(seen.prompts).toEqual([]);
   expect(seen.toasts).toEqual([
-    "sluice: couldn't ask for this session's outcomes: error: unrecognized subcommand 'untold'",
+    "sluice: couldn't collect this session's outcomes: error: unrecognized subcommand 'inbox'",
   ]);
 });
 
@@ -1483,7 +1483,7 @@ test("the host's sluice replaced by one with no watch: the line takes the queue'
   expect(seen.status.at(-1)).toBeUndefined();
 });
 
-test("the host's sluice upgraded: the queue comes back, and what was decided meanwhile is asked for", async ($, on) => {
+test("the host's sluice upgraded: the queue comes back, and what was decided meanwhile is collected", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
@@ -1492,20 +1492,20 @@ test("the host's sluice upgraded: the queue comes back, and what was decided mea
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   // #13, this session's, is queued; then the host's sluice can't be followed.
-  untold.answers = [telling(""), telling(LANDED13)];
+  inbox.answers = [printing(""), printing(LANDED13)];
   await watch.print(queued13());
   await watch.end();
   watch.refusing = NO_OVERVIEW;
   await clock.advance(1000);
   expect(await bandOf($)).toEqual([OLD]);
   expect(seen.prompts).toEqual([]);
-  expect(untold.asked).toHaveLength(1);
+  expect(inbox.ranIn).toHaveLength(1);
   // Upgraded: the next watch prints #13 landed while the board couldn't follow.
   watch.refusing = null;
   await clock.advance(2000);
   expect(watch.isOpen()).toBe(true);
   await watch.print(landed13());
-  expect(untold.asked).toHaveLength(2);
+  expect(inbox.ranIn).toHaveLength(2);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   const band = await bandOf($);
@@ -1598,8 +1598,8 @@ test("a named branch with no records keeps its line, and no 'Nothing submitted y
 
 /**
  * A host whose watch the test drives, each command it runs kept in `ran`; a
- * command `more` names prints what it says there, and `sluice untold`
- * answers as `untold` says.
+ * command `more` names prints what it says there, and `sluice inbox`
+ * answers as `inbox` says.
  */
 function watchedHost(
   on: On,
@@ -1607,7 +1607,7 @@ function watchedHost(
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
   more: Record<string, string> = {},
 ) {
-  untoldAfresh();
+  inboxAfresh();
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
@@ -1616,7 +1616,7 @@ function watchedHost(
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
     const answer = more[argv];
     if (answer !== undefined) return out(answer);
-    if (argv === UNTOLD) return untoldRun(e.init?.cwd);
+    if (argv === INBOX) return inboxRun(e.init?.cwd);
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });
@@ -1674,7 +1674,7 @@ function landed13(): Overview {
 
 const READ = "sluice overview --json";
 
-test("a watch that ends is started again a second later, and what it prints is asked for", async ($, on) => {
+test("a watch that ends is started again a second later, and what it prints is collected", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
@@ -1682,7 +1682,7 @@ test("a watch that ends is started again a second later, and what it prints is a
   ran.length = 0;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  untold.answers = [telling(""), telling(LANDED13)];
+  inbox.answers = [printing(""), printing(LANDED13)];
   await watch.print(queued13());
   await clock.advance(5000);
   await watch.end();
@@ -1690,20 +1690,20 @@ test("a watch that ends is started again a second later, and what it prints is a
   await startedAgainAfter(clock, watch, 1000);
   expect(watch.started[1]! - watch.ended[0]!).toBe(1000);
   await watch.print(landed13());
-  expect(untold.asked).toHaveLength(2);
+  expect(inbox.ranIn).toHaveLength(2);
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual([LANDED13]);
   expect(ran.filter((r) => r === READ)).toEqual([]);
 });
 
-test("a reload after a turn starts no turn for what sluice has told", async ($, on) => {
+test("a reload after a turn starts no turn for what sluice has delivered", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
   const watch = watchedHost(on, clock, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
-  untold.answers = [telling(""), telling(LANDED13)];
+  inbox.answers = [printing(""), printing(LANDED13)];
   await watch.print(queued13());
   await watch.print(landed13());
   expect(seen.prompts).toEqual([LANDED13]);
@@ -1713,7 +1713,7 @@ test("a reload after a turn starts no turn for what sluice has told", async ($, 
   expect(seen.prompts).toEqual([LANDED13]);
 });
 
-test("two outcomes while an ask runs give one more ask once it ends", async ($, on) => {
+test("two outcomes while a collect runs give one more collect once it ends", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
@@ -1739,26 +1739,26 @@ test("two outcomes while an ask runs give one more ask once it ends", async ($, 
   const landed12: Recent = { at: "2026-10-16T19:47:00Z", event: "landed", ids: [12], to: "6e7f8" };
   const blamed14: Recent = { at: "2026-10-16T19:48:00Z", event: "blamed", id: 14 };
   await watch.print(ours());
-  expect(untold.asked).toHaveLength(1);
-  // #13 lands, and sluice is slow to answer the ask.
+  expect(inbox.ranIn).toHaveLength(1);
+  // #13 lands, and sluice is slow to answer the collect.
   let answer!: () => void;
-  untold.held = new Promise<void>((done) => {
+  inbox.held = new Promise<void>((done) => {
     answer = done;
   });
   await watch.print(recent(ours(), [landed]));
-  expect(untold.asked).toHaveLength(2);
+  expect(inbox.ranIn).toHaveLength(2);
   await watch.print(recent(ours(), [landed, landed12]));
   await watch.print(recent(ours(), [landed, landed12, blamed14]));
-  expect(untold.asked).toHaveLength(2);
+  expect(inbox.ranIn).toHaveLength(2);
   expect(seen.toasts).toEqual([
     "sluice: #13 landed on main",
     "sluice: #12 landed on main",
     "sluice: #14 was blamed",
   ]);
-  untold.held = null;
+  inbox.held = null;
   answer();
   await clock.settle();
-  expect(untold.asked).toHaveLength(3);
+  expect(inbox.ranIn).toHaveLength(3);
 });
 
 test("a watch that can't be started is tried 1, 2, 4, 8, 16 and 32 s apart, then every minute, and nothing read between", async ($, on) => {
@@ -2204,7 +2204,7 @@ const WITH_217 = {
 /**
  * A host whose watch the test hands each document to, `w.doc` first; whose
  * worktree is 4 commits ahead at `w.head`, whose forecast says `w.answer`,
- * and whose `sluice untold` tells nothing.
+ * and whose `sluice inbox` prints nothing.
  */
 function forecastHost(
   on: On,
@@ -2212,13 +2212,13 @@ function forecastHost(
   w: World,
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
 ) {
-  untoldAfresh();
+  inboxAfresh();
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
-    if (argv === UNTOLD) return untoldRun(e.init?.cwd);
+    if (argv === INBOX) return inboxRun(e.init?.cwd);
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     if (argv === "git rev-parse HEAD") return out(`${w.head}\n`);
     if (argv.startsWith("git rev-list --count ")) return out("4\n");

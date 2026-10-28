@@ -673,15 +673,15 @@ export function statusLine(
   return `sluice: ${plural(queued, "submission")}${yours}${checks}${held}`;
 }
 
-/** What a `sluice untold` run gave: its exit and output, or null when it did not run. */
-export type Asked = { exitCode: number; stdout: string; stderr: string } | null;
+/** What a `sluice inbox` run gave: its exit and output, or null when it did not run. */
+export type Collected = { exitCode: number; stdout: string; stderr: string } | null;
 
 /**
- * What the board does with a `sluice untold` run (51): the turn's text,
- * sluice's words as printed, or null when it told nothing; and the toast,
- * when sluice could not read a branch or the ask failed.
+ * What the board does with a `sluice inbox` run (51): the turn's text,
+ * sluice's words as printed, or null when it printed nothing; and the toast,
+ * when sluice could not read a branch or the collect failed.
  */
-export function askedWords(got: Asked): { text: string | null; toast: string | null } {
+export function collectedWords(got: Collected): { text: string | null; toast: string | null } {
   const said = got?.stderr
     .split("\n")
     .map((l) => l.trim())
@@ -693,7 +693,7 @@ export function askedWords(got: Asked): { text: string | null; toast: string | n
     return { text: text === "" ? null : text, toast: got.exitCode === 3 ? (said ?? null) : null };
   }
   const why = said ?? (got ? `it exited ${got.exitCode}` : "it could not be run");
-  return { text: null, toast: `sluice: couldn't ask for this session's outcomes: ${why}` };
+  return { text: null, toast: `sluice: couldn't collect this session's outcomes: ${why}` };
 }
 
 /**
