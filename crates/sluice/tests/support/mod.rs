@@ -5,7 +5,7 @@
 
 pub mod http;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -204,6 +204,20 @@ thread_local! {
     /// This thread's readers directory, made on first use, or the one
     /// [`share_readers`] gave it.
     static READERS: RefCell<Option<(PathBuf, Option<Scratch>)>> = const { RefCell::new(None) };
+    /// The version of sluice this thread's fakes' host is (129).
+    static VERSION: Cell<&'static str> = const { Cell::new(sluice::VERSION) };
+}
+
+/// The version of sluice the fakes' host is on this thread: `VERSION`,
+/// unless [`set_version`] gave it another.
+pub fn version() -> &'static str {
+    VERSION.with(Cell::get)
+}
+
+/// Make the fakes' host on this thread a sluice of `version`, as a
+/// process of a newer or older sluice than a reader the test holds.
+pub fn set_version(version: &'static str) {
+    VERSION.with(|v| v.set(version));
 }
 
 /// The fakes' host's readers directory (129), the test's own: each test
@@ -226,7 +240,8 @@ pub fn share_readers(dir: PathBuf) {
 }
 
 /// The host over the fakes: session runs counted by the fake check seam,
-/// a reserve, no run directories, and the test's own [`readers`].
+/// a reserve, no run directories, the test's own [`readers`], and the
+/// thread's [`version`].
 pub struct FakeHost {
     pub world: sluice_fakes::World,
     pub reserved: usize,
@@ -297,6 +312,10 @@ impl sluice::exec::Host for FakeHost {
 
     fn readers(&self) -> anyhow::Result<PathBuf> {
         Ok(readers())
+    }
+
+    fn version(&self) -> &str {
+        version()
     }
 
     fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {

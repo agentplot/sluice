@@ -56,6 +56,10 @@ pub trait Host {
     /// Where each repository's reader of its queues keeps its lock and the
     /// overview it last read (129; ADR 0056).
     fn readers(&self) -> Result<PathBuf>;
+    /// The version of sluice this process is, which a reader names (129).
+    fn version(&self) -> &str {
+        crate::VERSION
+    }
     /// The repository's default branch, its HEAD, with its revision here:
     /// whose policy orders the overview (ADR 0036). `None` when HEAD names
     /// no branch.
