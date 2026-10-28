@@ -2213,6 +2213,263 @@ fn watch_leads_once_the_readers_wait_ends() {
     assert_eq!(readers_doc().as_ref(), Some(led));
 }
 
+// ---------------------------------------------------------------------------
+// A read the reader could not make (129, 133)
+// ---------------------------------------------------------------------------
+
+/// The words git fails to read a branch's records with on a loaded host.
+const UNREADABLE: &str = "fatal: unable to read 4b825dc6: Resource temporarily unavailable";
+
+/// Queues whose records a watch reads at each tick: submission 1, queued.
+fn one_queued() -> Fakes {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f
+}
+
+/// The error document a failing overview prints, with `words`.
+fn failure(words: &str) -> serde_json::Value {
+    sluice::told::document(sluice::told::Kind::Internal, words, &[])
+}
+
+/// `doc` is the error document a failing overview prints, its message
+/// holding `words` whole (133).
+fn assert_failure(doc: &serde_json::Value, words: &str) {
+    assert_eq!(doc["error"]["kind"], "internal", "{doc}");
+    let message = doc["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains(words), "{doc}");
+    assert_eq!(doc["error"]["next"], serde_json::json!([]), "{doc}");
+}
+
+/// 129: a watch that is the reader and cannot read the queues writes the
+/// failure as the reader's document, and the overview once it reads it.
+#[test]
+fn a_watchs_read_fails_and_then_succeeds() {
+    let f = one_queued();
+    let written = RefCell::new(Vec::new());
+    let between = |n: usize| {
+        written
+            .borrow_mut()
+            .push(readers_doc().expect("a document"));
+        match n {
+            1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
+            2 => f.world.fail_state_reads(BRANCH, None),
+            _ => {}
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let written = written.into_inner();
+    assert_eq!(written[0]["branches"][0]["depth"], 1, "{}", written[0]);
+    assert_failure(&written[1], UNREADABLE);
+    assert_eq!(written[2]["schema"], "sluice/overview@1", "{}", written[2]);
+    assert_eq!(written[2]["branches"][0]["depth"], 1, "{}", written[2]);
+}
+
+/// 129: a watch whose read fails prints the failure as a line and keeps
+/// watching: the overview it reads next is printed again, unchanged as it
+/// is from the first.
+#[test]
+fn a_failed_read_under_load() {
+    let f = one_queued();
+    let between = |n: usize| match n {
+        1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
+        2 => f.world.fail_state_reads(BRANCH, None),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 3, "{out}");
+    assert_failure(&lines[1], UNREADABLE);
+    let untimed = sluice::reader::untimed;
+    assert_eq!(untimed(&lines[2]), untimed(&lines[0]), "{out}");
+}
+
+/// 129: a failure that stands with the same words is written once and
+/// printed once: what the test put in its place after the first stands.
+#[test]
+fn a_standing_failure_is_written_once() {
+    let f = one_queued();
+    let put = serde_json::json!({ "put": "by the test" });
+    let between = |n: usize| match n {
+        1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
+        2 => {
+            assert_failure(&readers_doc().expect("a document"), UNREADABLE);
+            rewrite_readers_doc(&put);
+        }
+        _ => {}
+    };
+    // Five ticks after the first fail.
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(pause.n.get(), 6, "{out}");
+    assert_eq!(readers_doc(), Some(put));
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_failure(&lines[1], UNREADABLE);
+}
+
+/// 129: a watch whose repository is gone ends at its next read, as a
+/// failing overview does, with the read's words.
+#[test]
+fn a_watch_ends_once_its_repository_is_removed() {
+    let f = one_queued();
+    let gone = "fatal: not a git repository: '/fake/repo.git'";
+    let between = |n: usize| {
+        if n == 1 {
+            f.world.repository_gone(true);
+            f.world.fail_state_reads(BRANCH, Some(gone));
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 5,
+        between: &between,
+    };
+    let cli = Cli::try_parse_from(["sluice", "overview", "--json", "--watch"]).unwrap();
+    let mut out = Vec::new();
+    let host = support::FakeHost {
+        world: f.world.clone(),
+        reserved: 0,
+    };
+    let e = run(cli, f.seams(), &host, &(), &(), &f.clock, &pause, &mut out).unwrap_err();
+    // `main` prints it as the error document and exits 3.
+    assert_failure(&failure(&format!("{e:#}")), gone);
+    assert_eq!(pause.n.get(), 1);
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(out.lines().count(), 1, "{out}");
+}
+
+/// 129: one write of the reader's document that fails ends no watch: it
+/// prints what it read, and writes it at its next tick.
+#[test]
+fn a_watch_survives_a_failed_write_of_the_readers_document() {
+    let f = one_queued();
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let name = sluice::runs::flat_name(REPOSITORY);
+    // Where the document is written before it is renamed into place: a
+    // directory there fails the write.
+    let tmp = support::readers().join(format!(".{name}.tmp"));
+    let written = RefCell::new(Vec::new());
+    let between = |n: usize| {
+        written
+            .borrow_mut()
+            .push(readers_doc().expect("a document"));
+        match n {
+            1 => {
+                std::fs::create_dir(&tmp).unwrap();
+                sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+            }
+            2 => std::fs::remove_dir(&tmp).unwrap(),
+            _ => {}
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[1]["branches"][0]["depth"], 2, "{out}");
+    let written = written.into_inner();
+    assert_eq!(written[1], written[0]);
+    assert_eq!(written[2]["branches"][0]["depth"], 2, "{}", written[2]);
+}
+
+/// 129: a lock the follower could not try leaves it following, and it
+/// tries the lock again at its next tick.
+#[test]
+fn a_watch_survives_a_failed_try_of_the_readers_lock() {
+    let f = setup();
+    let doc = seven_testing();
+    let reader = RefCell::new(Some(reader_of(REPOSITORY, &doc)));
+    let lock = readers_file(REPOSITORY, "lock");
+    let between = |n: usize| match n {
+        // The reader stops, and the lock cannot be opened.
+        1 => {
+            drop(reader.borrow_mut().take());
+            std::fs::remove_file(&lock).unwrap();
+            std::fs::create_dir(&lock).unwrap();
+        }
+        2 => std::fs::remove_dir(&lock).unwrap(),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0], doc);
+    assert_eq!(lines[1]["branches"], serde_json::json!([]), "{out}");
+    assert_eq!(readers_doc().as_ref(), Some(&lines[1]));
+}
+
+/// 129: a follower prints the reader's failure once, as any document the
+/// reader writes, and the overview after it.
+#[test]
+fn a_follower_prints_the_readers_failure() {
+    let f = setup();
+    let doc = seven_testing();
+    let _reader = reader_of(REPOSITORY, &doc);
+    let between = |n: usize| match n {
+        1 => rewrite_readers_doc(&failure("HTTP 503")),
+        3 => rewrite_readers_doc(&doc),
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, [doc.clone(), failure("HTTP 503"), doc], "{out}");
+}
+
+/// 129: a watch stopped while a failure stands ends as a stopped watch
+/// does.
+#[test]
+fn a_watch_stopped_while_a_failure_stands() {
+    let f = one_queued();
+    f.world.fail_state_reads(BRANCH, Some(UNREADABLE));
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 9,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(pause.n.get(), 10, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert_failure(&lines[0], UNREADABLE);
+}
+
 #[test]
 fn amend_and_withdraw() {
     let f = setup();

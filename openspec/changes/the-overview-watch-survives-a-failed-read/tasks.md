@@ -8,7 +8,7 @@
   records, through the records seam, then returns an error carrying the
   words. Verified by a unit test in the crate that the next read fails
   with the words and a read after clearing succeeds (`fakes:test`).
-- [ ] 1.2 Give the world a flag saying the repository is gone, and the
+- [x] 1.2 Give the world a flag saying the repository is gone, and the
   tests' `FakeHost` (`crates/sluice/tests/support/mod.rs`) the new
   `Host::repository_gone` answering from it. Verified by its use in
   group 2's tests (`cli:test`).
@@ -20,7 +20,7 @@
   path is no longer a directory through a free function. Verified by a
   unit test of that function on a scratch directory before and after it
   is removed (`cli:test`).
-- [ ] 2.2 In `overview::run`, catch a failed read of the overview: unless
+- [x] 2.2 In `overview::run`, catch a failed read of the overview: unless
   the host says the repository the reader was taken for is gone, the
   reader writes, and the watch prints, the error document a failing
   overview prints (`told::document(Kind::Internal, "{e:#}", &[])`), and
@@ -29,7 +29,7 @@
   spec's scenarios "A watch's read fails and then succeeds", "A failed
   read under load", "A standing failure is written once" and "The
   repository is removed", with the fakes of group 1.
-- [ ] 2.3 In `overview::run`, a failed write of the reader's document no
+- [x] 2.3 In `overview::run`, a failed write of the reader's document no
   longer ends the watch: the watch prints what it read and the write is
   made again at the next tick; a failed `lead_once_free` leaves the watch
   following and is tried again at the next tick. Verified by the
@@ -37,7 +37,7 @@
   document made unwritable for one tick (`cli:test`), and by a unit test
   in `reader.rs` that a write that failed is made again even when the
   document is unchanged.
-- [ ] 2.4 Verify a follower watch prints the reader's error document once
+- [x] 2.4 Verify a follower watch prints the reader's error document once
   and the overview after it, and a watch stopped while a failure stands
   exits 130: the scenarios "A follower prints the reader's failure" and
   "Stopped while a failure stands" (`cli:test`).
