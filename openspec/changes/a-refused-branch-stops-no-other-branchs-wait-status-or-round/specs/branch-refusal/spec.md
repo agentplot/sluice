@@ -86,16 +86,47 @@ its next command.
 
 `sluice run` SHALL pass by a branch whose status read or round fails,
 and SHALL go on in the same pass to every other branch, whose rounds
-run as when that branch reads (26; rule core.14). A branch passed by
-SHALL NOT change the exit `sluice run` ends with.
+run as when that branch reads (26; rule core.14).
 
 #### Scenario: One branch refused, the rest move
 
 - **GIVEN** submissions queued on `main` and on `bolt/a`, and
   `bolt/b`'s policy refused
 - **WHEN** `sluice run --rounds 3` runs
-- **THEN** the submissions on `main` and `bolt/a` land, and it exits 0
-  (S64)
+- **THEN** the submissions on `main` and `bolt/a` land (S64)
+
+### Requirement: A bounded run ends as the last round's failed step would
+
+`sluice run --rounds <n>` that passed a branch by in its last round
+SHALL end as `sluice step` of that branch would: it SHALL exit 3, and
+SHALL write on stderr one line for each branch passed by in that round,
+naming the branch with the failure's words, whole and unchanged (26).
+A bounded run whose last round passed no branch by SHALL exit 0,
+whatever it passed by in earlier rounds.
+
+#### Scenario: Refused through the last round
+
+- **GIVEN** submissions queued on `main` and on `bolt/a`, and
+  `bolt/b`'s policy refused on every round
+- **WHEN** `sluice run --rounds 3` runs
+- **THEN** the submissions on `main` and `bolt/a` land, its stderr has
+  a line naming `bolt/b` with the words it was refused with, and it
+  exits 3
+
+#### Scenario: Read by the last round
+
+- **GIVEN** `bolt/b` refused on the first round and read on the second
+  and third
+- **WHEN** `sluice run --rounds 3` runs
+- **THEN** it says `bolt/b` passed by once, and exits 0
+
+#### Scenario: A host whose config names its systems
+
+- **GIVEN** a host whose config names its systems, and `bolt/b`'s
+  policy refused
+- **WHEN** `sluice run --rounds 1` runs
+- **THEN** every other branch's round runs, and it exits 3 naming
+  `bolt/b`
 
 ### Requirement: sluice run says a branch passed by once while it stands
 

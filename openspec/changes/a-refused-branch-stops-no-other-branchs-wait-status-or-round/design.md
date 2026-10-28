@@ -102,8 +102,7 @@ branch; the line `<branch> could not be read, passed by: <words>` is
 written to stdout when the words differ from those held, and a branch
 whose status read and round succeed leaves the map, so a refusal after
 it is said again. This mirrors `tell_hold` (121), which the clause
-cites for "said once". Passing a branch by does not change the run's
-exit.
+cites for "said once".
 
 The round's failure is caught too, not only the status read's: a round
 reads the branch's policy at its tip, which the status read (at the
@@ -117,7 +116,37 @@ Alternative: mark the reads that can be refused with a typed error, as
 Rejected: every seam read would need the mark, and a failure it missed
 would still end every branch's run.
 
-### D4. Rounds pass other branches they cannot read
+### D4. A bounded run ends as the last pass's failed step would
+
+Clause 26 says a run bounded to a number of rounds that passed a branch
+by in its last round ends as a step of that branch would, naming the
+branch. A failed `sluice step` prints `sluice: <words>` on stderr and
+exits 3 (`main.rs`, the `Err` arm of `run`). So the loop keeps, per
+pass, the branches it passed by in that pass with their words, apart
+from the said-once map; when `--rounds` is reached and that list is
+not empty, it writes `sluice: <branch>: <words>` for each, in branch
+order, through `telemetry::error` as `main` writes a step's failure,
+and returns `Ok(INTERNAL)`. An empty list returns 0 as now.
+
+- Only the last pass counts: a branch passed by on an earlier pass and
+  read on the last is no failure of the run's, as a step run then would
+  have succeeded.
+- The stderr line is written whether or not the stdout line was said
+  in that pass: the said-once rule is for the output a person reads;
+  the exit is for whatever started the run.
+- Interrupted by Ctrl-C, the run exits 130 as now; a branch whose read
+  Ctrl-C ended is not passed by (the existing `INTERRUPTED` arm).
+- An unbounded run never reaches the bound; it only says it once while
+  it stands, and its exit is unchanged.
+
+`Ok(INTERNAL)` rather than an `Err`: the run did its work for every
+other branch, and the in-process tests read the exit without the
+error path; the words still go where a step's go.
+
+Alternative: one line on stderr joining every branch. Rejected: a step
+names one branch per line, and a log reader greps by branch.
+
+### D5. Rounds pass other branches they cannot read
 
 - `capacity`: a branch whose line cannot be read adds nothing. A run
   this instance marked starting there has, once started, its checks in
@@ -131,7 +160,7 @@ would still end every branch's run.
   after a place was freed is warned and the place is reported as freed
   (the profile already let it go); the rest go on.
 
-### D5. The default branch's refusal is its own
+### D6. The default branch's refusal is its own
 
 `signed_remotes` takes the default branch's policy only when it reads;
 when `policy_of(&default)` fails, it lists the remotes this host has
@@ -151,6 +180,10 @@ and an unfound lookup's list among them.
   until this host reads it] → Only on a host that never read a state
   from that remote; record 0069's unit, which reads the remote and
   signers alone, lists it again.
+- [A bounded run from cron exits 3 every time while a branch stays
+  refused] → That is the clause's intent: whatever started it learns
+  from the exit, as it would from a step of that branch; stderr names
+  the branch, and every other branch moved in the same run.
 - [Words carrying a revision change each pass and are said each pass]
   → The words are the policy read's, naming a revision that changes
   only when the branch moves.

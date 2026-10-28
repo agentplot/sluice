@@ -34,6 +34,13 @@ refusal stops.
   with the branch and the words, while the same refusal stands, and
   again only when the words change or the branch is refused anew after
   being read.
+- `sluice run --rounds <n>` that passed a branch by in its last pass
+  ends as `sluice step` of that branch would: exit 3, with the branch
+  and its words on stderr, one line for each branch passed by in that
+  pass, so cron or a timer that started it learns from the exit and not
+  from its output alone. A bounded run whose last pass read every
+  branch exits 0, whatever it passed by before; `sluice run` with no
+  bound says it once while it stands, and exits as it does now.
 - A round of any branch no longer reads past its own branch into one
   that cannot be read: the count of runs a `sluice run` instance has
   starting on its other branches, the check of the host's systems
@@ -44,8 +51,8 @@ refusal stops.
   policy cannot be read, with the remotes this host has read a state
   from before; the default branch's refusal is its own.
 - The site's command reference says a branch that cannot be read stops
-  no other branch's wait, status or round, and what a lookup and
-  `sluice run` say of it.
+  no other branch's wait, status or round, what a lookup and `sluice
+  run` say of it, and how a bounded run exits.
 
 Out of scope:
 
