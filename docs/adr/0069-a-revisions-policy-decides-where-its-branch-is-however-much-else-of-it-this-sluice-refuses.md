@@ -1,7 +1,7 @@
 ---
 number: 69
 title: a revision's policy decides where its branch is however much else of it this sluice refuses
-status: proposed
+status: accepted
 date: 2026-10-28
 decision-makers:
 - Chuck Swanberg
@@ -9,9 +9,9 @@ decision-makers:
 
 # a revision's policy decides where its branch is however much else of it this sluice refuses
 
-Status: proposed to the user on 2026-10-28, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-28, on their card ("Approved").
 
-Deciders: madswan-design, on madswan-planner's question of 2026-10-28 after the user's push ("124 says a lagging revision decides nothing against one that names a remote; a lagging revision whose policy cannot be parsed should decide nothing either, else a hand push can never clear a refusal on any host") and on slc-2-conductor's finding of the same day (afterthought/crew-state, madswan/main, signal 2026-10-28-slc-2-conductor-3f0e396d/01-one-branchs-refused-policy-stops-every-wait); the user's yes is asked on the record's card.
+Deciders: the user, on the record's card (2026-10-28): "Approved"; madswan-design for the shape, on madswan-planner's question of 2026-10-28 after the user's push ("124 says a lagging revision decides nothing against one that names a remote; a lagging revision whose policy cannot be parsed should decide nothing either, else a hand push can never clear a refusal on any host") and on slc-2-conductor's finding of the same day (afterthought/crew-state, madswan/main, signal 2026-10-28-slc-2-conductor-3f0e396d/01-one-branchs-refused-policy-stops-every-wait).
 Sources: statement clauses 26, 56, 124, 133 and S64 in agentplot/blueprints `design/sluice/requirements.md` (as amended 2026-10-28); rules core.11, core.14, core.27; ADRs 0049, 0059, 0060; on main at c76cd3be: `crates/sluice/src/profiles/branches.rs` (`routing`, `policy_at`), `crates/sluice/src/profiles/records.rs` (`route`), `crates/sluice-core/src/lib.rs` (`find`), `crates/sluice-core/src/ops.rs` (`state`, `moved_to`), `crates/sluice/src/lib.rs` (`Command::Run`); deneb on 2026-10-28 under sluice 0.51.3: `sluice overview` and `sluice wait 250` both exiting 3 on `bolt/a-run-compiles-through-a-shared-cache`'s policy at 4f6fe55f.
 
 ## Context and problem statement
@@ -44,8 +44,8 @@ Good: a policy change that retires a table, as ADR 0049 did, strands no host who
 
 Bad: a revision's policy is read in two forms where the branch is routed to a remote, the narrow one for the routing and the whole one at the remote's revision for the gate; the second read is the one 56 always made.
 
-Neutral: rule core.27 is amended with the narrow reading; statement clause 124 and scenario S64 carry it, marked proposed until the user's yes.
+Neutral: rule core.27 is amended with the narrow reading; statement clause 124 and scenario S64 carry it.
 
 ## More information
 
-The unit this record calls for, queued once the user accepts it: the routing reads each revision's policy only as far as it needs, and a revision this sluice refuses elsewhere decides the remote all the same. The companion unit under clause 26, that a branch sluice cannot read is refused alone, is queued from the clause and waits on no card.
+The unit this record calls for, queued on its acceptance: the routing reads each revision's policy only as far as it needs, and a revision this sluice refuses elsewhere decides the remote all the same. The companion unit under clause 26, that a branch sluice cannot read is refused alone, is queued from the clause and waits on no card.

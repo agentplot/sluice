@@ -21,8 +21,8 @@ const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"sh check.sh\"\n
 [branches.\"bolt/*\"]\ntimeout = \"1m\"\ntrust = [\"open\", \"sandbox\", \"container\"]\n";
 
 /// The check: fails while a file named `broken` exists, after `SLOW`
-/// seconds.
-const CHECK: &str = "sleep ${SLOW:-0}\ntest ! -e broken\n";
+/// seconds, and takes five seconds more while one named `slow` does.
+const CHECK: &str = "sleep ${SLOW:-0}\nif test -e slow; then sleep 5; fi\ntest ! -e broken\n";
 
 struct Scratch {
     repo: Repo,
@@ -33,6 +33,21 @@ struct Scratch {
 impl Scratch {
     fn new(name: &str) -> Scratch {
         Scratch::with_policy(name, POLICY)
+    }
+
+    /// A scratch whose release command writes the checkout it ran for to
+    /// the log it returns, while that checkout still exists.
+    fn releasing(name: &str) -> (Scratch, PathBuf) {
+        let log = std::env::temp_dir().join(format!("sluice-{name}-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        let policy = POLICY.replace(
+            "command = \"sh check.sh\"\n",
+            &format!(
+                "command = \"sh check.sh\"\nrelease = \"test -d \\\"$SLUICE_CHECKOUT\\\" && echo \\\"$SLUICE_CHECKOUT\\\" >> {}\"\n",
+                log.display()
+            ),
+        );
+        (Scratch::with_policy(name, &policy), log)
     }
 
     fn with_policy(name: &str, policy: &str) -> Scratch {
@@ -122,6 +137,43 @@ impl Scratch {
     fn tip(&self) -> String {
         self.repo.rev("bolt/x")
     }
+
+    /// Every submission `bolt/x` has had from the worktree on
+    /// `unit/<name>`.
+    fn subs_from(&self, name: &str) -> Vec<serde_json::Value> {
+        let out = self.sluice(&["status", "bolt/x", "--json", "--all"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let from = format!("unit/{name}");
+        v["submissions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|x| x["from"]["worktree"] == from.as_str())
+            .collect()
+    }
+
+    /// Rounds of `bolt/x` until submission `id` lands, at most a minute.
+    fn land(&self, id: u64) {
+        let until = Instant::now() + Duration::from_secs(60);
+        while self.status(id)["state"] != "landed" {
+            assert!(Instant::now() < until, "{}", self.status(id));
+            let out = self.sluice(&["step", "bolt/x"]);
+            assert!(out.status.success(), "{}", text(&out));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+/// How many times the release `log` names `dir`.
+fn released(log: &Path, dir: &Path) -> usize {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| Path::new(l) == dir)
+        .count()
 }
 
 fn text(out: &Output) -> String {
@@ -346,6 +398,352 @@ fn a_resubmission_withdraws_the_first() {
     assert_eq!(s.status(one)["state"], "withdrawn");
 }
 
+/// Record 0065, C.5 worktrunk: run again after a `--no-wait` submit,
+/// `wt submit` makes no submission and withdraws none; it follows the one
+/// standing to its landing, says so, then releases and removes the
+/// worktree.
+#[test]
+fn run_again_follows_its_submission_and_removes_on_landing() {
+    let (s, log) = Scratch::releasing("wt-again-lands");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let a_canon = std::fs::canonicalize(&a).unwrap();
+    let out = s.wt_submit(&a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&format!(
+            "wt submit: following submission {one}, already submitted at this revision"
+        )),
+        "{}",
+        text(&out)
+    );
+    // Its landing, then the release's own line.
+    let tip = s.tip();
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(&format!("passed · landed as {}\n", &tip[..7])),
+        "{}",
+        text(&out)
+    );
+    let subs = s.subs_from("a");
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(subs[0]["id"], one);
+    assert_eq!(s.status(one)["state"], "landed");
+    assert_eq!(released(&log, &a_canon), 1, "{}", text(&out));
+    assert!(!a.exists(), "{}", text(&out));
+    let _ = std::fs::remove_file(&log);
+}
+
+/// Already landed: a run again runs no round, which would start the
+/// submission queued behind it, and releases and removes the worktree.
+#[test]
+fn run_again_once_landed_removes_at_once() {
+    let (s, log) = Scratch::releasing("wt-again-landed");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(one);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let two = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    let a_canon = std::fs::canonicalize(&a).unwrap();
+    let out = s.wt_submit(&a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(s.status(two)["state"], "queued", "{}", text(&out));
+    assert_eq!(s.subs_from("a").len(), 1);
+    assert_eq!(released(&log, &a_canon), 1, "{}", text(&out));
+    assert!(!a.exists(), "{}", text(&out));
+    let _ = std::fs::remove_file(&log);
+}
+
+/// Landed, kept: a run again under `--no-remove` exits 0 and neither
+/// releases nor removes the worktree.
+#[test]
+fn run_again_once_landed_keeps_under_no_remove() {
+    let (s, log) = Scratch::releasing("wt-again-kept");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(one);
+    let out = s.wt_submit(&a, &["--no-remove"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    assert_eq!(released(&log, &a), 0, "released under --no-remove");
+    assert_eq!(s.subs_from("a").len(), 1);
+    let _ = std::fs::remove_file(&log);
+}
+
+/// A first submit under a time limit: `wt submit --timeout` submits
+/// without waiting, then follows; out of time it exits 5 with only that
+/// submission's record on stdout and keeps the worktree. A later run makes
+/// no new submission, exits 0 once it lands, and the worktree is gone.
+#[test]
+fn a_first_submit_under_a_time_limit_submits_then_follows() {
+    let s = Scratch::new("wt-first-timeout");
+    let a = s.session("a", &[("slow", "x\n")]);
+    let out = s.wt_submit(&a, &["--timeout", "2s", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    let subs = s.subs_from("a");
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    let one = subs[0]["id"].as_u64().unwrap();
+    assert_eq!(record["id"], one, "{record}");
+    assert!(
+        record["state"] == "queued" || record["state"] == "testing",
+        "{record}"
+    );
+    assert!(a.join("slow").exists(), "{}", text(&out));
+
+    let out = s.wt_submit(&a, &["--timeout", "9m", "--json"]);
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["id"], one, "{record}");
+    assert_eq!(record["state"], "landed", "{record}");
+    assert_eq!(s.subs_from("a").len(), 1);
+    assert!(!a.exists(), "{}", text(&out));
+}
+
+/// Blamed while followed: a run again exits 1, as `sluice wait` does, and
+/// the worktree stays.
+#[test]
+fn run_again_blamed_keeps_the_worktree() {
+    let s = Scratch::new("wt-again-blamed");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let one = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&b, &["--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("following submission {one}")),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(s.status(one)["state"], "failed");
+    assert_eq!(s.subs_from("b").len(), 1);
+    assert!(b.join("broken").exists(), "{}", text(&out));
+}
+
+/// Blamed, the same head submitted again: nothing stands, so a run again
+/// is a new submission of that head, tested again (67).
+#[test]
+fn run_again_after_a_blame_submits_the_same_head() {
+    let s = Scratch::new("wt-again-retried");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let out = s.wt_submit(&b, &[]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    let out = s.wt_submit(&b, &[]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    assert!(!text(&out).contains("following"), "{}", text(&out));
+    let subs = s.subs_from("b");
+    assert_eq!(subs.len(), 2, "{subs:?}");
+    assert_eq!(subs[0]["head"], subs[1]["head"], "{subs:?}");
+    assert_eq!(subs[1]["state"], "failed", "{subs:?}");
+    assert!(b.join("broken").exists());
+}
+
+/// `--timeout` bounds a wait: with `--no-wait` it exits 64, saying so,
+/// and submits nothing.
+#[test]
+fn a_time_limit_without_waiting_is_refused() {
+    let s = Scratch::new("wt-nowait-timeout");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s.wt_submit(&a, &["--no-wait", "--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
+    assert!(
+        text(&out).contains("--timeout is for a run that waits"),
+        "{}",
+        text(&out)
+    );
+    assert!(s.subs_from("a").is_empty());
+    assert!(a.join("a.txt").exists());
+}
+
+/// Record 0065: a `--no-wait` run again where a submission stands answers
+/// with its record and exits 0, submitting nothing and withdrawing nothing.
+#[test]
+fn a_no_wait_run_again_answers_with_what_stands() {
+    let s = Scratch::new("wt-nowait-again");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&a, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["id"], one, "{record}");
+    assert_eq!(record["state"], "queued", "{record}");
+    let subs = s.subs_from("a");
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert_eq!(s.status(one)["state"], "queued");
+}
+
+/// Landed, then a `--no-wait` run again: it answers with the `landed`
+/// record and keeps the worktree, since only a run that waits removes.
+#[test]
+fn a_no_wait_run_again_once_landed_keeps_the_worktree() {
+    let s = Scratch::new("wt-nowait-landed");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(one);
+    let out = s.wt_submit(&a, &["--no-wait", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["id"], one, "{record}");
+    assert_eq!(record["state"], "landed", "{record}");
+    assert_eq!(s.subs_from("a").len(), 1);
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+}
+
+/// Only a new head submits again: a run naming `--after` where a
+/// submission stands exits 64, names `sluice amend <id>`, and withdraws
+/// nothing.
+#[test]
+fn a_place_in_the_queue_where_one_stands_is_refused() {
+    let s = Scratch::new("wt-again-after");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let two = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&a, &["--no-wait", "--after", &two.to_string()]);
+    assert_eq!(out.status.code(), Some(sluice::USAGE), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("sluice amend {one}")),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(s.status(one)["state"], "queued");
+    assert_eq!(s.subs_from("a").len(), 1);
+}
+
+/// Where sluice's status cannot be read, a run that would submit submits
+/// nothing and exits 3 with sluice's words: a submit at the revision
+/// standing would withdraw it (67).
+#[test]
+fn an_unread_status_submits_nothing() {
+    let s = Scratch::new("wt-unread");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let version = s.repo.dir().join(".git/sluice/bolt/x/version");
+    let kept = std::fs::read(&version).unwrap();
+    std::fs::write(&version, "unreadable\n").unwrap();
+    let out = s.wt_submit(&a, &["--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::INTERNAL), "{}", text(&out));
+    assert!(
+        text(&out).contains("could not read whether a submission stands, so nothing was submitted"),
+        "{}",
+        text(&out)
+    );
+    std::fs::write(&version, kept).unwrap();
+    assert_eq!(s.status(one)["state"], "queued");
+    assert_eq!(s.subs_from("a").len(), 1);
+    assert!(a.join("a.txt").exists());
+}
+
+/// A commit made while a run again follows: the submission lands, the
+/// run exits 0, says sluice records no landing of the worktree's head,
+/// and keeps it.
+#[test]
+fn a_commit_while_followed_keeps_the_worktree() {
+    let s = Scratch::new("wt-again-commit");
+    let a = s.session("a", &[("slow", "x\n")]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let child = s
+        .command("wt", &a)
+        .args(["submit", "bolt/x", "--timeout", "9m"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Its run started, so the read of what stands is behind it.
+    let runs = s.repo.dir().join(".git/sluice/.runs");
+    let until = Instant::now() + Duration::from_secs(30);
+    while std::fs::read_dir(&runs).map_or(true, |mut d| d.next().is_none()) {
+        assert!(Instant::now() < until, "no run started");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::fs::write(a.join("more.txt"), "more\n").unwrap();
+    s.repo.git(&["-C", a.to_str().unwrap(), "add", "-A"]);
+    s.repo
+        .git(&["-C", a.to_str().unwrap(), "commit", "-qm", "more"]);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    assert_eq!(s.status(one)["state"], "landed");
+    assert!(
+        text(&out).contains("sluice records no landing of this worktree's head, so it was kept"),
+        "{}",
+        text(&out)
+    );
+    assert!(a.join("more.txt").exists(), "{}", text(&out));
+}
+
+/// Record 0065, 25: `sluice wait` is the core's, and removes no worktree.
+/// A worktree that ran `sluice exec` submits with `wt submit --no-wait`,
+/// and `sluice wait <id>` follows it to its landing: it exits 0, and the
+/// worktree is still there at its head, its ports still held.
+#[test]
+fn sluice_wait_removes_nothing() {
+    let policy = format!("{POLICY}\n[checkout]\nports = [\"web\"]\nports_from = \"41600\"\n");
+    let s = Scratch::with_policy("wt-wait-keeps", &policy);
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["exec", "bolt/x"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let canon = std::fs::canonicalize(&a).unwrap();
+    let held = || {
+        let out = s.sluice(&["status", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        doc["worktrees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|w| w["worktree"] == canon.to_str().unwrap())
+            .cloned()
+            .unwrap_or_else(|| panic!("not held: {doc}"))
+    };
+    let ports = held()["ports"].clone();
+    assert!(ports["SLUICE_PORT_WEB"].is_string(), "{ports}");
+    let head = s
+        .repo
+        .git(&["-C", a.to_str().unwrap(), "rev-parse", "HEAD"]);
+    let one = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &one.to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    assert_eq!(s.status(one)["state"], "landed");
+    assert!(a.join("a.txt").exists(), "{}", text(&out));
+    assert_eq!(
+        s.repo
+            .git(&["-C", a.to_str().unwrap(), "rev-parse", "HEAD"]),
+        head
+    );
+    let after = held();
+    assert_eq!(after["ports"], ports, "{after}");
+    assert_eq!(after["removed"], false, "{after}");
+}
+
 /// 5, 60: Ctrl-C to a waiting submit ends the wait alone: the submission
 /// stays queued and its run goes on, and later rounds land it.
 #[test]
@@ -397,24 +795,8 @@ fn ctrl_c_ends_only_the_wait() {
 /// checkout is released as well, as every place sluice made is.
 #[test]
 fn wt_submit_releases_before_it_removes() {
-    let log = std::env::temp_dir().join(format!("sluice-wt-release-{}.log", std::process::id()));
-    let _ = std::fs::remove_file(&log);
-    let policy = POLICY.replace(
-        "command = \"sh check.sh\"\n",
-        &format!(
-            "command = \"sh check.sh\"\nrelease = \"test -d \\\"$SLUICE_CHECKOUT\\\" && echo \\\"$SLUICE_CHECKOUT\\\" >> {}\"\n",
-            log.display()
-        ),
-    );
-    let s = Scratch::with_policy("wt-release", &policy);
-    let released = |dir: &Path| -> usize {
-        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        std::fs::read_to_string(&log)
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| Path::new(l) == dir)
-            .count()
-    };
+    let (s, log) = Scratch::releasing("wt-release");
+    let released = |dir: &Path| released(&log, dir);
     let a = s.session("a", &[("a.txt", "a\n")]);
     let a_canon = std::fs::canonicalize(&a).unwrap();
     let out = s

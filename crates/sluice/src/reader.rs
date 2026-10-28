@@ -195,8 +195,15 @@ impl Follow {
         }
     }
 
-    /// The lead, holding `lock`: it names its version beside the lock.
+    /// The lead, holding `lock`: it names its version beside the lock. An
+    /// earlier reader's document saying the repository had no sluice is
+    /// removed before the lead reads, so no watch that starts meanwhile
+    /// ends on it; a removal that fails is passed over, as the lead's first
+    /// write replaces it (129).
     fn lead(&self, lock: File) -> Result<Lead> {
+        if self.read().is_some_and(|doc| no_sluice(&doc)) {
+            let _ = std::fs::remove_file(&self.files.doc);
+        }
         let Files { version, vtmp, .. } = &self.files;
         let named = serde_json::json!({ "version": self.version });
         write_whole(vtmp, version, &serde_json::to_vec(&named)?)?;
@@ -264,6 +271,12 @@ fn release(version: &str) -> Option<[u64; 3]> {
         number(parts.next()?)?,
     ];
     parts.next().is_none().then_some(numbers)
+}
+
+/// Whether `doc` is a reader's last, saying its repository has no sluice:
+/// the overview with `"set_up": false` (129).
+pub fn no_sluice(doc: &Value) -> bool {
+    doc.get("set_up") == Some(&Value::Bool(false))
 }
 
 /// `doc` but for the time it was read: what a watch prints again, and a
@@ -566,6 +579,21 @@ mod tests {
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:02Z", 2)));
     }
 
+    /// A write that failed is made again, though the document has changed
+    /// only in its time since: the follower reads it once it is written.
+    #[test]
+    fn a_write_that_failed_is_made_again() {
+        let s = Scratch::new("rewrite");
+        let mut lead = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let follow = follow(Reader::take(&s.0, REPO, NEW).unwrap());
+        std::fs::create_dir(&lead.files.tmp).unwrap();
+        assert!(lead.write(&doc("2026-10-25T09:00:00Z", 1)).is_err());
+        assert_eq!(follow.read(), None);
+        std::fs::remove_dir(&lead.files.tmp).unwrap();
+        lead.write(&doc("2026-10-25T09:00:01Z", 1)).unwrap();
+        assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
+    }
+
     /// A repository whose name is the longest one kept whole, as a
     /// scratch repository deep in a checkout is, has its files as any
     /// other: no name of them too long for a file system.
@@ -578,6 +606,30 @@ mod tests {
         let follow = follow(Reader::take(&s.0, &repository, NEW).unwrap());
         lead.write(&doc("2026-10-25T09:00:00Z", 1)).unwrap();
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
+    }
+
+    /// 129: an earlier reader's document saying the repository had no
+    /// sluice is gone once a lead takes the lock; any other stays for the
+    /// followers until the lead writes.
+    #[test]
+    fn a_lead_removes_an_earlier_readers_finding_of_no_sluice() {
+        let s = Scratch::new("no-sluice");
+        let mut ended = doc("2026-10-25T09:00:00Z", 0);
+        ended["branches"] = serde_json::json!([]);
+        ended["set_up"] = false.into();
+        let mut first = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        first.write(&ended).unwrap();
+        let next = follow(Reader::take(&s.0, REPO, NEW).unwrap());
+        assert_eq!(next.read(), Some(ended.clone()));
+        drop(first);
+        let mut second = next.try_lead().unwrap().expect("the lock, its holder gone");
+        assert_eq!(next.read(), None);
+        assert!(!next.files.doc.exists());
+
+        second.write(&doc("2026-10-25T09:00:01Z", 1)).unwrap();
+        drop(second);
+        let _third = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        assert_eq!(next.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
     }
 
     /// A half-written temporary file is never read: a follower reads the

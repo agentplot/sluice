@@ -20,8 +20,18 @@ every=$((term / 4))
 [ "$every" -ge 1 ] || every=1
 
 # The lease: the watcher's pid and when it last renewed, then the plugin
-# directory and version it runs, so a reinstall replaces it.
+# directory and version it runs, so a reinstall replaces it, and the
+# server it serves, so a server started in a stopped one's place does too.
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/herdr-plugin.toml")
+
+# The herdr server, known by its socket's inode: a server makes its socket
+# when it starts and removes it when it stops, so another server at the
+# same path has another socket. Nothing where there is no socket.
+socket_id() {
+  [ -e "${HERDR_SOCKET_PATH:-}" ] || return 0
+  # shellcheck disable=SC2012 # the inode comes first, whatever the name; find has no portable way to print it.
+  ls -di "$HERDR_SOCKET_PATH" 2>/dev/null | awk '{ print $1 }'
+}
 
 fresh() {
   [ -f "$lease" ] || return 1
@@ -29,9 +39,11 @@ fresh() {
   [ $(($(date +%s) - at)) -lt "$term" ] && kill -0 "$pid" 2>/dev/null
 }
 
-# Fresh, and held by a watcher of this plugin directory and version.
+# Fresh, and held by a watcher of this plugin directory and version,
+# started from this server.
 ours() {
-  fresh && [ "$(sed -n 2p "$lease")" = "$root" ] && [ "$(sed -n 3p "$lease")" = "$version" ]
+  fresh && [ "$(sed -n 2p "$lease")" = "$root" ] && [ "$(sed -n 3p "$lease")" = "$version" ] &&
+    [ "$(sed -n 4p "$lease")" = "$(socket_id)" ]
 }
 
 holder() {
@@ -42,7 +54,7 @@ holder() {
 # past its lease (a laptop asleep) may find another watcher has broken its
 # lock and taken the lease, and must not write over it.
 write_lease() {
-  printf '%s %s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" >"$lease.tmp.$$" || return 1
+  printf '%s %s\n%s\n%s\n%s\n' $$ "$(date +%s)" "$root" "$version" "$socket" >"$lease.tmp.$$" || return 1
   if holds_lock; then mv -f "$lease.tmp.$$" "$lease"; else rm -f "$lease.tmp.$$"; fi
 }
 
@@ -70,6 +82,9 @@ esac
 
 ticks=-1
 [ "${1:-}" = --ticks ] && ticks=$2
+
+# The server this watcher was started from.
+socket=$(socket_id)
 
 # Take the lease, unless another watcher holds it.
 take_lock || exit 0
@@ -178,6 +193,10 @@ for d in "$state"/run/*; do
   rm -rf "$d"
 done
 mkdir -p "$runs"
+# A link to its server's socket, so that while this watcher lives the
+# inode is no other socket's; none across filesystems, where the inode
+# alone tells.
+[ -n "$socket" ] && ln "$HERDR_SOCKET_PATH" "$runs/socket" 2>/dev/null
 
 stop() {
   # Reaped as well as killed: dash leaves a zombie that kill -0 still finds,
@@ -302,8 +321,13 @@ look() {
 i=0
 gone=0
 while [ "$ticks" -ne 0 ]; do
-  # The watcher lives as long as its herdr server: two ticks without an
-  # answer and it stops, with its sources.
+  # The watcher lives as long as the herdr server it was started from: once
+  # that server's socket is gone or another's, or after two ticks without
+  # an answer, it stops, with its sources.
+  if [ "$(socket_id)" != "$socket" ]; then
+    say "the herdr server it was started from is gone; stopping"
+    exit 0
+  fi
   if hd pane list >/dev/null 2>&1; then gone=0; else gone=$((gone + 1)); fi
   if [ "$gone" -ge 2 ]; then
     say "herdr does not answer; stopping"

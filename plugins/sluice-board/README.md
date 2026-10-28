@@ -96,15 +96,46 @@ sluice's queue inside a Claude Code session.
   forecasts for it.
 
 It reads everything from `sluice overview --json --watch` (sluice 0.12 or
-later). Where sluice has records of no branch, the pane says nothing has
+later), from the session's start: the first queue the watch prints is the
+board's first, and the board never runs a one-shot `sluice overview`,
+which would read sluice's records in the watch's place. When the watch
+ends, or can't be started, the board starts it again, waiting a second
+and then twice as long each time, up to a minute; a watch that stayed
+open a minute or more is followed by a second's wait again. Nothing is
+read in between: the band, the pane and the status line keep the last
+queue read until a watch prints the next, and an outcome decided
+meanwhile is told then.
+Where sluice has records of no branch, the pane says nothing has
 been submitted yet, and that a submission shows there from when an agent
 in a worktree runs `sluice submit <branch>` until it lands. Where sluice
-can't be read, because it isn't installed or `sluice overview` failed, the
-pane says why, in sluice's own words where it gave any, and to ask Claude
-to set sluice up in the repository. Each `/sluice` that opens the pane
-then reads sluice again, so a session that sets sluice up partway through
-shows the queue from then on. Where sluice can't be read, the band and
-the status line stay silent. A submission is this session's when its
+can't be read, because it isn't installed or its watch fails, the pane
+says why, in sluice's own words where it gave any (the error the watch
+printed, else the first line it wrote to its error output, else how it
+exited), and to ask Claude to set sluice up in the repository. The band
+and the status line stay silent meanwhile, but for the error's line in
+the band. While the board has no queue, each `/sluice` that opens the
+pane starts the next watch at once rather than waiting, so a session
+that sets sluice up partway through shows the queue as soon as the pane
+is opened.
+Where sluice isn't set up in the repository, with no records and no
+branch, the host's own or a remote's as last fetched, holding
+`.config/sluice.toml`, the watch says so and ends. The board drops any
+queue, error or reason it held: the band and the status line stay empty,
+nothing is forecast or told, and it starts no further watch. `/sluice`
+reads once more, the pane saying `Reading sluice…` while it does, then
+`sluice isn't set up in this repository.` and `Ask Claude to set sluice
+up in this repository.` Where that watch finds sluice set up, the board
+shows the queue and follows it from then on.
+Where the host's sluice has no watch, one older than 0.12, the band says
+the board can't follow it, naming the version sluice gives:
+`can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12
+or later`, or `this sluice` where it gives none. The pane shows the same
+line and `Ask Claude to upgrade sluice.` in place of the queue, and the
+status line is empty, even where the board showed a queue before. The
+board keeps starting the watch as above, and `/sluice` starts it at
+once, so once sluice is upgraded the next watch's queue takes the line's
+place, and an outcome decided meanwhile is told then.
+A submission is this session's when its
 `from.path` is the session's worktree, or the session's own `sluice
 submit` / `wt submit` printed its number or its pull request.
 
