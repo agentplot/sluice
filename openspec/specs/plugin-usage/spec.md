@@ -35,12 +35,8 @@ conflict it SHALL merge the branch in and submit again.
 An agent whose tool calls cannot outlast a verdict SHALL submit with
 `--no-wait --json` and then run `sluice wait <n> --timeout 9m --json`
 again for as long as it exits 5, reading the outcome from the record's
-`state` and the exit. Under worktrunk it SHALL instead run `wt submit
-<branch> --timeout 9m --json`, which submits and then waits, and run it
-again for as long as it exits 5; that removes its worktree once it
-lands, and it SHALL NOT remove a landed worktree by hand. It SHALL NOT
-read the outcome by searching `sluice status`'s listing, which a
-decided submission leaves.
+`state` and the exit. It SHALL NOT read the outcome by searching
+`sluice status`'s listing, which a decided submission leaves.
 
 #### Scenario: A long gate
 
@@ -49,6 +45,14 @@ decided submission leaves.
 - **THEN** it runs `sluice submit main --no-wait --json`, then
   `sluice wait <id> --timeout 9m --json` until it exits other than 5,
   and reports the record's `state`
+
+### Requirement: Under worktrunk an agent with a capped tool call waits with wt submit
+
+Under worktrunk, an agent whose tool calls cannot outlast a verdict
+SHALL instead run `wt submit <branch> --timeout 9m --json`, which
+submits and then waits, and run it again for as long as it exits 5;
+that removes its worktree once it lands, and it SHALL NOT remove a
+landed worktree by hand.
 
 #### Scenario: A long gate under worktrunk
 
