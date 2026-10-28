@@ -28,6 +28,51 @@ struct Scratch {
     repo: Repo,
     config: PathBuf,
     state: PathBuf,
+    /// First on the path of every command the scratch runs, so no round
+    /// reaches the host's own herdr.
+    herdr: FakeHerdr,
+}
+
+/// A herdr of the test's own: it keeps each call's arguments, the socket
+/// it was handed and the pane it ran in, and answers as the test sets.
+struct FakeHerdr {
+    dir: PathBuf,
+}
+
+impl FakeHerdr {
+    fn new(dir: PathBuf) -> FakeHerdr {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.display();
+        let script = format!(
+            "#!/bin/sh\n\
+             {{ printf 'call'; for a in \"$@\"; do printf ' <%s>' \"$a\"; done\n\
+             printf '\\nsocket %s\\npane %s\\n' \"${{HERDR_SOCKET_PATH-unset}}\" \"${{HERDR_PANE_ID-unset}}\"; }} >> {d}/calls\n\
+             if test -f {d}/stderr; then cat {d}/stderr >&2; fi\n\
+             exit \"$(cat {d}/exit 2>/dev/null || echo 0)\"\n"
+        );
+        let herdr = dir.join("herdr");
+        std::fs::write(&herdr, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
+        FakeHerdr { dir }
+    }
+
+    /// From now it refuses, writing `stderr` and exiting `code`.
+    fn refuses(&self, code: i32, stderr: &str) {
+        std::fs::write(self.dir.join("exit"), code.to_string()).unwrap();
+        std::fs::write(self.dir.join("stderr"), stderr).unwrap();
+    }
+
+    /// Each call: its arguments, the socket and the pane it ran under.
+    fn calls(&self) -> Vec<[String; 3]> {
+        let text = std::fs::read_to_string(self.dir.join("calls")).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        lines
+            .chunks(3)
+            .map(|c| [c[0].to_string(), c[1].to_string(), c[2].to_string()])
+            .collect()
+    }
 }
 
 impl Scratch {
@@ -62,10 +107,12 @@ impl Scratch {
         std::fs::write(config.join("sluice/config.toml"), "[runs]\nmax = 2\n").unwrap();
         let state = repo.dir().with_extension("state");
         let _ = std::fs::remove_dir_all(&state);
+        let herdr = FakeHerdr::new(repo.dir().with_extension("herdr"));
         Scratch {
             repo,
             config,
             state,
+            herdr,
         }
     }
 
@@ -97,9 +144,19 @@ impl Scratch {
     }
 
     fn command(&self, program: &str, dir: &Path) -> Command {
+        self.command_under(Command::new(program), dir)
+    }
+
+    /// `c` as a test runs it, whatever its parent gave it: isolated, with
+    /// the scratch's own config and state.
+    fn command_under(&self, mut c: Command, dir: &Path) -> Command {
         let bin = Path::new(env!("CARGO_BIN_EXE_sluice")).parent().unwrap();
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let mut c = Command::new(program);
+        let path = format!(
+            "{}:{}:{}",
+            self.herdr.dir.display(),
+            bin.display(),
+            std::env::var("PATH").unwrap()
+        );
         support::isolated(&mut c)
             .current_dir(dir)
             .env("PATH", path)
@@ -359,6 +416,266 @@ fn the_submitter_is_the_agent_or_the_branch() {
     assert_eq!(s.status(one)["from"]["worktree"], "unit/a");
     assert_eq!(s.status(two)["from"]["agent"], "crw-1-unit-1");
     assert_eq!(s.status(two)["from"]["worktree"], "unit/b");
+}
+
+/// 51: a submit in a herdr pane records the pane on its server, and the
+/// host as its peers name it; one in no pane records no session.
+#[test]
+fn a_submit_records_the_pane_it_ran_in_and_its_host() {
+    let s = Scratch::new("wt-pane");
+    std::fs::write(
+        s.config.join("sluice/config.toml"),
+        "[runs]\nmax = 2\n\n[peers]\nname = \"box-1\"\n",
+    )
+    .unwrap();
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let submit = |dir: &Path| {
+        let mut c = s.command("wt", dir);
+        c.args(["submit", "bolt/x", "--no-wait", "--json"]);
+        c
+    };
+    let one = id(&submit(&a)
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .output()
+        .unwrap());
+    let from = &s.status(one)["from"];
+    assert_eq!(
+        from["session"],
+        format!("herdr:w1:p2@{}", socket.display()).as_str(),
+        "{from}"
+    );
+    assert_eq!(from["host"], "box-1");
+
+    let two = id(&submit(&b)
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_SOCKET_PATH")
+        .output()
+        .unwrap());
+    let from = &s.status(two)["from"];
+    assert!(from.get("session").is_none(), "{from}");
+    assert_eq!(from["host"], "box-1");
+}
+
+/// 51: a test's sluice is in no pane, whatever pane its parent is in.
+#[test]
+fn a_tests_submit_records_no_pane_its_parent_is_in() {
+    let s = Scratch::new("wt-isolated");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let mut parent = Command::new("wt");
+    for v in support::HERDR {
+        parent.env(v, "set");
+    }
+    parent.env("HERDR_PANE_ID", "w1:p2");
+    let out = s
+        .command_under(parent, &a)
+        .args(["submit", "bolt/x", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    let from = &s.status(id(&out))["from"];
+    assert!(from.get("session").is_none(), "{from}");
+}
+
+impl Scratch {
+    /// A `--no-wait` submit from `dir` in herdr pane `pane`, on the
+    /// scratch's own herdr socket; its number and the session it records.
+    fn submit_from_pane(&self, dir: &Path, pane: &str) -> (u64, String) {
+        let socket = self.repo.dir().with_extension("herdr.sock");
+        let out = self
+            .command("wt", dir)
+            .args(["submit", "bolt/x", "--no-wait", "--json"])
+            .env("HERDR_PANE_ID", pane)
+            .env("HERDR_SOCKET_PATH", &socket)
+            .output()
+            .unwrap();
+        (id(&out), format!("herdr:{pane}@{}", socket.display()))
+    }
+
+    /// Rounds of `bolt/x` until submission `id` is decided, at most a
+    /// minute, and one more.
+    fn decide(&self, id: u64) -> serde_json::Value {
+        let until = Instant::now() + Duration::from_secs(60);
+        loop {
+            let out = self.sluice(&["step", "bolt/x"]);
+            assert!(out.status.success(), "{}", text(&out));
+            let v = self.status(id);
+            if ["landed", "failed", "conflict"].contains(&v["state"].as_str().unwrap_or("")) {
+                break;
+            }
+            assert!(Instant::now() < until, "{v}");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let out = self.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+        self.status(id)
+    }
+
+    /// The branch's log lines of `event`.
+    fn logged(&self, event: &str) -> Vec<serde_json::Value> {
+        let log = std::fs::read_to_string(self.repo.dir().join(".git/sluice/bolt/x/log.jsonl"))
+            .unwrap_or_default();
+        log.lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|v| v["event"] == event)
+            .collect()
+    }
+}
+
+/// 50, 51: a landing submitted from a pane is typed into that pane once,
+/// on the server the submit ran under, and the submission is marked
+/// delivered to it.
+#[test]
+fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
+    let s = Scratch::new("wt-push");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, session) = s.submit_from_pane(&a, "w1:p2");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    let landed = s.tip();
+    let calls = s.herdr.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(
+        calls[0][0],
+        format!(
+            "call <agent> <prompt> <w1:p2> <[sluice] #{n} landed on bolt/x as {}.>",
+            &landed[..7]
+        )
+    );
+    let socket = session.split_once('@').unwrap().1;
+    assert_eq!(calls[0][1], format!("socket {socket}"));
+    assert_eq!(calls[0][2], "pane unset");
+
+    let out = s.sluice(&["wait", &n.to_string(), "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["delivered"].is_string(), "{v}");
+    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+}
+
+/// 50: a blamed submission's line names its failure and the check.
+#[test]
+fn a_failure_is_pushed_with_its_check() {
+    let s = Scratch::new("wt-push-failed");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let (n, session) = s.submit_from_pane(&b, "w1:p3");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "failed", "{v}");
+    let calls = s.herdr.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let line = &calls[0][0];
+    assert!(
+        line.starts_with(&format!(
+            "call <agent> <prompt> <w1:p3> <[sluice] #{n} failed on bolt/x: "
+        )),
+        "{line}"
+    );
+    assert!(line.contains("sh check.sh"), "{line}");
+    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+}
+
+/// 51: a prompt herdr refuses marks nothing delivered, and the log says why
+/// once, in herdr's words; no later round pushes it again.
+#[test]
+fn a_refused_prompt_leaves_the_outcome_pending() {
+    let s = Scratch::new("wt-push-refused");
+    s.herdr.refuses(
+        1,
+        r#"{"error":{"code":"agent_blocked","message":"agent is blocked"}}"#,
+    );
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p2");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert!(
+        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
+        "{v}"
+    );
+    for _ in 0..3 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(s.herdr.calls().len(), 1, "never pushed again");
+    let pending = s.logged("pending");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["id"], n);
+    assert_eq!(pending[0]["why"], "agent is blocked");
+}
+
+/// 51: a submit in no pane lands with nothing pushed and nothing delivered,
+/// and the log says once that it is pending.
+#[test]
+fn a_submit_in_no_pane_is_pushed_nothing() {
+    let s = Scratch::new("wt-push-none");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert!(s.herdr.calls().is_empty());
+    assert!(
+        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
+        "{v}"
+    );
+    let pending = s.logged("pending");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["id"], n);
+    assert_eq!(pending[0]["why"], "no session recorded");
+}
+
+/// 51: a round on another host than the one a submission recorded types
+/// into no pane of its own.
+#[test]
+fn a_submission_from_another_host_is_not_pushed() {
+    let s = Scratch::new("wt-push-host");
+    let peers = |name: &str| {
+        std::fs::write(
+            s.config.join("sluice/config.toml"),
+            format!("[runs]\nmax = 2\n\n[peers]\nname = \"{name}\"\n"),
+        )
+        .unwrap();
+    };
+    peers("box-1");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p2");
+    peers("box-2");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert!(s.herdr.calls().is_empty());
+    assert!(v.get("delivered").is_none(), "{v}");
+    let pending = s.logged("pending");
+    assert!(
+        pending[0]["why"].as_str().unwrap().contains("box-1"),
+        "{pending:?}"
+    );
+}
+
+/// 51: a round run from another pane reaches the server the submission
+/// recorded, and carries none of its own pane.
+#[test]
+fn a_round_in_another_pane_reaches_the_recorded_server() {
+    let s = Scratch::new("wt-push-other");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, session) = s.submit_from_pane(&a, "w1:p2");
+    let other = s.repo.dir().with_extension("other.sock");
+    let until = Instant::now() + Duration::from_secs(60);
+    while s.herdr.calls().is_empty() {
+        assert!(Instant::now() < until, "{}", s.status(n));
+        let out = s
+            .command(env!("CARGO_BIN_EXE_sluice"), s.repo.dir())
+            .args(["step", "bolt/x"])
+            .env("HERDR_PANE_ID", "w9:p9")
+            .env("HERDR_SOCKET_PATH", &other)
+            .env("HERDR_SESSION", "other")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let calls = s.herdr.calls();
+    let socket = session.split_once('@').unwrap().1;
+    assert!(calls[0][0].contains("<w1:p2>"), "{calls:?}");
+    assert_eq!(calls[0][1], format!("socket {socket}"));
+    assert_eq!(calls[0][2], "pane unset");
 }
 
 /// A submission names the worktree it came from by its path, and the
@@ -828,4 +1145,482 @@ fn wt_submit_releases_before_it_removes() {
     assert!(text(&out).starts_with("released "), "{}", text(&out));
     assert_eq!(released(&k), 1);
     let _ = std::fs::remove_file(&log);
+}
+
+/// `sluice inbox` run in `dir`.
+fn inbox(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
+    s.command(env!("CARGO_BIN_EXE_sluice"), dir)
+        .arg("inbox")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// 51, 135: a landing nothing delivered is collected by `sluice inbox` in
+/// the worktree, opening with the round's notice, then as `sluice wait`
+/// reports it, and marked delivered to the worktree where no pane names
+/// its session; collected again, it prints nothing.
+#[test]
+fn inbox_delivers_a_landing_once_and_marks_it_delivered_to_the_worktree() {
+    let s = Scratch::new("wt-inbox");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let landed_as = s.status(n)["landed_as"].as_str().unwrap().to_string();
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+
+    let out = inbox(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let mut lines = said.lines();
+    let first = lines.next().unwrap_or_default();
+    for word in [format!("#{n}"), "landed".into(), landed_as[..7].to_string()] {
+        assert!(first.contains(&word), "{word} not in {said}");
+    }
+    assert!(lines.any(|l| l.starts_with("passed · landed as")), "{said}");
+    let record = s.status(n);
+    assert!(record["delivered"].is_string(), "{record}");
+    let path = std::fs::canonicalize(&a).unwrap();
+    assert_eq!(record["delivered_to"], path.to_str().unwrap());
+
+    let again = inbox(&s, &a, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(text(&again), "");
+}
+
+/// 51, 135: under `--json`, one document of the records collected, each
+/// marked delivered; collected again, none.
+#[test]
+fn inbox_json_lists_each_record_delivered_then_none() {
+    let s = Scratch::new("wt-inbox-json");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let out = inbox(&s, &a, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    assert_eq!(outcomes[0]["id"], n);
+    assert_eq!(outcomes[0]["state"], "landed");
+    assert_eq!(outcomes[0]["delivered"], s.status(n)["delivered"]);
+    assert_eq!(outcomes[0]["delivered_to"], s.status(n)["delivered_to"]);
+    assert!(v.get("unread").is_none(), "{v}");
+
+    let again = inbox(&s, &a, &["--json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// 51, 135: a blame is collected naming its failed check, then in the
+/// words `sluice wait` reports it with, its check's log among them. The
+/// submission is decided by rounds alone and its wait is read from another
+/// worktree, so neither delivers it before the collect.
+#[test]
+fn inbox_delivers_a_blame_as_sluice_wait_reports_it() {
+    let s = Scratch::new("wt-inbox-blamed");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(n)["state"], "failed");
+    let waited = s.sluice(&["wait", &n.to_string()]);
+    assert_eq!(
+        waited.status.code(),
+        Some(sluice::FAILED),
+        "{}",
+        text(&waited)
+    );
+    let waited = String::from_utf8_lossy(&waited.stdout).to_string();
+    assert!(waited.contains("log of sh check.sh"), "{waited}");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+
+    let out = inbox(&s, &b, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let (first, rest) = said.split_once('\n').unwrap();
+    for word in [&format!("#{n}") as &str, "failed", "sh check.sh"] {
+        assert!(first.contains(word), "{word} not in {said}");
+    }
+    assert_eq!(rest, waited);
+}
+
+/// 51; outcome-delivery spec, "A waiting submit delivers its landing": a
+/// `sluice submit --json` that waits and reports its landing marks it
+/// delivered to its worktree, in the record it prints, and a later
+/// collect in that worktree prints nothing.
+#[test]
+fn a_waiting_submit_delivers_its_landing_and_inbox_then_prints_nothing() {
+    let s = Scratch::new("wt-wait-delivers");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["submit", "bolt/x", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let record: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("no JSON: {}", text(&out)));
+    assert_eq!(record["state"], "landed", "{record}");
+    let path = std::fs::canonicalize(&a).unwrap();
+    assert!(record["delivered"].is_string(), "{record}");
+    assert_eq!(record["delivered_to"], path.to_str().unwrap(), "{record}");
+    let n = record["id"].as_u64().unwrap();
+    let stored = s.status(n);
+    assert_eq!(stored["delivered"], record["delivered"], "{stored}");
+    assert_eq!(stored["delivered_to"], record["delivered_to"], "{stored}");
+    let delivered: Vec<_> = s
+        .logged("delivered")
+        .into_iter()
+        .filter(|l| l["id"] == n)
+        .collect();
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+
+    let again = inbox(&s, &a, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(text(&again), "");
+}
+
+/// 51: `sluice wait <id>` in the submitting worktree, reporting a blame
+/// the rounds decided, marks it delivered there, and a later collect
+/// prints nothing.
+#[test]
+fn a_wait_in_its_own_worktree_delivers_a_blame_and_inbox_then_prints_nothing() {
+    let s = Scratch::new("wt-wait-own");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(n)["state"], "failed");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &b)
+        .args(["wait", &n.to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    assert!(text(&out).contains("log of sh check.sh"), "{}", text(&out));
+    let path = std::fs::canonicalize(&b).unwrap();
+    assert_eq!(s.status(n)["delivered_to"], path.to_str().unwrap());
+
+    let again = inbox(&s, &b, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(text(&again), "");
+}
+
+/// 20, 51; outcome-delivery spec, "A wait on another's submission marks
+/// nothing": a blame waited on from another worktree is reported and left
+/// pending, for its own session to collect.
+#[test]
+fn a_wait_from_another_worktree_marks_nothing() {
+    let s = Scratch::new("wt-wait-other");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    assert_eq!(s.decide(n)["state"], "failed");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &n.to_string(), "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(record.get("delivered").is_none(), "{record}");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert!(s.logged("delivered").is_empty());
+    assert_eq!(collected_one(&s, &b)["id"], n);
+}
+
+/// 51; outcome-delivery spec, "A wait reads an outcome already
+/// delivered": a landing the pane took is reported by a later wait in its
+/// worktree with the push's `delivered_to`, unchanged.
+#[test]
+fn a_wait_reports_an_outcome_the_pane_took_as_it_stands() {
+    let s = Scratch::new("wt-wait-pushed");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, session) = s.submit_from_pane(&a, "w1:p2");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &n.to_string(), "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(record["delivered"], v["delivered"], "{record}");
+    assert_eq!(record["delivered_to"], session.as_str(), "{record}");
+    assert_eq!(s.status(n)["delivered_to"], session.as_str());
+    assert_eq!(s.logged("delivered").len(), 1);
+}
+
+/// 51: a wait that runs out of time before its submission is decided
+/// marks nothing, and the outcome, once decided, is collected still.
+#[test]
+fn a_wait_that_runs_out_of_time_marks_nothing() {
+    let s = Scratch::new("wt-wait-timeout");
+    let a = s.session("a", &[("slow", "x\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["wait", &n.to_string(), "--timeout", "1s", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    let record: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        record["state"] == "queued" || record["state"] == "testing",
+        "{record}"
+    );
+    assert!(record.get("delivered").is_none(), "{record}");
+    assert!(s.logged("delivered").is_empty());
+    assert_eq!(s.decide(n)["state"], "landed");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+    assert_eq!(collected_one(&s, &a)["id"], n);
+}
+
+/// 51, 135: another worktree's outcome is not this session's to collect,
+/// and stays pending.
+#[test]
+fn inbox_delivers_nothing_of_another_worktrees_outcome() {
+    let s = Scratch::new("wt-inbox-other");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let out = inbox(&s, &b, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
+}
+
+/// 3, 135: a worktree on no branch has submitted nothing, and collects
+/// nothing.
+#[test]
+fn inbox_in_a_detached_worktree_delivers_nothing() {
+    let s = Scratch::new("wt-inbox-detached");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    s.repo
+        .git(&["-C", a.to_str().unwrap(), "switch", "-q", "--detach"]);
+    let out = inbox(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    let out = inbox(&s, &a, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// `sluice inbox --json` in `dir`: its one element, after asserting the
+/// document holds one and no `unread`, and the fields every element holds
+/// whatever its state (the contract a caller reads, which only gains
+/// fields).
+fn collected_one(s: &Scratch, dir: &Path) -> serde_json::Value {
+    let out = inbox(s, dir, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.get("unread").is_none(), "{v}");
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    let e = outcomes[0].clone();
+    let path = std::fs::canonicalize(dir).unwrap();
+    assert!(e["id"].is_u64(), "{e}");
+    assert_eq!(e["branch"], "bolt/x", "{e}");
+    assert!(e["delivered"].is_string(), "{e}");
+    assert_eq!(e["delivered_to"], path.to_str().unwrap(), "{e}");
+    assert!(e["from"]["worktree"].is_string(), "{e}");
+    assert_eq!(e["from"]["path"], path.to_str().unwrap(), "{e}");
+    let notice = e["notice"].as_str().unwrap();
+    assert!(
+        notice.starts_with(&format!("[sluice] #{} ", e["id"])),
+        "{e}"
+    );
+    assert_eq!(notice.lines().count(), 1, "{e}");
+    e
+}
+
+/// 51, 135; inbox spec, "The JSON document is a contract": a landing, a
+/// blame and a conflict, each collected as its record with `notice`, and
+/// by its state `landed_as`; `result` and `failed[].task`;
+/// `conflict.paths` and `conflict.with[].id`.
+#[test]
+fn inbox_json_holds_the_contracts_fields_for_each_outcome() {
+    let s = Scratch::new("wt-inbox-contract");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("broken", "x\n")]);
+    let d = s.session("d", &[("same.txt", "d\n")]);
+    let c = s.session("c", &[("same.txt", "c\n")]);
+    let ids: Vec<u64> = [&a, &b, &d, &c]
+        .iter()
+        .map(|w| id(&s.wt_submit(w, &["--no-wait", "--json"])))
+        .collect();
+    let (na, nb, nd, nc) = (ids[0], ids[1], ids[2], ids[3]);
+    for n in &ids {
+        s.decide(*n);
+    }
+
+    let e = collected_one(&s, &a);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(na), &"landed".into())
+    );
+    let landed_as = e["landed_as"].as_str().unwrap();
+    assert_eq!(landed_as, s.status(na)["landed_as"], "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("landed"), "{e}");
+
+    let e = collected_one(&s, &b);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(nb), &"failed".into())
+    );
+    assert_eq!(e["result"], "failed", "{e}");
+    assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("failed"), "{e}");
+
+    let e = collected_one(&s, &c);
+    assert_eq!(
+        (e["id"].as_u64(), &e["state"]),
+        (Some(nc), &"conflict".into())
+    );
+    assert_eq!(
+        e["conflict"]["paths"],
+        serde_json::json!(["same.txt"]),
+        "{e}"
+    );
+    assert_eq!(e["conflict"]["with"][0]["id"], nd, "{e}");
+    assert!(e["notice"].as_str().unwrap().contains("conflicts"), "{e}");
+}
+
+/// 51, 135: a session in a herdr pane whose push herdr refused collects
+/// its outcome by `sluice inbox`, marked delivered to the pane it collects
+/// in; no later round prompts any pane for it.
+#[test]
+fn inbox_in_a_herdr_pane_delivers_to_that_pane_and_no_round_pushes_it() {
+    let s = Scratch::new("wt-inbox-pane");
+    s.herdr.refuses(
+        1,
+        r#"{"error":{"code":"agent_blocked","message":"agent is blocked"}}"#,
+    );
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let (n, _) = s.submit_from_pane(&a, "w1:p1");
+    let v = s.decide(n);
+    assert_eq!(v["state"], "landed", "{v}");
+    assert!(v.get("delivered").is_none(), "{v}");
+    assert_eq!(s.herdr.calls().len(), 1, "the refused push");
+
+    let socket = s.repo.dir().with_extension("herdr.sock");
+    let out = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &a)
+        .args(["inbox"])
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        text(&out).starts_with(&format!("[sluice] #{n} landed")),
+        "{}",
+        text(&out)
+    );
+    let to = format!("herdr:w1:p2@{}", socket.display());
+    let record = s.status(n);
+    assert_eq!(record["delivered_to"], to.as_str(), "{record}");
+
+    for _ in 0..2 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(s.herdr.calls().len(), 1, "no round pushed it");
+    assert_eq!(s.status(n)["delivered_to"], to.as_str());
+}
+
+/// 50, 20; outcome-delivery spec, "No other pane is prompted": of two
+/// submissions tested together, only the blamed one's pane is sent the
+/// failure, and the other's pane nothing of it.
+#[test]
+fn of_two_tested_together_only_the_blamed_ones_pane_is_sent_the_failure() {
+    let s = Scratch::new("wt-push-two");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("broken", "x\n")]);
+    let (one, _) = s.submit_from_pane(&a, "w1:p2");
+    let (two, _) = s.submit_from_pane(&b, "w1:p3");
+    assert_eq!(s.decide(one)["state"], "landed");
+    let v = s.decide(two);
+    assert_eq!(v["state"], "failed", "{v}");
+    let together = v["tested"]["submissions"].as_array().unwrap();
+    assert!(
+        together.contains(&one.into()) && together.contains(&two.into()),
+        "tested together: {v}"
+    );
+
+    let calls = s.herdr.calls();
+    let to = |pane: &str| -> Vec<String> {
+        calls
+            .iter()
+            .filter(|c| c[0].contains(&format!("<{pane}>")))
+            .map(|c| c[0].clone())
+            .collect()
+    };
+    let p3 = to("w1:p3");
+    assert_eq!(p3.len(), 1, "{calls:?}");
+    assert!(p3[0].contains(&format!("#{two} failed")), "{p3:?}");
+    let p2 = to("w1:p2");
+    assert_eq!(p2.len(), 1, "{calls:?}");
+    assert!(p2[0].contains(&format!("#{one} landed")), "{p2:?}");
+    assert!(!p2[0].contains(&format!("#{two}")), "{p2:?}");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+}
+
+/// 51, 135; inbox spec, "A place submitted with no session collects its
+/// outcome by inbox": a caller that submits with `sluice submit --no-wait
+/// --json` in no pane and never waits, rounds run by `sluice step`, then
+/// `sluice inbox --json` twice. `sluice step` is as it was.
+#[test]
+fn a_caller_that_never_waits_collects_a_failure_and_a_landing_by_inbox() {
+    let s = Scratch::new("wt-inbox-caller");
+    let submit = |dir: &Path| {
+        let out = s
+            .command(env!("CARGO_BIN_EXE_sluice"), dir)
+            .args(["submit", "bolt/x", "--no-wait", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        id(&out)
+    };
+    let pending_for = |n: u64| s.logged("pending").iter().filter(|l| l["id"] == n).count();
+
+    // A blame.
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = submit(&b);
+    assert!(s.status(n)["from"].get("session").is_none());
+    assert_eq!(s.decide(n)["state"], "failed");
+    assert_eq!(pending_for(n), 1);
+    for _ in 0..2 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(pending_for(n), 1, "no further attempt");
+    assert!(s.herdr.calls().is_empty());
+    let e = collected_one(&s, &b);
+    assert_eq!(e["id"], n, "{e}");
+    assert_eq!(e["state"], "failed", "{e}");
+    assert_eq!(e["failed"][0]["task"], "sh check.sh", "{e}");
+    assert!(
+        e["notice"].as_str().unwrap().contains(&format!("#{n}")),
+        "{e}"
+    );
+    let again = inbox(&s, &b, &["--json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+
+    // A landing.
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = submit(&a);
+    assert_eq!(s.decide(n)["state"], "landed");
+    assert_eq!(pending_for(n), 1);
+    let e = collected_one(&s, &a);
+    assert_eq!(e["id"], n, "{e}");
+    assert_eq!(e["state"], "landed", "{e}");
+    assert_eq!(e["landed_as"], s.tip().as_str(), "{e}");
+    let again = inbox(&s, &a, &["--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
 }

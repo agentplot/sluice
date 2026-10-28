@@ -10,7 +10,7 @@ use sluice_core::records::{
 use sluice_core::session::Recorded;
 use sluice_core::{Forecast, Requester, Sluice, SubmitRefusal};
 use sluice_seams::{
-    LastResult, Outcome, ReleasePolicy, Released, Rev, RunKind, RunOutcome, SessionPlace, Told,
+    Decided, LastResult, Outcome, ReleasePolicy, Released, Rev, RunKind, RunOutcome, SessionPlace,
 };
 
 use crate::{Rig, BRANCH};
@@ -43,15 +43,15 @@ pub fn s1_two_heads_pass_and_land_in_order(h: &impl Rig) {
         .message(k1)
         .starts_with(&format!("chore(land): #{one} unit/a\n")));
     // Each session learns its own landing, and only its own (50).
-    let ta = h.told_to("agent-a");
+    let ta = h.delivered_to("agent-a");
     assert_eq!(ta.len(), 1);
     assert_eq!(
-        ta[0].told,
-        Told::Landed {
+        ta[0].decided,
+        Decided::Landed {
             landed_as: k1.clone()
         }
     );
-    assert_eq!(h.told_to("agent-b")[0].submission, two);
+    assert_eq!(h.delivered_to("agent-b")[0].submission, two);
     // Every place made was released (33, 34).
     assert_eq!(h.made_places().len(), 2);
     assert!(h.live_places().is_empty());
@@ -65,17 +65,17 @@ pub fn s2_a_conflict_is_told_before_any_check_runs(h: &impl Rig) {
     let two = h.submit("unit/b");
 
     h.step();
-    // Told at forming, before any run on a combination holding it.
-    let told = h.told_to("agent-b");
-    assert_eq!(told.len(), 1);
-    match &told[0].told {
-        Told::Conflict { paths, with } => {
+    // Delivered at forming, before any run on a combination holding it.
+    let delivered = h.delivered_to("agent-b");
+    assert_eq!(delivered.len(), 1);
+    match &delivered[0].decided {
+        Decided::Conflict { paths, with } => {
             assert_eq!(paths, &vec!["a/lib".to_string()]);
             assert_eq!(with.len(), 1);
             assert_eq!(with[0].id, one);
             assert_eq!(with[0].from.worktree, "unit/a");
         }
-        other => panic!("told {other:?}"),
+        other => panic!("delivered {other:?}"),
     }
     assert!(h.tested().iter().all(|c| !c.contains(&two)));
     assert_eq!(h.sub(two).state, State::Conflict);
@@ -83,9 +83,9 @@ pub fn s2_a_conflict_is_told_before_any_check_runs(h: &impl Rig) {
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
     assert!(h
-        .told_to("agent-a")
+        .delivered_to("agent-a")
         .iter()
-        .all(|n| n.told.word() == "landed"));
+        .all(|n| n.decided.word() == "landed"));
 }
 
 /// S3: the second of three fails; only its session hears, and the third
@@ -105,10 +105,10 @@ pub fn s3_the_second_fails_and_only_its_session_hears(h: &impl Rig) {
     let failed = h.sub(two);
     assert_eq!(failed.state, State::Failed);
     assert_eq!(failed.failed[0].task, "a:test");
-    let told = h.told_to("agent-b");
-    assert_eq!(told.len(), 1);
-    match &told[0].told {
-        Told::Failed {
+    let delivered = h.delivered_to("agent-b");
+    assert_eq!(delivered.len(), 1);
+    match &delivered[0].decided {
+        Decided::Failed {
             failed: tasks,
             submissions,
             logs,
@@ -123,11 +123,14 @@ pub fn s3_the_second_fails_and_only_its_session_hears(h: &impl Rig) {
             assert_eq!(failed.failed[0].log.as_deref(), Some(logs[0].text.as_str()));
             assert!(!h.kept_log(&logs[0].text).unwrap_or_default().is_empty());
         }
-        other => panic!("told {other:?}"),
+        other => panic!("delivered {other:?}"),
     }
     // No other session hears of the failure (20).
     for agent in ["agent-a", "agent-c"] {
-        assert!(h.told_to(agent).iter().all(|n| n.told.word() == "landed"));
+        assert!(h
+            .delivered_to(agent)
+            .iter()
+            .all(|n| n.decided.word() == "landed"));
     }
     assert_eq!(h.sub(three).state, State::Landed);
 }
@@ -144,7 +147,7 @@ pub fn s4_the_first_fails_and_the_second_is_formed_again_without_it(h: &impl Rig
     h.settle();
 
     assert_eq!(h.sub(one).state, State::Failed);
-    assert_eq!(h.told_to("agent-a")[0].told.word(), "failed");
+    assert_eq!(h.delivered_to("agent-a")[0].decided.word(), "failed");
     let landed = h.sub(two);
     assert_eq!(landed.state, State::Landed);
     // Tested again as the branch and B alone (10, 21).
@@ -271,10 +274,10 @@ pub fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(h: &i
         assert_eq!(s.state, State::Landed);
         // In the order given: the first's landing is nearest the base.
         assert_eq!(s.landed_as.as_ref(), Some(&history[2 - k]));
-        let told = h.told_to(&format!("agent-{}", k + 1));
-        assert_eq!(told.len(), 1);
-        assert_eq!(told[0].submission, *id);
-        assert_eq!(told[0].told.word(), "landed");
+        let delivered = h.delivered_to(&format!("agent-{}", k + 1));
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].submission, *id);
+        assert_eq!(delivered[0].decided.word(), "landed");
     }
 
     // The middle one conflicts with the first as the combinations form.
@@ -294,9 +297,11 @@ pub fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(h: &i
         .map(|c| (c.id, c.from.worktree.clone()))
         .collect();
     assert_eq!(with, vec![(ids[0], h.place("unit/4"))]);
-    match &h.told_to("agent-5")[..] {
-        [n] => assert!(matches!(&n.told, Told::Conflict { with, .. } if with[0].id == ids[0])),
-        other => panic!("told {other:?}"),
+    match &h.delivered_to("agent-5")[..] {
+        [n] => {
+            assert!(matches!(&n.decided, Decided::Conflict { with, .. } if with[0].id == ids[0]))
+        }
+        other => panic!("delivered {other:?}"),
     }
     assert!(h.tested()[tested..].iter().all(|c| !c.contains(&ids[1])));
     for id in [ids[0], ids[2]] {
@@ -321,14 +326,17 @@ pub fn s59_heads_submitted_as_one_act_are_formed_together_and_each_its_own(h: &i
         .collect();
     assert_eq!(blamed, vec![ids[1]]);
     assert_eq!(h.sub(ids[1]).state, State::Failed);
-    assert_eq!(h.told_to("agent-8")[0].told.word(), "failed");
+    assert_eq!(h.delivered_to("agent-8")[0].decided.word(), "failed");
     // The third is tested again without it, and both others land.
     assert!(h.tested()[tested..]
         .iter()
         .any(|c| c.contains(&ids[2]) && !c.contains(&ids[1])));
     for (id, agent) in [(ids[0], "agent-7"), (ids[2], "agent-9")] {
         assert_eq!(h.sub(id).state, State::Landed);
-        assert!(h.told_to(agent).iter().all(|n| n.told.word() == "landed"));
+        assert!(h
+            .delivered_to(agent)
+            .iter()
+            .all(|n| n.decided.word() == "landed"));
     }
 
     // The first withdrawn leaves alone; the other lands without it.
@@ -677,15 +685,15 @@ pub fn a_conflict_names_every_submission_it_is_contested_with(h: &impl Rig) {
         h.submit("unit/4"),
     );
     h.settle();
-    match &h.told_to("agent-4")[0].told {
-        Told::Conflict { paths, with } => {
+    match &h.delivered_to("agent-4")[0].decided {
+        Decided::Conflict { paths, with } => {
             assert_eq!(paths, &vec!["a/f".to_string(), "a/g".to_string()]);
             let ids: Vec<u64> = with.iter().map(|c| c.id).collect();
             // Each it conflicts with alone; not #3.
             assert_eq!(ids, vec![one, two]);
             assert_eq!(with[1].from.worktree, "unit/2");
         }
-        other => panic!("told {other:?}"),
+        other => panic!("delivered {other:?}"),
     }
     assert_eq!(h.sub(four).conflict.unwrap().with.len(), 2);
     // The chain continued without it (12).

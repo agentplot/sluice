@@ -31,8 +31,8 @@ use sluice_conformance::{policy, shared, Rig, BRANCH};
 use sluice_core::records::State as Entry;
 use sluice_core::{Seams, Sluice, Step, SystemClock};
 use sluice_seams::{
-    Branch, Checkout, Driver, Formed, HostCopy, LandingCommit, Moved, Notification, Place,
-    Progress, Rev, RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
+    Branch, Checkout, Delivery, Driver, Formed, HostCopy, LandingCommit, Moved, Notification,
+    Place, Progress, Rev, RunHandle, RunRequest, Session, Settings, TaskLog, TaskProgress, Tests,
 };
 use support::{Repo, Scratch};
 
@@ -262,11 +262,11 @@ impl Branch for RecordedRefs {
 }
 
 /// The driver, with each session's agent named by the rig, and every
-/// outcome it delivered kept.
+/// outcome the round asked it to deliver kept, delivered or not.
 struct Sessions {
     inner: Drivers,
     agents: RefCell<BTreeMap<String, String>>,
-    told: RefCell<Vec<Notification>>,
+    delivered: RefCell<Vec<Notification>>,
 }
 
 impl Driver for Sessions {
@@ -275,13 +275,16 @@ impl Driver for Sessions {
         if let Some(agent) = self.agents.borrow().get(worktree) {
             s.from.agent = agent.clone();
         }
+        // The rig's sessions are in no pane: run in-process, the driver
+        // would name the one this test runs in (51).
+        s.from.session = None;
         Ok(s)
     }
 
-    fn notify(&self, n: &Notification) -> Result<()> {
-        self.inner.notify(n)?;
-        self.told.borrow_mut().push(n.clone());
-        Ok(())
+    fn notify(&self, n: &Notification) -> Result<Delivery> {
+        let delivery = self.inner.notify(n)?;
+        self.delivered.borrow_mut().push(n.clone());
+        Ok(delivery)
     }
 }
 
@@ -472,7 +475,7 @@ impl Real {
             driver: Sessions {
                 inner: driver,
                 agents: RefCell::default(),
-                told: RefCell::default(),
+                delivered: RefCell::default(),
             },
             state,
             _blocks: blocks,
@@ -659,9 +662,9 @@ impl Rig for Real {
         }
     }
 
-    fn told_to(&self, agent: &str) -> Vec<Notification> {
+    fn delivered_to(&self, agent: &str) -> Vec<Notification> {
         self.driver
-            .told
+            .delivered
             .borrow()
             .iter()
             .filter(|n| n.to.agent == agent)

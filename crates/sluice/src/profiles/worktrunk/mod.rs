@@ -2,9 +2,11 @@
 //! `docs/plans/phase-1-integrations.md` section 7). Its front door:
 //! worktrunk runs any `wt-<name>` on the path as `wt <name>`, so `wt
 //! submit` runs `wt-submit`, which forwards to `sluice submit` from the
-//! session's worktree. A waiting submit's outcome is its exit and its last
-//! lines, so `notify` has nothing to deliver beyond the core's record. When
-//! a waiting submit lands, `wt-submit` removes the session's worktree as
+//! session's worktree. A submit records the herdr pane it ran in, and the
+//! round that decides its outcome, on the same host, types it into that
+//! pane as one line to the agent there ([`herdr`]); a waiting submit's
+//! outcome is also its exit and its last lines. When a waiting submit
+//! lands, `wt-submit` removes the session's worktree as
 //! `wt merge` does (C.4): the driver's, never the core's (rule core.16).
 //! Run again where the worktree's submission stands, at the revision
 //! sluice says a submit from it would send (124), it submits nothing: it
@@ -20,12 +22,23 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context as _, Result};
 use clap::{CommandFactory as _, FromArgMatches as _};
-use sluice_seams::{Driver, Notification, Rev, Session, Submitter};
+use sluice_seams::{Delivery, Driver, Notification, Rev, Session, Submitter};
 
-/// The worktrunk driver.
-pub struct Worktrunk;
+pub mod herdr;
+
+/// The worktrunk driver, on the host its peers name `host`.
+pub struct Worktrunk {
+    host: String,
+}
 
 impl Worktrunk {
+    /// The driver on `host`, as its peers name it: the instance's
+    /// `[peers] name`, else the hostname, which the binding reads (rule
+    /// core.2).
+    pub fn new(host: impl Into<String>) -> Worktrunk {
+        Worktrunk { host: host.into() }
+    }
+
     fn git(&self, worktree: &Path, args: &[&str]) -> Result<std::process::Output> {
         Command::new("git")
             .arg("-C")
@@ -102,16 +115,47 @@ impl Driver for Worktrunk {
                 worktree: branch.clone(),
                 path: (top.status.success() && !path.is_empty()).then_some(path),
                 head: None,
+                // 51: where the outcome is pushed once it is decided.
+                host: Some(self.host.clone()),
+                session: herdr::session_here(),
             },
             dirty: dirty(&status.stdout),
             detached: branch.is_empty(),
         })
     }
 
-    /// 50, 51: a waiting submit is told by its exit; any other reads its
-    /// outcome with `sluice status`, from the core's record of it.
-    fn notify(&self, _: &Notification) -> Result<()> {
-        Ok(())
+    /// 50, 51: push the outcome into the pane the submit ran in, delivered
+    /// once herdr takes it. A submit in no pane, or on another host, is not
+    /// delivered, and nothing is called; herdr's refusal is not delivered,
+    /// in its words.
+    fn notify(&self, n: &Notification) -> Result<Delivery> {
+        let undelivered = |why: String| Ok(Delivery::Undelivered { why });
+        let Some(session) = &n.to.session else {
+            return undelivered("no session recorded".into());
+        };
+        if n.to.host.as_deref() != Some(self.host.as_str()) {
+            return undelivered(format!(
+                "{session} is on {}, and this round on {}",
+                n.to.host.as_deref().unwrap_or("a host it did not name"),
+                self.host
+            ));
+        }
+        let Some((pane, socket)) = herdr::pane_of(session) else {
+            return undelivered(format!("{session} is no herdr pane"));
+        };
+        Ok(
+            match herdr::prompt(
+                pane,
+                socket,
+                &crate::words::notice(n.submission, &n.branch, &n.decided),
+                herdr::BOUND,
+            )? {
+                herdr::Answer::Took => Delivery::Delivered {
+                    to: session.clone(),
+                },
+                herdr::Answer::Refused(why) => Delivery::Undelivered { why },
+            },
+        )
     }
 }
 

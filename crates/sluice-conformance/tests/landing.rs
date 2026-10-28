@@ -26,7 +26,7 @@ fn a_crash_between_the_landing_intent_and_the_move_is_finished_by_the_next_step(
         let moves = h.w().moves();
         assert_eq!(moves.len(), 1, "{crash:?}");
         assert_eq!(moves[0].from, base);
-        assert_eq!(h.w().told_to("agent-a").len(), 1);
+        assert_eq!(h.w().delivered_to("agent-a").len(), 1);
     }
 }
 
@@ -73,12 +73,12 @@ fn a_notification_repeated_after_a_crash_carries_the_same_id_and_outcome() {
     h.w().crash_after_next_notify();
     assert!(h.sluice().step(BRANCH).is_err());
     h.settle();
-    let told = h.w().told_to("agent-a");
-    assert_eq!(told.len(), 2);
-    assert_eq!(told[0], told[1]);
-    assert_eq!(told[0].id, format!("{one}:landed"));
+    let delivered = h.w().delivered_to("agent-a");
+    assert_eq!(delivered.len(), 2);
+    assert_eq!(delivered[0], delivered[1]);
+    assert_eq!(delivered[0].id, format!("{one}:landed"));
     assert_eq!(h.sub(one).state, State::Landed);
-    assert!(h.sub(one).told.is_some());
+    assert!(h.sub(one).delivered.is_some());
 }
 
 /// satisfies: 65, 12

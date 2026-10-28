@@ -29,7 +29,8 @@ use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
+    Branch, Decided, Delivery, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session,
+    Submitter,
 };
 
 use super::app::Repo;
@@ -229,9 +230,10 @@ struct Groups {
     unread: BTreeMap<u64, anyhow::Error>,
 }
 
-/// The line written into a comment, naming the notification it tells, so
-/// a repeat is known as one (51).
-fn told_marker(id: &str) -> String {
+/// The line written into a comment, naming the notification it delivers,
+/// so a repeat is known as one (51). Its key stays `told`, which the
+/// comments on a forge already carry and a repeat is read by.
+fn delivered_marker(id: &str) -> String {
     format!("<!-- sluice: told={id} -->")
 }
 
@@ -469,7 +471,7 @@ impl Pulls {
         id: &str,
         body: &str,
     ) -> Result<()> {
-        let m = told_marker(id);
+        let m = delivered_marker(id);
         let comments = forge.comment_list(repo, number)?;
         if comments.iter().any(|c| c.body.contains(&m)) {
             return Ok(());
@@ -1654,10 +1656,10 @@ impl Outcome {
         })
     }
 
-    fn told(told: &Told) -> Outcome {
-        match told.clone() {
-            Told::Landed { landed_as } => Outcome::Landed { landed_as },
-            Told::Failed {
+    fn decided(decided: &Decided) -> Outcome {
+        match decided.clone() {
+            Decided::Landed { landed_as } => Outcome::Landed { landed_as },
+            Decided::Failed {
                 failed,
                 combination,
                 submissions,
@@ -1670,7 +1672,7 @@ impl Outcome {
                 ids: submissions,
                 timed_out,
             },
-            Told::Conflict { paths, with } => Outcome::Conflict {
+            Decided::Conflict { paths, with } => Outcome::Conflict {
                 paths,
                 with: with.iter().map(|w| name_of(w.id, &w.from)).collect(),
             },
@@ -2282,6 +2284,8 @@ impl Pulls {
                 worktree: worktree.into(),
                 path: None,
                 head: Some(k.pull.head_ref.clone()),
+                host: None,
+                session: None,
             },
             dirty: Vec::new(),
             detached: false,
@@ -2289,12 +2293,16 @@ impl Pulls {
     }
 
     /// 50, 51: post the outcome on the pull request's head and, when it is
-    /// sent back, comment once. An entry intake has not read this round is
-    /// shown by the next intake, from its record.
-    pub fn notify(&self, n: &Notification) -> Result<()> {
+    /// sent back, comment once: delivered to the request once posted. An
+    /// entry intake has not read this round holds no request here, and is
+    /// not delivered; the next intake shows it, from its record.
+    pub fn notify(&self, n: &Notification) -> Result<Delivery> {
         let Some(e) = self.entries.borrow().get(&n.submission).cloned() else {
-            return Ok(());
+            return Ok(Delivery::Undelivered {
+                why: format!("no pull request is held for submission {}", n.submission),
+            });
         };
+        let to = place(e.number);
         let forge = self.forge(&n.branch)?;
         let names: BTreeMap<u64, String> = self
             .entries
@@ -2302,7 +2310,7 @@ impl Pulls {
             .iter()
             .map(|(id, e)| (*id, format!("#{}", e.number)))
             .collect();
-        let outcome = Outcome::told(&n.told);
+        let outcome = Outcome::decided(&n.decided);
         let shown = outcome_shown(&n.branch, &outcome, &names);
         // ADR 0044: a pull request that landed is closed, so no intake
         // reads it again: its report is posted with the outcome.
@@ -2318,7 +2326,7 @@ impl Pulls {
             n.report.as_ref(),
         )?;
         if matches!(outcome, Outcome::Landed { .. }) {
-            return Ok(());
+            return Ok(Delivery::Delivered { to });
         }
         // Its body, as intake read it this round, says whether a submit
         // opened it.
@@ -2335,7 +2343,7 @@ impl Pulls {
         if let Some(body) = comment(&n.branch, &outcome, &names, from) {
             self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
         }
-        Ok(())
+        Ok(Delivery::Delivered { to })
     }
 }
 
