@@ -301,6 +301,10 @@ impl sluice::exec::Host for FakeHost {
         self.world.is_repository_gone()
     }
 
+    fn holds_policy(&self) -> anyhow::Result<bool> {
+        self.world.holds_path(sluice_core::policy::POLICY_PATH)
+    }
+
     fn readers(&self) -> anyhow::Result<PathBuf> {
         Ok(readers())
     }

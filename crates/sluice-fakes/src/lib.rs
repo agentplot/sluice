@@ -132,6 +132,12 @@ struct Inner {
     failed_list: Option<String>,
     /// The repository's git directory is gone from the host (129).
     repository_gone: bool,
+    /// Each remote's tracking branch the host holds, by name as
+    /// `origin/main`, as last fetched: read only by [`World::holds_path`]
+    /// (129).
+    tracking: BTreeMap<String, Rev>,
+    /// The words the list of the repository's refs fails with (129).
+    failed_refs: Option<String>,
     /// Each host's refusal document of a branch, by host and branch (133).
     refusals: BTreeMap<(String, String), Vec<u8>>,
     crash: Option<Crash>,
@@ -813,6 +819,44 @@ impl World {
     /// Whether the repository's git directory is gone from the host.
     pub fn is_repository_gone(&self) -> bool {
         self.0.borrow().repository_gone
+    }
+
+    /// `name`, a remote's tracking branch such as `origin/main`, as last
+    /// fetched to the host: at `at`, or with `None` held no more (129).
+    pub fn set_tracking(&self, name: &str, at: Option<&Rev>) {
+        let mut inner = self.0.borrow_mut();
+        match at {
+            Some(at) => inner.tracking.insert(name.into(), at.clone()),
+            None => inner.tracking.remove(name),
+        };
+    }
+
+    /// From now, every list of the repository's refs fails with `said`;
+    /// with `None`, they are listed again (129).
+    pub fn fail_ref_list(&self, said: Option<&str>) {
+        self.0.borrow_mut().failed_refs = said.map(Into::into);
+    }
+
+    /// Whether any ref the host holds, a branch, its copy of a branch kept
+    /// on a remote, or a remote's tracking branch, has `path` in its tree,
+    /// with nothing fetched (129).
+    pub fn holds_path(&self, path: &str) -> Result<bool> {
+        let inner = self.0.borrow();
+        if let Some(said) = &inner.failed_refs {
+            bail!("{said}");
+        }
+        let host = &inner.host;
+        let copies = inner
+            .copies
+            .iter()
+            .filter(|((h, _), _)| h == host)
+            .filter_map(|(_, at)| at.as_ref());
+        Ok(inner
+            .refs
+            .values()
+            .chain(copies)
+            .chain(inner.tracking.values())
+            .any(|rev| inner.commits[rev].tree.contains_key(path)))
     }
 
     /// This host's refusal document of `branch`, as kept (133).
