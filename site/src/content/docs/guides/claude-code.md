@@ -240,9 +240,16 @@ again to fold them. A check that runs a command has no tasks, and says so:
 1 agent` says where the host's runs go.
 
 When one of the session's submissions lands, fails or conflicts, a toast
-says so, and an idle session gets a turn telling it the outcome, which tests
-were blamed and where their logs are, so the agent can fix its work without
-being asked. The `wake` option in `/config` turns that turn off.
+says so, and the board asks sluice, with `sluice untold`, to tell the
+session whatever nothing has told it yet. An idle session then gets a turn
+in sluice's own words: the outcome, which tests were blamed and where their
+logs are, so the agent can fix its work without being asked. Where the
+session runs in a terminal multiplexer that sluice has given the outcome to
+already, sluice tells nothing more and no turn starts. The board asks when
+the session starts too, so a session that restarted hears what it missed.
+The `wake` option in `/config` turns the asking and the turn off, and the
+outcome then waits to be told another way. The board needs a sluice with
+`sluice untold`, and says so in a toast where the host's sluice has none.
 
 Before it submits, the board forecasts the session's worktree whenever its
 commit, its branch or the submissions queued there move, as `sluice submit
