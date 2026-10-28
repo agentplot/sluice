@@ -46,6 +46,29 @@ again for as long as it exits 5, reading the outcome from the record's
   `sluice wait <id> --timeout 9m --json` until it exits other than 5,
   and reports the record's `state`
 
+### Requirement: Under worktrunk an agent with a capped tool call waits with wt submit
+
+Under worktrunk, an agent whose tool calls cannot outlast a verdict
+SHALL instead run `wt submit <branch> --timeout 9m --json`, which
+submits and then waits, and run it again for as long as it exits 5;
+that removes its worktree once it lands, and it SHALL NOT remove a
+landed worktree by hand.
+
+#### Scenario: A long gate under worktrunk
+
+- **WHEN** an agent with ten-minute tool calls, in a worktree worktrunk
+  made, submits to a branch whose gate takes forty minutes
+- **THEN** it runs `wt submit main --timeout 9m --json` until it exits
+  other than 5, reports the record's `state`, and runs no `wt remove`
+
+#### Scenario: The session-start note says so
+
+- **WHEN** a session starts in a repository with a `.config/sluice.toml`
+- **THEN** the note sluice's plugin adds tells an agent under worktrunk
+  to submit and wait with `wt submit <branch> --timeout 9m --json` in
+  the background, again while it exits 5, and never to remove a landed
+  worktree by hand
+
 ### Requirement: An agent started in a worktree submits its own work
 
 When Claude starts a background agent to work in a worktree of a

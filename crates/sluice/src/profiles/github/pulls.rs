@@ -2048,6 +2048,8 @@ impl crate::PullRequests for Pulls {
             lines,
             submission,
             names,
+            head: pull.as_ref().map(|p| p.head.clone()),
+            draft: pull.as_ref().is_some_and(|p| p.draft),
         })
     }
 }
