@@ -80,6 +80,12 @@ pub struct BranchView {
     /// from, as its `from.worktree` says (26, 49, 61): live, or moved to
     /// the finished index, which keeps it (130).
     pub recent_from: BTreeMap<u64, String>,
+    /// The subject each submission the recent lines name was given at its
+    /// submit (23, 26), live or moved to the finished index, which keeps
+    /// it; none for a submission whose submit gave none, which a reader
+    /// names by `recent_from`, and `{}` in a document from before it.
+    #[serde(default)]
+    pub recent_subjects: BTreeMap<u64, String>,
     /// 121: the branch was last read at a revision lacking its last
     /// landing, and nothing is formed or landed on it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +206,17 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
             Some((id, worktree))
         })
         .collect();
+    let recent_subjects = recent
+        .iter()
+        .flat_map(named)
+        .filter_map(|id| {
+            let subject = match line.subs.get(&id) {
+                Some(s) => s.subject.clone(),
+                None => line.finished.get(&id)?.subject.clone(),
+            };
+            Some((id, subject?))
+        })
+        .collect();
     Ok(BranchView {
         branch,
         at: line.doc.base.clone(),
@@ -212,6 +229,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         submissions,
         recent,
         recent_from,
+        recent_subjects,
         held: line.doc.held.clone(),
         held_checkouts: line.doc.failed_releases.clone(),
     })
@@ -615,6 +633,7 @@ mod tests {
             submissions: Vec::new(),
             recent,
             recent_from: BTreeMap::new(),
+            recent_subjects: BTreeMap::new(),
             held: None,
             held_checkouts: Vec::new(),
         }
@@ -750,6 +769,80 @@ mod tests {
             serde_json::to_value(&queued).unwrap()["recent_from"],
             serde_json::json!({})
         );
+    }
+
+    /// 23, 26: the subject of each submission a recent line names whose
+    /// submit gave one, live or from the finished index; none for one with
+    /// no subject or an index line written before subjects were kept.
+    #[test]
+    fn a_branch_names_the_subjects_of_its_recent_submissions() {
+        const GATE: &str = "[branches.main]\nrequired = []\n";
+        let subject = |id: u64, worktree: &str, given: &str| {
+            let (path, doc) = submission(id, worktree, "landed");
+            let doc = doc.replacen(
+                "\"state\":",
+                &format!("\"subject\":{given:?},\"state\":"),
+                1,
+            );
+            (path, doc)
+        };
+        let log = line("landed", ",\"ids\":[1,2],\"to\":\"b\"");
+        let (one, one_doc) = subject(1, "unit/a", "Batch review cards");
+        let (two, two_doc) = submission(2, "unit/b", "landed");
+        let live = read(
+            GATE,
+            &[
+                (LOG_FILE, log.clone()),
+                (one.as_str(), one_doc),
+                (two.as_str(), two_doc),
+            ],
+        );
+        let json = serde_json::to_value(&live).unwrap();
+        assert_eq!(
+            json["recent_subjects"],
+            serde_json::json!({"1": "Batch review cards"})
+        );
+        assert_eq!(
+            json["recent_from"],
+            serde_json::json!({"1": "unit/a", "2": "unit/b"})
+        );
+
+        let finished = read(
+            GATE,
+            &[
+                (LOG_FILE, log.clone()),
+                (
+                    crate::records::FINISHED_INDEX,
+                    "{\"id\":1,\"state\":\"landed\",\"worktree\":\"unit/a\",\
+                     \"subject\":\"Batch review cards\"}\n\
+                     {\"id\":2,\"state\":\"landed\",\"worktree\":\"unit/b\"}\n"
+                        .to_string(),
+                ),
+            ],
+        );
+        assert_eq!(
+            serde_json::to_value(&finished).unwrap()["recent_subjects"],
+            serde_json::json!({"1": "Batch review cards"})
+        );
+        assert_eq!(finished.recent_from, live.recent_from);
+        assert_eq!(finished.recent, live.recent);
+
+        let (one, one_doc) = submission(1, "unit/a", "queued");
+        let queued = read(GATE, &[(one.as_str(), one_doc)]);
+        assert_eq!(
+            serde_json::to_value(&queued).unwrap()["recent_subjects"],
+            serde_json::json!({})
+        );
+    }
+
+    /// A reader's document from a sluice before `recent_subjects` reads
+    /// with none.
+    #[test]
+    fn a_branch_view_without_recent_subjects_reads() {
+        let mut json = serde_json::to_value(view("main", Vec::new())).unwrap();
+        json.as_object_mut().unwrap().remove("recent_subjects");
+        let back: BranchView = serde_json::from_value(json).unwrap();
+        assert!(back.recent_subjects.is_empty());
     }
 
     #[test]

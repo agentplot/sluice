@@ -16,7 +16,7 @@ use sluice_core::{Clock, Sluice};
 use crate::exec::Host;
 use crate::preview::preview_json;
 use crate::reader::{untimed, Reader};
-use crate::{hashes, held_line, progress, sessions_json, Pause, STOPPED};
+use crate::{hashes, held_line, progress, sessions_json, Names, Pause, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -139,15 +139,20 @@ fn write_overview(
             writeln!(out, "  {}", held_line(&b.branch, hold))?;
         }
         write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+        let names = branch_names(b);
         for c in &b.candidates {
             if !matches!(c.state, CandidateState::Starting | CandidateState::Testing) {
                 continue;
             }
             // ADR 0042: how far it has got, as of when the overview was read.
-            writeln!(out, "  {}", progress::testing_line(&b.branch, c, now))?;
+            writeln!(
+                out,
+                "  {}",
+                progress::testing_line(&b.branch, c, now, Some(&names))
+            )?;
         }
         for r in b.recent.iter().rev().take(3) {
-            writeln!(out, "  {}", recent_line(r))?;
+            writeln!(out, "  {}", recent_line(r, &names))?;
         }
     }
     // 123: a worktree's or a preview's held place whose branch has no
@@ -373,8 +378,26 @@ pub fn held_clause(room: Option<&Room>, queued: usize, testing: usize, window: u
     }
 }
 
-/// One recent log line, as text.
-fn recent_line(r: &serde_json::Value) -> String {
+/// Each submission a branch's lines may name (26): one in its chain by
+/// its record, one its recent lines name by its subject, else the
+/// worktree it came from; one a document gives neither for, by its
+/// number alone.
+fn branch_names(b: &BranchView) -> Names {
+    let mut names = Names::default();
+    for (id, from) in &b.recent_from {
+        names.insert(*id, from);
+    }
+    for (id, subject) in &b.recent_subjects {
+        names.insert(*id, subject);
+    }
+    for s in &b.submissions {
+        names.insert(s.id, s.name());
+    }
+    names
+}
+
+/// One recent log line, as text, its submissions by `names` (26).
+fn recent_line(r: &serde_json::Value, names: &Names) -> String {
     let at = r["at"].as_str().unwrap_or("");
     let ids = |v: &serde_json::Value| -> Vec<u64> {
         v.as_array()
@@ -383,15 +406,17 @@ fn recent_line(r: &serde_json::Value) -> String {
     };
     let short =
         |v: &serde_json::Value| v.as_str().unwrap_or("").chars().take(7).collect::<String>();
+    let named = |ids: &[u64]| hashes(ids, Some(names), &mut BTreeSet::new());
+    let id = |v: &serde_json::Value| named(&[v.as_u64().unwrap_or(0)]);
     match r["event"].as_str() {
         Some("landed") => format!(
             "{at}  landed {} as {}",
-            hashes(&ids(&r["ids"])),
+            named(&ids(&r["ids"])),
             short(&r["to"])
         ),
         Some("blamed") => format!(
-            "{at}  blamed #{} on {}",
-            r["id"].as_u64().unwrap_or(0),
+            "{at}  blamed {} on {}",
+            id(&r["id"]),
             short(&r["combination"])
         ),
         Some("conflict") => {
@@ -399,11 +424,7 @@ fn recent_line(r: &serde_json::Value) -> String {
                 .as_array()
                 .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
                 .unwrap_or_default();
-            format!(
-                "{at}  conflict #{} on {}",
-                r["id"].as_u64().unwrap_or(0),
-                paths.join(", ")
-            )
+            format!("{at}  conflict {} on {}", id(&r["id"]), paths.join(", "))
         }
         _ => at.to_string(),
     }
