@@ -23,7 +23,7 @@
 
 ## 4. The branches are listed past a refused default branch
 
-- [ ] 4.1 In `crates/sluice/src/profiles/records.rs`, `signed_remotes` reads the default branch's policy only when it reads, and otherwise lists the remotes this host has read a state from, as design D5 says; doc comment cites 26. Verify with `cargo check -p sluice`.
+- [x] 4.1 In `crates/sluice/src/profiles/records.rs`, `signed_remotes` reads the default branch's policy only when it reads, and otherwise lists the remotes this host has read a state from, as design D5 says; doc comment cites 26. Verify with `cargo check -p sluice`.
 - [ ] 4.2 In `crates/sluice/tests/remote_branch.rs`, a scenario citing 26: state on origin, read once by this host, a submission queued on `bolt/a`, then the host's own `main` moved to a commit whose policy adds a `[[checkout.cache]]` table; `sluice wait <n>` follows the submission to `landed`, and `sluice overview --json` shows `main` with `unread` and `bolt/a` whole. Verify with `sluice exec main -- cargo test -p sluice --features tools --test remote_branch refused_alone`.
 
 ## 5. The gate
