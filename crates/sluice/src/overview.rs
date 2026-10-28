@@ -142,6 +142,18 @@ fn write_overview(
         .and_then(|at| at.parse().ok())
         .unwrap_or_default();
     for b in branches {
+        // 26: a branch that could not be read is shown with the refusal,
+        // in its words, and nothing read of it.
+        if let Some(why) = &b.unread {
+            writeln!(
+                out,
+                "{} could not be read: {}",
+                b.branch,
+                why.replace('\n', "\n  ")
+            )?;
+            write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
+            continue;
+        }
         let at = b.at.as_ref().map_or("nothing", |r| r.short());
         let testing = b.candidates.iter().filter(|c| c.state.under_test()).count();
         let up_to = b

@@ -2230,8 +2230,8 @@ impl Reading {
                     self.view = branches.into_iter().find(|b| b.branch == branch);
                     None
                 }
-                // Another branch's part, or the host's, could not be read:
-                // the failure is the reader's document, in the words it was
+                // The records, or the host's part, could not be read: the
+                // failure is the reader's document, in the words it was
                 // refused with (133), and its own part is read as a wait
                 // alone reads it. Ctrl-C reaching the git a read runs is no
                 // failure of the queues'.

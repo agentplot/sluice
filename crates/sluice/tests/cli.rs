@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use clap::Parser;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_fakes::Fakes;
-use sluice_seams::Outcome;
+use sluice_seams::{Changes, Outcome, State};
 
 const BRANCH: &str = "bolt/concurrent-units";
 
@@ -1678,6 +1678,97 @@ fn overview_orders_branches_as_the_policy_names_them() {
         .map(|l| l.split(' ').next().unwrap())
         .collect();
     assert_eq!(heads, ["release", "bolt/a", "bolt/b"]);
+}
+
+/// 26 (129, 133): a branch whose policy the overview could not read is
+/// shown with the refusal, in the words it was refused with, and hides no
+/// other branch; nothing of it is read from the policy it was refused.
+#[test]
+fn overview_shows_a_branch_whose_policy_is_refused_and_every_other() {
+    let f = setup();
+    three_submissions(&f);
+    // A bolt with records, which last saw a revision whose policy the
+    // core has since come to refuse.
+    let stale = "bolt/stale";
+    let policy = "[branches.\"bolt/*\"]\nrequired = []\n";
+    f.world.init(stale, &[(".config/sluice.toml", policy)]);
+    let head = f.world.work(&f.world.tip(stale), &[("work", Some("w"))]);
+    f.world.session("w/stale", "agent", &head);
+    let (code, _) = sluice(&f, &["submit", stale, "--worktree", "w/stale", "--no-wait"]);
+    assert_eq!(code, 0);
+    let cached =
+        format!("{policy}[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n");
+    let at = f.world.work(
+        &f.world.tip(stale),
+        &[(".config/sluice.toml", Some(cached.as_str()))],
+    );
+    f.world.set_branch(stale, &at);
+    {
+        let _lock = f.state.lock(stale).unwrap().unwrap();
+        let read = f.state.read(stale).unwrap();
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&read.files["branch.json"]).unwrap();
+        doc["base"] = at.0.clone().into();
+        let mut put = std::collections::BTreeMap::new();
+        put.insert("branch.json".to_string(), serde_json::to_vec(&doc).unwrap());
+        let changes = Changes {
+            put,
+            ..Changes::default()
+        };
+        f.state.write(stale, read.version, changes).unwrap();
+    }
+
+    let (code, json) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let branches = v["branches"].as_array().unwrap();
+    let names: Vec<&str> = branches
+        .iter()
+        .map(|b| b["branch"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, [BRANCH, stale]);
+    let read = &branches[0];
+    assert!(read.get("unread").is_none(), "{json}");
+    assert_eq!(read["depth"], 1);
+    assert_eq!(read["parallel"], 4);
+    let refused = &branches[1];
+    let words = refused["unread"].as_str().unwrap();
+    assert!(
+        words.starts_with(&format!("{stale}'s policy at {}: ", at.0))
+            && words.contains("[checkout] declares a cache")
+            && words.contains("Remove [[checkout.cache]] from .config/sluice.toml"),
+        "{words}"
+    );
+    assert!(refused["parallel"].is_null(), "{json}");
+    assert_eq!(refused["candidates"], serde_json::json!([]));
+
+    let (code, text) = sluice(&f, &["overview"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.starts_with(&format!(
+            "{BRANCH} at {} · 1 in the queue",
+            f.world.tip(BRANCH).short()
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("\n{stale} could not be read: {words}\n")),
+        "{text}"
+    );
+
+    // The home view counts the same branches, the refused one with its
+    // refusal.
+    let v = home(&f, "unit/forecast");
+    let counts = v["branches"].as_array().unwrap();
+    assert_eq!(counts[0]["depth"], 1);
+    assert!(counts[0].get("unread").is_none(), "{v}");
+    assert_eq!(counts[1]["unread"], words);
+    let (code, text) = sluice(&f, &["--worktree", "unit/forecast"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.contains(&format!("\n{stale} could not be read: {words}\n")),
+        "{text}"
+    );
 }
 
 #[test]
