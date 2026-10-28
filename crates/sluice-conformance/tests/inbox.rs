@@ -206,3 +206,76 @@ fn a_failure_withdrawn_by_a_resubmission_is_not_found() {
     assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), again)]);
     assert_eq!(h.sub(blamed).delivered, None);
 }
+
+/// The fakes' driver as a driver with no carrier for a submitter that
+/// recorded no session: each such notify is kept and answered undelivered,
+/// as the worktrunk driver answers a submit made in no pane.
+struct NoSession<'a> {
+    inner: &'a dyn Driver,
+    notified: std::cell::RefCell<Vec<Notification>>,
+}
+
+impl Driver for NoSession<'_> {
+    fn session(&self, worktree: &str) -> Result<Session> {
+        self.inner.session(worktree)
+    }
+
+    fn notify(&self, n: &Notification) -> Result<Delivery> {
+        if n.to.session.is_some() {
+            return self.inner.notify(n);
+        }
+        self.notified.borrow_mut().push(n.clone());
+        Ok(Delivery::Undelivered {
+            why: "no session recorded".into(),
+        })
+    }
+}
+
+/// satisfies: 51, 135
+#[test]
+fn a_submitter_with_no_session_is_notified_once_and_collects_once() {
+    let h = Harness::bolt();
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    assert_eq!(h.sub(one).from.session, None);
+    let driver = NoSession {
+        inner: &h.f.driver,
+        notified: Default::default(),
+    };
+    let seams = sluice_core::Seams {
+        driver: &driver,
+        ..h.f.seams()
+    };
+    for _ in 0..24 {
+        Sluice::new(seams, &h.f.clock).step(BRANCH).unwrap();
+    }
+    assert_eq!(h.sub(one).state, State::Landed);
+
+    let notified = driver.notified.borrow().clone();
+    assert_eq!(notified.len(), 1, "notified once: {notified:?}");
+    assert_eq!(notified[0].submission, one);
+    let s = h.sub(one);
+    assert_eq!((s.delivered, s.delivered_to), (None, None));
+    let pending: Vec<_> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Pending { id, why, .. } => Some((id, why)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pending, [(one, "no session recorded".to_string())]);
+    assert!(h.doc().outbox.is_empty(), "no round tries again");
+
+    // No session to name, so it is marked delivered to its place.
+    let at = h.sub(one).from.path.clone().unwrap_or("unit/a".into());
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
+    assert_eq!(h.sub(one).delivered_to.as_deref(), Some(at.as_str()));
+    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
+    assert!(collect(&h, "unit/a").is_empty(), "collected once");
+    for _ in 0..3 {
+        Sluice::new(seams, &h.f.clock).step(BRANCH).unwrap();
+    }
+    assert_eq!(driver.notified.borrow().len(), 1, "notified no more");
+    assert!(h.w().delivered_to("agent-a").is_empty());
+}
