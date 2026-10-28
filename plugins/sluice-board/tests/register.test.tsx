@@ -1251,6 +1251,172 @@ test("two good reads of sluice start one watch between them", async ($, on) => {
   expect(n.watches).toBe(1);
 });
 
+/**
+ * A host whose first read of the overview is `first`, each read kept in
+ * `ran`, and whose watch the test drives.
+ */
+function watchedHost(
+  on: On,
+  clock: MockClock,
+  first: Overview,
+  seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
+) {
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("process.run", ($, e) => {
+    const argv = e.argv.join(" ");
+    ran.push(argv);
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
+    if (argv === "sluice overview --json") return out(JSON.stringify(first));
+    if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
+    return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
+  });
+  on("ui.status", ($, e) => {
+    seen.status.push(e.text);
+    return { value: undefined };
+  });
+  on("ui.toast", ($, e) => {
+    seen.toasts.push(e.text);
+    return { value: undefined };
+  });
+  on("prompt.submit", ($, e) => {
+    seen.prompts.push(e.text);
+    return { text: e.text };
+  });
+  return watches(on, clock);
+}
+
+/** Moves the clock `ms` on, and finds the watch started again then and not before. */
+async function startedAgainAfter(clock: MockClock, watch: ReturnType<typeof watches>, ms: number) {
+  const n = watch.started.length;
+  await clock.advance(ms - 1);
+  expect(watch.started).toHaveLength(n);
+  await clock.advance(1);
+  expect(watch.started).toHaveLength(n + 1);
+}
+
+/** The fixture with nothing under test, and #13, this session's, queued. */
+function queued13(): Overview {
+  const d = overview();
+  const main = d.branches[0]!;
+  main.candidates = [];
+  for (const s of main.submissions) s.state = "queued";
+  return d;
+}
+
+/** The same, then #13 landed as 5d6e7f8a9b. */
+function landed13(): Overview {
+  const d = queued13();
+  const main = d.branches[0]!;
+  main.submissions = main.submissions.filter((s) => s.id !== 13);
+  main.depth = 2;
+  main.recent.push({
+    schema: "sluice/log@1",
+    at: "2026-10-16T19:46:00Z",
+    event: "landed",
+    ids: [13],
+    to: "5d6e7f8a9b",
+  });
+  return d;
+}
+
+const READ = "sluice overview --json";
+
+test("a watch that ends is started again a second later, and what it prints is told", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, queued13(), seen);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(queued13());
+  await clock.advance(5000);
+  await watch.end();
+
+  await startedAgainAfter(clock, watch, 1000);
+  expect(watch.started[1]! - watch.ended[0]!).toBe(1000);
+  await watch.print(landed13());
+  expect(seen.toasts).toContain("sluice: #13 landed on main");
+  expect(seen.prompts).toEqual(["[sluice] Your submission #13 landed on main as 5d6e7f8."]);
+  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+});
+
+test("a watch that can't be started is tried 1, 2, 4, 8, 16 and 32 s apart, then every minute, and nothing read between", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  watch.failing = true;
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  for (const gap of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
+    await startedAgainAfter(clock, watch, gap);
+  expect(watch.started.slice(1).map((t, i) => t - watch.started[i]!)).toEqual([
+    1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000,
+  ]);
+  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  expect(
+    await band.find({ type: "Text", text: "sluice main · 1 submission · #3 waiting" }),
+  ).toBeDefined();
+  await band.unmount();
+});
+
+test("a watch killed after ten minutes is started again a second later", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await clock.advance(600_000);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+  expect(watch.started).toEqual([NOW, NOW + 601_000]);
+});
+
+test("a watch open ten minutes after the waits grew to a minute is started again a second later", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  watch.failing = true;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  for (const gap of [1000, 2000, 4000, 8000, 16000, 32000])
+    await startedAgainAfter(clock, watch, gap);
+  // The next wait is a minute, and that watch stays open.
+  watch.failing = false;
+  await startedAgainAfter(clock, watch, 60_000);
+  expect(watch.isOpen()).toBe(true);
+  await clock.advance(600_000);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+});
+
+test("/sluice twice with the watch open leaves one watch running", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, overview(), nothingSeen());
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(true));
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toHaveLength(1);
+  expect(watch.isOpen()).toBe(true);
+  // No other is started until it ends.
+  await clock.advance(60_000);
+  expect(watch.started).toHaveLength(1);
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+});
+
 test("a failure opens in place, folds, and moves no one", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
