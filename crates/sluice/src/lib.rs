@@ -2136,24 +2136,16 @@ fn await_submission(
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
-            let delivering = match waiting.worktree {
-                Some(w) => delivering(s, w, &sub),
-                None => None,
-            };
-            let shown = delivering
-                .as_ref()
-                .and_then(|(pending, to)| pending.marked(to).pop())
-                .unwrap_or(sub);
-            let code = report(s, &shown, &branch, &names, waiting.copy, waiting.json, out)?;
-            out.flush()?;
-            if let Some((pending, to)) = delivering {
-                if let Err(e) = pending.mark(&to) {
-                    telemetry::error(&format!(
-                        "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
-                        shown.id
-                    ));
-                }
-            }
+            let code = report_delivering(
+                s,
+                waiting.worktree,
+                sub,
+                &branch,
+                &names,
+                waiting.copy,
+                waiting.json,
+                out,
+            )?;
             if let Some(e) = after {
                 after_landing(&e);
             }
@@ -2169,6 +2161,40 @@ fn await_submission(
         writeln!(out, "{}", record_json(&sub, waiting.copy)?)?;
     } else {
         writeln!(out, "still waiting: sluice wait {}", sub.id)?;
+    }
+    Ok(code)
+}
+
+/// 51: report `sub`, decided, as [`report`] does; when it is the waiting
+/// `worktree`'s own and pending, the record reported carries the mark,
+/// and it is marked delivered once the report is written and flushed. A
+/// mark that fails is said and leaves the outcome pending for `sluice
+/// inbox`.
+#[allow(clippy::too_many_arguments)]
+fn report_delivering(
+    s: &Sluice<'_>,
+    worktree: Option<&str>,
+    sub: Submission,
+    branch: &str,
+    names: &BTreeMap<u64, String>,
+    copy: Option<&CopyDiffers>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    let delivering = worktree.and_then(|w| delivering(s, w, &sub));
+    let shown = delivering
+        .as_ref()
+        .and_then(|(pending, to)| pending.marked(to).pop())
+        .unwrap_or(sub);
+    let code = report(s, &shown, branch, names, copy, json, out)?;
+    out.flush()?;
+    if let Some((pending, to)) = delivering {
+        if let Err(e) = pending.mark(&to) {
+            telemetry::error(&format!(
+                "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
+                shown.id
+            ));
+        }
     }
     Ok(code)
 }
@@ -2892,7 +2918,9 @@ enum PullMode<'a> {
 /// stands; [`PullMode::Wait`] follows the one open. While it waits, each
 /// read is tried again under the retry policy for the wait's five minutes
 /// (134), and one that still fails as the forge could not answer ends the
-/// wait as it could not read.
+/// wait as it could not read. An outcome it reports that is still pending
+/// is marked delivered to the worktree, whose branch the request was
+/// opened from, as [`await_submission`] marks one (51).
 #[allow(clippy::too_many_arguments)]
 fn submit_pull(
     s: &Sluice<'_>,
@@ -2995,7 +3023,18 @@ fn submit_pull(
                     )?;
                     return Ok(0);
                 }
-                return report(s, &sub, branch, &names, copy.as_ref(), json, out);
+                // 51: the request was opened from this worktree's branch,
+                // so the outcome a waiting submit reports is its own.
+                return report_delivering(
+                    s,
+                    Some(worktree),
+                    sub,
+                    branch,
+                    &names,
+                    copy.as_ref(),
+                    json,
+                    out,
+                );
             }
             Some(Followed::Closed) => {
                 if json {
@@ -3136,7 +3175,16 @@ fn submit_pull(
                         Ok(Followed::Done(_, names)) => names,
                         _ => BTreeMap::new(),
                     };
-                    let code = report(s, &sub, branch, &names, copy.as_ref(), json, out)?;
+                    let code = report_delivering(
+                        s,
+                        Some(worktree),
+                        sub,
+                        branch,
+                        &names,
+                        copy.as_ref(),
+                        json,
+                        out,
+                    )?;
                     after_landing(&e);
                     return Ok(code);
                 }

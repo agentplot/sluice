@@ -335,6 +335,17 @@ submitter's session (20). Under `--json` the record printed carries the
 `delivered` and `delivered_to` the wait marks. A wait that ends
 undecided, by its timeout or Ctrl-C, marks nothing.
 
+A waiting pull-request submit, and `sluice wait <branch>` on a branch
+that takes pull requests, mark the same way: the request was opened
+from the waiting worktree's branch, which the submission records as its
+`from.head`. The pull request driver has usually delivered the outcome
+to the request already, and then the wait reports that mark unchanged.
+
+A group submit's wait (125) marks nothing: it waits on several
+worktrees' submissions from the directory it runs in, which is no one
+of their sessions, so each outcome stays pending for its own worktree's
+`sluice inbox`, the push or the pull request.
+
 *Alternative:* leave the wait out, as the earlier changes did. Then an
 agent that waited on its own submission is delivered it twice, once by
 its wait and again by `sluice inbox` or the push, which 51 forbids.
