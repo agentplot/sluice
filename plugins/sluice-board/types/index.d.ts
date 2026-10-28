@@ -244,7 +244,6 @@ declare module "claude-code" {
     "sluice-board": {
       doc: Overview | null;
       mine: Mine;
-      told: string[];
       isHidden: boolean;
       now: number;
       /** Each remote's `https://github.com/<owner>/<repo>`, or null when it is not on GitHub. */
