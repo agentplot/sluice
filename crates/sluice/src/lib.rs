@@ -36,10 +36,11 @@ use reader::Reader;
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Requester,
-    Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Pending,
+    Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal,
+    Withdrew,
 };
-use sluice_seams::{Outcome, Rev, SessionPlace};
+use sluice_seams::{Outcome, Rev, SessionPlace, Submitter};
 use told::Kind;
 
 /// Exits of a waiting submit and `sluice wait` (walkthrough section 5;
@@ -998,6 +999,7 @@ pub fn run(
                 json,
                 pause,
                 copy: None,
+                worktree: Some(&worktree),
             };
             await_submission(&s, &waiting, sub, None, out)
         }
@@ -1815,6 +1817,7 @@ fn submit(
         json,
         pause,
         copy,
+        worktree: Some(&req.worktree),
     };
     await_submission(s, &waiting, sub, Some(State::Queued), out)
 }
@@ -1898,6 +1901,7 @@ fn submit_group(
         json,
         pause,
         copy: None,
+        worktree: None,
     };
     // Each in turn; once stopped, the rest as they stand.
     let mut subs = Vec::new();
@@ -2109,12 +2113,18 @@ struct Waiting<'a> {
     /// 124: how the host's copy differed from what the submit waited on
     /// submitted, carried by its `--json` document.
     copy: Option<&'a CopyDiffers>,
+    /// 51: the worktree that waits, whose own outcome the wait delivers
+    /// when it reports it; none for a wait that delivers nothing.
+    worktree: Option<&'a str>,
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
 /// say it: the loop under a waiting submit and `sluice wait`. `said` is
 /// the state its caller has said already. Under `--json`, one document
 /// however it ends: the submission's record, with the copy's `copy`.
+/// 51: an outcome the waiting worktree's own and pending is marked
+/// delivered to it once the report is written, and the record reported
+/// carries that mark; an undecided end marks nothing.
 fn await_submission(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
@@ -2126,7 +2136,24 @@ fn await_submission(
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
-            let code = report(s, &sub, &branch, &names, waiting.copy, waiting.json, out)?;
+            let delivering = match waiting.worktree {
+                Some(w) => delivering(s, w, &sub),
+                None => None,
+            };
+            let shown = delivering
+                .as_ref()
+                .and_then(|(pending, to)| pending.marked(to).pop())
+                .unwrap_or(sub);
+            let code = report(s, &shown, &branch, &names, waiting.copy, waiting.json, out)?;
+            out.flush()?;
+            if let Some((pending, to)) = delivering {
+                if let Err(e) = pending.mark(&to) {
+                    telemetry::error(&format!(
+                        "sluice: could not mark #{} delivered, so it stays pending for sluice inbox: {e:#}",
+                        shown.id
+                    ));
+                }
+            }
             if let Some(e) = after {
                 after_landing(&e);
             }
@@ -2638,21 +2665,12 @@ fn report(
 /// delivered again; each branch it collects from is locked meanwhile, so
 /// no round pushes the same outcome.
 fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
-    let session = s.seams().driver.session(worktree)?;
-    // 3: a worktree on no branch names no work, and submitted nothing.
-    if session.detached {
+    let Some((me, to)) = recipient(s, worktree)? else {
         if json {
             writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
         }
         return Ok(0);
-    }
-    let me = session.from;
-    // The session as its driver names it, else the worktree it works in.
-    let to = me
-        .session
-        .clone()
-        .or_else(|| me.path.clone())
-        .unwrap_or_else(|| me.worktree.clone());
+    };
     let pending = s.pending(&me)?;
     let marked = pending.marked(&to);
     for u in &pending.unread {
@@ -2699,6 +2717,50 @@ fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Res
     let unread = !pending.unread.is_empty();
     pending.mark(&to)?;
     Ok(if unread { INTERNAL } else { 0 })
+}
+
+/// 51: who works in `worktree`, and the name an outcome is delivered to
+/// there: the session as its driver names it, else the worktree's path.
+/// None for a worktree on no branch, which names no work and submitted
+/// nothing (3).
+fn recipient(s: &Sluice<'_>, worktree: &str) -> Result<Option<(Submitter, String)>> {
+    let session = s.seams().driver.session(worktree)?;
+    if session.detached {
+        return Ok(None);
+    }
+    let me = session.from;
+    let to = me
+        .session
+        .clone()
+        .or_else(|| me.path.clone())
+        .unwrap_or_else(|| me.worktree.clone());
+    Ok(Some((me, to)))
+}
+
+/// 51: `sub`, decided, locked and ready to mark delivered with the name to
+/// mark, when it is `worktree`'s own and pending; None otherwise, and
+/// when what it needs could not be read, which is said and leaves it
+/// pending for the next carrier.
+fn delivering<'s, 'a>(
+    s: &'s Sluice<'a>,
+    worktree: &str,
+    sub: &Submission,
+) -> Option<(Pending<'s, 'a>, String)> {
+    let found = recipient(s, worktree).and_then(|r| match r {
+        Some((me, to)) => Ok(Some((s.pending_one(&sub.branch, sub.id, &me)?, to))),
+        None => Ok(None),
+    });
+    match found {
+        Ok(Some((pending, to))) if !pending.outcomes.is_empty() => Some((pending, to)),
+        Ok(_) => None,
+        Err(e) => {
+            telemetry::error(&format!(
+                "sluice: could not read whether #{} is delivered, so it stays pending for sluice inbox: {e:#}",
+                sub.id
+            ));
+            None
+        }
+    }
 }
 
 /// Whether `branch`, at its revision, takes its work as pull requests
