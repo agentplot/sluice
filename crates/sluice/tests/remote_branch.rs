@@ -71,13 +71,26 @@ impl Setup {
     /// policy naming one signer, whose key this host signs with as the
     /// host `name` (C.6).
     fn signed(name: &str) -> Setup {
+        Setup::signing(name, &["main"])
+    }
+
+    /// As [`Setup::signed`], each branch of `trusting`, `main` or
+    /// `bolt/*`, trusting the signer, so its results count (78).
+    fn signing(name: &str, trusting: &[&str]) -> Setup {
         use ssh_key::{Algorithm, LineEnding, PrivateKey};
         let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
         let line = format!("a {}", key.public_key().to_openssh().unwrap());
-        let policy = policy("origin").replace(
+        let mut policy = policy("origin").replace(
             "[branches.main]\n",
-            &format!("[signers.a]\nssh = \"{line}\"\n\n[branches.main]\ntrust = [\"a\"]\n"),
+            &format!("[signers.a]\nssh = \"{line}\"\n\n[branches.main]\n"),
         );
+        for b in trusting {
+            let table = match b.contains('*') {
+                true => format!("[branches.\"{b}\"]\n"),
+                false => format!("[branches.{b}]\n"),
+            };
+            policy = policy.replace(&table, &format!("{table}trust = [\"a\"]\n"));
+        }
         let s = Setup::with(name, &policy);
         let path = s.config.path().join("signing");
         key.write_openssh_file(&path, LineEnding::LF).unwrap();
@@ -1207,4 +1220,270 @@ fn a_worktree_on_a_bolt_behind_submits_origins_revision_and_a_round_levels_it() 
         .collect();
     assert_eq!(after, files);
     assert!(!w.join("a.txt").exists() && !w.join("b.txt").exists());
+}
+
+/// A `[[checkout.cache]]` table, which sluice no longer keeps and whose
+/// policy it refuses whole (ADR 0049).
+const CACHE: &str = "\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
+
+/// A commit on `from` whose policy is `policy`, made on the scratch
+/// branch `name`, which no policy protects; returns it.
+fn with_policy(s: &Setup, name: &str, from: &str, policy: &str) -> String {
+    s.repo
+        .branch(name, from, &[(".config/sluice.toml", Some(policy))])
+}
+
+/// Set this host's own `branch` to `to`, as an older sluice left it,
+/// past the protection.
+fn set_copy(s: &Setup, branch: &str, to: &str) {
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        &format!("refs/heads/{branch}"),
+        to,
+    ]);
+}
+
+/// S64, 124; record 0069: `bolt/x` is made on origin under a clean
+/// policy, and this host's own `bolt/x` moved past the protection to a
+/// commit adding a `[[checkout.cache]]` table, which sluice refuses. A
+/// submission to `bolt/x` waits; the bolt's own rounds read origin's
+/// revision, land the submission there, and level this host's `bolt/x`
+/// to the landing.
+#[test]
+fn s64_the_bolts_round_reads_past_a_copy_that_lags() {
+    let s = Setup::new("remote-s64-lags", "origin");
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    s.repo.git(&["fetch", "-q", "origin"]);
+    let made = remote_rev(&s, "refs/heads/bolt/x");
+    let cached = with_policy(&s, "cached", &made, &format!("{}{CACHE}", policy("origin")));
+    set_copy(&s, "bolt/x", &cached);
+
+    let out = s.submit_to("a", "origin/bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed"]);
+    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(s.repo.rev(&format!("{bolt}^1")), made, "formed on origin's");
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
+    assert_eq!(s.repo.rev("bolt/x"), bolt, "this host's copy is levelled");
+}
+
+/// 124, 56; record 0069: origin's `bolt/x` holds a `[[checkout.cache]]`
+/// table while a submission waits; a round lands nothing, runs nothing,
+/// moves nothing, and names `bolt/x`, origin's revision and the table. A
+/// commit removing the table is pushed to origin's `bolt/x` by hand, this
+/// host's own `bolt/x` left holding it, and the next rounds land the
+/// submission on origin.
+#[test]
+fn a_policy_refused_on_the_remote_is_cleared_by_a_push() {
+    let s = Setup::new("remote-refused-pushed", "origin");
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    s.repo.git(&["fetch", "-q", "origin"]);
+    let out = s.submit_to("a", "origin/bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    let made = remote_rev(&s, "refs/heads/bolt/x");
+    let cached = with_policy(&s, "cached", &made, &format!("{}{CACHE}", policy("origin")));
+    set_remote(&s, "refs/heads/cached", "refs/heads/bolt/x");
+    set_copy(&s, "bolt/x", &cached);
+
+    let out = s.sluice(&["step", "bolt/x"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    for words in ["bolt/x", &cached[..7], "[[checkout.cache]]"] {
+        assert!(said.contains(words), "{words}: {said}");
+    }
+    assert_eq!(s.runs(), 0, "nothing ran");
+    assert_eq!(remote_rev(&s, "refs/heads/bolt/x"), cached);
+    assert_eq!(s.repo.rev("bolt/x"), cached);
+
+    let fixed = with_policy(&s, "fixed", &cached, &policy("origin"));
+    set_remote(&s, "refs/heads/fixed", "refs/heads/bolt/x");
+    assert_eq!(
+        s.repo.rev("bolt/x"),
+        cached,
+        "this host's copy still refused"
+    );
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed"]);
+    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(
+        s.repo.rev(&format!("{bolt}^1")),
+        fixed,
+        "formed on the push"
+    );
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
+}
+
+/// A branch whose policy this sluice refuses is refused alone (26, S64).
+mod refused_alone {
+    use super::*;
+
+    /// The id a `submit --no-wait --json` answered with.
+    fn id(out: &Output) -> String {
+        assert!(out.status.success(), "{}", text(out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["id"].to_string()
+    }
+
+    /// The host's own `branch` moved, past the protection, to a commit
+    /// whose policy is `edit` of the one it holds. The commit is made in a
+    /// worktree of its own, so the repository's HEAD still names its
+    /// default branch.
+    fn own_policy(s: &Setup, branch: &str, edit: impl Fn(&str) -> String) {
+        let dir = s
+            .sessions
+            .path()
+            .join(format!("refused-{}", branch.replace('/', "-")));
+        let dir = dir.to_str().unwrap();
+        s.repo
+            .git(&["worktree", "add", "-q", "--detach", dir, branch]);
+        let policy = Path::new(dir).join(".config/sluice.toml");
+        let text = std::fs::read_to_string(&policy).unwrap();
+        std::fs::write(&policy, edit(&text)).unwrap();
+        s.repo
+            .git(&["-C", dir, "commit", "-q", "-am", "a refused policy"]);
+        let at = s.repo.git(&["-C", dir, "rev-parse", "HEAD"]);
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            &format!("refs/heads/{branch}"),
+            &at,
+        ]);
+    }
+
+    /// The host's own `branch` and origin's moved, past the protection, to
+    /// a commit whose policy adds a `[[checkout.cache]]` table, which this
+    /// sluice refuses: the host's own copy holds it as on deneb (S64), and
+    /// origin's, since the routing passes over the own copy's other fields
+    /// and reads the policy whole on the remote (record 0069), so the
+    /// branch is refused whichever copy a read takes.
+    fn refuse(s: &Setup, branch: &str) {
+        own_policy(s, branch, |p| format!("{p}{CACHE}"));
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/heads/{branch}"),
+        ]);
+    }
+
+    /// The record a `sluice wait --json` ended with.
+    fn waited(out: &Output) -> serde_json::Value {
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(out)))
+    }
+
+    /// 26, S64, rule core.11: the deneb case. The host's own ref of
+    /// `bolt/b`, a branch with state, holds a policy this sluice refuses,
+    /// and origin's as well; `sluice wait` on a submission to `main` finds
+    /// it past `bolt/b` and follows it to its landing.
+    #[test]
+    fn a_wait_on_main_passes_a_bolt_whose_own_ref_is_refused() {
+        let s = Setup::new("refused-alone-wait", "origin");
+        s.repo.git(&["branch", "bolt/b", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/b:refs/heads/bolt/b"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        id(&s.submit_to("b", "bolt/b", "bolt/b"));
+        let on_main = id(&s.submit_to("a", "main", "main"));
+        refuse(&s, "bolt/b");
+        let out = s.sluice(&["status", "bolt/b"]);
+        assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
+
+        let out = s.sluice(&["wait", &on_main, "--json", "--timeout", "2m"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let v = waited(&out);
+        assert_eq!(v["id"].to_string(), on_main, "{v}");
+        assert_eq!(v["state"], "landed", "{v}");
+    }
+
+    /// 26, S64: `bolt/b`'s policy refused on the host's own ref and on
+    /// origin's, so whichever copy a round reads refuses it. A bounded
+    /// `sluice run` lands the submission on `main`, and, its last round
+    /// having passed `bolt/b` by, exits 3 as a step of `bolt/b` would,
+    /// naming it on stderr with the refusal's words.
+    #[test]
+    fn a_bounded_run_lands_main_and_exits_3_naming_the_refused_bolt() {
+        let s = Setup::new("refused-alone-run", "origin");
+        s.repo.git(&["branch", "bolt/b", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/b:refs/heads/bolt/b"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        id(&s.submit_to("b", "bolt/b", "bolt/b"));
+        let on_main = id(&s.submit_to("a", "main", "main"));
+        refuse(&s, "bolt/b");
+        let out = s.sluice(&["status", "bolt/b"]);
+        assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
+
+        let out = s.sluice(&["run", "--rounds", "2"]);
+        assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.lines().any(|l| l.starts_with("sluice: bolt/b: ")
+                && l.contains("Remove [[checkout.cache]] from .config/sluice.toml")),
+            "{}",
+            text(&out)
+        );
+        let out = s.sluice(&["status", &on_main, "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["state"], "landed", "{v}");
+    }
+
+    /// 26: the host's own `main`, the default branch, holds a policy this
+    /// sluice refuses where the routing reads it, `main`'s remote no
+    /// remote's name (record 0069), while the state is on origin and this
+    /// host has read it before. The branches are listed all the same:
+    /// `sluice wait` on a submission to `bolt/a` follows it to its
+    /// landing, and the overview shows `main` with its refusal and `bolt/a`
+    /// whole.
+    #[test]
+    fn a_refused_main_hides_no_branch_this_host_has_read() {
+        let s = Setup::signing("refused-alone-main", &["main", "bolt/*"]);
+        s.submit("m");
+        s.step_until_out();
+        assert_eq!(s.states(), ["landed"]);
+        s.repo.git(&["branch", "bolt/a", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/a:refs/heads/bolt/a"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        let on_bolt = id(&s.submit_to("a", "bolt/a", "bolt/a"));
+        own_policy(&s, "main", |p| {
+            p.replacen("remote = \"origin\"", "remote = 1", 1)
+        });
+        let out = s.sluice(&["status", "main"]);
+        assert!(!out.status.success(), "main still reads: {}", text(&out));
+
+        let out = s.sluice(&["wait", &on_bolt, "--json", "--timeout", "2m"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let v = waited(&out);
+        assert_eq!(v["id"].to_string(), on_bolt, "{v}");
+        assert_eq!(v["state"], "landed", "{v}");
+
+        let out = s.sluice(&["overview", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let part = |name: &str| {
+            v["branches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["branch"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} in {v}"))
+        };
+        assert!(
+            part("main")["unread"]
+                .as_str()
+                .is_some_and(|w| w.contains("remote must be the name of a git remote")),
+            "{v}"
+        );
+        assert!(part("bolt/a").get("unread").is_none(), "{v}");
+    }
 }

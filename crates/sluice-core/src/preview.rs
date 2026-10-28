@@ -315,7 +315,10 @@ impl Sluice<'_> {
     /// failed on every try its branch gives it.
     ///
     /// Each release takes its branch's lock, never waiting for it (rule
-    /// core.14), and one that fails is reported and the rest go on.
+    /// core.14): a preview whose branch a round holds, or whose branch
+    /// cannot be read (26), is left to a later pass. One that fails is
+    /// reported and the rest go on, and so is one released whose line
+    /// cannot be written.
     pub fn release_unusable_previews(&self) -> Result<Vec<Dropped>> {
         let mut out = Vec::new();
         let checkout = self.seams.checkout;
@@ -331,7 +334,9 @@ impl Sluice<'_> {
                     _ => continue,
                 },
             };
-            let _lock = match self.seams.state.lock(&p.branch)? {
+            // Where its branch keeps a log, as its release is logged.
+            let logged = self.seams.state.branches()?.contains(&p.branch);
+            let _lock = match self.release_lock(&p.branch, logged) {
                 Some(l) => l,
                 None => continue,
             };
@@ -401,13 +406,19 @@ impl Sluice<'_> {
                     accepted: None,
                 }),
             };
-            if let Some(event) = event {
-                if self.seams.state.branches()?.contains(&p.branch) {
-                    let now = self.now();
-                    self.update(&p.branch, |l| {
-                        l.log(&now, event.clone());
-                        Ok(())
-                    })?;
+            if let Some(event) = event.filter(|_| logged) {
+                let now = self.now();
+                let written = self.update(&p.branch, |l| {
+                    l.log(&now, event.clone());
+                    Ok(())
+                });
+                // 26: released all the same; the profile let it go.
+                if let Err(e) = written {
+                    tracing::warn!(
+                        sluice.preview = %p.name,
+                        "logging the preview's release on {} failed: {e:#}",
+                        p.branch
+                    );
                 }
             }
             out.push(Dropped {

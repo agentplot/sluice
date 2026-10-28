@@ -500,6 +500,162 @@ fn the_router_decides_with_the_remote_out_of_reach() {
     assert!(b.read("main").is_err());
 }
 
+/// A `[[checkout.cache]]` table, which sluice no longer keeps and whose
+/// policy it refuses whole (ADR 0049).
+const CACHE: &str = "[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
+
+/// Commit `policy` onto the host's own `branch`, from where it is.
+fn own_policy(repo: &Repo, branch: &str, policy: &str) -> String {
+    repo.branch(branch, branch, &[(".config/sluice.toml", Some(policy))])
+}
+
+/// 124, record 0069: the host's own `bolt/x`, whose policy sluice refuses
+/// for a `[[checkout.cache]]` table, still names origin for it, and
+/// `origin/bolt/x`, clean, names it too: `bolt/x` is origin's, read from
+/// origin, and deciding it says nothing of the table.
+#[test]
+fn a_copy_refused_elsewhere_still_says_where_the_branch_is() {
+    let repo = Repo::new("router-refused-copy");
+    let policy = "[branches.main]\n[branches.\"bolt/*\"]\nremote = \"origin\"\n";
+    repo.write(".config/sluice.toml", policy);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    repo.git(&["branch", "bolt/x"]);
+    let _bare = repo.bare_origin();
+    let theirs = repo.rev("refs/remotes/origin/bolt/x");
+    let own = own_policy(&repo, "bolt/x", &format!("{policy}{CACHE}"));
+    assert!(Policy::parse(&format!("{policy}{CACHE}")).is_err());
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    assert_eq!(b.remote("bolt/x").unwrap().as_deref(), Some("origin"));
+    assert_eq!(b.read("bolt/x").unwrap(), Some(rev(theirs)));
+    assert_eq!(repo.rev("bolt/x"), own);
+}
+
+/// 124, record 0069: where the host's own `bolt/x`, refused elsewhere in
+/// its policy, is the one revision naming origin, the host holding no
+/// `origin/bolt/x`, `bolt/x` is still origin's, not a branch in this
+/// host's own refs, and a read fetches it from origin.
+#[test]
+fn the_one_revision_naming_the_remote_is_refused_elsewhere() {
+    let repo = Repo::new("router-refused-only");
+    let policy = "[branches.main]\n[branches.\"bolt/*\"]\nremote = \"origin\"\n";
+    repo.write(".config/sluice.toml", policy);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let _bare = repo.bare_origin();
+    let theirs = repo.rev("main");
+    repo.git(&["push", "-q", "origin", "main:refs/heads/bolt/x"]);
+    repo.git(&["update-ref", "-d", "refs/remotes/origin/bolt/x"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let own = own_policy(&repo, "bolt/x", &format!("{policy}{CACHE}"));
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    assert_eq!(b.remote("bolt/x").unwrap().as_deref(), Some("origin"));
+    assert_eq!(b.read("bolt/x").unwrap(), Some(rev(theirs.clone())));
+    assert_eq!(repo.rev("refs/remotes/origin/bolt/x"), theirs);
+    assert_eq!(repo.rev("bolt/x"), own);
+}
+
+/// 124, record 0069: a copy whose `remote` for the branch is not a
+/// remote's name refuses the routing, naming the copy, its revision and
+/// what `remote` must be.
+#[test]
+fn a_remote_that_cant_be_read_refuses_naming_the_copy() {
+    let repo = Repo::new("router-unread-remote");
+    repo.write(".config/sluice.toml", "[branches.main]\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let _bare = repo.bare_origin();
+    repo.git(&["branch", "bolt/x", "main"]);
+    let own = own_policy(
+        &repo,
+        "bolt/x",
+        "[branches.main]\n[branches.\"bolt/*\"]\nremote = 1\n",
+    );
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    for err in [
+        format!("{:#}", b.remote("bolt/x").unwrap_err()),
+        format!("{:#}", b.read("bolt/x").unwrap_err()),
+    ] {
+        assert!(err.contains("bolt/x's policy at "), "{err}");
+        assert!(err.contains(&own[..7]), "{err}");
+        assert!(
+            err.contains("[branches.\"bolt/*\"] remote must be the name of a git remote"),
+            "{err}"
+        );
+    }
+}
+
+/// 124, record 0069: the host's `main`, refused elsewhere in its policy,
+/// naming origin, and `upstream/main` naming upstream, are refused still,
+/// the refusal naming each remote and its ref.
+#[test]
+fn two_remotes_are_still_refused_when_one_copy_is_refused_elsewhere() {
+    let repo = Repo::new("router-two-refused");
+    repo.write(
+        ".config/sluice.toml",
+        &format!("[branches.main]\nremote = \"origin\"\n{CACHE}"),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let _origin = repo.bare_origin();
+    let upstream = Scratch::new("upstream.git");
+    let at = upstream.path().to_str().unwrap();
+    repo.git(&["clone", "-q", "--bare", ".", at]);
+    repo.git(&["remote", "add", "upstream", at]);
+    let theirs = repo.branch(
+        "upstream-policy",
+        "main",
+        &[(
+            ".config/sluice.toml",
+            Some("[branches.main]\nremote = \"upstream\"\n"),
+        )],
+    );
+    repo.git(&[
+        "push",
+        "-q",
+        "upstream",
+        &format!("{theirs}:refs/heads/main"),
+    ]);
+    repo.git(&["fetch", "-q", "upstream"]);
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    for err in [
+        format!("{:#}", b.remote("main").unwrap_err()),
+        format!("{:#}", b.read("main").unwrap_err()),
+    ] {
+        assert!(err.contains("origin on main ("), "{err}");
+        assert!(err.contains("upstream on upstream/main ("), "{err}");
+        assert!(!err.contains("cache"), "{err}");
+    }
+}
+
+/// 124, record 0069: the policy `main` is routed by, and the remote a
+/// branch would be made on from it, are read off a copy refused elsewhere
+/// in its policy as `remote` reads it.
+#[test]
+fn made_from_and_policy_of_read_a_refused_copy_as_remote_does() {
+    let repo = Repo::new("router-refused-made");
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[branches.main]\nremote = \"origin\"\n[branches.\"bolt/*\"]\nremote = \"origin\"\n\
+             [signers.box]\nssh = \"keys/box.pub\"\n{CACHE}"
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "policy"]);
+    let own = repo.rev("main");
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    assert_eq!(b.remote("main").unwrap().as_deref(), Some("origin"));
+    assert_eq!(
+        b.remote_if_made_from("bolt/x", "main").unwrap().as_deref(),
+        Some("origin")
+    );
+    let at = b.policy_of("main").unwrap();
+    let signers: Vec<String> = at.as_ref().unwrap().1.signers.keys().cloned().collect();
+    assert_eq!(signers, ["box"]);
+    assert_eq!(routed_by(at, "main"), (own, Some("origin".into())));
+}
+
 /// An identity whose remote is a fake HTTP server, with a token of its
 /// own: `token`, then `token-1`, `token-2` and on as it is renewed, unless
 /// its forge refuses to make another, saying `refuses`.
