@@ -20,7 +20,7 @@ the work is committed.
 
 ## 3. The records profiles rewrite a finished record
 
-- [ ] 3.1 Add tests in `crates/sluice/tests/local_files.rs` and `crates/sluice/tests/remote_refs.rs` that a write putting an existing `.finished/<id>.json` replaces it, reads back as written through `read_finished` and `read_all_finished`, and leaves `finished.jsonl` as it was; change the profile only if a test fails. Verify `sluice exec main -- cargo test -p sluice --features tools --test local_files --test remote_refs`.
+- [x] 3.1 Add tests in `crates/sluice/tests/local_files.rs` and `crates/sluice/tests/remote_refs.rs` that a write putting an existing `.finished/<id>.json` replaces it, reads back as written through `read_finished` and `read_all_finished`, and leaves `finished.jsonl` as it was; change the profile only if a test fails. Verify `sluice exec main -- cargo test -p sluice --features tools --test local_files --test remote_refs`.
 
 ## 4. The command
 
