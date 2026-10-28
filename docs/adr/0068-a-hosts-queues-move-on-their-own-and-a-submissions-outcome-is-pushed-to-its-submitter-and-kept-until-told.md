@@ -1,7 +1,7 @@
 ---
 number: 68
 title: sluice stays a plain command line that needs no daemon; a host may run one driver, which waits follow; a submission's outcome is pushed to its submitter and kept until told
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # sluice stays a plain command line that needs no daemon; a host may run one driver, which waits follow; a submission's outcome is pushed to its submitter and kept until told
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it, revised on 2026-10-28 on their note, amended the same day with which carrier tells an outcome and who marks it told, and again on the user's question on its card, "how is this any different from what we already have?", with the three changes against what is built named first; accepted only on their yes.
+Status: accepted by the user on 2026-10-28, on their card ("Approved"), after a revision on their note of the same day and an amendment naming the carriers.
 
 Deciders: the user, on the record's first card (2026-10-28): "We want Sleuth to be easy for new people to adopt and telling them they have to set up a daemon is probably not what I want. It should be able to work as a simple CLI", which settles that nothing of sluice's need run for sluice to work and that no adopter is told to set up a daemon; the user, in swancloud-ops's pane the same night (afterthought/crew-state, swancloud/main, signal 2026-10-28-swancloud-ops-4f509aa5/01-waits-are-pushed-and-reconnect-after-restart): "If our records already know about sluice submissions, crew units, and chores, then if we restarted a Claude Code session, it should be able to come back up and reconnect with those watchers (either through the mod or through some instruction)", which settles that an outcome reaches a session by a push the session picks up again from the records after a restart; madswan-design for the shape; the user's yes is asked on the record's card. swancloud-design holds the design across crew, Flume and sluice (crew record 0046).
 Sources: `README.md` on main at 2026-10-27, "No daemon": sluice keeps nothing running itself, a waiting submit drives the queue while it waits, `sluice run` or `sluice step` from cron does the same for a host; statement clauses 20, 26, 50, 51, 71, 129, 131 and the C.5 worktrunk row; rules core.4, core.11, core.25; ADRs 0011, 0041, 0056 (which declined a per-host service for the same reason); `crates/sluice-core/src/records.rs` (`told` on a submission); swancloud's reading of deneb on 2026-10-28 (signal 2026-10-28-swancloud-ops-cc4c8120/01: the host saturated by watchers and waits).
