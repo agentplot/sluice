@@ -134,6 +134,12 @@ impl Follow {
     }
 }
 
+/// Whether `doc` is a reader's last, saying its repository has no sluice:
+/// the overview with `"set_up": false` (129).
+pub fn no_sluice(doc: &Value) -> bool {
+    doc.get("set_up") == Some(&Value::Bool(false))
+}
+
 /// `doc` but for the time it was read: what a watch prints again, and a
 /// reader writes again, only when it changes.
 pub fn untimed(doc: &Value) -> Value {
