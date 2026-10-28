@@ -64,6 +64,7 @@ import {
   recentInWay,
   recentKeys,
   recentWords,
+  rewatchWait,
   shown,
   signature,
   since,
@@ -338,32 +339,41 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
   if (wake) await $.prompt.submit({ text: wakeText(o, failed) });
 }
 
-/** `sluice overview --json --watch` for the session's life, else a poll. */
+/**
+ * `sluice overview --json --watch` for the session's life, one at a time:
+ * when it ends or can't be started, it is started again after a wait that
+ * grows (`rewatchWait`), and never polled for. A watch ends only when killed,
+ * replaced or its repository is gone, and a new one follows the host's
+ * reader (129; ADR 0056).
+ */
 async function feed($: $, cwd: string, how: How) {
-  try {
-    let rest = "";
-    for await (const chunk of $.process.spawn({
-      argv: ["sluice", "overview", "--json", "--watch"],
-      cwd,
-    })) {
-      if (chunk.stream !== "stdout") continue;
-      rest += chunk.text;
-      let nl = rest.indexOf("\n");
-      while (nl >= 0) {
-        const line = rest.slice(0, nl).trim();
-        rest = rest.slice(nl + 1);
-        if (line) await take($, JSON.parse(line), cwd, how);
-        nl = rest.indexOf("\n");
+  let wait: number | null = null;
+  for (;;) {
+    const started = await $.clock.now();
+    try {
+      let rest = "";
+      for await (const chunk of $.process.spawn({
+        argv: ["sluice", "overview", "--json", "--watch"],
+        cwd,
+      })) {
+        if (chunk.stream !== "stdout") continue;
+        rest += chunk.text;
+        let nl = rest.indexOf("\n");
+        while (nl >= 0) {
+          const line = rest.slice(0, nl).trim();
+          rest = rest.slice(nl + 1);
+          // A line that isn't JSON is passed over, and the watch kept.
+          if (line) await take($, parsed(line), cwd, how);
+          nl = rest.indexOf("\n");
+        }
       }
+    } catch {
+      // It could not be started, or its stream broke: start it again.
     }
-  } catch {
-    // Spawning failed or the stream broke: poll instead.
+    const ms = rewatchWait(wait, (await $.clock.now()) - started);
+    wait = ms;
+    await new Promise<void>((done) => $.clock.after(ms, done));
   }
-  $.clock.every(3000, async () => {
-    const got = await $.process.run(["sluice", "overview", "--json"], { cwd }).catch(() => null);
-    // A failing overview prints its error document on stdout too.
-    if (got) await take($, parsed(got.stdout), cwd, how);
-  });
 }
 
 /** `sluice overview --json` once: the overview, or null with why kept in `unread`. */
