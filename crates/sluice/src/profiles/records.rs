@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use sluice_core::policy::Policy;
+use sluice_core::policy::{Policy, POLICY_PATH};
 use sluice_core::records::{parse_lines, to_line, ResultLine, SetAside};
 use sluice_seams::{
-    Changes, Guard, ReadRefused, Rev, Setting, Snapshot, State, TaskLog, TaskProgress, Written,
+    read_refused, Branch, Changes, Guard, ReadRefused, Rev, Setting, Snapshot, State, TaskLog,
+    TaskProgress, Written,
 };
 
 use super::branches::Branches;
@@ -99,15 +100,19 @@ impl Records {
     }
 
     /// The `remote refs` profile `branch` is routed to, or `None` for
-    /// local files.
+    /// local files: its remote's when the policy the routing reads names
+    /// signers and a remote for it (C.6), each revision's policy read only
+    /// as far as that needs (124; record 0069). The signers its runs are
+    /// verified by are read from its revision on the remote, never from
+    /// the host's own copy ([`Records::open`]; 27).
     pub fn route(&self, branch: &str) -> Result<Option<Rc<RemoteRefs>>> {
         if let Some(known) = self.routes.borrow().get(branch) {
             return Ok(known.as_ref().map(|r| self.remotes.borrow()[r].clone()));
         }
         let routed = match self.branches.policy_of(branch)? {
-            Some((rev, policy)) if !policy.signers.is_empty() => {
+            Some((_, policy)) if !policy.signers.is_empty() => {
                 match policy.rules_for(branch)?.and_then(|r| r.remote.clone()) {
-                    Some(remote) => Some(self.open(&remote, &rev, &policy)?),
+                    Some(remote) => Some(self.open(&remote, branch)?),
                     None => None,
                 }
             }
@@ -148,31 +153,22 @@ impl Records {
         Ok(out)
     }
 
-    /// `remote`'s profile, opened once, verifying the signers the policy
-    /// at `rev` names (78).
-    fn open(&self, remote: &str, rev: &Rev, policy: &Policy) -> Result<Rc<RemoteRefs>> {
+    /// `remote`'s profile, opened once, verifying the signers named by the
+    /// policy, read whole, at `branch`'s revision on `remote` (78; 27,
+    /// 124; record 0069): fetched, as every read of a branch on its remote
+    /// is (C.7); as last fetched when the remote can't be read; and, when
+    /// the remote holds no such branch and the host no tracking ref of it,
+    /// the revision the routing chose, which it is being made at. The
+    /// host's own copy is never read for them. A policy refused there
+    /// fails, naming the branch, the remote and the revision, and opens no
+    /// profile. Bound for guarding, it reads no key and fetches nothing.
+    fn open(&self, remote: &str, branch: &str) -> Result<Rc<RemoteRefs>> {
         if let Some(r) = self.remotes.borrow().get(remote) {
             return Ok(r.clone());
         }
         let mut signers = BTreeMap::new();
-        for (name, s) in policy.signers.iter().filter(|_| !self.guarding) {
-            let key = match (&s.identity.0[..], &s.identity.1) {
-                ("ssh", Setting::Text(v)) => {
-                    let text = if v.split_whitespace().count() >= 2 {
-                        v.clone()
-                    } else {
-                        let bytes = self.branches.file_at(rev, v)?.with_context(|| {
-                            format!("[signers.{name}] ssh names {v}, which {rev} does not hold")
-                        })?;
-                        String::from_utf8(bytes)?
-                    };
-                    SignerKey::Ssh(
-                        ssh::allowed(&text).with_context(|| format!("[signers.{name}] ssh"))?,
-                    )
-                }
-                _ => SignerKey::Keyless,
-            };
-            signers.insert(name.clone(), key);
+        if !self.guarding {
+            self.signers(remote, branch, &mut signers)?;
         }
         let signing = match self.signing.as_ref().filter(|_| !self.guarding) {
             Some(s) => Some(Signing {
@@ -189,6 +185,57 @@ impl Records {
         ));
         self.remotes.borrow_mut().insert(remote.into(), r.clone());
         Ok(r)
+    }
+
+    /// The keys of the signers [`Records::open`] verifies `branch`'s
+    /// records on `remote` by, into `signers`.
+    fn signers(
+        &self,
+        remote: &str,
+        branch: &str,
+        signers: &mut BTreeMap<String, SignerKey>,
+    ) -> Result<()> {
+        let p = self.branches.pushed_refs(remote)?;
+        let fetched = match p.read(branch) {
+            Ok(at) => at,
+            Err(e) if read_refused(&e).is_some() => None,
+            Err(e) => return Err(e),
+        };
+        let rev = match fetched {
+            Some(at) => at,
+            None => match p.read_ref(&format!("refs/remotes/{remote}/{branch}"))? {
+                Some(at) => at,
+                None => match self.branches.policy_of(branch)? {
+                    Some((at, _)) => at,
+                    None => return Ok(()),
+                },
+            },
+        };
+        let Some(bytes) = self.branches.file_at(&rev, POLICY_PATH)? else {
+            return Ok(());
+        };
+        let policy = Policy::parse(std::str::from_utf8(&bytes)?)
+            .with_context(|| format!("{branch}'s policy on {remote} at {rev}"))?;
+        for (name, s) in &policy.signers {
+            let key = match (&s.identity.0[..], &s.identity.1) {
+                ("ssh", Setting::Text(v)) => {
+                    let text = if v.split_whitespace().count() >= 2 {
+                        v.clone()
+                    } else {
+                        let bytes = self.branches.file_at(&rev, v)?.with_context(|| {
+                            format!("[signers.{name}] ssh names {v}, which {rev} does not hold")
+                        })?;
+                        String::from_utf8(bytes)?
+                    };
+                    SignerKey::Ssh(
+                        ssh::allowed(&text).with_context(|| format!("[signers.{name}] ssh"))?,
+                    )
+                }
+                _ => SignerKey::Keyless,
+            };
+            signers.insert(name.clone(), key);
+        }
+        Ok(())
     }
 
     /// Where this host notes that `branch`'s own records moved to its
