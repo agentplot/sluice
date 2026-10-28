@@ -993,3 +993,15 @@ only one run at a time for a branch.
   it.
   [Executors and systems](/sluice/guides/executors-and-systems/) sets
   one up.
+
+`sluice run` passes by a branch it cannot read, one whose policy,
+revision or state it cannot read or whose round fails, and goes on with
+every other branch's round. It says so once, on one line with the words
+it was refused with, and again only when those words change or when the
+branch is refused again after a pass that read it:
+
+```console
+bolt/cache could not be read, passed by: [checkout] declares a cache, which sluice no longer keeps: …
+```
+
+A branch passed by leaves the run's exit as it was.
