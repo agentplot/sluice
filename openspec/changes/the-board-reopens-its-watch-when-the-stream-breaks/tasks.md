@@ -2,7 +2,7 @@
 
 ## 1. The wait before the next watch
 
-- [ ] 1.1 In `plugins/sluice-board/hooks/board.ts`, add a pure function giving the wait before the board starts its watch again, from the last wait (none before the first) and how long the watch that ended was open: 1000 ms with no last wait or after a watch open at least 60 000 ms, else twice the last wait, at most 60 000 ms. Its doc comment cites clause 129 and ADR 0056 and says why the count starts over only after a minute's life (design, "The wait doubles"). Verify with tests in `plugins/sluice-board/tests/board.test.ts`: the waits from none run 1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000 for watches that end at once; 60000 followed by a watch open 600 000 ms gives 1000; a watch open 59 999 ms after a 4000 wait gives 8000. Run `moon run plugin-board:test plugin-board:typecheck`.
+- [x] 1.1 In `plugins/sluice-board/hooks/board.ts`, add a pure function giving the wait before the board starts its watch again, from the last wait (none before the first) and how long the watch that ended was open: 1000 ms with no last wait or after a watch open at least 60 000 ms, else twice the last wait, at most 60 000 ms. Its doc comment cites clause 129 and ADR 0056 and says why the count starts over only after a minute's life (design, "The wait doubles"). Verify with tests in `plugins/sluice-board/tests/board.test.ts`: the waits from none run 1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000 for watches that end at once; 60000 followed by a watch open 600 000 ms gives 1000; a watch open 59 999 ms after a 4000 wait gives 8000. Run `moon run plugin-board:test plugin-board:typecheck`.
 
 ## 2. The board starts its watch again and never polls
 
