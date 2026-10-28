@@ -1025,6 +1025,8 @@ pub fn run(
             let mut n = 0;
             // 121: each branch's hold as last said, so it is said once.
             let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
+            // 26, 121: the words each branch passed by was last said with.
+            let mut passed: BTreeMap<String, String> = BTreeMap::new();
             loop {
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
@@ -1039,9 +1041,29 @@ pub fn run(
                 branches.dedup();
                 for branch in branches {
                     intake(pulls, seams, clock, &branch);
-                    let status = s.status(&branch)?;
-                    if status.submissions.iter().any(|x| !x.state.is_out()) {
-                        let round = s.round(&branch)?;
+                    // 26, rule core.14: a branch whose status read or round
+                    // fails is that branch's alone; the pass goes on to
+                    // every other branch, and the run's exit is unchanged.
+                    let ran = s.status(&branch).and_then(|status| {
+                        if !status.submissions.iter().any(|x| !x.state.is_out()) {
+                            return Ok(None);
+                        }
+                        s.round(&branch).map(Some)
+                    });
+                    let round = match ran {
+                        Ok(round) => {
+                            passed.remove(&branch);
+                            round
+                        }
+                        // Ctrl-C reaching the git a branch's read runs is no
+                        // refusal of that branch's.
+                        Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+                        Err(e) => {
+                            tell_passed(out, &branch, &format!("{e:#}"), &mut passed)?;
+                            None
+                        }
+                    };
+                    if let Some(round) = round {
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
                         exec::tell_releases(out, false, &round.releases)?;
@@ -1514,6 +1536,24 @@ fn tell_hold(
             writeln!(out, "{}", held_line(branch, h))?;
         }
         *said = now;
+    }
+    Ok(())
+}
+
+/// 26, 121, rule core.14: say that `sluice run` passed `branch` by, its
+/// status read or round failing with `words`, once while those words
+/// stand: when it begins, and again for other words. `said` holds the
+/// words each branch was last passed by with; a branch that reads leaves
+/// it, so a refusal after a pass that read it is said again.
+fn tell_passed(
+    out: &mut dyn Write,
+    branch: &str,
+    words: &str,
+    said: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    if said.get(branch).map(String::as_str) != Some(words) {
+        writeln!(out, "{branch} could not be read, passed by: {words}")?;
+        said.insert(branch.to_string(), words.to_string());
     }
     Ok(())
 }
