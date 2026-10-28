@@ -18,5 +18,5 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 In `plugins/sluice-board/README.md`, say the board reads only through its watch from the session's start, never a one-shot `sluice overview`; that `/sluice` with no queue starts the watch at once; and that where the host's sluice has no watch the band and the pane say the board can't follow it, naming its version and 0.12, and the status line is empty; verify by reading it against the spec delta.
+- [x] 4.1 In `plugins/sluice-board/README.md`, say the board reads only through its watch from the session's start, never a one-shot `sluice overview`; that `/sluice` with no queue starts the watch at once; and that where the host's sluice has no watch the band and the pane say the board can't follow it, naming its version and 0.12, and the status line is empty; verify by reading it against the spec delta.
 - [ ] 4.2 Say the same, in the user words, in `site/src/content/docs/guides/claude-code.md`; verify with `sluice exec main -- moon run site:prose` clearing every Vale warning.
