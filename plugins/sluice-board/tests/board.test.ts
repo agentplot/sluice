@@ -3,6 +3,7 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   bandLines,
   bar,
+  cannotFollow,
   checkLines,
   checkRows,
   clearText,
@@ -34,6 +35,7 @@ import {
   moving,
   namedFirst,
   namedLine,
+  noWatch,
   openedText,
   outcomes,
   progress,
@@ -49,6 +51,7 @@ import {
   submitted,
   taskLines,
   unreadReason,
+  WATCH_SINCE,
   wakeText,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
@@ -733,6 +736,34 @@ describe("the watch started again", () => {
   test("a watch open a minute starts the count over; one open less does not", () => {
     expect(rewatchWait(60000, 600_000)).toBe(1000);
     expect(rewatchWait(4000, 59_999)).toBe(8000);
+  });
+});
+
+describe("a sluice with no watch", () => {
+  test("is told from clap refusing `overview` or `--watch`, and nothing else", () => {
+    expect(noWatch("error: unrecognized subcommand 'overview'\n\nUsage: sluice <COMMAND>\n")).toBe(
+      true,
+    );
+    expect(noWatch("error: unexpected argument '--watch' found\n\nUsage: sluice overview\n")).toBe(
+      true,
+    );
+    expect(noWatch("sluice: not a git repository\n")).toBe(false);
+    expect(noWatch("error: unexpected argument '--json' found\n")).toBe(false);
+    expect(noWatch("")).toBe(false);
+  });
+
+  test("the line names the version sluice printed, else this sluice, and the one needed", () => {
+    expect(WATCH_SINCE).toBe("0.12");
+    expect(cannotFollow("sluice 0.11.2")).toBe(
+      "can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12 or later",
+    );
+    expect(cannotFollow(" sluice 0.9.0 \n")).toBe(
+      "can't follow sluice 0.9.0: it has no watch; the board needs sluice 0.12 or later",
+    );
+    for (const none of [null, "", "  "])
+      expect(cannotFollow(none)).toBe(
+        "can't follow this sluice: it has no watch; the board needs sluice 0.12 or later",
+      );
   });
 });
 

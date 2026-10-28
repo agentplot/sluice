@@ -842,6 +842,30 @@ export function rewatchWait(last: number | null, open: number): number {
   return Math.min(last * 2, REWATCH_MOST);
 }
 
+/** The sluice that first had `overview --watch`, the one place the board names it. */
+export const WATCH_SINCE = "0.12";
+
+/**
+ * Whether a watch ended because the host's sluice has no watch: clap
+ * refusing `overview` as a command or `--watch` as an argument, as a sluice
+ * older than 0.12 does.
+ */
+export function noWatch(stderr: string): boolean {
+  return (
+    stderr.includes("unrecognized subcommand 'overview'") ||
+    stderr.includes("unexpected argument '--watch'")
+  );
+}
+
+/**
+ * The band's one line where the host's sluice has no watch, naming the
+ * version it printed (`sluice 0.11.2`), or `this sluice` when it printed none.
+ */
+export function cannotFollow(version: string | null): string {
+  const which = version?.trim() || "this sluice";
+  return `can't follow ${which}: it has no watch; the board needs sluice ${WATCH_SINCE} or later`;
+}
+
 /**
  * Why `sluice overview --json` gave no overview: the command could not be
  * started (`got` null), else sluice's first line on stderr, else its exit.

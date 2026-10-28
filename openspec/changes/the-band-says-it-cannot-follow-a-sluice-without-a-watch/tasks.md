@@ -2,7 +2,7 @@
 
 ## 1. Telling a sluice with no watch
 
-- [ ] 1.1 In `plugins/sluice-board/hooks/board.ts`, add `WATCH_SINCE = "0.12"`, `noWatch(stderr)` (true on `unrecognized subcommand 'overview'` or `unexpected argument '--watch'`) and `cannotFollow(version)` (`can't follow <version>: it has no watch; the board needs sluice 0.12 or later`, `this sluice` for a null or empty version); verify with `board.test.ts` cases for both clap wordings, an unrelated stderr, a version line and none, run by `moon run sluice-board:test` under `sluice exec main --`.
+- [x] 1.1 In `plugins/sluice-board/hooks/board.ts`, add `WATCH_SINCE = "0.12"`, `noWatch(stderr)` (true on `unrecognized subcommand 'overview'` or `unexpected argument '--watch'`) and `cannotFollow(version)` (`can't follow <version>: it has no watch; the board needs sluice 0.12 or later`, `this sluice` for a null or empty version); verify with `board.test.ts` cases for both clap wordings, an unrelated stderr, a version line and none, run by `moon run sluice-board:test` under `sluice exec main --`.
 
 ## 2. The watch as the first read
 
