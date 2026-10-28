@@ -117,6 +117,15 @@ the band. While the board has no queue, each `/sluice` that opens the
 pane starts the next watch at once rather than waiting, so a session
 that sets sluice up partway through shows the queue as soon as the pane
 is opened.
+Where sluice isn't set up in the repository, with no records and no
+branch, the host's own or a remote's as last fetched, holding
+`.config/sluice.toml`, the watch says so and ends. The board drops any
+queue, error or reason it held: the band and the status line stay empty,
+nothing is forecast or told, and it starts no further watch. `/sluice`
+reads once more, the pane saying `Reading sluice…` while it does, then
+`sluice isn't set up in this repository.` and `Ask Claude to set sluice
+up in this repository.` Where that watch finds sluice set up, the board
+shows the queue and follows it from then on.
 Where the host's sluice has no watch, one older than 0.12, the band says
 the board can't follow it, naming the version sluice gives:
 `can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12
