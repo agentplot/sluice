@@ -6742,14 +6742,14 @@ fn a_release_failing_after_the_landing_leaves_it_landed() {
     assert!(f.world.live_places().is_empty());
 }
 
-/// 122: telling the outcome fails after the landing, in the round
-/// `sluice wait` ran: landed, exit 0, and the telling's failure on stderr.
+/// 122: pushing the outcome fails after the landing, in the round
+/// `sluice wait` ran: landed, exit 0, and the push's failure on stderr.
 #[test]
-fn telling_failing_after_the_landing_leaves_it_landed() {
-    if let Some(err) = stderr_of("telling_failing_after_the_landing_leaves_it_landed") {
+fn a_push_failing_after_the_landing_leaves_it_landed() {
+    if let Some(err) = stderr_of("a_push_failing_after_the_landing_leaves_it_landed") {
         assert_eq!(
             after_the_landing(&err),
-            ["sluice: after the landing: crashed after telling 1:landed"],
+            ["sluice: after the landing: crashed after delivering 1:landed"],
             "{err}"
         );
         return;

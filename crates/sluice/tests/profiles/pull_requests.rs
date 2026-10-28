@@ -1127,13 +1127,13 @@ fn a_submits_pull_request_sent_back_says_so() {
         ),
         "{summary}"
     );
-    let told: Vec<String> = g
+    let delivered: Vec<String> = g
         .comments(pull.number)
         .into_iter()
         .filter(|c| c.contains("told="))
         .collect();
-    assert_eq!(told.len(), 1, "{told:?}");
-    let c = &told[0];
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    let c = &delivered[0];
     assert!(c.contains("`sh check.sh` failed"), "{c}");
     assert!(c.contains("[sluice's report]("), "{c}");
     assert!(
@@ -1177,6 +1177,20 @@ fn landed_and_merged_by_landing() {
         .report(n)
         .unwrap()
         .contains("## sluice: landed on main as "));
+}
+
+/// 51: a landed pull request's outcome is delivered to the request, and
+/// its submission is marked delivered to it.
+#[test]
+fn a_landed_requests_outcome_is_delivered_to_it() {
+    let g = OnGitHub::new("pr-delivered", "");
+    let (n, _) = g.by_hand("unit/delivered", &[("t.txt", Some("t\n"))], false);
+    g.step_until("delivered", |g| {
+        g.of(n).first().is_some_and(|s| s["delivered"].is_string())
+    });
+    let s = &g.of(n)[0];
+    assert_eq!(s["state"], "landed", "{s}");
+    assert_eq!(s["delivered_to"], format!("pull/{n}").as_str(), "{s}");
 }
 
 /// Two rounds with nothing changed between them post nothing the second
@@ -1792,6 +1806,14 @@ fn a_waiting_submit_follows_its_pull_request() {
         "{said}"
     );
     assert!(!w.exists(), "the worktree is removed on landing: {said}");
+    // 51: the request's outcome was delivered to it, and the wait that
+    // reported it left that mark as it stood.
+    let s = &g.of(pull.number)[0];
+    assert_eq!(
+        s["delivered_to"],
+        format!("pull/{}", pull.number).as_str(),
+        "{s}"
+    );
 }
 
 /// `--no-wait` returns once the pull request is open; `--status` later
@@ -1824,7 +1846,8 @@ fn status_names_the_head_waiting_for_a_review() {
     let pull = g.pull_from("unit/headed");
     let out = g.wt_submit(&w, &["--status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(
         doc,
         serde_json::json!({
@@ -1846,7 +1869,8 @@ fn status_names_a_draft() {
     g.gh.forge.set_draft(pull.number, true).unwrap();
     let out = g.wt_submit(&w, &["--status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number, "{doc}");
     assert_eq!(doc["head"], pull.head.as_str(), "{doc}");
     assert_eq!(doc["draft"], true, "{doc}");
@@ -1876,7 +1900,8 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
     let before = writes();
     let out = g.wt_submit(&w, &["--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(
         doc,
         serde_json::json!({
@@ -1919,7 +1944,8 @@ fn run_again_without_waiting_answers_with_a_pull_request() {
     let before = writes();
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], n, "{doc}");
     assert_eq!(doc["branch"], "main", "{doc}");
     assert_eq!(doc["state"], "waiting: needs 1 review", "{doc}");
@@ -1966,15 +1992,20 @@ fn no_wait_answers_with_its_submission() {
     let w = g.session("ready", &[("ready.txt", "ready\n")]);
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let n = g.pull_from("unit/ready").number;
     assert_eq!(doc["pull_request"], n, "{doc}");
     assert_eq!(doc["branch"], "main", "{doc}");
     assert_eq!(doc["ahead"], serde_json::json!([]), "{doc}");
-    let id = doc["id"].as_u64().expect(&doc.to_string()).to_string();
+    let id = doc["id"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{doc}"))
+        .to_string();
     let out = g.sluice(&["status", &id, "--json"]);
     assert!(out.status.success(), "{}", text(&out));
-    let record: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let record: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(record["from"]["worktree"], format!("pull/{n}").as_str());
     let pushed = github::rev(g.bare.path(), "refs/heads/unit/ready").unwrap();
     assert_eq!(record["head"], pushed.as_str());
@@ -1984,7 +2015,8 @@ fn no_wait_answers_with_its_submission() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["state"], "landed");
 }
 
@@ -1996,7 +2028,8 @@ fn no_wait_waiting_for_a_review_answers_with_the_pull_request() {
     let w = g.session("unreviewed", &[("u.txt", "u\n")]);
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     let n = g.pull_from("unit/unreviewed").number;
     assert_eq!(
         doc,
@@ -2049,7 +2082,8 @@ fn wait_follows_a_pull_request() {
     let out = wait(&["main", "--timeout", "2s", "--json"]);
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
     let pull = g.gh.forge.by_ref("unit/waits").unwrap().unwrap();
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["pull_request"], pull.number);
     assert_eq!(doc["state"], "waiting: needs 1 review");
 
@@ -2061,10 +2095,11 @@ fn wait_follows_a_pull_request() {
         serde_json::from_slice(&g.sluice(&["status", "main", "--json"]).stdout).unwrap();
     let id = status["submissions"][0]["id"]
         .as_u64()
-        .expect(&status.to_string());
+        .unwrap_or_else(|| panic!("{status}"));
     let out = wait(&[&id.to_string(), "--json"]);
     assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(doc["state"], "landed");
 }
 
@@ -2077,15 +2112,17 @@ fn wait_follows_a_pull_requests_submission() {
     let w = g.session("taken", &[("slow", "x\n")]);
     let out = g.wt_submit(&w, &["--no-wait", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    let doc: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
-    let id = doc["id"].as_u64().expect(&doc.to_string());
+    let doc: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    let id = doc["id"].as_u64().unwrap_or_else(|| panic!("{doc}"));
     let out = g
         .command(env!("CARGO_BIN_EXE_sluice"), &w)
         .args(["wait", "main", "--timeout", "2s", "--json"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
-    let record: Value = serde_json::from_slice(&out.stdout).expect(&text(&out));
+    let record: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
     assert_eq!(record["id"], id, "{record}");
     assert!(
         record["state"] == "queued" || record["state"] == "testing",
