@@ -342,9 +342,9 @@ async function tell($: $, o: Outcome, cwd: string, wake: boolean) {
 /**
  * `sluice overview --json --watch` for the session's life, one at a time:
  * when it ends or can't be started, it is started again after a wait that
- * grows (`rewatchWait`), and never polled for. A watch ends only when killed,
- * replaced or its repository is gone, and a new one follows the host's
- * reader (129; ADR 0056).
+ * grows (`rewatchWait`), never replaced by a poll. A watch ends only when
+ * killed, replaced or its repository is gone, and a new one follows the
+ * host's reader (129; ADR 0056).
  */
 async function feed($: $, cwd: string, how: How) {
   let wait: number | null = null;
