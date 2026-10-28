@@ -78,8 +78,10 @@ pub fn run(
     // 129: the first watch or wait of the repository on the host reads its
     // queues and writes each document it prints; every other follows that
     // document, reading nothing itself, until it finds the lock free
-    // (rule core.25).
-    let mut reader = Reader::take(&host.readers()?, &host.repository()?, crate::VERSION)?;
+    // (rule core.25). A watch of a newer sluice than the reader's takes
+    // its lease (129): the older reader lets go and follows, and the
+    // newer watch reads from its next tick.
+    let mut reader = Reader::take(&host.readers()?, &host.repository()?, host.version())?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
@@ -104,6 +106,7 @@ pub fn run(
         if !pause.pause() {
             return Ok(STOPPED);
         }
+        // A watch may take an older reader's lease.
         reader.step(true)?;
     }
 }
