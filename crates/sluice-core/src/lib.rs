@@ -364,13 +364,59 @@ impl<'a> Sluice<'a> {
         Ok(aside)
     }
 
-    /// The branch that holds submission `id`.
-    pub fn find(&self, id: u64) -> Result<Option<String>> {
+    /// The branch that holds submission `id`, from every branch with
+    /// records that reads: one whose records cannot be read, or whose
+    /// finished record of `id` cannot be, is passed by into the unread
+    /// list with the words it was refused with, and only the list of
+    /// branches failing fails the lookup (26; rule core.11).
+    pub fn find(&self, id: u64) -> Result<Found> {
+        let mut unread = Vec::new();
         for b in self.seams.state.branches()? {
-            if self.read_line(&b)?.has(id) {
-                return Ok(Some(b));
+            let held = self.read_line(&b).and_then(|line| {
+                if line.subs.contains_key(&id) {
+                    return Ok(true);
+                }
+                if line.finished.contains_key(&id) {
+                    self.finished_sub(&b, id)?;
+                    return Ok(true);
+                }
+                Ok(false)
+            });
+            match held {
+                Ok(true) => return Ok(Found::On(b)),
+                Ok(false) => {}
+                Err(e) => unread.push(Unread::of(&b, &e)),
             }
         }
-        Ok(None)
+        Ok(Found::Unfound(unread))
     }
+}
+
+/// A branch a lookup passed by, and the words its read was refused with,
+/// whole (26, 133).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unread {
+    pub branch: String,
+    pub refused: String,
+}
+
+impl Unread {
+    /// `branch`, refused with `e`, worded as the overview words a branch
+    /// it could not read.
+    pub fn of(branch: &str, e: &anyhow::Error) -> Unread {
+        Unread {
+            branch: branch.into(),
+            refused: format!("{e:#}"),
+        }
+    }
+}
+
+/// Where a lookup by number found a submission (26).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// On this branch.
+    On(String),
+    /// On none of the branches read; the branches that could not be read,
+    /// none when every branch was.
+    Unfound(Vec<Unread>),
 }

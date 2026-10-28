@@ -12,7 +12,7 @@ use sluice_seams::{Contested, Formed, HostCopy, Rev, Session};
 use crate::line::Line;
 use crate::order::{self, Entry};
 use crate::records::{Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
-use crate::Sluice;
+use crate::{Found, Sluice};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubmitRequest {
@@ -702,7 +702,7 @@ impl Sluice<'_> {
         after: Option<Vec<u64>>,
         priority: Option<i64>,
     ) -> Result<Result<(), AmendRefusal>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(Err(AmendRefusal::NoSuchSubmission));
         };
         // Finished, it is past changing: refused as it was before it moved.
@@ -758,7 +758,7 @@ impl Sluice<'_> {
     /// 48, 5: withdraw a submission, by its submitter, its planner or the
     /// operator.
     pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<Withdrew, WithdrawRefusal>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(Err(WithdrawRefusal::NoSuchSubmission));
         };
         // Withdrawn or landed is final (5): answered from the records, with
@@ -806,7 +806,7 @@ impl Sluice<'_> {
 
     /// 49, 26: a submission as last written, read with no step running.
     pub fn state(&self, id: u64) -> Result<Option<Submission>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(None);
         };
         let mut line = self.read_line(&branch)?;
@@ -822,7 +822,7 @@ impl Sluice<'_> {
     /// at the landing's revision or past it, as a round confirms a landing
     /// (24). Read with no step running; it writes nothing (rule core.4).
     pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(None);
         };
         let line = self.read_line(&branch)?;
