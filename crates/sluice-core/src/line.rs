@@ -268,10 +268,10 @@ mod tests {
         );
     }
 
-    /// 51, 130: a finished submission marked told is put back at its
+    /// 51, 130: a finished submission marked delivered is put back at its
     /// finished record, and the index and the live files are left as read.
     #[test]
-    fn a_finished_submission_marked_told_is_one_put_of_its_record() {
+    fn a_finished_submission_marked_delivered_is_one_put_of_its_record() {
         let index = "{\"id\":12,\"state\":\"landed\",\"worktree\":\"unit/review\"}\n";
         let files = [
             (
@@ -289,8 +289,8 @@ mod tests {
         )
         .unwrap();
         let mut s: Submission = serde_json::from_slice(&landed(12, "unit/review", None)).unwrap();
-        s.told = Some("2026-10-28T09:00:00Z".into());
-        s.told_to = Some("/w/review".into());
+        s.delivered = Some("2026-10-28T09:00:00Z".into());
+        s.delivered_to = Some("/w/review".into());
         line.rewritten.insert(12, s.clone());
         let changes = line.changes();
         assert_eq!(changes.put.keys().collect::<Vec<_>>(), [&finished_file(12)]);

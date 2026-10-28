@@ -110,7 +110,7 @@ pub trait Rig {
     fn settle(&self);
 
     /// Every outcome delivered to `agent`'s sessions, in order.
-    fn told_to(&self, agent: &str) -> Vec<Notification>;
+    fn delivered_to(&self, agent: &str) -> Vec<Notification>;
 
     /// A failed task's output, read where the records seam said it is kept.
     fn kept_log(&self, at: &str) -> Option<String>;
@@ -421,11 +421,11 @@ impl Rig for Harness {
     fn settle(&self) {
         for _ in 0..64 {
             let v = self.w().version(BRANCH);
-            let told = self.w().told().len();
+            let delivered = self.w().delivered().len();
             let places = self.w().made_places().len();
             self.step();
             if v == self.w().version(BRANCH)
-                && told == self.w().told().len()
+                && delivered == self.w().delivered().len()
                 && places == self.w().made_places().len()
             {
                 return;
@@ -434,8 +434,8 @@ impl Rig for Harness {
         panic!("{BRANCH} never settled");
     }
 
-    fn told_to(&self, agent: &str) -> Vec<Notification> {
-        self.w().told_to(agent)
+    fn delivered_to(&self, agent: &str) -> Vec<Notification> {
+        self.w().delivered_to(agent)
     }
 
     fn started(&self) -> Vec<Rev> {

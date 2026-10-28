@@ -1,10 +1,10 @@
 //! How sluice words a failed check, the same in a waiting `submit` and on
 //! a pull request (ADR 0044), a required check that can never pass (ADR
-//! 0050), and an outcome told to its session (51).
+//! 0050), and an outcome's notice to its session (51).
 
 use sluice_core::records::{FlakyKey, Recorded};
 use sluice_core::KeptOut;
-use sluice_seams::{Outcome, Told};
+use sluice_seams::{Decided, Outcome};
 
 /// `passed` or `failed`.
 pub fn outcome(o: Outcome) -> &'static str {
@@ -120,20 +120,20 @@ pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
     )
 }
 
-/// 51: an outcome as one line, the same whether the round pushes it into
-/// the submitting session or the session asks for it: the submission, its
-/// branch and its outcome, and for a failure or a conflict the command
-/// that shows the rest. It opens `[sluice]`, so it is never taken for the
-/// user's typing.
-pub fn told_line(id: u64, branch: &str, told: &Told) -> String {
-    match told {
-        Told::Landed { landed_as } => {
+/// 51: an outcome's notice, one line, the same whether the round pushes it
+/// into the submitting session or the session collects it by `sluice
+/// inbox`: the submission, its branch and its outcome, and for a failure
+/// or a conflict the command that shows the rest. It opens `[sluice]`, so
+/// it is never taken for the user's typing.
+pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
+    match decided {
+        Decided::Landed { landed_as } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {}.",
                 landed_as.short()
             )
         }
-        Told::Failed {
+        Decided::Failed {
             failed, timed_out, ..
         } => {
             let what = if *timed_out {
@@ -145,7 +145,7 @@ pub fn told_line(id: u64, branch: &str, told: &Told) -> String {
             };
             format!("[sluice] #{id} failed on {branch}{what}. sluice wait {id} shows why.")
         }
-        Told::Conflict { paths, with } => {
+        Decided::Conflict { paths, with } => {
             let mut text = format!("[sluice] #{id} conflicts on {branch}");
             if !with.is_empty() {
                 let ids: Vec<String> = with.iter().map(|c| format!("#{}", c.id)).collect();
@@ -283,15 +283,15 @@ mod tests {
     /// 51: each outcome is one line naming the submission, its branch and
     /// its outcome, a failure and a conflict the command showing the rest.
     #[test]
-    fn an_outcome_is_told_in_one_line() {
-        let landed = Told::Landed {
+    fn an_outcomes_notice_is_one_line() {
+        let landed = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
         };
         assert_eq!(
-            told_line(12, "main", &landed),
+            notice(12, "main", &landed),
             "[sluice] #12 landed on main as abc1234."
         );
-        let failed = |timed_out| Told::Failed {
+        let failed = |timed_out| Decided::Failed {
             failed: vec!["cli:test".into(), "core:test".into()],
             combination: Rev::new("c13"),
             submissions: vec![13],
@@ -299,11 +299,11 @@ mod tests {
             logs: Vec::new(),
         };
         assert_eq!(
-            told_line(13, "main", &failed(false)),
+            notice(13, "main", &failed(false)),
             "[sluice] #13 failed on main: cli:test, core:test. sluice wait 13 shows why."
         );
         assert_eq!(
-            told_line(13, "main", &failed(true)),
+            notice(13, "main", &failed(true)),
             "[sluice] #13 failed on main: timed out. sluice wait 13 shows why."
         );
         let from = Submitter {
@@ -314,20 +314,20 @@ mod tests {
             host: None,
             session: None,
         };
-        let conflict = Told::Conflict {
+        let conflict = Decided::Conflict {
             paths: vec!["src/lib.rs".into()],
             with: vec![Contested { id: 11, from }],
         };
         assert_eq!(
-            told_line(14, "main", &conflict),
+            notice(14, "main", &conflict),
             "[sluice] #14 conflicts on main with #11 in src/lib.rs. sluice wait 14 shows it."
         );
-        let with_the_branch = Told::Conflict {
+        let with_the_branch = Decided::Conflict {
             paths: vec!["src/lib.rs".into()],
             with: Vec::new(),
         };
         assert_eq!(
-            told_line(14, "main", &with_the_branch),
+            notice(14, "main", &with_the_branch),
             "[sluice] #14 conflicts on main in src/lib.rs. sluice wait 14 shows it."
         );
     }

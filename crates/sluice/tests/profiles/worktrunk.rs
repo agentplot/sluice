@@ -524,7 +524,8 @@ impl Scratch {
 }
 
 /// 50, 51: a landing submitted from a pane is typed into that pane once,
-/// on the server the submit ran under, and the submission is told to it.
+/// on the server the submit ran under, and the submission is marked
+/// delivered to it.
 #[test]
 fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
     let s = Scratch::new("wt-push");
@@ -548,8 +549,8 @@ fn a_landing_is_pushed_into_the_pane_it_was_submitted_from() {
 
     let out = s.sluice(&["wait", &n.to_string(), "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["told"].is_string(), "{v}");
-    assert_eq!(v["told_to"], session.as_str(), "{v}");
+    assert!(v["delivered"].is_string(), "{v}");
+    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
 }
 
 /// 50: a blamed submission's line names its failure and the check.
@@ -570,13 +571,13 @@ fn a_failure_is_pushed_with_its_check() {
         "{line}"
     );
     assert!(line.contains("sh check.sh"), "{line}");
-    assert_eq!(v["told_to"], session.as_str(), "{v}");
+    assert_eq!(v["delivered_to"], session.as_str(), "{v}");
 }
 
-/// 51: a prompt herdr refuses marks nothing told, and the log says why
+/// 51: a prompt herdr refuses marks nothing delivered, and the log says why
 /// once, in herdr's words.
 #[test]
-fn a_refused_prompt_leaves_the_outcome_untold() {
+fn a_refused_prompt_leaves_the_outcome_pending() {
     let s = Scratch::new("wt-push-refused");
     s.herdr.refuses(
         1,
@@ -586,17 +587,20 @@ fn a_refused_prompt_leaves_the_outcome_untold() {
     let (n, _) = s.submit_from_pane(&a, "w1:p2");
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
-    assert!(v.get("told").is_none() && v.get("told_to").is_none(), "{v}");
+    assert!(
+        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
+        "{v}"
+    );
     let out = s.sluice(&["step", "bolt/x"]);
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(s.herdr.calls().len(), 1, "never pushed again");
-    let untold = s.logged("untold");
-    assert_eq!(untold.len(), 1, "{untold:?}");
-    assert_eq!(untold[0]["id"], n);
-    assert_eq!(untold[0]["why"], "agent is blocked");
+    let pending = s.logged("pending");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["id"], n);
+    assert_eq!(pending[0]["why"], "agent is blocked");
 }
 
-/// 51: a submit in no pane lands with nothing pushed and nothing told.
+/// 51: a submit in no pane lands with nothing pushed and nothing delivered.
 #[test]
 fn a_submit_in_no_pane_is_pushed_nothing() {
     let s = Scratch::new("wt-push-none");
@@ -605,7 +609,7 @@ fn a_submit_in_no_pane_is_pushed_nothing() {
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
     assert!(s.herdr.calls().is_empty());
-    assert!(v.get("told").is_none(), "{v}");
+    assert!(v.get("delivered").is_none(), "{v}");
 }
 
 /// 51: a round on another host than the one a submission recorded types
@@ -627,11 +631,11 @@ fn a_submission_from_another_host_is_not_pushed() {
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
     assert!(s.herdr.calls().is_empty());
-    assert!(v.get("told").is_none(), "{v}");
-    let untold = s.logged("untold");
+    assert!(v.get("delivered").is_none(), "{v}");
+    let pending = s.logged("pending");
     assert!(
-        untold[0]["why"].as_str().unwrap().contains("box-1"),
-        "{untold:?}"
+        pending[0]["why"].as_str().unwrap().contains("box-1"),
+        "{pending:?}"
     );
 }
 
@@ -1133,29 +1137,29 @@ fn wt_submit_releases_before_it_removes() {
     let _ = std::fs::remove_file(&log);
 }
 
-/// `sluice untold` run in `dir`.
-fn untold(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
+/// `sluice inbox` run in `dir`.
+fn inbox(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
     s.command(env!("CARGO_BIN_EXE_sluice"), dir)
-        .arg("untold")
+        .arg("inbox")
         .args(args)
         .output()
         .unwrap()
 }
 
-/// 51, 135: a landing nothing told is told by `sluice untold` in the
-/// worktree, opening with the round's line, then as `sluice wait` reports
-/// it, and marked told to the worktree where no pane names its session;
-/// asked again, it tells nothing.
+/// 51, 135: a landing nothing delivered is collected by `sluice inbox` in
+/// the worktree, opening with the round's notice, then as `sluice wait`
+/// reports it, and marked delivered to the worktree where no pane names
+/// its session; collected again, it prints nothing.
 #[test]
-fn untold_tells_a_landing_once_and_marks_it_told_to_the_worktree() {
-    let s = Scratch::new("wt-untold");
+fn inbox_delivers_a_landing_once_and_marks_it_delivered_to_the_worktree() {
+    let s = Scratch::new("wt-inbox");
     let a = s.session("a", &[("a.txt", "a\n")]);
     let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     s.land(n);
     let landed_as = s.status(n)["landed_as"].as_str().unwrap().to_string();
-    assert_eq!(s.status(n)["told"], serde_json::Value::Null);
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
 
-    let out = untold(&s, &a, &[]);
+    let out = inbox(&s, &a, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let said = String::from_utf8_lossy(&out.stdout).to_string();
     let mut lines = said.lines();
@@ -1165,45 +1169,45 @@ fn untold_tells_a_landing_once_and_marks_it_told_to_the_worktree() {
     }
     assert!(lines.any(|l| l.starts_with("passed · landed as")), "{said}");
     let record = s.status(n);
-    assert!(record["told"].is_string(), "{record}");
+    assert!(record["delivered"].is_string(), "{record}");
     let path = std::fs::canonicalize(&a).unwrap();
-    assert_eq!(record["told_to"], path.to_str().unwrap());
+    assert_eq!(record["delivered_to"], path.to_str().unwrap());
 
-    let again = untold(&s, &a, &[]);
+    let again = inbox(&s, &a, &[]);
     assert_eq!(again.status.code(), Some(0), "{}", text(&again));
     assert_eq!(text(&again), "");
 }
 
-/// 51, 135: under `--json`, one document of the records told, each marked
-/// told; asked again, none.
+/// 51, 135: under `--json`, one document of the records collected, each
+/// marked delivered; collected again, none.
 #[test]
-fn untold_json_lists_each_record_told_then_none() {
-    let s = Scratch::new("wt-untold-json");
+fn inbox_json_lists_each_record_delivered_then_none() {
+    let s = Scratch::new("wt-inbox-json");
     let a = s.session("a", &[("a.txt", "a\n")]);
     let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     s.land(n);
-    let out = untold(&s, &a, &["--json"]);
+    let out = inbox(&s, &a, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let outcomes = v["outcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 1, "{v}");
     assert_eq!(outcomes[0]["id"], n);
     assert_eq!(outcomes[0]["state"], "landed");
-    assert_eq!(outcomes[0]["told"], s.status(n)["told"]);
-    assert_eq!(outcomes[0]["told_to"], s.status(n)["told_to"]);
+    assert_eq!(outcomes[0]["delivered"], s.status(n)["delivered"]);
+    assert_eq!(outcomes[0]["delivered_to"], s.status(n)["delivered_to"]);
     assert!(v.get("unread").is_none(), "{v}");
 
-    let again = untold(&s, &a, &["--json"]);
+    let again = inbox(&s, &a, &["--json"]);
     assert_eq!(again.status.code(), Some(0), "{}", text(&again));
     let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(v, serde_json::json!({ "outcomes": [] }));
 }
 
-/// 51, 135: a blame is told naming its failed check, then in the words
-/// `sluice wait` reports it with, its check's log among them.
+/// 51, 135: a blame is collected naming its failed check, then in the
+/// words `sluice wait` reports it with, its check's log among them.
 #[test]
-fn untold_tells_a_blame_as_sluice_wait_reports_it() {
-    let s = Scratch::new("wt-untold-blamed");
+fn inbox_delivers_a_blame_as_sluice_wait_reports_it() {
+    let s = Scratch::new("wt-inbox-blamed");
     let b = s.session("b", &[("broken", "x\n")]);
     let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
     let out = s.wt_submit(&b, &["--timeout", "9m"]);
@@ -1216,7 +1220,7 @@ fn untold_tells_a_blame_as_sluice_wait_reports_it() {
     let waited = String::from_utf8_lossy(&waited.stdout).to_string();
     assert!(waited.contains("log of sh check.sh"), "{waited}");
 
-    let out = untold(&s, &b, &[]);
+    let out = inbox(&s, &b, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let said = String::from_utf8_lossy(&out.stdout).to_string();
     let (first, rest) = said.split_once('\n').unwrap();
@@ -1226,30 +1230,30 @@ fn untold_tells_a_blame_as_sluice_wait_reports_it() {
     assert_eq!(rest, waited);
 }
 
-/// 51, 135: another worktree's outcome is not this session's to be told,
-/// and stays untold.
+/// 51, 135: another worktree's outcome is not this session's to collect,
+/// and stays pending.
 #[test]
-fn untold_tells_nothing_of_another_worktrees_outcome() {
-    let s = Scratch::new("wt-untold-other");
+fn inbox_delivers_nothing_of_another_worktrees_outcome() {
+    let s = Scratch::new("wt-inbox-other");
     let a = s.session("a", &[("a.txt", "a\n")]);
     let b = s.session("b", &[("b.txt", "b\n")]);
     let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
     s.land(n);
-    let out = untold(&s, &b, &[]);
+    let out = inbox(&s, &b, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(text(&out), "");
-    assert_eq!(s.status(n)["told"], serde_json::Value::Null);
+    assert_eq!(s.status(n)["delivered"], serde_json::Value::Null);
 }
 
-/// 3, 135: a worktree on no branch has submitted nothing, and is told
+/// 3, 135: a worktree on no branch has submitted nothing, and collects
 /// nothing.
 #[test]
-fn untold_in_a_detached_worktree_tells_nothing() {
-    let s = Scratch::new("wt-untold-detached");
+fn inbox_in_a_detached_worktree_delivers_nothing() {
+    let s = Scratch::new("wt-inbox-detached");
     let a = s.session("a", &[("a.txt", "a\n")]);
     s.repo
         .git(&["-C", a.to_str().unwrap(), "switch", "-q", "--detach"]);
-    let out = untold(&s, &a, &[]);
+    let out = inbox(&s, &a, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(text(&out), "");
 }

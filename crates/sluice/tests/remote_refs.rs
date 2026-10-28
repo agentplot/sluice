@@ -154,18 +154,18 @@ fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
     c.append
         .insert("finished.jsonl".into(), index.as_bytes().to_vec());
     assert_eq!(ha.write("bolt/x", 0, c).unwrap(), Written::Written(1));
-    let told = "{\"id\":5,\"told\":\"2026-10-28T09:00:00Z\"}\n";
-    let mut c = put(&[(".finished/5.json", told)]);
-    c.append.insert("log.jsonl".into(), b"told\n".to_vec());
+    let delivered = "{\"id\":5,\"delivered\":\"2026-10-28T09:00:00Z\"}\n";
+    let mut c = put(&[(".finished/5.json", delivered)]);
+    c.append.insert("log.jsonl".into(), b"delivered\n".to_vec());
     assert_eq!(ha.write("bolt/x", 1, c).unwrap(), Written::Written(2));
     for h in [&ha, &hb] {
         assert_eq!(
             h.read_finished("bolt/x", "5.json").unwrap().unwrap(),
-            told.as_bytes()
+            delivered.as_bytes()
         );
         let all = h.read_all_finished("bolt/x").unwrap();
         assert_eq!(all.keys().collect::<Vec<_>>(), ["5.json"]);
-        assert_eq!(all["5.json"], told.as_bytes());
+        assert_eq!(all["5.json"], delivered.as_bytes());
         assert_eq!(
             h.read("bolt/x").unwrap().files["finished.jsonl"],
             index.as_bytes()

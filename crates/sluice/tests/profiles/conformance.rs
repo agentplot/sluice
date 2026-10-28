@@ -266,7 +266,7 @@ impl Branch for RecordedRefs {
 struct Sessions {
     inner: Drivers,
     agents: RefCell<BTreeMap<String, String>>,
-    told: RefCell<Vec<Notification>>,
+    delivered: RefCell<Vec<Notification>>,
 }
 
 impl Driver for Sessions {
@@ -283,7 +283,7 @@ impl Driver for Sessions {
 
     fn notify(&self, n: &Notification) -> Result<Delivery> {
         let delivery = self.inner.notify(n)?;
-        self.told.borrow_mut().push(n.clone());
+        self.delivered.borrow_mut().push(n.clone());
         Ok(delivery)
     }
 }
@@ -475,7 +475,7 @@ impl Real {
             driver: Sessions {
                 inner: driver,
                 agents: RefCell::default(),
-                told: RefCell::default(),
+                delivered: RefCell::default(),
             },
             state,
             _blocks: blocks,
@@ -662,9 +662,9 @@ impl Rig for Real {
         }
     }
 
-    fn told_to(&self, agent: &str) -> Vec<Notification> {
+    fn delivered_to(&self, agent: &str) -> Vec<Notification> {
         self.driver
-            .told
+            .delivered
             .borrow()
             .iter()
             .filter(|n| n.to.agent == agent)

@@ -1038,8 +1038,10 @@ pub struct Contested {
     pub from: Submitter,
 }
 
+/// 20, 51: a submission's decided outcome, which a notification carries to
+/// its session.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Told {
+pub enum Decided {
     Landed {
         landed_as: Rev,
     },
@@ -1057,12 +1059,12 @@ pub enum Told {
     },
 }
 
-impl Told {
+impl Decided {
     pub fn word(&self) -> &'static str {
         match self {
-            Told::Landed { .. } => "landed",
-            Told::Failed { .. } => "failed",
-            Told::Conflict { .. } => "conflict",
+            Decided::Landed { .. } => "landed",
+            Decided::Failed { .. } => "failed",
+            Decided::Conflict { .. } => "conflict",
         }
     }
 }
@@ -1214,13 +1216,14 @@ pub struct Notification {
     pub submission: u64,
     pub branch: String,
     pub to: Submitter,
-    pub told: Told,
-    /// 49: the entry's report as its records hold it when told, for a
+    pub decided: Decided,
+    /// 49: the entry's report as its records hold it when decided, for a
     /// driver that shows one (ADR 0044); `None` when it could not be read.
     pub report: Option<VerdictView>,
 }
 
-/// 51: whether a notify delivered its outcome, which alone marks it told.
+/// 51: whether a notify delivered its outcome, which alone marks it
+/// delivered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Delivery {
     /// Delivered to this session, as the driver names it.

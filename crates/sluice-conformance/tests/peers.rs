@@ -134,7 +134,7 @@ fn s17_a_landing_left_by_a_quiet_lead_lands_once_by_the_next() {
     assert_eq!(h.sub(one).state, State::Landed);
     assert_eq!(on(&h, "a").step(BRANCH).unwrap(), Step::Led);
     assert_eq!(h.w().moves().len(), 1);
-    assert_eq!(h.w().told_to("agent-a").len(), 1);
+    assert_eq!(h.w().delivered_to("agent-a").len(), 1);
 }
 
 /// Instance `name`, signing as `signer` or as no one.

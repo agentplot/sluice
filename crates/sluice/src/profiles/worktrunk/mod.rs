@@ -147,7 +147,7 @@ impl Driver for Worktrunk {
             match herdr::prompt(
                 pane,
                 socket,
-                &crate::words::told_line(n.submission, &n.branch, &n.told),
+                &crate::words::notice(n.submission, &n.branch, &n.decided),
                 herdr::BOUND,
             )? {
                 herdr::Answer::Took => Delivery::Delivered {

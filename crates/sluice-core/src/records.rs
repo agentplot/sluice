@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
-    Contested, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog, Told,
+    Contested, Decided, Enforced, NotRun, Outcome, Rev, RunDetail, RunHandle, Submitter, TaskLog,
 };
 
 pub const SUBMISSION_SCHEMA: &str = "sluice/submission@1";
@@ -235,14 +235,16 @@ pub struct Submission {
     pub conflict: Option<ConflictRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Withdrawal>,
-    /// 51: when its outcome was delivered into its session; `None` while
-    /// it stands untold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub told: Option<String>,
-    /// 51: the session its outcome was delivered to, as the driver named
-    /// it; `None` while untold, and in records told before it was kept.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub told_to: Option<String>,
+    /// 51: when its outcome was delivered to its session; `None` while it
+    /// stands pending. Read under `told` too, the name an earlier sluice
+    /// wrote it under (record 0070).
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told")]
+    pub delivered: Option<String>,
+    /// 51: the session its outcome was delivered to, as its carrier named
+    /// it; `None` while pending, and in records delivered before it was
+    /// kept. Read under `told_to` too (record 0070).
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "told_to")]
+    pub delivered_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_as: Option<Rev>,
     /// Its id in this host's own records, before the branch's records
@@ -266,18 +268,18 @@ impl Submission {
         self.subject.as_deref().unwrap_or(&self.from.worktree)
     }
 
-    /// 51: the outcome a round tells of it, read from its record as the
+    /// 51: the outcome a round delivers of it, read from its record as the
     /// round's outbox item holds it; `None` for a submission that has not
-    /// landed, been blamed or met a conflict, which the round tells nothing
-    /// of, and for a record lacking what its outcome names.
-    pub fn told_outcome(&self) -> Option<Told> {
+    /// landed, been blamed or met a conflict, which the round delivers
+    /// nothing of, and for a record lacking what its outcome names.
+    pub fn decided(&self) -> Option<Decided> {
         match self.state {
-            State::Landed => Some(Told::Landed {
+            State::Landed => Some(Decided::Landed {
                 landed_as: self.landed_as.clone()?,
             }),
             State::Failed => {
                 let tested = self.tested.as_ref()?;
-                Some(Told::Failed {
+                Some(Decided::Failed {
                     failed: self.failed.iter().map(|f| f.task.clone()).collect(),
                     combination: tested.combination.clone(),
                     submissions: tested.submissions.clone(),
@@ -296,7 +298,7 @@ impl Submission {
             }
             State::Conflict => {
                 let conflict = self.conflict.as_ref()?;
-                Some(Told::Conflict {
+                Some(Decided::Conflict {
                     paths: conflict.paths.clone(),
                     with: conflict.with.clone(),
                 })
@@ -305,12 +307,12 @@ impl Submission {
         }
     }
 
-    /// 51: the notification its outcome is told under, `<id>:<outcome>`,
+    /// 51: the notification its outcome is delivered under, `<id>:<outcome>`,
     /// as the round's outbox names it, so a repeat is known as one; `None`
-    /// where [`Submission::told_outcome`] is.
+    /// where [`Submission::decided`] is.
     pub fn notification(&self) -> Option<String> {
-        self.told_outcome()
-            .map(|told| format!("{}:{}", self.id, told.word()))
+        self.decided()
+            .map(|decided| format!("{}:{}", self.id, decided.word()))
     }
 }
 
@@ -571,17 +573,20 @@ pub struct LandingIntent {
     pub commits: Vec<LandingCommitRecord>,
 }
 
-/// An outcome decided and not yet confirmed told (50, 51).
+/// An outcome decided and not yet pushed to its session (50, 51).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxItem {
     pub id: String,
     pub submission: u64,
-    pub told: ToldRecord,
+    /// Kept under the key `told` on disk, which an older sluice on another
+    /// host reads to run its rounds (record 0070).
+    #[serde(rename = "told")]
+    pub outcome: DecidedRecord,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
-pub enum ToldRecord {
+pub enum DecidedRecord {
     Landed {
         landed_as: Rev,
     },
@@ -600,32 +605,32 @@ pub enum ToldRecord {
     },
 }
 
-impl ToldRecord {
-    pub fn to_told(&self) -> Told {
+impl DecidedRecord {
+    pub fn to_decided(&self) -> Decided {
         match self.clone() {
-            ToldRecord::Landed { landed_as } => Told::Landed { landed_as },
-            ToldRecord::Failed {
+            DecidedRecord::Landed { landed_as } => Decided::Landed { landed_as },
+            DecidedRecord::Failed {
                 failed,
                 combination,
                 submissions,
                 timed_out,
                 logs,
-            } => Told::Failed {
+            } => Decided::Failed {
                 failed,
                 combination,
                 submissions,
                 timed_out,
                 logs,
             },
-            ToldRecord::Conflict { paths, with } => Told::Conflict { paths, with },
+            DecidedRecord::Conflict { paths, with } => Decided::Conflict { paths, with },
         }
     }
 
     pub fn word(&self) -> &'static str {
         match self {
-            ToldRecord::Landed { .. } => "landed",
-            ToldRecord::Failed { .. } => "failed",
-            ToldRecord::Conflict { .. } => "conflict",
+            DecidedRecord::Landed { .. } => "landed",
+            DecidedRecord::Failed { .. } => "failed",
+            DecidedRecord::Conflict { .. } => "conflict",
         }
     }
 }
@@ -981,13 +986,16 @@ pub enum Event {
         /// The command that tried it.
         by: String,
     },
-    Told {
+    /// 51: an outcome a carrier delivered to its session. Read under
+    /// `told` too, the name an earlier sluice wrote it under (record 0070).
+    #[serde(alias = "told")]
+    Delivered {
         id: u64,
         notification: String,
     },
     /// 51: an outcome its driver did not deliver, and why in the carrier's
-    /// words; it stands decided and untold, and no round pushes it again.
-    Untold {
+    /// words; it stands decided and pending, and no round pushes it again.
+    Pending {
         id: u64,
         notification: String,
         why: String,
@@ -1510,48 +1518,111 @@ mod tests {
         assert_eq!(serde_json::from_str::<Submitter>(&text).unwrap(), both);
     }
 
-    /// 51: a submission told before `told_to` was kept reads with none and
-    /// writes back unchanged; the `untold` line round-trips.
+    /// 51, record 0070: a submission an earlier sluice marked under `told`
+    /// and `told_to` reads them as `delivered` and `delivered_to`, and
+    /// writes them back under the new names.
     #[test]
-    fn a_submission_told_before_its_session_reads_as_it_was() {
+    fn a_submission_marked_told_reads_as_delivered() {
+        let old = submission(None);
+        let doc = String::from_utf8(to_document(&old)).unwrap();
+        let earlier = doc.replacen(
+            "\"state\": \"queued\"",
+            "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/review\"",
+            1,
+        );
+        let read: Submission = serde_json::from_str(&earlier).unwrap();
+        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
+        assert_eq!(read.delivered_to.as_deref(), Some("/w/review"));
+        let written = String::from_utf8(to_document(&read)).unwrap();
+        assert_eq!(
+            written,
+            earlier
+                .replace("\"told\":", "\"delivered\":")
+                .replace("\"told_to\":", "\"delivered_to\":")
+        );
+        assert!(!written.contains("told"), "{written}");
+    }
+
+    /// 51: a submission delivered before `delivered_to` was kept reads with
+    /// none and writes back unchanged.
+    #[test]
+    fn a_submission_delivered_before_its_session_reads_as_it_was() {
         let old = submission(None);
         let mut doc = String::from_utf8(to_document(&old)).unwrap();
         doc = doc.replacen(
             "\"state\": \"queued\"",
-            "\"state\": \"landed\",\n  \"told\": \"2026-10-27T10:00:00Z\"",
+            "\"state\": \"landed\",\n  \"delivered\": \"2026-10-27T10:00:00Z\"",
             1,
         );
-        let told: Submission = serde_json::from_str(&doc).unwrap();
-        assert_eq!(told.told.as_deref(), Some("2026-10-27T10:00:00Z"));
-        assert_eq!(told.told_to, None);
-        assert_eq!(String::from_utf8(to_document(&told)).unwrap(), doc);
+        let read: Submission = serde_json::from_str(&doc).unwrap();
+        assert_eq!(read.delivered.as_deref(), Some("2026-10-27T10:00:00Z"));
+        assert_eq!(read.delivered_to, None);
+        assert_eq!(String::from_utf8(to_document(&read)).unwrap(), doc);
+    }
+
+    /// 51, record 0070: a `told` line an earlier sluice wrote reads as
+    /// `Delivered`, which is written `delivered`; the `pending` line
+    /// round-trips.
+    #[test]
+    fn a_told_line_reads_as_delivered() {
+        let earlier = r#"{"schema":"sluice/log@1","at":"2026-10-27T10:00:00Z","event":"told","id":5,"notification":"5:landed"}"#
+            .to_string();
+        let line: LogLine = serde_json::from_str(&earlier).unwrap();
+        assert_eq!(
+            line.event,
+            Event::Delivered {
+                id: 5,
+                notification: "5:landed".into(),
+            }
+        );
+        let text = serde_json::to_string(&line).unwrap();
+        assert!(text.contains("\"event\":\"delivered\""), "{text}");
 
         let line = LogLine {
             schema: LOG_SCHEMA.into(),
             at: "2026-10-28T09:00:00Z".into(),
-            event: Event::Untold {
+            event: Event::Pending {
                 id: 15,
-                notification: "15-landed".into(),
+                notification: "15:landed".into(),
                 why: "agent is blocked".into(),
             },
         };
         let text = serde_json::to_string(&line).unwrap();
-        assert!(text.contains("\"event\":\"untold\""), "{text}");
+        assert!(text.contains("\"event\":\"pending\""), "{text}");
         assert_eq!(serde_json::from_str::<LogLine>(&text).unwrap(), line);
+    }
+
+    /// 50, record 0070: an outbox item keeps its key `told` on disk, which
+    /// an older sluice on another host reads, and round-trips through it.
+    #[test]
+    fn an_outbox_item_keeps_its_told_key() {
+        let item = OutboxItem {
+            id: "5:landed".into(),
+            submission: 5,
+            outcome: DecidedRecord::Landed {
+                landed_as: Rev::new("abc1234"),
+            },
+        };
+        let text = serde_json::to_string(&item).unwrap();
+        assert_eq!(
+            text,
+            r#"{"id":"5:landed","submission":5,"told":{"outcome":"landed","landed_as":"abc1234"}}"#
+        );
+        assert_eq!(serde_json::from_str::<OutboxItem>(&text).unwrap(), item);
     }
 
     /// 51: a landed, blamed or conflicting submission's record names the
     /// outcome its round's outbox item holds, under the same notification.
     #[test]
-    fn a_decided_submission_names_the_outcome_its_round_tells() {
+    fn a_decided_submission_names_the_outcome_its_round_delivers() {
         let landed = Submission {
             state: State::Landed,
             landed_as: Some(Rev::new("abc1234")),
             ..submission(None)
         };
         assert_eq!(
-            landed.told_outcome(),
-            Some(Told::Landed {
+            landed.decided(),
+            Some(Decided::Landed {
                 landed_as: Rev::new("abc1234")
             })
         );
@@ -1586,8 +1657,8 @@ mod tests {
             ..submission(None)
         };
         assert_eq!(
-            failed.told_outcome(),
-            Some(Told::Failed {
+            failed.decided(),
+            Some(Decided::Failed {
                 failed: vec!["cli:test".into(), "core:test".into()],
                 combination: Rev::new("c1"),
                 submissions: vec![11, 12],
@@ -1605,8 +1676,8 @@ mod tests {
             ..failed
         };
         assert!(matches!(
-            timed_out.told_outcome(),
-            Some(Told::Failed {
+            timed_out.decided(),
+            Some(Decided::Failed {
                 timed_out: true,
                 ..
             })
@@ -1625,8 +1696,8 @@ mod tests {
             ..submission(None)
         };
         assert_eq!(
-            conflict.told_outcome(),
-            Some(Told::Conflict {
+            conflict.decided(),
+            Some(Decided::Conflict {
                 paths: vec!["src/lib.rs".into()],
                 with,
             })
@@ -1638,7 +1709,7 @@ mod tests {
     #[test]
     fn a_queued_or_withdrawn_submission_names_no_outcome() {
         let queued = submission(None);
-        assert_eq!((queued.told_outcome(), queued.notification()), (None, None));
+        assert_eq!((queued.decided(), queued.notification()), (None, None));
         let withdrawn = Submission {
             state: State::Withdrawn,
             withdrawn: Some(Withdrawal {
@@ -1648,7 +1719,7 @@ mod tests {
             ..submission(None)
         };
         assert_eq!(
-            (withdrawn.told_outcome(), withdrawn.notification()),
+            (withdrawn.decided(), withdrawn.notification()),
             (None, None)
         );
     }

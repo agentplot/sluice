@@ -265,11 +265,11 @@ struct Inner {
     worktrees: BTreeMap<String, Session>,
     /// Worktrees with a branch checked out: the branch and the revision.
     checked_out: BTreeMap<String, (String, Rev)>,
-    told: Vec<Notification>,
+    delivered: Vec<Notification>,
     /// Agents whose sessions take no outcome (51), and every notification
-    /// asked of them, kept apart from those delivered.
+    /// pushed to them, kept apart from those delivered.
     undelivering: BTreeSet<String>,
-    untold: Vec<Notification>,
+    undelivered: Vec<Notification>,
     crash_notify: bool,
     // the records
     lines: BTreeMap<String, Line>,
@@ -1350,7 +1350,7 @@ impl World {
 
     /// Every notification not delivered, in order.
     pub fn undelivered(&self) -> Vec<Notification> {
-        self.0.borrow().untold.clone()
+        self.0.borrow().undelivered.clone()
     }
 
     /// The next notification is delivered and the process stops before
@@ -1360,13 +1360,13 @@ impl World {
     }
 
     /// Every notification delivered, in order.
-    pub fn told(&self) -> Vec<Notification> {
-        self.0.borrow().told.clone()
+    pub fn delivered(&self) -> Vec<Notification> {
+        self.0.borrow().delivered.clone()
     }
 
     /// The notifications delivered to `agent`.
-    pub fn told_to(&self, agent: &str) -> Vec<Notification> {
-        self.told()
+    pub fn delivered_to(&self, agent: &str) -> Vec<Notification> {
+        self.delivered()
             .into_iter()
             .filter(|n| n.to.agent == agent)
             .collect()
@@ -2307,14 +2307,14 @@ impl Driver for FakeDriver {
         let mut inner = self.0 .0.borrow_mut();
         let to = &notification.to;
         if inner.undelivering.contains(&to.agent) {
-            inner.untold.push(notification.clone());
+            inner.undelivered.push(notification.clone());
             return Ok(Delivery::Undelivered {
                 why: format!("{} takes nothing", to.agent),
             });
         }
-        inner.told.push(notification.clone());
+        inner.delivered.push(notification.clone());
         if std::mem::take(&mut inner.crash_notify) {
-            bail!("crashed after telling {}", notification.id);
+            bail!("crashed after delivering {}", notification.id);
         }
         Ok(Delivery::Delivered {
             to: to.session.clone().unwrap_or_else(|| to.agent.clone()),
@@ -2680,11 +2680,11 @@ impl Clock for FakeClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sluice_seams::Told;
+    use sluice_seams::Decided;
 
     /// 51: the driver fake delivers to the session its submitter recorded,
     /// or its agent where it recorded none, and an agent whose sessions
-    /// take nothing is answered undelivered, kept apart from those told.
+    /// take nothing is answered undelivered, kept apart from those delivered.
     #[test]
     fn the_driver_delivers_to_the_session_or_answers_undelivered() {
         let f = Fakes::new();
@@ -2697,7 +2697,7 @@ mod tests {
             submission: 1,
             branch: "main".into(),
             to: f.driver.session(worktree).unwrap().from,
-            told: Told::Landed {
+            decided: Decided::Landed {
                 landed_as: head.clone(),
             },
             report: None,
@@ -2713,7 +2713,7 @@ mod tests {
             f.driver.notify(&to("unit/b")).unwrap(),
             Delivery::Undelivered { .. }
         ));
-        assert_eq!(f.world.told().len(), 2);
+        assert_eq!(f.world.delivered().len(), 2);
         assert_eq!(f.world.undelivered(), [to("unit/b")]);
     }
 

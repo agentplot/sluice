@@ -445,19 +445,22 @@ fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
             &[("finished.jsonl", index)],
         ),
     );
-    let told = "{\"id\":5,\"told\":\"2026-10-28T09:00:00Z\"}\n";
+    let delivered = "{\"id\":5,\"delivered\":\"2026-10-28T09:00:00Z\"}\n";
     write(
         &s,
         "bolt/x",
-        changes(&[(".finished/5.json", told)], &[("log.jsonl", "told\n")]),
+        changes(
+            &[(".finished/5.json", delivered)],
+            &[("log.jsonl", "delivered\n")],
+        ),
     );
     assert_eq!(
         s.read_finished("bolt/x", "5.json").unwrap().unwrap(),
-        told.as_bytes()
+        delivered.as_bytes()
     );
     let all = s.read_all_finished("bolt/x").unwrap();
     assert_eq!(all.keys().collect::<Vec<_>>(), ["5.json"]);
-    assert_eq!(all["5.json"], told.as_bytes());
+    assert_eq!(all["5.json"], delivered.as_bytes());
     assert_eq!(
         s.read("bolt/x").unwrap().files["finished.jsonl"],
         index.as_bytes()

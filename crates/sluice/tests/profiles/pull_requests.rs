@@ -1117,13 +1117,13 @@ fn a_submits_pull_request_sent_back_says_so() {
         ),
         "{summary}"
     );
-    let told: Vec<String> = g
+    let delivered: Vec<String> = g
         .comments(pull.number)
         .into_iter()
         .filter(|c| c.contains("told="))
         .collect();
-    assert_eq!(told.len(), 1, "{told:?}");
-    let c = &told[0];
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    let c = &delivered[0];
     assert!(c.contains("`sh check.sh` failed"), "{c}");
     assert!(c.contains("[sluice's report]("), "{c}");
     assert!(
@@ -1170,17 +1170,17 @@ fn landed_and_merged_by_landing() {
 }
 
 /// 51: a landed pull request's outcome is delivered to the request, and
-/// its submission is told to it.
+/// its submission is marked delivered to it.
 #[test]
-fn a_landed_requests_outcome_is_told_to_it() {
-    let g = OnGitHub::new("pr-told", "");
-    let (n, _) = g.by_hand("unit/told", &[("t.txt", Some("t\n"))], false);
-    g.step_until("told", |g| {
-        g.of(n).first().is_some_and(|s| s["told"].is_string())
+fn a_landed_requests_outcome_is_delivered_to_it() {
+    let g = OnGitHub::new("pr-delivered", "");
+    let (n, _) = g.by_hand("unit/delivered", &[("t.txt", Some("t\n"))], false);
+    g.step_until("delivered", |g| {
+        g.of(n).first().is_some_and(|s| s["delivered"].is_string())
     });
     let s = &g.of(n)[0];
     assert_eq!(s["state"], "landed", "{s}");
-    assert_eq!(s["told_to"], format!("pull/{n}").as_str(), "{s}");
+    assert_eq!(s["delivered_to"], format!("pull/{n}").as_str(), "{s}");
 }
 
 /// Two rounds with nothing changed between them post nothing the second

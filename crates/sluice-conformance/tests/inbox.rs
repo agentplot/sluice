@@ -1,4 +1,5 @@
-//! A session asking for its untold outcomes: 51, 135; ADR 0068.
+//! A session collecting its pending outcomes, as `sluice inbox` does: 51,
+//! 135; ADR 0068, record 0070.
 
 use anyhow::{bail, Result};
 use sluice_conformance::{policy, Harness, Rig, BRANCH};
@@ -6,40 +7,40 @@ use sluice_core::records::{Event, State};
 use sluice_core::{Sluice, SubmitRequest};
 use sluice_seams::{Delivery, Driver, Notification, Session};
 
-/// The session in place `worktree` asks for its untold outcomes, is told
-/// them, and has each marked told to it, as `sluice untold` does: to the
-/// session its driver names, else its worktree's path, else its branch.
-/// Returns what it was told, by branch and submission.
-fn ask(h: &Harness, worktree: &str) -> Vec<(String, u64)> {
+/// The session in place `worktree` collects its pending outcomes and has
+/// each marked delivered to it, as `sluice inbox` does: to the session its
+/// driver names, else its worktree's path, else its branch. Returns what it
+/// collected, by branch and submission.
+fn collect(h: &Harness, worktree: &str) -> Vec<(String, u64)> {
     let s = h.sluice();
     let me = s.seams().driver.session(worktree).unwrap().from;
-    let told_to = me
+    let to = me
         .session
         .clone()
         .or(me.path.clone())
         .unwrap_or(me.worktree.clone());
-    let untold = s.untold(&me).unwrap();
-    assert!(untold.unread.is_empty(), "{:?}", untold.unread);
-    let told = untold
+    let pending = s.pending(&me).unwrap();
+    assert!(pending.unread.is_empty(), "{:?}", pending.unread);
+    let collected = pending
         .outcomes
         .iter()
         .map(|o| (o.branch.clone(), o.submission.id))
         .collect();
-    untold.mark(&told_to).unwrap();
-    told
+    pending.mark(&to).unwrap();
+    collected
 }
 
-fn told_lines(h: &Harness, branch: &str, id: u64) -> Vec<String> {
+fn delivered_lines(h: &Harness, branch: &str, id: u64) -> Vec<String> {
     let s = h.sluice();
     let snap = s.seams().state.read(branch).unwrap();
     sluice_core::line::Line::read_log(&snap)
         .unwrap()
         .into_iter()
         .filter_map(|l| match l.event {
-            Event::Told {
-                id: told,
+            Event::Delivered {
+                id: delivered,
                 notification,
-            } if told == id => Some(notification),
+            } if delivered == id => Some(notification),
             _ => None,
         })
         .collect()
@@ -47,7 +48,7 @@ fn told_lines(h: &Harness, branch: &str, id: u64) -> Vec<String> {
 
 /// satisfies: 51, 135
 #[test]
-fn a_landing_the_ask_tells_is_marked_told_to_the_asker_and_told_once() {
+fn a_landing_collected_is_marked_delivered_to_the_collector_once() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", "pane-1");
@@ -55,30 +56,33 @@ fn a_landing_the_ask_tells_is_marked_told_to_the_asker_and_told_once() {
     let one = h.submit("unit/a");
     h.settle();
     assert_eq!(h.sub(one).state, State::Landed);
-    assert_eq!(h.sub(one).told, None, "the round delivered nothing");
+    assert_eq!(h.sub(one).delivered, None, "the round delivered nothing");
 
-    // The session comes back in another pane and asks.
+    // The session comes back in another pane and collects.
     h.w().in_session("unit/a", "pane-2");
-    assert_eq!(ask(&h, "unit/a"), [(BRANCH.to_string(), one)]);
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
     let s = h.sub(one);
-    assert!(s.told.is_some());
-    assert_eq!(s.told_to.as_deref(), Some("pane-2"));
-    assert_eq!(told_lines(&h, BRANCH, one), [format!("{one}:landed")]);
+    assert!(s.delivered.is_some());
+    assert_eq!(s.delivered_to.as_deref(), Some("pane-2"));
+    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
 
-    assert!(ask(&h, "unit/a").is_empty(), "asking again tells nothing");
-    assert_eq!(told_lines(&h, BRANCH, one).len(), 1);
+    assert!(
+        collect(&h, "unit/a").is_empty(),
+        "collecting again finds nothing"
+    );
+    assert_eq!(delivered_lines(&h, BRANCH, one).len(), 1);
 }
 
 /// satisfies: 51, 135
 #[test]
-fn an_outcome_the_round_delivered_is_not_found_by_the_ask() {
+fn an_outcome_the_round_delivered_is_not_collected() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", "pane-1");
     let one = h.submit("unit/a");
     h.settle();
-    assert_eq!(h.sub(one).told_to.as_deref(), Some("pane-1"));
-    assert!(ask(&h, "unit/a").is_empty());
+    assert_eq!(h.sub(one).delivered_to.as_deref(), Some("pane-1"));
+    assert!(collect(&h, "unit/a").is_empty());
 }
 
 /// The fakes' driver, whose next notify fails as sluice's own failure
@@ -103,7 +107,7 @@ impl Driver for FailsOnce<'_> {
 
 /// satisfies: 51, 135
 #[test]
-fn an_outcome_the_ask_marked_is_not_pushed_by_the_next_round() {
+fn an_outcome_collected_is_not_pushed_by_the_next_round() {
     let h = Harness::bolt();
     h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
     h.w().in_session("unit/a", "pane-1");
@@ -126,17 +130,20 @@ fn an_outcome_the_ask_marked_is_not_pushed_by_the_next_round() {
     assert_eq!(h.doc().outbox.len(), 1, "its outcome is still to be pushed");
 
     h.w().in_session("unit/a", "pane-2");
-    assert_eq!(ask(&h, "unit/a"), [(BRANCH.to_string(), one)]);
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), one)]);
     assert!(h.doc().outbox.is_empty());
     h.settle();
-    assert!(h.w().told_to("agent-a").is_empty(), "no round pushed it");
-    assert_eq!(h.sub(one).told_to.as_deref(), Some("pane-2"));
-    assert_eq!(told_lines(&h, BRANCH, one), [format!("{one}:landed")]);
+    assert!(
+        h.w().delivered_to("agent-a").is_empty(),
+        "no round pushed it"
+    );
+    assert_eq!(h.sub(one).delivered_to.as_deref(), Some("pane-2"));
+    assert_eq!(delivered_lines(&h, BRANCH, one), [format!("{one}:landed")]);
 }
 
 /// satisfies: 51, 135
 #[test]
-fn one_ask_tells_the_outcomes_of_every_branch() {
+fn one_collect_finds_the_outcomes_of_every_branch() {
     // `main` requires only `c:test`, which the work leaves passing;
     // `bolt/x` requires the gate, whose `a:test` it fails.
     let main = policy(false, "fail", 4) + "\n[branches.main]\nrequired = [\"c:test\"]\n";
@@ -166,12 +173,18 @@ fn one_ask_tells_the_outcomes_of_every_branch() {
     assert_eq!(h.sub(landed).state, State::Landed);
 
     assert_eq!(
-        ask(&h, "unit/a"),
+        collect(&h, "unit/a"),
         [(BRANCH.to_string(), blamed), ("main".to_string(), landed)]
     );
-    assert_eq!(told_lines(&h, BRANCH, blamed), [format!("{blamed}:failed")]);
-    assert_eq!(told_lines(&h, "main", landed), [format!("{landed}:landed")]);
-    assert!(ask(&h, "unit/a").is_empty());
+    assert_eq!(
+        delivered_lines(&h, BRANCH, blamed),
+        [format!("{blamed}:failed")]
+    );
+    assert_eq!(
+        delivered_lines(&h, "main", landed),
+        [format!("{landed}:landed")]
+    );
+    assert!(collect(&h, "unit/a").is_empty());
 }
 
 /// satisfies: 51, 135, 67
@@ -190,6 +203,6 @@ fn a_failure_withdrawn_by_a_resubmission_is_not_found() {
     assert_eq!(h.sub(blamed).state, State::Withdrawn);
     h.settle();
     assert_eq!(h.sub(again).state, State::Landed);
-    assert_eq!(ask(&h, "unit/a"), [(BRANCH.to_string(), again)]);
-    assert_eq!(h.sub(blamed).told, None);
+    assert_eq!(collect(&h, "unit/a"), [(BRANCH.to_string(), again)]);
+    assert_eq!(h.sub(blamed).delivered, None);
 }

@@ -134,16 +134,16 @@ Exit codes:
   64   a command line sluice cannot read
   130  stopped with Ctrl-C; the submission stays queued";
 
-/// `sluice untold --help`'s examples and exits (51, 135).
-const UNTOLD_AFTER_HELP: &str = "\
+/// `sluice inbox --help`'s examples and exits (51, 135).
+const INBOX_AFTER_HELP: &str = "\
 Examples:
-  $ sluice untold          once, when a session starts again
-  $ sluice untold --json
+  $ sluice inbox           once, when a session starts again
+  $ sluice inbox --json
 
 Exit codes:
-  0    told every outcome not yet told, or there was none
+  0    delivered every outcome pending, or there was none
   3    a branch's records could not be read, said on stderr after the rest
-       is told; or sluice itself failed
+       is delivered; or sluice itself failed
   64   a command line sluice cannot read";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
@@ -277,11 +277,11 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Tell this worktree's session every outcome of its submissions not
-    /// yet told to it, and mark each told.
-    #[command(after_help = UNTOLD_AFTER_HELP)]
-    Untold {
-        /// The worktree whose session is told.
+    /// Collect every outcome pending for this worktree's submissions, print
+    /// each, and mark each delivered.
+    #[command(after_help = INBOX_AFTER_HELP)]
+    Inbox {
+        /// The worktree whose outcomes are collected.
         #[arg(long, default_value = ".")]
         worktree: String,
         /// One JSON document on stdout: `{"outcomes":[...]}`, each the
@@ -801,7 +801,7 @@ impl Cli {
             Some(
                 Command::Submit { json, .. }
                 | Command::Wait { json, .. }
-                | Command::Untold { json, .. }
+                | Command::Inbox { json, .. }
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
@@ -1001,7 +1001,7 @@ pub fn run(
             };
             await_submission(&s, &waiting, sub, None, out)
         }
-        Command::Untold { worktree, json } => untold(&s, &worktree, json, out),
+        Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch);
             let round = s.round(&branch)?;
@@ -2112,17 +2112,17 @@ struct Waiting<'a> {
 }
 
 /// ADR 0041: wait on `sub` to its outcome, or as `waiting` bounds it, and
-/// say it: the loop under a waiting submit and `sluice wait`. `told` is
+/// say it: the loop under a waiting submit and `sluice wait`. `said` is
 /// the state its caller has said already. Under `--json`, one document
 /// however it ends: the submission's record, with the copy's `copy`.
 fn await_submission(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
     sub: Submission,
-    told: Option<State>,
+    said: Option<State>,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let (sub, code) = match wait_on(s, waiting, sub, told, out)? {
+    let (sub, code) = match wait_on(s, waiting, sub, said, out)? {
         Waited::Decided(sub, after) => {
             let branch = sub.branch.clone();
             let names = BTreeMap::new();
@@ -2212,12 +2212,12 @@ fn wait_on(
     s: &Sluice<'_>,
     waiting: &Waiting<'_>,
     mut sub: Submission,
-    told: Option<State>,
+    said_before: Option<State>,
     out: &mut dyn Write,
 ) -> Result<Waited> {
     let (id, branch) = (sub.id, sub.branch.clone());
     type Moved = (State, Option<(Vec<u64>, usize, Vec<String>)>);
-    let mut said: Option<Moved> = told.map(|t| (t, None));
+    let mut said: Option<Moved> = said_before.map(|t| (t, None));
     // 121: the branch's hold as last said, so each is said once.
     let mut said_hold = None;
     let mut first = true;
@@ -2631,13 +2631,13 @@ fn report(
     Ok(exit_for(sub))
 }
 
-/// 51, 135: `sluice untold`: tell the session in `worktree` every outcome
-/// of its submissions not yet told it, each in the line the round pushes
-/// and what `sluice wait <id>` prints, then mark each told to it. What it
-/// tells is written before it marks, so an ask stopped between them is
-/// told again; each branch it tells of is locked meanwhile, so no round
-/// pushes the same outcome.
-fn untold(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
+/// 51, 135: `sluice inbox`: collect every outcome pending for the
+/// submissions of `worktree`, print each in the notice the round pushes and
+/// what `sluice wait <id>` prints, then mark each delivered to it. What it
+/// prints is written before it marks, so a collect stopped between them is
+/// delivered again; each branch it collects from is locked meanwhile, so
+/// no round pushes the same outcome.
+fn inbox(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
     let session = s.seams().driver.session(worktree)?;
     // 3: a worktree on no branch names no work, and submitted nothing.
     if session.detached {
@@ -2648,14 +2648,14 @@ fn untold(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Re
     }
     let me = session.from;
     // The session as its driver names it, else the worktree it works in.
-    let told_to = me
+    let to = me
         .session
         .clone()
         .or_else(|| me.path.clone())
         .unwrap_or_else(|| me.worktree.clone());
-    let untold = s.untold(&me)?;
-    let marked = untold.marked(&told_to);
-    for u in &untold.unread {
+    let pending = s.pending(&me)?;
+    let marked = pending.marked(&to);
+    for u in &pending.unread {
         telemetry::error(&format!(
             "sluice: could not read {}'s records: {}",
             u.branch, u.error
@@ -2663,8 +2663,8 @@ fn untold(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Re
     }
     if json {
         let mut doc = serde_json::json!({ "outcomes": marked });
-        if !untold.unread.is_empty() {
-            let unread: Vec<_> = untold
+        if !pending.unread.is_empty() {
+            let unread: Vec<_> = pending
                 .unread
                 .iter()
                 .map(|u| serde_json::json!({ "branch": u.branch, "error": u.error }))
@@ -2674,17 +2674,17 @@ fn untold(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Re
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = BTreeMap::new();
-        for (i, (o, sub)) in untold.outcomes.iter().zip(&marked).enumerate() {
+        for (i, (o, sub)) in pending.outcomes.iter().zip(&marked).enumerate() {
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "{}", words::told_line(sub.id, &o.branch, &o.told))?;
+            writeln!(out, "{}", words::notice(sub.id, &o.branch, &o.decided))?;
             report(s, sub, &o.branch, &names, None, false, out)?;
         }
     }
     out.flush()?;
-    let unread = !untold.unread.is_empty();
-    untold.mark(&told_to)?;
+    let unread = !pending.unread.is_empty();
+    pending.mark(&to)?;
     Ok(if unread { INTERNAL } else { 0 })
 }
 
