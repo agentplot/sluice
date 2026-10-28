@@ -91,11 +91,13 @@ crates/sluice-core/src/line.rs
 crates/sluice-core/src/overview.rs
 crates/sluice-core/src/ops.rs
 crates/sluice-core/src/text.rs
+crates/sluice/src/branch.rs
 crates/sluice/src/home.rs
 crates/sluice/src/overview.rs
 crates/sluice/src/progress.rs
 crates/sluice/src/lib.rs
 crates/sluice/tests/**
+plugins/herdr/bin/document.sh
 plugins/herdr/lib/words.jq
 plugins/herdr/tests/**
 plugins/herdr/README.md
