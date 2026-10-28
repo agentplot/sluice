@@ -12,12 +12,14 @@ use std::rc::Rc;
 use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::pushed_refs::PushedRefs;
 use sluice::profiles::remote_refs::{RemoteRefs, SignerKey, Signing};
+use sluice::retry;
 use sluice::signing::ssh;
 use sluice_core::records::{parse_lines, to_line, ResultKind, ResultLine, RESULT_SCHEMA};
 use sluice_seams::{
     read_refused, Changes, Enforced, Outcome, Rev, State, TaskLog, Written, KEPT_LOGS,
 };
 use ssh_key::{Algorithm, PrivateKey};
+use support::http::{commands, is_push, listing, lists_for_push, Fake, CUT};
 use support::{Repo, Scratch};
 
 fn key() -> PrivateKey {
@@ -41,7 +43,7 @@ fn host(
     signers: BTreeMap<String, SignerKey>,
     signing: Option<(&str, PrivateKey)>,
 ) -> RemoteRefs {
-    let pushed = Rc::new(PushedRefs::open(repo.dir(), "origin").unwrap());
+    let pushed = Rc::new(PushedRefs::open_as(repo.dir(), "origin", None, recorded()).unwrap());
     RemoteRefs::new(
         &repo.dir().join(".git"),
         pushed,
@@ -51,6 +53,11 @@ fn host(
             key,
         }),
     )
+}
+
+/// A command's retry policy whose pauses are skipped, as if taken.
+fn recorded() -> Rc<retry::Policy> {
+    Rc::new(retry::Policy::command().recording())
 }
 
 fn put(files: &[(&str, &str)]) -> Changes {
@@ -442,7 +449,7 @@ fn the_first_hosts_queue_moves_and_the_others_is_left_behind() {
     let records = |r: &Repo| {
         Records::new(
             &r.dir().join(".git"),
-            Branches::open(r.dir()).unwrap(),
+            Branches::open_as(r.dir(), None, recorded()).unwrap(),
             None,
         )
     };
@@ -464,4 +471,83 @@ fn the_first_hosts_queue_moves_and_the_others_is_left_behind() {
     assert!(String::from_utf8_lossy(&left[0]).contains("\"id\":9"));
     rb.forget_left_behind("main", &[9]).unwrap();
     assert!(rb.left_behind("main").unwrap().is_empty());
+}
+
+/// 134, 122, 77: a host's sign of life whose push was cut after it was
+/// sent is pushed once, and stands when the remote's ref holds the commit
+/// it pushed.
+#[test]
+fn a_sign_of_life_cut_after_it_was_sent_stands() {
+    let repo = Repo::new("rr-beat-cut");
+    let held = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let fake = {
+        let held = held.clone();
+        Fake::start(move |r| {
+            if lists_for_push(r) {
+                listing("git-receive-pack", &[])
+            } else if is_push(r) {
+                let (_, new, _) = commands(r).remove(0);
+                *held.lock().unwrap() = Some(new);
+                (CUT, vec![], String::new())
+            } else {
+                let held = held.lock().unwrap().clone();
+                match &held {
+                    Some(at) => listing("git-upload-pack", &[("refs/sluice/hosts/h", at)]),
+                    None => listing("git-upload-pack", &[]),
+                }
+            }
+        })
+    };
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        &format!("{}/o/r.git", fake.url()),
+    ]);
+    let h = host(&repo, BTreeMap::new(), None);
+    h.beat("h", b"{}").unwrap();
+    let pushes = fake.requests().iter().filter(|r| is_push(r)).count();
+    assert_eq!(pushes, 1, "one push");
+    assert!(held.lock().unwrap().is_some(), "the remote holds the beat");
+}
+
+/// 134, 62: the state's leased push refused at its lease, another host
+/// having written first, is one push, and the write is refused as before.
+#[test]
+fn a_state_write_refused_at_the_lease_is_one_push() {
+    use std::os::unix::fs::PermissionsExt;
+    let (a, _bare, b) = two_hosts("rr-lease-once");
+    let (ha, hb) = (
+        host(&a, BTreeMap::new(), None),
+        host(&b, BTreeMap::new(), None),
+    );
+    let at_a = ha.read("main").unwrap().version;
+    let at_b = hb.read("main").unwrap().version;
+    // Every push of b's runs this, once.
+    let log = b.dir().join(".git/pushes.log");
+    let pack = b.dir().join(".git/receive-pack");
+    std::fs::write(
+        &pack,
+        format!(
+            "#!/bin/sh\necho push >> '{}'\nexec git receive-pack \"$@\"\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&pack, std::fs::Permissions::from_mode(0o755)).unwrap();
+    b.git(&[
+        "config",
+        "remote.origin.receivepack",
+        pack.to_str().unwrap(),
+    ]);
+    let wa = ha
+        .write("main", at_a, put(&[("branch.json", "{\"a\":1}\n")]))
+        .unwrap();
+    let wb = hb
+        .write("main", at_b, put(&[("branch.json", "{\"b\":1}\n")]))
+        .unwrap();
+    assert_eq!(wa, Written::Written(1));
+    assert_eq!(wb, Written::Refused);
+    let pushes = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(pushes.lines().count(), 1, "one push: {pushes}");
 }

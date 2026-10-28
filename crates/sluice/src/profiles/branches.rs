@@ -15,32 +15,42 @@ use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 use super::local_refs::LocalRefs;
 use super::pushed_refs::{remotes, PushedRefs};
 use crate::identity::Identity;
+use crate::retry;
 use crate::{Pusher, Pushers};
 
 pub struct Branches {
     local: LocalRefs,
     dir: PathBuf,
     identity: Option<(Rc<dyn Identity>, PathBuf)>,
+    /// The retry policy every call to a remote runs under (134).
+    retry: Rc<retry::Policy>,
     pushed: RefCell<BTreeMap<String, Rc<PushedRefs>>>,
     /// 124: whether the policy is read only as far as guarding needs.
     guarding: bool,
 }
 
 impl Branches {
-    /// The repository holding `path`, a worktree or a git directory.
+    /// The repository holding `path`, a worktree or a git directory, its
+    /// remotes reached under a command's retry policy.
     pub fn open(path: &Path) -> Result<Self> {
-        Branches::open_as(path, None)
+        Branches::open_as(path, None, Rc::new(retry::Policy::command()))
     }
 
     /// As [`Branches::open`], each remote reached as `identity` where it
-    /// has one on the remote's forge; the `PathBuf` is the `sluice`
-    /// executable git runs as its credential helper.
-    pub fn open_as(path: &Path, identity: Option<(Rc<dyn Identity>, PathBuf)>) -> Result<Self> {
+    /// has one on the remote's forge, each call under `retry`; the
+    /// `PathBuf` is the `sluice` executable git runs as its credential
+    /// helper.
+    pub fn open_as(
+        path: &Path,
+        identity: Option<(Rc<dyn Identity>, PathBuf)>,
+        retry: Rc<retry::Policy>,
+    ) -> Result<Self> {
         let local = LocalRefs::open(path)?;
         Ok(Branches {
             dir: local.git_dir().to_path_buf(),
             local,
             identity,
+            retry,
             pushed: RefCell::default(),
             guarding: false,
         })
@@ -225,7 +235,7 @@ impl Branches {
             return Ok(p.clone());
         }
         let p = Rc::new(
-            PushedRefs::open_as(&self.dir, remote, self.identity.clone())
+            PushedRefs::open_as(&self.dir, remote, self.identity.clone(), self.retry.clone())
                 .with_context(|| format!("{branch}'s remote"))?,
         );
         self.pushed.borrow_mut().insert(remote.into(), p.clone());

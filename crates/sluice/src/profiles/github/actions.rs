@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use sluice_seams::{Launch, Setting};
 
-use super::app::{App, Repo};
+use super::app::{App, Bearer, Call, Repo};
 use crate::profiles::checks::Launcher;
 use crate::profiles::pushed_refs::remote_url;
 
@@ -43,14 +43,18 @@ impl Actions {
         Ok(path.rsplit('/').next().unwrap_or(&path).to_string())
     }
 
+    /// Start a run of `workflow` on `git_ref` (134; rule core.29): a call
+    /// that starts something, which nothing reads back, so one whose
+    /// answer was not read is never sent again and fails
+    /// [`sluice_seams::Unanswered`] for its caller to judge.
     fn dispatch(&self, repo: &Repo, workflow: &str, git_ref: &str, inputs: Value) -> Result<()> {
-        let token = self.app.token(repo)?;
         let path = format!(
             "/repos/{}/{}/actions/workflows/{workflow}/dispatches",
             repo.owner, repo.name
         );
         let body = json!({ "ref": git_ref, "inputs": inputs }).to_string();
-        self.app.post_api(&path, &token, &body)?;
+        self.app
+            .post_api(Call::Make, &path, Bearer::Repo(repo), &body)?;
         Ok(())
     }
 }
@@ -102,14 +106,13 @@ impl Launcher for Actions {
     ) -> Result<bool> {
         let repo = self.repo(remote)?;
         let workflow = Actions::workflow(kind)?;
-        let token = self.app.token(&repo)?;
         let title = format!("sluice {claim}");
         for status in ["queued", "in_progress", "waiting", "pending", "requested"] {
             let path = format!(
                 "/repos/{}/{}/actions/workflows/{workflow}/runs?status={status}&per_page=100",
                 repo.owner, repo.name
             );
-            let v = self.app.get(&path, &token)?;
+            let v = self.app.get(&path, Bearer::Repo(&repo))?;
             let found = v["workflow_runs"]
                 .as_array()
                 .is_some_and(|runs| runs.iter().any(|r| r["display_title"] == title.as_str()));

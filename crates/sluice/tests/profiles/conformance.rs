@@ -102,6 +102,10 @@ impl Checkout for RecordedPlaces {
         Ok(gone)
     }
 
+    fn remove_unnamed_scratch(&self) -> Result<Vec<std::path::PathBuf>> {
+        self.inner.remove_unnamed_scratch()
+    }
+
     fn adopt(&self, worktree: &str, branch: &str, checkout: &Settings, at: &str) -> Result<Place> {
         self.inner.adopt(worktree, branch, checkout, at)
     }
@@ -431,6 +435,7 @@ impl Real {
                 systems: None,
                 caches: vec![moon_cache],
             },
+            std::rc::Rc::new(sluice::retry::Policy::command().recording()),
         )
         .expect("the profiles bind");
         let Bound {

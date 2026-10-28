@@ -2079,7 +2079,7 @@ impl Sluice<'_> {
                 .get(&pool.signer)
                 .map(|s| s.identity.clone())
                 .expect("a pool's signer is one the policy names");
-            self.seams.tests.launch(&sluice_seams::Launch {
+            let launched = self.seams.tests.launch(&sluice_seams::Launch {
                 pool: pool.name.clone(),
                 kind: pool.kind.clone(),
                 signer,
@@ -2090,7 +2090,16 @@ impl Sluice<'_> {
                 combination: c.revision.clone(),
                 system: run.system.clone(),
                 claim: claim.clone(),
-            })?;
+            });
+            // 134: a dispatch whose answer was not read is never sent
+            // again: its run is claimed as dispatched, the claim's event
+            // carrying the forge's words, and the next round reads whether
+            // a job of the claim runs, lapsing it when none does (77, 88).
+            let unanswered = match launched {
+                Ok(()) => None,
+                Err(e) if sluice_seams::unanswered(&e) => Some(format!("{e:#}")),
+                Err(e) => return Err(e),
+            };
             let x = line.candidate_mut(&id).expect("a chain's candidate");
             let r = &mut x.runs[i];
             r.state = RunState::Starting;
@@ -2102,6 +2111,7 @@ impl Sluice<'_> {
                     combination: c.revision.clone(),
                     system: run.system.clone(),
                     host: claim,
+                    unanswered,
                 },
             );
         }
@@ -2342,6 +2352,7 @@ impl Sluice<'_> {
                         combination,
                         system,
                         host: me.clone(),
+                        unanswered: None,
                     },
                 );
                 Ok(true)

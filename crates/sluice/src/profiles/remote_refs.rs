@@ -35,7 +35,7 @@ use sluice_seams::{
 };
 
 use super::local_files::LocalFiles;
-use super::pushed_refs::{command, refusal, PushedRefs};
+use super::pushed_refs::{command, Pushed, PushedRefs};
 use crate::signing::dsse::Envelope;
 use crate::signing::ssh;
 use crate::signing::statement::{Claims, Run, RunResult, Statement};
@@ -267,52 +267,49 @@ impl RemoteRefs {
         Ok(String::from_utf8(out.stdout)?.trim().to_string())
     }
 
+    /// Push `spec`, setting the remote's ref `name` to `to` (`None`: a
+    /// removal), with `lease` when there is one, under the retry policy
+    /// (134): tried again only when the remote never judged it, and read
+    /// back when its answer was lost (122).
+    fn push(
+        &self,
+        lease: Option<&str>,
+        spec: &str,
+        name: &str,
+        to: Option<&str>,
+    ) -> Result<Pushed> {
+        let mut args = vec!["push", "--porcelain", "--no-verify"];
+        args.extend(lease);
+        args.extend([self.pushed.target(), spec]);
+        self.pushed.push(&args, name, to)
+    }
+
     /// Push `commit` to `name`, leased on `expected` (`None`: the remote
     /// has no such ref). `Ok(false)` when the lease failed.
     fn push_leased(&self, commit: &str, name: &str, expected: Option<&str>) -> Result<bool> {
         let lease = format!("--force-with-lease={name}:{}", expected.unwrap_or(""));
         let spec = format!("{commit}:{name}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            &lease,
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if out.status.success() {
-            return Ok(true);
+        let pushed = self.push(Some(&lease), &spec, name, Some(commit))?;
+        if let Pushed::Refused(out) = &pushed {
+            let report = String::from_utf8_lossy(&out.stdout);
+            if report.contains("stale info")
+                || report.contains("fetch first")
+                || report.contains("rejected")
+            {
+                return Ok(false);
+            }
         }
-        let report = String::from_utf8_lossy(&out.stdout);
-        if report.contains("stale info")
-            || report.contains("fetch first")
-            || report.contains("rejected")
-        {
-            return Ok(false);
+        match pushed.why() {
+            None => Ok(true),
+            Some(why) => bail!("pushing {name} to {} failed: {why}", self.remote()),
         }
-        bail!(
-            "pushing {name} to {} failed: {}",
-            self.remote(),
-            refusal(&out)
-        )
     }
 
     /// Remove `name` from the remote.
     fn delete(&self, name: &str) -> Result<()> {
         let spec = format!(":{name}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "removing {name} from {} failed: {}",
-                self.remote(),
-                refusal(&out)
-            );
+        if let Some(why) = self.push(None, &spec, name, None)?.why() {
+            bail!("removing {name} from {} failed: {why}", self.remote());
         }
         Ok(())
     }
@@ -320,26 +317,21 @@ impl RemoteRefs {
     /// Remove `name` from the remote when it holds it.
     fn delete_if_present(&self, name: &str) -> Result<()> {
         let spec = format!(":{name}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        if out.status.success() || said.contains("does not exist") {
-            return Ok(());
+        let pushed = self.push(None, &spec, name, None)?;
+        if let Pushed::Refused(out) = &pushed {
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if said.contains("does not exist") {
+                return Ok(());
+            }
         }
-        bail!(
-            "removing {name} from {} failed: {}",
-            self.remote(),
-            refusal(&out)
-        )
+        match pushed.why() {
+            None => Ok(()),
+            Some(why) => bail!("removing {name} from {} failed: {why}", self.remote()),
+        }
     }
 
     /// Add `files` to the ref `name`, on top of whatever it holds, again
@@ -642,20 +634,10 @@ impl State for RemoteRefs {
     }
 
     fn publish_head(&self, _branch: &str, head: &Rev) -> Result<()> {
-        let spec = format!("{head}:refs/sluice/heads/{head}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "pushing the head {head} to {} failed: {}",
-                self.remote(),
-                refusal(&out)
-            );
+        let name = format!("refs/sluice/heads/{head}");
+        let spec = format!("{head}:{name}");
+        if let Some(why) = self.push(None, &spec, &name, Some(head.as_str()))?.why() {
+            bail!("pushing the head {head} to {} failed: {why}", self.remote());
         }
         Ok(())
     }
@@ -688,20 +670,10 @@ impl State for RemoteRefs {
             None,
             &format!("{host} is alive"),
         )?;
-        let spec = format!("+{commit}:refs/sluice/hosts/{host}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "showing {host} alive on {} failed: {}",
-                self.remote(),
-                refusal(&out)
-            );
+        let name = format!("refs/sluice/hosts/{host}");
+        let spec = format!("+{commit}:{name}");
+        if let Some(why) = self.push(None, &spec, &name, Some(&commit))?.why() {
+            bail!("showing {host} alive on {} failed: {why}", self.remote());
         }
         Ok(())
     }
@@ -779,19 +751,12 @@ impl State for RemoteRefs {
 
     fn publish_candidate(&self, branch: &str, id: &str, rev: &Rev) -> Result<()> {
         state_ref(branch)?;
-        let spec = format!("+{rev}:refs/sluice/combinations/{branch}/{id}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
+        let name = format!("refs/sluice/combinations/{branch}/{id}");
+        let spec = format!("+{rev}:{name}");
+        if let Some(why) = self.push(None, &spec, &name, Some(rev.as_str()))?.why() {
             bail!(
-                "opening the combination {id} on {} failed: {}",
-                self.remote(),
-                refusal(&out)
+                "opening the combination {id} on {} failed: {why}",
+                self.remote()
             );
         }
         Ok(())
@@ -1094,18 +1059,10 @@ impl State for RemoteRefs {
         }
         let commit = self.commit(&blobs, None, &format!("logs of {candidate}"))?;
         let spec = format!("+{commit}:{name}");
-        let out = self.pushed.remote_git(&[
-            "push",
-            "--porcelain",
-            "--no-verify",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
+        if let Some(why) = self.push(None, &spec, &name, Some(&commit))?.why() {
             bail!(
-                "keeping {candidate}'s logs on {} failed: {}",
-                self.remote(),
-                refusal(&out)
+                "keeping {candidate}'s logs on {} failed: {why}",
+                self.remote()
             );
         }
         let listed = self.pushed.remote_git(&[

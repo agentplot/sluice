@@ -1,8 +1,10 @@
 use std::path::Path;
-use std::time::Duration;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use sluice::profiles::Bound;
+use sluice::retry::Policy;
 use sluice::telemetry::Telemetry;
 use sluice::{run, Cli, Command, Sleep};
 use sluice_core::SystemClock;
@@ -57,6 +59,7 @@ fn main() {
             }
         }
     }
+    let retry = Rc::new(retry(&cli));
     // The forge check reads the host's config itself, and says what in it
     // is wrong rather than failing on it.
     if let Some(Command::Forge {
@@ -71,6 +74,7 @@ fn main() {
                     branch.as_deref(),
                     *json,
                     &mut std::io::stdout(),
+                    retry.clone(),
                 )
             })
             .unwrap_or_else(|e| {
@@ -86,11 +90,11 @@ fn main() {
         if state != "prepared" {
             return;
         }
-        std::process::exit(hook(cli));
+        std::process::exit(hook(cli, retry));
     }
     let bound = match std::env::current_dir()
         .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::open(&dir))
+        .and_then(|dir| Bound::open(&dir, retry))
     {
         Ok(b) => b,
         Err(e) => {
@@ -151,14 +155,14 @@ fn main() {
 /// that folder only when git set none. It reads the host's settings and
 /// the policy only as far as guarding needs. A transaction it cannot read
 /// for a reason of its own passes, said once; it never exits 3.
-fn hook(cli: Cli) -> i32 {
+fn hook(cli: Cli, retry: Rc<Policy>) -> i32 {
     let bound = std::env::current_dir()
         .map(|dir| match std::env::var_os("GIT_DIR") {
             Some(git_dir) if !git_dir.is_empty() => dir.join(git_dir),
             _ => dir,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|dir| Bound::guarding(&dir));
+        .and_then(|dir| Bound::guarding(&dir, retry));
     let bound = match bound {
         Ok(b) => b,
         Err(e) => {
@@ -184,6 +188,30 @@ fn hook(cli: Cli) -> i32 {
         }
     }
 }
+
+/// The retry policy every call to a remote runs under (134): a wait's five
+/// minutes, ending at its `--timeout`, for a waiting submit and `sluice
+/// wait`, and thirty seconds for anything else. Tests that run the binary
+/// set `SLUICE_RETRY_SLEEP=record` to skip its pauses.
+fn retry(cli: &Cli) -> Policy {
+    let policy = match &cli.command {
+        Some(Command::Wait { timeout, .. }) => Policy::waiting(timeout.map(|t| Instant::now() + t)),
+        Some(Command::Submit {
+            no_wait: false,
+            check: false,
+            status: false,
+            ..
+        }) => Policy::waiting(None),
+        _ => Policy::command(),
+    };
+    match std::env::var(RETRY_SLEEP_VAR).as_deref() {
+        Ok("record") => policy.recording(),
+        _ => policy,
+    }
+}
+
+/// Set to `record` in tests, the retry policy's pauses are skipped.
+const RETRY_SLEEP_VAR: &str = "SLUICE_RETRY_SLEEP";
 
 /// `put` sluice's hook, for this executable, in the repository holding the
 /// folder the command runs in.

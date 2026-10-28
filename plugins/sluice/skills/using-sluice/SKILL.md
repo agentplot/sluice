@@ -37,7 +37,13 @@ sluice submit --check main      # would it conflict? writes nothing
 sluice submit --check main --head bolt/x   # the same for a branch no worktree holds
 sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
+sluice submit main --subject "Batch review cards"   # one line saying what lands
 ```
+
+`--subject` titles the pull request a submit opens, on a branch that takes
+pull requests, and names the landing commit on any branch:
+`chore(land): #12 Batch review cards`. Without it, both are named by your
+branch.
 
 Exit codes: `0` landed, whatever failed after the landing (what failed is
 on stderr, after `sluice: after the landing:`), `1` failed (this
@@ -85,7 +91,8 @@ worktree's last submission or its pull request.
 
 Several worktrees whose heads must go in together, such as a set of
 approved bolts, are submitted as one act: `sluice submit main --worktree
-../a --worktree ../b`. sluice queues all of them, in that order, or none,
+../a --worktree ../b`, with one `--subject` per `--worktree`, in their
+order, or none. sluice queues all of them, in that order, or none,
 and forms no combination on any of them until every one is queued. Once
 queued, each is its own submission: blamed, withdrawn and waited on
 (`sluice wait <id>`) alone. See [references/submit.md](references/submit.md).
@@ -136,7 +143,8 @@ whenever you look.
   queue as last fetched; it moves on when the remote is back.
 
 On a branch with `[branches."<pattern>".pull_requests]`, `submit` pushes your
-branch and opens or updates its pull request instead; the pull request joins
+branch and opens or updates its pull request instead, titled by `--subject`
+or by your branch's name; the pull request joins
 the queue once its reviews and checks hold. See
 [references/submit.md](references/submit.md).
 
