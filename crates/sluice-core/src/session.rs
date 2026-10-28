@@ -6,8 +6,9 @@
 
 use anyhow::{anyhow, Result};
 use sluice_seams::{
-    GoneRelease, LastResult, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind, RunOutcome,
-    RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress, TaskState,
+    GoneRelease, Guard, LastResult, Outcome, Place, ReleasePolicy, Rev, RunHandle, RunKind,
+    RunOutcome, RunReport, RunRequest, Session, SessionPlace, Setting, Source, TaskProgress,
+    TaskState,
 };
 
 use crate::policy::{Policy, Rules};
@@ -465,9 +466,11 @@ impl Sluice<'_> {
     /// however old its last run.
     ///
     /// Each takes its branch's lock, never waiting for it (rule core.14):
-    /// a place whose branch a round holds is left to the next round or
-    /// run. One that cannot be freed is reported and the rest go on: one
-    /// broken place never stops the host's rounds.
+    /// a place whose branch a round holds, or whose branch cannot be read
+    /// (26), is left to the next round or run. One that cannot be freed
+    /// is reported and the rest go on, and so is one freed whose `gone`
+    /// line cannot be written: one broken place never stops the host's
+    /// rounds.
     ///
     /// Then every scratch directory no place's record names is removed,
     /// the freed places' own already gone with them (123, rule core.30). A
@@ -483,7 +486,7 @@ impl Sluice<'_> {
             let _lock = if p.branch.is_empty() {
                 None
             } else {
-                match self.seams.state.lock(&p.branch)? {
+                match self.release_lock(&p.branch, true) {
                     Some(l) => Some(l),
                     None => continue,
                 }
@@ -506,7 +509,7 @@ impl Sluice<'_> {
                 );
                 if !p.branch.is_empty() {
                     let now = self.now();
-                    self.update(&p.branch, |l| {
+                    let logged = self.update(&p.branch, |l| {
                         l.log(
                             &now,
                             Event::Gone {
@@ -517,7 +520,15 @@ impl Sluice<'_> {
                             },
                         );
                         Ok(())
-                    })?;
+                    });
+                    // 26: freed all the same; the profile let it go.
+                    if let Err(e) = logged {
+                        tracing::warn!(
+                            sluice.branch = %p.branch,
+                            "logging {worktree}'s place freed on {} failed: {e:#}",
+                            p.branch
+                        );
+                    }
                 }
             }
             out.push(Abandoned {
@@ -543,6 +554,31 @@ impl Sluice<'_> {
             Err(e) => tracing::warn!("removing scratch no checkout names failed: {e:#}"),
         }
         Ok(out)
+    }
+
+    /// 26, rule core.14: `branch`'s lock for a pass that releases the
+    /// places nobody can use, never waited for, its records read under it
+    /// when `logged`, since the release is logged there. `None`, the place
+    /// left for a later pass, when a round holds the lock, and when the
+    /// lock or the records cannot be had, as a branch that cannot be read,
+    /// warned with the branch and the words it was refused with.
+    pub(crate) fn release_lock(&self, branch: &str, logged: bool) -> Option<Box<dyn Guard + '_>> {
+        let held = self.seams.state.lock(branch).and_then(|lock| {
+            if lock.is_some() && logged {
+                self.read_line(branch)?;
+            }
+            Ok(lock)
+        });
+        match held {
+            Ok(lock) => lock,
+            Err(e) => {
+                tracing::warn!(
+                    sluice.branch = %branch,
+                    "{branch} could not be read, so its place is left for a later pass: {e:#}"
+                );
+                None
+            }
+        }
     }
 }
 
