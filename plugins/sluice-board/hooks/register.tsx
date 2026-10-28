@@ -33,6 +33,7 @@ import {
   duration,
   emptyLines,
   errorLine,
+  errorMessage,
   failedName,
   flakyLines,
   flipped,
@@ -74,6 +75,7 @@ import {
   taskLines,
   testing,
   unlistedHeld,
+  unreadReason,
   wakeText,
 } from "./board";
 
@@ -192,6 +194,7 @@ async function learnRemotes($: $, next: Overview, cwd: string) {
 /** A new overview: learn this session's submissions, tell new outcomes. */
 async function take($: $, next: Overview, cwd: string, how: How) {
   await update($, error, () => null);
+  await update($, unread, () => null);
   await learnRemotes($, next, cwd);
   const first = (await read($, doc)) === null;
   await update($, doc, () => next);
@@ -339,37 +342,59 @@ let following: How | null = null;
 /**
  * A line a watch printed: an overview, the first of which sets the board up
  * to follow sluice; or an error document, the band's one line while the last
- * overview stays. A line that is neither is passed over, and the watch kept.
+ * overview stays, and while the board has none the pane's reason, which it
+ * answers true for. A line that is neither is passed over, and the watch kept.
  */
-async function see($: $, next: unknown, cwd: string, chosen: How) {
+async function see($: $, next: unknown, cwd: string, chosen: How): Promise<boolean> {
   if (isOverview(next)) {
     following ??= await follow($, cwd, chosen);
     await take($, next, cwd, following);
-    return;
+    return false;
   }
   const said = errorLine(next);
-  if (said !== null) await update($, error, () => said);
+  if (said === null) return false;
+  await update($, error, () => said);
+  if ((await read($, doc)) !== null) return false;
+  await update($, unread, () => errorMessage(next));
+  return true;
 }
+
+/** How a watch ended: its exit, or the signal that ended it, and what it wrote to stderr. */
+type Ended = { exitCode: number | null; signal: string | null; stderr: string };
+
+/** As much of a watch's stderr as the board keeps: its first words say why it ended. */
+const STDERR_KEPT = 4096;
 
 /**
  * One `sluice overview --json --watch`, each line taken as it comes, until
- * it ends; it rejects when it could not be started or its stream broke.
+ * it ends: how it ended, or null when it could not be started or its stream
+ * broke; and whether it printed the pane's reason.
  */
 async function watch($: $, cwd: string, chosen: How) {
-  let rest = "";
-  for await (const chunk of $.process.spawn({
-    argv: ["sluice", "overview", "--json", "--watch"],
-    cwd,
-  })) {
-    if (chunk.stream !== "stdout") continue;
-    rest += chunk.text;
-    let nl = rest.indexOf("\n");
-    while (nl >= 0) {
-      const line = rest.slice(0, nl).trim();
-      rest = rest.slice(nl + 1);
-      if (line) await see($, parsed(line), cwd, chosen);
-      nl = rest.indexOf("\n");
+  let said = false;
+  let stderr = "";
+  try {
+    const stream = $.process.spawn({ argv: ["sluice", "overview", "--json", "--watch"], cwd });
+    let rest = "";
+    for await (const chunk of stream) {
+      if (chunk.stream === "stderr") {
+        if (stderr.length < STDERR_KEPT) stderr += chunk.text;
+        continue;
+      }
+      rest += chunk.text;
+      let nl = rest.indexOf("\n");
+      while (nl >= 0) {
+        const line = rest.slice(0, nl).trim();
+        rest = rest.slice(nl + 1);
+        if (line && (await see($, parsed(line), cwd, chosen))) said = true;
+        nl = rest.indexOf("\n");
+      }
     }
+    const { code, signal } = await stream.result;
+    const end: Ended = { exitCode: code, signal, stderr };
+    return { end, said };
+  } catch {
+    return { end: null, said };
   }
 }
 
@@ -385,8 +410,9 @@ async function feed($: $, cwd: string, chosen: How) {
   let wait: number | null = null;
   for (;;) {
     const started = await $.clock.now();
-    // One that could not be started, or whose stream broke, is started again.
-    await watch($, cwd, chosen).catch(() => undefined);
+    const { end, said } = await watch($, cwd, chosen);
+    // While the board has no overview, the pane says why this one gave none.
+    if (!said && (await read($, doc)) === null) await update($, unread, () => unreadReason(end));
     const ms = rewatchWait(wait, (await $.clock.now()) - started);
     wait = ms;
     await new Promise<void>((done) => $.clock.after(ms, done));
@@ -395,8 +421,8 @@ async function feed($: $, cwd: string, chosen: How) {
 
 /**
  * Set the board up to follow sluice, once a load, on the first overview a
- * watch prints: the session's worktree and branch, its remotes, the clock,
- * and the wake and the forecast as the options turn them on.
+ * watch prints: the session's worktree and branch, its remotes, and the wake
+ * and the forecast as the options turn them on.
  */
 async function follow($: $, cwd: string, chosen: How): Promise<How> {
   const top = await $.process
@@ -415,14 +441,7 @@ async function follow($: $, cwd: string, chosen: How): Promise<How> {
   await update($, remotes, (all) => ({ ...all, origin: base }));
   // A session whose orchestrator forecasts for it turns this off.
   const env = await $.env.get("SLUICE_FORECAST").catch(() => undefined);
-  const how = { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
-  // Elapsed times move while something is under test or an agent's check
-  // goes, and a finished check leaves the pane a quarter hour on.
-  $.clock.every(5000, async () => {
-    const t = await $.clock.now();
-    if (moving(await read($, doc), t)) await update($, now, () => t);
-  });
-  return how;
+  return { wake: chosen.wake, forecast: chosen.forecast && env !== "0" };
 }
 
 export const register: Register = (on, options) => {
@@ -435,6 +454,12 @@ export const register: Register = (on, options) => {
       watching = true;
       // It ends only when the engine refuses it, as once the mod is unloaded.
       void feed($, e.cwd, chosen).catch(() => undefined);
+      // Elapsed times move while something is under test or an agent's check
+      // goes, and a finished check leaves the pane a quarter hour on.
+      $.clock.every(5000, async () => {
+        const t = await $.clock.now();
+        if (moving(await read($, doc), t)) await update($, now, () => t);
+      });
     }
     return started;
   });

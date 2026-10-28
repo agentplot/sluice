@@ -161,7 +161,12 @@ function host(
  * ended, by the mocked clock.
  */
 function watches(on: On, clock: MockClock) {
-  type Open = { lines: string[]; ended: boolean; wake: () => void };
+  type Piece = { stream: "stdout" | "stderr"; text: string };
+  type Open = {
+    pieces: Piece[];
+    ended: { code: number | null; signal: string | null } | null;
+    wake: () => void;
+  };
   let open: Open | null = null;
   const w = {
     failing: false,
@@ -170,7 +175,7 @@ function watches(on: On, clock: MockClock) {
     isOpen: () => open !== null,
     /** Prints `text` on the open watch as it is. */
     async say(text: string) {
-      open!.lines.push(text);
+      open!.pieces.push({ stream: "stdout", text });
       open!.wake();
       await clock.settle();
     },
@@ -180,7 +185,14 @@ function watches(on: On, clock: MockClock) {
     },
     /** Ends the open watch, as one killed ends. */
     async end() {
-      open!.ended = true;
+      open!.ended = { code: null, signal: "SIGTERM" };
+      open!.wake();
+      await clock.settle();
+    },
+    /** Ends the open watch as sluice exits `code`, having written `stderr`. */
+    async exit(code: number, stderr: string) {
+      if (stderr) open!.pieces.push({ stream: "stderr", text: stderr });
+      open!.ended = { code, signal: null };
       open!.wake();
       await clock.settle();
     },
@@ -188,20 +200,19 @@ function watches(on: On, clock: MockClock) {
   on("process.spawn", async function* () {
     w.started.push(clock.now());
     if (w.failing) throw new Error("sluice: command not found");
-    const me: Open = { lines: [], ended: false, wake: () => undefined };
+    const me: Open = { pieces: [], ended: null, wake: () => undefined };
     open = me;
     try {
       for (;;) {
-        const text = me.lines.shift();
-        if (text !== undefined) yield { stream: "stdout" as const, text };
-        else if (me.ended) break;
+        const piece = me.pieces.shift();
+        if (piece !== undefined) yield piece;
+        else if (me.ended) return { value: me.ended };
         else await new Promise<void>((woken) => (me.wake = woken));
       }
     } finally {
       if (open === me) open = null;
       w.ended.push(clock.now());
     }
-    return { value: { code: null, signal: "SIGTERM" } };
   });
   return w;
 }
@@ -1077,6 +1088,82 @@ async function bandOf($: Engine): Promise<string[]> {
   await band.unmount();
   return lines;
 }
+
+const ASK = "Ask Claude to set sluice up in this repository.";
+
+/** The texts of the pane as `/sluice` drew it, docked. */
+async function paneTexts($: Engine): Promise<string[]> {
+  const pane = await mountPane($);
+  const texts = (await pane.findAll({ type: "Text" })).map((t) => t.text);
+  await pane.unmount();
+  return texts;
+}
+
+test("sluice not installed: the pane says the command was not found, and what to do", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  watch.failing = true;
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await $.command.run(slash(false));
+  const pane = await mountPane($, INLINE);
+  expect((await pane.findAll({ type: "Text" })).map((t) => t.text)).toEqual([
+    "sluice could not be read here: the sluice command was not found",
+    ASK,
+  ]);
+  expect(await pane.find({ type: "Button", key: "close" })).toBeDefined();
+  await pane.unmount();
+  expect(await bandOf($)).toEqual([]);
+});
+
+test("the overview fails: the pane gives the watch's own words, and what to do", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  // Reading, until the watch prints or ends.
+  expect(await paneTexts($)).toEqual(["Reading sluice…"]);
+  await watch.exit(3, "sluice: not a git repository\n");
+  await $.command.run(slash(true));
+  expect(await paneTexts($)).toEqual([
+    "sluice could not be read here: sluice: not a git repository",
+    ASK,
+  ]);
+  expect(await bandOf($)).toEqual([]);
+  // One that writes nothing gives its exit.
+  await clock.advance(1000);
+  await watch.exit(4, "");
+  expect((await paneTexts($))[0]).toBe("sluice could not be read here: sluice overview exited 4");
+});
+
+test("the watch prints only its failure: the pane gives its message, until an overview comes", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.say('{"error":{"kind":"internal","message":"no policy on main","next":[]}}\n');
+  expect(watch.isOpen()).toBe(true);
+  expect(await paneTexts($)).toEqual(["sluice could not be read here: no policy on main", ASK]);
+  expect(await bandOf($)).toEqual(["sluice: no policy on main"]);
+  // Its message stands over what it wrote to stderr when it ends.
+  await watch.exit(1, "sluice: interrupted\n");
+  expect((await paneTexts($))[0]).toBe("sluice could not be read here: no policy on main");
+  // The next watch prints the queue: the reason goes.
+  await clock.advance(1000);
+  await watch.print(justSetUp());
+  expect(await paneTexts($)).toContain("QUEUED");
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  // A failure after it, and the watch's end, leave the queue in the pane.
+  await watch.say('{"error":{"kind":"internal","message":"no policy on main","next":[]}}\n');
+  await watch.exit(3, "sluice: not a git repository\n");
+  expect(await paneTexts($)).toContain("QUEUED");
+});
 
 test("the first queue comes from the watch, and nothing reads the records in its place", async ($, on) => {
   const clock = mock.clock(on);

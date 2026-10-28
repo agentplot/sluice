@@ -13,6 +13,7 @@ import {
   duration,
   emptyLines,
   errorLine,
+  errorMessage,
   finishedWords,
   flakyLines,
   flipped,
@@ -83,6 +84,7 @@ describe("the band", () => {
       },
     };
     expect(errorLine(failed)).toBe("sluice: opening the repository at /work/x: it is gone");
+    expect(errorMessage(failed)).toBe("opening the repository at /work/x: it is gone");
     expect(isOverview(failed)).toBe(false);
     expect(bandLines(failed as never, NOW)).toEqual([]);
     expect(isOverview(overview())).toBe(true);
@@ -90,6 +92,7 @@ describe("the band", () => {
     for (const v of [null, "error", 3, {}, { error: "gone" }, { error: { kind: "internal" } }]) {
       expect(isOverview(v)).toBe(false);
       expect(errorLine(v)).toBeNull();
+      expect(errorMessage(v)).toBeNull();
     }
   });
 
@@ -385,7 +388,7 @@ describe("the pane", () => {
     );
   });
 
-  test("why sluice could not be read: not started, its stderr, else its exit", () => {
+  test("why sluice could not be read: not started, its stderr, else its exit or signal", () => {
     const got = (exitCode: number, stderr: string) => ({ exitCode, stderr });
     expect(unreadReason(null)).toBe("the sluice command was not found");
     expect(unreadReason(got(3, "sluice: not a git repository\n"))).toBe(
@@ -394,6 +397,9 @@ describe("the pane", () => {
     expect(unreadReason(got(2, "\n  \nsluice: no policy\nmore\n"))).toBe("sluice: no policy");
     expect(unreadReason(got(1, ""))).toBe("sluice overview exited 1");
     expect(unreadReason(got(4, " \n"))).toBe("sluice overview exited 4");
+    expect(unreadReason({ exitCode: null, signal: "SIGTERM", stderr: "" })).toBe(
+      "sluice overview was ended by SIGTERM",
+    );
   });
 
   test("with no branch and none named, how a submission gets there", () => {

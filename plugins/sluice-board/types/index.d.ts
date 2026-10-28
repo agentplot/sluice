@@ -258,7 +258,7 @@ declare module "claude-code" {
       forecasting: Forecasting;
       /** The band's line for the overview's last error, until a document comes. */
       error: string | null;
-      /** Why the last `sluice overview --json` gave no overview, or null when it did. */
+      /** Why the board's watch gave no overview, while it has none; null once one comes. */
       unread: string | null;
     };
   }
