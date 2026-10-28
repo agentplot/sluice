@@ -363,31 +363,26 @@ When sluice's overview names no branch and the session names none with `SLUICE_B
 
 ### Requirement: A pane that could not read sluice says why and what to do
 
-When the board has no overview because `sluice overview --json` could not run or failed, the pane SHALL say `sluice could not be read here:`, then the reason (`the sluice command was not found` when it could not be started, else the first line of what sluice wrote to stderr, else its exit code), then `Ask Claude to set sluice up in this repository.`
+When the board has no overview because its watch could not be started, ended without printing one, or printed only an error document, and the host's sluice is not one with no watch, the pane SHALL say `sluice could not be read here:`, then the reason, then `Ask Claude to set sluice up in this repository.` The band SHALL stay silent meanwhile, but for an error document's line.
 
 #### Scenario: sluice not installed
 
 - **WHEN** `sluice` cannot be started in the session and the user runs `/sluice`
 - **THEN** the pane shows `sluice could not be read here: the sluice command was not found` and `Ask Claude to set sluice up in this repository.`
 
+#### Scenario: The watch prints only its failure
+
+- **WHEN** the session's watch stays open and prints `{"error":{"kind":"internal","message":"no policy on main","next":[]}}` as its first line
+- **THEN** the pane shows `sluice could not be read here: no policy on main` and `Ask Claude to set sluice up in this repository.`, and the band reads `sluice: no policy on main`
+
+### Requirement: The pane's reason is the first thing the watch gave
+
+The reason a pane that could not read sluice gives SHALL be `the sluice command was not found` when the watch could not be started, else the message of the error document it printed, else the first line of what sluice wrote to stderr, else its exit code.
+
 #### Scenario: The overview fails
 
-- **WHEN** `sluice overview --json` exits 3 having written `sluice: not a git repository` to stderr
+- **WHEN** `sluice overview --json --watch` exits 3 having written `sluice: not a git repository` to stderr
 - **THEN** the pane shows `sluice could not be read here: sluice: not a git repository` and `Ask Claude to set sluice up in this repository.`
-
-### Requirement: The pane reads sluice again when the first read failed
-
-While the board has no overview, each `/sluice` that opens the pane SHALL run `sluice overview --json` in the session's directory again. When that succeeds, the board SHALL show and follow the queue from then on, as it does after a first read that succeeded; when it fails, the pane SHALL say why, as for the first read.
-
-#### Scenario: sluice set up during the session
-
-- **WHEN** the session started where `sluice overview --json` failed, and later, with sluice set up, it lists `main` with #3 queued and the user runs `/sluice`
-- **THEN** the pane shows `main`'s section with #3 under QUEUED, and the band shows `main`'s line
-
-#### Scenario: Still failing
-
-- **WHEN** the session started where `sluice` could not be started and it still cannot when the user runs `/sluice`
-- **THEN** the pane shows `sluice could not be read here: the sluice command was not found`
 
 ### Requirement: A CHECKING row opens its tasks
 
@@ -637,3 +632,184 @@ the same words, and SHALL be shown for it with nothing queued (123).
 - **WHEN** the session's `#13` is under test and one checkout is held
 - **THEN** the status line ends `yours #13 testing · 1 held: release
   failed`
+
+### Requirement: The board reads the queue only through its watch
+
+The board SHALL read the overview only through `sluice overview --json
+--watch`, one at a time, from the session's start for the session's
+life, and SHALL start the watch again whenever it ends or can't be
+started, but for a watch whose last line said the repository has no
+sluice. It SHALL never run `sluice overview --json`, at the session's
+start, on `/sluice` or on a timer: the first overview a watch prints is
+the board's first queue.
+
+#### Scenario: The first queue comes from the watch
+
+- **WHEN** the session starts and its watch prints `main` with #3 queued
+- **THEN** the band shows `main`'s line with #3 waiting, and no
+  `sluice overview --json` has run
+
+#### Scenario: The watch ends
+
+- **WHEN** the session's watch prints `main` with #13 queued and ends,
+  and the next watch prints `main` with #13 landed
+- **THEN** the board starts a second `sluice overview --json --watch`,
+  the session is told #13 landed on `main`, and no `sluice overview
+  --json` runs
+
+#### Scenario: One watch at a time
+
+- **WHEN** the board's watch is open and the user runs `/sluice` twice
+- **THEN** one `sluice overview --json --watch` is running, and no other
+  is started until it ends
+
+### Requirement: The board keeps its last overview while no watch is open
+
+While no watch is open, the band, the pane and the status line SHALL
+keep the last overview read, unless the host's sluice has no watch or the
+last watch said the repository has no sluice; an outcome decided
+meanwhile SHALL be told once a watch prints an overview that holds it.
+
+#### Scenario: The watch can't be started
+
+- **WHEN** the session's watch printed `main` with #3 queued and ended,
+  and every later `sluice overview --json --watch` fails to start
+- **THEN** the board keeps trying the watch, runs no `sluice overview
+  --json` in between, and the band still shows `main` with #3 queued
+
+### Requirement: The wait before the next watch grows
+
+The board SHALL wait before starting its watch again: 1 second the first
+time, then twice the last wait each time, never more than 60 seconds. A
+watch that was open for at least 60 seconds before it ended SHALL be
+followed by a 1-second wait again.
+
+#### Scenario: Watches that keep failing
+
+- **WHEN** every `sluice overview --json --watch` fails to start
+- **THEN** the board starts the next one 1, 2, 4, 8, 16 and 32 seconds
+  after each failure, and every 60 seconds after that
+
+#### Scenario: A watch killed mid-session
+
+- **WHEN** the session's watch has been open for 10 minutes and ends
+- **THEN** the board starts the next watch 1 second after it ended
+
+#### Scenario: A watch that ran a while after waits had grown
+
+- **WHEN** the board's watches have failed until it waits 60 seconds,
+  and the next watch stays open for 10 minutes and then ends
+- **THEN** the board starts the next watch 1 second after that one ended
+
+### Requirement: The band says when the board can't follow this sluice
+
+When a watch ends because the host's sluice has no watch, refusing `overview` as an unrecognized subcommand or `--watch` as an unexpected argument, the band SHALL show one line, `can't follow <version>: it has no watch; the board needs sluice 0.12 or later`, where `<version>` is the first line `sluice --version` printed, or `this sluice` when it printed none. The pane SHALL show that line and `Ask Claude to upgrade sluice.`, and the status line nothing.
+
+#### Scenario: An older sluice on the host
+
+- **WHEN** the session starts where `sluice overview --json --watch`
+  exits 2 having written `error: unrecognized subcommand 'overview'` to
+  stderr, and `sluice --version` prints `sluice 0.11.2`
+- **THEN** the band reads
+  `can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12 or later`,
+  `/sluice` opens a pane showing that line and
+  `Ask Claude to upgrade sluice.`, the status line is empty, and no
+  `sluice overview --json` runs
+
+#### Scenario: No version to name
+
+- **WHEN** the watch exits having written
+  `error: unexpected argument '--watch' found` to stderr, and
+  `sluice --version` fails
+- **THEN** the band reads
+  `can't follow this sluice: it has no watch; the board needs sluice 0.12 or later`
+
+#### Scenario: The host's sluice replaced by one with no watch
+
+- **WHEN** the session's watch printed `main` with #3 queued and ended,
+  and the next watch is refused as having no watch
+- **THEN** the band shows the can't-follow line in place of `main`'s
+  line, the pane shows it in place of `main`'s section, and the status
+  line is empty
+
+#### Scenario: The host's sluice upgraded
+
+- **WHEN** the band shows the can't-follow line and a later watch prints
+  `main` with #3 queued
+- **THEN** the band shows `main`'s line in place of the can't-follow
+  line, and the status line follows the queue again
+
+### Requirement: /sluice starts the watch when the board has no queue
+
+While the board has no overview and no watch is open, each `/sluice` that opens the pane SHALL start the next `sluice overview --json --watch` at once, without waiting out the wait before it, and SHALL run no `sluice overview --json`. While a watch is open it SHALL start none. When the watch prints an overview the board SHALL show and follow the queue from then on; when it ends without one, the pane SHALL say why.
+
+#### Scenario: sluice set up during the session
+
+- **WHEN** the session started where the watch failed, and later, with
+  sluice set up, the user runs `/sluice` and the watch it starts lists
+  `main` with #3 queued
+- **THEN** the pane shows `main`'s section with #3 under QUEUED, the band
+  shows `main`'s line, and no `sluice overview --json` ran
+
+#### Scenario: Still failing
+
+- **WHEN** the session started where `sluice` could not be started and it
+  still cannot when the user runs `/sluice`
+- **THEN** the pane shows
+  `sluice could not be read here: the sluice command was not found`
+
+#### Scenario: A watch already open
+
+- **WHEN** the board's watch is open and has printed no overview yet, and
+  the user runs `/sluice`
+- **THEN** no second watch is started
+
+### Requirement: A session in a repository with no sluice shows nothing of sluice's
+
+When the watch prints an overview with `"set_up": false`, the board SHALL
+drop any queue, error or reason it held. The band and the status line
+SHALL show nothing, no forecast SHALL run, and no turn or toast SHALL be
+given. Once that watch ends, the board SHALL start no further watch until
+the user runs `/sluice` (129).
+
+#### Scenario: A session starts where sluice isn't set up
+
+- **WHEN** the session starts and its watch prints an overview with
+  `branches` `[]` and `"set_up": false` and exits 0
+- **THEN** the band and the status line are empty, and ten minutes on no
+  further `sluice overview --json --watch` has been started and no
+  `sluice overview --json` has run
+
+#### Scenario: A queue the board showed gives way
+
+- **WHEN** the board shows `main` with #3 queued, and a later watch prints
+  an overview with `"set_up": false`
+- **THEN** the band and the status line are empty, and `main`'s line is
+  gone
+
+### Requirement: /sluice in a repository with no sluice says so
+
+While the last watch said the repository has no sluice, each `/sluice`
+that opens the pane SHALL start one watch at once. While it reads, the
+pane SHALL say `Reading sluice…`. When that watch also says the
+repository has no sluice, the pane SHALL say `sluice isn't set up in this
+repository.` and `Ask Claude to set sluice up in this repository.`, and
+the band SHALL stay empty. When it prints any other overview, the board
+SHALL show and follow the queue from then on.
+
+#### Scenario: Still not set up
+
+- **WHEN** the session's first watch said the repository has no sluice,
+  and the watch `/sluice` starts says so too
+- **THEN** the pane shows `sluice isn't set up in this repository.` and
+  `Ask Claude to set sluice up in this repository.`, the band is empty,
+  and no further watch is started until the next `/sluice`
+
+#### Scenario: Set up during the session
+
+- **WHEN** the session's first watch said the repository has no sluice,
+  sluice is then set up, and the watch `/sluice` starts prints `main`
+  with #3 queued
+- **THEN** the pane shows `main`'s section with #3 under QUEUED, the band
+  shows `main`'s line, and when that watch ends the board starts the
+  next one after its wait

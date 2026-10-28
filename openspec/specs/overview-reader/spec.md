@@ -150,3 +150,220 @@ live, and SHALL neither become a reader nor write the reader's document.
   do not hold, and `sluice overview --json` runs
 - **THEN** it prints the overview read from the records, without `#7`,
   and the reader's document is unchanged
+
+### Requirement: A reader that could not read the queues writes the failure as its document
+
+When the reader, a watch or a wait, cannot list its repository's records,
+it SHALL replace the reader's document with the error document a failing
+`sluice overview --json` prints, `{"error":{"kind","message","next"}}`,
+whose message is the failure's words, whole and unchanged (133). It
+SHALL read again at its next tick, and write the overview it reads once
+it can. A failure that stands with the same words SHALL be written once
+while it stands.
+
+#### Scenario: A watch's read fails and then succeeds
+
+- **WHEN** a watch is the reader, the repository's records are listed
+  again at its second tick and the list fails with `fatal: unable to read
+  4b825dc6: Resource temporarily unavailable`, and its third tick lists
+  them
+- **THEN** the reader's document after the second tick is
+  `{"error":{"kind":"internal","message":…,"next":[]}}` whose message
+  holds `fatal: unable to read 4b825dc6: Resource temporarily
+  unavailable`, and after the third tick it is the overview read then
+
+#### Scenario: A standing failure is written once
+
+- **WHEN** a watch is the reader and five ticks in a row fail to list the
+  repository's records with the same words
+- **THEN** the reader's document is written once for them
+
+### Requirement: A reader that could not read one branch writes it unread
+
+When the reader, a watch or a wait, cannot read one branch's policy,
+revision or records, it SHALL write the overview with that branch
+unread, its `unread` the refusal's words, whole and unchanged, and every
+other branch read (26, 133). A refusal that stands with the same words
+SHALL be written once while it stands.
+
+#### Scenario: A wait that is the reader cannot read another branch's records
+
+- **WHEN** `sluice wait 4` is the reader and each read of another
+  branch's records fails with the same words
+- **THEN** the reader's document is the overview with that branch unread,
+  its `unread` the failure's words, and submission 4's branch read, it is
+  written once while the failure stands, and the wait goes on waiting on
+  submission 4
+
+### Requirement: A watch prints a read it could not make and keeps watching
+
+A `sluice overview --json --watch` whose read fails SHALL print the
+error document as one line, as it prints a changed overview, and SHALL
+NOT end. It SHALL print a failure that stands with the same words once,
+and print the overview it next reads, whatever it held before the
+failure.
+
+#### Scenario: A failed read under load
+
+- **WHEN** a watch with no reader prints the overview at its start, its
+  second tick's read fails, and its third tick reads an overview unchanged
+  from its first
+- **THEN** it prints three lines, the overview, the error document with
+  the failure's words, and the overview again, and it is still running
+
+#### Scenario: A follower prints the reader's failure
+
+- **WHEN** a watch follows a reader whose document changes from an
+  overview to the error document with `HTTP 503`, and then back to an
+  overview
+- **THEN** the watch prints three lines, the second the error document
+  with `HTTP 503`, and is still running
+
+### Requirement: A watch ends only when asked, when its repository is gone, or where it has no sluice
+
+A `sluice overview --json --watch` SHALL end only when it is stopped, when
+whoever reads its output has closed it, when its repository's git
+directory no longer exists, or when its repository has no sluice. A
+failed read of the queues, a failed write of the reader's document, or a
+failed try of the reader's lock SHALL NOT end it. A watch whose repository
+is gone SHALL end as a failing overview does, its error document on stdout
+and exit 3.
+
+#### Scenario: The reader's document cannot be written
+
+- **WHEN** a watch is the reader and one write of the reader's document
+  fails
+- **THEN** the watch still prints the overview it read, writes the
+  document at a later tick, and is still running
+
+#### Scenario: The repository is removed
+
+- **WHEN** a watch is the reader and its repository's git directory is
+  removed, so its next read fails
+- **THEN** the watch prints the error document with the read's words and
+  exits 3
+
+#### Scenario: Stopped while a failure stands
+
+- **WHEN** a watch's reads have failed for ten ticks and it is stopped
+  with Ctrl-C
+- **THEN** it ends as a stopped watch does, exit 130
+
+### Requirement: A follower wait passes over a failure document
+
+A `sluice wait` or waiting `sluice submit` that follows a reader whose
+document is an error document SHALL read nothing from it, and nothing of
+the records in its place: it SHALL say nothing new, as when there is no
+whole document, until the reader writes an overview again.
+
+#### Scenario: The reader cannot read while a wait follows
+
+- **WHEN** `sluice wait 7` follows a reader whose document shows `#7`
+  testing, and the reader's document becomes the error document
+- **THEN** the wait prints no new line, reads no record of submission 7,
+  and is still waiting
+
+#### Scenario: Out of time on a failure
+
+- **WHEN** a follower `sluice wait 7 --timeout 2s --json` last read `#7`
+  testing, and the reader's document has been the error document since
+- **THEN** it exits 5 and prints submission 7's record as the last
+  overview it read held it, with `state` `testing`
+
+### Requirement: A watch ends where its repository has no sluice
+
+When a watch that is the reader finds that its repository's records list
+no branch, and that no revision the host holds has sluice's policy, it
+SHALL write the overview it read with `"set_up": false` as the reader's
+document, print it as its last line, and exit 0. The revisions it checks
+are every local branch and every remote's tracking branch as last fetched,
+and nothing is fetched to decide it (129). No other document holds
+`set_up`.
+
+#### Scenario: A repository sluice was never set up in
+
+- **WHEN** a repository has no records and no branch of it, local or
+  tracked, holds `.config/sluice.toml`, and `sluice overview --json
+  --watch` runs in it
+- **THEN** it prints one line, the overview with `branches` `[]` and
+  `"set_up": false`, writes that line as the reader's document, and exits
+  0 at its first tick
+
+#### Scenario: Set up with nothing submitted
+
+- **WHEN** a repository has no records and its `main` holds
+  `.config/sluice.toml`, and a watch runs in it for five ticks
+- **THEN** it prints one line, the overview with `branches` `[]` and no
+  `set_up` field, and is still running
+
+#### Scenario: The policy only on a remote's branch
+
+- **WHEN** a repository has no records, its own `main` holds no policy,
+  and its `origin/main`, as last fetched, holds `.config/sluice.toml`
+- **THEN** the watch prints the overview with no `set_up` field and is
+  still running, and nothing was fetched
+
+#### Scenario: A policy in the working copy alone
+
+- **WHEN** a repository has no records and `.config/sluice.toml` is in a
+  worktree but committed on no branch
+- **THEN** the watch prints the overview with `"set_up": false` and exits
+  0
+
+#### Scenario: Records with no policy
+
+- **WHEN** a repository's records list `main` and no revision the host
+  holds has the policy
+- **THEN** the watch prints the overview with `main` and no `set_up`
+  field, and is still running
+
+### Requirement: A check of the revisions that fails is a read refused
+
+When a watch that is the reader cannot tell whether any revision the host
+holds has sluice's policy, it SHALL write and print the error document
+with the failure's words, whole and unchanged, as for a read of the
+queues it could not make (133), and SHALL go on watching and check again
+at its next tick.
+
+#### Scenario: git fails to list the branches
+
+- **WHEN** a watch reads a repository with no records, and listing its
+  branches fails with `fatal: unable to read 4b825dc6: Resource
+  temporarily unavailable`
+- **THEN** it prints the error document whose message holds those words,
+  does not end, and at its next tick, the branches listed and none holding
+  the policy, prints the overview with `"set_up": false` and exits 0
+
+### Requirement: A watch that follows ends on a document saying the repository has no sluice
+
+A watch that follows a reader SHALL print a reader's document with
+`"set_up": false` as its last line and exit 0, reading nothing itself.
+
+#### Scenario: Two watches in a repository with no sluice
+
+- **WHEN** a watch follows a live reader, and the reader's document
+  becomes the overview with `"set_up": false`
+- **THEN** the follower prints that document and exits 0, and read no
+  records, policy or checkouts itself
+
+### Requirement: A reader that takes the lock passes over an earlier reader's finding
+
+A watch or wait that becomes the reader SHALL remove a reader's document
+with `"set_up": false` left by an earlier reader before it reads, so that
+no watch that starts while it reads ends on that earlier finding.
+
+#### Scenario: sluice set up after a watch ended
+
+- **WHEN** a watch ended leaving the reader's document with `"set_up":
+  false`, sluice is then set up and `main` holds `.config/sluice.toml`,
+  and a watch runs again
+- **THEN** it prints the overview with no `set_up` field, the reader's
+  document is that overview, and it is still running
+
+#### Scenario: A watch that starts while the new reader reads
+
+- **WHEN** an earlier reader left the document with `"set_up": false`, a
+  new watch has taken the lock and not yet written, and a second watch
+  starts
+- **THEN** the second watch follows, prints nothing until the new reader
+  writes, and does not end

@@ -149,10 +149,19 @@ it. The reply to `/sluice` says which.
 Where nothing has been submitted yet, the pane says so, and that a
 submission shows there from when an agent in a worktree runs `sluice
 submit <branch>` until it lands. Where sluice can't be read, because it
-isn't installed or `sluice overview` failed, the pane says why and to ask
-Claude to set sluice up in the repository. Each `/sluice` that opens the
-pane reads sluice again, so once Claude has set it up, the pane and the
-band show the queue without a new session.
+isn't installed or the board's watch fails, the pane says why, in sluice's
+own words where it gave any. It then says to ask Claude to set sluice up in
+the repository. While there is no queue to show, each `/sluice` that opens the
+pane starts the watch again at once. Once Claude has set sluice up, the
+pane and the band show the queue without a new session.
+
+Where sluice isn't set up in the repository, the band and the status line
+stay empty, and the board starts no further watch, so nothing of sluice's
+keeps running there. `/sluice` reads once more, and the pane says `Reading
+sluice…` while it does. Then it says `sluice isn't set up in this
+repository.` and `Ask Claude to set sluice up in this repository.` Once
+sluice is set up, `/sluice` shows the queue, and the board follows it from
+then on.
 
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's
@@ -250,9 +259,19 @@ files, what is in the way and the next step, as for a conflict in RECENT. The `f
 off; so does `SLUICE_FORECAST=0` in the session's environment, for a tool
 that forecasts for its agents itself.
 
-It reads everything from `sluice overview --json --watch`, so it needs
-sluice 0.12 or later. The band and the status line stay silent in a
-repository with no queue. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
+It reads everything from `sluice overview --json --watch`, from the
+session's start, and never runs a one-shot `sluice overview`, so it needs
+sluice 0.12 or later. Where the host's sluice is older, the band says so
+in one line, naming the version sluice gives, as in `can't follow sluice
+0.11.2: it has no watch; the board needs sluice 0.12 or later`. The pane
+shows the same line and `Ask Claude to upgrade sluice.` in place of the
+queue, and the status line is empty. When the watch ends, the board starts
+it again, waiting a second and then longer each time up to a minute, and
+never polls; the band and the pane keep the last queue read meanwhile.
+Once sluice is upgraded, the next queue takes the message's place.
+The band and the status line stay silent in a
+repository with no queue, and where sluice isn't set up the board starts
+no further watch until `/sluice`. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
 ### Naming a session's branch

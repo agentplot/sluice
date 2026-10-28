@@ -11,7 +11,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, Serializer};
 use sluice_seams::{Rev, Snapshot, Submitter, TaskProgress};
 
@@ -95,6 +95,35 @@ pub struct BranchView {
     /// tried again by the next round until then.
     #[serde(serialize_with = "held_checkouts")]
     pub held_checkouts: Vec<FailedRelease>,
+    /// 26: what refused this host's read of the branch, its policy, its
+    /// revision or its records, in the words it was refused with (133).
+    /// Nothing else of the branch is read, and no other branch is hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<String>,
+}
+
+impl BranchView {
+    /// 26: `branch`, which could not be read, shown with the refusal
+    /// `why` and nothing read of it.
+    pub fn unread(branch: &str, why: &anyhow::Error) -> BranchView {
+        BranchView {
+            branch: branch.to_string(),
+            at: None,
+            version: 0,
+            window: 0,
+            parallel: None,
+            remote: None,
+            depth: 0,
+            candidates: Vec::new(),
+            submissions: Vec::new(),
+            recent: Vec::new(),
+            recent_from: BTreeMap::new(),
+            recent_subjects: BTreeMap::new(),
+            held: None,
+            held_checkouts: Vec::new(),
+            unread: Some(format!("{why:#}")),
+        }
+    }
 }
 
 /// 123: each held checkout as `sluice status <branch> --json` lists it,
@@ -232,6 +261,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         recent_subjects,
         held: line.doc.held.clone(),
         held_checkouts: line.doc.failed_releases.clone(),
+        unread: None,
     })
 }
 
@@ -315,12 +345,16 @@ impl Sluice<'_> {
 
     /// 26, 61: every branch with records, as last written, each read at
     /// the revision its records last saw, in the order `from`'s policy
-    /// names them (ADR 0036).
+    /// names them (ADR 0036). A branch whose policy, revision or records
+    /// could not be read is shown with the refusal and hides no other
+    /// (26; 129, 133): only the records' own list fails it whole.
     pub fn overview(&self, from: Option<&OrderFrom>) -> Result<Vec<BranchView>> {
         let mut out = Vec::new();
         let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
-            let view = self.branch_view_of(&branch)?;
+            let view = self
+                .branch_view_of(&branch)
+                .unwrap_or_else(|e| BranchView::unread(&branch, &e));
             if from.is_some_and(|f| f.branch == branch) {
                 order_at = view.at.clone().or(order_at);
             }
@@ -340,7 +374,9 @@ impl Sluice<'_> {
         let snapshot = self.seams.state.read(branch)?;
         let base = Line::load(branch, snapshot.clone())?.doc.base;
         let policy = match &base {
-            Some(rev) => self.policy_at(rev)?,
+            Some(rev) => self
+                .policy_at(rev)
+                .with_context(|| format!("{branch}'s policy at {rev}"))?,
             None => None,
         };
         let rules = match &policy {
@@ -472,6 +508,10 @@ pub struct BranchCount {
     pub depth: usize,
     pub testing: usize,
     pub parallel: Option<usize>,
+    /// 26: the refusal the branch could not be read for, as the
+    /// overview shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread: Option<String>,
 }
 
 /// Every branch's counts, as the overview gives them.
@@ -483,6 +523,7 @@ pub fn counts(branches: &[BranchView]) -> Vec<BranchCount> {
             depth: b.depth,
             testing: b.candidates.iter().filter(|c| c.state.under_test()).count(),
             parallel: b.parallel,
+            unread: b.unread.clone(),
         })
         .collect()
 }
@@ -636,6 +677,7 @@ mod tests {
             recent_subjects: BTreeMap::new(),
             held: None,
             held_checkouts: Vec::new(),
+            unread: None,
         }
     }
 

@@ -295,6 +295,16 @@ impl sluice::exec::Host for FakeHost {
         Ok("/fake/repo.git".into())
     }
 
+    /// The fakes' repository is no directory: it is gone when the world
+    /// says so.
+    fn repository_gone(&self, _: &str) -> bool {
+        self.world.is_repository_gone()
+    }
+
+    fn holds_policy(&self) -> anyhow::Result<bool> {
+        self.world.holds_path(sluice_core::policy::POLICY_PATH)
+    }
+
     fn readers(&self) -> anyhow::Result<PathBuf> {
         Ok(readers())
     }

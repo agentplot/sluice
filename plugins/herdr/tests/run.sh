@@ -498,6 +498,62 @@ SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 10 2>/dev/null
 [ -f "$S/watch.lease" ] && fail "the watcher left its lease"
 pass
 
+# The state of the herdr server at socket $1.
+state_of() {
+  echo "$t/state/servers/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+}
+
+# Whether every process named has ended.
+ended() {
+  for p in "$@"; do kill -0 "$p" 2>/dev/null && return 1; done
+  return 0
+}
+
+fresh 'watch: its herdr server stops'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+# The server's socket, here a plain file, which a server removes as it stops.
+sock=$t/herdr.sock
+: >"$sock"
+S=$(state_of "$sock")
+HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+w=$!
+within 15 'sources_of "$w" | grep -q .' || fail "no source started"
+theirs=$(sources_of "$w")
+rm -f "$sock"
+ends_within "$w" 15 || fail "the watcher still runs ${took}s after its server stopped"
+within 5 'ended $theirs' || fail "its sources outlived its server"
+[ -f "$S/watch.lease" ] && fail "the watcher left its lease"
+rm -f "$FAKE/hold"
+kill "$w" 2>/dev/null
+pass
+
+fresh 'watch: another herdr server in its place'
+doc >"$FAKE/overview-work.json"
+doc >"$FAKE/watch-work.jsonl"
+touch "$FAKE/hold"
+sock=$t/herdr.sock
+: >"$sock"
+S=$(state_of "$sock")
+# Its ticks are long, so only the new server's watcher can end it here.
+HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=60 sh "$plugin/bin/watch.sh" --ticks 60 2>/dev/null &
+a=$!
+within 15 'sources_of "$a" | grep -q .' || fail "no source started"
+theirs=$(sources_of "$a")
+# The server stops and another starts at its path within a tick, with a
+# socket of its own, and runs the plugin's startup.
+rm -f "$sock"
+: >"$sock"
+HERDR_SOCKET_PATH=$sock SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ensure
+ends_within "$a" 15 || fail "the first server's watcher still runs after ${took}s"
+within 5 'ended $theirs' || fail "the first server's sources outlived it"
+within 15 'b=$(holder_of "$S/watch.lease") && [ -n "$b" ] && [ "$b" != "$a" ] && kill -0 "$b" 2>/dev/null' ||
+  fail "the new server has no watcher: $(cat "$S/watch.lease" 2>/dev/null)"
+rm -f "$FAKE/hold"
+kill "$a" 2>/dev/null
+pass
+
 fresh 'watch: no configuration'
 doc >"$FAKE/overview-work.json"
 doc ".branches[0].depth = 1 | .branches[0].submissions = [$(sub 12 '$work' queued)]" >"$FAKE/watch-work.jsonl"

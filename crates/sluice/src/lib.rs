@@ -2278,27 +2278,41 @@ impl Reading {
     }
 
     /// Read `sub` again, and its branch's part of the overview. A follower
-    /// with no whole document to read says nothing new.
+    /// with no whole overview to read says nothing new.
     fn read(&mut self, s: &Sluice<'_>, waiting: &Waiting<'_>, sub: &mut Submission) -> Result<()> {
         let (id, branch) = (sub.id, sub.branch.clone());
         // The reader's document, when it was read from one.
         let followed = match &mut self.reader {
             Reader::Lead(lead) => match overview::document(s, waiting.host, waiting.clock) {
                 Ok((branches, doc)) => {
-                    lead.write(&doc)?;
-                    self.view = branches.into_iter().find(|b| b.branch == branch);
+                    // Ctrl-C reaching the git a branch's read runs is no
+                    // refusal of that branch's (26).
+                    if !INTERRUPTED.load(Ordering::SeqCst) {
+                        lead.write(&doc)?;
+                    }
+                    self.view = branches
+                        .into_iter()
+                        .find(|b| b.branch == branch && b.unread.is_none());
                     None
                 }
-                // Another branch's part, or the host's, could not be read:
-                // its own, as a wait alone reads them, and nothing written.
-                Err(_) => {
+                // The records, or the host's part, could not be read: the
+                // failure is the reader's document, in the words it was
+                // refused with (133), and its own part is read as a wait
+                // alone reads it. Ctrl-C reaching the git a read runs is no
+                // failure of the queues'.
+                Err(e) => {
+                    if !INTERRUPTED.load(Ordering::SeqCst) {
+                        lead.write(&told::document(Kind::Internal, &format!("{e:#}"), &[]))?;
+                    }
                     self.view = s.branch_view_of(&branch).ok();
                     *sub = record(s, id, &branch)?;
                     return Ok(());
                 }
             },
             Reader::Follow(follow) => {
-                let Some(doc) = follow.read() else {
+                // The reader's read that failed is no whole document either:
+                // the last view stands, and no record is read for it (129).
+                let Some(doc) = follow.read().filter(|d| d["branches"].is_array()) else {
                     return Ok(());
                 };
                 self.view = branch_in(&doc, &branch);
@@ -2331,13 +2345,16 @@ fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
         .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))
 }
 
-/// `branch`'s part of an overview document; `None` when it has none.
+/// `branch`'s part of an overview document; `None` when it has none, or
+/// when the reader could not read it (26).
 fn branch_in(doc: &serde_json::Value, branch: &str) -> Option<BranchView> {
     let b = doc["branches"]
         .as_array()?
         .iter()
         .find(|b| b["branch"] == branch)?;
-    serde_json::from_value(b.clone()).ok()
+    serde_json::from_value::<BranchView>(b.clone())
+        .ok()
+        .filter(|b| b.unread.is_none())
 }
 
 /// 122: submission `id` as landed, when its work is on its branch: its
