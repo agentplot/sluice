@@ -76,7 +76,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 4. Waits follow the driver and run no round
 
-- [ ] 4.1 In `wait_on` (`crates/sluice/src/lib.rs`), probe the driver
+- [x] 4.1 In `wait_on` (`crates/sluice/src/lib.rs`), probe the driver
   once per tick, after the pause:
   - While it lives, skip the intake and the round, and step the reader
     with `others_drive = true`.

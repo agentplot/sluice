@@ -247,8 +247,9 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Wait for a submission's outcome, running sluice's rounds meanwhile,
-    /// as a waiting submit does.
+    /// Wait for a submission's outcome, running sluice's rounds meanwhile
+    /// unless `sluice run` drives the repository on this host, as a waiting
+    /// submit does.
     #[command(after_help = WAIT_AFTER_HELP)]
     Wait {
         /// A submission's number, or a branch: this worktree's last
@@ -2217,7 +2218,10 @@ fn could_not_read(
 /// Read `sub` again until it is decided, running a round between reads
 /// as a waiting driver does (1; rule core.4; ADR 0011), until the
 /// deadline or Ctrl-C. It reads before its first round, so a submission
-/// already decided runs nothing. Each call a round makes to a remote is
+/// already decided runs nothing. Where `sluice run` lives on the host, it
+/// runs no round and takes no pull request in: it follows the driver's
+/// document, looking again at each tick, and runs rounds from the tick
+/// after the driver stops (135). Each call a round makes to a remote is
 /// tried again under the retry policy for the wait's five minutes (134);
 /// a round that still fails as the forge could not answer ends the wait as
 /// it could not read. Without `--json`, it says the
@@ -2276,26 +2280,29 @@ fn wait_on(
             return Ok(Waited::Undecided(sub, STOPPED));
         }
         first = false;
-        if let Some(pulls) = waiting.pulls {
-            intake(pulls, s.seams(), waiting.clock, &branch);
-        }
-        match s.round(&branch) {
-            Ok(round) => {
-                exec::tell_abandoned(out, waiting.json, &round.released)?;
-                exec::tell_releases(out, waiting.json, &round.releases)?;
+        let driven = reading.driven();
+        if !driven {
+            if let Some(pulls) = waiting.pulls {
+                intake(pulls, s.seams(), waiting.clock, &branch);
             }
-            Err(e) => {
-                // Ctrl-C reaches the tools a round runs in the foreground.
-                if INTERRUPTED.load(Ordering::SeqCst) {
-                    return Ok(Waited::Undecided(sub, STOPPED));
+            match s.round(&branch) {
+                Ok(round) => {
+                    exec::tell_abandoned(out, waiting.json, &round.released)?;
+                    exec::tell_releases(out, waiting.json, &round.releases)?;
                 }
-                if let Some(sub) = landed(s, id) {
-                    return Ok(Waited::Decided(sub, Some(e)));
+                Err(e) => {
+                    // Ctrl-C reaches the tools a round runs in the foreground.
+                    if INTERRUPTED.load(Ordering::SeqCst) {
+                        return Ok(Waited::Undecided(sub, STOPPED));
+                    }
+                    if let Some(sub) = landed(s, id) {
+                        return Ok(Waited::Decided(sub, Some(e)));
+                    }
+                    return Ok(Waited::Unread(sub, unread(e)?));
                 }
-                return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
-        reading.reader.step(false)?;
+        reading.reader.step(driven)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }
@@ -2303,11 +2310,16 @@ fn wait_on(
 /// How a wait reads its submission, its combination and its branch's
 /// hold (129; ADR 0056; rule core.25): the first watch or wait of the
 /// repository on the host is its reader, which reads the records and
-/// writes the whole overview for the others; every other wait reads them
+/// writes the whole overview for the others, unless `sluice run` lives on
+/// the host, which is the reader there (135); every other wait reads them
 /// from the reader's document, and its own record only once a document no
 /// longer holds it, as when it has left the queue.
 struct Reading {
     reader: Reader,
+    /// Where the host's readers and drivers keep their files, and the
+    /// repository whose they are.
+    readers: std::path::PathBuf,
+    repository: String,
     /// Its branch's part of the overview, as last read.
     view: Option<BranchView>,
     /// The reader's last document that did not hold the submission: its
@@ -2317,11 +2329,20 @@ struct Reading {
 
 impl Reading {
     fn take(host: &dyn exec::Host) -> Result<Reading> {
+        let (readers, repository) = (host.readers()?, host.repository()?);
         Ok(Reading {
-            reader: Reader::take(&host.readers()?, &host.repository()?)?,
+            reader: Reader::take(&readers, &repository)?,
+            readers,
+            repository,
             view: None,
             lacked: None,
         })
+    }
+
+    /// Whether `sluice run` drives the repository on the host, as probed
+    /// now: once a tick, the wait's round left to it (135).
+    fn driven(&self) -> bool {
+        reader::driver_live(&self.readers, &self.repository)
     }
 
     /// Read `sub` again, and its branch's part of the overview. A follower

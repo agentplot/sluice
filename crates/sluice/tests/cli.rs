@@ -3556,10 +3556,11 @@ fn a_driver_with_nothing_queued() {
     assert!(reader_free());
 }
 
-/// Whether the reader's lock is free: the test can take it.
+/// Whether the reader's lock is free: the test can take it, as the driver
+/// would.
 fn reader_free() -> bool {
     matches!(
-        sluice::reader::Reader::take(&support::readers(), REPOSITORY).unwrap(),
+        sluice::reader::Reader::take_given(&support::readers(), REPOSITORY, false).unwrap(),
         sluice::reader::Reader::Lead(_)
     )
 }
@@ -3647,6 +3648,192 @@ fn a_watch_with_no_reader_beside_a_driver() {
     assert_eq!(code, sluice::STOPPED, "{out}");
     let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
     assert_eq!(lines, [doc], "{out}");
+}
+
+/// 135: a wait beside a driver that has not reached its submission runs
+/// no round: out of time, its record is queued still, and nothing started.
+#[test]
+fn a_wait_beside_a_driver_that_has_not_reached_it() {
+    let f = one_queued();
+    let _driver = driver();
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(json(&out)["state"], "queued", "{out}");
+    assert!(f.world.started().is_empty());
+}
+
+/// 129, 135: where the reader is the driver, a wait follows its document
+/// and runs no round: out of time, it prints its record as the driver's
+/// document holds it.
+#[test]
+fn a_follower_wait_beside_a_driver() {
+    let f = one_queued();
+    let _driver = driver();
+    let (_, overview) = sluice(&f, &["overview", "--json"]);
+    let mut doc = json(&overview);
+    doc["branches"][0]["submissions"][0]["priority"] = 9.into();
+    let _reader = driver_reads(&doc);
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    let held = &doc["branches"][0]["submissions"][0];
+    assert_eq!(json(&out), *held);
+    assert_eq!(held["state"], "queued");
+    assert!(f.world.started().is_empty());
+    assert_eq!(state_of(&f, 1), "queued");
+}
+
+/// 135: a wait that is the reader and runs rounds when the driver starts
+/// runs no round from its next tick and lets the reader's place go; it
+/// reports the outcome once the driver has decided it and written so.
+#[test]
+fn a_wait_was_the_reader() {
+    let f = one_queued();
+    f.world.hold_runs(true);
+    let driving = RefCell::new(None);
+    let between = |n: usize| match n {
+        1 => {
+            // Its own round started the combination, whose run then ends.
+            assert_eq!(f.world.started().len(), 1);
+            *driving.borrow_mut() = Some((driver(), None));
+            f.world.complete_all();
+        }
+        2 => {
+            // No round of the wait's read the run's result, and the place
+            // is the driver's to take.
+            assert_eq!(state_of(&f, 1), "testing");
+            assert!(reader_free());
+            for _ in 0..3 {
+                sluice(&f, &["step", BRANCH]);
+            }
+            assert_eq!(state_of(&f, 1), "landed");
+            let (_, overview) = sluice(&f, &["overview", "--json"]);
+            if let Some((_, reader)) = &mut *driving.borrow_mut() {
+                *reader = Some(driver_reads(&json(&overview)));
+            }
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 4,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert_eq!(pause.n.get(), 2, "{out}");
+    assert_eq!(f.world.started().len(), 1);
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+}
+
+/// 135: once the driver a wait follows stops, the wait runs rounds again
+/// from its next tick, and its own round lands the submission.
+#[test]
+fn the_driver_stops_while_a_wait_follows_it() {
+    let f = one_queued();
+    let first = RefCell::new(Some(driver()));
+    let between = |n: usize| {
+        if n == 1 {
+            assert!(f.world.started().is_empty());
+            assert_eq!(state_of(&f, 1), "queued");
+            drop(first.borrow_mut().take());
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 10,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!f.world.started().is_empty());
+    let tip = f.world.tip(BRANCH);
+    assert!(
+        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
+        "{out}"
+    );
+}
+
+/// 135: a waiting submit beside a driver writes its submission and waits
+/// on it, running no round.
+#[test]
+fn a_waiting_submit_beside_a_driver() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    let _driver = driver();
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(
+        &f,
+        &pause,
+        &["submit", BRANCH, "--worktree", "unit/a", "--json"],
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert_eq!(json(&out)["state"], "queued", "{out}");
+    assert_eq!(state_of(&f, 1), "queued");
+    assert!(f.world.started().is_empty());
+}
+
+/// 125, 135: a group's waiting submit beside a driver queues every
+/// submission and waits on them, running no round.
+#[test]
+fn a_waiting_group_submit_beside_a_driver() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let _driver = driver();
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(
+        &f,
+        &pause,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/a",
+            "--worktree",
+            "unit/b",
+            "--json",
+        ],
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let doc = json(&out);
+    let states: Vec<&serde_json::Value> = doc["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| &x["state"])
+        .collect();
+    assert_eq!(states, ["queued", "queued"], "{out}");
+    assert!(f.world.started().is_empty());
+}
+
+/// 129, 135: with no driver, a wait that follows a watch's document runs
+/// rounds between its reads, as it always has.
+#[test]
+fn a_wait_follows_a_watch() {
+    let f = one_queued();
+    let (_, overview) = sluice(&f, &["overview", "--json"]);
+    let _watch = reader_of(REPOSITORY, &json(&overview));
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 2,
+        between: &|_| {},
+    };
+    let (code, out) = sluice_with(&f, &pause, &["wait", "1"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert!(!f.world.started().is_empty());
+    assert_ne!(state_of(&f, 1), "queued");
 }
 
 // ---------------------------------------------------------------------------
