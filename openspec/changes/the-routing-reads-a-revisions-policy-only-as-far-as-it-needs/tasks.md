@@ -13,7 +13,7 @@
 
 ## 3. The refusal is read at the branch's revision on its remote
 
-- [ ] 3.1 In `crates/sluice-core/src/lib.rs`, wrap `Sluice::policy_at`'s parse error with `.config/sluice.toml at <rev>` and `rules_at`'s with `<branch>'s policy`, citing 56 and record 0069. Verify with `cargo test -p sluice-core`.
+- [x] 3.1 In `crates/sluice-core/src/lib.rs`, wrap `Sluice::policy_at`'s parse error with `.config/sluice.toml at <rev>` and `rules_at`'s with `<branch>'s policy`, citing 56 and record 0069. Verify with `cargo test -p sluice-core`.
 - [ ] 3.2 Add to `crates/sluice/tests/remote_branch.rs` the scenario `s64_the_bolts_round_reads_past_a_copy_that_lags`, its doc comment citing S64, 124 and record 0069: `bolt/x` made on origin with a clean policy, the host's own `bolt/x` moved past the protection (`-c core.hooksPath=/dev/null`) to a commit adding a `[[checkout.cache]]` table, a submission to `bolt/x` waiting; `sluice step bolt/x` until it is out lands it on origin, and the host's `bolt/x` is then origin's landing. Verify with `sluice exec main -- cargo test -p sluice --features tools --test remote_branch s64_`.
 - [ ] 3.3 In the same file, the scenario `a_policy_refused_on_the_remote_is_cleared_by_a_push`, citing 124, 56 and record 0069: origin's `bolt/x` holds a `[[checkout.cache]]` table and a submission waits; `sluice step bolt/x` exits non-zero, nothing ran, nothing moved, and its output names `bolt/x`, origin's short revision and `[[checkout.cache]]`; a commit removing the table is pushed to origin's `bolt/x` by hand, leaving the host's own `bolt/x` refused, and the next steps land the submission. Verify with `sluice exec main -- cargo test -p sluice --features tools --test remote_branch a_policy_refused_on_the_remote`.
 
