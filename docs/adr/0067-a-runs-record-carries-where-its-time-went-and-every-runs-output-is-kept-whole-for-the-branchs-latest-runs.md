@@ -1,7 +1,7 @@
 ---
 number: 67
 title: A run's record carries where its time went, and every run's output is kept whole for as many of the branch's latest runs as the policy states
-status: proposed
+status: accepted
 date: 2026-10-27
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # A run's record carries where its time went, and every run's output is kept whole for as many of the branch's latest runs as the policy states
 
-Status: proposed to the user on 2026-10-27, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-27, on their card.
 
 Deciders: madswan-design, on swancloud-design's reading of 2026-10-27 relayed through madswan's operator (afterthought/crew-state, madswan/main, signal 2026-10-28-madswan-operator-bfb404ca/01-sluice-keeps-only-red-runs-last-64kb): "sluice keeps only red runs' logs and only their last 64 KB, so no reading can be made of where a green run's minutes go, and a red run's kept tail cuts the build stage's own lines"; the user's yes is asked on the record's card.
 Sources: statement clauses 16, 26, 69, 119, 130 to 132 and the C.6 local-files row; `crates/sluice-seams/src/lib.rs` on main at 2026-10-27 (`KEPT_LOGS`, twenty failed candidates; `LOG_LIMIT`, 64 KiB; `log_tail`); `crates/sluice-core/src/step.rs` (`kept_log`, which finds a task's output only among a candidate's or a blamed submission's failed tasks); the moon profile's row, which records each task's duration and attempts and the run's duration with the run (119).
