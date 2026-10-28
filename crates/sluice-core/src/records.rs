@@ -63,6 +63,17 @@ pub struct FinishedLine {
     pub id: u64,
     pub state: State,
     pub worktree: String,
+    /// Its submission's subject (23), for a reader to name it by (26);
+    /// `None` where its submit gave none, and in lines written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+impl FinishedLine {
+    /// What a person is shown it by (26): as [`Submission::name`].
+    pub fn name(&self) -> &str {
+        self.subject.as_deref().unwrap_or(&self.worktree)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +246,19 @@ pub struct Submission {
     /// Passed and waiting to land with a deeper candidate (117).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<Held>,
+    /// 23: the submitter's words for what lands, which its landing commit
+    /// names it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+impl Submission {
+    /// What a person is shown it by (26): its subject, or where its submit
+    /// gave none, the branch it was submitted from, as its landing commit
+    /// names it (23).
+    pub fn name(&self) -> &str {
+        self.subject.as_deref().unwrap_or(&self.from.worktree)
+    }
 }
 
 /// What a passed submission waits for under a hold (117): the deeper
@@ -1060,6 +1084,49 @@ pub fn to_document<T: Serialize>(value: &T) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn submission(subject: Option<&str>) -> Submission {
+        let doc = format!(
+            "{{\"schema\":\"sluice/submission@1\",\"id\":12,\"branch\":\"main\",\
+             \"head\":\"h12\",\"from\":{{\"agent\":\"a\",\"worktree\":\"unit/review\"}},\
+             \"submitted\":\"t\",\"after\":[],\"priority\":0,\"attempt\":1,\
+             \"state\":\"queued\"{}}}",
+            subject.map_or(String::new(), |s| format!(",\"subject\":{s:?}"))
+        );
+        serde_json::from_str(&doc).unwrap()
+    }
+
+    /// 26: a submission is named by its subject, or by the branch it was
+    /// submitted from where its submit gave none; a record written before
+    /// subjects reads as one with none.
+    #[test]
+    fn a_submission_is_named_by_its_subject_or_its_branch() {
+        let given = submission(Some("Batch review cards"));
+        assert_eq!(given.subject.as_deref(), Some("Batch review cards"));
+        assert_eq!(given.name(), "Batch review cards");
+        let none = submission(None);
+        assert_eq!(none.subject, None);
+        assert_eq!(none.name(), "unit/review");
+        assert!(!String::from_utf8(to_document(&none))
+            .unwrap()
+            .contains("subject"));
+    }
+
+    /// 26, 130: an index line written before subjects were kept reads with
+    /// none, named by its worktree, and writes back as it was.
+    #[test]
+    fn a_finished_line_without_a_subject_reads_with_none() {
+        let old = "{\"id\":1,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n";
+        let back: Vec<FinishedLine> = parse_lines(old.as_bytes()).unwrap();
+        assert_eq!(back[0].subject, None);
+        assert_eq!(back[0].name(), "unit/a");
+        assert_eq!(String::from_utf8(to_line(&back[0])).unwrap(), old);
+        let given = FinishedLine {
+            subject: Some("Batch review cards".into()),
+            ..back[0].clone()
+        };
+        assert_eq!(given.name(), "Batch review cards");
+    }
 
     /// A document written before the hold existed reads as before, with
     /// no revision it must contain and no hold, and writes back unchanged.
