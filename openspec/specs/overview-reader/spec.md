@@ -156,12 +156,10 @@ live, and SHALL neither become a reader nor write the reader's document.
 When the reader, a watch or a wait, cannot list its repository's records,
 it SHALL replace the reader's document with the error document a failing
 `sluice overview --json` prints, `{"error":{"kind","message","next"}}`,
-whose message is the failure's words, whole and unchanged (133). When it
-cannot read one branch's policy, revision or records, it SHALL write the
-overview with that branch unread, its `unread` the refusal's words, whole
-and unchanged, and every other branch read (26). It SHALL read again at
-its next tick, and write the overview it reads once it can. A failure
-that stands with the same words SHALL be written once while it stands.
+whose message is the failure's words, whole and unchanged (133). It
+SHALL read again at its next tick, and write the overview it reads once
+it can. A failure that stands with the same words SHALL be written once
+while it stands.
 
 #### Scenario: A watch's read fails and then succeeds
 
@@ -174,6 +172,20 @@ that stands with the same words SHALL be written once while it stands.
   holds `fatal: unable to read 4b825dc6: Resource temporarily
   unavailable`, and after the third tick it is the overview read then
 
+#### Scenario: A standing failure is written once
+
+- **WHEN** a watch is the reader and five ticks in a row fail to list the
+  repository's records with the same words
+- **THEN** the reader's document is written once for them
+
+### Requirement: A reader that could not read one branch writes it unread
+
+When the reader, a watch or a wait, cannot read one branch's policy,
+revision or records, it SHALL write the overview with that branch
+unread, its `unread` the refusal's words, whole and unchanged, and every
+other branch read (26, 133). A refusal that stands with the same words
+SHALL be written once while it stands.
+
 #### Scenario: A wait that is the reader cannot read another branch's records
 
 - **WHEN** `sluice wait 4` is the reader and each read of another
@@ -182,12 +194,6 @@ that stands with the same words SHALL be written once while it stands.
   its `unread` the failure's words, and submission 4's branch read, it is
   written once while the failure stands, and the wait goes on waiting on
   submission 4
-
-#### Scenario: A standing failure is written once
-
-- **WHEN** a watch is the reader and five ticks in a row fail to list the
-  repository's records with the same words
-- **THEN** the reader's document is written once for them
 
 ### Requirement: A watch prints a read it could not make and keeps watching
 
