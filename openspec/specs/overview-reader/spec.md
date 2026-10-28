@@ -12,12 +12,11 @@ it (129; ADR 0056; rule core.25).
 
 A `sluice overview --json --watch`, `sluice wait` or waiting `sluice
 submit` that finds no live reader of its repository on the host SHALL
-become the reader, unless the repository's driver on the host is live
-(`host-driver`), whose place it is. It SHALL hold that until it ends or
-a driver starts. Each time the
-overview, all but the time it was read, changes, the reader SHALL replace
-the reader's document in the host's state with the whole document, as
-`sluice overview --json` prints it, so no follower ever reads part of one.
+become the reader, but where a driver holds the place (below), and SHALL
+hold that until it ends. Each time the overview, all but the time it was
+read, changes, the reader SHALL replace the reader's document in the
+host's state with the whole document, as `sluice overview --json` prints
+it, so no follower ever reads part of one.
 
 #### Scenario: A watch with no reader becomes the reader
 
@@ -33,6 +32,13 @@ the reader's document in the host's state with the whole document, as
   runs in it
 - **THEN** the reader's document holds the whole overview, every branch,
   checkout and preview of the repository, not only submission 4's branch
+
+### Requirement: A live driver holds the reader's place
+
+A watch or wait that finds no live reader of its repository on the host
+SHALL NOT become the reader while the repository's driver on the host is
+live (`host-driver`), whose place it is. A watch or wait that is the
+reader SHALL hold the place only until a driver starts.
 
 #### Scenario: A watch with no reader beside a driver
 
