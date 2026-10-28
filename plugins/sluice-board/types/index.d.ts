@@ -267,6 +267,11 @@ declare module "claude-code" {
        * or null when it printed none; the whole null once a watch prints an overview.
        */
       cannot: { version: string | null } | null;
+      /**
+       * The last watch said the repository has no sluice (129): nothing of
+       * sluice's is shown, and only `/sluice` starts the next watch.
+       */
+      absent: boolean;
     };
   }
 }
