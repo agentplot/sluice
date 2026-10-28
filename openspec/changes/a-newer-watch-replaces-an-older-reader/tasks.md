@@ -19,4 +19,4 @@
 
 ## 4. The gate
 
-- [ ] 4.1 Run the gate's checks on the committed work, `sluice exec main`, and verify every task passes.
+- [x] 4.1 Run the gate's checks on the committed work, `sluice exec main`, and verify every task passes.
