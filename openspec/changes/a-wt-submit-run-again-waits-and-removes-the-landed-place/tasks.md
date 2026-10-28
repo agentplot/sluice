@@ -29,7 +29,8 @@ Tests run through sluice, as CLAUDE.md says: `sluice exec main -- cargo test -p 
 
 ## 5. The gate
 
-- [ ] 5.1 Commit, then run `sluice exec main` and verify that every check-fast task passes.
+- [x] 5.1 Commit, then run `sluice exec main` and verify that every check-fast task passes.
+  Every check-fast task passed but `plugin-sluice:lay-out`, which refused before any test ran: the host's sluice 0.44.0 names this worktree's scratch by its long path (35, core.30), which put the scratch clone's key over the suite's 200 guard. The user set that cause aside twice on 2026-10-27; run alone, the suite passes (22 ok). The merge's submission is judged by sluice's own candidate run.
 
 ## Workflow follow-up
 
