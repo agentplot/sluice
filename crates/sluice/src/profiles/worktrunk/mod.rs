@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context as _, Result};
 use clap::{CommandFactory as _, FromArgMatches as _};
-use sluice_seams::{Driver, Notification, Rev, Session, Submitter};
+use sluice_seams::{Delivery, Driver, Notification, Rev, Session, Submitter};
 
 /// The worktrunk driver.
 pub struct Worktrunk;
@@ -102,6 +102,8 @@ impl Driver for Worktrunk {
                 worktree: branch.clone(),
                 path: (top.status.success() && !path.is_empty()).then_some(path),
                 head: None,
+                host: None,
+                session: None,
             },
             dirty: dirty(&status.stdout),
             detached: branch.is_empty(),
@@ -110,8 +112,10 @@ impl Driver for Worktrunk {
 
     /// 50, 51: a waiting submit is told by its exit; any other reads its
     /// outcome with `sluice status`, from the core's record of it.
-    fn notify(&self, _: &Notification) -> Result<()> {
-        Ok(())
+    fn notify(&self, _: &Notification) -> Result<Delivery> {
+        Ok(Delivery::Undelivered {
+            why: "no session recorded".into(),
+        })
     }
 }
 

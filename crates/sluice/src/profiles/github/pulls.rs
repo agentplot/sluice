@@ -29,7 +29,8 @@ use sluice_core::{
     Clock, Forecast, GroupRequest, Requester, Seams, Sluice, SubmitRefusal, SubmitRequest, Withdrew,
 };
 use sluice_seams::{
-    Branch, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session, Submitter, Told,
+    Branch, Delivery, Formed, HostCopy, LandingCommit, Moved, Notification, Rev, Session,
+    Submitter, Told,
 };
 
 use super::app::Repo;
@@ -2282,6 +2283,8 @@ impl Pulls {
                 worktree: worktree.into(),
                 path: None,
                 head: Some(k.pull.head_ref.clone()),
+                host: None,
+                session: None,
             },
             dirty: Vec::new(),
             detached: false,
@@ -2289,12 +2292,16 @@ impl Pulls {
     }
 
     /// 50, 51: post the outcome on the pull request's head and, when it is
-    /// sent back, comment once. An entry intake has not read this round is
-    /// shown by the next intake, from its record.
-    pub fn notify(&self, n: &Notification) -> Result<()> {
+    /// sent back, comment once: delivered to the request once posted. An
+    /// entry intake has not read this round holds no request here, and is
+    /// not delivered; the next intake shows it, from its record.
+    pub fn notify(&self, n: &Notification) -> Result<Delivery> {
         let Some(e) = self.entries.borrow().get(&n.submission).cloned() else {
-            return Ok(());
+            return Ok(Delivery::Undelivered {
+                why: format!("no pull request is held for submission {}", n.submission),
+            });
         };
+        let to = place(e.number);
         let forge = self.forge(&n.branch)?;
         let names: BTreeMap<u64, String> = self
             .entries
@@ -2318,7 +2325,7 @@ impl Pulls {
             n.report.as_ref(),
         )?;
         if matches!(outcome, Outcome::Landed { .. }) {
-            return Ok(());
+            return Ok(Delivery::Delivered { to });
         }
         // Its body, as intake read it this round, says whether a submit
         // opened it.
@@ -2335,7 +2342,7 @@ impl Pulls {
         if let Some(body) = comment(&n.branch, &outcome, &names, from) {
             self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
         }
-        Ok(())
+        Ok(Delivery::Delivered { to })
     }
 }
 

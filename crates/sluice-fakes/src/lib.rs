@@ -17,9 +17,9 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as Span, TimeZone, Utc};
 use sluice_core::{Clock, Seams, Sluice};
 use sluice_seams::{
-    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Driver, Enforced, Formed, GoneRelease,
-    Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network, NotRun,
-    Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
+    Adopted, AtBound, Branch, Changes, CheckedOut, Checkout, Delivery, Driver, Enforced, Formed,
+    GoneRelease, Guard, HostCopy, HostRun, KeptOutTask, LandingCommit, LastResult, Moved, Network,
+    NotRun, Notification, Outcome, Place, PreviewPlace, Progress, ReadRefused, ReleaseFailure,
     ReleasePolicy, Released, Rev, RunHandle, RunReport, RunRequest, Running, Session, SessionPlace,
     Settings, Snapshot, Source, State, Submitter, TaskLog, TaskProgress, TaskResult, Tests,
     Unanswered, Written,
@@ -1252,6 +1252,8 @@ impl World {
                     worktree: worktree.into(),
                     path: None,
                     head: None,
+                    host: None,
+                    session: None,
                 },
                 dirty: Vec::new(),
                 detached: false,
@@ -2271,13 +2273,15 @@ impl Driver for FakeDriver {
             .ok_or_else(|| anyhow!("no place {worktree}"))
     }
 
-    fn notify(&self, notification: &Notification) -> Result<()> {
+    fn notify(&self, notification: &Notification) -> Result<Delivery> {
         let mut inner = self.0 .0.borrow_mut();
         inner.told.push(notification.clone());
         if std::mem::take(&mut inner.crash_notify) {
             bail!("crashed after telling {}", notification.id);
         }
-        Ok(())
+        Ok(Delivery::Delivered {
+            to: notification.to.agent.clone(),
+        })
     }
 }
 
