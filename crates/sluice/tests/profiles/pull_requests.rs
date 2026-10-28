@@ -1532,8 +1532,9 @@ fn no_wait_then_status() {
     assert!(w.exists());
 }
 
-/// Waiting for a review: `--status --json` names the pull request's head
-/// and that it is no draft, beside its number, branch and state.
+/// Waiting for a review: `--status --json` names the pull request's head,
+/// that it is no draft, and what a submit from the worktree would send,
+/// beside its number, branch and state.
 #[test]
 fn status_names_the_head_waiting_for_a_review() {
     let g = OnGitHub::new("pr-status-head", "reviews = 1");
@@ -1549,6 +1550,7 @@ fn status_names_the_head_waiting_for_a_review() {
         serde_json::json!({
             "pull_request": pull.number, "branch": "main",
             "state": "waiting: needs 1 review", "head": pull.head, "draft": false,
+            "sends": pull.head,
         })
     );
 }
