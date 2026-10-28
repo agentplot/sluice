@@ -20,7 +20,7 @@
 ## 4. Say it to the operator
 
 - [x] 4.1 In `site/src/content/docs/guides/github.md`, extend the bullet *Every copy of `main` on your machine says where it is* by a sentence or two: a copy whose policy sluice refuses for anything other than where `main` is, such as a table it no longer keeps, still says where it is; the policy is judged on GitHub's `main`, so pushing a fixed policy there clears the refusal on every machine, with no copy to fix by hand. Verify with `moon run site:prose`, every warning cleared.
-- [ ] 4.2 In `plugins/sluice/skills/setting-up-sluice/references/profiles/remote-branches.md`, after the paragraph on telling which remote a branch is on, say the same in one or two sentences (rule core.26: no name of ours). Verify with `moon run plugin-sluice:validate` and `sluice exec main -- cargo test -p sluice --test plugin_docs`.
+- [x] 4.2 In `plugins/sluice/skills/setting-up-sluice/references/profiles/remote-branches.md`, after the paragraph on telling which remote a branch is on, say the same in one or two sentences (rule core.26: no name of ours). Verify with `moon run plugin-sluice:validate` and `sluice exec main -- cargo test -p sluice --test plugin_docs`.
 
 ## 5. The gate
 
