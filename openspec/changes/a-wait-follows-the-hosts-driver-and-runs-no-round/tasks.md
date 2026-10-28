@@ -60,7 +60,7 @@ committed, run the gate with `sluice exec main`.
 
 ## 3. Watches give way to the driver
 
-- [ ] 3.1 In `overview::run` (`crates/sluice/src/overview.rs`), make the
+- [x] 3.1 In `overview::run` (`crates/sluice/src/overview.rs`), make the
   per-tick step `step(driver_live(..))`, with the error ignored as
   today.
 

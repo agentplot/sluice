@@ -3576,6 +3576,79 @@ fn a_driver_whose_read_fails_writes_the_failure() {
     assert_failure(&readers_doc().expect("the driver's document"), UNREADABLE);
 }
 
+/// The reader's place, taken as the driver takes it, given that no other
+/// process drives; its document `doc`.
+fn driver_reads(doc: &serde_json::Value) -> sluice::reader::Lead {
+    let readers = support::readers();
+    match sluice::reader::Reader::take_given(&readers, REPOSITORY, false).unwrap() {
+        sluice::reader::Reader::Lead(mut lead) => {
+            lead.write(doc).unwrap();
+            lead
+        }
+        sluice::reader::Reader::Follow(_) => panic!("the reader's place, held"),
+    }
+}
+
+/// 135: a watch that is the reader when a driver starts lets the place go
+/// within one tick and reads the records no more, so a submission queued
+/// then prints nothing; it follows the document the driver then writes.
+#[test]
+fn a_watch_was_the_reader() {
+    let f = one_queued();
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    let doc = seven_testing();
+    let driving = RefCell::new(None);
+    let between = |n: usize| match n {
+        1 => {
+            *driving.borrow_mut() = Some((driver(), None));
+            sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
+        }
+        2 => {
+            if let Some((_, reader)) = &mut *driving.borrow_mut() {
+                *reader = Some(driver_reads(&doc));
+            }
+        }
+        _ => {}
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0]["branches"][0]["depth"], 1, "{out}");
+    assert_eq!(lines[1], doc, "{out}");
+}
+
+/// 135: a watch that finds the reader's place free beside a live driver
+/// leaves it to the driver: it reads no records, and prints the document
+/// the driver writes once it has taken the place.
+#[test]
+fn a_watch_with_no_reader_beside_a_driver() {
+    let f = one_queued();
+    let doc = seven_testing();
+    let _driver = driver();
+    let reader = RefCell::new(None);
+    let between = |n: usize| {
+        if n == 2 {
+            assert_eq!(readers_doc(), None);
+            *reader.borrow_mut() = Some(driver_reads(&doc));
+        }
+    };
+    let pause = Between {
+        n: Cell::new(0),
+        rounds: 3,
+        between: &between,
+    };
+    let (code, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
+    assert_eq!(lines, [doc], "{out}");
+}
+
 // ---------------------------------------------------------------------------
 // sluice exec (session-runs-1 clauses 89 to 93)
 // ---------------------------------------------------------------------------
