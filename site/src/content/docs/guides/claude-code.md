@@ -155,6 +155,14 @@ the repository. While there is no queue to show, each `/sluice` that opens the
 pane starts the watch again at once. Once Claude has set sluice up, the
 pane and the band show the queue without a new session.
 
+Where sluice isn't set up in the repository, the band and the status line
+stay empty, and the board starts no further watch, so nothing of sluice's
+keeps running there. `/sluice` reads once more, and the pane says `Reading
+sluice…` while it does. Then it says `sluice isn't set up in this
+repository.` and `Ask Claude to set sluice up in this repository.` Once
+sluice is set up, `/sluice` shows the queue, and the board follows it from
+then on.
+
 Press a blame, or a failed test's `log of` row, to open it under its row:
 each failed test, its log path (press it to copy the path) and the log's
 last lines. Press it again to close it. The pane only shows: it never
@@ -262,7 +270,8 @@ it again, waiting a second and then longer each time up to a minute, and
 never polls; the band and the pane keep the last queue read meanwhile.
 Once sluice is upgraded, the next queue takes the message's place.
 The band and the status line stay silent in a
-repository with no queue. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
+repository with no queue, and where sluice isn't set up the board starts
+no further watch until `/sluice`. It is a Claude Code mod, a newer and still-changing interface, which is why it is a
 plugin of its own.
 
 ### Naming a session's branch

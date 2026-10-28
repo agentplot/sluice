@@ -56,6 +56,11 @@ pub trait Host {
     /// Whether `repository`, a common git directory as [`Host::repository`]
     /// names it, is gone from the host: what ends a watch of it (129).
     fn repository_gone(&self, repository: &str) -> bool;
+    /// Whether any branch tip the host holds, its own or a remote's
+    /// tracking branch as last fetched, has the policy file, with nothing
+    /// fetched: where none has and no branch has records, the repository
+    /// has no sluice (129; rule core.27).
+    fn holds_policy(&self) -> Result<bool>;
     /// Where each repository's reader of its queues keeps its lock and the
     /// overview it last read (129; ADR 0056).
     fn readers(&self) -> Result<PathBuf>;

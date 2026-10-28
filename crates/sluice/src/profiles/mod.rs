@@ -304,6 +304,89 @@ pub(crate) fn default_branch(common: &Path) -> Result<Option<String>> {
     Ok((out.status.success() && !name.is_empty()).then_some(name))
 }
 
+/// Whether any branch tip of the repository whose common directory is
+/// `common`, its own or a remote's tracking branch as last fetched, has
+/// the policy file (129; rule core.27). Nothing is fetched, and only the
+/// tips are read: a policy in history, in a tag or in a working copy alone
+/// is none a branch holds.
+fn holds_policy(common: &Path) -> Result<bool> {
+    let git = || {
+        let mut c = Command::new("git");
+        c.arg("--git-dir").arg(common).env_remove("GIT_DIR");
+        c
+    };
+    let out = git()
+        .args([
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .context("running git")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git for-each-ref exited {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let listed = String::from_utf8_lossy(&out.stdout);
+    let mut tips: Vec<&str> = Vec::new();
+    for tip in listed.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !tips.contains(&tip) {
+            tips.push(tip);
+        }
+    }
+    if tips.is_empty() {
+        return Ok(false);
+    }
+    // One object asked at a time: cat-file answers each line as it is
+    // asked, so the first tip holding the policy ends the reading.
+    let mut child = git()
+        .args(["cat-file", "--batch-check"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("running git")?;
+    let mut ask = child.stdin.take().context("git cat-file's input")?;
+    let mut answers =
+        std::io::BufReader::new(child.stdout.take().context("git cat-file's output")?);
+    let (mut holds, mut broke) = (false, false);
+    for tip in &tips {
+        let mut line = String::new();
+        let answered = writeln!(ask, "{tip}:{}", sluice_core::policy::POLICY_PATH)
+            .and_then(|()| ask.flush())
+            .and_then(|()| std::io::BufRead::read_line(&mut answers, &mut line));
+        match answered {
+            Ok(n) if n > 0 => {
+                if !line.trim_end().ends_with(" missing") {
+                    holds = true;
+                    break;
+                }
+            }
+            // Its output ended or broke: git says why on its stderr.
+            _ => {
+                broke = true;
+                break;
+            }
+        }
+    }
+    drop(ask);
+    drop(answers);
+    let ended = child.wait_with_output().context("running git")?;
+    if broke {
+        anyhow::bail!(
+            "git cat-file --batch-check exited {:?}: {}",
+            ended.status.code(),
+            String::from_utf8_lossy(&ended.stderr).trim()
+        );
+    }
+    Ok(holds)
+}
+
 /// Whether the directory `dir` is gone, as a repository's git directory
 /// removed or moved away is (129).
 fn gone(dir: &Path) -> bool {
@@ -422,6 +505,10 @@ impl crate::exec::Host for Bound {
 
     fn repository_gone(&self, repository: &str) -> bool {
         gone(Path::new(repository))
+    }
+
+    fn holds_policy(&self) -> Result<bool> {
+        holds_policy(&self.branch.common_dir()?)
     }
 
     fn readers(&self) -> Result<PathBuf> {

@@ -1629,6 +1629,115 @@ test("/sluice twice with the watch open leaves one watch running", async ($, on)
   await startedAgainAfter(clock, watch, 1000);
 });
 
+/** The overview a watch ends on where the repository has no sluice (129). */
+function noSluice(): Overview {
+  return { ...overview(), branches: [], sessions: [], previews: [], set_up: false };
+}
+
+const NOT_SET_UP = [
+  "sluice isn't set up in this repository.",
+  "Ask Claude to set sluice up in this repository.",
+];
+
+test("a session where sluice isn't set up shows nothing, and starts no watch again", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  expect(await bandOf($)).toEqual([]);
+  expect(seen.status.at(-1)).toBeUndefined();
+  // Ten minutes on: no other watch, and nothing run in its place.
+  await clock.advance(600_000);
+  expect(watch.started).toEqual([NOW]);
+  expect(ran).toEqual([]);
+  expect(seen.toasts).toEqual([]);
+  expect(seen.prompts).toEqual([]);
+});
+
+test("a queue the board showed gives way to a watch saying sluice isn't set up", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(justSetUp());
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  expect(seen.status.at(-1)).toBe("sluice: 1 submission");
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  expect(await bandOf($)).toEqual([]);
+  expect(seen.status.at(-1)).toBeUndefined();
+  expect((await paneTexts($)).join("\n")).not.toContain("main");
+  await clock.advance(600_000);
+  expect(watch.started).toHaveLength(2);
+});
+
+test("still not set up: /sluice reads once more, and the pane says so and what to do", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  await $.command.run(slash(true));
+  await clock.settle();
+  // Started at once, and the pane reads while it does.
+  expect(watch.started).toEqual([NOW, NOW]);
+  expect(await paneTexts($)).toEqual(["Reading sluice…"]);
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  expect(await paneTexts($)).toEqual(NOT_SET_UP);
+  expect(await bandOf($)).toEqual([]);
+  expect(seen.status.at(-1)).toBeUndefined();
+  // No other watch until the next /sluice, which closes the pane, then opens it.
+  await clock.advance(600_000);
+  expect(watch.started).toHaveLength(2);
+  await $.command.run(slash(true));
+  await $.command.run(slash(true));
+  await clock.settle();
+  expect(watch.started).toEqual([NOW, NOW, NOW + 600_000]);
+  expect(ran.filter((r) => r.startsWith("sluice"))).toEqual([]);
+});
+
+test("set up during the session: /sluice's watch shows the queue, and is followed", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  const watch = watchedHost(on, clock, seen);
+  panes(on);
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(noSluice());
+  await watch.exit(0, "");
+  await $.command.run(slash(true));
+  await clock.settle();
+  await watch.print(justSetUp());
+  const pane = await mountPane($);
+  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
+  expect(heads.map((h) => h.text)).toEqual(["QUEUED"]);
+  expect(await pane.find({ type: "Text", text: /#3 queued\s+w3 claude/ })).toBeDefined();
+  await pane.unmount();
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  expect(seen.status.at(-1)).toBe("sluice: 1 submission");
+  // Followed from now: the next watch after the wait, unasked.
+  await watch.end();
+  await startedAgainAfter(clock, watch, 1000);
+});
+
 test("a failure opens in place, folds, and moves no one", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
