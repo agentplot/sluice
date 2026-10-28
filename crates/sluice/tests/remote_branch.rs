@@ -1208,3 +1208,52 @@ fn a_worktree_on_a_bolt_behind_submits_origins_revision_and_a_round_levels_it() 
     assert_eq!(after, files);
     assert!(!w.join("a.txt").exists() && !w.join("b.txt").exists());
 }
+
+/// A `[[checkout.cache]]` table, which sluice no longer keeps and whose
+/// policy it refuses whole (ADR 0049).
+const CACHE: &str = "\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n";
+
+/// A commit on `from` whose policy is `policy`, made on the scratch
+/// branch `name`, which no policy protects; returns it.
+fn with_policy(s: &Setup, name: &str, from: &str, policy: &str) -> String {
+    s.repo
+        .branch(name, from, &[(".config/sluice.toml", Some(policy))])
+}
+
+/// Set this host's own `branch` to `to`, as an older sluice left it,
+/// past the protection.
+fn set_copy(s: &Setup, branch: &str, to: &str) {
+    s.repo.git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "update-ref",
+        &format!("refs/heads/{branch}"),
+        to,
+    ]);
+}
+
+/// S64, 124; record 0069: `bolt/x` is made on origin under a clean
+/// policy, and this host's own `bolt/x` moved past the protection to a
+/// commit adding a `[[checkout.cache]]` table, which sluice refuses. A
+/// submission to `bolt/x` waits; the bolt's own rounds read origin's
+/// revision, land the submission there, and level this host's `bolt/x`
+/// to the landing.
+#[test]
+fn s64_the_bolts_round_reads_past_a_copy_that_lags() {
+    let s = Setup::new("remote-s64-lags", "origin");
+    let out = s.sluice(&["branch", "create", "bolt/x", "--from", "main"]);
+    assert!(out.status.success(), "{}", text(&out));
+    s.repo.git(&["fetch", "-q", "origin"]);
+    let made = remote_rev(&s, "refs/heads/bolt/x");
+    let cached = with_policy(&s, "cached", &made, &format!("{}{CACHE}", policy("origin")));
+    set_copy(&s, "bolt/x", &cached);
+
+    let out = s.submit_to("a", "origin/bolt/x", "bolt/x");
+    assert!(out.status.success(), "{}", text(&out));
+    step_bolt_until_out(&s);
+    assert_eq!(bolt_states(&s), ["landed"]);
+    let bolt = remote_rev(&s, "refs/heads/bolt/x");
+    assert_eq!(s.repo.rev(&format!("{bolt}^1")), made, "formed on origin's");
+    s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
+    assert_eq!(s.repo.rev("bolt/x"), bolt, "this host's copy is levelled");
+}
