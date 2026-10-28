@@ -31,7 +31,7 @@ the work is committed.
 ## 5. Documentation
 
 - [x] 5.1 Add a `sluice untold` section to `site/src/content/docs/reference/commands.md` beside `sluice wait`: what it tells, that it marks each told so it is told once whichever of the pane's push or the command comes first, its text and `--json` with an example, its exits, and that a session starting again runs it once in place of keeping a wait; say in `reference/state.md` that `told` and `told_to` are also set by `sluice untold`, `told_to` then the worktree's path where no multiplexer named the session; verify `sluice exec main -- moon run site:prose` passes with no Vale warning.
-- [ ] 5.2 In `plugins/sluice/skills/using-sluice/SKILL.md`, under Submit, say that a session starting again, after a restart or on another host, runs `sluice untold` once to be told the outcomes of its submissions it missed, in place of keeping a wait for each, and that it answers nothing for an outcome already told; verify `sluice exec main -- cargo test -p sluice --test plugin_docs` passes (every command is named in the skills), and `sluice exec main -- moon run plugin-sluice:validate`.
+- [x] 5.2 In `plugins/sluice/skills/using-sluice/SKILL.md`, under Submit, say that a session starting again, after a restart or on another host, runs `sluice untold` once to be told the outcomes of its submissions it missed, in place of keeping a wait for each, and that it answers nothing for an outcome already told; verify `sluice exec main -- cargo test -p sluice --test plugin_docs` passes (every command is named in the skills), and `sluice exec main -- moon run plugin-sluice:validate`.
 
 ## 6. Integration
 
