@@ -101,12 +101,8 @@ submission's record once and report its outcome from it, as
 
 When the reader ends, by its own end, Ctrl-C or a crash, the next watch
 or wait of the repository on the host to look for a reader SHALL become
-the reader within its own tick. When a newer watch holds the lease, that
-watch SHALL be the one to become the reader, and no other watch or wait
-SHALL take the reader's place before it; when that watch ends before it
-reads, the next watch or wait to look SHALL become the reader within its
-own tick. Until then, each follower SHALL go on following the document
-the reader last wrote.
+the reader within its own tick. Until then, each follower SHALL go on
+following the document the reader last wrote.
 
 #### Scenario: The reader is stopped
 
@@ -121,6 +117,14 @@ the reader last wrote.
   wait's submission lands, so the wait exits
 - **THEN** the watch becomes the reader within one tick, and printed
   nothing in between but the documents the wait wrote
+
+### Requirement: The watch holding the lease is the one to replace a stopped reader
+
+When a newer watch holds the lease of a reader that stopped, that watch
+SHALL be the one to become the reader, and no other watch or wait SHALL
+take the reader's place before it; when that watch ends before it reads,
+the next watch or wait to look SHALL become the reader within its own
+tick.
 
 #### Scenario: The watch holding the lease is the one to read
 
