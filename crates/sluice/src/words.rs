@@ -146,16 +146,16 @@ pub fn told_line(id: u64, branch: &str, told: &Told) -> String {
             format!("[sluice] #{id} failed on {branch}{what}. sluice wait {id} shows why.")
         }
         Told::Conflict { paths, with } => {
-            let with = if with.is_empty() {
-                String::new()
-            } else {
+            let mut text = format!("[sluice] #{id} conflicts on {branch}");
+            if !with.is_empty() {
                 let ids: Vec<String> = with.iter().map(|c| format!("#{}", c.id)).collect();
-                format!(" with {}", ids.join(", "))
-            };
-            format!(
-                "[sluice] #{id} conflicts on {branch}{with} in {}. sluice wait {id} shows it.",
-                paths.join(", ")
-            )
+                text.push_str(&format!(" with {}", ids.join(", ")));
+            }
+            if !paths.is_empty() {
+                text.push_str(&format!(" in {}", paths.join(", ")));
+            }
+            text.push_str(&format!(". sluice wait {id} shows it."));
+            text
         }
     }
 }
@@ -321,6 +321,14 @@ mod tests {
         assert_eq!(
             told_line(14, "main", &conflict),
             "[sluice] #14 conflicts on main with #11 in src/lib.rs. sluice wait 14 shows it."
+        );
+        let with_the_branch = Told::Conflict {
+            paths: vec!["src/lib.rs".into()],
+            with: Vec::new(),
+        };
+        assert_eq!(
+            told_line(14, "main", &with_the_branch),
+            "[sluice] #14 conflicts on main in src/lib.rs. sluice wait 14 shows it."
         );
     }
 }
