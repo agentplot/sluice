@@ -56,7 +56,7 @@
 
 ## 4. The site
 
-- [ ] 4.1 In `site/src/content/docs/reference/commands.md`, the
+- [x] 4.1 In `site/src/content/docs/reference/commands.md`, the
   `sluice overview` row says `--json --watch` keeps watching through a
   read it could not make, printing the error as a line, and ends only
   when stopped or when its repository is gone. In
