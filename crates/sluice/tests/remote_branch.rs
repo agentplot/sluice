@@ -71,13 +71,26 @@ impl Setup {
     /// policy naming one signer, whose key this host signs with as the
     /// host `name` (C.6).
     fn signed(name: &str) -> Setup {
+        Setup::signing(name, &["main"])
+    }
+
+    /// As [`Setup::signed`], each branch of `trusting`, `main` or
+    /// `bolt/*`, trusting the signer, so its results count (78).
+    fn signing(name: &str, trusting: &[&str]) -> Setup {
         use ssh_key::{Algorithm, LineEnding, PrivateKey};
         let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
         let line = format!("a {}", key.public_key().to_openssh().unwrap());
-        let policy = policy("origin").replace(
+        let mut policy = policy("origin").replace(
             "[branches.main]\n",
-            &format!("[signers.a]\nssh = \"{line}\"\n\n[branches.main]\ntrust = [\"a\"]\n"),
+            &format!("[signers.a]\nssh = \"{line}\"\n\n[branches.main]\n"),
         );
+        for b in trusting {
+            let table = match b.contains('*') {
+                true => format!("[branches.\"{b}\"]\n"),
+                false => format!("[branches.{b}]\n"),
+            };
+            policy = policy.replace(&table, &format!("{table}trust = [\"a\"]\n"));
+        }
         let s = Setup::with(name, &policy);
         let path = s.config.path().join("signing");
         key.write_openssh_file(&path, LineEnding::LF).unwrap();
@@ -1318,19 +1331,24 @@ mod refused_alone {
 
     /// The host's own `branch` moved, past the protection, to a commit
     /// whose policy adds a `[[checkout.cache]]` table, which this sluice
-    /// refuses; the remote's copy is left clean (S64).
+    /// refuses; the remote's copy is left clean (S64). The commit is made
+    /// in a worktree of its own, so the repository's HEAD still names its
+    /// default branch.
     fn refuse_own_ref(s: &Setup, branch: &str) {
-        let policy = s
-            .repo
-            .git(&["show", &format!("{branch}:.config/sluice.toml")]);
-        let refused = format!(
-            "{policy}\n\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"
-        );
-        let at = s.repo.branch(
-            "refused",
-            branch,
-            &[(".config/sluice.toml", Some(refused.as_str()))],
-        );
+        let dir = s
+            .sessions
+            .path()
+            .join(format!("refused-{}", branch.replace('/', "-")));
+        let dir = dir.to_str().unwrap();
+        s.repo
+            .git(&["worktree", "add", "-q", "--detach", dir, branch]);
+        let policy = Path::new(dir).join(".config/sluice.toml");
+        let mut text = std::fs::read_to_string(&policy).unwrap();
+        text.push_str("\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n");
+        std::fs::write(&policy, text).unwrap();
+        s.repo
+            .git(&["-C", dir, "commit", "-q", "-am", "a checkout cache"]);
+        let at = s.repo.git(&["-C", dir, "rev-parse", "HEAD"]);
         s.repo.git(&[
             "-c",
             "core.hooksPath=/dev/null",
@@ -1367,5 +1385,52 @@ mod refused_alone {
         let v = waited(&out);
         assert_eq!(v["id"].to_string(), on_main, "{v}");
         assert_eq!(v["state"], "landed", "{v}");
+    }
+
+    /// 26: the host's own `main`, the default branch, holds a policy this
+    /// sluice refuses, while the state is on origin and this host has read
+    /// it before. The branches are listed all the same: `sluice wait` on a
+    /// submission to `bolt/a` follows it to its landing, and the overview
+    /// shows `main` with its refusal and `bolt/a` whole.
+    #[test]
+    fn a_refused_main_hides_no_branch_this_host_has_read() {
+        let s = Setup::signing("refused-alone-main", &["main", "bolt/*"]);
+        s.submit("m");
+        s.step_until_out();
+        assert_eq!(s.states(), ["landed"]);
+        s.repo.git(&["branch", "bolt/a", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/a:refs/heads/bolt/a"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        let on_bolt = id(&s.submit_to("a", "bolt/a", "bolt/a"));
+        refuse_own_ref(&s, "main");
+        let out = s.sluice(&["status", "main"]);
+        assert!(!out.status.success(), "main still reads: {}", text(&out));
+
+        let out = s.sluice(&["wait", &on_bolt, "--json", "--timeout", "2m"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let v = waited(&out);
+        assert_eq!(v["id"].to_string(), on_bolt, "{v}");
+        assert_eq!(v["state"], "landed", "{v}");
+
+        let out = s.sluice(&["overview", "--json"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let part = |name: &str| {
+            v["branches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["branch"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} in {v}"))
+        };
+        assert!(
+            part("main")["unread"]
+                .as_str()
+                .is_some_and(|w| w.contains("Remove [[checkout.cache]]")),
+            "{v}"
+        );
+        assert!(part("bolt/a").get("unread").is_none(), "{v}");
     }
 }
