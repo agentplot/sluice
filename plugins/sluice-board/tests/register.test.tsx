@@ -75,7 +75,7 @@ function blamedWithLog(log: string, f?: Flaky): Overview {
 }
 
 /**
- * A host where sluice answers from `docs`, streamed by --watch in turn, and
+ * A host where sluice answers from `docs`, streamed by its watch in turn, and
  * the session was started with the variables `env`; a command `more` names
  * prints what it says there, before any other answer.
  */
@@ -123,8 +123,6 @@ function host(
     }
     if (argv === "git rev-parse --show-toplevel")
       return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: "", ...WHOLE } };
-    if (argv === "sluice overview --json")
-      return { value: { exitCode: 0, stdout: JSON.stringify(docs[0]), stderr: "", ...WHOLE } };
     if (argv === "sluice status 13 --json") {
       return {
         value: {
@@ -894,10 +892,7 @@ test("an overview's error is one line in the band, from --watch, until a documen
   on("command.register", ($, e) => ({ value: { command: e.name } }));
   on("process.run", ($, e) => {
     const argv = e.argv.join(" ");
-    if (argv === "sluice overview --json") {
-      reads.push(argv);
-      return { value: { exitCode: 0, stdout: JSON.stringify(overview()), stderr: "", ...WHOLE } };
-    }
+    if (argv === READ) reads.push(argv);
     if (argv === "git rev-parse --show-toplevel")
       return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: "", ...WHOLE } };
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
@@ -939,7 +934,7 @@ test("an overview's error is one line in the band, from --watch, until a documen
   expect(await band()).toEqual(["sluice: reading the records of main: it is gone"]);
   expect(watch.started).toHaveLength(3);
   expect(watch.isOpen()).toBe(true);
-  expect(reads).toHaveLength(1);
+  expect(reads).toEqual([]);
 });
 
 /** The engine's record of the open panes, and of each open the board asked for. */
@@ -1059,79 +1054,6 @@ function justSetUp(): Overview {
   return d;
 }
 
-/** What one `sluice overview --json` answers: an overview, a failed run, or no sluice to start. */
-type Read = Overview | { exitCode: number; stderr: string } | "missing";
-
-/**
- * A host whose `sluice overview --json` answers each read with the next of
- * `reads`, the last again once they run out, and whose watch streams the
- * last overview read; it counts the reads and the watches.
- */
-function readsHost(on: On, reads: Read[]) {
-  const n = { reads: 0, watches: 0 };
-  let last: Overview | null = null;
-  on("session.start", ($, e) => ({ cwd: e.cwd }));
-  on("command.register", ($, e) => ({ value: { command: e.name } }));
-  on("process.run", ($, e, next) => {
-    const argv = e.argv.join(" ");
-    if (argv !== "sluice overview --json")
-      return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
-    const r = reads[Math.min(n.reads, reads.length - 1)]!;
-    n.reads += 1;
-    // Nothing beneath answers: the run rejects, as for a command not found.
-    if (r === "missing") return next(e);
-    if ("schema" in r) {
-      last = r;
-      return { value: { exitCode: 0, stdout: JSON.stringify(r), stderr: "", ...WHOLE } };
-    }
-    return { value: { exitCode: r.exitCode, stdout: "", stderr: r.stderr, ...WHOLE } };
-  });
-  on("process.spawn", async function* () {
-    n.watches += 1;
-    if (last) yield { stream: "stdout" as const, text: `${JSON.stringify(last)}\n` };
-    return { value: { code: 0, signal: null } };
-  });
-  on("ui.status", () => ({ value: undefined }));
-  on("ui.toast", () => ({ value: undefined }));
-  return n;
-}
-
-test("/sluice reads sluice again where the session could not, and follows it once it can", async ($, on) => {
-  const clock = mock.clock(on);
-  await clock.set(NOW);
-  const n = readsHost(on, [{ exitCode: 3, stderr: "sluice: no policy here\n" }, justSetUp()]);
-  panes(on);
-  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  await clock.settle();
-  expect(n.reads).toBe(1);
-  expect(n.watches).toBe(0);
-
-  await $.command.run(slash(true));
-  await clock.settle();
-  expect(n.reads).toBe(2);
-  const pane = await $.ui.mount({
-    plugin: "sluice-board",
-    surface: "terminal",
-    component: "Pane",
-    props: PANE,
-    requestId: "sluice",
-  });
-  const heads = await pane.findAll({ type: "Text", text: /^(TESTING|QUEUED|RECENT)$/ });
-  expect(heads.map((h) => h.text)).toEqual(["QUEUED"]);
-  expect(await pane.find({ type: "Text", text: /#3 queued\s+w3 claude/ })).toBeDefined();
-  await pane.unmount();
-  const band = await $.ui.mount({
-    plugin: "sluice-board",
-    surface: "terminal",
-    component: "AbovePrompt",
-    props: BAND,
-  });
-  expect(
-    await band.find({ type: "Text", text: "sluice main · 1 submission · #3 waiting" }),
-  ).toBeDefined();
-  await band.unmount();
-});
-
 /** The pane as `/sluice` drew it, docked unless `props` says otherwise. */
 function mountPane($: Engine, props = PANE) {
   return $.ui.mount({
@@ -1143,39 +1065,37 @@ function mountPane($: Engine, props = PANE) {
   });
 }
 
-const ASK = "Ask Claude to set sluice up in this repository.";
+/** The band's lines, as it draws them now. */
+async function bandOf($: Engine): Promise<string[]> {
+  const band = await $.ui.mount({
+    plugin: "sluice-board",
+    surface: "terminal",
+    component: "AbovePrompt",
+    props: BAND,
+  });
+  const lines = (await band.findAll({ type: "Text" })).map((t) => t.text);
+  await band.unmount();
+  return lines;
+}
 
-test("/sluice reads sluice again where it still cannot be started, and says so", async ($, on) => {
-  const n = readsHost(on, ["missing"]);
+test("the first queue comes from the watch, and nothing reads the records in its place", async ($, on) => {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const watch = watchedHost(on, clock, nothingSeen());
   panes(on);
+  ran.length = 0;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  await $.command.run(slash(false));
-  expect(n.reads).toBe(2);
-  expect(n.watches).toBe(0);
-  const pane = await mountPane($, INLINE);
-  expect(
-    await pane.find({
-      type: "Text",
-      text: "sluice could not be read here: the sluice command was not found",
-    }),
-  ).toBeDefined();
-  expect(await pane.find({ type: "Text", text: ASK })).toBeDefined();
-  expect(await pane.find({ type: "Button", key: "close" })).toBeDefined();
-  await pane.unmount();
-});
-
-test("a pane whose sluice overview failed gives sluice's words and what to do", async ($, on) => {
-  readsHost(on, [{ exitCode: 3, stderr: "sluice: not a git repository\n" }]);
-  panes(on);
-  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  expect(watch.started).toEqual([NOW]);
+  expect(await bandOf($)).toEqual([]);
+  await watch.print(justSetUp());
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  // Nor does the pane, or a minute's wait.
   await $.command.run(slash(true));
-  const pane = await mountPane($);
-  const lines = await pane.findAll({ type: "Text" });
-  expect(lines.map((l) => l.text)).toEqual([
-    "sluice could not be read here: sluice: not a git repository",
-    ASK,
-  ]);
-  await pane.unmount();
+  await clock.advance(60_000);
+  expect(await bandOf($)).toEqual(["sluice main · 1 submission · #3 waiting"]);
+  expect(watch.started).toEqual([NOW]);
+  expect(ran.filter((r) => r.startsWith("sluice overview"))).toEqual([]);
 });
 
 test("a pane with no branch says how a submission gets there", async ($, on) => {
@@ -1183,7 +1103,7 @@ test("a pane with no branch says how a submission gets there", async ($, on) => 
   await clock.set(NOW);
   const none = overview();
   none.branches = [];
-  readsHost(on, [none]);
+  host(on, [none], nothingSeen());
   panes(on);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -1211,7 +1131,7 @@ test("a pane whose branches have nothing to show says no branch has a queue", as
     submissions: [],
     recent: [{ schema: "sluice/log@1", at: "2026-10-16T19:20:00Z", event: "landed", ids: [11] }],
   };
-  readsHost(on, [quiet]);
+  host(on, [quiet], nothingSeen());
   panes(on);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -1224,10 +1144,9 @@ test("a pane whose branches have nothing to show says no branch has a queue", as
 test("a named branch with no records keeps its line, and no 'Nothing submitted yet'", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  mock.env(on, { SLUICE_BRANCH: "hotfix" });
   const none = overview();
   none.branches = [];
-  readsHost(on, [none]);
+  host(on, [none], nothingSeen(), { SLUICE_BRANCH: "hotfix" });
   panes(on);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -1238,27 +1157,10 @@ test("a named branch with no records keeps its line, and no 'Nothing submitted y
   await pane.unmount();
 });
 
-test("two good reads of sluice start one watch between them", async ($, on) => {
-  const clock = mock.clock(on);
-  await clock.set(NOW);
-  const n = readsHost(on, ["missing", justSetUp()]);
-  panes(on);
-  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
-  // Two /sluice at once, each finding no overview yet, each reading it.
-  await Promise.all([$.command.run(slash(true)), $.command.run(slash(true))]);
-  await clock.settle();
-  expect(n.reads).toBe(3);
-  expect(n.watches).toBe(1);
-});
-
-/**
- * A host whose first read of the overview is `first`, each read kept in
- * `ran`, and whose watch the test drives.
- */
+/** A host whose watch the test drives, each command it runs kept in `ran`. */
 function watchedHost(
   on: On,
   clock: MockClock,
-  first: Overview,
   seen: { prompts: string[]; toasts: string[]; status: (string | undefined)[] },
 ) {
   on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -1267,7 +1169,6 @@ function watchedHost(
     const argv = e.argv.join(" ");
     ran.push(argv);
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
-    if (argv === "sluice overview --json") return out(JSON.stringify(first));
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
     return { value: { exitCode: 1, stdout: "", stderr: `no ${argv}`, ...WHOLE } };
   });
@@ -1283,6 +1184,8 @@ function watchedHost(
     seen.prompts.push(e.text);
     return { text: e.text };
   });
+  // Core's own drawing above the prompt, where the band has nothing to show.
+  on("ui.render", { component: "AbovePrompt" }, () => ({ type: "engine" as const, ref: 0 }));
   return watches(on, clock);
 }
 
@@ -1326,7 +1229,7 @@ test("a watch that ends is started again a second later, and what it prints is t
   const clock = mock.clock(on);
   await clock.set(NOW);
   const seen = nothingSeen();
-  const watch = watchedHost(on, clock, queued13(), seen);
+  const watch = watchedHost(on, clock, seen);
   ran.length = 0;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -1339,23 +1242,26 @@ test("a watch that ends is started again a second later, and what it prints is t
   await watch.print(landed13());
   expect(seen.toasts).toContain("sluice: #13 landed on main");
   expect(seen.prompts).toEqual(["[sluice] Your submission #13 landed on main as 5d6e7f8."]);
-  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+  expect(ran.filter((r) => r === READ)).toEqual([]);
 });
 
 test("a watch that can't be started is tried 1, 2, 4, 8, 16 and 32 s apart, then every minute, and nothing read between", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
-  watch.failing = true;
+  const watch = watchedHost(on, clock, nothingSeen());
   ran.length = 0;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  // The session's watch prints the queue and ends, and none starts after it.
+  await watch.print(justSetUp());
+  await watch.end();
+  watch.failing = true;
   for (const gap of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
     await startedAgainAfter(clock, watch, gap);
   expect(watch.started.slice(1).map((t, i) => t - watch.started[i]!)).toEqual([
     1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000,
   ]);
-  expect(ran.filter((r) => r === READ)).toHaveLength(1);
+  expect(ran.filter((r) => r === READ)).toEqual([]);
   const band = await $.ui.mount({
     plugin: "sluice-board",
     surface: "terminal",
@@ -1371,7 +1277,7 @@ test("a watch that can't be started is tried 1, 2, 4, 8, 16 and 32 s apart, then
 test("a watch killed after ten minutes is started again a second later", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  const watch = watchedHost(on, clock, nothingSeen());
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   await clock.advance(600_000);
@@ -1383,7 +1289,7 @@ test("a watch killed after ten minutes is started again a second later", async (
 test("a watch open ten minutes after the waits grew to a minute is started again a second later", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  const watch = watchedHost(on, clock, justSetUp(), nothingSeen());
+  const watch = watchedHost(on, clock, nothingSeen());
   watch.failing = true;
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -1401,10 +1307,11 @@ test("a watch open ten minutes after the waits grew to a minute is started again
 test("/sluice twice with the watch open leaves one watch running", async ($, on) => {
   const clock = mock.clock(on);
   await clock.set(NOW);
-  const watch = watchedHost(on, clock, overview(), nothingSeen());
+  const watch = watchedHost(on, clock, nothingSeen());
   panes(on);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(overview());
   await $.command.run(slash(true));
   await $.command.run(slash(true));
   await clock.settle();
@@ -1649,7 +1556,7 @@ test(
   conflictOpens([], "in the way: what main has landed"),
 );
 
-/** What a forecast host answers, changed as a test goes; `doc` is its first read. */
+/** What a forecast host answers, changed as a test goes; `doc` is its watch's first overview. */
 type World = { doc: Overview; head: string; answer: object; forecasts: number };
 
 /** The fixture with #13, this session's, gone from main's queue. */
@@ -1670,9 +1577,9 @@ const WITH_217 = {
 };
 
 /**
- * A host whose first read of the overview is `w.doc`, and whose watch the
- * test hands each later document to; whose worktree is 4 commits ahead at
- * `w.head`, and whose forecast says `w.answer`.
+ * A host whose watch the test hands each document to, `w.doc` first; whose
+ * worktree is 4 commits ahead at `w.head`, and whose forecast says
+ * `w.answer`.
  */
 function forecastHost(
   on: On,
@@ -1686,7 +1593,6 @@ function forecastHost(
     const argv = e.argv.join(" ");
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: "", ...WHOLE } });
     if (argv === "git rev-parse --show-toplevel") return out(`${ROOT}\n`);
-    if (argv === "sluice overview --json") return out(JSON.stringify(w.doc));
     if (argv === "git rev-parse HEAD") return out(`${w.head}\n`);
     if (argv.startsWith("git rev-list --count ")) return out("4\n");
     if (argv === "sluice submit main --check --json") {
@@ -1793,6 +1699,7 @@ test("main landing a change to the same lines starts one turn, once, a reload in
   const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   expect(w.forecasts).toBe(1);
   expect(seen.prompts).toEqual([]);
 
@@ -1830,6 +1737,7 @@ test("a conflict with a queued submission names it, and its failing clears it on
   const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   expect(w.forecasts).toBe(0);
 
   // #220 is removed for a conflict with #217, queued ahead of it.
@@ -1879,6 +1787,7 @@ test("the forecast's conflict is a row under its branch, kept across a reload un
   const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   expect(w.forecasts).toBe(1);
   const row = "  ⚠ your work would conflict · docs/builds.md";
   const mount = () =>
@@ -1934,6 +1843,7 @@ test("a conflict cleared by the agent's own merge starts no turn", async ($, on)
   const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   w.answer = LANDED;
   await watch.print(free("b2c3d4e5f6"));
   expect(seen.prompts).toHaveLength(1);
@@ -1950,9 +1860,10 @@ test("a conflict there when the session starts is a toast, not a turn", async ($
   await clock.set(NOW);
   const w: World = { doc: free(), head: "h1", answer: LANDED, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, clock, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   expect(w.forecasts).toBe(1);
   expect(seen.prompts).toEqual([]);
   expect(seen.toasts).toContain("sluice: your work would conflict with main in docs/builds.md");
@@ -1968,9 +1879,10 @@ test("a forecast conflict with no paths and a session state with no ids draw as 
   });
   const w: World = { doc: free(), head: "h1", answer: { conflict: { with: [] } }, forecasts: 0 };
   const seen = nothingSeen();
-  forecastHost(on, clock, w, seen);
+  const watch = forecastHost(on, clock, w, seen);
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   expect(w.forecasts).toBe(1);
   expect(seen.toasts).toContain("sluice: your work would conflict with main in a file");
   const pane = await $.ui.mount({
@@ -1998,6 +1910,7 @@ test("SLUICE_FORECAST=0 turns forecasting off", async ($, on) => {
   const watch = forecastHost(on, clock, w, nothingSeen());
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
+  await watch.print(w.doc);
   await watch.print(free("b2c3d4e5f6"));
   expect(w.forecasts).toBe(0);
 });
@@ -2012,6 +1925,7 @@ test(
     const watch = forecastHost(on, clock, w, nothingSeen());
     await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
     await clock.settle();
+    await watch.print(w.doc);
     await watch.print(free("b2c3d4e5f6"));
     expect(w.forecasts).toBe(0);
   },
