@@ -1304,3 +1304,68 @@ fn a_policy_refused_on_the_remote_is_cleared_by_a_push() {
     );
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
 }
+
+/// A branch whose policy this sluice refuses is refused alone (26, S64).
+mod refused_alone {
+    use super::*;
+
+    /// The id a `submit --no-wait --json` answered with.
+    fn id(out: &Output) -> String {
+        assert!(out.status.success(), "{}", text(out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["id"].to_string()
+    }
+
+    /// The host's own `branch` moved, past the protection, to a commit
+    /// whose policy adds a `[[checkout.cache]]` table, which this sluice
+    /// refuses; the remote's copy is left clean (S64).
+    fn refuse_own_ref(s: &Setup, branch: &str) {
+        let policy = s
+            .repo
+            .git(&["show", &format!("{branch}:.config/sluice.toml")]);
+        let refused = format!(
+            "{policy}\n\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"
+        );
+        let at = s.repo.branch(
+            "refused",
+            branch,
+            &[(".config/sluice.toml", Some(refused.as_str()))],
+        );
+        s.repo.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "update-ref",
+            &format!("refs/heads/{branch}"),
+            &at,
+        ]);
+    }
+
+    /// The record a `sluice wait --json` ended with.
+    fn waited(out: &Output) -> serde_json::Value {
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", text(out)))
+    }
+
+    /// 26, S64, rule core.11: the deneb case. The host's own ref of
+    /// `bolt/b`, a branch with state, holds a policy this sluice refuses
+    /// while origin's is clean; `sluice wait` on a submission to `main`
+    /// finds it past `bolt/b` and follows it to its landing.
+    #[test]
+    fn a_wait_on_main_passes_a_bolt_whose_own_ref_is_refused() {
+        let s = Setup::new("refused-alone-wait", "origin");
+        s.repo.git(&["branch", "bolt/b", "main"]);
+        s.repo
+            .git(&["push", "-q", "origin", "bolt/b:refs/heads/bolt/b"]);
+        s.repo.git(&["fetch", "-q", "origin"]);
+        id(&s.submit_to("b", "bolt/b", "bolt/b"));
+        let on_main = id(&s.submit_to("a", "main", "main"));
+        refuse_own_ref(&s, "bolt/b");
+        let out = s.sluice(&["status", "bolt/b"]);
+        assert!(!out.status.success(), "bolt/b still reads: {}", text(&out));
+
+        let out = s.sluice(&["wait", &on_main, "--json", "--timeout", "2m"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+        let v = waited(&out);
+        assert_eq!(v["id"].to_string(), on_main, "{v}");
+        assert_eq!(v["state"], "landed", "{v}");
+    }
+}
