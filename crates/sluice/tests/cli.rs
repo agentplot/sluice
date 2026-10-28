@@ -7264,12 +7264,13 @@ mod refused_alone {
 
     /// 26, S64, rule core.14: `sluice run` passes by the branch it cannot
     /// read, says so once while the same words stand, and lands every
-    /// other branch's work.
+    /// other branch's work; its last round having passed the branch by,
+    /// it exits 3 as a step of that branch would.
     #[test]
     fn sluice_run_passes_a_branch_by_and_lands_the_rest() {
         let f = two_bolts_queued();
         let (code, out) = sluice(&f, &["run", "--rounds", "3"]);
-        assert_eq!(code, 0, "{out}");
+        assert_eq!(code, sluice::INTERNAL, "{out}");
         let said: Vec<&str> = out
             .lines()
             .filter(|l| l.starts_with(&format!("{REFUSED} ")))
@@ -7280,7 +7281,7 @@ mod refused_alone {
     }
 
     /// 26, 121: a branch read on one pass and refused again on the next
-    /// is said again.
+    /// is said again, and the run, refused on its last round, exits 3.
     #[test]
     fn sluice_run_says_a_branch_refused_anew_again() {
         let f = two_bolts_queued();
@@ -7295,9 +7296,30 @@ mod refused_alone {
             between: &between,
         };
         let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "3"]);
-        assert_eq!(code, 0, "{out}");
+        assert_eq!(code, sluice::INTERNAL, "{out}");
         let said = out.lines().filter(|l| *l == passed_by(UNREADABLE)).count();
         assert_eq!(said, 2, "{out}");
+    }
+
+    /// 26, S64: a bounded run whose last round read the branch it passed
+    /// by before exits 0, having said it once.
+    #[test]
+    fn sluice_run_read_by_its_last_round_exits_0() {
+        let f = two_bolts_queued();
+        let between = |n: usize| {
+            if n == 1 {
+                f.world.fail_state_reads(REFUSED, None);
+            }
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 3,
+            between: &between,
+        };
+        let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "3"]);
+        assert_eq!(code, 0, "{out}");
+        let said = out.lines().filter(|l| *l == passed_by(UNREADABLE)).count();
+        assert_eq!(said, 1, "{out}");
     }
 
     /// A fakes' host whose config names the systems it runs (87).
@@ -7385,8 +7407,8 @@ mod refused_alone {
 
     /// 26, 87, S64, rule core.14: on a host whose config names its
     /// systems, `sluice run` checks them against every branch's policy it
-    /// can read, passes by the one whose policy this sluice refuses, and
-    /// runs the rest's rounds.
+    /// can read, passes by the one whose policy this sluice refuses, runs
+    /// the rest's rounds, and exits 3 for the branch it passed by.
     #[test]
     fn sluice_run_on_a_host_naming_its_systems_runs_past_a_refused_policy() {
         let f = queued(false);
@@ -7429,7 +7451,7 @@ mod refused_alone {
         )
         .unwrap();
         let out = String::from_utf8(out).unwrap();
-        assert_eq!(code, 0, "{out}");
+        assert_eq!(code, sluice::INTERNAL, "{out}");
         assert!(
             out.lines().any(|l| l.starts_with(&passed_by(""))
                 && l.contains("Remove [[checkout.cache]] from .config/sluice.toml")),
