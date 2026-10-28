@@ -281,7 +281,8 @@ pub enum Command {
     /// Rounds for every branch with a queue, until stopped.
     #[command(after_help = "Examples:\n  $ sluice run\n  $ sluice run --rounds 1")]
     Run {
-        /// Stop after this many rounds.
+        /// Stop after this many rounds; a run whose last round passed a
+        /// branch by exits 3, naming it.
         #[arg(long)]
         rounds: Option<usize>,
     },
@@ -1028,6 +1029,10 @@ pub fn run(
             // 26, 121: the words each branch passed by was last said with.
             let mut passed: BTreeMap<String, String> = BTreeMap::new();
             loop {
+                // 26: the branches this pass passed by, with their words; a
+                // bounded run whose last pass passed one by ends as a step
+                // of that branch would.
+                let mut failed: BTreeMap<String, String> = BTreeMap::new();
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
                 exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
@@ -1043,7 +1048,7 @@ pub fn run(
                     intake(pulls, seams, clock, &branch);
                     // 26, rule core.14: a branch whose status read or round
                     // fails is that branch's alone; the pass goes on to
-                    // every other branch, and the run's exit is unchanged.
+                    // every other branch.
                     let ran = s.status(&branch).and_then(|status| {
                         if !status.submissions.iter().any(|x| !x.state.is_out()) {
                             return Ok(None);
@@ -1059,7 +1064,9 @@ pub fn run(
                         // refusal of that branch's.
                         Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
                         Err(e) => {
-                            tell_passed(out, &branch, &format!("{e:#}"), &mut passed)?;
+                            let words = format!("{e:#}");
+                            tell_passed(out, &branch, &words, &mut passed)?;
+                            failed.insert(branch.clone(), words);
                             None
                         }
                     };
@@ -1075,7 +1082,12 @@ pub fn run(
                 }
                 n += 1;
                 if rounds.is_some_and(|r| n >= r) {
-                    return Ok(0);
+                    // 26: one line per branch, as `main` writes a failed
+                    // step's, said whether or not stdout said it this pass.
+                    for (branch, words) in &failed {
+                        telemetry::error(&format!("sluice: {branch}: {words}"));
+                    }
+                    return Ok(if failed.is_empty() { 0 } else { INTERNAL });
                 }
                 if !pause.pause() {
                     return Ok(STOPPED);
