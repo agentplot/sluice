@@ -53,6 +53,9 @@ pub trait Host {
     fn name(&self) -> String;
     /// The repository, as the path of its common git directory.
     fn repository(&self) -> Result<String>;
+    /// Whether `repository`, a common git directory as [`Host::repository`]
+    /// names it, is gone from the host: what ends a watch of it (129).
+    fn repository_gone(&self, repository: &str) -> bool;
     /// Where each repository's reader of its queues keeps its lock and the
     /// overview it last read (129; ADR 0056).
     fn readers(&self) -> Result<PathBuf>;

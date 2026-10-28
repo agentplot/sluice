@@ -6,6 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use chrono::SecondsFormat;
@@ -16,7 +17,8 @@ use sluice_core::{Clock, Sluice};
 use crate::exec::Host;
 use crate::preview::preview_json;
 use crate::reader::{untimed, Reader};
-use crate::{hashes, held_line, progress, sessions_json, Pause, STOPPED};
+use crate::told::{self, Kind};
+use crate::{hashes, held_line, progress, sessions_json, Pause, INTERRUPTED, STOPPED};
 
 /// Every branch's part, and the whole document as `--json` prints it.
 pub fn document(
@@ -79,16 +81,31 @@ pub fn run(
     // queues and writes each document it prints; every other follows that
     // document, reading nothing itself, until it finds the lock free
     // (rule core.25).
-    let mut reader = Reader::take(&host.readers()?, &host.repository()?)?;
+    let repository = host.repository()?;
+    let mut reader = Reader::take(&host.readers()?, &repository)?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
     let mut last: Option<serde_json::Value> = None;
+    // 129: it ends only when stopped, when its output is closed, or when
+    // its repository is gone; anything else that fails is tried again at
+    // the next tick, which is its cadence and no retry (rule core.29).
     loop {
         let doc = match &mut reader {
             Reader::Lead(lead) => {
-                let (_, doc) = document(s, host, clock)?;
-                lead.write(&doc)?;
+                let doc = match document(s, host, clock) {
+                    Ok((_, doc)) => doc,
+                    // Ctrl-C reaches the git a read runs in the foreground.
+                    Err(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
+                    Err(e) if host.repository_gone(&repository) => return Err(e),
+                    // The read it could not make is its document, in the
+                    // words it was refused with (133), as a failing
+                    // overview prints it.
+                    Err(e) => told::document(Kind::Internal, &format!("{e:#}"), &[]),
+                };
+                // What it read is printed all the same; the reader's last
+                // document stands for a write that failed until one succeeds.
+                let _ = lead.write(&doc);
                 Some(doc)
             }
             Reader::Follow(follow) => follow.read(),
@@ -104,7 +121,8 @@ pub fn run(
         if !pause.pause() {
             return Ok(STOPPED);
         }
-        reader.lead_once_free()?;
+        // A lock it could not try leaves it following.
+        let _ = reader.lead_once_free();
     }
 }
 

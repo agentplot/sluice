@@ -229,6 +229,21 @@ mod tests {
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:02Z", 2)));
     }
 
+    /// A write that failed is made again, though the document has changed
+    /// only in its time since: the follower reads it once it is written.
+    #[test]
+    fn a_write_that_failed_is_made_again() {
+        let s = Scratch::new("rewrite");
+        let mut lead = lead(Reader::take(&s.0, REPO).unwrap());
+        let follow = follow(Reader::take(&s.0, REPO).unwrap());
+        std::fs::create_dir(&lead.files.tmp).unwrap();
+        assert!(lead.write(&doc("2026-10-25T09:00:00Z", 1)).is_err());
+        assert_eq!(follow.read(), None);
+        std::fs::remove_dir(&lead.files.tmp).unwrap();
+        lead.write(&doc("2026-10-25T09:00:01Z", 1)).unwrap();
+        assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
+    }
+
     /// A repository whose name is the longest one kept whole, as a
     /// scratch repository deep in a checkout is, has its files as any
     /// other: no name of them too long for a file system.
