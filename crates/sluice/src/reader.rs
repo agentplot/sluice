@@ -3,23 +3,34 @@
 //! waiting `sluice submit` of a repository on the host holds its lock and
 //! keeps the overview it reads beside it, and every other watch and wait
 //! of the repository on the host follows that document instead of reading
-//! the records itself.
+//! the records itself. A watch of a newer sluice than the reader's takes
+//! the reader's lease, and the reader, finding it taken, lets go and
+//! follows, so the newest sluice that watches reads, and never two at once.
 //!
 //! ```text
 //! $XDG_STATE_HOME/sluice/readers/     (default ~/.local/state)
-//!   <repository, flat>.lock   locked by the reader for as long as it runs
-//!   <repository, flat>.json   the overview it last read, written whole
+//!   <repository, flat>.lock      locked by the reader for as long as it runs
+//!   <repository, flat>.json      the overview it last read, written whole
+//!   <repository, flat>.version   the reader's version of sluice, written
+//!                                whole when it takes the lock
+//!   <repository, flat>.lease     locked by a watch of a newer sluice that
+//!                                has taken the reader's lease, until it is
+//!                                the reader
 //! ```
 //!
 //! The repository is its common git directory, which every worktree of it
 //! shares, written as one file name as `running/` writes a run directory.
-//! The lock goes with the process, however it ends, so a reader that stops
-//! leaves nothing to clean and no time to wait out: the next watch or wait
-//! to try the lock becomes the reader. The document is written to a
+//! The lock and the lease go with their process, however it ends, so a
+//! reader, or a watch holding the lease, that stops leaves nothing to
+//! clean and no time to wait out: the next watch or wait to try the lock
+//! becomes the reader. The document and the version are each written to a
 //! temporary file and renamed over the last, so a follower reads a whole
-//! document or none.
+//! one or none. The version is a file of its own: a follower of a sluice
+//! from before it empties the lock file at every try, and a follower
+//! prints the document as it finds it. A reader of such a sluice names no
+//! version and never looks at the lease, so it is followed until it stops.
 
-use std::fs::{File, TryLockError};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -39,6 +50,8 @@ pub enum Reader {
 pub struct Lead {
     _lock: File,
     files: Files,
+    /// The version of sluice it is.
+    version: String,
     /// The document last written, but for its time.
     last: Option<Value>,
 }
@@ -46,6 +59,10 @@ pub struct Lead {
 /// A follower of the reader's document.
 pub struct Follow {
     files: Files,
+    /// The version of sluice it is.
+    version: String,
+    /// The lease, once it has taken an older reader's, until it leads.
+    lease: Option<File>,
 }
 
 /// One repository's reader's files.
@@ -55,34 +72,65 @@ struct Files {
     doc: PathBuf,
     /// Where a document is written before it is renamed over `doc`.
     tmp: PathBuf,
+    /// The reader's version of sluice, as `{"version":"0.53.0"}`.
+    version: PathBuf,
+    /// Where the version is written before it is renamed over `version`.
+    vtmp: PathBuf,
+    /// Locked by a newer watch that has taken the reader's lease.
+    lease: PathBuf,
 }
 
 impl Reader {
-    /// The part in reading `repository` among the readers in `dir`: the
-    /// lead when no live process holds its lock, a follower otherwise.
-    pub fn take(dir: &Path, repository: &str) -> Result<Reader> {
+    /// The part in reading `repository` among the readers in `dir`, for a
+    /// sluice of `version`: the lead when no live process holds its lock
+    /// or its lease, a follower otherwise, which takes no lease until its
+    /// first step.
+    pub fn take(dir: &Path, repository: &str, version: &str) -> Result<Reader> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let name = flat_name(repository);
-        let follow = Follow {
+        let mut follow = Follow {
+            // A name kept whole is up to 246 bytes, so no file of it adds
+            // more than `.version`'s eight bytes, nor reaches 255.
             files: Files {
                 lock: dir.join(format!("{name}.lock")),
                 doc: dir.join(format!("{name}.json")),
-                // A name kept whole is up to 246 bytes, so the temporary
-                // file's adds no more than its document's to a file name.
                 tmp: dir.join(format!(".{name}.tmp")),
+                version: dir.join(format!("{name}.version")),
+                vtmp: dir.join(format!(".{name}.vtmp")),
+                lease: dir.join(format!("{name}.lease")),
             },
+            version: version.to_string(),
+            lease: None,
         };
-        Ok(match follow.try_lead()? {
+        // A free lock is the lease holder's, when a newer watch holds it.
+        Ok(match follow.step(false)? {
             Some(lead) => Reader::Lead(lead),
             None => Reader::Follow(follow),
         })
     }
 
-    /// The lead from now, when it followed a reader that has stopped.
-    pub fn lead_once_free(&mut self) -> Result<()> {
-        if let Reader::Follow(follow) = self {
-            if let Some(lead) = follow.try_lead()? {
-                *self = Reader::Lead(lead);
+    /// The step a watch or a wait takes at each tick, before it reads
+    /// (129; rule core.25). The lead lets go and follows once a newer
+    /// watch has taken its lease. A follower leads once the lock is free
+    /// and no other process holds the lease; the one holding it leads once
+    /// the lock is free, and lets the lease go. When `may_lease`, as a
+    /// watch's step is, a follower takes the lease of a reader whose
+    /// version is older than its own.
+    pub fn step(&mut self, may_lease: bool) -> Result<()> {
+        match self {
+            Reader::Lead(lead) => {
+                if try_lock(&lead.files.lease)?.is_none() {
+                    *self = Reader::Follow(Follow {
+                        files: lead.files.clone(),
+                        version: lead.version.clone(),
+                        lease: None,
+                    });
+                }
+            }
+            Reader::Follow(follow) => {
+                if let Some(lead) = follow.step(may_lease)? {
+                    *self = Reader::Lead(lead);
+                }
             }
         }
         Ok(())
@@ -98,9 +146,7 @@ impl Lead {
             return Ok(());
         }
         let Files { doc: path, tmp, .. } = &self.files;
-        std::fs::write(tmp, serde_json::to_vec(doc)?)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(tmp, path).with_context(|| format!("writing {}", path.display()))?;
+        write_whole(tmp, path, &serde_json::to_vec(doc)?)?;
         self.last = Some(now);
         Ok(())
     }
@@ -116,22 +162,108 @@ impl Follow {
             .filter(Value::is_object)
     }
 
-    /// The lead, once the reader has stopped and the lock is free.
-    pub fn try_lead(&self) -> Result<Option<Lead>> {
-        let path = &self.files.lock;
-        let lock = File::create(path).with_context(|| format!("creating {}", path.display()))?;
-        match lock.try_lock() {
-            Ok(()) => Ok(Some(Lead {
-                _lock: lock,
-                files: self.files.clone(),
-                last: None,
-            })),
-            Err(TryLockError::WouldBlock) => Ok(None),
-            Err(TryLockError::Error(e)) => {
-                Err(e).with_context(|| format!("locking {}", path.display()))
+    /// A follower's step, as [`Reader::step`] says: the lead it is from
+    /// now, when it is.
+    fn step(&mut self, may_lease: bool) -> Result<Option<Lead>> {
+        if self.lease.is_some() {
+            let lead = self.try_lead()?;
+            if lead.is_some() {
+                self.lease = None;
+            }
+            return Ok(lead);
+        }
+        match try_lock(&self.files.lock)? {
+            // The lock is free, and the newer watch holding the lease, if
+            // one does, is the one to take it.
+            Some(lock) if try_lock(&self.files.lease)?.is_some() => self.lead(lock).map(Some),
+            Some(_) => Ok(None),
+            None => {
+                let reader = self.files.reader_version();
+                if may_lease && reader.is_some_and(|v| older(&v, &self.version)) {
+                    self.lease = try_lock(&self.files.lease)?;
+                }
+                Ok(None)
             }
         }
     }
+
+    /// The lead, once the reader has stopped and the lock is free.
+    fn try_lead(&self) -> Result<Option<Lead>> {
+        match try_lock(&self.files.lock)? {
+            Some(lock) => self.lead(lock).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// The lead, holding `lock`: it names its version beside the lock.
+    fn lead(&self, lock: File) -> Result<Lead> {
+        let Files { version, vtmp, .. } = &self.files;
+        let named = serde_json::json!({ "version": self.version });
+        write_whole(vtmp, version, &serde_json::to_vec(&named)?)?;
+        Ok(Lead {
+            _lock: lock,
+            files: self.files.clone(),
+            version: self.version.clone(),
+            last: None,
+        })
+    }
+}
+
+impl Files {
+    /// The version the reader's file names; `None` when there is no whole
+    /// one, as a reader of a sluice from before it writes none.
+    fn reader_version(&self) -> Option<String> {
+        let bytes = std::fs::read(&self.version).ok()?;
+        let named = serde_json::from_slice::<Value>(&bytes).ok()?;
+        Some(named.get("version")?.as_str()?.to_string())
+    }
+}
+
+/// The lock on `path`, when no live process holds it. Opening it never
+/// empties the file.
+fn try_lock(path: &Path) -> Result<Option<File>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+}
+
+/// Write `bytes` to `tmp` and rename it over `path`, so a reader of `path`
+/// finds them whole or what was there before.
+fn write_whole(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    std::fs::write(tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(tmp, path).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Whether `version` is older than `own`, both as release numbers: three
+/// numbers, dot-separated, compared in order. Anything else is no version,
+/// which is never older, nor has any older than it.
+fn older(version: &str, own: &str) -> bool {
+    matches!((release(version), release(own)), (Some(v), Some(o)) if v < o)
+}
+
+/// `version`'s three release numbers; `None` when it is no release.
+fn release(version: &str) -> Option<[u64; 3]> {
+    let number = |p: &str| {
+        let digits = !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        digits.then(|| p.parse().ok()).flatten()
+    };
+    let mut parts = version.split('.');
+    let numbers = [
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+    ];
+    parts.next().is_none().then_some(numbers)
 }
 
 /// `doc` but for the time it was read: what a watch prints again, and a
@@ -167,6 +299,10 @@ mod tests {
     }
 
     const REPO: &str = "/Users/someone/project/project.git";
+    /// A sluice older than [`NEW`].
+    const OLD: &str = "0.52.0";
+    /// A sluice newer than [`OLD`].
+    const NEW: &str = "0.53.0";
 
     fn doc(at: &str, depth: u64) -> Value {
         serde_json::json!({
@@ -190,14 +326,215 @@ mod tests {
         }
     }
 
+    fn is_lead(r: &Reader) -> bool {
+        matches!(r, Reader::Lead(_))
+    }
+
+    fn files(r: &Reader) -> &Files {
+        match r {
+            Reader::Lead(l) => &l.files,
+            Reader::Follow(f) => &f.files,
+        }
+    }
+
+    /// Whether `r` is a follower holding the lease.
+    fn holds_lease(r: &Reader) -> bool {
+        matches!(r, Reader::Follow(f) if f.lease.is_some())
+    }
+
+    /// Whether any reader of `r`'s repository holds its lease.
+    fn leased(r: &Reader) -> bool {
+        try_lock(&files(r).lease).unwrap().is_none()
+    }
+
+    /// 129: a lead names its version of sluice beside its lock, whole.
+    #[test]
+    fn a_leads_version_reads_back_as_its_own() {
+        let s = Scratch::new("version");
+        let lead = Reader::take(&s.0, REPO, OLD).unwrap();
+        assert!(is_lead(&lead));
+        assert_eq!(files(&lead).reader_version().as_deref(), Some(OLD));
+        let bytes = std::fs::read(&files(&lead).version).unwrap();
+        let named: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(named, serde_json::json!({ "version": OLD }));
+    }
+
+    /// 129: a follower of a newer sluice takes an older lead's lease at its
+    /// step; the lead lets go at its next, and the newer one leads at its
+    /// own and lets the lease go. At no step do both lead.
+    #[test]
+    fn a_newer_follower_takes_an_older_leads_lease() {
+        let s = Scratch::new("handover");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        assert!(is_lead(&old) && !is_lead(&new));
+        new.step(true).unwrap();
+        assert!(holds_lease(&new));
+        assert!(is_lead(&old) && !is_lead(&new));
+        old.step(true).unwrap();
+        assert!(!is_lead(&old) && !is_lead(&new));
+        new.step(true).unwrap();
+        assert!(!is_lead(&old) && is_lead(&new));
+        assert!(!leased(&new));
+        assert_eq!(files(&new).reader_version().as_deref(), Some(NEW));
+        for _ in 0..3 {
+            old.step(true).unwrap();
+            new.step(true).unwrap();
+            assert!(!is_lead(&old) && is_lead(&new));
+        }
+    }
+
+    /// 129: a follower of the reader's own version takes no lease, nor one
+    /// beside a lock whose version is absent or no whole one, as a reader
+    /// of a sluice from before it names none.
+    #[test]
+    fn no_lease_is_taken_of_the_same_version_or_of_none() {
+        let s = Scratch::new("same");
+        let mut lead = Reader::take(&s.0, REPO, NEW).unwrap();
+        let mut same = Reader::take(&s.0, REPO, NEW).unwrap();
+        same.step(true).unwrap();
+        assert!(!holds_lease(&same) && !leased(&lead));
+        let version = files(&lead).version.clone();
+        std::fs::remove_file(&version).unwrap();
+        let mut newer = Reader::take(&s.0, REPO, "0.54.0").unwrap();
+        newer.step(true).unwrap();
+        assert!(!leased(&lead), "beside no version");
+        for unreadable in ["", "0.52.0", r#"{"version":"#, r#"{"version":52}"#, "[]"] {
+            std::fs::write(&version, unreadable).unwrap();
+            newer.step(true).unwrap();
+            assert!(!leased(&lead), "beside {unreadable:?}");
+        }
+        lead.step(true).unwrap();
+        assert!(is_lead(&lead));
+    }
+
+    /// 129: a step that may not take a lease, as a wait's, takes none,
+    /// even beside an older lead.
+    #[test]
+    fn a_step_that_may_not_take_a_lease_takes_none() {
+        let s = Scratch::new("wait");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        for _ in 0..3 {
+            new.step(false).unwrap();
+            old.step(true).unwrap();
+        }
+        assert!(!holds_lease(&new) && !leased(&old));
+        assert!(is_lead(&old) && !is_lead(&new));
+    }
+
+    /// 129: while another holds the lease, a follower leaves the free lock
+    /// to it, and takes it once that holder is dropped, as its process
+    /// ends.
+    #[test]
+    fn a_free_lock_is_left_to_the_lease_holder() {
+        let s = Scratch::new("left");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut other = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        new.step(true).unwrap();
+        old.step(true).unwrap();
+        assert!(!is_lead(&old));
+        other.step(true).unwrap();
+        assert!(!is_lead(&other));
+        drop(new);
+        assert!(!leased(&other));
+        other.step(true).unwrap();
+        assert!(is_lead(&other));
+        assert_eq!(files(&other).reader_version().as_deref(), Some(OLD));
+    }
+
+    /// 129: while another holds the lease, a watch or a wait that starts
+    /// beside the free lock follows, of whatever version, and leaves the
+    /// lock to it; once that holder is dropped, as its process ends, the
+    /// next to start leads.
+    #[test]
+    fn a_take_leaves_a_free_lock_to_the_lease_holder() {
+        let s = Scratch::new("take-left");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        new.step(true).unwrap();
+        old.step(true).unwrap();
+        assert!(!is_lead(&old) && holds_lease(&new));
+        for version in [OLD, NEW, "0.54.0"] {
+            let started = Reader::take(&s.0, REPO, version).unwrap();
+            assert!(!is_lead(&started) && !holds_lease(&started), "{version}");
+        }
+        drop(new);
+        let next = Reader::take(&s.0, REPO, OLD).unwrap();
+        assert!(is_lead(&next));
+        assert_eq!(files(&next).reader_version().as_deref(), Some(OLD));
+    }
+
+    /// 129: a lead whose lease was taken, following from then on, never
+    /// takes the lock back while the newer watch holds the lease.
+    #[test]
+    fn a_lead_let_go_does_not_take_the_lock_back() {
+        let s = Scratch::new("back");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        new.step(true).unwrap();
+        old.step(true).unwrap();
+        for _ in 0..3 {
+            old.step(true).unwrap();
+            assert!(!is_lead(&old) && !holds_lease(&old));
+        }
+        new.step(true).unwrap();
+        assert!(is_lead(&new));
+        old.step(true).unwrap();
+        assert!(!is_lead(&old) && !holds_lease(&old));
+    }
+
+    /// 129: versions compare as release numbers; anything else is no
+    /// version, which is neither older nor newer than any.
+    #[test]
+    fn versions_compare_as_release_numbers() {
+        assert!(older("0.9.0", "0.10.0"));
+        assert!(!older("0.10.0", "0.9.0"));
+        assert!(older("0.0.0", "0.52.0"));
+        assert!(older(OLD, NEW));
+        assert!(!older(NEW, OLD));
+        assert!(!older(NEW, NEW));
+        for none in [
+            "dev",
+            "",
+            "0.52",
+            "0.52.0.1",
+            "0..52",
+            "+0.52.0",
+            "0.52.0-rc.1",
+        ] {
+            assert_eq!(release(none), None, "{none:?}");
+            assert!(!older(none, NEW) && !older(OLD, none), "{none:?}");
+        }
+    }
+
+    /// 129: a repository whose name is the longest one kept whole has its
+    /// version, its version's temporary file and its lease, as any other.
+    #[test]
+    fn a_repository_named_as_long_as_is_kept_whole_has_its_lease() {
+        let s = Scratch::new("long-lease");
+        let repository = format!("/{}", "x".repeat(243));
+        let old = Reader::take(&s.0, &repository, OLD).unwrap();
+        let mut new = Reader::take(&s.0, &repository, NEW).unwrap();
+        new.step(true).unwrap();
+        assert!(holds_lease(&new));
+        let f = files(&old);
+        assert_eq!(f.reader_version().as_deref(), Some(OLD));
+        std::fs::write(&f.vtmp, b"{}").unwrap();
+        for path in [&f.version, &f.vtmp, &f.lease] {
+            assert!(path.exists(), "{}", path.display());
+        }
+    }
+
     /// A second take of a held lock follows, whatever worktree it is in;
     /// another repository's is its own.
     #[test]
     fn a_second_take_of_a_held_lock_follows() {
         let s = Scratch::new("second");
-        let _first = lead(Reader::take(&s.0, REPO).unwrap());
-        follow(Reader::take(&s.0, REPO).unwrap());
-        lead(Reader::take(&s.0, "/Users/someone/other/.git").unwrap());
+        let _first = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        follow(Reader::take(&s.0, REPO, NEW).unwrap());
+        lead(Reader::take(&s.0, "/Users/someone/other/.git", NEW).unwrap());
     }
 
     /// 129: once the reader is dropped, as its process ends, a follower's
@@ -205,8 +542,8 @@ mod tests {
     #[test]
     fn the_lock_is_taken_again_once_its_holder_is_dropped() {
         let s = Scratch::new("again");
-        let first = lead(Reader::take(&s.0, REPO).unwrap());
-        let next = follow(Reader::take(&s.0, REPO).unwrap());
+        let first = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let next = follow(Reader::take(&s.0, REPO, NEW).unwrap());
         assert!(next.try_lead().unwrap().is_none());
         drop(first);
         let _lead = next.try_lead().unwrap().expect("the lock, its holder gone");
@@ -218,8 +555,8 @@ mod tests {
     #[test]
     fn a_document_written_is_read_back_whole() {
         let s = Scratch::new("whole");
-        let mut lead = lead(Reader::take(&s.0, REPO).unwrap());
-        let follow = follow(Reader::take(&s.0, REPO).unwrap());
+        let mut lead = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let follow = follow(Reader::take(&s.0, REPO, NEW).unwrap());
         assert_eq!(follow.read(), None);
         lead.write(&doc("2026-10-25T09:00:00Z", 1)).unwrap();
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
@@ -237,8 +574,8 @@ mod tests {
         let s = Scratch::new("long");
         let repository = format!("/{}", "x".repeat(243));
         assert_eq!(flat_name(&repository).len(), 246);
-        let mut lead = lead(Reader::take(&s.0, &repository).unwrap());
-        let follow = follow(Reader::take(&s.0, &repository).unwrap());
+        let mut lead = lead(Reader::take(&s.0, &repository, NEW).unwrap());
+        let follow = follow(Reader::take(&s.0, &repository, NEW).unwrap());
         lead.write(&doc("2026-10-25T09:00:00Z", 1)).unwrap();
         assert_eq!(follow.read(), Some(doc("2026-10-25T09:00:00Z", 1)));
     }
@@ -248,8 +585,8 @@ mod tests {
     #[test]
     fn a_half_written_temporary_file_is_never_read() {
         let s = Scratch::new("half");
-        let mut lead = lead(Reader::take(&s.0, REPO).unwrap());
-        let follow = follow(Reader::take(&s.0, REPO).unwrap());
+        let mut lead = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let follow = follow(Reader::take(&s.0, REPO, NEW).unwrap());
         let half = br#"{"schema":"sluice/overview@1","branches":[{"bra"#;
         std::fs::write(&follow.files.tmp, half).unwrap();
         assert_eq!(follow.read(), None);
