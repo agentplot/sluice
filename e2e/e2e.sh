@@ -37,6 +37,8 @@ export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@localhost GIT_COMMITTER_NAME=e2e
 # No git here, sluice's included, reaches the user's config, credential helpers or a prompt.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
 unset GIT_ASKPASS SSH_ASKPASS
+# No submit here records the caller's herdr pane, and no round pushes an outcome into it.
+unset HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_AGENT HERDR_BIN_PATH
 
 # indir <dir> <command...>: run a command in a directory.
 indir() {

@@ -22,10 +22,21 @@ use anyhow::{bail, Context as _, Result};
 use clap::{CommandFactory as _, FromArgMatches as _};
 use sluice_seams::{Delivery, Driver, Notification, Rev, Session, Submitter};
 
-/// The worktrunk driver.
-pub struct Worktrunk;
+pub mod herdr;
+
+/// The worktrunk driver, on the host its peers name `host`.
+pub struct Worktrunk {
+    host: String,
+}
 
 impl Worktrunk {
+    /// The driver on `host`, as its peers name it: the instance's
+    /// `[peers] name`, else the hostname, which the binding reads (rule
+    /// core.2).
+    pub fn new(host: impl Into<String>) -> Worktrunk {
+        Worktrunk { host: host.into() }
+    }
+
     fn git(&self, worktree: &Path, args: &[&str]) -> Result<std::process::Output> {
         Command::new("git")
             .arg("-C")
@@ -102,8 +113,9 @@ impl Driver for Worktrunk {
                 worktree: branch.clone(),
                 path: (top.status.success() && !path.is_empty()).then_some(path),
                 head: None,
-                host: None,
-                session: None,
+                // 51: where the outcome is pushed once it is decided.
+                host: Some(self.host.clone()),
+                session: herdr::session_here(),
             },
             dirty: dirty(&status.stdout),
             detached: branch.is_empty(),
