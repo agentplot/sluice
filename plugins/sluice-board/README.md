@@ -96,7 +96,13 @@ sluice's queue inside a Claude Code session.
   forecasts for it.
 
 It reads everything from `sluice overview --json --watch` (sluice 0.12 or
-later). Where sluice has records of no branch, the pane says nothing has
+later). When the watch ends, or can't be started, the board starts it
+again, waiting a second and then twice as long each time, up to a minute;
+a watch that stayed open a minute or more is followed by a second's wait
+again. It never polls `sluice overview` in between: the band, the pane
+and the status line keep the last queue read until a watch prints the
+next, and an outcome decided meanwhile is told then.
+Where sluice has records of no branch, the pane says nothing has
 been submitted yet, and that a submission shows there from when an agent
 in a worktree runs `sluice submit <branch>` until it lands. Where sluice
 can't be read, because it isn't installed or `sluice overview` failed, the

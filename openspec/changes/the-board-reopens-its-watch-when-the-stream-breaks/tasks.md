@@ -12,7 +12,7 @@
 
 ## 3. Say it to the operator
 
-- [ ] 3.1 In `plugins/sluice-board/README.md`, after "It reads everything from `sluice overview --json --watch`", say that when the watch ends the board starts it again, waiting a second and then longer each time up to a minute, and never polls; the band and the pane keep the last queue read meanwhile. Verify by reading it against the requirements: no gate task reads `*.md` outside the site (core.21), so this one is checked by hand.
+- [x] 3.1 In `plugins/sluice-board/README.md`, after "It reads everything from `sluice overview --json --watch`", say that when the watch ends the board starts it again, waiting a second and then longer each time up to a minute, and never polls; the band and the pane keep the last queue read meanwhile. Verify by reading it against the requirements: no gate task reads `*.md` outside the site (core.21), so this one is checked by hand.
 - [ ] 3.2 In `site/src/content/docs/guides/claude-code.md`, in the paragraph that begins "It reads everything from `sluice overview --json --watch`", say the same in one or two sentences, with no name of ours (rule core.26). Verify with `moon run site:prose`, every warning cleared.
 
 ## 4. The gate
