@@ -134,6 +134,18 @@ Exit codes:
   64   a command line sluice cannot read
   130  stopped with Ctrl-C; the submission stays queued";
 
+/// `sluice untold --help`'s examples and exits (51, 135).
+const UNTOLD_AFTER_HELP: &str = "\
+Examples:
+  $ sluice untold          once, when a session starts again
+  $ sluice untold --json
+
+Exit codes:
+  0    told every outcome not yet told, or there was none
+  3    a branch's records could not be read, said on stderr after the rest
+       is told; or sluice itself failed
+  64   a command line sluice cannot read";
+
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
 /// read is a command line sluice cannot read (64). `wt submit`'s own
 /// `--timeout` is read by it too.
@@ -262,6 +274,18 @@ pub enum Command {
         #[arg(long, default_value = ".")]
         worktree: String,
         /// One JSON document on stdout: the submission's record.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Tell this worktree's session every outcome of its submissions not
+    /// yet told to it, and mark each told.
+    #[command(after_help = UNTOLD_AFTER_HELP)]
+    Untold {
+        /// The worktree whose session is told.
+        #[arg(long, default_value = ".")]
+        worktree: String,
+        /// One JSON document on stdout: `{"outcomes":[...]}`, each the
+        /// submission's record.
         #[arg(long)]
         json: bool,
     },
@@ -777,6 +801,7 @@ impl Cli {
             Some(
                 Command::Submit { json, .. }
                 | Command::Wait { json, .. }
+                | Command::Untold { json, .. }
                 | Command::Status { json, .. }
                 | Command::Overview { json, .. }
                 | Command::Exec { json, .. }
@@ -976,6 +1001,7 @@ pub fn run(
             };
             await_submission(&s, &waiting, sub, None, out)
         }
+        Command::Untold { worktree, json } => untold(&s, &worktree, json, out),
         Command::Step { branch, json } => {
             intake(pulls, seams, clock, &branch);
             let round = s.round(&branch)?;
@@ -2603,6 +2629,63 @@ fn report(
         _ => writeln!(out, "{}", sub.state.word())?,
     }
     Ok(exit_for(sub))
+}
+
+/// 51, 135: `sluice untold`: tell the session in `worktree` every outcome
+/// of its submissions not yet told it, each in the line the round pushes
+/// and what `sluice wait <id>` prints, then mark each told to it. What it
+/// tells is written before it marks, so an ask stopped between them is
+/// told again; each branch it tells of is locked meanwhile, so no round
+/// pushes the same outcome.
+fn untold(s: &Sluice<'_>, worktree: &str, json: bool, out: &mut dyn Write) -> Result<i32> {
+    let session = s.seams().driver.session(worktree)?;
+    // 3: a worktree on no branch names no work, and submitted nothing.
+    if session.detached {
+        if json {
+            writeln!(out, "{}", serde_json::json!({ "outcomes": [] }))?;
+        }
+        return Ok(0);
+    }
+    let me = session.from;
+    // The session as its driver names it, else the worktree it works in.
+    let told_to = me
+        .session
+        .clone()
+        .or_else(|| me.path.clone())
+        .unwrap_or_else(|| me.worktree.clone());
+    let untold = s.untold(&me)?;
+    let marked = untold.marked(&told_to);
+    for u in &untold.unread {
+        telemetry::error(&format!(
+            "sluice: could not read {}'s records: {}",
+            u.branch, u.error
+        ));
+    }
+    if json {
+        let mut doc = serde_json::json!({ "outcomes": marked });
+        if !untold.unread.is_empty() {
+            let unread: Vec<_> = untold
+                .unread
+                .iter()
+                .map(|u| serde_json::json!({ "branch": u.branch, "error": u.error }))
+                .collect();
+            doc["unread"] = serde_json::Value::Array(unread);
+        }
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        let names = BTreeMap::new();
+        for (i, (o, sub)) in untold.outcomes.iter().zip(&marked).enumerate() {
+            if i > 0 {
+                writeln!(out)?;
+            }
+            writeln!(out, "{}", words::told_line(sub.id, &o.branch, &o.told))?;
+            report(s, sub, &o.branch, &names, None, false, out)?;
+        }
+    }
+    out.flush()?;
+    let unread = !untold.unread.is_empty();
+    untold.mark(&told_to)?;
+    Ok(if unread { INTERNAL } else { 0 })
 }
 
 /// Whether `branch`, at its revision, takes its work as pull requests
