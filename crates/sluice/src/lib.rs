@@ -135,8 +135,9 @@ Exit codes:
   130  stopped with Ctrl-C; the submission stays queued";
 
 /// `--timeout`'s value, read as the policy reads a duration; one it cannot
-/// read is a command line sluice cannot read (64).
-fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
+/// read is a command line sluice cannot read (64). `wt submit`'s own
+/// `--timeout` is read by it too.
+pub fn timeout(text: &str) -> std::result::Result<std::time::Duration, String> {
     sluice_core::policy::parse_duration(text).map_err(|e| format!("{e:#}"))
 }
 
@@ -537,6 +538,11 @@ pub enum Followed {
         /// What each submission is called on a pull request, as
         /// [`Followed::Done`] names them.
         names: BTreeMap<u64, String>,
+        /// The revision the forge holds as its head; `None` when the forge
+        /// returned no pull to read it from.
+        head: Option<String>,
+        /// Whether it is a draft, which intake does not take in.
+        draft: bool,
     },
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
@@ -2248,7 +2254,9 @@ fn wait_on(
                 return Ok(Waited::Unread(sub, unread(e)?));
             }
         }
-        reading.reader.lead_once_free()?;
+        // A wait takes no lease, but lets go of the lock once a newer
+        // watch has taken its; it follows from then on.
+        reading.reader.step(false)?;
         reading.read(s, waiting, &mut sub)?;
     }
 }
@@ -2258,7 +2266,9 @@ fn wait_on(
 /// repository on the host is its reader, which reads the records and
 /// writes the whole overview for the others; every other wait reads them
 /// from the reader's document, and its own record only once a document no
-/// longer holds it, as when it has left the queue.
+/// longer holds it, as when it has left the queue. A wait that is the
+/// reader lets go once a newer watch has taken its lease, and follows from
+/// then on as any other wait.
 struct Reading {
     reader: Reader,
     /// Its branch's part of the overview, as last read.
@@ -2271,7 +2281,7 @@ struct Reading {
 impl Reading {
     fn take(host: &dyn exec::Host) -> Result<Reading> {
         Ok(Reading {
-            reader: Reader::take(&host.readers()?, &host.repository()?)?,
+            reader: Reader::take(&host.readers()?, &host.repository()?, host.version())?,
             view: None,
             lacked: None,
         })
@@ -2660,6 +2670,20 @@ fn last_submitted(
     Ok(found.ok_or(from.worktree))
 }
 
+/// `doc` with `sends`: the revision a submit from `worktree` would send
+/// now, as the core decides it (124), so a driver reading `--status
+/// --json` can tell whether the submission stands at it without deciding
+/// that itself (record 0065; rule core.27).
+fn with_sends(
+    mut doc: serde_json::Value,
+    s: &Sluice<'_>,
+    worktree: &str,
+) -> Result<serde_json::Value> {
+    let session = s.seams().driver.session(worktree)?;
+    doc["sends"] = serde_json::to_value(s.submitted_head(&session)?.head)?;
+    Ok(doc)
+}
+
 fn submitted(
     s: &Sluice<'_>,
     clock: &dyn Clock,
@@ -2679,7 +2703,8 @@ fn submitted(
     };
     let status = s.status(branch)?;
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+        let doc = with_sends(serde_json::to_value(&sub)?, s, worktree)?;
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         let names = status_names(&status, std::slice::from_ref(&sub));
         let testing = progress::lines(s, branch, Some(sub.id), clock.now(), Some(&names))?;
@@ -2796,7 +2821,8 @@ fn submit_pull(
         match followed {
             Some(Followed::Done(sub, names)) => {
                 if status && json {
-                    writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
+                    let doc = with_sends(serde_json::to_value(&sub)?, s, worktree)?;
+                    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
                     return Ok(0);
                 }
                 if status {
@@ -2833,6 +2859,8 @@ fn submit_pull(
                 lines,
                 submission,
                 names,
+                head,
+                draft,
             }) => {
                 // Taken in on the head just pushed: the submission is the
                 // answer, as a no-wait submit's on any branch, with the
@@ -2865,7 +2893,17 @@ fn submit_pull(
                 }
                 let now = (title, lines);
                 if last.as_ref() != Some(&now) {
-                    if json && (no_wait || status) {
+                    if json && status {
+                        // Its head and draft mark, for a driver to tell
+                        // whether it stands at what the worktree would send
+                        // (record 0065).
+                        let doc = serde_json::json!({
+                            "pull_request": number, "branch": branch, "state": now.0,
+                            "head": head, "draft": draft,
+                        });
+                        let doc = with_sends(doc, s, worktree)?;
+                        writeln!(out, "{}", with_copy(doc, copy.as_ref())?)?;
+                    } else if json && no_wait {
                         let doc = serde_json::json!({
                             "pull_request": number, "branch": branch, "state": now.0,
                         });
