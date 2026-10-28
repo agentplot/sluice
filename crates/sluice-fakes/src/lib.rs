@@ -126,6 +126,8 @@ struct Inner {
     /// The words each branch's records fail to be read with, by branch: no
     /// answer at all, as when git cannot read them on a loaded host (129).
     failed_state: BTreeMap<String, String>,
+    /// The repository's git directory is gone from the host (129).
+    repository_gone: bool,
     /// Each host's refusal document of a branch, by host and branch (133).
     refusals: BTreeMap<(String, String), Vec<u8>>,
     crash: Option<Crash>,
@@ -790,6 +792,17 @@ impl World {
             Some(said) => inner.failed_state.insert(branch.into(), said.into()),
             None => inner.failed_state.remove(branch),
         };
+    }
+
+    /// From now, the repository's git directory is gone from the host, or
+    /// with `false` is there again (129).
+    pub fn repository_gone(&self, gone: bool) {
+        self.0.borrow_mut().repository_gone = gone;
+    }
+
+    /// Whether the repository's git directory is gone from the host.
+    pub fn is_repository_gone(&self) -> bool {
+        self.0.borrow().repository_gone
     }
 
     /// This host's refusal document of `branch`, as kept (133).

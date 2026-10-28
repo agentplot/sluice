@@ -15,7 +15,7 @@
 
 ## 2. A watch keeps watching
 
-- [ ] 2.1 Add `repository_gone(&self, repository: &str) -> bool` to
+- [x] 2.1 Add `repository_gone(&self, repository: &str) -> bool` to
   `exec::Host`, the real host (`profiles/mod.rs`) answering whether the
   path is no longer a directory through a free function. Verified by a
   unit test of that function on a scratch directory before and after it

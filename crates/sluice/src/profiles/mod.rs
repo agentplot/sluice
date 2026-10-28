@@ -304,6 +304,12 @@ pub(crate) fn default_branch(common: &Path) -> Result<Option<String>> {
     Ok((out.status.success() && !name.is_empty()).then_some(name))
 }
 
+/// Whether the directory `dir` is gone, as a repository's git directory
+/// removed or moved away is (129).
+fn gone(dir: &Path) -> bool {
+    !dir.is_dir()
+}
+
 /// The branch checked out in `dir`.
 fn checked_out(dir: &Path) -> Result<String> {
     let out = Command::new("git")
@@ -414,6 +420,10 @@ impl crate::exec::Host for Bound {
         Ok(self.branch.common_dir()?.to_string_lossy().into_owned())
     }
 
+    fn repository_gone(&self, repository: &str) -> bool {
+        gone(Path::new(repository))
+    }
+
     fn readers(&self) -> Result<PathBuf> {
         Ok(crate::instance::state_dir()?.join("readers"))
     }
@@ -438,5 +448,20 @@ impl crate::exec::Host for Bound {
         let local =
             (out.status.success() && !full.is_empty()).then(|| sluice_seams::Rev::new(full));
         Ok(Some(sluice_core::overview::OrderFrom { branch, local }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 129: a git directory is there until it is removed.
+    #[test]
+    fn a_directory_is_gone_once_removed() {
+        let dir = std::env::temp_dir().join(format!("sluice-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!gone(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(gone(&dir));
     }
 }
