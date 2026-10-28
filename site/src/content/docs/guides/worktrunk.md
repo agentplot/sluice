@@ -106,19 +106,16 @@ says what to use instead.
 
 ## Waiting in rounds
 
-An agent whose tool calls can't outlast a result submits without waiting,
-then waits in rounds, each one with a time limit:
+An agent whose tool calls can't outlast a result submits and waits with
+one command, run in rounds, each one with a time limit:
 
 ```sh
-wt submit bolt/concurrent-units --no-wait --json
 wt submit bolt/concurrent-units --timeout 9m --json   # again while it exits 5
 ```
 
-Run again in the same worktree with nothing committed since, `wt submit`
-finds the submission of the worktree's head still queued, under test or
-landed, and submits nothing. It follows that submission as
-`sluice wait bolt/concurrent-units` does, prints what that prints, and
-exits as it does:
+The first run submits as `--no-wait` does, its answer on stderr, then
+follows the new submission as `sluice wait bolt/concurrent-units` does,
+prints what that prints, and exits as it does:
 
 | exit | the submission |
 |---|---|
@@ -129,17 +126,28 @@ exits as it does:
 | `4` | withdrawn |
 | `5` | still undecided when `--timeout` ran out |
 
-Under `--json` it prints the submission's record. Once the submission
+Run again in the same worktree with nothing committed since, `wt submit`
+finds that submission still queued, under test or landed, submits
+nothing, and follows it the same way. Under `--json` it prints the
+submission's record and nothing else on stdout. Once the submission
 lands, `wt submit` releases the worktree and removes it, at once when it
 had already landed; `--no-remove` keeps it. On a branch that takes pull
-requests, `wt submit` follows an open pull request at the worktree's head
-the same way, unless it is a draft.
+requests, `wt submit` follows an open pull request the same way, unless
+it is a draft.
 
-`--timeout` only follows a submission already made. Where none stands, or
-given with `--no-wait`, `--check` or `--status`, it exits `64` and submits
-nothing: `wt submit <branch> --no-wait` makes the submission to follow. A
-new commit, or a submission blamed, in conflict or withdrawn, goes into the
-queue again as any submit does.
+A submission stands at the revision a submit from the worktree would
+send now, which `sluice submit <branch> --status --json` names as
+`sends`. That is the worktree's head, or, in a worktree that has checked
+out a branch sluice lands on, the remote's revision of that branch.
+
+`wt submit <branch> --no-wait`, run again where a submission stands,
+answers with it as `wt submit <branch> --status` prints it and exits
+`0`. It submits nothing and removes nothing. Only a new head submits
+again: given `--after` or `--priority` where a submission stands,
+`wt submit` exits `64` and names `sluice amend`, which moves it in the
+queue. `--timeout` given with `--no-wait`, `--check` or `--status` exits
+`64` and submits nothing. A new commit, or a submission blamed, in
+conflict or withdrawn, goes into the queue again as any submit does.
 
 `sluice wait` waits the same way and removes nothing: a worktree waited on
 with it is still there after its submission lands, ports and all. Run
