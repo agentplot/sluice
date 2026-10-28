@@ -829,3 +829,124 @@ fn wt_submit_releases_before_it_removes() {
     assert_eq!(released(&k), 1);
     let _ = std::fs::remove_file(&log);
 }
+
+/// `sluice untold` run in `dir`.
+fn untold(s: &Scratch, dir: &Path, args: &[&str]) -> Output {
+    s.command(env!("CARGO_BIN_EXE_sluice"), dir)
+        .arg("untold")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// 51, 135: a landing nothing told is told by `sluice untold` in the
+/// worktree, opening with the round's line, then as `sluice wait` reports
+/// it, and marked told to the worktree where no pane names its session;
+/// asked again, it tells nothing.
+#[test]
+fn untold_tells_a_landing_once_and_marks_it_told_to_the_worktree() {
+    let s = Scratch::new("wt-untold");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let landed_as = s.status(n)["landed_as"].as_str().unwrap().to_string();
+    assert_eq!(s.status(n)["told"], serde_json::Value::Null);
+
+    let out = untold(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let mut lines = said.lines();
+    let first = lines.next().unwrap_or_default();
+    for word in [format!("#{n}"), "landed".into(), landed_as[..7].to_string()] {
+        assert!(first.contains(&word), "{word} not in {said}");
+    }
+    assert!(lines.any(|l| l.starts_with("passed · landed as")), "{said}");
+    let record = s.status(n);
+    assert!(record["told"].is_string(), "{record}");
+    let path = std::fs::canonicalize(&a).unwrap();
+    assert_eq!(record["told_to"], path.to_str().unwrap());
+
+    let again = untold(&s, &a, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(text(&again), "");
+}
+
+/// 51, 135: under `--json`, one document of the records told, each marked
+/// told; asked again, none.
+#[test]
+fn untold_json_lists_each_record_told_then_none() {
+    let s = Scratch::new("wt-untold-json");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let out = untold(&s, &a, &["--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let outcomes = v["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{v}");
+    assert_eq!(outcomes[0]["id"], n);
+    assert_eq!(outcomes[0]["state"], "landed");
+    assert_eq!(outcomes[0]["told"], s.status(n)["told"]);
+    assert_eq!(outcomes[0]["told_to"], s.status(n)["told_to"]);
+    assert!(v.get("unread").is_none(), "{v}");
+
+    let again = untold(&s, &a, &["--json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({ "outcomes": [] }));
+}
+
+/// 51, 135: a blame is told naming its failed check, then in the words
+/// `sluice wait` reports it with, its check's log among them.
+#[test]
+fn untold_tells_a_blame_as_sluice_wait_reports_it() {
+    let s = Scratch::new("wt-untold-blamed");
+    let b = s.session("b", &[("broken", "x\n")]);
+    let n = id(&s.wt_submit(&b, &["--no-wait", "--json"]));
+    let out = s.wt_submit(&b, &["--timeout", "9m"]);
+    assert_eq!(out.status.code(), Some(sluice::FAILED), "{}", text(&out));
+    let waited = s
+        .command(env!("CARGO_BIN_EXE_sluice"), &b)
+        .args(["wait", &n.to_string()])
+        .output()
+        .unwrap();
+    let waited = String::from_utf8_lossy(&waited.stdout).to_string();
+    assert!(waited.contains("log of sh check.sh"), "{waited}");
+
+    let out = untold(&s, &b, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let (first, rest) = said.split_once('\n').unwrap();
+    for word in [&format!("#{n}") as &str, "failed", "sh check.sh"] {
+        assert!(first.contains(word), "{word} not in {said}");
+    }
+    assert_eq!(rest, waited);
+}
+
+/// 51, 135: another worktree's outcome is not this session's to be told,
+/// and stays untold.
+#[test]
+fn untold_tells_nothing_of_another_worktrees_outcome() {
+    let s = Scratch::new("wt-untold-other");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    let b = s.session("b", &[("b.txt", "b\n")]);
+    let n = id(&s.wt_submit(&a, &["--no-wait", "--json"]));
+    s.land(n);
+    let out = untold(&s, &b, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(text(&out), "");
+    assert_eq!(s.status(n)["told"], serde_json::Value::Null);
+}
+
+/// 3, 135: a worktree on no branch has submitted nothing, and is told
+/// nothing.
+#[test]
+fn untold_in_a_detached_worktree_tells_nothing() {
+    let s = Scratch::new("wt-untold-detached");
+    let a = s.session("a", &[("a.txt", "a\n")]);
+    s.repo
+        .git(&["-C", a.to_str().unwrap(), "switch", "-q", "--detach"]);
+    let out = untold(&s, &a, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(text(&out), "");
+}
