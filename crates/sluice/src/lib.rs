@@ -36,8 +36,9 @@ use reader::Reader;
 use sluice_core::overview::{in_queue, BranchView, Held};
 use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
-    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Requester,
-    Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, WithdrawRefusal, Withdrew,
+    Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
+    Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, Unread,
+    WithdrawRefusal, Withdrew,
 };
 use sluice_seams::{Outcome, Rev, SessionPlace};
 use told::Kind;
@@ -125,10 +126,13 @@ Examples:
 
 Exit codes:
   0    landed, whatever failed after the landing (said on stderr)
-  1    failed: it was blamed, or its pull request closed; or no such submission
+  1    failed: it was blamed, or its pull request closed; or no such
+       submission on any branch, every branch read
   2    a conflict
   3    sluice itself failed, or it could not read the forge for 5m and
-       whether it landed is not known; the cause is on stderr
+       whether it landed is not known: the cause is on stderr; or the
+       number is on none of the branches it could read, and each branch
+       it could not read is named with why
   4    withdrawn
   5    still waiting: --timeout ran out, and the submission stays queued
   64   a command line sluice cannot read
@@ -277,7 +281,8 @@ pub enum Command {
     /// Rounds for every branch with a queue, until stopped.
     #[command(after_help = "Examples:\n  $ sluice run\n  $ sluice run --rounds 1")]
     Run {
-        /// Stop after this many rounds.
+        /// Stop after this many rounds; a run whose last round passed a
+        /// branch by exits 3, naming it.
         #[arg(long)]
         rounds: Option<usize>,
     },
@@ -936,17 +941,15 @@ pub fn run(
                 clock.now() + chrono::Duration::from_std(t).unwrap_or(chrono::Duration::MAX)
             });
             let sub = match target.parse::<u64>() {
-                Ok(id) => match s
-                    .state(id)?
-                    .map_or_else(|| s.moved_to(id), |x| Ok(Some(x)))?
-                {
-                    Some(sub) => sub,
-                    None => {
+                Ok(id) => match s.lookup(id)? {
+                    Lookup::Found(sub) => sub,
+                    Lookup::Unfound(unread) if unread.is_empty() => {
                         let next = ["sluice overview".to_string()];
                         let text = format!("no submission {id}");
                         told::tell(out, json, Kind::NotFound, &text, &next)?;
                         return Ok(FAILED);
                     }
+                    Lookup::Unfound(unread) => return unfound(id, &unread, json, out),
                 },
                 Err(_) if takes_pulls(&s, &target)? => {
                     let mode = PullMode::Wait { deadline };
@@ -1023,7 +1026,13 @@ pub fn run(
             let mut n = 0;
             // 121: each branch's hold as last said, so it is said once.
             let mut said: BTreeMap<String, Option<(Rev, Rev)>> = BTreeMap::new();
+            // 26, 121: the words each branch passed by was last said with.
+            let mut passed: BTreeMap<String, String> = BTreeMap::new();
             loop {
+                // 26: the branches this pass passed by, with their words; a
+                // bounded run whose last pass passed one by ends as a step
+                // of that branch would.
+                let mut failed: BTreeMap<String, String> = BTreeMap::new();
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
                 exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
@@ -1037,9 +1046,31 @@ pub fn run(
                 branches.dedup();
                 for branch in branches {
                     intake(pulls, seams, clock, &branch);
-                    let status = s.status(&branch)?;
-                    if status.submissions.iter().any(|x| !x.state.is_out()) {
-                        let round = s.round(&branch)?;
+                    // 26, rule core.14: a branch whose status read or round
+                    // fails is that branch's alone; the pass goes on to
+                    // every other branch.
+                    let ran = s.status(&branch).and_then(|status| {
+                        if !status.submissions.iter().any(|x| !x.state.is_out()) {
+                            return Ok(None);
+                        }
+                        s.round(&branch).map(Some)
+                    });
+                    let round = match ran {
+                        Ok(round) => {
+                            passed.remove(&branch);
+                            round
+                        }
+                        // Ctrl-C reaching the git a branch's read runs is no
+                        // refusal of that branch's.
+                        Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+                        Err(e) => {
+                            let words = format!("{e:#}");
+                            tell_passed(out, &branch, &words, &mut passed)?;
+                            failed.insert(branch.clone(), words);
+                            None
+                        }
+                    };
+                    if let Some(round) = round {
                         exec::tell_abandoned(out, false, &round.released)?;
                         preview::tell_dropped(out, false, &round.previews)?;
                         exec::tell_releases(out, false, &round.releases)?;
@@ -1051,7 +1082,12 @@ pub fn run(
                 }
                 n += 1;
                 if rounds.is_some_and(|r| n >= r) {
-                    return Ok(0);
+                    // 26: one line per branch, as `main` writes a failed
+                    // step's, said whether or not stdout said it this pass.
+                    for (branch, words) in &failed {
+                        telemetry::error(&format!("sluice: {branch}: {words}"));
+                    }
+                    return Ok(if failed.is_empty() { 0 } else { INTERNAL });
                 }
                 if !pause.pause() {
                     return Ok(STOPPED);
@@ -1082,11 +1118,8 @@ pub fn run(
             all,
             json,
         } => match target.parse::<u64>() {
-            Ok(id) => match s
-                .state(id)?
-                .map_or_else(|| s.moved_to(id), |x| Ok(Some(x)))?
-            {
-                None => {
+            Ok(id) => match s.lookup(id)? {
+                Lookup::Unfound(unread) if unread.is_empty() => {
                     let next = ["sluice overview".to_string()];
                     told::tell(
                         out,
@@ -1097,11 +1130,12 @@ pub fn run(
                     )?;
                     Ok(1)
                 }
-                Some(sub) if json => {
+                Lookup::Unfound(unread) => unfound(id, &unread, json, out),
+                Lookup::Found(sub) if json => {
                     writeln!(out, "{}", serde_json::to_string_pretty(&sub)?)?;
                     Ok(0)
                 }
-                Some(sub) => {
+                Lookup::Found(sub) => {
                     if sub.id != id {
                         writeln!(
                             out,
@@ -1215,9 +1249,12 @@ pub fn run(
                 writeln!(out, "amended #{id}")?;
                 Ok(0)
             }
+            Err(AmendRefusal::NoSuchSubmission(unread)) if !unread.is_empty() => {
+                unfound(id, &unread, json, out)
+            }
             Err(r) => {
                 let (why, next) = match r {
-                    AmendRefusal::NoSuchSubmission => {
+                    AmendRefusal::NoSuchSubmission(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     AmendRefusal::NotYours => (
@@ -1270,9 +1307,12 @@ pub fn run(
                 }
                 Ok(0)
             }
+            Err(WithdrawRefusal::NoSuchSubmission(unread)) if !unread.is_empty() => {
+                unfound(id, &unread, json, out)
+            }
             Err(r) => {
                 let (why, next) = match r {
-                    WithdrawRefusal::NoSuchSubmission => {
+                    WithdrawRefusal::NoSuchSubmission(_) => {
                         (no_submission(id), vec!["sluice overview".into()])
                     }
                     WithdrawRefusal::NotYours => (
@@ -1508,6 +1548,24 @@ fn tell_hold(
             writeln!(out, "{}", held_line(branch, h))?;
         }
         *said = now;
+    }
+    Ok(())
+}
+
+/// 26, 121, rule core.14: say that `sluice run` passed `branch` by, its
+/// status read or round failing with `words`, once while those words
+/// stand: when it begins, and again for other words. `said` holds the
+/// words each branch was last passed by with; a branch that reads leaves
+/// it, so a refusal after a pass that read it is said again.
+fn tell_passed(
+    out: &mut dyn Write,
+    branch: &str,
+    words: &str,
+    said: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    if said.get(branch).map(String::as_str) != Some(words) {
+        writeln!(out, "{branch} could not be read, passed by: {words}")?;
+        said.insert(branch.to_string(), words.to_string());
     }
     Ok(())
 }
@@ -2349,10 +2407,19 @@ impl Reading {
     }
 }
 
-/// Submission `id`'s record, from the records of `branch`.
+/// Submission `id`'s record, from the records of `branch`, looked up as
+/// `sluice wait <n>` looks it up, past any other branch that cannot be
+/// read (26).
 fn record(s: &Sluice<'_>, id: u64, branch: &str) -> Result<Submission> {
-    s.state(id)?
-        .ok_or_else(|| anyhow::anyhow!("submission {id} is no longer in {branch}'s records"))
+    match s.lookup(id)? {
+        Lookup::Found(sub) => Ok(sub),
+        Lookup::Unfound(unread) if unread.is_empty() => Err(anyhow::anyhow!(
+            "submission {id} is no longer in {branch}'s records"
+        )),
+        Lookup::Unfound(unread) => {
+            Err(anyhow::anyhow!("{}", unfound_lines(id, &unread).join("; ")))
+        }
+    }
 }
 
 /// `branch`'s part of an overview document; `None` when it has none, or
@@ -2624,6 +2691,35 @@ fn takes_pulls(s: &Sluice<'_>, branch: &str) -> Result<bool> {
 /// A refusal's words for a number that names no submission.
 fn no_submission(id: u64) -> String {
     format!("no submission {id}: sluice overview lists the queues")
+}
+
+/// 26: the words for submission `id` on none of the branches sluice
+/// could read, while those `unread` could not be: that line, then each
+/// branch with the words it was refused with, whole (133), as the
+/// overview words a branch it could not read.
+fn unfound_lines(id: u64, unread: &[Unread]) -> Vec<String> {
+    std::iter::once(format!(
+        "submission {id} is on none of the branches sluice could read"
+    ))
+    .chain(
+        unread
+            .iter()
+            .map(|u| format!("{} could not be read: {}", u.branch, u.refused)),
+    )
+    .collect()
+}
+
+/// 26: say that submission `id` is on none of the branches sluice could
+/// read, naming each it could not, and never that there is no such
+/// submission, since whether there is one is not known (rule core.11);
+/// exit [`INTERNAL`]. Under `--json`, the internal error document, its
+/// message the lines joined by `; `, next `sluice overview`.
+fn unfound(id: u64, unread: &[Unread], json: bool, out: &mut dyn Write) -> Result<i32> {
+    let lines = unfound_lines(id, unread);
+    let text = lines.join(if json { "; " } else { "\n" });
+    let next = ["sluice overview".to_string()];
+    told::tell(out, json, Kind::Internal, &text, &next)?;
+    Ok(INTERNAL)
 }
 
 /// The commands a refusal for another's submission `id` moves on with:

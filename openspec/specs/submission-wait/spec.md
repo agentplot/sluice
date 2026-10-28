@@ -72,6 +72,20 @@ exit 1 with the not-found error document under `--json`.
   9999
 - **THEN** it prints `{"error":{"kind":"not_found",...}}` and exits 1
 
+### Requirement: A number on no branch read, while one was not, exits 3
+
+A number found on no branch sluice could read, while some branch could
+not be read, SHALL exit 3 with the internal error document under
+`--json`, naming each branch that could not be read, since whether the
+submission exists is not known (26).
+
+#### Scenario: Not found among the branches that could be read
+
+- **WHEN** `sluice wait 9999 --json` runs, no branch sluice could read
+  holds submission 9999, and `bolt/b`'s state could not be read
+- **THEN** it prints `{"error":{"kind":"internal",...}}` whose message
+  names `bolt/b` and the words it was refused with, and exits 3
+
 ### Requirement: The document is the submission's record
 
 Under `--json`, `sluice wait` and a waiting `sluice submit` SHALL print

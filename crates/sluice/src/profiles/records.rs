@@ -128,12 +128,15 @@ impl Records {
     /// The remotes that may hold a branch's state: those the default
     /// branch's policy, read here with no fetch, names for a branch while
     /// it names signers, and those this host has fetched a state from
-    /// before. A repository with no signers asks no remote (C.6).
+    /// before. A repository with no signers asks no remote (C.6). A
+    /// default branch whose policy cannot be read names none: its refusal
+    /// is its own, said wherever that branch is read, and the remotes this
+    /// host has read a state from are listed all the same (26).
     fn signed_remotes(&self) -> Result<Vec<String>> {
         let mut out = Vec::new();
         let common = self.branches.common_dir()?;
         if let Some(default) = super::default_branch(&common)? {
-            if let Some((_, policy)) = self.branches.policy_of(&default)? {
+            if let Ok(Some((_, policy))) = self.branches.policy_of(&default) {
                 if !policy.signers.is_empty() {
                     for (_, rules) in &policy.branches {
                         if let Some(r) = &rules.remote {

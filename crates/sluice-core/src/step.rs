@@ -1713,13 +1713,18 @@ impl Sluice<'_> {
     /// kinds (session-runs-1 clause 89), and less the runs this instance
     /// has marked starting on the branches it serves, `line` as this step
     /// has it, which the host's count holds only once they start. A run
-    /// whose checks ended counts no longer, its result read or not.
+    /// whose checks ended counts no longer, its result read or not. A
+    /// branch whose records cannot be read adds nothing (26, rule
+    /// core.14): a run marked starting there holds its checks in the
+    /// host's count once it starts.
     fn capacity(&self, line: &Line) -> Result<usize> {
         let mut under = self.seams.tests.running()?.total() + self.starting_here(line);
         if self.serves == Serves::Every {
             for b in self.seams.state.branches()? {
                 if b != line.branch {
-                    under += self.starting_here(&self.read_line(&b)?);
+                    if let Ok(other) = self.read_line(&b) {
+                        under += self.starting_here(&other);
+                    }
                 }
             }
         }
@@ -1949,17 +1954,21 @@ impl Sluice<'_> {
     }
 
     /// 87: refuse a host whose `[runs] systems` names a system it is not,
-    /// by the policy of any branch with records.
+    /// by the policy of any branch with records. A branch whose tip or
+    /// policy cannot be read is passed by (26, rule core.14): its own
+    /// round reads the same policy once it reads.
     pub fn check_host_systems(&self) -> Result<()> {
         let Some(names) = &self.peer.systems else {
             return Ok(());
         };
         let p = self.seams.tests.platform()?;
         for b in self.seams.state.branches()? {
-            let Some(tip) = self.seams.branch.read(&b)? else {
-                continue;
-            };
-            let Some(policy) = self.policy_at(&tip)? else {
+            let read = self
+                .seams
+                .branch
+                .read(&b)
+                .and_then(|tip| tip.map(|tip| self.policy_at(&tip)).transpose());
+            let Ok(Some(Some(policy))) = read else {
                 continue;
             };
             for n in names {
