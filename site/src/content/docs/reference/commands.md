@@ -799,6 +799,23 @@ and exit. A submission already decided is reported at once, and nothing
 runs. `sluice wait <branch>` waits for this worktree's last submission
 to that branch, the one `sluice submit <branch> --status` reports.
 
+sluice finds a submission by its number on any branch it can read,
+whatever other branch it cannot. A branch whose policy, revision or
+state sluice cannot read holds up no wait on another branch. When the
+number is on none of the branches sluice could read, and some branch
+could not be read, it says so and exits `3`. It names each branch it
+could not read, with the words its read was refused with. Whether the
+submission exists is then not known, so it never says there is no such
+submission. Under `--json`, it prints the error document, kind
+`internal`. `sluice status <id>`, `sluice amend` and `sluice withdraw`
+find a submission, and say they could not, the same way:
+
+```console
+$ sluice wait 250
+submission 250 is on none of the branches sluice could read
+bolt/cache could not be read: [checkout] declares a cache, which sluice no longer keeps: …
+```
+
 With `--timeout`, as `90s`, `9m` or `1h30m`, it returns once that long
 has passed and exits `5`, with the submission as it stands. The
 submission stays in the queue. An agent whose tool calls end before a
@@ -870,7 +887,12 @@ record is the one the next round writes.
 Every command, not only submit, exits `3` when sluice itself fails (a
 repository it cannot open, a record it cannot read), with the cause on
 stderr. A waiting submit or `sluice wait` does so only while the
-submission has not landed. A command exits `64` when it cannot read its
+submission has not landed. `sluice wait`, `sluice status`, `sluice
+amend` and `sluice withdraw` find a submission by its number. Each exits
+`3` as well when the number is on none of the branches it could read
+while some branch could not be read, and names each such branch with
+why. Each says there is no such submission, exit `1`, only when every
+branch was read. A command exits `64` when it cannot read its
 command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
