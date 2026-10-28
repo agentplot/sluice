@@ -28,4 +28,4 @@
 
 ## 5. The gate
 
-- [ ] 5.1 Run the gate's checks on the committed work, `sluice exec main`, and verify every task passes, `sluice:tools` and `sluice-conformance:test` among them.
+- [x] 5.1 Run the gate's checks on the committed work, `sluice exec main`, and verify every task passes, `sluice:tools` and `sluice-conformance:test` among them.
