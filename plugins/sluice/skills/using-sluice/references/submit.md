@@ -11,6 +11,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--status` | Where this worktree's last submission, or its pull request, stands. |
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
+| `--subject <text>` | One line saying what lands: the title of the pull request the submit opens, or of one it opened before, and the name of its landing commit. With several worktrees, once for each, in their order, or not at all. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
 | `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions, with its `head` and `draft` under `--status`; under `--status`, with `sends`, the revision a submit from the worktree would send now; `{branch,submissions}` for several worktrees. |
 | `--timeout 9m` | `wt submit` only: submit, then wait at most that long, exit `5` when it runs out; run again, follow the submission already made. See "Who moves the queue". |
@@ -77,6 +78,8 @@ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait --json
   `--json`, one document: `{branch,submissions}`, each item that
   submission's record plus its `worktree`.
 - `--check` and `--status` take one worktree (exit `64` with more).
+- `--subject` is given once per worktree, in their order, or not at all
+  (exit `64` otherwise); each names its own submission.
 
 ## Who moves the queue
 
@@ -121,7 +124,7 @@ push is logged as `refused` and the next round tests again on the new tip.
 With `[branches.main.pull_requests]`:
 
 ```
-$ wt submit main
+$ wt submit main --subject "Batch review cards"
 pushed unit/batch-review · opened #41: Batch review cards
 waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
@@ -130,6 +133,9 @@ testing main + #38 + #40 + #41
 passed · landed as b7d2e94
 ```
 
+- Its title is the `--subject`, or your branch's name with none. A later
+  `--subject` retitles a pull request sluice opened, never one a person
+  opened; a submit with none leaves the title as it is.
 - The pull request waits while it is a draft or misses a review or a check
   the policy names, then joins the queue.
 - A submit of new commits replaces its submission in the queue
@@ -149,7 +155,10 @@ passed · landed as b7d2e94
 ## Landing commits
 
 One merge commit per submission: first parent the branch, second parent your
-head. Trailers record what was tested:
+head. Its first line names the work, `chore(land): #12 Batch review cards` by
+default: the submit's `--subject`, the title of the pull request it was taken
+from, or your branch with neither. Trailers record who submitted it and what
+was tested:
 
 ```
 Sluice-Submission: 12

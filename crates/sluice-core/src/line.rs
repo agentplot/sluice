@@ -202,6 +202,7 @@ impl Line {
                 id: s.id,
                 state: s.state,
                 worktree: s.from.worktree.clone(),
+                subject: s.subject.clone(),
             }));
         }
         if !self.appended.is_empty() {
@@ -213,5 +214,50 @@ impl Line {
             changes.append.insert(FINISHED_INDEX.into(), index);
         }
         changes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn landed(id: u64, worktree: &str, subject: Option<&str>) -> Vec<u8> {
+        format!(
+            "{{\"schema\":\"sluice/submission@1\",\"id\":{id},\"branch\":\"main\",\
+             \"head\":\"h{id}\",\"from\":{{\"agent\":\"a\",\"worktree\":\"{worktree}\"}},\
+             \"submitted\":\"t\",\"after\":[],\"priority\":0,\"attempt\":1,\
+             \"state\":\"landed\"{}}}",
+            subject.map_or(String::new(), |s| format!(",\"subject\":{s:?}"))
+        )
+        .into_bytes()
+    }
+
+    /// 26, 130: a submission moved to the finished records keeps its
+    /// subject in the live index, and one with none writes no field.
+    #[test]
+    fn a_finished_submission_keeps_its_subject_in_the_index() {
+        let files = [
+            (
+                submission_file(12),
+                landed(12, "unit/review", Some("Batch review cards")),
+            ),
+            (submission_file(13), landed(13, "unit/forecast", None)),
+        ];
+        let line = Line::load(
+            "main",
+            Snapshot {
+                version: 1,
+                files: files.into_iter().collect(),
+            },
+        )
+        .unwrap();
+        let changes = line.changes();
+        assert!(changes.remove.contains(&submission_file(12)));
+        assert_eq!(
+            String::from_utf8(changes.append[FINISHED_INDEX].clone()).unwrap(),
+            "{\"id\":12,\"state\":\"landed\",\"worktree\":\"unit/review\",\
+             \"subject\":\"Batch review cards\"}\n\
+             {\"id\":13,\"state\":\"landed\",\"worktree\":\"unit/forecast\"}\n"
+        );
     }
 }

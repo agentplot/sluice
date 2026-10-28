@@ -4,6 +4,8 @@
 //! (ADR 0028); it decides nothing and writes nothing (rules core.11,
 //! core.14).
 
+use std::collections::BTreeSet;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sluice_core::overview::{BranchView, CandidateView};
@@ -11,7 +13,7 @@ use sluice_core::records::CandidateState;
 use sluice_core::Sluice;
 use sluice_seams::TaskState;
 
-use crate::combination;
+use crate::{combination, Names};
 
 /// How many running tasks a line names.
 const NAMED: usize = 3;
@@ -19,12 +21,13 @@ const NAMED: usize = 3;
 /// `testing main + #12 · 7/12 tasks · running a:test 4m02s · 6m10s of
 /// 30m`, for each combination of `branch` under test; with `only`, the
 /// one submission `only`'s: the combination whose last submission it is,
-/// else any that holds it.
+/// else any that holds it. Its submissions by `names`, where given.
 pub fn lines(
     s: &Sluice<'_>,
     branch: &str,
     only: Option<u64>,
     now: DateTime<Utc>,
+    names: Option<&Names>,
 ) -> Result<Vec<String>> {
     let view = s.branch_view_of(branch)?;
     let shown: Vec<&CandidateView> = match only {
@@ -33,7 +36,7 @@ pub fn lines(
     };
     Ok(shown
         .into_iter()
-        .map(|c| testing_line(branch, c, now))
+        .map(|c| testing_line(branch, c, now, names))
         .collect())
 }
 
@@ -67,9 +70,16 @@ pub fn moved(c: &CandidateView) -> (Vec<u64>, usize, Vec<String>) {
     )
 }
 
-/// `testing <combination>`, and its progress where there is any.
-pub fn testing_line(branch: &str, c: &CandidateView, now: DateTime<Utc>) -> String {
-    let named = combination(branch, &c.submissions);
+/// `testing <combination>`, and its progress where there is any; the
+/// combination's submissions by `names`, where given (26), and by their
+/// numbers alone otherwise, as `sluice wait` says them.
+pub fn testing_line(
+    branch: &str,
+    c: &CandidateView,
+    now: DateTime<Utc>,
+    names: Option<&Names>,
+) -> String {
+    let named = combination(branch, &c.submissions, names, &mut BTreeSet::new());
     match line(c, now) {
         p if p.is_empty() => format!("testing {named}"),
         p => format!("testing {named} · {p}"),
@@ -227,7 +237,7 @@ mod tests {
         let mut c = candidate(None, None);
         c.started = None;
         assert_eq!(line(&c, now()), "");
-        assert_eq!(testing_line("main", &c, now()), "testing main + #12");
+        assert_eq!(testing_line("main", &c, now(), None), "testing main + #12");
     }
 
     #[test]

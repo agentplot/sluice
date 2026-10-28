@@ -29,7 +29,9 @@ pub struct Policy {
     /// Patterns of branch names and their gates, in the order written.
     pub branches: Vec<(String, Rules)>,
     /// `[landing] subject`: a landing commit's first line, with `{id}`,
-    /// `{from}`, `{agent}` and `{to}` filled in (23).
+    /// `{from}`, `{agent}` and `{to}` filled in (23). `{from}` is what
+    /// lands: the submit's subject, or the branch submitted where it gave
+    /// none.
     pub landing_subject: String,
     /// `[preview]`: how a preview of this revision is brought up
     /// (previews-1 clauses 98, 99); `None` when the table is absent.

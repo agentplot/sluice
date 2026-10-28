@@ -711,6 +711,126 @@ fn a_submission_the_runner_could_not_check_is_taken_with_a_warning() {
     assert!(warnings[0].as_str().unwrap().contains("no devenv"), "{out}");
 }
 
+/// The message of the commit submission `id` landed as.
+fn landing_message(f: &Fakes, id: u64) -> String {
+    let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+    let landed = json(&out)["landed_as"]
+        .as_str()
+        .expect("landed")
+        .to_string();
+    f.world.message(&sluice_seams::Rev::new(landed))
+}
+
+/// 23: a subject on a branch with no pull requests names its landing.
+/// The submission is taken with no warning of its subject and lands, its
+/// landing commit's first line the subject, `Sluice-From` still naming
+/// the agent and the branch; under `--json --no-wait`, the document
+/// carries no warning either.
+#[test]
+fn a_subject_on_a_branch_with_no_pull_requests_names_its_landing() {
+    let f = setup();
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
+    let subject = ["--subject", "Batch review cards"];
+    let args = [
+        &["submit", BRANCH, "--worktree", "unit/review"][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, LANDED, "{out}");
+    assert!(!out.contains("warning:"), "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 Batch review cards"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
+
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("plugin/lib/plan.py", Some("y"))],
+    );
+    let args = [
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/b",
+            "--no-wait",
+            "--json",
+        ][..],
+        &subject,
+    ]
+    .concat();
+    let (code, out) = sluice(&f, &args);
+    assert_eq!(code, 0, "{out}");
+    let v = json(&out);
+    assert_eq!(v["id"], 2);
+    assert_eq!(v.get("warnings"), None, "{out}");
+}
+
+/// 23: with no subject, a landing commit is named by its branch.
+#[test]
+fn with_no_subject_a_landing_is_named_by_its_branch() {
+    let f = setup();
+    work(
+        &f,
+        "unit/review",
+        "agent",
+        &[("tests/t_cards.py", Some("x"))],
+    );
+    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/review"]);
+    assert_eq!(code, LANDED, "{out}");
+    let m = landing_message(&f, 1);
+    assert_eq!(m.lines().next(), Some("chore(land): #1 unit/review"));
+    assert!(m.contains("\nSluice-From: agent (unit/review)\n"), "{m}");
+}
+
+/// 125, 23: a group given a subject for each worktree queues its
+/// submissions in order, each landing named by its own subject.
+#[test]
+fn a_subject_for_each_names_each_landing() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("tests/b", Some("b"))]);
+    let (code, out) = sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--no-wait",
+            "--worktree",
+            "unit/a",
+            "--worktree",
+            "unit/b",
+            "--subject",
+            "Batch review cards",
+            "--subject",
+            "Card filters",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(queued(&f).len(), 2);
+    for id in [1, 2] {
+        assert_eq!(sluice(&f, &["wait", &id.to_string()]).0, LANDED);
+    }
+    for (id, subject, from) in [
+        (1, "Batch review cards", "agent-a (unit/a)"),
+        (2, "Card filters", "agent-b (unit/b)"),
+    ] {
+        let m = landing_message(&f, id);
+        assert_eq!(
+            m.lines().next(),
+            Some(format!("chore(land): #{id} {subject}").as_str())
+        );
+        assert!(m.contains(&format!("\nSluice-From: {from}\n")), "{m}");
+    }
+}
+
 /// Under `--json`, a refusal is one error document on stdout, naming
 /// what moves it on; the exit is a refusal's still.
 #[test]
@@ -864,8 +984,56 @@ fn home_finds_a_landed_or_failed_submission_through_recent() {
 
     let (code, out) = sluice(&f, &["--worktree", "unit/b"]);
     assert_eq!(code, 0);
-    assert!(out.contains(&format!("#2 to {BRANCH} · failed\n")), "{out}");
+    assert!(
+        out.contains(&format!("#2 unit/b to {BRANCH} · failed\n")),
+        "{out}"
+    );
     assert!(out.contains("  failed tests:t-batch-cards: "), "{out}");
+}
+
+/// 26: the home view names its submission by its subject, or its branch
+/// where its submit gave none; `--json` carries the subject, null where
+/// there is none, its other fields as before.
+#[test]
+fn home_names_its_submission_with_its_subject() {
+    let f = setup();
+    work(&f, "unit/forecast", "agent-f", &[("plugin/a", Some("a"))]);
+    f.world.at_path("unit/forecast", "/w/f");
+    f.world.hold_runs(true);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/forecast", "--no-wait"],
+    );
+    sluice(&f, &["step", BRANCH]);
+    let text = |f: &Fakes| sluice(f, &["--worktree", "unit/forecast"]).1;
+    let out = text(&f);
+    assert!(
+        out.contains(&format!("\n#1 unit/forecast to {BRANCH} · testing\n")),
+        "{out}"
+    );
+    let v = home(&f, "unit/forecast");
+    assert_eq!(v["submission"]["subject"], serde_json::Value::Null);
+
+    give_subject(&f, 1, "Forecast concurrent units");
+    let out = text(&f);
+    assert!(
+        out.contains(&format!(
+            "\n#1 Forecast concurrent units to {BRANCH} · testing\n"
+        )),
+        "{out}"
+    );
+    let v = home(&f, "unit/forecast");
+    assert_eq!(
+        v["submission"],
+        serde_json::json!({
+            "id": 1, "branch": BRANCH, "state": "testing", "failed": [],
+            "landed_as": null, "subject": "Forecast concurrent units",
+        })
+    );
+    assert_eq!(
+        v["next"],
+        serde_json::json!(["sluice status 1", "sluice withdraw 1 --as agent-f"])
+    );
 }
 
 /// A pull request's submission names no worktree's path, but the branch it
@@ -963,13 +1131,13 @@ fn status_lists_the_queue() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], header);
     assert!(
-        lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")),
+        lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")),
         "{out}"
     );
     assert_eq!(
         lines[2..],
         [
-            format!("  #3  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
+            format!("  #3 unit/forecast  testing   crw-1-unit-3  unit/forecast   {BRANCH} + #3"),
             format!("2 no longer in the queue: sluice status {BRANCH} --all"),
         ]
     );
@@ -978,13 +1146,19 @@ fn status_lists_the_queue() {
     assert_eq!(code, 0);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], header);
-    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
-    assert_eq!(lines[2], "  #1  landed    crw-1-unit-1  unit/touches");
-    assert!(lines[3]
-        .starts_with("  #2  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "));
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")));
+    assert_eq!(
+        lines[2],
+        "  #1 unit/touches       landed    crw-1-unit-1  unit/touches"
+    );
+    assert!(lines[3].starts_with(
+        "  #2 unit/batch-review  failed    crw-1-unit-2  unit/batch-review   tests:t-batch-cards on "
+    ));
     assert_eq!(
         lines[4],
-        format!("  #3  testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3")
+        format!(
+            "  #3 unit/forecast      testing   crw-1-unit-3  unit/forecast       {BRANCH} + #3"
+        )
     );
 
     // `--json` lists the queue, `--all` the history, the landed #1 read
@@ -1359,7 +1533,7 @@ fn overview_shows_every_branch_at_a_glance() {
             &tip.0[..7]
         )
     );
-    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 · ")));
+    assert!(lines[1].starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · ")));
 }
 
 /// 26, 49, 61: the overview names the worktree each submission its recent
@@ -1391,6 +1565,126 @@ fn overview_names_where_recent_submissions_came_from() {
         b["recent_from"],
         serde_json::json!({"1": "unit/touches", "2": "unit/batch-review"}),
         "{json}"
+    );
+}
+
+/// 23, 26: the overview names the subject of each submission its recent
+/// lines name whose submit gave one, once it has moved to the finished
+/// records too, beside where each came from; none before anything lands.
+#[test]
+fn overview_names_the_subjects_of_recent_submissions() {
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    for w in ["unit/a", "unit/b"] {
+        sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    }
+    give_subject(&f, 2, "Batch review cards");
+    let branch = |f: &Fakes| json(&sluice(f, &["overview", "--json"]).1)["branches"][0].clone();
+    let b = branch(&f);
+    assert_eq!(b["recent"], serde_json::json!([]));
+    assert_eq!(b["recent_subjects"], serde_json::json!({}));
+
+    sluice(&f, &["run", "--rounds", "6"]);
+    // Landed together, #2 moved to the finished records, #1 not yet.
+    let files = f.world.files(BRANCH);
+    assert!(files.contains_key(".finished/2.json"), "{:?}", files.keys());
+    assert!(files.contains_key("submissions/1.json"));
+    let b = branch(&f);
+    assert_eq!(b["recent"][0]["ids"], serde_json::json!([1, 2]), "{b}");
+    assert_eq!(
+        b["recent_subjects"],
+        serde_json::json!({"2": "Batch review cards"}),
+        "{b}"
+    );
+    assert_eq!(
+        b["recent_from"],
+        serde_json::json!({"1": "unit/a", "2": "unit/b"}),
+        "{b}"
+    );
+}
+
+/// 26: the overview's text names each submission of a landing, a blame,
+/// a conflict and a combination under test by its subject, or where it
+/// came from where its submit gave none.
+#[test]
+fn overview_names_each_submission_with_its_subject() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    let submit = |w: &str| sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    let recent = |f: &Fakes| -> Vec<String> {
+        sluice(f, &["overview"])
+            .1
+            .lines()
+            .filter(|l| l.starts_with("  20"))
+            .map(|l| {
+                l.split_once("  ")
+                    .unwrap()
+                    .1
+                    .split_once("  ")
+                    .unwrap()
+                    .1
+                    .to_string()
+            })
+            .collect()
+    };
+
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    submit("unit/a");
+    submit("unit/b");
+    give_subject(&f, 2, "Batch review cards");
+    sluice(&f, &["run", "--rounds", "6"]);
+    let to = &f.world.tip(BRANCH).0[..7];
+    assert_eq!(
+        recent(&f),
+        [format!("landed #1 unit/a, #2 Batch review cards as {to}")]
+    );
+
+    work(
+        &f,
+        "unit/c",
+        "agent-c",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    submit("unit/c");
+    give_subject(&f, 3, "Fix the forecast's dates");
+    sluice(&f, &["run", "--rounds", "6"]);
+    let blamed = recent(&f);
+    assert!(
+        blamed[0].starts_with("blamed #3 Fix the forecast's dates on "),
+        "{blamed:?}"
+    );
+    sluice(&f, &["withdraw", "3", "--as", "agent-c"]);
+
+    f.world.hold_runs(true);
+    work(
+        &f,
+        "unit/d",
+        "agent-d",
+        &[("plugin/lib/plan.py", Some("one"))],
+    );
+    work(
+        &f,
+        "unit/e",
+        "agent-e",
+        &[("plugin/lib/plan.py", Some("two"))],
+    );
+    submit("unit/d");
+    submit("unit/e");
+    give_subject(&f, 5, "Herdr popup");
+    sluice(&f, &["step", BRANCH]);
+    let (_, out) = sluice(&f, &["overview"]);
+    assert_eq!(
+        recent(&f)[0],
+        "conflict #5 Herdr popup on plugin/lib/plan.py",
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with(&format!("  testing {BRANCH} + #4 unit/d · "))),
+        "{out}"
     );
 }
 
@@ -1449,7 +1743,7 @@ fn overview_shows_a_combinations_tasks() {
     let (_, text) = sluice(&f, &["overview"]);
     assert!(
         text.lines().any(|l| l.starts_with(&format!(
-            "  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards · "
+            "  testing {BRANCH} + #3 unit/forecast · 1/3 tasks · running tests:t-batch-cards · "
         ))),
         "{text}"
     );
@@ -1465,10 +1759,10 @@ fn status_shows_a_combinations_progress() {
     three_submissions(&f);
     let (_, before) = sluice(&f, &["status", BRANCH]);
     assert!(
-        before
-            .lines()
-            .any(|l| l == format!("  testing {BRANCH} + #3").as_str()
-                || l.starts_with(&format!("  testing {BRANCH} + #3 · "))),
+        before.lines().any(
+            |l| l == format!("  testing {BRANCH} + #3 unit/forecast").as_str()
+                || l.starts_with(&format!("  testing {BRANCH} + #3 unit/forecast · "))
+        ),
         "{before}"
     );
     let (_, json) = sluice(&f, &["status", "3", "--json"]);
@@ -1496,7 +1790,9 @@ fn status_shows_a_combinations_progress() {
     );
     sluice(&f, &["step", BRANCH]);
 
-    let head = format!("  testing {BRANCH} + #3 · 1/3 tasks · running tests:t-batch-cards 4m");
+    let head = format!(
+        "  testing {BRANCH} + #3 unit/forecast · 1/3 tasks · running tests:t-batch-cards 4m"
+    );
     let (_, text) = sluice(&f, &["status", BRANCH]);
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
@@ -1507,7 +1803,8 @@ fn status_shows_a_combinations_progress() {
     assert!(
         lines[at + 1..]
             .iter()
-            .any(|l| l.starts_with("  #3  testing ") && l.ends_with(&format!("{BRANCH} + #3"))),
+            .any(|l| l.starts_with("  #3 unit/forecast  testing ")
+                && l.ends_with(&format!("{BRANCH} + #3"))),
         "{text}"
     );
     let (_, text) = sluice(&f, &["status", "3"]);
@@ -1515,6 +1812,170 @@ fn status_shows_a_combinations_progress() {
     // A submission in no combination under test has no line.
     let (_, text) = sluice(&f, &["status", "1"]);
     assert!(!text.contains("  testing "), "{text}");
+}
+
+/// 23: submission `id` as if its submit gave `subject`, written on its
+/// live record, since no submit here takes one yet.
+fn give_subject(f: &Fakes, id: u64, subject: &str) {
+    let state = f.seams().state;
+    let _lock = state.wait_lock(BRANCH).unwrap();
+    let read = state.read(BRANCH).unwrap();
+    let path = format!("submissions/{id}.json");
+    let mut doc: serde_json::Value = serde_json::from_slice(&read.files[&path]).unwrap();
+    doc["subject"] = subject.into();
+    let mut changes = sluice_seams::Changes::default();
+    changes
+        .put
+        .insert(path, serde_json::to_vec_pretty(&doc).unwrap());
+    assert!(matches!(
+        state.write(BRANCH, read.version, changes).unwrap(),
+        sluice_seams::Written::Written(_)
+    ));
+}
+
+/// The column a row's state begins at.
+fn state_column(row: &str) -> usize {
+    [" queued ", " testing ", " waiting ", " landed ", " failed "]
+        .iter()
+        .find_map(|w| row.find(w))
+        .unwrap_or_else(|| panic!("no state in {row}"))
+}
+
+/// 26: each row begins with its number and its subject, or its branch
+/// where its submit gave none, padded so the columns after line up; a
+/// combination names each of its submissions once, a row's own number
+/// standing alone.
+#[test]
+fn status_names_each_submission_with_its_subject() {
+    let f = setup();
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    work(&f, "unit/forecast", "agent-f", &[("plugin/b", Some("b"))]);
+    for w in ["unit/review", "unit/forecast"] {
+        sluice(&f, &["submit", BRANCH, "--worktree", w, "--no-wait"]);
+    }
+    give_subject(&f, 1, "Batch review cards");
+    f.world.hold_runs(true);
+    sluice(&f, &["step", BRANCH]);
+
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    let lines: Vec<&str> = out.lines().collect();
+    let one = lines
+        .iter()
+        .find(|l| l.starts_with("  #1 "))
+        .unwrap_or_else(|| panic!("{out}"));
+    let two = lines
+        .iter()
+        .find(|l| l.starts_with("  #2 "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        one.starts_with("  #1 Batch review cards  testing   agent-r  unit/review   "),
+        "{out}"
+    );
+    assert!(one.ends_with(&format!("   {BRANCH} + #1")), "{out}");
+    assert!(two.starts_with("  #2 unit/forecast       "), "{out}");
+    assert_eq!(state_column(one), state_column(two), "{out}");
+    assert!(
+        lines.iter().any(|l| l.starts_with(&format!(
+            "  testing {BRANCH} + #1 Batch review cards + #2 unit/forecast · "
+        ))),
+        "{out}"
+    );
+
+    // One submission's status names the combination the same way.
+    let (_, out) = sluice(&f, &["status", "2"]);
+    assert!(
+        out.lines().any(|l| l.starts_with(&format!(
+            "  testing {BRANCH} + #1 Batch review cards + #2 unit/forecast"
+        ))),
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #2 unit/forecast  testing ")
+                && l.ends_with(&format!("{BRANCH} + #1 Batch review cards + #2"))),
+        "{out}"
+    );
+}
+
+/// 26: a subject is shown on its row's one line, each run of control
+/// characters a space, and kept as given under `--json`.
+#[test]
+fn status_shows_a_subject_on_one_line() {
+    let f = setup();
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/review", "--no-wait"],
+    );
+    give_subject(&f, 1, "Batch review\ncards\u{1b}[31m");
+    let (_, out) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #1 Batch review cards [31m  queued ")),
+        "{out}"
+    );
+    assert!(!out.contains('\u{1b}'), "{out}");
+    let v = json(&sluice(&f, &["status", "1", "--json"]).1);
+    assert_eq!(v["subject"], "Batch review\ncards\u{1b}[31m");
+}
+
+/// 26, 130: a waiting submission names what it waits on by its subject,
+/// a landed one's read from the finished index, or the history's records
+/// under `--all`.
+#[test]
+fn status_names_what_a_submission_waits_on() {
+    let f = setup();
+    f.world
+        .fails_with("tests:t-batch-cards", "tests/t_cards.py", "broken");
+    work(&f, "unit/review", "agent-r", &[("plugin/a", Some("a"))]);
+    sluice(
+        &f,
+        &["submit", BRANCH, "--worktree", "unit/review", "--no-wait"],
+    );
+    give_subject(&f, 1, "Batch review cards");
+    sluice(&f, &["run", "--rounds", "6"]);
+    assert!(f.world.files(BRANCH).contains_key(".finished/1.json"));
+    work(
+        &f,
+        "unit/b",
+        "agent-b",
+        &[("tests/t_cards.py", Some("broken"))],
+    );
+    assert_eq!(
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/b"]).0,
+        FAILED
+    );
+    work(&f, "unit/cards", "agent-c", &[("plugin/c", Some("c"))]);
+    sluice(
+        &f,
+        &[
+            "submit",
+            BRANCH,
+            "--worktree",
+            "unit/cards",
+            "--after",
+            "2,1",
+            "--no-wait",
+        ],
+    );
+    sluice(&f, &["step", BRANCH]);
+    for args in [&["status", BRANCH][..], &["status", BRANCH, "--all"]] {
+        let (_, out) = sluice(&f, args);
+        let row = out
+            .lines()
+            .find(|l| l.starts_with("  #3 "))
+            .unwrap_or_else(|| panic!("{out}"));
+        assert!(
+            row.ends_with("   after #2 unit/b, #1 Batch review cards"),
+            "{out}"
+        );
+    }
+    let (_, out) = sluice(&f, &["status", BRANCH, "--all"]);
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("  #1 Batch review cards  landed ")),
+        "{out}"
+    );
 }
 
 /// ADR 0036: the branches in the order the default branch's policy writes
@@ -3682,57 +4143,35 @@ fn wait_finds_what_it_waits_on() {
     assert_eq!(json(&out)["error"]["message"], "no submission 9999");
 }
 
-/// A pause that moves the fakes' clock on a minute at each wait, for a
-/// wait that runs past [`sluice::UNANSWERED_FOR`].
-struct Minutes<'a>(&'a Fakes, Cell<usize>);
+/// A pause a wait never takes once a read or a round failed as the forge
+/// could not answer: the retry policy read again for it (rule core.29).
+struct Unpaused;
 
-impl Pause for Minutes<'_> {
+impl Pause for Unpaused {
     fn pause(&self) -> bool {
-        self.1.set(self.1.get() + 1);
-        assert!(self.1.get() < 50, "waited too long");
-        self.0.world.advance(chrono::Duration::minutes(1));
-        true
+        panic!("the wait paused to read again")
     }
 }
 
-/// A round the forge answered 5xx is run again: `sluice wait` and a
-/// waiting submit wait through a few such answers to the outcome.
+/// 134: a round whose call the forge could not answer for the retry
+/// policy's time, so that its seam answers 5xx once the policy is spent,
+/// ends `sluice wait` and a waiting submit at once: each says it could not
+/// read, on stderr with how long and the forge's words and on stdout with
+/// how to wait again, and exits 3, no outcome. The wait never reads again
+/// of its own (rule core.29); nothing was decided of the submission, which
+/// lands once the forge answers.
 #[test]
-fn a_wait_reads_again_through_a_forges_5xx() {
-    let f = setup();
-    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
-    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    f.world.unanswer_starts(3);
-    let (code, out) = sluice(&f, &["wait", "1"]);
-    assert_eq!(code, LANDED, "{out}");
-    let tip = f.world.tip(BRANCH);
-    assert!(
-        out.ends_with(&format!("passed · landed as {}\n", &tip.0[..7])),
-        "{out}"
-    );
-
-    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
-    f.world.unanswer_starts(3);
-    let (code, out) = sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--json"]);
-    assert_eq!(code, LANDED, "{out}");
-    assert_eq!(json(&out)["state"], "landed");
-}
-
-/// Past five minutes of a forge's 5xx answers, `sluice wait` says it could
-/// not read, on stderr with the forge's words and on stdout with how to
-/// wait again, and exits 3: no outcome. Nothing was decided of the
-/// submission, which lands once the forge answers.
-#[test]
-fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
-    if let Some(err) = stderr_of("a_wait_past_five_minutes_of_5xx_says_it_could_not_read") {
+fn a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read() {
+    const TEST: &str = "a_wait_whose_round_the_forge_could_not_answer_says_it_could_not_read";
+    if let Some(err) = stderr_of(TEST) {
         let said: Vec<&str> = err
             .lines()
-            .filter(|l| l.starts_with("sluice: could not read #1 for 5m"))
+            .filter(|l| l.starts_with("sluice: could not read #"))
             .collect();
-        assert_eq!(said.len(), 2, "{err}");
+        assert_eq!(said.len(), 3, "{err}");
         for line in said {
             assert!(
-                line.contains(", so whether it landed is not known: starting a run in ")
+                line.contains(" for 0s, so whether it landed is not known: starting a run in ")
                     && line.ends_with(": 503 Service Unavailable"),
                 "{err}"
             );
@@ -3742,8 +4181,8 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
     let f = setup();
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
-    f.world.unanswer_starts(usize::MAX);
-    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1"]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1"]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     assert!(out.ends_with("could not read #1: sluice wait 1\n"), "{out}");
     assert!(
@@ -3751,26 +4190,73 @@ fn a_wait_past_five_minutes_of_5xx_says_it_could_not_read() {
         "{out}"
     );
 
-    let (code, out) = sluice_with(&f, &Minutes(&f, Cell::new(0)), &["wait", "1", "--json"]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1", "--json"]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     let v = json(&out);
     assert_eq!(v["error"]["kind"], "internal");
     assert_eq!(v["error"]["next"], serde_json::json!(["sluice wait 1"]));
     let message = v["error"]["message"].as_str().unwrap();
-    assert!(message.starts_with("could not read #1 for 5m"), "{message}");
+    assert!(
+        message.starts_with("could not read #1 for 0s, so whether it landed is not known: "),
+        "{message}"
+    );
     assert!(message.ends_with(": 503 Service Unavailable"), "{message}");
     let (_, out) = sluice(&f, &["status", "1", "--json"]);
     assert_ne!(json(&out)["state"], "failed");
 
-    f.world.unanswer_starts(0);
-    assert_eq!(sluice(&f, &["wait", "1"]).0, LANDED);
+    work(&f, "unit/b", "agent-b", &[("plugin/b", Some("b"))]);
+    f.world.unanswer_starts(1);
+    let (code, out) = sluice_with(&f, &Unpaused, &["submit", BRANCH, "--worktree", "unit/b"]);
+    assert_eq!(code, sluice::INTERNAL, "{out}");
+    assert!(out.ends_with("could not read #2: sluice wait 2\n"), "{out}");
+
+    assert_eq!(sluice(&f, &["wait", "2"]).0, LANDED);
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert_eq!(json(&out)["state"], "landed");
+}
+
+/// 134: Ctrl-C while a wait's call to a remote is between tries ends the
+/// retry policy's pauses, and the call fails as its last try did; the wait
+/// stops at once, as a wait stopped by Ctrl-C does, never as one that
+/// could not read, and the submission stays queued. Alone in a process of
+/// its own, which Ctrl-C reaches whole.
+#[test]
+fn a_wait_stopped_between_tries_is_a_stopped_wait() {
+    const TEST: &str = "a_wait_stopped_between_tries_is_a_stopped_wait";
+    if let Some(err) = stderr_of(TEST) {
+        assert!(!err.contains("could not read"), "{err}");
+        return;
+    }
+    let f = setup();
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    f.world.unanswer_starts(1);
+    sluice::stop_on_interrupt().unwrap();
+    nix::sys::signal::raise(nix::sys::signal::Signal::SIGINT).unwrap();
+    let (code, out) = sluice_with(&f, &Unpaused, &["wait", "1"]);
+    assert_eq!(
+        f.world.unanswered_starts_left(),
+        0,
+        "the round's call was made"
+    );
+    assert_eq!(code, sluice::STOPPED, "{out}");
+    assert!(out.ends_with("still waiting: sluice wait 1\n"), "{out}");
+    let (_, out) = sluice(&f, &["status", "1", "--json"]);
+    assert!(
+        !["failed", "landed", "withdrawn"].contains(&json(&out)["state"].as_str().unwrap()),
+        "{out}"
+    );
 }
 
 /// Pull request 7 into the branch, from any worktree, waiting; its forge
-/// answers 5xx to as many finds and follows as each count holds.
+/// answers 5xx to as many finds and follows as each count holds, each as a
+/// retry policy spent after five minutes of them answers it. It keeps the
+/// subject of each open.
 struct Pull7 {
     finds: Cell<usize>,
     follows: Cell<usize>,
+    subjects: RefCell<Vec<Option<String>>>,
 }
 
 impl Pull7 {
@@ -3778,6 +4264,7 @@ impl Pull7 {
         Pull7 {
             finds: Cell::new(finds),
             follows: Cell::new(follows),
+            subjects: RefCell::default(),
         }
     }
 
@@ -3787,10 +4274,13 @@ impl Pull7 {
             return Ok(());
         }
         left.set(left.get() - 1);
-        Err(
+        let e: anyhow::Error =
             sluice_seams::Unanswered("GET /repos/o/r/pulls/7: 503 Service Unavailable".into())
-                .into(),
-        )
+                .into();
+        Err(e.context(sluice::retry::Spent {
+            tries: 9,
+            lasted: std::time::Duration::from_secs(300),
+        }))
     }
 }
 
@@ -3814,7 +4304,9 @@ impl sluice::PullRequests for Pull7 {
         _: &dyn sluice_core::Clock,
         _: &str,
         _: &str,
+        subject: Option<&str>,
     ) -> anyhow::Result<Result<sluice::Opened, sluice_core::SubmitRefusal>> {
+        self.subjects.borrow_mut().push(subject.map(String::from));
         Ok(Ok(sluice::Opened {
             number: 7,
             said: "opened #7".into(),
@@ -3885,29 +4377,121 @@ fn sluice_pulls(
     (code, String::from_utf8(out).unwrap())
 }
 
-/// Following a pull request, a find or a follow the forge answered 5xx is
-/// made again; past five minutes of such answers, `sluice wait` and a
-/// waiting submit say they could not read it and exit 3, never that it
-/// closed or failed.
+/// C.5 pull request: a subject is one line. An empty one, or one of two
+/// lines, is a command line sluice cannot read, which pushes, opens and
+/// queues nothing.
 #[test]
-fn following_a_pull_request_reads_again_through_a_forges_5xx() {
+fn a_subject_is_one_line() {
     let f = pulls_setup();
-    let stop = Then(Cell::new(0), |n| n < 6);
-    let (code, out) = sluice_pulls(&f, &Pull7::new(2, 2), &stop, &["wait", BRANCH]);
-    assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_eq!(
-        out,
-        format!("waiting\nstill open: #7; sluice wait {BRANCH}\n")
-    );
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    let pulls = Pull7::new(0, 0);
+    let one = ["--worktree", "unit/b1", "--subject"];
+    for (subject, why) in [
+        ("", "--subject is empty"),
+        ("  ", "--subject is empty"),
+        ("one\ntwo", "a subject is one line"),
+        ("one\r\ntwo", "a subject is one line"),
+    ] {
+        let args = [&["submit", BRANCH][..], &one, &[subject]].concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+        assert!(out.contains(why), "{args:?}: {out}");
+    }
+    assert!(pulls.subjects.borrow().is_empty());
+    assert!(queued(&f).is_empty());
+}
 
-    let pulls = Pull7::new(0, usize::MAX);
-    let (code, out) = sluice_pulls(&f, &pulls, &Minutes(&f, Cell::new(0)), &["wait", BRANCH]);
+/// 125: a group takes one subject per worktree, in their order, or none;
+/// one subject for two worktrees, or any other count, is refused before
+/// anything is pushed, opened or queued, saying what to give.
+#[test]
+fn one_subject_for_two_worktrees_is_refused() {
+    let give = "give one --subject per --worktree, in their order, or none";
+    for f in [setup(), pulls_setup()] {
+        work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+        work(&f, "unit/b2", "agent-2", &[("plugin/two", Some("2"))]);
+        let pulls = Pull7::new(0, 0);
+        let two = ["--worktree", "unit/b1", "--worktree", "unit/b2"];
+        for (args, said) in [
+            (
+                [&two[..], &["--subject", "Both"]].concat(),
+                "1 subject for 2 worktrees",
+            ),
+            (
+                [
+                    &two[..],
+                    &["--subject", "a", "--subject", "b", "--subject", "c"],
+                ]
+                .concat(),
+                "3 subjects for 2 worktrees",
+            ),
+            (
+                vec!["--worktree", "unit/b1", "--subject", "a", "--subject", "b"],
+                "2 subjects for 1 worktree",
+            ),
+        ] {
+            let args = [&["submit", BRANCH, "--no-wait"][..], &args].concat();
+            let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+            assert_eq!(code, sluice::USAGE, "{args:?}: {out}");
+            assert_eq!(out, format!("sluice submit: {said}; {give}\n"), "{args:?}");
+        }
+        assert!(pulls.subjects.borrow().is_empty());
+        assert!(queued(&f).is_empty());
+    }
+}
+
+/// The subject reaches the pull request a submit opens, as written; a
+/// submit with none gives none.
+#[test]
+fn a_subject_is_handed_to_the_pull_request_opened() {
+    let f = pulls_setup();
+    work(&f, "unit/b1", "agent-1", &[("plugin/one", Some("1"))]);
+    let pulls = Pull7::new(0, 0);
+    let submit = |rest: &[&str]| {
+        let args = [
+            &["submit", BRANCH, "--worktree", "unit/b1", "--no-wait"][..],
+            rest,
+        ]
+        .concat();
+        let (code, out) = sluice_pulls(&f, &pulls, &Rounds(Cell::new(0)), &args);
+        assert_eq!(code, 0, "{out}");
+    };
+    submit(&["--subject", "Batch review cards"]);
+    submit(&[]);
+    assert_eq!(
+        *pulls.subjects.borrow(),
+        [Some("Batch review cards".to_string()), None]
+    );
+}
+
+/// A subject titles what a submit opens: neither a forecast nor a
+/// worktree's status takes one.
+#[test]
+fn a_subject_takes_neither_check_nor_status() {
+    for flag in ["--check", "--status"] {
+        let e =
+            Cli::try_parse_from(["sluice", "submit", BRANCH, "--subject", "x", flag]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict);
+        let said = e.to_string();
+        assert!(said.contains("--subject") && said.contains(flag), "{said}");
+    }
+}
+
+/// Following a pull request, a find or a follow the forge could not
+/// answer for the retry policy's time ends `sluice wait` and a waiting
+/// submit at once (134; rule core.29): each says it could not read the
+/// pull request, with how long it was tried, and exits 3, never that it
+/// closed or failed, and never reads again of its own.
+#[test]
+fn following_a_pull_request_the_forge_could_not_answer_says_it_could_not_read() {
+    let f = pulls_setup();
+    let (code, out) = sluice_pulls(&f, &Pull7::new(0, 1), &Unpaused, &["wait", BRANCH]);
     assert_eq!(code, sluice::INTERNAL, "{out}");
     assert_eq!(out, format!("could not read #7: sluice wait {BRANCH}\n"));
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(0, 1),
+        &Unpaused,
         &["wait", BRANCH, "--json"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");
@@ -3918,19 +4502,17 @@ fn following_a_pull_request_reads_again_through_a_forges_5xx() {
         serde_json::json!([format!("sluice wait {BRANCH}")])
     );
     let message = v["error"]["message"].as_str().unwrap();
-    assert!(message.starts_with("could not read #7 for 5m"), "{message}");
-    assert!(
-        message.ends_with(
-            ", so whether it landed is not known: GET /repos/o/r/pulls/7: 503 Service Unavailable"
-        ),
-        "{message}"
+    assert_eq!(
+        message,
+        "could not read #7 for 5m00s, so whether it landed is not known: \
+         GET /repos/o/r/pulls/7: 503 Service Unavailable"
     );
 
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("b"))]);
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(0, 1),
+        &Unpaused,
         &["submit", BRANCH, "--worktree", "unit/a"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");
@@ -3939,11 +4521,10 @@ fn following_a_pull_request_reads_again_through_a_forges_5xx() {
         format!("opened #7\ncould not read #7: sluice wait {BRANCH}\n")
     );
 
-    let pulls = Pull7::new(usize::MAX, 0);
     let (code, out) = sluice_pulls(
         &f,
-        &pulls,
-        &Minutes(&f, Cell::new(0)),
+        &Pull7::new(1, 0),
+        &Unpaused,
         &["wait", BRANCH, "--worktree", "unit/a"],
     );
     assert_eq!(code, sluice::INTERNAL, "{out}");
@@ -4639,7 +5220,7 @@ fn status_and_overview_show_a_hold_while_it_lasts() {
                 &landing[..7]
             ),
             held.clone(),
-            "  #2  queued    agent-b  unit/b".to_string(),
+            "  #2 unit/b  queued    agent-b  unit/b".to_string(),
             format!("1 no longer in the queue: sluice status {BRANCH} --all"),
         ],
         "{out}"

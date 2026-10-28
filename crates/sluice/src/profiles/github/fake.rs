@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use super::app::Repo;
 use super::forge::{Check, Comment, Forge, Posted, Posting, Pull, Review, Standing};
 
+/// The author this fake gives every pull request sluice opens.
+pub const LOGIN: &str = "sluice";
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Held {
     pub next: u64,
@@ -185,6 +188,10 @@ impl FileForge {
 }
 
 impl Forge for FileForge {
+    fn login(&self) -> Result<String> {
+        Ok(LOGIN.into())
+    }
+
     fn pulls(&self, _: &Repo, base: &str) -> Result<Vec<Pull>> {
         Ok(self
             .held()?
@@ -285,7 +292,7 @@ impl Forge for FileForge {
     ) -> Result<Pull> {
         // GitHub reads the head from the branch as pushed; the test's push
         // is to a bare remote this fake cannot see, so it is named after.
-        let number = self.open_by("sluice", base, head_ref, "", draft, None)?;
+        let number = self.open_by(LOGIN, base, head_ref, "", draft, None)?;
         self.with_pull(number, |p| {
             p.title = title.into();
             p.body = body.into();
@@ -294,8 +301,13 @@ impl Forge for FileForge {
             .ok_or_else(|| anyhow!("no pull request {number}"))
     }
 
-    fn edit(&self, _: &Repo, number: u64, body: &str) -> Result<()> {
-        self.with_pull(number, |p| p.body = body.into())
+    fn edit(&self, _: &Repo, number: u64, title: Option<&str>, body: &str) -> Result<()> {
+        self.with_pull(number, |p| {
+            if let Some(title) = title {
+                p.title = title.into();
+            }
+            p.body = body.into();
+        })
     }
 
     fn set_draft(&self, _: &Repo, number: u64, draft: bool) -> Result<()> {
@@ -451,8 +463,16 @@ mod tests {
         assert_eq!(f.comments(&repo, n).unwrap(), ["edited"]);
         let opened = f.open(&repo, "main", "unit/b", "B", "body", false).unwrap();
         assert!(!opened.draft);
-        f.edit(&repo, opened.number, "new body").unwrap();
-        assert_eq!(f.by_ref("unit/b").unwrap().unwrap().body, "new body");
+        assert_eq!(opened.author, f.login().unwrap());
+        f.edit(&repo, opened.number, None, "new body").unwrap();
+        let edited = f.by_ref("unit/b").unwrap().unwrap();
+        assert_eq!(
+            (edited.title.as_str(), edited.body.as_str()),
+            ("B", "new body")
+        );
+        f.edit(&repo, opened.number, Some("B2"), "new body")
+            .unwrap();
+        assert_eq!(f.by_ref("unit/b").unwrap().unwrap().title, "B2");
         let drafted = f.open(&repo, "main", "unit/c", "C", "", true).unwrap();
         assert!(drafted.draft && f.by_ref("unit/c").unwrap().unwrap().draft);
         assert!(f.readied(&repo, drafted.number).unwrap().is_empty());

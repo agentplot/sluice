@@ -736,6 +736,34 @@ mod tests {
         assert!(standing(None, b"", b"").is_err());
     }
 
+    /// `--subject` is sluice's, handed on as given, its words one
+    /// argument: a submit that does not wait removes nothing, and one that
+    /// waits removes its worktree as without it.
+    #[test]
+    fn a_subject_is_handed_on_whole() {
+        let parse = |a: &[&str]| Submit::parse(a.iter().map(OsString::from));
+        let s = parse(&["main", "--no-wait", "--subject", "Two words"]);
+        assert_eq!(
+            s.sluice,
+            ["submit", "main", "--no-wait", "--subject", "Two words"]
+        );
+        assert_eq!(s.refused, None);
+        assert!(s.single.is_some_and(|w| !w.waits));
+        let s = parse(&["main", "--subject", "Two words"]);
+        assert_eq!(
+            s.single,
+            Some(Single {
+                branch: "main".into(),
+                worktree: ".".into(),
+                waits: true,
+                remove: true,
+                timeout: None,
+                json: false,
+                orders: false,
+            })
+        );
+    }
+
     /// git's own bytes for a staged deletion, a modification staged and
     /// not, a rename, an addition, and untracked files with a space and
     /// in a new directory (section 7).
