@@ -3,6 +3,7 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   bandLines,
   bar,
+  cannotFollow,
   checkLines,
   checkRows,
   clearText,
@@ -12,6 +13,7 @@ import {
   duration,
   emptyLines,
   errorLine,
+  errorMessage,
   finishedWords,
   flakyLines,
   flipped,
@@ -34,6 +36,7 @@ import {
   moving,
   namedFirst,
   namedLine,
+  noWatch,
   openedText,
   outcomes,
   progress,
@@ -49,6 +52,7 @@ import {
   submitted,
   taskLines,
   unreadReason,
+  WATCH_SINCE,
   wakeText,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
@@ -80,6 +84,7 @@ describe("the band", () => {
       },
     };
     expect(errorLine(failed)).toBe("sluice: opening the repository at /work/x: it is gone");
+    expect(errorMessage(failed)).toBe("opening the repository at /work/x: it is gone");
     expect(isOverview(failed)).toBe(false);
     expect(bandLines(failed as never, NOW)).toEqual([]);
     expect(isOverview(overview())).toBe(true);
@@ -87,6 +92,7 @@ describe("the band", () => {
     for (const v of [null, "error", 3, {}, { error: "gone" }, { error: { kind: "internal" } }]) {
       expect(isOverview(v)).toBe(false);
       expect(errorLine(v)).toBeNull();
+      expect(errorMessage(v)).toBeNull();
     }
   });
 
@@ -382,7 +388,7 @@ describe("the pane", () => {
     );
   });
 
-  test("why sluice could not be read: not started, its stderr, else its exit", () => {
+  test("why sluice could not be read: not started, its stderr, else its exit or signal", () => {
     const got = (exitCode: number, stderr: string) => ({ exitCode, stderr });
     expect(unreadReason(null)).toBe("the sluice command was not found");
     expect(unreadReason(got(3, "sluice: not a git repository\n"))).toBe(
@@ -391,6 +397,9 @@ describe("the pane", () => {
     expect(unreadReason(got(2, "\n  \nsluice: no policy\nmore\n"))).toBe("sluice: no policy");
     expect(unreadReason(got(1, ""))).toBe("sluice overview exited 1");
     expect(unreadReason(got(4, " \n"))).toBe("sluice overview exited 4");
+    expect(unreadReason({ exitCode: null, signal: "SIGTERM", stderr: "" })).toBe(
+      "sluice overview was ended by SIGTERM",
+    );
   });
 
   test("with no branch and none named, how a submission gets there", () => {
@@ -733,6 +742,34 @@ describe("the watch started again", () => {
   test("a watch open a minute starts the count over; one open less does not", () => {
     expect(rewatchWait(60000, 600_000)).toBe(1000);
     expect(rewatchWait(4000, 59_999)).toBe(8000);
+  });
+});
+
+describe("a sluice with no watch", () => {
+  test("is told from clap refusing `overview` or `--watch`, and nothing else", () => {
+    expect(noWatch("error: unrecognized subcommand 'overview'\n\nUsage: sluice <COMMAND>\n")).toBe(
+      true,
+    );
+    expect(noWatch("error: unexpected argument '--watch' found\n\nUsage: sluice overview\n")).toBe(
+      true,
+    );
+    expect(noWatch("sluice: not a git repository\n")).toBe(false);
+    expect(noWatch("error: unexpected argument '--json' found\n")).toBe(false);
+    expect(noWatch("")).toBe(false);
+  });
+
+  test("the line names the version sluice printed, else this sluice, and the one needed", () => {
+    expect(WATCH_SINCE).toBe("0.12");
+    expect(cannotFollow("sluice 0.11.2")).toBe(
+      "can't follow sluice 0.11.2: it has no watch; the board needs sluice 0.12 or later",
+    );
+    expect(cannotFollow(" sluice 0.9.0 \n")).toBe(
+      "can't follow sluice 0.9.0: it has no watch; the board needs sluice 0.12 or later",
+    );
+    for (const none of [null, "", "  "])
+      expect(cannotFollow(none)).toBe(
+        "can't follow this sluice: it has no watch; the board needs sluice 0.12 or later",
+      );
   });
 });
 

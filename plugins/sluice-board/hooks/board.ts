@@ -25,15 +25,21 @@ export function isOverview(v: unknown): v is Overview {
 }
 
 /**
- * `sluice: <message>`, one line, for the error document a failing overview
- * prints (`{"error":{"kind","message","next"}}`); null for anything else.
+ * The message of the error document a failing overview prints
+ * (`{"error":{"kind","message","next"}}`), on one line; null for anything else.
  */
-export function errorLine(v: unknown): string | null {
+export function errorMessage(v: unknown): string | null {
   const e = typeof v === "object" && v !== null ? (v as { error?: unknown }).error : undefined;
   const message =
     typeof e === "object" && e !== null ? (e as { message?: unknown }).message : undefined;
   if (typeof message !== "string") return null;
-  return `sluice: ${message.trim().replace(/\s*\n\s*/g, " ")}`;
+  return message.trim().replace(/\s*\n\s*/g, " ");
+}
+
+/** `sluice: <message>`, the band's one line for an error document; null for anything else. */
+export function errorLine(v: unknown): string | null {
+  const message = errorMessage(v);
+  return message === null ? null : `sluice: ${message}`;
 }
 
 /** The hosts serving a remote: how many, their room, and any lapsed. */
@@ -842,17 +848,47 @@ export function rewatchWait(last: number | null, open: number): number {
   return Math.min(last * 2, REWATCH_MOST);
 }
 
+/** The sluice that first had `overview --watch`, the one place the board names it. */
+export const WATCH_SINCE = "0.12";
+
 /**
- * Why `sluice overview --json` gave no overview: the command could not be
- * started (`got` null), else sluice's first line on stderr, else its exit.
+ * Whether a watch ended because the host's sluice has no watch: clap
+ * refusing `overview` as a command or `--watch` as an argument, as a sluice
+ * older than 0.12 does.
  */
-export function unreadReason(got: { exitCode: number; stderr: string } | null): string {
+export function noWatch(stderr: string): boolean {
+  return (
+    stderr.includes("unrecognized subcommand 'overview'") ||
+    stderr.includes("unexpected argument '--watch'")
+  );
+}
+
+/**
+ * The band's one line where the host's sluice has no watch, naming the
+ * version it printed (`sluice 0.11.2`), or `this sluice` when it printed none.
+ */
+export function cannotFollow(version: string | null): string {
+  const which = version?.trim() || "this sluice";
+  return `can't follow ${which}: it has no watch; the board needs sluice ${WATCH_SINCE} or later`;
+}
+
+/**
+ * Why a watch ended with no overview: the command could not be started
+ * (`got` null), else sluice's first line on stderr, else its exit, or the
+ * signal that ended it.
+ */
+export function unreadReason(
+  got: { exitCode: number | null; signal?: string | null; stderr: string } | null,
+): string {
   if (!got) return "the sluice command was not found";
   const line = got.stderr
     .split("\n")
     .map((l) => l.trim())
     .find((l) => l !== "");
-  return line ?? `sluice overview exited ${got.exitCode}`;
+  if (line !== undefined) return line;
+  return got.exitCode !== null
+    ? `sluice overview exited ${got.exitCode}`
+    : `sluice overview was ended by ${got.signal ?? "a signal"}`;
 }
 
 /**
