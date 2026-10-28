@@ -12,8 +12,8 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 | `--after 2,5` | Land only after those submissions. |
 | `--priority N` | Higher goes first, ahead of lower-priority submissions not yet under test; the default is 0. |
 | `--worktree <path>` | Submit from another worktree than the current directory. Given more than once, every worktree's head as one act, in that order: see below. |
-| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions, with its `head` and `draft` under `--status`; `{branch,submissions}` for several worktrees. |
-| `--timeout 9m` | `wt submit` only, run again to follow a submission already made: see "Who moves the queue". |
+| `--json` | One JSON document: the submission record when it finishes; `{id,branch,ahead}` with `--no-wait`, and `{id,branch,ahead,pull_request}` for a pull request sluice queued at once; `{"conflict":null}` or `{"conflict":{paths,with}}` with `--check`; `{pull_request,branch,state}` for a pull request still waiting for its conditions, with its `head` and `draft` under `--status`; under `--status`, with `sends`, the revision a submit from the worktree would send now; `{branch,submissions}` for several worktrees. |
+| `--timeout 9m` | `wt submit` only: submit, then wait at most that long, exit `5` when it runs out; run again, follow the submission already made. See "Who moves the queue". |
 
 ## Refused: a required task kept out of CI
 
@@ -89,16 +89,22 @@ passed. Any process may run one; a lock lets one run at a time.
   `--no-wait`; `--timeout 9m` returns after that long, exit `5`, with the
   submission's record under `--json`, for a caller whose calls are capped.
   It removes no worktree.
-- `wt submit <branch>` run again in the worktree does the same under
-  worktrunk: where its submission at its head stands (queued, under test,
-  passed or landed) or its pull request is open and ready there, it
-  submits nothing and follows it as `sluice wait <branch>` does, with the
-  same output, document and exits, `--timeout` included. Once it lands, it
+- `wt submit <branch> --timeout 9m --json` does the same under worktrunk,
+  from submit to landing: run in the background again while it exits `5`,
+  it submits once, as `--no-wait` does, its answer on stderr, then follows
+  that submission as `sluice wait <branch>` does, with the same output,
+  document and exits. Run again where the worktree's submission stands
+  (queued, under test, passed or landed, of the revision `sends` names, a
+  submit from the worktree would send now) or its pull request is open and
+  ready there, it submits nothing and follows it. Once it lands, it
   releases and removes the worktree, at once when it had already landed;
-  `--no-remove` keeps it. `--timeout` where nothing stands, or with
-  `--no-wait`, `--check`, `--status`, `--after` or `--priority`, exits
-  `64` and submits nothing. A new commit, or a submission blamed, in
-  conflict or withdrawn, is submitted again by a run without `--timeout`.
+  `--no-remove` keeps it. `wt submit <branch> --no-wait` run again where
+  one stands answers with it, as `--status` prints it, submits nothing and
+  removes nothing. Only a new head submits again: where one stands,
+  `--after` or `--priority` exits `64` and names `sluice amend <id>`.
+  `--timeout` with `--no-wait`, `--check` or `--status` exits `64` and
+  submits nothing. A new commit, or a submission blamed, in conflict or
+  withdrawn, is submitted again.
 - `sluice step <branch>`: one round, then exit.
 - `sluice run`: rounds for every branch until stopped. Needed for pull
   requests opened by hand, which nobody waits on.
@@ -154,6 +160,7 @@ Sluice-Result: passed (2 run, 31 replayed)
 
 The plain `sluice submit` leaves your worktree and branch in place, and
 so does `sluice wait`; `wt submit` removes them on landing (`--no-remove`
-keeps them), whether it waited from the start or was run again to follow
-a `--no-wait` submission. Never remove a landed worktree by hand: run
-`wt submit <branch>` again in it.
+keeps them), whether it waited from the start, under `--timeout` in
+rounds, or was run again to follow a `--no-wait` submission. A
+`--no-wait` run removes nothing. Never remove a landed worktree by hand:
+run `wt submit <branch>` again in it.
