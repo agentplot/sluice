@@ -82,12 +82,12 @@ impl Records {
         }
     }
 
-    /// The same binding, for branch protection: each policy is read only
-    /// as far as guarding needs, and a remote's profile is given no signer's
-    /// key and no signing, since the hook verifies and signs no run (124).
+    /// The same binding, for branch protection: a remote's profile is
+    /// given no signer's key and no signing, and no fetch is made to read
+    /// them, since the hook verifies and signs no run (124). Where each
+    /// branch is is read as every command reads it (record 0069).
     pub fn guarding(self) -> Self {
         Records {
-            branches: self.branches.guarding(),
             guarding: true,
             ..self
         }
