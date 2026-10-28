@@ -892,7 +892,9 @@ amend` and `sluice withdraw` find a submission by its number. Each exits
 `3` as well when the number is on none of the branches it could read
 while some branch could not be read, and names each such branch with
 why. Each says there is no such submission, exit `1`, only when every
-branch was read. A command exits `64` when it cannot read its
+branch was read. `sluice run --rounds <n>` exits `3` when its last
+round passed a branch by, naming each such branch on stderr with why
+(see [Who runs the rounds](#who-runs-the-rounds)). A command exits `64` when it cannot read its
 command line: an unknown command, flag or value, or a missing argument. `64` is kept apart from
 `2`, so a mistyped flag is never taken for a conflict. `--help` and
 `--version` exit `0`.
@@ -1004,4 +1006,17 @@ branch is refused again after a pass that read it:
 bolt/cache could not be read, passed by: [checkout] declares a cache, which sluice no longer keeps: …
 ```
 
-A branch passed by leaves the run's exit as it was.
+`sluice run --rounds <n>` whose last round passed a branch by ends as
+`sluice step` of that branch would. Once every other branch's round has
+run, it exits `3`. Its stderr has one line for each branch it passed by
+in that round, naming the branch with the words it was refused with:
+
+```console
+sluice: bolt/cache: [checkout] declares a cache, which sluice no longer keeps: …
+```
+
+So cron or a timer that starts it learns from the exit, not only from
+what it printed. A bounded run whose last round read every branch exits
+`0`, whatever it passed by in earlier rounds. `sluice run` with no bound
+says it once and goes on, and a branch it passes by leaves its exit as
+it is.
