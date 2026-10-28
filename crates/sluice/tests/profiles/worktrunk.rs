@@ -575,7 +575,7 @@ fn a_failure_is_pushed_with_its_check() {
 }
 
 /// 51: a prompt herdr refuses marks nothing delivered, and the log says why
-/// once, in herdr's words.
+/// once, in herdr's words; no later round pushes it again.
 #[test]
 fn a_refused_prompt_leaves_the_outcome_pending() {
     let s = Scratch::new("wt-push-refused");
@@ -591,8 +591,10 @@ fn a_refused_prompt_leaves_the_outcome_pending() {
         v.get("delivered").is_none() && v.get("delivered_to").is_none(),
         "{v}"
     );
-    let out = s.sluice(&["step", "bolt/x"]);
-    assert!(out.status.success(), "{}", text(&out));
+    for _ in 0..3 {
+        let out = s.sluice(&["step", "bolt/x"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
     assert_eq!(s.herdr.calls().len(), 1, "never pushed again");
     let pending = s.logged("pending");
     assert_eq!(pending.len(), 1, "{pending:?}");
@@ -600,7 +602,8 @@ fn a_refused_prompt_leaves_the_outcome_pending() {
     assert_eq!(pending[0]["why"], "agent is blocked");
 }
 
-/// 51: a submit in no pane lands with nothing pushed and nothing delivered.
+/// 51: a submit in no pane lands with nothing pushed and nothing delivered,
+/// and the log says once that it is pending.
 #[test]
 fn a_submit_in_no_pane_is_pushed_nothing() {
     let s = Scratch::new("wt-push-none");
@@ -609,7 +612,14 @@ fn a_submit_in_no_pane_is_pushed_nothing() {
     let v = s.decide(n);
     assert_eq!(v["state"], "landed", "{v}");
     assert!(s.herdr.calls().is_empty());
-    assert!(v.get("delivered").is_none(), "{v}");
+    assert!(
+        v.get("delivered").is_none() && v.get("delivered_to").is_none(),
+        "{v}"
+    );
+    let pending = s.logged("pending");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["id"], n);
+    assert_eq!(pending[0]["why"], "no session recorded");
 }
 
 /// 51: a round on another host than the one a submission recorded types
