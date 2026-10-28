@@ -25,4 +25,4 @@ command installed. Run the board's checks through sluice:
 
 ## 4. Integration
 
-- [ ] 4.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate the-board-carries-sluices-telling-and-keeps-no-told-list`; verify both pass.
+- [x] 4.1 Run the gate's checks on the committed work with `sluice exec main`, and `openspec validate the-board-carries-sluices-telling-and-keeps-no-told-list`; verify both pass.
