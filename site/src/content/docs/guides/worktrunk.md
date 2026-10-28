@@ -83,7 +83,8 @@ submitted. A team can mix them, some agents on `wt submit` and some on
 
 Everything `sluice submit` takes, `wt submit` takes: `--check` to ask
 whether the work would conflict, `--no-wait` to return once queued,
-`--after` to land behind named submissions, and `--json` for scripts.
+`--after` to land behind named submissions, and `--json` for scripts. It
+adds two of its own: `--no-remove`, above, and `--timeout`, below.
 
 sluice never touches an agent's worktree. It tests each combination in a
 clean checkout of its own, made with `git worktree add --detach` and
@@ -94,11 +95,53 @@ the worktrees people and agents make.
 
 The agent's worktree is the one worktrunk made, with its hooks, its
 copied ignored files and its template paths. sluice reads its head when
-it submits and nothing more. Submitting again from the same worktree
-withdraws that worktree's earlier submission, so an agent that fixes a
-failure and runs `wt submit` again is in the queue once.
+it submits and nothing more. Submitting a new commit from the same
+worktree withdraws that worktree's earlier submission, so an agent that
+fixes a failure and runs `wt submit` again is in the queue once.
 
 worktrunk's own worktree for the default branch is the exception: once
 sluice lands on `main`, keep no worktree on `main` or on any branch
 sluice lands on. [Worktrees beside sluice](/sluice/guides/worktrees/)
 says what to use instead.
+
+## Waiting in rounds
+
+An agent whose tool calls can't outlast a result submits without waiting,
+then waits in rounds, each one with a time limit:
+
+```sh
+wt submit bolt/concurrent-units --no-wait --json
+wt submit bolt/concurrent-units --timeout 9m --json   # again while it exits 5
+```
+
+Run again in the same worktree with nothing committed since, `wt submit`
+finds the submission of the worktree's head still queued, under test or
+landed, and submits nothing. It follows that submission as
+`sluice wait bolt/concurrent-units` does, prints what that prints, and
+exits as it does:
+
+| exit | the submission |
+|---|---|
+| `0` | landed |
+| `1` | blamed |
+| `2` | in conflict |
+| `3` | unknown: sluice could not read where it stands |
+| `4` | withdrawn |
+| `5` | still undecided when `--timeout` ran out |
+
+Under `--json` it prints the submission's record. Once the submission
+lands, `wt submit` releases the worktree and removes it, at once when it
+had already landed; `--no-remove` keeps it. On a branch that takes pull
+requests, `wt submit` follows an open pull request at the worktree's head
+the same way, unless it is a draft.
+
+`--timeout` only follows a submission already made. Where none stands, or
+given with `--no-wait`, `--check` or `--status`, it exits `64` and submits
+nothing: `wt submit <branch> --no-wait` makes the submission to follow. A
+new commit, or a submission blamed, in conflict or withdrawn, goes into the
+queue again as any submit does.
+
+`sluice wait` waits the same way and removes nothing: a worktree waited on
+with it is still there after its submission lands, ports and all. Run
+`wt submit` again in it, not `wt remove`, so that sluice releases the
+worktree before worktrunk removes it.
