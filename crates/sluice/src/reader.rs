@@ -3,24 +3,29 @@
 //! waiting `sluice submit` of a repository on the host holds its lock and
 //! keeps the overview it reads beside it, and every other watch and wait
 //! of the repository on the host follows that document instead of reading
-//! the records itself.
+//! the records itself. Where the host runs `sluice run`, that one process
+//! is the repository's driver on the host, and its reader: no watch or wait
+//! takes the reader's place while it lives, and one that held it lets it go
+//! (135; ADR 0068; rule core.31).
 //!
 //! ```text
 //! $XDG_STATE_HOME/sluice/readers/     (default ~/.local/state)
-//!   <repository, flat>.lock   locked by the reader for as long as it runs
-//!   <repository, flat>.json   the overview it last read, written whole
+//!   <repository, flat>.lock     locked by the reader for as long as it runs
+//!   <repository, flat>.json     the overview it last read, written whole
+//!   <repository, flat>.driver   locked by `sluice run` for as long as it runs
 //! ```
 //!
 //! The repository is its common git directory, which every worktree of it
 //! shares, written as one file name as `running/` writes a run directory.
-//! The lock goes with the process, however it ends, so a reader that stops
-//! leaves nothing to clean and no time to wait out: the next watch or wait
-//! to try the lock becomes the reader. The document is written to a
-//! temporary file and renamed over the last, so a follower reads a whole
-//! document or none.
+//! The locks go with their process, however it ends, so a reader or a
+//! driver that stops leaves nothing to clean and no time to wait out: the
+//! next watch or wait to try the lock becomes the reader, and the next
+//! `sluice run` the driver. The document is written to a temporary file and
+//! renamed over the last, so a follower reads a whole document or none.
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -48,6 +53,12 @@ pub struct Follow {
     files: Files,
 }
 
+/// The driver: `sluice run`, holding its repository's driver's lock on
+/// the host until it is dropped (135).
+pub struct Driver {
+    _lock: File,
+}
+
 /// One repository's reader's files.
 #[derive(Clone)]
 struct Files {
@@ -59,8 +70,15 @@ struct Files {
 
 impl Reader {
     /// The part in reading `repository` among the readers in `dir`: the
-    /// lead when no live process holds its lock, a follower otherwise.
+    /// lead when no live process holds its lock and no driver of it lives
+    /// on the host, a follower otherwise (135).
     pub fn take(dir: &Path, repository: &str) -> Result<Reader> {
+        Reader::take_given(dir, repository, driver_live(dir, repository))
+    }
+
+    /// As [`Reader::take`], given whether a process other than this one
+    /// drives `repository` on the host: the driver itself passes `false`.
+    pub fn take_given(dir: &Path, repository: &str, others_drive: bool) -> Result<Reader> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let name = flat_name(repository);
         let follow = Follow {
@@ -72,21 +90,85 @@ impl Reader {
                 tmp: dir.join(format!(".{name}.tmp")),
             },
         };
+        if others_drive {
+            return Ok(Reader::Follow(follow));
+        }
         Ok(match follow.try_lead()? {
             Some(lead) => Reader::Lead(lead),
             None => Reader::Follow(follow),
         })
     }
 
-    /// The lead from now, when it followed a reader that has stopped.
-    pub fn lead_once_free(&mut self) -> Result<()> {
-        if let Reader::Follow(follow) = self {
-            if let Some(lead) = follow.try_lead()? {
-                *self = Reader::Lead(lead);
+    /// Its part from this tick, given whether a process other than this
+    /// one drives the repository on the host (135): a reader lets the lock
+    /// go to a driver, its last document left for the others to follow
+    /// until the driver writes one; a follower is the lead once the lock is
+    /// free, unless another process drives, whose place it is.
+    pub fn step(&mut self, others_drive: bool) -> Result<()> {
+        match self {
+            Reader::Lead(lead) if others_drive => {
+                *self = Reader::Follow(Follow {
+                    files: lead.files.clone(),
+                });
             }
+            Reader::Follow(follow) if !others_drive => {
+                if let Some(lead) = follow.try_lead()? {
+                    *self = Reader::Lead(lead);
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
+}
+
+/// How many times, and how far apart, `sluice run` tries the driver's
+/// lock before it reads it as another run's: a probe holds it shared for
+/// the instant of its try, and is no driver.
+const DRIVER_TRIES: u32 = 20;
+const DRIVER_APART: Duration = Duration::from_millis(50);
+
+impl Driver {
+    /// The driver of `repository` among the readers in `dir`, once its
+    /// lock is this process's; `None` while another process holds it,
+    /// tried again over about a second. A local lock, no call to a remote,
+    /// so no retry policy's (rule core.29).
+    pub fn take(dir: &Path, repository: &str) -> Result<Option<Driver>> {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = driver_file(dir, repository);
+        let lock = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+        for tried in 1..=DRIVER_TRIES {
+            match lock.try_lock() {
+                Ok(()) => return Ok(Some(Driver { _lock: lock })),
+                Err(TryLockError::WouldBlock) if tried < DRIVER_TRIES => {
+                    std::thread::sleep(DRIVER_APART);
+                }
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Error(e)) => {
+                    return Err(e).with_context(|| format!("locking {}", path.display()))
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Whether a driver of `repository` lives on the host: a process holds
+/// its lock among the readers in `dir`. A probe, its shared lock dropped at
+/// once; one that fails reads as no driver, so a wait runs rounds rather
+/// than wait on nothing (135).
+pub fn driver_live(dir: &Path, repository: &str) -> bool {
+    let Ok(lock) = File::open(driver_file(dir, repository)) else {
+        return false;
+    };
+    matches!(lock.try_lock_shared(), Err(TryLockError::WouldBlock))
+}
+
+/// The driver's lock of `repository` among the readers in `dir`: a name
+/// kept whole is up to 246 bytes, so with its suffix's seven the file's
+/// name is within the 255 a file system allows.
+fn driver_file(dir: &Path, repository: &str) -> PathBuf {
+    dir.join(format!("{}.driver", flat_name(repository)))
 }
 
 impl Lead {
@@ -313,5 +395,118 @@ mod tests {
         // Nor a document cut short where it is read.
         std::fs::write(&follow.files.doc, half).unwrap();
         assert_eq!(follow.read(), None);
+    }
+
+    /// 135: a driver held reads as live, to its own repository alone; once
+    /// dropped, as its process ends, it reads as none. With no driver ever,
+    /// there is no file to probe, and none is made.
+    #[test]
+    fn a_held_driver_reads_as_live_until_dropped() {
+        let s = Scratch::new("driver-live");
+        assert!(!driver_live(&s.0, REPO));
+        assert!(!driver_file(&s.0, REPO).exists());
+        let driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
+        assert!(driver_live(&s.0, REPO));
+        assert!(!driver_live(&s.0, "/Users/someone/other/.git"));
+        drop(driver);
+        assert!(!driver_live(&s.0, REPO));
+    }
+
+    /// 135: a second driver taken while one is held is another's: `None`,
+    /// after its tries; once the first is dropped, the next take holds it.
+    #[test]
+    fn a_second_driver_while_one_is_held_is_anothers() {
+        let s = Scratch::new("driver-second");
+        let first = Driver::take(&s.0, REPO).unwrap().expect("the driver");
+        assert!(Driver::take(&s.0, REPO).unwrap().is_none());
+        drop(first);
+        let _next = Driver::take(&s.0, REPO)
+            .unwrap()
+            .expect("the driver, its holder gone");
+    }
+
+    /// A probe's shared lock is no driver: a run that meets one tries
+    /// again, and holds the lock once the probe has let it go.
+    #[test]
+    fn a_probe_does_not_keep_a_driver_from_its_lock() {
+        let s = Scratch::new("driver-probe");
+        drop(Driver::take(&s.0, REPO).unwrap().expect("the driver"));
+        let probe = File::open(driver_file(&s.0, REPO)).unwrap();
+        probe.try_lock_shared().unwrap();
+        let held = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(probe);
+        });
+        let driver = Driver::take(&s.0, REPO).unwrap();
+        held.join().unwrap();
+        assert!(driver.is_some(), "a probe read as another run");
+        assert!(driver_live(&s.0, REPO));
+    }
+
+    /// A repository whose name is the longest one kept whole has its
+    /// driver's lock as any other.
+    #[test]
+    fn a_repository_named_as_long_as_is_kept_whole_has_its_driver() {
+        let s = Scratch::new("driver-long");
+        let repository = format!("/{}", "x".repeat(243));
+        let _driver = Driver::take(&s.0, &repository)
+            .unwrap()
+            .expect("the driver");
+        assert!(driver_live(&s.0, &repository));
+    }
+
+    /// 135: a watch or wait takes no free reader's place while a driver
+    /// lives: the place is the driver's, whose own take, given that no
+    /// other process drives, holds it.
+    #[test]
+    fn a_take_beside_a_driver_follows() {
+        let s = Scratch::new("take-beside");
+        let _driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
+        follow(Reader::take(&s.0, REPO).unwrap());
+        let _lead = lead(Reader::take_given(&s.0, REPO, false).unwrap());
+    }
+
+    /// 135: a reader lets the lock go at its step once another process
+    /// drives, and its last document stays for the others to follow.
+    #[test]
+    fn a_reader_lets_go_to_a_driver_and_leaves_its_document() {
+        let s = Scratch::new("lets-go");
+        let mut reader = Reader::take(&s.0, REPO).unwrap();
+        let Reader::Lead(l) = &mut reader else {
+            panic!("a follower, where the lock was free");
+        };
+        l.write(&doc("2026-10-28T09:00:00Z", 1)).unwrap();
+        let other = follow(Reader::take(&s.0, REPO).unwrap());
+        assert!(other.try_lead().unwrap().is_none());
+        reader.step(false).unwrap();
+        assert!(matches!(reader, Reader::Lead(_)));
+        reader.step(true).unwrap();
+        let Reader::Follow(f) = &reader else {
+            panic!("the lead, where another process drives");
+        };
+        assert_eq!(f.read(), Some(doc("2026-10-28T09:00:00Z", 1)));
+        assert_eq!(other.read(), Some(doc("2026-10-28T09:00:00Z", 1)));
+        let _lead = other.try_lead().unwrap().expect("the lock, let go");
+    }
+
+    /// 135: a follower leaves a free lock while another process drives,
+    /// and takes it once none does; the driver's own step (`false`) takes a
+    /// free lock.
+    #[test]
+    fn a_follower_leaves_a_free_lock_to_a_driver() {
+        let s = Scratch::new("leaves");
+        let first = lead(Reader::take(&s.0, REPO).unwrap());
+        let mut waiter = Reader::take(&s.0, REPO).unwrap();
+        let mut driving = Reader::take(&s.0, REPO).unwrap();
+        assert!(matches!(waiter, Reader::Follow(_)));
+        drop(first);
+        let driver = Driver::take(&s.0, REPO).unwrap().expect("the driver");
+        waiter.step(driver_live(&s.0, REPO)).unwrap();
+        assert!(matches!(waiter, Reader::Follow(_)));
+        driving.step(false).unwrap();
+        assert!(matches!(driving, Reader::Lead(_)));
+        drop((driving, driver));
+        waiter.step(driver_live(&s.0, REPO)).unwrap();
+        assert!(matches!(waiter, Reader::Lead(_)));
     }
 }
