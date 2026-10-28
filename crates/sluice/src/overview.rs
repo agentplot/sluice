@@ -94,9 +94,11 @@ pub fn run(
         let doc = match &mut reader {
             Reader::Lead(lead) => {
                 let doc = match document(s, host, clock) {
+                    // Ctrl-C reaches the git a read runs in the foreground:
+                    // a branch's read it ended is no refusal of the branch's
+                    // (26).
+                    _ if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                     Ok((_, doc)) => doc,
-                    // Ctrl-C reaches the git a read runs in the foreground.
-                    Err(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                     Err(e) if host.repository_gone(&repository) => return Err(e),
                     // The read it could not make is its document, in the
                     // words it was refused with (133), as a failing

@@ -2308,7 +2308,7 @@ fn watch_leads_once_the_readers_wait_ends() {
 // A read the reader could not make (129, 133)
 // ---------------------------------------------------------------------------
 
-/// The words git fails to read a branch's records with on a loaded host.
+/// The words git fails to read the records with on a loaded host.
 const UNREADABLE: &str = "fatal: unable to read 4b825dc6: Resource temporarily unavailable";
 
 /// Queues whose records a watch reads at each tick: submission 1, queued.
@@ -2333,7 +2333,7 @@ fn assert_failure(doc: &serde_json::Value, words: &str) {
     assert_eq!(doc["error"]["next"], serde_json::json!([]), "{doc}");
 }
 
-/// 129: a watch that is the reader and cannot read the queues writes the
+/// 129: a watch that is the reader and cannot list the records writes the
 /// failure as the reader's document, and the overview once it reads it.
 #[test]
 fn a_watchs_read_fails_and_then_succeeds() {
@@ -2344,8 +2344,8 @@ fn a_watchs_read_fails_and_then_succeeds() {
             .borrow_mut()
             .push(readers_doc().expect("a document"));
         match n {
-            1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
-            2 => f.world.fail_state_reads(BRANCH, None),
+            1 => f.world.fail_state_list(Some(UNREADABLE)),
+            2 => f.world.fail_state_list(None),
             _ => {}
         }
     };
@@ -2370,8 +2370,8 @@ fn a_watchs_read_fails_and_then_succeeds() {
 fn a_failed_read_under_load() {
     let f = one_queued();
     let between = |n: usize| match n {
-        1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
-        2 => f.world.fail_state_reads(BRANCH, None),
+        1 => f.world.fail_state_list(Some(UNREADABLE)),
+        2 => f.world.fail_state_list(None),
         _ => {}
     };
     let pause = Between {
@@ -2395,7 +2395,7 @@ fn a_standing_failure_is_written_once() {
     let f = one_queued();
     let put = serde_json::json!({ "put": "by the test" });
     let between = |n: usize| match n {
-        1 => f.world.fail_state_reads(BRANCH, Some(UNREADABLE)),
+        1 => f.world.fail_state_list(Some(UNREADABLE)),
         2 => {
             assert_failure(&readers_doc().expect("a document"), UNREADABLE);
             rewrite_readers_doc(&put);
@@ -2426,7 +2426,7 @@ fn a_watch_ends_once_its_repository_is_removed() {
     let between = |n: usize| {
         if n == 1 {
             f.world.repository_gone(true);
-            f.world.fail_state_reads(BRANCH, Some(gone));
+            f.world.fail_state_list(Some(gone));
         }
     };
     let pause = Between {
@@ -2547,7 +2547,7 @@ fn a_follower_prints_the_readers_failure() {
 #[test]
 fn a_watch_stopped_while_a_failure_stands() {
     let f = one_queued();
-    f.world.fail_state_reads(BRANCH, Some(UNREADABLE));
+    f.world.fail_state_list(Some(UNREADABLE));
     let pause = Between {
         n: Cell::new(0),
         rounds: 9,
@@ -2561,11 +2561,12 @@ fn a_watch_stopped_while_a_failure_stands() {
     assert_failure(&lines[0], UNREADABLE);
 }
 
-/// 129: a wait that is the reader and cannot read another branch's
-/// records writes the failure as the reader's document, and goes on
-/// waiting on its own submission.
+/// 26, 129: a wait that is the reader and cannot read another branch's
+/// records writes the overview with that branch unread, in the words it
+/// was refused with, once while the refusal stands, and goes on waiting on
+/// its own submission.
 #[test]
-fn a_reader_wait_writes_a_read_it_could_not_make() {
+fn a_reader_wait_shows_a_branch_it_could_not_read() {
     let f = setup();
     f.world.hold_runs(true);
     let other = "bolt/other";
@@ -2579,16 +2580,40 @@ fn a_reader_wait_writes_a_read_it_could_not_make() {
     work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
     sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
     f.world.fail_state_reads(other, Some(UNREADABLE));
+    let put = serde_json::json!({ "put": "by the test" });
     let written = RefCell::new(None);
-    let between = |_: usize| *written.borrow_mut() = readers_doc();
+    let between = |n: usize| {
+        if n == 1 {
+            *written.borrow_mut() = readers_doc();
+            rewrite_readers_doc(&put);
+        }
+    };
     let pause = Between {
         n: Cell::new(0),
-        rounds: 2,
+        rounds: 3,
         between: &between,
     };
     let (code, out) = sluice_with(&f, &pause, &["wait", "4"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
-    assert_failure(&written.into_inner().expect("a document"), UNREADABLE);
+    let doc = written.into_inner().expect("a document");
+    assert_eq!(doc["schema"], "sluice/overview@1", "{doc}");
+    let part = |name: &str| {
+        doc["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["branch"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} in {doc}"))
+    };
+    let own = part(BRANCH);
+    assert!(own.get("unread").is_none(), "{doc}");
+    assert_eq!(own["submissions"][0]["id"], 4, "{doc}");
+    let unread = part(other);
+    assert_eq!(unread["unread"], UNREADABLE, "{doc}");
+    assert_eq!(unread["submissions"], serde_json::json!([]), "{doc}");
+    // Written once while the refusal stands.
+    assert_eq!(readers_doc(), Some(put));
     assert!(out.ends_with("still waiting: sluice wait 4\n"), "{out}");
     let (_, status) = sluice(&f, &["status", "4", "--json"]);
     assert_eq!(json(&status)["state"], "testing");

@@ -153,34 +153,40 @@ live, and SHALL neither become a reader nor write the reader's document.
 
 ### Requirement: A reader that could not read the queues writes the failure as its document
 
-When the reader, a watch or a wait, cannot read its repository's queues,
+When the reader, a watch or a wait, cannot list its repository's records,
 it SHALL replace the reader's document with the error document a failing
 `sluice overview --json` prints, `{"error":{"kind","message","next"}}`,
-whose message is the failure's words, whole and unchanged (133). It
-SHALL read again at its next tick, and write the overview it reads once
-it can.
+whose message is the failure's words, whole and unchanged (133). When it
+cannot read one branch's policy, revision or records, it SHALL write the
+overview with that branch unread, its `unread` the refusal's words, whole
+and unchanged, and every other branch read (26). It SHALL read again at
+its next tick, and write the overview it reads once it can. A failure
+that stands with the same words SHALL be written once while it stands.
 
 #### Scenario: A watch's read fails and then succeeds
 
-- **WHEN** a watch is the reader, the branch's records are read again at
-  its second tick and fail with `fatal: unable to read 4b825dc6: Resource
-  temporarily unavailable`, and its third tick reads them
+- **WHEN** a watch is the reader, the repository's records are listed
+  again at its second tick and the list fails with `fatal: unable to read
+  4b825dc6: Resource temporarily unavailable`, and its third tick lists
+  them
 - **THEN** the reader's document after the second tick is
   `{"error":{"kind":"internal","message":…,"next":[]}}` whose message
   holds `fatal: unable to read 4b825dc6: Resource temporarily
   unavailable`, and after the third tick it is the overview read then
 
-#### Scenario: A wait that is the reader cannot read the queues
+#### Scenario: A wait that is the reader cannot read another branch's records
 
-- **WHEN** `sluice wait 4` is the reader and a read of another branch's
-  records fails
-- **THEN** the reader's document is the error document with that
-  failure's words, and the wait goes on waiting on submission 4
+- **WHEN** `sluice wait 4` is the reader and each read of another
+  branch's records fails with the same words
+- **THEN** the reader's document is the overview with that branch unread,
+  its `unread` the failure's words, and submission 4's branch read, it is
+  written once while the failure stands, and the wait goes on waiting on
+  submission 4
 
 #### Scenario: A standing failure is written once
 
-- **WHEN** a watch is the reader and five ticks in a row fail with the
-  same words
+- **WHEN** a watch is the reader and five ticks in a row fail to list the
+  repository's records with the same words
 - **THEN** the reader's document is written once for them
 
 ### Requirement: A watch prints a read it could not make and keeps watching

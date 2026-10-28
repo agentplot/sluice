@@ -126,6 +126,10 @@ struct Inner {
     /// The words each branch's records fail to be read with, by branch: no
     /// answer at all, as when git cannot read them on a loaded host (129).
     failed_state: BTreeMap<String, String>,
+    /// The words the list of the repository's records fails with: no
+    /// answer at all, as when git cannot read them on a loaded host (26,
+    /// 129).
+    failed_list: Option<String>,
     /// The repository's git directory is gone from the host (129).
     repository_gone: bool,
     /// Each host's refusal document of a branch, by host and branch (133).
@@ -792,6 +796,12 @@ impl World {
             Some(said) => inner.failed_state.insert(branch.into(), said.into()),
             None => inner.failed_state.remove(branch),
         };
+    }
+
+    /// From now, every list of the repository's records fails with `said`;
+    /// with `None`, they are listed again (26, 129).
+    pub fn fail_state_list(&self, said: Option<&str>) {
+        self.0.borrow_mut().failed_list = said.map(Into::into);
     }
 
     /// From now, the repository's git directory is gone from the host, or
@@ -2423,10 +2433,11 @@ impl State for FakeState {
     }
 
     fn branches(&self) -> Result<Vec<String>> {
-        Ok(self
-            .0
-             .0
-            .borrow()
+        let inner = self.0 .0.borrow();
+        if let Some(said) = &inner.failed_list {
+            bail!("{said}");
+        }
+        Ok(inner
             .lines
             .iter()
             .filter(|(_, l)| l.version > 0)
