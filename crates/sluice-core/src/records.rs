@@ -771,6 +771,10 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         system: Option<String>,
         host: String,
+        /// 134: a pool's run whose dispatch went unanswered, claimed as
+        /// dispatched: the forge's words saying its answer was not read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unanswered: Option<String>,
     },
     /// 77: a claim whose host showed no sign of life for the bound: its
     /// run has no outcome and is open again.

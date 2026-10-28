@@ -468,6 +468,12 @@ impl Sluice<'_> {
     /// a place whose branch a round holds is left to the next round or
     /// run. One that cannot be freed is reported and the rest go on: one
     /// broken place never stops the host's rounds.
+    ///
+    /// Then every scratch directory no place's record names is removed,
+    /// the freed places' own already gone with them (123, rule core.30). A
+    /// removal that fails is warned of, and what was freed is returned all
+    /// the same; nothing of it is logged on a branch, since such a
+    /// directory is no branch's.
     pub fn release_abandoned(&self) -> Result<Vec<Abandoned>> {
         let mut out = Vec::new();
         for p in self.seams.checkout.session_places()? {
@@ -523,6 +529,72 @@ impl Sluice<'_> {
                 error,
             });
         }
+        match self.seams.checkout.remove_unnamed_scratch() {
+            Ok(removed) if !removed.is_empty() => tracing::info!(
+                sluice.scratch.removed = removed.len(),
+                "removed scratch no checkout names: {}",
+                removed
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("removing scratch no checkout names failed: {e:#}"),
+        }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, TimeZone, Utc};
+    use sluice_fakes::Fakes;
+    use sluice_seams::{Checkout, Settings};
+
+    use crate::{Clock, Seams, Sluice};
+
+    struct Noon;
+
+    impl Clock for Noon {
+        fn now(&self) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 10, 27, 12, 0, 0).unwrap()
+        }
+    }
+
+    /// 123, rule core.30: scratch no record names is removed once the
+    /// removed worktrees' places are freed, and a removal that fails
+    /// leaves every one of them freed and returned.
+    #[test]
+    fn the_freed_are_returned_when_unnamed_scratch_cannot_be_removed() {
+        let f = Fakes::new();
+        let rev = f.world.init("main", &[("lib", "1")]);
+        for w in ["/w/a", "/w/b"] {
+            f.world.session(w, &format!("agent-{w}"), &rev);
+            f.checkout
+                .adopt(w, "main", &Settings::new(), "2026-10-27T09:00:00Z")
+                .unwrap();
+            f.world.remove_worktree(w);
+        }
+        f.world.unnamed_scratch_fails(Some("permission denied"));
+        let seams = Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        };
+        let freed = Sluice::new(seams, &Noon).release_abandoned().unwrap();
+        let freed: Vec<_> = freed
+            .iter()
+            .map(|a| (a.worktree.as_str(), a.freed, a.error.clone()))
+            .collect();
+        assert_eq!(freed, vec![("/w/a", true, None), ("/w/b", true, None)]);
+        assert!(f.checkout.session_places().unwrap().is_empty());
+        assert_eq!(
+            f.world.unnamed_scratch_asks(),
+            vec![0],
+            "asked once, after both were freed"
+        );
     }
 }

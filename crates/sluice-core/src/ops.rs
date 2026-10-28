@@ -21,6 +21,8 @@ pub struct SubmitRequest {
     pub branch: String,
     pub after: Vec<u64>,
     pub priority: i64,
+    /// 23: the submitter's words for what lands.
+    pub subject: Option<String>,
 }
 
 /// 125: several places' heads submitted to one branch as one act.
@@ -33,6 +35,8 @@ pub struct GroupRequest {
     /// Every submission of the act lands after these, alike.
     pub after: Vec<u64>,
     pub priority: i64,
+    /// 23, 125: each place's subject, in the places' order, or none.
+    pub subjects: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,6 +333,7 @@ impl Sluice<'_> {
             worktrees: vec![req.worktree.clone()],
             after: req.after.clone(),
             priority: req.priority,
+            subjects: req.subject.iter().cloned().collect(),
         };
         Ok(match self.submit_group(&group)? {
             Ok(mut accepted) => Ok(accepted.remove(0)),
@@ -349,6 +354,14 @@ impl Sluice<'_> {
     ) -> Result<Result<Vec<Accepted>, Vec<(String, SubmitRefusal)>>> {
         if req.worktrees.is_empty() {
             bail!("a group submit to {} names no worktree", req.branch);
+        }
+        if !req.subjects.is_empty() && req.subjects.len() != req.worktrees.len() {
+            bail!(
+                "a group submit to {} gives {} subjects for {} worktrees",
+                req.branch,
+                req.subjects.len(),
+                req.worktrees.len()
+            );
         }
         let mut refused = Vec::new();
         let mut sessions: Vec<Session> = Vec::new();
@@ -430,8 +443,10 @@ impl Sluice<'_> {
         let _lock = self.seams.state.wait_lock(&req.branch)?;
         let accepted = self.update(&req.branch, |l| {
             let mut accepted = Vec::new();
-            for ((&id, session), head) in ids.iter().zip(&sessions).zip(&submitted) {
-                accepted.push(admit(l, req, id, session, head, &now));
+            for (k, ((&id, session), head)) in ids.iter().zip(&sessions).zip(&submitted).enumerate()
+            {
+                let subject = req.subjects.get(k).cloned();
+                accepted.push(admit(l, req, id, session, head, subject, &now));
             }
             Ok(accepted)
         })?;
@@ -1055,13 +1070,14 @@ pub fn kept_out_warning(branch: &str, task: &str) -> String {
 
 /// 47, 67: withdraw the earlier submissions from `session`'s place and
 /// queue the head it submits, `submitted` (124), as submission `id`, in
-/// `l`.
+/// `l`, keeping its `subject` (23).
 fn admit(
     l: &mut Line,
     req: &GroupRequest,
     id: u64,
     session: &Session,
     submitted: &SubmittedHead,
+    subject: Option<String>,
     now: &str,
 ) -> Accepted {
     let mine: Vec<u64> = l
@@ -1120,7 +1136,7 @@ fn admit(
             landed_as: None,
             was: None,
             held: None,
-            subject: None,
+            subject,
         },
     );
     l.log(
@@ -1225,6 +1241,7 @@ mod tests {
                 worktrees: worktrees.iter().map(|w| w.to_string()).collect(),
                 after: after.to_vec(),
                 priority: 0,
+                subjects: Vec::new(),
             }
         }
     }
@@ -1413,6 +1430,10 @@ mod tests {
             unreachable!("a submit releases no place")
         }
 
+        fn remove_unnamed_scratch(&self) -> Result<Vec<std::path::PathBuf>> {
+            Ok(Vec::new())
+        }
+
         fn made(&self) -> Result<Vec<String>> {
             unreachable!("a submit reads no place")
         }
@@ -1593,6 +1614,65 @@ mod tests {
             assert_eq!(s.after, vec![earlier], "none names another of the act");
             assert_eq!(s.priority, 3);
         }
+    }
+
+    /// 23, 125: a group given a subject per place keeps each on its own
+    /// submission, in order; one given none keeps none; any other count
+    /// is a caller's error and writes nothing.
+    #[test]
+    fn each_place_keeps_its_own_subject() {
+        let h = Host::new();
+        h.place("b1");
+        h.place("b2");
+        let mut req = h.group(&["b1", "b2"], &[]);
+        req.subjects = vec!["Batch review cards".into(), "Card filters".into()];
+        let ids: Vec<u64> = h
+            .sluice()
+            .submit_group(&req)
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        let l = line(&h);
+        let subjects: Vec<_> = ids.iter().map(|id| l.subs[id].subject.clone()).collect();
+        assert_eq!(
+            subjects,
+            vec![
+                Some("Batch review cards".to_string()),
+                Some("Card filters".to_string())
+            ]
+        );
+        let accepted = h
+            .sluice()
+            .submit_group(&h.group(&["b1", "b2"], &[]))
+            .unwrap()
+            .unwrap();
+        let l = line(&h);
+        assert!(accepted.iter().all(|a| l.subs[&a.id].subject.is_none()));
+        let before = h.writes.get();
+        req.subjects.pop();
+        let e = h.sluice().submit_group(&req).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("1 subjects for 2 worktrees"),
+            "{e:#}"
+        );
+        assert_eq!(h.writes.get(), before);
+    }
+
+    /// 23: a submission written before subjects were kept reads as having
+    /// none, and one with none writes no `subject`.
+    #[test]
+    fn a_submission_with_no_subject_reads_and_writes_as_before() {
+        let json = serde_json::json!({
+            "schema": SUBMISSION_SCHEMA, "id": 4, "branch": "main", "head": "h",
+            "from": { "agent": "a", "worktree": "unit/a" },
+            "submitted": "2026-10-23T10:00:00Z", "after": [], "priority": 0,
+            "attempt": 1, "state": "queued",
+        });
+        let s: Submission = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(s.subject, None);
+        assert_eq!(serde_json::to_value(&s).unwrap(), json);
     }
 
     /// 67: each place's earlier submission is withdrawn in the same write.

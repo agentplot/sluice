@@ -16,7 +16,10 @@ lay_out=$here/../scripts/lay-out.sh
 
 # Under sluice's sandbox only SLUICE_TMP is writable beside the checkout.
 # Every name here is short: Claude Code derives a key from a path only up
-# to 200 characters, and a session's SLUICE_TMP is long already.
+# to 200 characters. A host whose sluice names a checkout's scratch by its
+# worktree's path gives a worktree with a long path a SLUICE_TMP too long
+# for that, and the suite refuses below; updating the host's sluice gives
+# every checkout a short one.
 scratch=$(mktemp -d "${SLUICE_TMP:-${TMPDIR:-/tmp}}/l.XXXX")
 trap 'rm -rf "$scratch"' EXIT
 scratch=$(cd "$scratch" && pwd -P)
@@ -46,6 +49,7 @@ key() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
 longest=$(key "$scratch/c/main")
 if [ ${#longest} -gt 200 ]; then
   echo "FAIL  $scratch is too long to test the carry: a clone's main/ in it makes a key of ${#longest} characters, over Claude Code's 200"
+  [ -z "${SLUICE_TMP:-}" ] || echo "      this host's sluice names a checkout's scratch by its worktree's path; updating the host's sluice gives it a short one"
   echo "1 failed"
   exit 1
 fi

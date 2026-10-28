@@ -37,6 +37,7 @@ use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHE
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
+use crate::retry;
 use crate::{Followed, GroupRefused, Opened, Short};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
@@ -256,6 +257,8 @@ pub struct Pulls {
     locks: PathBuf,
     forge: Option<Rc<dyn Forge>>,
     identity: Option<(Rc<dyn Identity>, PathBuf)>,
+    /// The retry policy every call to a remote runs under (134).
+    retry: Rc<retry::Policy>,
     /// The pull requests the last intake read, by place.
     known: RefCell<BTreeMap<String, Known>>,
     /// Every pull request entry of the branches intake read, by id.
@@ -301,18 +304,21 @@ struct Target {
 impl Pulls {
     /// The pull requests of the repository whose git directory is `dir`
     /// and whose common directory is `common`, read and posted on
-    /// `forge`, and fetched as `identity` where it has one.
+    /// `forge`, and fetched as `identity` where it has one, each fetch and
+    /// push under `retry`.
     pub fn new(
         dir: &Path,
         common: &Path,
         forge: Option<Rc<dyn Forge>>,
         identity: Option<(Rc<dyn Identity>, PathBuf)>,
+        retry: Rc<retry::Policy>,
     ) -> Pulls {
         Pulls {
             dir: dir.to_path_buf(),
             locks: common.join("sluice").join(".intake"),
             forge,
             identity,
+            retry,
             known: RefCell::default(),
             entries: RefCell::default(),
             shown: RefCell::default(),
@@ -331,7 +337,7 @@ impl Pulls {
     }
 
     fn pushed(&self, remote: &str) -> Result<PushedRefs> {
-        PushedRefs::open_as(&self.dir, remote, self.identity.clone())
+        PushedRefs::open_as(&self.dir, remote, self.identity.clone(), self.retry.clone())
     }
 
     /// `branch`'s pull requests and where they are, at the revision the
@@ -796,11 +802,14 @@ impl Pulls {
             });
         }
         if missing.is_empty() && group.is_none() {
+            // 23, 118, 120: its landing names the request's work by its
+            // title.
             let accepted = s.submit(&SubmitRequest {
                 worktree: place(p.number),
                 branch: branch.into(),
                 after: Vec::new(),
                 priority: 0,
+                subject: Some(p.title.clone()),
             })?;
             return Ok(Considered::from(match accepted {
                 Ok(a) => {
@@ -972,6 +981,7 @@ impl Pulls {
                     worktrees: by_k.values().map(|p| place(p.number)).collect(),
                     after: Vec::new(),
                     priority: 0,
+                    subjects: by_k.values().map(|p| p.title.clone()).collect(),
                 };
                 match s.submit_group(&req)? {
                     Ok(accepted) => {
@@ -1109,6 +1119,7 @@ impl Pulls {
             worktrees: acted.iter().map(|(p, _)| place(p.number)).collect(),
             after: Vec::new(),
             priority: 0,
+            subjects: acted.iter().map(|(p, _)| p.title.clone()).collect(),
         };
         let accepted = match s.submit_group(&req)? {
             Ok(accepted) => accepted,
@@ -1919,9 +1930,10 @@ impl crate::PullRequests for Pulls {
         clock: &dyn Clock,
         worktree: &str,
         branch: &str,
+        subject: Option<&str>,
     ) -> Result<Result<Opened, SubmitRefusal>> {
         Ok(
-            match self.open_group(seams, clock, &[worktree.to_string()], branch)? {
+            match self.opening(seams, clock, &[worktree.to_string()], branch, &[subject])? {
                 Ok(mut opened) => Ok(opened.remove(0)),
                 Err(GroupRefused::Worktrees(mut refused)) => Err(refused.remove(0).1),
                 Err(GroupRefused::Short { .. }) => {
@@ -1931,195 +1943,27 @@ impl crate::PullRequests for Pulls {
         )
     }
 
-    /// 125: every worktree read before anything is pushed, and a refusal
-    /// for each refused; then, in order, each request marked one of the
-    /// group before its head reaches it: an open request's description
-    /// written for its head before its branch is pushed, a new one opened
-    /// a draft with it once its branch is. Then the group is taken whole or left drafts
-    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
-    /// marked ready, for intake to take on its conditions.
     fn open_group(
         &self,
         seams: Seams<'_>,
         clock: &dyn Clock,
         worktrees: &[String],
+        subjects: &[String],
         branch: &str,
     ) -> Result<Result<Vec<Opened>, GroupRefused>> {
-        let mut refused = Vec::new();
-        let mut sessions: Vec<Session> = Vec::new();
-        for (k, worktree) in worktrees.iter().enumerate() {
-            let session = seams.driver.session(worktree)?;
-            let before = worktrees[..k]
-                .iter()
-                .zip(&sessions)
-                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
-            if let Some((earlier, _)) = before {
-                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
-            } else if session.detached {
-                refused.push((worktree.clone(), SubmitRefusal::Detached));
-            } else if !session.dirty.is_empty() {
-                refused.push((
-                    worktree.clone(),
-                    SubmitRefusal::Dirty(session.dirty.clone()),
-                ));
-            }
-            sessions.push(session);
-        }
-        let s = Sluice::new(seams, clock);
-        let target = self.target(&s, branch)?;
-        if target.is_none() {
-            for w in worktrees {
-                refused.push((w.clone(), SubmitRefusal::NotManaged));
-            }
-        }
-        let (Some(t), true) = (target, refused.is_empty()) else {
-            return Ok(Err(GroupRefused::Worktrees(refused)));
-        };
-        // ADR 0050: refused before anything is pushed or opened, each place
-        // its runner keeps a required check out of CI in.
-        let mut warnings = Vec::new();
-        for (worktree, session) in worktrees.iter().zip(&sessions) {
-            match s.check_kept_out(session, branch, &t.tip)? {
-                Ok(w) => warnings.push(w),
-                Err(r) => refused.push((worktree.clone(), r)),
-            }
-        }
-        if !refused.is_empty() {
-            return Ok(Err(GroupRefused::Worktrees(refused)));
-        }
-        let forge = self.forge(branch)?;
-        let _lock = self.wait_lock(branch)?;
-        // 124, 1: a branch sluice lands on is asked for as its remote holds
-        // it, and nothing is pushed; only a branch it lands on nowhere is.
-        let submitted = sessions
-            .iter()
-            .map(|session| s.submitted_head(session))
-            .collect::<Result<Vec<_>>>()?;
-        let open = forge.pulls(&t.repo, branch)?;
-        let n = sessions.len();
-        let token = group_token(clock.now(), &submitted[0].head);
-        let mut opened = Vec::new();
-        // Each request as the act leaves it, and when its last submission
-        // left the queue, for the group's taking.
-        let mut acted = Vec::new();
-        for (k, (session, submitted)) in sessions.iter().zip(&submitted).enumerate() {
-            let head_ref = session.from.worktree.clone();
-            let head = &submitted.head;
-            let agent = &session.from.agent;
-            let group = (n > 1).then(|| Group {
-                token: token.clone(),
-                k: k + 1,
-                n,
-                head: head.0.clone(),
-            });
-            let push = || -> Result<()> {
-                if !submitted.from_remote {
-                    self.pushed(&t.remote)?.push_branch(head, &head_ref)?;
-                }
-                Ok(())
-            };
-            let existing = open
-                .iter()
-                .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
-            // C.5: the description of the head submitted, its commits'
-            // messages as many as GitHub holds; the head is in the
-            // repository's objects before it is pushed.
-            let messages = self.messages(&t.tip, head)?;
-            let compare = compare_address(&t.repo, branch, &head_ref);
-            let body = description(&messages, agent, group.as_ref(), &compare);
-            let (pull, word) = match existing {
-                Some(p) => {
-                    if p.body != body {
-                        forge.edit(&t.repo, p.number, &body)?;
-                    }
-                    push()?;
-                    (Pull { body, ..p.clone() }, "updated")
-                }
-                None => {
-                    push()?;
-                    let title = messages
-                        .first()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or(&head_ref)
-                        .to_string();
-                    // A group's request is opened a draft, which the act
-                    // marks ready only once it takes the group (125).
-                    let p = forge.open(&t.repo, branch, &head_ref, &title, &body, n > 1)?;
-                    (p, "opened")
-                }
-            };
-            let number = pull.number;
-            let mut said = format!("{word} #{number}: {}", pull.title);
-            if !submitted.from_remote {
-                said = format!("pushed {head_ref} · {said}");
-            }
-            // The submit is its submitter's act (120). The submission on an
-            // older head leaves the queue, withdrawn by the submit itself
-            // (67), and a ready mark follows the latest leaving, so intake
-            // reads the act as given.
-            let here = place(number);
-            let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
-            if let Some(e) = latest
-                .get(&here)
-                .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != *head)
-            {
-                // Landing since it was read: it lands, and the new head waits.
-                if let Ok(Withdrew::Now) =
-                    s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
-                {
-                    said.push_str(&format!(" · withdrew its submission {}", e.id));
-                }
-            }
-            let latest = s
-                .latest_of(branch, std::slice::from_ref(&here))?
-                .remove(&here);
-            let log = Line::read_log(&s.seams().state.read(branch)?)?;
-            let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
-            if n == 1 && (pull.draft || left.is_some()) {
-                mark_ready(forge, &t.repo, number, pull.draft, left)?;
-                said.push_str(" · marked ready for review");
-            }
-            opened.push(Opened {
-                number,
-                said,
-                copy: submitted.copy.clone(),
-                submission: None,
-            });
-            acted.push((
-                Pull {
-                    head: head.0.clone(),
-                    ..pull
-                },
-                left,
-            ));
-        }
-        let taken = if n > 1 {
-            self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
+        // 125: one subject per worktree, in their order, or none.
+        let subjects: Vec<Option<&str>> = if subjects.is_empty() {
+            vec![None; worktrees.len()]
+        } else if subjects.len() == worktrees.len() {
+            subjects.iter().map(|s| Some(s.as_str())).collect()
         } else {
-            Ok(opened)
+            bail!(
+                "a group submit to {branch} gives {} subjects for {} worktrees",
+                subjects.len(),
+                worktrees.len()
+            );
         };
-        // 124: how the host's copy differs, and ADR 0050: why the runner
-        // could not be asked, beneath what the act did.
-        let beneath = |mut opened: Vec<Opened>| {
-            for (o, warnings) in opened.iter_mut().zip(&warnings) {
-                if let Some(copy) = &o.copy {
-                    o.said.push('\n');
-                    o.said.push_str(&crate::copy_differs_line(copy));
-                }
-                for w in warnings {
-                    o.said.push_str(&format!("\nwarning: {w}"));
-                }
-            }
-            opened
-        };
-        Ok(match taken {
-            Ok(opened) => Ok(beneath(opened)),
-            Err(GroupRefused::Short { opened, short }) => Err(GroupRefused::Short {
-                opened: beneath(opened),
-                short,
-            }),
-            Err(refused) => Err(refused),
-        })
+        self.opening(seams, clock, worktrees, branch, &subjects)
     }
 
     fn find(
@@ -2209,6 +2053,214 @@ impl crate::PullRequests for Pulls {
 }
 
 impl Pulls {
+    /// 125: every worktree read before anything is pushed, and a refusal
+    /// for each refused; then, in order, each request marked one of the
+    /// group before its head reaches it: an open request's description
+    /// written for its head before its branch is pushed, a new one opened
+    /// a draft with it once its branch is. Then the group is taken whole or left drafts
+    /// ([`Pulls::take_act`]). One worktree is marked one of no group and
+    /// marked ready, for intake to take on its conditions. Each worktree's
+    /// of `subjects`, one per worktree, titles its request where given.
+    fn opening(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        worktrees: &[String],
+        branch: &str,
+        subjects: &[Option<&str>],
+    ) -> Result<Result<Vec<Opened>, GroupRefused>> {
+        let mut refused = Vec::new();
+        let mut sessions: Vec<Session> = Vec::new();
+        for (k, worktree) in worktrees.iter().enumerate() {
+            let session = seams.driver.session(worktree)?;
+            let before = worktrees[..k]
+                .iter()
+                .zip(&sessions)
+                .find(|(w, s)| *w == worktree || s.from.worktree == session.from.worktree);
+            if let Some((earlier, _)) = before {
+                refused.push((worktree.clone(), SubmitRefusal::NamedTwice(earlier.clone())));
+            } else if session.detached {
+                refused.push((worktree.clone(), SubmitRefusal::Detached));
+            } else if !session.dirty.is_empty() {
+                refused.push((
+                    worktree.clone(),
+                    SubmitRefusal::Dirty(session.dirty.clone()),
+                ));
+            }
+            sessions.push(session);
+        }
+        let s = Sluice::new(seams, clock);
+        let target = self.target(&s, branch)?;
+        if target.is_none() {
+            for w in worktrees {
+                refused.push((w.clone(), SubmitRefusal::NotManaged));
+            }
+        }
+        let (Some(t), true) = (target, refused.is_empty()) else {
+            return Ok(Err(GroupRefused::Worktrees(refused)));
+        };
+        // ADR 0050: refused before anything is pushed or opened, each place
+        // its runner keeps a required check out of CI in.
+        let mut warnings = Vec::new();
+        for (worktree, session) in worktrees.iter().zip(&sessions) {
+            match s.check_kept_out(session, branch, &t.tip)? {
+                Ok(w) => warnings.push(w),
+                Err(r) => refused.push((worktree.clone(), r)),
+            }
+        }
+        if !refused.is_empty() {
+            return Ok(Err(GroupRefused::Worktrees(refused)));
+        }
+        let forge = self.forge(branch)?;
+        let _lock = self.wait_lock(branch)?;
+        // 124, 1: a branch sluice lands on is asked for as its remote holds
+        // it, and nothing is pushed; only a branch it lands on nowhere is.
+        let submitted = sessions
+            .iter()
+            .map(|session| s.submitted_head(session))
+            .collect::<Result<Vec<_>>>()?;
+        let open = forge.pulls(&t.repo, branch)?;
+        let n = sessions.len();
+        let token = group_token(clock.now(), &submitted[0].head);
+        let mut opened = Vec::new();
+        // Each request as the act leaves it, and when its last submission
+        // left the queue, for the group's taking.
+        let mut acted = Vec::new();
+        for (k, ((session, submitted), &subject)) in
+            sessions.iter().zip(&submitted).zip(subjects).enumerate()
+        {
+            let head_ref = session.from.worktree.clone();
+            let head = &submitted.head;
+            let agent = &session.from.agent;
+            let group = (n > 1).then(|| Group {
+                token: token.clone(),
+                k: k + 1,
+                n,
+                head: head.0.clone(),
+            });
+            let push = || -> Result<()> {
+                if !submitted.from_remote {
+                    self.pushed(&t.remote)?.push_branch(head, &head_ref)?;
+                }
+                Ok(())
+            };
+            let existing = open
+                .iter()
+                .find(|p| p.head_ref == head_ref && p.from_repo(&t.repo));
+            // C.5: the description of the head submitted, its commits'
+            // messages as many as GitHub holds; the head is in the
+            // repository's objects before it is pushed.
+            let messages = self.messages(&t.tip, head)?;
+            let compare = compare_address(&t.repo, branch, &head_ref);
+            let body = description(&messages, agent, group.as_ref(), &compare);
+            let (pull, word) = match existing {
+                Some(p) => {
+                    // C.5 pull request, 120: a subject retitles a request
+                    // sluice opened, never one a person opened; none leaves
+                    // the title as it is.
+                    let title = match subject {
+                        Some(s) if s != p.title && p.author == forge.login()? => Some(s),
+                        _ => None,
+                    };
+                    if p.body != body || title.is_some() {
+                        forge.edit(&t.repo, p.number, title, &body)?;
+                    }
+                    push()?;
+                    let title = title.map_or_else(|| p.title.clone(), String::from);
+                    (
+                        Pull {
+                            body,
+                            title,
+                            ..p.clone()
+                        },
+                        "updated",
+                    )
+                }
+                None => {
+                    push()?;
+                    // C.5 pull request: titled by what lands, the subject
+                    // or the branch's name, never a commit's message.
+                    let title = subject.unwrap_or(&head_ref);
+                    // A group's request is opened a draft, which the act
+                    // marks ready only once it takes the group (125).
+                    let p = forge.open(&t.repo, branch, &head_ref, title, &body, n > 1)?;
+                    (p, "opened")
+                }
+            };
+            let number = pull.number;
+            let mut said = format!("{word} #{number}: {}", pull.title);
+            if !submitted.from_remote {
+                said = format!("pushed {head_ref} · {said}");
+            }
+            // The submit is its submitter's act (120). The submission on an
+            // older head leaves the queue, withdrawn by the submit itself
+            // (67), and a ready mark follows the latest leaving, so intake
+            // reads the act as given.
+            let here = place(number);
+            let latest = s.latest_of(branch, std::slice::from_ref(&here))?;
+            if let Some(e) = latest
+                .get(&here)
+                .filter(|e| !e.state.is_out() && e.state != State::Landing && e.head != *head)
+            {
+                // Landing since it was read: it lands, and the new head waits.
+                if let Ok(Withdrew::Now) =
+                    s.withdraw(e.id, &Requester::Session(e.from.agent.clone()))?
+                {
+                    said.push_str(&format!(" · withdrew its submission {}", e.id));
+                }
+            }
+            let latest = s
+                .latest_of(branch, std::slice::from_ref(&here))?
+                .remove(&here);
+            let log = Line::read_log(&s.seams().state.read(branch)?)?;
+            let left = latest.filter(left_unlanded).map(|e| acts_from(&log, &e));
+            if n == 1 && (pull.draft || left.is_some()) {
+                mark_ready(forge, &t.repo, number, pull.draft, left)?;
+                said.push_str(" · marked ready for review");
+            }
+            opened.push(Opened {
+                number,
+                said,
+                copy: submitted.copy.clone(),
+                submission: None,
+            });
+            acted.push((
+                Pull {
+                    head: head.0.clone(),
+                    ..pull
+                },
+                left,
+            ));
+        }
+        let taken = if n > 1 {
+            self.take_act(&s, forge, &t, branch, worktrees, &acted, opened)?
+        } else {
+            Ok(opened)
+        };
+        // 124: how the host's copy differs, and ADR 0050: why the runner
+        // could not be asked, beneath what the act did.
+        let beneath = |mut opened: Vec<Opened>| {
+            for (o, warnings) in opened.iter_mut().zip(&warnings) {
+                if let Some(copy) = &o.copy {
+                    o.said.push('\n');
+                    o.said.push_str(&crate::copy_differs_line(copy));
+                }
+                for w in warnings {
+                    o.said.push_str(&format!("\nwarning: {w}"));
+                }
+            }
+            opened
+        };
+        Ok(match taken {
+            Ok(opened) => Ok(beneath(opened)),
+            Err(GroupRefused::Short { opened, short }) => Err(GroupRefused::Short {
+                opened: beneath(opened),
+                short,
+            }),
+            Err(refused) => Err(refused),
+        })
+    }
+
     /// 2, 47: the head of pull request `worktree`, `pull/<n>`, as intake
     /// read it this round, fetched from its remote; never dirty, never
     /// detached; its agent the one its body names, or its author; and the
@@ -2327,7 +2379,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
         let forge = Rc::new(FileForge::new(&dir.join("github.json"), &repo));
-        let pulls = Pulls::new(&dir, &dir, Some(forge.clone()), None);
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            Some(forge.clone()),
+            None,
+            Rc::new(retry::Policy::command()),
+        );
         let view = VerdictView {
             branch: "main".into(),
             id: 12,

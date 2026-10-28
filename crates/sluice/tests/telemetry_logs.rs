@@ -150,6 +150,7 @@ impl PullRequests for Unreadable {
         _: &dyn Clock,
         _: &str,
         branch: &str,
+        _: Option<&str>,
     ) -> anyhow::Result<Result<Opened, SubmitRefusal>> {
         anyhow::bail!("{branch} takes no pull requests")
     }

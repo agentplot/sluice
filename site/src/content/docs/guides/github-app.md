@@ -87,14 +87,16 @@ nothing in the queue
 
 GitHub sometimes refuses a token in its first seconds, reading the
 repository as not found or the push as denied, and takes the same token
-a moment later. sluice then makes the fetch or push once more, on a
-token it makes afresh and waits five seconds to use. A push goes again
-only when GitHub refused it before looking at any branch, and expects
-the branch where the first push did, so it never moves a branch that
-moved in between. When GitHub refuses the fresh token too, sluice tries
-no third time: it reports GitHub's own words, then what each refused
-token was, its app, repository, installation, scope and age. It never
-shows the token itself.
+a moment later. sluice then tries the fetch or push again on a token it
+makes afresh and waits five seconds to use. It pauses longer before each
+try, for up to thirty seconds, or five minutes while a submit or
+`sluice wait` waits. A push goes again only when GitHub refused it
+before looking at any branch, and expects the branch where the first
+push did, so it never moves a branch that moved in between. When GitHub
+still refuses once that time is spent, sluice reports GitHub's own
+words, then what each refused token was, in the order it tried them:
+its app, repository, installation, scope and age. It never shows the
+token itself.
 
 ## 5. Make the app the ruleset's only bypass
 

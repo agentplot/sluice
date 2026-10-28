@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::app::{App, Repo};
+use super::app::{App, Bearer, Repo};
 
 /// One thing checked, and whether it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,11 +33,8 @@ fn failed(what: String) -> Finding {
 /// token, which reads the rulesets' bypass lists.
 pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Vec<Finding> {
     let mut found = Vec::new();
-    let token = match app.token(repo) {
-        Ok(t) => {
-            found.push(ok(format!("app {} makes a token for {repo}", app.id())));
-            t
-        }
+    match app.token(repo) {
+        Ok(_) => found.push(ok(format!("app {} makes a token for {repo}", app.id()))),
         Err(e) => {
             found.push(failed(format!(
                 "app {} makes no token for {repo}: {e:#}",
@@ -70,24 +67,18 @@ pub fn check(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Ve
         }
         Err(e) => found.push(failed(format!("{e:#}"))),
     }
-    found.extend(rules(app, repo, branch, &token, operator));
+    found.extend(rules(app, repo, branch, operator));
     found
 }
 
 /// Each ruleset on `branch`: the app among its bypass actors, and no one
 /// else.
-fn rules(
-    app: &App,
-    repo: &Repo,
-    branch: &str,
-    token: &str,
-    operator: Option<&str>,
-) -> Vec<Finding> {
+fn rules(app: &App, repo: &Repo, branch: &str, operator: Option<&str>) -> Vec<Finding> {
     let path = format!(
         "/repos/{}/{}/rules/branches/{branch}",
         repo.owner, repo.name
     );
-    let rules = match app.get(&path, token) {
+    let rules = match app.get(&path, Bearer::Repo(repo)) {
         Ok(v) => v,
         Err(e) => return vec![failed(format!("reading {branch}'s rules: {e:#}"))],
     };
@@ -114,7 +105,7 @@ fn rules(
                 "/repos/{}/{}/rulesets/{id}?includes_parents=true",
                 repo.owner, repo.name
             );
-            match app.get(&path, operator) {
+            match app.get(&path, Bearer::Token(operator)) {
                 Ok(r) => ruleset(app.id(), branch, &r),
                 Err(e) => failed(format!("reading ruleset {id}: {e:#}")),
             }

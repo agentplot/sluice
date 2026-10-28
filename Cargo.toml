@@ -77,6 +77,13 @@ regex = "1"
 jsonwebtoken = "9"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+# Every call to a remote runs under one retry policy (ADR 0062): a
+# maintained crate's backoff, blocking, with no async runtime.
+backon = { version = "1.6", default-features = false, features = [
+  "std",
+  "std-blocking-sleep",
+] }
+
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
