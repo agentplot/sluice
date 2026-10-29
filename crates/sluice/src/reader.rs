@@ -488,7 +488,7 @@ mod tests {
         assert!(holds_lease(&new));
         // A fork's copy of the lead's descriptor of its lock.
         let forked = match &old {
-            Reader::Lead(l) => l._lock.try_clone().unwrap(),
+            Reader::Lead(l) => l.lock.try_clone().unwrap(),
             Reader::Follow(_) => panic!("a follower, where the lock was free"),
         };
         old.step(true).unwrap();
