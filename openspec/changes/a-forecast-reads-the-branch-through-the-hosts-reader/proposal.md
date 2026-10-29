@@ -111,6 +111,7 @@ crates/sluice/src/overview.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/main.rs
 crates/sluice/src/exec.rs
+crates/sluice/src/progress.rs
 crates/sluice-core/src/ops.rs
 crates/sluice-core/src/step.rs
 crates/sluice-core/src/overview.rs
