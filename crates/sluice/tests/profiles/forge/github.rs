@@ -12,8 +12,11 @@
 //! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
 //! it. Told to, it troubles the next calls of a method and path: answers
 //! them with a status, takes them and then answers a status, or cuts the
-//! connection once it read them, taken or not. Each test crate that
-//! includes it uses a part.
+//! connection once it read them, taken or not, or answers them as GitHub
+//! does when an allowance is spent, or as the last call of one. It gives
+//! every answer to a `GET` an ETag, answers `304` to a `GET` whose
+//! `If-None-Match` is the answer's own, and keeps each call's status.
+//! Each test crate that includes it uses a part.
 
 #![allow(dead_code)]
 
@@ -38,6 +41,8 @@ pub const INSTALLATION: u64 = 7;
 const REPO: &str = "/repos/o/r";
 /// The characters GitHub holds in a pull request's body.
 const BODY_LIMIT: usize = 65_536;
+/// The installation token the fake sells: one no answer holds by chance.
+pub const TOKEN: &str = "ghs_fakeInstallationToken0123456789";
 
 pub fn repo() -> Repo {
     Repo::from_url("https://github.com/o/r.git").unwrap()
@@ -54,11 +59,23 @@ pub struct GitHub {
     unavailable: Arc<AtomicUsize>,
     /// The calls troubled from now.
     troubles: Arc<Mutex<Vec<Troubled>>>,
+    /// Each call's method, path and the status it was answered.
+    answered: Arc<Mutex<Vec<(String, String, u16)>>>,
 }
 
 /// What the fake does to a call it is told to trouble.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Trouble {
+    /// Answers it with this status, these headers and this JSON, taking
+    /// nothing of it: an allowance spent.
+    Limited {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Value,
+    },
+    /// Answers it as it would, with these headers beside: the last call
+    /// of an allowance.
+    With(Vec<(String, String)>),
     /// Answers it with this status, taking nothing of it.
     Status(u16),
     /// Takes it, then answers it with this status, as GitHub may.
@@ -110,7 +127,9 @@ impl GitHub {
         let left = unavailable.clone();
         let troubles: Arc<Mutex<Vec<Troubled>>> = Arc::default();
         let troubling = troubles.clone();
-        let fake = Fake::start_on(listener, move |r| {
+        let answered: Arc<Mutex<Vec<(String, String, u16)>>> = Arc::default();
+        let answering = answered.clone();
+        let respond = move |r: &Request| -> Answer {
             if let Some(b) = &bare {
                 sync(&held, b);
             }
@@ -118,13 +137,24 @@ impl GitHub {
                 let hit = t.left > 0 && r.method == t.method && r.path.starts_with(&t.path);
                 hit.then(|| {
                     t.left -= 1;
-                    t.trouble
+                    t.trouble.clone()
                 })
             });
             let take = |r: &Request| {
                 let _ = answer(&held, bare.as_deref(), &fails.lock().unwrap(), r);
             };
+            let mut beside = Vec::new();
             match trouble {
+                Some(Trouble::Limited {
+                    status,
+                    headers,
+                    body,
+                }) => {
+                    let (code, mut h, body) = json(status, body);
+                    h.extend(headers);
+                    return (code, h, body);
+                }
+                Some(Trouble::With(headers)) => beside = headers,
                 Some(Trouble::Status(status)) => return erring(status),
                 Some(Trouble::Taken(status)) => {
                     take(r);
@@ -149,10 +179,21 @@ impl GitHub {
             {
                 return json(503, json!({ "message": "Service Unavailable" }));
             }
-            if r.method == "POST" && r.path == "/graphql" {
-                return graphql(&held, refusing.load(Ordering::SeqCst), r);
-            }
-            answer(&held, bare.as_deref(), &fails.lock().unwrap(), r)
+            let (status, mut headers, body) = if r.method == "POST" && r.path == "/graphql" {
+                graphql(&held, refusing.load(Ordering::SeqCst), r)
+            } else {
+                answer(&held, bare.as_deref(), &fails.lock().unwrap(), r)
+            };
+            headers.extend(beside);
+            versioned(r, (status, headers, body))
+        };
+        let fake = Fake::start_on(listener, move |r| {
+            let a = respond(r);
+            answering
+                .lock()
+                .unwrap()
+                .push((r.method.clone(), r.path.clone(), a.0));
+            a
         });
         GitHub {
             forge,
@@ -161,7 +202,19 @@ impl GitHub {
             failing,
             unavailable,
             troubles,
+            answered,
         }
+    }
+
+    /// How many calls of `method` to a path starting `path` the fake
+    /// answered `status`.
+    pub fn answered(&self, method: &str, path: &str, status: u16) -> usize {
+        self.answered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, p, s)| m == method && p.starts_with(path) && *s == status)
+            .count()
     }
 
     /// Trouble the next `n` calls of `method` to a path starting `path` as
@@ -182,6 +235,17 @@ impl GitHub {
             .iter()
             .filter(|r| r.method == method && r.path.starts_with(path))
             .count()
+    }
+
+    /// The methods of the calls to a path starting `path` the fake saw,
+    /// in the order it saw them.
+    pub fn methods(&self, path: &str) -> Vec<String> {
+        self.fake
+            .requests()
+            .into_iter()
+            .filter(|r| r.path.starts_with(path))
+            .map(|r| r.method)
+            .collect()
     }
 
     pub fn url(&self) -> &str {
@@ -264,6 +328,26 @@ fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
     )
 }
 
+/// `a`, GitHub's answer to `r`, with an ETag when it is a `GET`'s 200:
+/// `304` with nothing when `r` sent that ETag as `If-None-Match`.
+fn versioned(r: &Request, a: Answer) -> Answer {
+    let (status, mut headers, body) = a;
+    if r.method != "GET" || status != 200 {
+        return (status, headers, body);
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    body.hash(&mut h);
+    let etag = format!("\"{:016x}\"", h.finish());
+    if r.header("If-None-Match") == Some(etag.as_str()) {
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
+        headers.push(("ETag".into(), etag));
+        return (304, headers, String::new());
+    }
+    headers.push(("ETag".into(), etag));
+    (status, headers, body)
+}
+
 /// GitHub's pull requests follow their branches.
 fn sync(forge: &FileForge, bare: &Path) {
     let Ok(held) = forge.held() else { return };
@@ -288,7 +372,7 @@ fn sync(forge: &FileForge, bare: &Path) {
             .status
             .success();
         if merged {
-            forge.close(p.number).unwrap();
+            forge.merge(p.number).unwrap();
         }
     }
 }
@@ -355,6 +439,8 @@ fn pull_json(p: &Pull) -> Value {
         "state": if p.open { "open" } else { "closed" },
         "head": { "sha": p.head, "ref": p.head_ref, "repo": { "full_name": p.head_repo } },
         "base": { "ref": p.base },
+        "updated_at": p.updated_at.map(|t| t.to_rfc3339()),
+        "merged_at": p.updated_at.filter(|_| p.merged).map(|t| t.to_rfc3339()),
     })
 }
 
@@ -469,7 +555,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
         let ends = chrono::Utc::now() + chrono::TimeDelta::hours(1);
         return json(
             201,
-            json!({ "token": "token", "expires_at": ends.to_rfc3339() }),
+            json!({ "token": TOKEN, "expires_at": ends.to_rfc3339() }),
         );
     }
     let Some(rest) = path.strip_prefix(REPO) else {
@@ -565,7 +651,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
             json(200, json!({ "state": "pending", "statuses": [] }))
         }
         ("POST", ["check-runs"]) => {
-            forge
+            let id = forge
                 .post_named(
                     &repo,
                     body["head_sha"].as_str().unwrap(),
@@ -574,7 +660,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
                     &posting(&body),
                 )
                 .unwrap();
-            json(201, json!({}))
+            json(201, json!({ "id": id }))
         }
         ("PATCH", ["check-runs", id]) => {
             let id: u64 = id.parse().unwrap();
@@ -615,14 +701,14 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
             )
         }
         ("POST", ["issues", n, "comments"]) => {
-            forge
+            let id = forge
                 .comment(
                     &repo,
                     n.parse().unwrap(),
                     body["body"].as_str().unwrap_or_default(),
                 )
                 .unwrap();
-            json(201, json!({}))
+            json(201, json!({ "id": id }))
         }
         ("PATCH", ["issues", "comments", id]) => {
             forge

@@ -76,6 +76,13 @@ impl App {
     }
 }
 
+/// The id GitHub gave what it just made, a check run or a comment.
+fn made_id(v: &Value, what: &str) -> Result<u64> {
+    v["id"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("GitHub made a {what} and gave it no id"))
+}
+
 fn text(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
@@ -95,6 +102,11 @@ fn pull(v: &Value) -> Result<Pull> {
         head_ref: text(&v["head"]["ref"]),
         head_repo: text(&v["head"]["repo"]["full_name"]),
         base: text(&v["base"]["ref"]),
+        updated_at: v["updated_at"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc)),
+        merged: v["merged_at"].is_string(),
     })
 }
 
@@ -320,7 +332,7 @@ impl Forge for App {
         name: &str,
         existing: Option<u64>,
         posting: &Posting,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let mut body = posting_json(name, posting);
         match existing {
             Some(id) => {
@@ -329,6 +341,7 @@ impl Forge for App {
                     Bearer::Repo(repo),
                     &body.to_string(),
                 )?;
+                Ok(id)
             }
             None => {
                 body["head_sha"] = json!(rev);
@@ -336,15 +349,14 @@ impl Forge for App {
                     repo,
                     &Self::repo_path(repo, "/check-runs"),
                     &body.to_string(),
-                    |_| Ok(()),
+                    |v| made_id(v, "check run"),
                     || {
                         let runs = self.posted_all(repo, rev)?;
-                        Ok(runs.iter().any(|p| p.name == name).then_some(()))
+                        Ok(runs.iter().find(|p| p.name == name).map(|p| p.id))
                     },
-                )?;
+                )
             }
         }
-        Ok(())
     }
 
     fn comment_list(&self, repo: &Repo, number: u64) -> Result<Vec<Comment>> {
@@ -369,15 +381,15 @@ impl Forge for App {
         Ok(())
     }
 
-    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
+    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<u64> {
         self.make(
             repo,
             &Self::repo_path(repo, &format!("/issues/{number}/comments")),
             &json!({ "body": body }).to_string(),
-            |_| Ok(()),
+            |v| made_id(v, "comment"),
             || {
                 let comments = self.comment_list(repo, number)?;
-                Ok(comments.iter().any(|c| c.body == body).then_some(()))
+                Ok(comments.iter().find(|c| c.body == body).map(|c| c.id))
             },
         )
     }
@@ -435,6 +447,31 @@ impl Forge for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 136: a pull request is read with when GitHub last changed it, and
+    /// whether it was merged.
+    #[test]
+    fn a_pull_request_reads_its_last_change_and_its_merge() {
+        let v = json!({
+            "number": 7, "node_id": "PR_kw7", "title": "T", "body": "B",
+            "user": { "login": "ann" }, "draft": false, "state": "closed",
+            "head": { "sha": "abc", "ref": "unit/a", "repo": { "full_name": "o/r" } },
+            "base": { "ref": "main" },
+            "updated_at": "2026-10-28T12:34:56Z", "merged_at": "2026-10-28T12:34:50Z",
+        });
+        let p = pull(&v).unwrap();
+        assert_eq!(
+            p.updated_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-28T12:34:56Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+        assert!(p.merged && !p.open);
+        let open = pull(&json!({ "number": 8, "state": "open", "merged_at": null })).unwrap();
+        assert_eq!((open.updated_at, open.merged), (None, false));
+    }
 
     /// What sluice posts reads back the same, so a round that would post
     /// it again posts nothing.

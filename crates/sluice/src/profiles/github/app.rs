@@ -10,10 +10,20 @@
 //! installation's token on (401) is tried again on one bought afresh; a
 //! read, or a write that sets a state, is tried again whatever else
 //! failed but GitHub's answer; a write that makes something is not made
-//! again once GitHub may have taken it, a 5xx or a 429 among them, and
-//! fails [`Unanswered`], for its caller to read whether it was made.
+//! again once GitHub may have taken it, a 5xx among them, and fails
+//! [`Unanswered`], for its caller to read whether it was made.
+//!
+//! GitHub's word that an allowance is spent, a 429, a 403 that says so,
+//! GraphQL's `RATE_LIMITED`, or a success that leaves no call, is a pause
+//! kept in the host's state for the installation and the allowance, read
+//! before every call by every process on the host: while it stands no
+//! call is made, and none to find out (134 as amended 2026-10-28; rule
+//! core.29; ADR 0071). Every `GET` carries the ETag and last-modified time
+//! of the answer the host keeps for its address, and GitHub's 304 is
+//! answered from it (136; rule core.32). The calls the app's JWT makes,
+//! finding the installation and buying a token, read no pause.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -25,8 +35,9 @@ use serde::Serialize;
 use serde_json::Value;
 use sluice_seams::Unanswered;
 
+use super::kept::{self, Allowance, Kept, Pause};
 use crate::instance::Forge;
-use crate::retry::{Failed, Judged, Kind, Policy};
+use crate::retry::{Failed, Judged, Kind, Limited, Policy};
 
 /// GitHub's API.
 pub const API: &str = "https://api.github.com";
@@ -44,6 +55,10 @@ const REFRESH: TimeDelta = TimeDelta::minutes(5);
 /// GitHub may refuse a token for its first seconds, until all its servers
 /// know it (Octokit's auth-app waits as long for the same reason).
 const SETTLE: TimeDelta = TimeDelta::seconds(5);
+/// How long a pause lasts when GitHub names no time: doubled for each
+/// such answer in a row, up to [`LONGEST_PAUSE`], as GitHub asks.
+const FIRST_PAUSE: TimeDelta = TimeDelta::minutes(1);
+const LONGEST_PAUSE: TimeDelta = TimeDelta::minutes(30);
 
 /// The time now; a test's own clock in tests.
 pub type Now = Box<dyn Fn() -> DateTime<Utc>>;
@@ -168,6 +183,31 @@ pub struct App {
     /// The app's slug, once read.
     slug: RefCell<Option<String>>,
     policy: Rc<Policy>,
+    /// The host's answers and pauses; none, nothing is kept.
+    kept: Option<Kept>,
+    /// The end of the last pause this process said it waits out.
+    told: Cell<Option<DateTime<Utc>>>,
+}
+
+/// What GitHub said of its allowance with an answer, and of the answer's
+/// version.
+#[derive(Default)]
+struct Heard {
+    remaining: Option<u64>,
+    reset: Option<DateTime<Utc>>,
+    resource: Option<String>,
+    retry_after: Option<u64>,
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+/// One call's answer: its status, its JSON, its text and what GitHub said
+/// with it.
+struct Reply {
+    status: u16,
+    v: Value,
+    text: String,
+    heard: Heard,
 }
 
 impl App {
@@ -190,16 +230,26 @@ impl App {
             tokens: RefCell::default(),
             slug: RefCell::default(),
             policy,
+            kept: None,
+            told: Cell::new(None),
         })
     }
 
-    /// The host's `[forge]` app, each call under the command's `policy`.
+    /// The host's `[forge]` app, each call under the command's `policy`,
+    /// keeping its answers and pauses in the host's state.
     pub fn open(forge: &Forge, policy: Rc<Policy>) -> Result<App> {
         let pem = std::fs::read(&forge.key)
             .with_context(|| format!("reading the app's key {}", forge.key.display()))?;
         let api = std::env::var(API_VAR).unwrap_or_else(|_| API.into());
-        App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
-            .with_context(|| format!("[forge] key {}", forge.key.display()))
+        let app = App::new(forge.app_id, &pem, &api, Box::new(Utc::now), policy)
+            .with_context(|| format!("[forge] key {}", forge.key.display()))?;
+        Ok(app.keeping(Kept::new(&crate::instance::state_dir()?)))
+    }
+
+    /// `self`, keeping its answers and pauses in `kept`.
+    pub fn keeping(mut self, kept: Kept) -> App {
+        self.kept = Some(kept);
+        self
     }
 
     pub fn id(&self) -> u64 {
@@ -382,11 +432,12 @@ impl App {
 
     /// GitHub's answer to a `call`, under the retry policy: its status,
     /// its JSON and its text, for a success or any status GitHub would
-    /// answer again. A 5xx or a 429 is tried again, but on a call that
-    /// makes something, which GitHub may have taken; a 401 on the
-    /// installation's token is tried again on one bought afresh. The last
-    /// try's failure is the call's when the policy stops; a call that
-    /// makes something stopped with its answer not read fails
+    /// answer again. A 5xx is tried again, but on a call that makes
+    /// something, which GitHub may have taken; a 401 on the installation's
+    /// token is tried again on one bought afresh; a spent allowance is
+    /// the policy's to wait out or stop on, no call made while its pause
+    /// stands. The last try's failure is the call's when the policy stops;
+    /// a call that makes something stopped with its answer not read fails
     /// [`Unanswered`], saying so.
     fn answer(
         &self,
@@ -415,14 +466,32 @@ impl App {
                     Call::Make => Failed::new(Judged::Answered, anyhow!("{e:#}")),
                     _ => Failed::new(Judged::Answered, e),
                 })?;
-                let (status, v, text) = self.call(method, path, &auth, body)?;
-                let judged = match status {
-                    500..=599 | 429 if call == Call::Make => Judged::Unknown,
-                    500..=599 | 429 => Judged::Never,
-                    401 if matches!(bearer, Bearer::Repo(_)) => Judged::Credential,
-                    _ => return Ok((status, v, text)),
+                let allowance = self.allowance(bearer, path);
+                let paused = allowance
+                    .as_ref()
+                    .and_then(|a| self.kept.as_ref()?.pause(a));
+                if let Some(p) = paused.as_ref().filter(|p| p.until > self.policy.wall()) {
+                    return Err(self.limited(p.until, &p.words));
+                }
+                let url = format!("{}{path}", self.api);
+                let kept = match (&self.kept, method) {
+                    (Some(k), "GET") => k.answer(&url),
+                    _ => None,
                 };
-                let e = failed(method, path, status, &v, &text);
+                let r = self.call(method, path, &auth, body, kept.as_ref())?;
+                if let Some(words) = spent(path, &r) {
+                    return Err(self.pause(allowance.as_ref(), paused, &r.heard, words));
+                }
+                let judged = match r.status {
+                    500..=599 if call == Call::Make => Judged::Unknown,
+                    500..=599 => Judged::Never,
+                    401 if matches!(bearer, Bearer::Repo(_)) => Judged::Credential,
+                    _ => {
+                        self.heard(allowance.as_ref(), paused, &r.heard);
+                        return Ok(self.kept_answer(&url, method, kept, r));
+                    }
+                };
+                let e = failed(method, path, r.status, &r.v, &r.text);
                 said = format!("{e:#}");
                 Err(Failed::new(judged, e))
             })
@@ -440,25 +509,179 @@ impl App {
             })
     }
 
-    /// One call: its status, its JSON, and its text; a call that got no
-    /// answer read, how it stands.
+    /// The allowance a call as `bearer` to `path` is counted against:
+    /// the installation's, `graphql` or `core`; `None` for the app's own
+    /// calls and the operator's token, or before a token was bought.
+    fn allowance(&self, bearer: Bearer, path: &str) -> Option<Allowance> {
+        let Bearer::Repo(repo) = bearer else {
+            return None;
+        };
+        let installation = self.tokens.borrow().get(repo)?.installation;
+        Some(Allowance {
+            app: self.id,
+            installation,
+            resource: resource(path).into(),
+        })
+    }
+
+    /// A try not made, or refused, for an allowance spent until `until`;
+    /// said once on stderr when the policy waits it out.
+    fn limited(&self, until: DateTime<Utc>, words: &str) -> Failed<anyhow::Error> {
+        if self.policy.waits() && self.told.get() != Some(until) {
+            self.told.set(Some(until));
+            eprintln!(
+                "sluice: GitHub's allowance of calls is spent until {}; waiting: {words}",
+                crate::retry::clock(until)
+            );
+        }
+        let e = Limited {
+            app: self.id,
+            until,
+            words: words.into(),
+        };
+        Failed::new(Judged::Limited { until }, e.into())
+    }
+
+    /// GitHub said in `words` that an allowance is spent: the pause, until
+    /// `retry-after`, else the reset when no call remains, else a minute
+    /// doubled for each such answer in a row; kept for `allowance`, the
+    /// resource GitHub named winning, later than any kept already.
+    fn pause(
+        &self,
+        allowance: Option<&Allowance>,
+        paused: Option<Pause>,
+        heard: &Heard,
+        words: String,
+    ) -> Failed<anyhow::Error> {
+        let now = self.policy.wall();
+        let streak = paused.map_or(0, |p| p.streak);
+        let named = match (heard.retry_after, heard.remaining, heard.reset) {
+            (Some(secs), _, _) => Some(now + TimeDelta::seconds(secs as i64)),
+            (None, Some(0), Some(reset)) => Some(reset),
+            _ => None,
+        };
+        let until = named.unwrap_or_else(|| {
+            now + (FIRST_PAUSE * 2i32.saturating_pow(streak.min(5))).min(LONGEST_PAUSE)
+        });
+        let pause = Pause {
+            until,
+            words,
+            streak: streak + 1,
+        };
+        let pause = match (&self.kept, allowance) {
+            (Some(k), Some(a)) => {
+                let a = Allowance {
+                    resource: heard.resource.clone().unwrap_or_else(|| a.resource.clone()),
+                    ..a.clone()
+                };
+                match k.put_pause(&a, pause.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("keeping GitHub's pause: {e:#}");
+                        pause
+                    }
+                }
+            }
+            _ => pause,
+        };
+        self.limited(pause.until, &pause.words)
+    }
+
+    /// GitHub answered: an answer that leaves no call of the allowance
+    /// starts its pause until the reset, and any other ends the run of
+    /// spent answers a pause kept.
+    fn heard(&self, allowance: Option<&Allowance>, paused: Option<Pause>, heard: &Heard) {
+        let (Some(k), Some(a)) = (&self.kept, allowance) else {
+            return;
+        };
+        let a = Allowance {
+            resource: heard.resource.clone().unwrap_or_else(|| a.resource.clone()),
+            ..a.clone()
+        };
+        let pause = match (heard.remaining, heard.reset) {
+            (Some(0), Some(until)) => Pause {
+                until,
+                words: "x-ratelimit-remaining: 0".into(),
+                streak: 0,
+            },
+            _ => match paused {
+                Some(p) if p.streak > 0 => Pause { streak: 0, ..p },
+                _ => return,
+            },
+        };
+        if let Err(e) = k.put_pause(&a, pause) {
+            tracing::warn!("keeping GitHub's pause: {e:#}");
+        }
+    }
+
+    /// The answer to a call GitHub judged: a `GET`'s 304 answered from
+    /// `kept`, its 200 kept for `url` when it has a version, its 404
+    /// forgetting what was kept.
+    fn kept_answer(
+        &self,
+        url: &str,
+        method: &str,
+        kept: Option<kept::Answer>,
+        r: Reply,
+    ) -> (u16, Value, String) {
+        let Some(k) = self.kept.as_ref().filter(|_| method == "GET") else {
+            return (r.status, r.v, r.text);
+        };
+        match (r.status, kept) {
+            (304, Some(a)) => {
+                k.used(url);
+                let v = serde_json::from_str(&a.body).unwrap_or(Value::Null);
+                (200, v, a.body)
+            }
+            (200, _) if r.heard.etag.is_some() || r.heard.last_modified.is_some() => {
+                let a = kept::Answer {
+                    url: url.into(),
+                    etag: r.heard.etag,
+                    last_modified: r.heard.last_modified,
+                    body: r.text.clone(),
+                    at: (self.now)(),
+                };
+                if let Err(e) = k.keep(&a) {
+                    tracing::warn!("keeping GitHub's answer to {url}: {e:#}");
+                }
+                (r.status, r.v, r.text)
+            }
+            (404, _) => {
+                k.forget(url);
+                (r.status, r.v, r.text)
+            }
+            _ => (r.status, r.v, r.text),
+        }
+    }
+
+    /// One call, conditional on `kept` when it is given: its answer; a
+    /// call that got no answer read, how it stands.
     fn call(
         &self,
         method: &str,
         path: &str,
         bearer: &str,
         body: Option<&str>,
-    ) -> Result<(u16, Value, String), Failed<anyhow::Error>> {
+        kept: Option<&kept::Answer>,
+    ) -> Result<Reply, Failed<anyhow::Error>> {
         let url = format!("{}{path}", self.api);
         let auth = format!("Bearer {bearer}");
         let resp = match (method, body) {
-            ("GET", _) => self
-                .http
-                .get(&url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .header("Authorization", &auth)
-                .call(),
+            ("GET", _) => {
+                let mut req = self
+                    .http
+                    .get(&url)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .header("Authorization", &auth);
+                if let Some(etag) = kept.and_then(|k| k.etag.as_deref()) {
+                    req = req.header("If-None-Match", etag);
+                }
+                if let Some(at) = kept.and_then(|k| k.last_modified.as_deref()) {
+                    req = req.header("If-Modified-Since", at);
+                }
+                req.call()
+            }
             (_, body) => {
                 let req = match method {
                     "POST" => self.http.post(&url),
@@ -480,12 +703,32 @@ impl App {
         };
         let mut resp = resp.map_err(|e| unread(sent(&e), e.into()))?;
         let status = resp.status().as_u16();
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        let number = |name: &str| header(name).and_then(|v| v.trim().parse::<u64>().ok());
+        let heard = Heard {
+            remaining: number("x-ratelimit-remaining"),
+            reset: number("x-ratelimit-reset").and_then(|t| DateTime::from_timestamp(t as i64, 0)),
+            resource: header("x-ratelimit-resource"),
+            retry_after: number("retry-after"),
+            etag: header("etag"),
+            last_modified: header("last-modified"),
+        };
         let text = resp
             .body_mut()
             .read_to_string()
             .map_err(|e| unread(Judged::Unknown, e.into()))?;
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok((status, v, text))
+        Ok(Reply {
+            status,
+            v,
+            text,
+            heard,
+        })
     }
 }
 
@@ -508,6 +751,42 @@ fn sent(e: &ureq::Error) -> Judged {
             Judged::Never
         }
         _ => Judged::Unknown,
+    }
+}
+
+/// GitHub's name for the allowance a call to `path` is counted against.
+fn resource(path: &str) -> &'static str {
+    if path == "/graphql" {
+        "graphql"
+    } else {
+        "core"
+    }
+}
+
+/// GitHub's words, when `r` says an allowance is spent: a 429; a 403 that
+/// leaves no call, names a time to call again or says `rate limit`; a
+/// GraphQL answer whose errors say `RATE_LIMITED`.
+fn spent(path: &str, r: &Reply) -> Option<String> {
+    let message = || {
+        r.v["message"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| r.text.trim().to_string())
+    };
+    match r.status {
+        429 => Some(message()),
+        403 if r.heard.remaining == Some(0)
+            || r.heard.retry_after.is_some()
+            || message().to_lowercase().contains("rate limit") =>
+        {
+            Some(message())
+        }
+        200 if path == "/graphql" => r.v["errors"]
+            .as_array()?
+            .iter()
+            .find(|e| e["type"] == "RATE_LIMITED")
+            .map(|e| e["message"].as_str().unwrap_or("RATE_LIMITED").to_string()),
+        _ => None,
     }
 }
 

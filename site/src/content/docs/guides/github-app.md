@@ -132,6 +132,25 @@ so `sluice forge check` reads the ruleset with your own token, from `gh`
 or `GH_TOKEN`. It exits `1` and names what is wrong when anything is,
 such as a second bypass left on the ruleset.
 
+## GitHub's allowance of calls
+
+GitHub allows the app a number of calls an hour on each installation.
+Every read sluice makes carries the version of the answer it last got
+at that address, kept on the host, and GitHub answers an unchanged one
+without counting it against the allowance.
+
+When GitHub says the allowance is spent, every sluice on the host stops
+calling it until the time GitHub named, or for a minute, then longer,
+where it names none. None calls to find out whether the time has come.
+While it lasts:
+
+- a `sluice submit` that waits, or a `sluice wait`, waits it out within
+  its `--timeout`, saying once on stderr until when, then goes on;
+- a `sluice submit --no-wait` fails at once, exit `3`, saying until
+  when;
+- `sluice run` and `sluice step` leave the pull requests until the time
+  has passed, say so once, and go on landing what has passed its checks.
+
 ## What the app does not do
 
 The key is a file your user may read, and an agent runs as your user.

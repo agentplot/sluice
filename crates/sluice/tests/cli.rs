@@ -2687,8 +2687,11 @@ fn readers_version() -> Option<String> {
 }
 
 /// 129: a watch of a newer sluice than the live reader's follows it, takes
-/// its lease at its next tick, and is the reader at its own next tick once
-/// the older reader has let go, naming its version.
+/// its lease at its next tick, and is the reader at a tick of its own once
+/// the older reader has let go, naming its version. The tick is the next
+/// one but for a process another test of this binary forks meanwhile,
+/// which holds the older reader's lock until it runs its program: the
+/// watch then leads at the tick after.
 #[test]
 fn a_newer_watch_takes_an_older_readers_lease() {
     let f = setup();
@@ -2698,15 +2701,19 @@ fn a_newer_watch_takes_an_older_readers_lease() {
     support::set_version("0.53.0");
     let written = RefCell::new(None);
     let between = |n: usize| match n {
+        1 => {}
         2 => {
             assert!(leased(), "the watch took no lease");
             let mut older = older.borrow_mut();
             older.step(true, sluice::reader::Drives::Nobody).unwrap();
             assert!(!is_reader(&older), "the older reader kept reading");
         }
-        3 => {
+        _ if written.borrow().is_none() => {
+            if readers_version().as_deref() != Some("0.53.0") {
+                assert!(leased(), "the watch let its lease go before it read");
+                return;
+            }
             *written.borrow_mut() = readers_doc();
-            assert_eq!(readers_version().as_deref(), Some("0.53.0"));
             assert!(!leased(), "the lease kept once the watch reads");
             older
                 .borrow_mut()
@@ -2718,7 +2725,7 @@ fn a_newer_watch_takes_an_older_readers_lease() {
     };
     let pause = Between {
         n: Cell::new(0),
-        rounds: 3,
+        rounds: 6,
         between: &between,
     };
     let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
@@ -2727,7 +2734,9 @@ fn a_newer_watch_takes_an_older_readers_lease() {
     assert_eq!(lines[0], doc);
     // Read from the records, which hold no submission.
     assert_eq!(lines[1]["branches"], serde_json::json!([]), "{out}");
-    assert_eq!(written.into_inner().as_ref(), Some(&lines[1]));
+    let written = written.into_inner();
+    assert!(written.is_some(), "the watch never read: {out}");
+    assert_eq!(written.as_ref(), Some(&lines[1]));
 }
 
 /// 129: a watch of the live reader's own version follows it for as long as

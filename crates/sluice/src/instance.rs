@@ -27,6 +27,7 @@
 //! [forge]
 //! app_id = 123456
 //! key = "~/.config/sluice/app.pem"
+//! discovery = "60s"
 //!
 //! [signing]
 //! signer = "box"
@@ -147,13 +148,23 @@ pub fn this_system() -> (&'static str, &'static str) {
     (std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// The host's `[forge]` table: the app sluice is on the forge, and the
-/// path of its private key on this host, which no repository holds.
+/// The host's `[forge]` table: the app sluice is on the forge, the path
+/// of its private key on this host, which no repository holds, and how
+/// often a branch's open pull requests are asked for while nothing on the
+/// host moves (136).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Forge {
     pub app_id: u64,
     pub key: PathBuf,
+    pub discovery: Duration,
 }
+
+/// How often a branch's open pull requests are asked for where the host
+/// sets no `[forge] discovery` (136).
+pub const DISCOVERY: Duration = Duration::from_secs(60);
+
+/// The least `[forge] discovery` a host may set (136).
+pub const LEAST_DISCOVERY: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -199,6 +210,7 @@ struct PeersForm {
 struct ForgeForm {
     app_id: u64,
     key: String,
+    discovery: Option<String>,
 }
 
 /// What [`Instance::guarding_from`] reads, every other table passed over.
@@ -348,6 +360,7 @@ impl Instance {
                 let f = ForgeForm {
                     app_id: f.app_id,
                     key: f.key,
+                    discovery: None,
                 };
                 forge(f, home().as_deref())
             })
@@ -463,11 +476,27 @@ fn ordinal(n: usize) -> String {
 }
 
 /// The `[forge]` table, its key's path with `~` expanded. A key anyone
-/// but its owner may read is refused.
+/// but its owner may read is refused, and so is a `discovery` shorter
+/// than [`LEAST_DISCOVERY`] (136).
 fn forge(form: ForgeForm, home: Option<&Path>) -> Result<Forge> {
+    let discovery = match form.discovery {
+        None => DISCOVERY,
+        Some(t) => {
+            let d = sluice_core::policy::parse_duration(&t).context("[forge] discovery")?;
+            if d < LEAST_DISCOVERY {
+                bail!(
+                    "[forge] discovery = {t:?} is shorter than ten seconds, the least it takes: \
+                     GitHub's allowance of calls is shared by every repository of the app's \
+                     installation"
+                );
+            }
+            d
+        }
+    };
     Ok(Forge {
         app_id: form.app_id,
         key: private_key("[forge] key", &form.key, home)?,
+        discovery,
     })
 }
 
@@ -649,7 +678,8 @@ mod tests {
             with(&table, 4).unwrap().forge,
             Some(Forge {
                 app_id: 42,
-                key: key.clone()
+                key: key.clone(),
+                discovery: DISCOVERY,
             })
         );
 
@@ -666,6 +696,7 @@ mod tests {
             ForgeForm {
                 app_id: 1,
                 key: "~/app.pem".into(),
+                discovery: None,
             },
             Some(&dir),
         )
