@@ -2557,3 +2557,73 @@ test(
     expect(w.forecasts).toBe(0);
   },
 );
+
+/** The releases `.claude-plugin/sluice.json` names, as the board reads them. */
+const RANGE = JSON.stringify({ from: "0.55.0", before: "1.0.0" });
+
+/** The board's manifest of the sluice it runs with reads `range`. */
+function manifest(on: On, range: string = RANGE) {
+  on("fs.read", ($, e, next) =>
+    e.path.endsWith("/.claude-plugin/sluice.json") ? { value: range } : next(e),
+  );
+}
+
+const TOO_OLD =
+  "the sluice board needs sluice 0.55.0 or later, which has `sluice inbox`, and this host's is sluice 0.44.0: it shows nothing and delivers nothing until sluice is upgraded";
+const TOO_NEW =
+  "the sluice board runs with sluice before 1.0.0, and this host's is sluice 1.2.0: it shows nothing and delivers nothing until the board is updated";
+
+/**
+ * A board on a host whose sluice prints `version`: an outcome of the
+ * session's own is pending, and `sluice inbox` would print it.
+ */
+async function startedOn($: Engine, on: On, version: string) {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  manifest(on);
+  const watch = watchedHost(on, clock, seen, { [VERSION]: `${version}\n` });
+  inbox.answers = [printing(BLAME13)];
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(blamed());
+  return { clock, seen, watch };
+}
+
+for (const [version, words] of [
+  ["sluice 0.44.0", TOO_OLD],
+  ["sluice 1.2.0", TOO_NEW],
+] as const) {
+  test(`${version} on the host: the board says so once, and shows and delivers nothing`, async ($, on) => {
+    const { clock, seen, watch } = await startedOn($, on, version);
+    // Said once, in a toast; nothing collected, no turn, nothing drawn.
+    expect(seen.toasts).toEqual([words]);
+    expect(ran.filter((r) => r === VERSION)).toEqual([VERSION]);
+    expect(ran).not.toContain(INBOX);
+    expect(seen.prompts).toEqual([]);
+    expect(await bandOf($)).toEqual([]);
+    // The watch is ended, and none follows it.
+    expect(watch.isOpen()).toBe(false);
+    await clock.advance(120_000);
+    expect(watch.started).toHaveLength(1);
+    // /sluice answers with the same words, and opens no pane.
+    expect((await $.command.run(slash(true))).text).toBe(words);
+    expect(watch.started).toHaveLength(1);
+    expect(seen.toasts).toEqual([words]);
+  });
+}
+
+test("a sluice the board runs with: it collects the session's outcome as before", async ($, on) => {
+  const { seen } = await startedOn($, on, "sluice 0.56.0");
+  expect(seen.toasts).toEqual([]);
+  expect(ran).toContain(INBOX);
+  expect(seen.prompts).toEqual([BLAME13]);
+});
+
+test("a build that names no release: the board runs", async ($, on) => {
+  const { seen } = await startedOn($, on, "sluice 0.0.0");
+  expect(seen.toasts).toEqual([]);
+  expect(seen.prompts).toEqual([BLAME13]);
+});

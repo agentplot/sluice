@@ -78,10 +78,12 @@ import {
   since,
   statusLine,
   submitted,
+  supported,
   taskLines,
   testing,
   unlistedHeld,
   unreadReason,
+  unsupported,
 } from "./board";
 
 const PANE = "sluice";
@@ -120,6 +122,9 @@ const unread = atom({ plugin: "sluice-board", key: "unread" } as const, null);
 const cannot = atom({ plugin: "sluice-board", key: "cannot" } as const, null);
 // The last watch said the repository has no sluice (129).
 const absent = atom({ plugin: "sluice-board", key: "absent" } as const, false);
+// What the board said where the host's sluice is outside the releases it runs
+// with, said once a session.
+const refused = atom({ plugin: "sluice-board", key: "refused" } as const, null);
 
 type Detail = OpenedTest;
 
@@ -377,6 +382,33 @@ function raise($: $, o: Outcome) {
 // start the next watch, what starts it at once.
 let watching = false;
 let following: How | null = null;
+// The host's sluice is outside the releases the board runs with: it runs no
+// further watch, collects nothing and starts no turn this load.
+let stopped = false;
+
+/**
+ * Where the host's sluice is outside the releases `.claude-plugin/sluice.json`
+ * names, what the board says, else null: a board older than the sluice it
+ * runs against would deliver outcomes its own way (rule core.31), and one
+ * newer would ask for an `inbox` that is not there.
+ */
+async function refusal($: $, cwd: string): Promise<string | null> {
+  const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/sluice.json`).catch(() => null);
+  const range = supported(typeof text === "string" ? text : null);
+  if (range === null) return null;
+  const printed = await output($, ["sluice", "--version"], cwd);
+  return unsupported(printed, range);
+}
+
+/** Run no further, and say why once a session: a toast, and the line /sluice answers. */
+async function refuse($: $, words: string) {
+  stopped = true;
+  await update($, doc, () => null);
+  $.ui.status(undefined);
+  if ((await read($, refused)) === words) return;
+  await update($, refused, () => words);
+  $.ui.toast(words);
+}
 let wake: (() => void) | null = null;
 
 /**
@@ -404,6 +436,13 @@ async function see($: $, next: unknown, cwd: string, chosen: How): Promise<boole
     // keeps the last overview, and the session's outcomes are collected all
     // the same.
     const loaded = following === null;
+    if (loaded) {
+      const words = await refusal($, cwd);
+      if (words !== null) {
+        await refuse($, words);
+        return false;
+      }
+    }
     following ??= await follow($, cwd, chosen);
     await take($, next, cwd, following, loaded);
     return false;
@@ -444,6 +483,7 @@ async function watch($: $, cwd: string, chosen: How) {
         const line = rest.slice(0, nl).trim();
         rest = rest.slice(nl + 1);
         if (line && (await see($, parsed(line), cwd, chosen))) said = true;
+        if (stopped) return { end: null, said };
         nl = rest.indexOf("\n");
       }
     }
@@ -471,6 +511,7 @@ async function feed($: $, cwd: string, chosen: How) {
     const started = await $.clock.now();
     await update($, absent, () => false);
     const { end, said } = await watch($, cwd, chosen);
+    if (stopped) return;
     if (await read($, absent)) {
       // Asked for, the next watch reads afresh: once it finds sluice, its
       // first wait is a second.
@@ -555,6 +596,8 @@ export const register: Register = (on, options) => {
   // Above the prompt it asks for the keyboard, so Escape is the pane's; docked,
   // the prompt keeps it.
   on("command.run", { command: "sluice" }, async ($, e) => {
+    const words = stopped ? await read($, refused) : null;
+    if (words !== null) return { text: words };
     if ((await $.ui.panes()).some((p) => p.id === PANE)) {
       await $.ui.close({ id: PANE });
       return { text: "sluice's pane is closed." };

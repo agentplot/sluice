@@ -1543,19 +1543,32 @@ fn refusal_word(r: &SubmitRefusal) -> String {
 }
 
 /// When submission `id` left the queue without landing, withdrawn, blamed
-/// or found conflicting, from the log.
+/// or found conflicting, from the log: the last such line, past a
+/// resubmission's withdrawal of one sent back already. That withdrawal is
+/// written by the act that submitted its pull request again, after the
+/// submit's ready mark; read as its leaving, it would hold the request
+/// that mark brought back, and intake would mark it a draft and withdraw
+/// the new submission (120, S56).
 fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Utc>> {
+    let leaving = |l: &&sluice_core::records::LogLine| match &l.event {
+        Event::Withdrawn { id: i, .. }
+        | Event::Blamed { id: i, .. }
+        | Event::Conflict { id: i, .. } => *i == id,
+        _ => false,
+    };
+    let resubmitted = |l: &&sluice_core::records::LogLine| matches!(&l.event, Event::Withdrawn { by, .. } if by == RESUBMISSION);
     log.iter()
         .rev()
-        .find(|l| match &l.event {
-            Event::Withdrawn { id: i, .. }
-            | Event::Blamed { id: i, .. }
-            | Event::Conflict { id: i, .. } => *i == id,
-            _ => false,
-        })
+        .filter(leaving)
+        .find(|l| !resubmitted(l))
+        .or_else(|| log.iter().rev().find(leaving))
         .and_then(|l| DateTime::parse_from_rfc3339(&l.at).ok())
         .map(|t| t.with_timezone(&Utc))
 }
+
+/// Who a resubmission's withdrawal names: the core withdraws the earlier
+/// submissions from a place as it queues its new one (47, 67).
+const RESUBMISSION: &str = "resubmission";
 
 /// What a pull request a submit opened or updated waits for once its
 /// submission left the queue.
@@ -3266,5 +3279,74 @@ mod tests {
             acts_from(&log, &sub(3, "2026-10-23T10:01:00Z")),
             at("2026-10-23T10:01:01Z")
         );
+    }
+
+    /// 120, S56, on GitHub's fake: blamed, then submitted again by a submit
+    /// whose ready mark came before the core withdrew the blamed submission
+    /// as it queued the new one. The resubmission's withdrawal is no leaving:
+    /// the request is not held, so no pass marks it a draft and withdraws
+    /// what the submit queued (#285 and #287, 2026-10-29).
+    #[test]
+    fn a_resubmissions_withdrawal_holds_no_ready_mark_back() {
+        use sluice_core::records::LogLine;
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-resub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let f = FileForge::new(&dir.join("github.json"), &repo);
+        let body = description(&[], "unit/a", None, "");
+        let n = f
+            .open(&repo, "main", "unit/a", "A", &body, false)
+            .unwrap()
+            .number;
+        let now = Utc::now().trunc_subsecs(0);
+        let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let line = |t: DateTime<Utc>, event: Event| LogLine {
+            schema: sluice_core::records::LOG_SCHEMA.into(),
+            at: at(t),
+            event,
+        };
+        let blamed = now - chrono::TimeDelta::seconds(600);
+        let mut log = vec![line(
+            blamed,
+            Event::Blamed {
+                id: 1,
+                combination: Rev::new("c"),
+            },
+        )];
+        // The submit's ready mark, counted from when the blamed one left.
+        mark_ready(&f, &repo, n, false, Some(blamed)).unwrap();
+        // The core queues the new head seconds later, withdrawing the
+        // blamed one as it does.
+        log.push(line(
+            now + chrono::TimeDelta::seconds(3),
+            Event::Withdrawn {
+                id: 1,
+                by: RESUBMISSION.into(),
+            },
+        ));
+        let p = f.pull(&repo, n).unwrap().unwrap();
+        assert!(!p.draft && submits(&p).is_some(), "{p:?}");
+        let old: Submission = serde_json::from_value(serde_json::json!({
+            "schema": sluice_core::records::SUBMISSION_SCHEMA, "id": 1, "branch": "main",
+            "head": p.head, "from": { "agent": "unit/a", "worktree": place(n) },
+            "submitted": at(blamed - chrono::TimeDelta::seconds(600)), "after": [],
+            "priority": 0, "attempt": 1, "state": "withdrawn",
+            "withdrawn": { "by": RESUBMISSION, "at": at(now + chrono::TimeDelta::seconds(3)) },
+        }))
+        .unwrap();
+        assert_eq!(acts_from(&log, &old), blamed);
+        let held = is_held(&p, Some(&old), &log, || f.readied(&repo, n)).unwrap();
+        assert!(!held, "the submit's ready mark is held back");
+        // One that only a resubmission ever withdrew left then.
+        let queued = [line(
+            now,
+            Event::Withdrawn {
+                id: 2,
+                by: RESUBMISSION.into(),
+            },
+        )];
+        assert_eq!(removal(&queued, 2), Some(now));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
