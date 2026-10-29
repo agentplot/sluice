@@ -270,6 +270,11 @@ declare module "claude-code" {
        * sluice's is shown, and only `/sluice` starts the next watch.
        */
       absent: boolean;
+      /**
+       * What the board said where the host's sluice is outside the releases
+       * `.claude-plugin/sluice.json` names, kept so it is said once a session.
+       */
+      refused: string | null;
     };
   }
 }

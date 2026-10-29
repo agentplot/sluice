@@ -53,7 +53,7 @@ def said($b): reduce .[] as $p ({said: {}, text: ""};
 # Lists of pieces as one, $sep between each.
 def joined($sep): reduce .[] as $p (null; if . == null then $p else . + [$sep] + $p end) // [];
 
-# `main + #12 Batch review cards + #13 unit/forecast`: the numbers of a
+# `main + #12 Batch review cards + #13 forecast`: the numbers of a
 # combination's submissions on the branch $b, as pieces, and as a line.
 def combination_pieces($b): [$b.branch] + map(" + ", .);
 def combination($b): combination_pieces($b) | said($b);

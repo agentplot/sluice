@@ -1134,7 +1134,7 @@ hold = "5m"
             );
         }
         let full = Policy::parse(examples[1].1).unwrap();
-        assert!(full.rules_for("bolt/x").unwrap().is_some());
+        assert!(full.rules_for("feature/x").unwrap().is_some());
         let main = full.rules_for("main").unwrap().unwrap();
         assert_eq!(main.remote.as_deref(), Some("origin"));
         assert!(main.pull_requests.is_some());

@@ -76,7 +76,7 @@ land without it.
 number, and each combination that passes adds one back. It never falls
 below one or rises above `parallel`.
 
-![A branch with parallel 4 tests 4 at once, then 2 and then 1 after two failures, and climbs back to 4 one pass at a time. Beside it, main, a bolt and an agent's sluice exec take the host's 4 runs, so a second bolt waits.](../../../../../docs/diagrams/at-once.svg)
+![A branch with parallel 4 tests 4 at once, then 2 and then 1 after two failures, and climbs back to 4 one pass at a time. Beside it, main, a feature branch and an agent's sluice exec take the host's 4 runs, so a second feature branch waits.](../../../../../docs/diagrams/at-once.svg)
 
 With `batch = false`, everything stacked on a failing combination is
 thrown away. When failures come in a streak, because the branch is
@@ -193,14 +193,14 @@ failure, so it halves how many are tested at once too.
 On one branch, `batch = true` tests one combination at a time, so one
 branch can't have both. Several branches can: each branch has its own
 queue, and all of them share the host's bound. A repository whose agents
-land on bolts (`bolt/*`) and that lands each bolt on `main` tests every
-bolt's queue at once.
+land on feature branches (`feature/*` here) and that lands each one on `main` tests every
+feature branch's queue at once.
 
-A common split is `batch = false` on `bolt/*`, with a short gate of the
+A common split is `batch = false` on `feature/*`, with a short gate of the
 fast checks, and `batch = true` on `main`, with the full gate:
 
 ```toml
-[branches."bolt/*"]
+[branches."feature/*"]
 required = ["#check-fast"]
 parallel = 3
 

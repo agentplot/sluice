@@ -1796,7 +1796,7 @@ mod tests {
         assert_eq!(repository(Path::new("/c/sluice/sluice.git")), "sluice");
         assert_eq!(repository(Path::new("/c/switchboard/.git")), "switchboard");
         assert_eq!(repository(Path::new("/c/breadboard/.bare")), "breadboard");
-        assert_eq!(repository(Path::new("/c/crew/git")), "crew");
+        assert_eq!(repository(Path::new("/c/shop/git")), "shop");
     }
 
     /// 99: an address is filled in with the names and ports; a port the

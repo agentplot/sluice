@@ -38,7 +38,7 @@ cat >"$repo/.config/sluice.toml" <<'EOF'
 runner = "command"
 command = "true"
 
-[branches."bolt/*"]
+[branches."feature/*"]
 parallel = 2
 
 [branches.main] # the trunk
@@ -49,7 +49,7 @@ reviews = 0
 EOF
 git -C "$repo" add -A
 git -C "$repo" commit -qm policy
-git -C "$repo" branch bolt/y
+git -C "$repo" branch feature/y
 git -C "$repo" worktree add -q -b unit/x "$scratch/unit-x" main
 
 plain=$scratch/plain
@@ -102,7 +102,7 @@ wt=$scratch/unit-x
 denies "$wt" 'git push origin HEAD:main'
 denies "$wt" 'git push origin main'
 denies "$wt" 'git push -f origin unit/x:refs/heads/main'
-denies "$wt" 'git push origin unit/x:bolt/y'
+denies "$wt" 'git push origin unit/x:feature/y'
 denies "$wt" 'git push --all origin'
 denies "$wt" "git -C $repo merge unit/x"
 denies "$wt" "cd $repo && git merge --no-ff unit/x"
@@ -131,7 +131,7 @@ allows "$plain" 'git merge topic'
 # The session note.
 out=$(jq -n --arg d "$wt" '{cwd: $d}' | "$note")
 # shellcheck disable=SC2016 # backticks are the text
-if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`bolt/\*`, `main` only move through it.*Before anything else, run `sluice inbox` once in your worktree.*`sluice submit main --no-wait --json`.*start `sluice wait <id> --timeout 9m --json` as a background command.*again the same way for as long as it exits 5.*Under worktrunk, submit and wait in one command instead: start `wt submit main --timeout 9m --json` as a background command, again the same way for as long as it exits 5. It submits once.*removes your worktree once it lands.*never remove a landed worktree by hand.*Wait in the foreground only where your harness runs nothing in the background.*An agent this session starts to work in a worktree submits its own work through sluice from there, told so in the prompt it is given; never ask the user to run `sluice submit`'; then
+if printf '%s' "$out" | jq -er '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -q '`feature/\*`, `main` only move through it.*Before anything else, run `sluice inbox` once in your worktree.*`sluice submit main --no-wait --json`.*start `sluice wait <id> --timeout 9m --json` as a background command.*again the same way for as long as it exits 5.*Under worktrunk, submit and wait in one command instead: start `wt submit main --timeout 9m --json` as a background command, again the same way for as long as it exits 5. It submits once.*removes your worktree once it lands.*never remove a landed worktree by hand.*Wait in the foreground only where your harness runs nothing in the background.*An agent this session starts to work in a worktree submits its own work through sluice from there, told so in the prompt it is given; never ask the user to run `sluice submit`'; then
   echo "ok    the session note names the protected branches, has sluice inbox run first, has a submission watched from the background, under worktrunk submitted and waited on with wt submit, which removes the landed worktree, and says who submits an agent's work"
 else
   echo "FAIL  session note: ${out:-nothing}"

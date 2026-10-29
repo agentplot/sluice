@@ -129,14 +129,14 @@ terminal, a login item, a service manager) is your choice.
 
 ```console
 $ wt submit main --subject "Batch review cards"
-pushed unit/batch-review · opened #41: Batch review cards
+pushed batch-review · opened #41: Batch review cards
 waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 ```
 
 The agent's branch is pushed, and the pull request is opened. Its
 title is the subject, one line in the agent's words saying what lands.
-With no subject, the title is the branch's name, `unit/batch-review`,
+With no subject, the title is the branch's name, `batch-review`,
 and never a commit's message: a branch's first commit can say little
 of what the branch lands. Its description holds the branch's commit
 messages, each whole and oldest first, and names the agent, which makes
@@ -152,12 +152,12 @@ subject, and its `Sluice-From` trailer names the agent and the pull
 request.
 
 GitHub holds 65,536 characters in a description. When a branch's
-messages pass that, as a long bolt's can, the description holds as many
+messages pass that, as a long-lived feature branch's can, the description holds as many
 of them whole as fit. A count of the rest follows, with a link to
 GitHub's comparison of the branch, then the subject of each of the rest:
 
 ```text
-38 more commits, each by its subject; all of them in full: https://github.com/org/cards/compare/main...bolt/review-cards
+38 more commits, each by its subject; all of them in full: https://github.com/org/cards/compare/main...feature/review-cards
 
 - Show the review card's footer
 - Count the cards left to review
@@ -169,26 +169,26 @@ for the commits it pushes, so it follows the pull request's commits. It
 replaces any text a person added there; a person's notes belong in a
 comment.
 
-### A bolt's landing worktree submits
+### A feature branch's landing worktree submits
 
 A worktree that has checked out a branch sluice lands on, such as a
-bolt kept on GitHub, submits that branch as GitHub holds it. Nothing is
-pushed: sluice lands on the bolt, and only sluice writes it. The pull
-request is from the bolt into `main`, at GitHub's revision of it, which
+feature branch kept on GitHub, submits that branch as GitHub holds it. Nothing is
+pushed: sluice lands on the feature branch, and only sluice writes it. The pull
+request is from the feature branch into `main`, at GitHub's revision of it, which
 is also the head submitted:
 
 ```console
 $ wt submit main
-opened #52: bolt/review-cards
-this host's bolt/review-cards is at 10e4791, behind origin's 8079db3; submitted 8079db3
+opened #52: feature/review-cards
+this host's feature/review-cards is at 10e4791, behind origin's 8079db3; submitted 8079db3
 waiting: needs 1 review
 ```
 
 The second line appears only when the worktree's head, this host's own
-`bolt/review-cards`, differs from GitHub's: behind it, ahead of it, or
-apart from it. It refuses nothing; a round of the bolt sets this host's
+`feature/review-cards`, differs from GitHub's: behind it, ahead of it, or
+apart from it. It refuses nothing; a round of the feature branch sets this host's
 branch to its landing. Submitting again after another landing on the
-bolt updates the same pull request and marks it ready at the new
+feature branch updates the same pull request and marks it ready at the new
 revision.
 
 A waiting `wt submit` reports each state as it changes and returns when
@@ -223,13 +223,13 @@ draft at its commit, so no round takes one of them alone. It names each
 one short of its conditions with what it lacks, and exits `2`:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait --subject "Runner credentials" --subject "Runner cache"
-pushed bolt/a · opened #51: Runner credentials
-pushed bolt/b · opened #52: Runner cache
-refused: #51 from ../bolt-a needs 1 review
-refused: #52 from ../bolt-b needs 1 review
+$ sluice submit main --worktree ../feature-a --worktree ../feature-b --no-wait --subject "Runner credentials" --subject "Runner cache"
+pushed feature/a · opened #51: Runner credentials
+pushed feature/b · opened #52: Runner cache
+refused: #51 from ../feature-a needs 1 review
+refused: #52 from ../feature-b needs 1 review
 nothing submitted: #51, #52 are drafts at their heads
-once each meets its conditions, the same submit takes them all: sluice submit main --worktree ../bolt-a --worktree ../bolt-b
+once each meets its conditions, the same submit takes them all: sluice submit main --worktree ../feature-a --worktree ../feature-b
 ```
 
 Reviewers review the drafts. Once each meets its conditions, run the
@@ -238,10 +238,10 @@ queues all of them at once, in the order given, each with its
 submission:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait
-pushed bolt/a · updated #51: Runner credentials · marked ready for review
+$ sluice submit main --worktree ../feature-a --worktree ../feature-b --no-wait
+pushed feature/a · updated #51: Runner credentials · marked ready for review
 submission 61 to main from #51 · nothing queued ahead
-pushed bolt/b · updated #52: Runner cache · marked ready for review
+pushed feature/b · updated #52: Runner cache · marked ready for review
 submission 62 to main from #52 · 1 queued ahead (#51)
 ```
 

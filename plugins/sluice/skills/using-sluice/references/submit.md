@@ -20,7 +20,7 @@ Full reference: <https://agentplot.github.io/sluice/reference/commands/>.
 
 ```
 refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
-the agent working in unit/integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
+the agent working in integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
 ```
 
 The branch requires a task the task runner, in your worktree, never runs
@@ -37,10 +37,10 @@ task missing as before.
 ## What a waiting submit prints
 
 ```
-submission 12 to bolt/x · 1 queued ahead (#11)
-testing bolt/x + #11 + #12 · 3s of 15m
-testing bolt/x + #11 + #12 · 30/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
-testing bolt/x + #11 + #12 · 4 tasks to run, 29 replayed
+submission 12 to feature/x · 1 queued ahead (#11)
+testing feature/x + #11 + #12 · 3s of 15m
+testing feature/x + #11 + #12 · 30/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
+testing feature/x + #11 + #12 · 4 tasks to run, 29 replayed
 passed · landed as b7d2e94
 ```
 
@@ -56,14 +56,14 @@ trusts `"cache"`.
 ## Several worktrees as one act
 
 Submit a set as one act when its heads must be queued together, such as
-approved bolts landing on `main`. Submitted one by one, a round between
+approved feature branches landing on `main`. Submitted one by one, a round between
 the submits can test the first alone, and land it before the rest are
 queued.
 
 ```sh
-sluice submit main --worktree ../bolt-a --worktree ../bolt-b --worktree ../bolt-c
-sluice submit main --worktree ../bolt-a --worktree ../bolt-b --no-wait --json
-# {"branch":"main","submissions":[{"id":41,"worktree":"../bolt-a","ahead":[]},{"id":42,"worktree":"../bolt-b","ahead":[41]}]}
+sluice submit main --worktree ../feature-a --worktree ../feature-b --worktree ../feature-c
+sluice submit main --worktree ../feature-a --worktree ../feature-b --no-wait --json
+# {"branch":"main","submissions":[{"id":41,"worktree":"../feature-a","ahead":[]},{"id":42,"worktree":"../feature-b","ahead":[41]}]}
 ```
 
 - All or none: a refused worktree (uncommitted changes, named twice) is
@@ -125,7 +125,7 @@ With `[branches.main.pull_requests]`:
 
 ```
 $ wt submit main --subject "Batch review cards"
-pushed unit/batch-review · opened #41: Batch review cards
+pushed batch-review · opened #41: Batch review cards
 waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 queued behind #38, #40
@@ -162,7 +162,7 @@ was tested:
 
 ```
 Sluice-Submission: 12
-Sluice-From: crw-1-unit-1 (unit/touches)
+Sluice-From: agent-1 (touches)
 Sluice-Tested: 9ab3d07c11
 Sluice-Result: passed (2 run, 31 replayed)
 ```

@@ -20,7 +20,7 @@ back: the queue never depends on it
 - **As**: service `sluice` (`SLUICE_OTEL_SERVICE_NAME` changes it), with
   `service.version` the release's. The standard
   `OTEL_RESOURCE_ATTRIBUTES` adds the host's own, e.g.
-  `host.name=build-7,deployment.environment=crew`.
+  `host.name=build-7,deployment.environment=prod`.
 - **Traces**: one per round of a branch, `sluice.round`, with
   `sluice.recover`, `sluice.decide` and `sluice.perform` beneath it, and
   `sluice.form`, `sluice.start`, `sluice.verdict`, `sluice.blame` and

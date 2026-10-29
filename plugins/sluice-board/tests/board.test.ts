@@ -48,13 +48,16 @@ import {
   pullOf,
   pullsOf,
   recentInWay,
+  releaseOf,
   rewatchWait,
   shown,
   signature,
   statusLine,
   submitted,
+  supported,
   taskLines,
   unreadReason,
+  unsupported,
   WATCH_SINCE,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
@@ -308,10 +311,10 @@ describe("the branches' order", () => {
   test("the band keeps the overview's order, whatever the names", () => {
     const d = overview();
     const main = d.branches[0]!;
-    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "feature/a" }, main];
     expect(bandLines(d, NOW).map((l) => l.split(" · ")[0])).toEqual([
       "sluice release",
-      "sluice bolt/a",
+      "sluice feature/a",
       "sluice main",
     ]);
   });
@@ -319,25 +322,25 @@ describe("the branches' order", () => {
   test("a branch named for the session comes first, the rest as the overview has them", () => {
     const d = overview();
     const main = d.branches[0]!;
-    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
-    expect(bandLines(d, NOW, "bolt/a").map((l) => l.split(" · ")[0])).toEqual([
-      "sluice bolt/a",
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "feature/a" }, main];
+    expect(bandLines(d, NOW, "feature/a").map((l) => l.split(" · ")[0])).toEqual([
+      "sluice feature/a",
       "sluice release",
       "sluice main",
     ]);
     expect(namedFirst(d.branches, "main").map((b) => b.branch)).toEqual([
       "main",
       "release",
-      "bolt/a",
+      "feature/a",
     ]);
     expect(namedFirst(d.branches, "hotfix").map((b) => b.branch)).toEqual([
       "release",
-      "bolt/a",
+      "feature/a",
       "main",
     ]);
     expect(namedFirst(d.branches, null).map((b) => b.branch)).toEqual([
       "release",
-      "bolt/a",
+      "feature/a",
       "main",
     ]);
   });
@@ -700,10 +703,10 @@ describe("what sluice inbox printed", () => {
   });
 
   test("exit 3: the turn, and a toast of the branch sluice could not read", () => {
-    const stderr = "sluice: could not read bolt/x's records: it is gone\n";
+    const stderr = "sluice: could not read feature/x's records: it is gone\n";
     expect(collectedWords({ exitCode: 3, stdout: `${LANDED}\n`, stderr })).toEqual({
       text: LANDED,
-      toast: "sluice: could not read bolt/x's records: it is gone",
+      toast: "sluice: could not read feature/x's records: it is gone",
     });
   });
 
@@ -851,7 +854,7 @@ describe("forecasts", () => {
   const queued = {
     conflict: {
       paths: ["docs/builds.md", "docs/identity.md"],
-      with: [{ id: 217, from: { agent: "runner", worktree: "bolt/runner" } }],
+      with: [{ id: 217, from: { agent: "runner", worktree: "feature/runner" } }],
     },
   };
 
@@ -919,7 +922,7 @@ describe("forecasts", () => {
 
   test("an opened conflict: its files, what is in the way, and the next step", () => {
     const next = "next: take main into the worktree, resolve and commit, then sluice submit main";
-    const b = { ...free().branches[0]!, recent_from: { "217": "bolt/runner" } };
+    const b = { ...free().branches[0]!, recent_from: { "217": "feature/runner" } };
     const line = (w: number[]) => ({
       at: "2026-10-16T19:45:00Z",
       event: "conflict" as const,
@@ -929,13 +932,13 @@ describe("forecasts", () => {
     });
     expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([217])))).toEqual([
       "files: docs/builds.md",
-      "in the way: #217 (bolt/runner)",
+      "in the way: #217 (feature/runner)",
       next,
     ]);
     // An id the sluice gave no worktree for is named alone.
     expect(conflictLines("main", ["a", "b"], recentInWay(b, line([217, 219])))).toEqual([
       "files: a, b",
-      "in the way: #217 (bolt/runner), #219",
+      "in the way: #217 (feature/runner), #219",
       next,
     ]);
     expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([])))[1]).toBe(
@@ -952,7 +955,7 @@ describe("forecasts", () => {
         "Merge main into your worktree now and resolve it while it is small (check with `sluice submit --check main`).",
     );
     expect(conflictText("main", queued.conflict)).toContain(
-      "with #217 (bolt/runner), in docs/builds.md, docs/identity.md.",
+      "with #217 (feature/runner), in docs/builds.md, docs/identity.md.",
     );
     expect(forecastToast("main", queued.conflict)).toBe(
       "sluice: your work would conflict with main in docs/builds.md +1",
@@ -968,5 +971,33 @@ describe("forecasts", () => {
     expect(clearText("main", { id: 220, branch: "main", conflict: false, active: false })).toBe(
       "[sluice] Your work no longer conflicts with main or anything queued.",
     );
+  });
+});
+
+describe("the releases of sluice the board runs with", () => {
+  const range = { from: "0.55.0", before: "1.0.0" };
+  test("its manifest's range, and none where it names none", () => {
+    expect(supported('{ "from": "0.55.0", "before": "1.0.0" }')).toEqual(range);
+    expect(supported('{ "from": "0.55.0" }')).toBeNull();
+    expect(supported("not json")).toBeNull();
+    expect(supported(null)).toBeNull();
+  });
+  test("a release from what sluice printed; none for a build of no release", () => {
+    expect(releaseOf("sluice 0.56.0")).toEqual([0, 56, 0]);
+    expect(releaseOf("sluice 0.0.0")).toBeNull();
+    expect(releaseOf("sluice")).toBeNull();
+    expect(releaseOf(null)).toBeNull();
+  });
+  test("older than its inbox, or as new as the first it does not know: said; between: runs", () => {
+    expect(unsupported("sluice 0.54.9", range)).toBe(
+      "the sluice board needs sluice 0.55.0 or later, which has `sluice inbox`, and this host's is sluice 0.54.9: it shows nothing and delivers nothing until sluice is upgraded",
+    );
+    expect(unsupported("sluice 0.55.0", range)).toBeNull();
+    expect(unsupported("sluice 0.99.12", range)).toBeNull();
+    expect(unsupported("sluice 1.0.0", range)).toBe(
+      "the sluice board runs with sluice before 1.0.0, and this host's is sluice 1.0.0: it shows nothing and delivers nothing until the board is updated",
+    );
+    expect(unsupported("sluice 0.0.0", range)).toBeNull();
+    expect(unsupported(null, range)).toBeNull();
   });
 });

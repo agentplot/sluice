@@ -529,12 +529,12 @@ test("the pane leaves out branches with nothing queued and no event this quarter
     candidates: [],
     recent,
   });
-  for (let i = 0; i < 30; i++) d.branches.push(idle(`bolt/b${i}`, []));
+  for (let i = 0; i < 30; i++) d.branches.push(idle(`feature/b${i}`, []));
   const landed = (at: string) => [
     { schema: "sluice/log@1", at, event: "landed" as const, ids: [77], to: "abcdef0" },
   ];
-  d.branches.push(idle("bolt/done", landed("2026-10-16T19:40:00Z")));
-  d.branches.push(idle("bolt/old", landed("2026-10-16T19:20:00Z")));
+  d.branches.push(idle("feature/done", landed("2026-10-16T19:40:00Z")));
+  d.branches.push(idle("feature/old", landed("2026-10-16T19:20:00Z")));
   host(on, [d], { prompts: [], toasts: [], status: [] });
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -546,8 +546,8 @@ test("the pane leaves out branches with nothing queued and no event this quarter
     requestId: "sluice",
   });
   expect(await pane.find({ type: "Text", text: /^main at / })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: /^bolt\/done at / })).toBeDefined();
-  expect(await pane.findAll({ type: "Text", text: /bolt\/(b\d|old)/ })).toEqual([]);
+  expect(await pane.find({ type: "Text", text: /^feature\/done at / })).toBeDefined();
+  expect(await pane.findAll({ type: "Text", text: /feature\/(b\d|old)/ })).toEqual([]);
   expect(
     await pane.find({ type: "Text", text: "31 other branches with nothing queued" }),
   ).toBeDefined();
@@ -731,7 +731,14 @@ test("the pane keeps the overview's order of branches, and counts the idle ones"
   await clock.set(NOW);
   const d = overview();
   const main = d.branches[0]!;
-  const idle = { ...main, branch: "bolt/a", depth: 0, submissions: [], candidates: [], recent: [] };
+  const idle = {
+    ...main,
+    branch: "feature/a",
+    depth: 0,
+    submissions: [],
+    candidates: [],
+    recent: [],
+  };
   d.branches = [{ ...main, branch: "release" }, idle, main];
   host(on, [d], { prompts: [], toasts: [], status: [] });
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
@@ -794,9 +801,16 @@ test("the pane shows a named branch first even when idle", async ($, on) => {
   await clock.set(NOW);
   const d = overview();
   const main = d.branches[0]!;
-  const idle = { ...main, branch: "bolt/a", depth: 0, submissions: [], candidates: [], recent: [] };
+  const idle = {
+    ...main,
+    branch: "feature/a",
+    depth: 0,
+    submissions: [],
+    candidates: [],
+    recent: [],
+  };
   d.branches = [{ ...main, branch: "release" }, idle, main];
-  host(on, [d], { prompts: [], toasts: [], status: [] }, { SLUICE_BRANCH: "bolt/a" });
+  host(on, [d], { prompts: [], toasts: [], status: [] }, { SLUICE_BRANCH: "feature/a" });
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
   const pane = await $.ui.mount({
@@ -807,7 +821,7 @@ test("the pane shows a named branch first even when idle", async ($, on) => {
     requestId: "sluice",
   });
   const heads = await pane.findAll({ type: "Text", text: /^\S+ at / });
-  expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["bolt/a", "release", "main"]);
+  expect(heads.map((h) => h.text.split(" ")[0])).toEqual(["feature/a", "release", "main"]);
   expect(await pane.find({ type: "Text", text: /with nothing queued/ })).toBeUndefined();
   await pane.unmount();
 });
@@ -1013,7 +1027,7 @@ test("a branch sluice could not read: the turn, and a toast of sluice's line", a
   await clock.set(NOW);
   const seen = nothingSeen();
   host(on, [queued13(), landed13()], seen);
-  const unread = "sluice: could not read bolt/x's records: it is gone";
+  const unread = "sluice: could not read feature/x's records: it is gone";
   inbox.answers = [printing(""), { exitCode: 3, stdout: `${LANDED13}\n`, stderr: `${unread}\n` }];
   await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
   await clock.settle();
@@ -2173,7 +2187,7 @@ function conflictOpens(with_: number[], inWay: string): TestBody {
 
 test(
   "a RECENT conflict with a queued submission opens to it, and folds",
-  conflictOpens([217], "in the way: #217 (bolt/runner)"),
+  conflictOpens([217], "in the way: #217 (feature/runner)"),
 );
 
 test(
@@ -2197,7 +2211,7 @@ const LANDED = { conflict: { paths: ["docs/builds.md"], with: [] } };
 const WITH_217 = {
   conflict: {
     paths: ["docs/builds.md"],
-    with: [{ id: 217, from: { agent: "runner", worktree: "bolt/runner" } }],
+    with: [{ id: 217, from: { agent: "runner", worktree: "feature/runner" } }],
   },
 };
 
@@ -2372,7 +2386,7 @@ test("a conflict with a queued submission names it, and its failing clears it on
   d1.branches[0]!.submissions.push({
     id: 217,
     state: "testing",
-    from: { agent: "runner", worktree: "bolt/runner" },
+    from: { agent: "runner", worktree: "feature/runner" },
   });
   d1.branches[0]!.recent.push({
     schema: "sluice/log@1",
@@ -2383,9 +2397,9 @@ test("a conflict with a queued submission names it, and its failing clears it on
   });
   w.answer = WITH_217;
   await watch.print(d1);
-  expect(seen.prompts.some((p) => p.includes("with #217 (bolt/runner), in docs/builds.md"))).toBe(
-    true,
-  );
+  expect(
+    seen.prompts.some((p) => p.includes("with #217 (feature/runner), in docs/builds.md")),
+  ).toBe(true);
   const told = seen.prompts.length;
 
   // #217 fails; the head has not moved.
@@ -2407,7 +2421,7 @@ test("the forecast's conflict is a row under its branch, kept across a reload un
   d1.branches[0]!.submissions.push({
     id: 217,
     state: "testing",
-    from: { agent: "runner", worktree: "bolt/runner" },
+    from: { agent: "runner", worktree: "feature/runner" },
   });
   const w: World = { doc: d1, head: "h1", answer: WITH_217, forecasts: 0 };
   const seen = nothingSeen();
@@ -2435,7 +2449,9 @@ test("the forecast's conflict is a row under its branch, kept across a reload un
   await pane.press({ key: "forecast-main" });
   await pane.redraw();
   expect(await pane.find({ type: "Text", text: "files: docs/builds.md" })).toBeDefined();
-  expect(await pane.find({ type: "Text", text: "in the way: #217 (bolt/runner)" })).toBeDefined();
+  expect(
+    await pane.find({ type: "Text", text: "in the way: #217 (feature/runner)" }),
+  ).toBeDefined();
   expect(
     await pane.find({
       type: "Text",
@@ -2557,3 +2573,73 @@ test(
     expect(w.forecasts).toBe(0);
   },
 );
+
+/** The releases `.claude-plugin/sluice.json` names, as the board reads them. */
+const RANGE = JSON.stringify({ from: "0.55.0", before: "1.0.0" });
+
+/** The board's manifest of the sluice it runs with reads `range`. */
+function manifest(on: On, range: string = RANGE) {
+  on("fs.read", ($, e, next) =>
+    e.path.endsWith("/.claude-plugin/sluice.json") ? { value: range } : next(e),
+  );
+}
+
+const TOO_OLD =
+  "the sluice board needs sluice 0.55.0 or later, which has `sluice inbox`, and this host's is sluice 0.44.0: it shows nothing and delivers nothing until sluice is upgraded";
+const TOO_NEW =
+  "the sluice board runs with sluice before 1.0.0, and this host's is sluice 1.2.0: it shows nothing and delivers nothing until the board is updated";
+
+/**
+ * A board on a host whose sluice prints `version`: an outcome of the
+ * session's own is pending, and `sluice inbox` would print it.
+ */
+async function startedOn($: Engine, on: On, version: string) {
+  const clock = mock.clock(on);
+  await clock.set(NOW);
+  const seen = nothingSeen();
+  manifest(on);
+  const watch = watchedHost(on, clock, seen, { [VERSION]: `${version}\n` });
+  inbox.answers = [printing(BLAME13)];
+  panes(on);
+  ran.length = 0;
+  await $.session.start({ cwd: ROOT, surface: "terminal", isInteractive: true });
+  await clock.settle();
+  await watch.print(blamed());
+  return { clock, seen, watch };
+}
+
+for (const [version, words] of [
+  ["sluice 0.44.0", TOO_OLD],
+  ["sluice 1.2.0", TOO_NEW],
+] as const) {
+  test(`${version} on the host: the board says so once, and shows and delivers nothing`, async ($, on) => {
+    const { clock, seen, watch } = await startedOn($, on, version);
+    // Said once, in a toast; nothing collected, no turn, nothing drawn.
+    expect(seen.toasts).toEqual([words]);
+    expect(ran.filter((r) => r === VERSION)).toEqual([VERSION]);
+    expect(ran).not.toContain(INBOX);
+    expect(seen.prompts).toEqual([]);
+    expect(await bandOf($)).toEqual([]);
+    // The watch is ended, and none follows it.
+    expect(watch.isOpen()).toBe(false);
+    await clock.advance(120_000);
+    expect(watch.started).toHaveLength(1);
+    // /sluice answers with the same words, and opens no pane.
+    expect((await $.command.run(slash(true))).text).toBe(words);
+    expect(watch.started).toHaveLength(1);
+    expect(seen.toasts).toEqual([words]);
+  });
+}
+
+test("a sluice the board runs with: it collects the session's outcome as before", async ($, on) => {
+  const { seen } = await startedOn($, on, "sluice 0.56.0");
+  expect(seen.toasts).toEqual([]);
+  expect(ran).toContain(INBOX);
+  expect(seen.prompts).toEqual([BLAME13]);
+});
+
+test("a build that names no release: the board runs", async ($, on) => {
+  const { seen } = await startedOn($, on, "sluice 0.0.0");
+  expect(seen.toasts).toEqual([]);
+  expect(seen.prompts).toEqual([BLAME13]);
+});

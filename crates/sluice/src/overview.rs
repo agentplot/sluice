@@ -2,8 +2,9 @@
 //! pane or a status line (26, 49; ADR 0023). A reader only: it releases,
 //! counts and writes nothing (rules core.11, core.14), so `sluice
 //! previews`' own tidying is left to it. A watch writes only the reader's
-//! document in the host's state, when it is the reader, and ends where
-//! the repository has no sluice (129; ADR 0056).
+//! document in the host's state, when it is the reader, which it never is
+//! while `sluice run` lives on the host (135), and ends where the
+//! repository has no sluice (129; ADR 0056).
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -17,7 +18,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::reader::{no_sluice, untimed, Reader};
+use crate::reader::{no_sluice, untimed, Drives, Reader};
 use crate::told::{self, Kind};
 use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
@@ -83,9 +84,11 @@ pub fn run(
     // document, reading nothing itself, until it finds the lock free
     // (rule core.25). A watch of a newer sluice than the reader's takes
     // its lease (129): the older reader lets go and follows, and the
-    // newer watch reads from its next tick.
-    let repository = host.repository()?;
-    let mut reader = Reader::take(&host.readers()?, &repository, host.version())?;
+    // newer watch reads from its next tick. Where `sluice run` lives on the
+    // host, the place is its: the watch follows it, and one that read lets
+    // go (135).
+    let (readers, repository) = (host.readers()?, host.repository()?);
+    let mut reader = Reader::take(&readers, &repository, host.version())?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
@@ -134,7 +137,7 @@ pub fn run(
         }
         // A watch may take an older reader's lease; a lock it could not
         // try leaves it as it was.
-        let _ = reader.step(true);
+        let _ = reader.step(true, Drives::probe(&readers, &repository));
     }
 }
 
@@ -142,7 +145,11 @@ pub fn run(
 /// `"set_up": false` where the records list no branch and no branch the
 /// host holds, its own or a remote's as last fetched, has the policy (129).
 /// A check of the branches that fails is a read it could not make (133).
-fn read(s: &Sluice<'_>, host: &dyn Host, clock: &dyn Clock) -> Result<serde_json::Value> {
+pub(crate) fn read(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+) -> Result<serde_json::Value> {
     let (branches, mut doc) = document(s, host, clock)?;
     if branches.is_empty() && !host.holds_policy()? {
         doc["set_up"] = false.into();

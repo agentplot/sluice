@@ -1081,8 +1081,18 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
     use std::net::TcpListener;
     let dir = support::Scratch::new("forge-unconnected");
     let file = github::file(dir.path());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    // A port below every system's range of ports it hands out (49152 up on
+    // macOS, 32768 up on Linux): once GitHub goes away no other test's
+    // server, bound to a port the system picks, and no connection's own end
+    // takes it. One the system had picked was taken now and then on a
+    // loaded host, and the comment's first try reached something there and
+    // was reset, so it was read back.
+    let (listener, port) = (0..)
+        .map(|k: u32| {
+            10_000 + (std::process::id().wrapping_add(k.wrapping_mul(7919)) % 20_000) as u16
+        })
+        .find_map(|port| Some((TcpListener::bind(("127.0.0.1", port)).ok()?, port)))
+        .unwrap();
     // GitHub sells the app its token, then goes away: the comment's
     // first try finds nothing on the port, and the pause brings GitHub
     // back on it.
@@ -1121,16 +1131,20 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
     app.comment(&repo(), n, "posted").unwrap();
     let gh = back.borrow();
     let gh = gh.as_ref().expect("GitHub back after the first try");
-    assert_eq!(
-        gh.calls("POST", &format!("/repos/o/r/issues/{n}/comments")),
-        1
-    );
     // Never judged, the comment was made again blind: nothing read
-    // whether GitHub held it. Counted before the test's own read, which
-    // the policy may try again on a connection a loaded host dropped.
+    // whether GitHub held it before it was made, and it was made once.
+    // A read after it is no blind try's: the one a loaded host makes when
+    // it dropped the made comment's answer (core.29).
+    let methods = gh.methods(&format!("/repos/o/r/issues/{n}/comments"));
     assert_eq!(
-        gh.calls("GET", &format!("/repos/o/r/issues/{n}/comments")),
-        0
+        methods.first().map(String::as_str),
+        Some("POST"),
+        "{methods:?}"
+    );
+    assert_eq!(
+        methods.iter().filter(|m| *m == "POST").count(),
+        1,
+        "{methods:?}"
     );
     assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
 }

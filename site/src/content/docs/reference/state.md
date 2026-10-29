@@ -14,7 +14,7 @@ readable with plain tools whether or not sluice is running.
   results.jsonl        every test result of the repository, with its executor
   .next-id             the next submission's id
   .lock                held while an id is given or a branch's records are written
-  bolt/concurrent-units/
+  feature/concurrent-units/
     version            57: bumped on every write, so two rounds never both write
     branch.json        the queue's own state, one document
     submissions/14.json
@@ -25,9 +25,9 @@ readable with plain tools whether or not sluice is running.
                        state and worktree
     log.jsonl          every submission, test run, result, blame and landing, in order
     lock               held by a round of this branch
-  .logs/bolt/concurrent-units/<candidate>/<task>.log
+  .logs/feature/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-  .refused/bolt/concurrent-units.json
+  .refused/feature/concurrent-units.json
                        while this host's rounds can't read the branch's remote:
                        what they couldn't read, since when, for how many rounds,
                        and which of it the log holds yet
@@ -89,11 +89,14 @@ every repository on the host and never pushed:
                        round asks at once
   ports/<n>            a block of ports, naming the checkout that holds it
   readers/<repository>.lock
-                       held by the first watch or wait of the repository for
-                       as long as it runs
+                       held by the repository's `sluice run`, or else by the
+                       first watch or wait of it, for as long as it runs
   readers/<repository>.json
                        the overview it last read, as `sluice overview --json`
                        prints it, for every other watch and wait to follow
+  readers/<repository>.driver
+                       held by the repository's `sluice run` for as long as
+                       it runs
   readers/<repository>.version
                        the version of sluice that holds the lock
   readers/<repository>.lease
@@ -146,32 +149,41 @@ its `sluice exec` rewrites it as each task ends, for `sluice overview`
 to show; nothing that decides a result reads it.
 
 One process on the host reads a repository's queues for every watch and
-wait of it. The first `sluice overview --json --watch`, `sluice wait` or
-waiting `sluice submit` of the repository holds its `readers/` lock. It
-keeps the overview in the file beside it, rewritten whole each time it
-changes, so nothing reads half of one. A read of the queues it couldn't
-make goes in the file in its place, as the error document `sluice
-overview --json` prints when it fails. It holds the words the read was
-refused with, and the reader reads again at its next look. Where the
-repository has no sluice, the file holds the watch's last document, the
-overview with `"set_up": false`, and the watch ends. The next watch or
-wait to hold the lock removes that file before it reads, so nothing that
-starts once sluice is set up ends on it. Every other watch of the
-repository on the host follows that file and reads no state of its own.
-Every other wait takes its submission's progress from that file and
-still runs sluice's rounds, which read the branch's state as they always
-do. It reads its submission's own file once, when the submission leaves
-the queue, to say how it ended. When the one holding the lock stops, however
-it stops, the lock goes with it: the next watch or wait takes over
-within its next look, a second for a watch, three for a wait. A watch of
-a newer sluice than the one holding the lock takes over from it within a
-few seconds. It holds the lease, and the older one lets go at its next
-look and follows it from then on; the newer one reads from its own next
-look. A sluice from before the lease takes no part: it names no version
-and never looks at the lease, so it reads until its watch or wait ends,
-and newer watches follow it meanwhile. The file names take the repository's git directory, which all its worktrees
-share, written as one file name as a checkout's is. `sluice overview`
-alone always reads the state itself.
+wait of it. Where `sluice run` is running in the repository, it is that
+process. It holds the `.driver` file's lock and the `readers/` lock, and
+writes the overview file beside them after each of its passes, whether
+or not anything is queued. Every wait then follows it and runs no rounds
+of its own, and a watch or wait that held the lock when `sluice run`
+started lets it go within its next look. A second `sluice run` of the
+repository holds neither lock and runs nothing until the first stops.
+Where no `sluice run` is running, the first `sluice overview --json
+--watch`, `sluice wait` or waiting `sluice submit` of the repository
+holds the `readers/` lock. The reader keeps the overview in the file
+beside it, rewritten whole each time it changes, so nothing reads half
+of one. A read of the queues it couldn't make goes in the file in its
+place, as the error document `sluice overview --json` prints when it
+fails. It holds the words the read was refused with, and the reader
+reads again at its next look. Where the repository has no sluice, the
+file holds the watch's last document, the overview with `"set_up":
+false`, and the watch ends. The next watch or wait to hold the lock
+removes that file before it reads, so nothing that starts once sluice is
+set up ends on it. Every other watch of the repository on the host
+follows that file and reads no state of its own. Every other wait takes
+its submission's progress from that file and, where no `sluice run` is
+running, still runs sluice's rounds, which read the branch's state as
+they always do. It reads its submission's own file once, when the
+submission leaves the queue, to say how it ended. When the one holding
+the lock stops, however it stops, the lock goes with it: the next watch
+or wait takes over within its next look, a second for a watch, three for
+a wait. A watch of a newer sluice than the watch or wait holding the
+lock takes over from it within a few seconds. It holds the lease, and
+the older one lets go at its next look and follows it from then on; the
+newer one reads from its own next look. A sluice from before the lease
+takes no part: it names no version and never looks at the lease, so it
+reads until its watch or wait ends, and newer watches follow it
+meanwhile. The file names take the repository's git directory, which all
+its worktrees share, written as one file name as a checkout's is.
+`sluice overview` alone always reads the state itself.
 
 ## A branch whose state is on its remote
 
@@ -251,7 +263,7 @@ branch against:
 - `copies`: for a branch kept on a remote, each host whose own branch
   of that name a round could not set to `landed`, by the host's name:
   `{"build-2": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
-  holds the lock on refs/heads/bolt/x", "since":
+  holds the lock on refs/heads/feature/x", "since":
   "2026-10-23T09:16:40Z"}}`. `at` is the revision that host's branch
   holds, `null` when it has none. Each host writes only its own entry,
   and takes it out on the round that sets its branch to `landed`.
@@ -266,9 +278,9 @@ over them.
 {
   "schema": "sluice/submission@1",
   "id": 13,
-  "branch": "bolt/concurrent-units",
+  "branch": "feature/concurrent-units",
   "head": "8d41b6c2e5",
-  "from": { "agent": "crw-1-unit-2", "worktree": "unit/batch-review",
+  "from": { "agent": "agent-2", "worktree": "batch-review",
             "path": "/home/me/wt/unit-batch-review", "host": "build-1",
             "session": "herdr:w1:p2@/tmp/herdr/herdr.sock" },
   "submitted": "2026-10-11T09:16:40Z",
@@ -279,7 +291,7 @@ over them.
   "tested": { "combination": "e20a6f9b48", "on": "c41e8f2d90", "submissions": [12, 13] },
   "result": "failed",
   "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
-               "log": ".git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log" } ],
+               "log": ".git/sluice/.logs/feature/concurrent-units/c7/tests:t-batch-cards.log" } ],
   "delivered": "2026-10-11T09:21:55Z",
   "delivered_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
 }
@@ -306,7 +318,7 @@ the outcome types a notice into that pane, one line to the agent there,
 when the round runs on the same host:
 
 ```text
-[sluice] #13 failed on bolt/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
+[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
 ```
 
 `delivered` is when the outcome was delivered, and `delivered_to` is
@@ -348,8 +360,8 @@ reads a finished submission's one file, and `sluice status <branch>
 branch's next write.
 
 A pull request's submission comes from `pull/<n>`, its number on
-GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",
-"worktree": "pull/41", "head": "unit/cards" }`, with no `path`; `head`
+GitHub, in place of a worktree: `"from": { "agent": "agent-2",
+"worktree": "pull/41", "head": "cards" }`, with no `path`; `head`
 is the branch the pull request was opened from. Its agent is the one the pull request's
 description names, in the comment `sluice submit` writes there, or
 else whoever opened it. Each new commit on the pull request is a new
@@ -402,7 +414,7 @@ logged when a round sets one that was behind. `copy` is the revision
 this host's branch holds:
 
 ```json
-{"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
+{"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/feature/x"}
 {"schema":"sluice/log@1","event":"copy-levelled","host":"build-2","copy":"c43609b8e1"}
 ```
 
@@ -477,15 +489,15 @@ shows its worktree as merged. What was tested rides along as trailers,
 which outlive the state files:
 
 ```console
-$ git log -1 bolt/concurrent-units
+$ git log -1 feature/concurrent-units
 commit b7d2e94f03
 Merge: c41e8f2 3f9c2e1
 Author: sluice <sluice@localhost>
 
-    chore(land): #12 unit/touches
+    chore(land): #12 touches
 
     Sluice-Submission: 12
-    Sluice-From: crw-1-unit-1 (unit/touches)
+    Sluice-From: agent-1 (touches)
     Sluice-Tested: 9ab3d07c11
     Sluice-Result: passed (2 run, 31 replayed)
 ```
