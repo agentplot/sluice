@@ -12,7 +12,7 @@ core.29).
 - **THEN** the call is not made again before that time
 
 #### Scenario: GraphQL's allowance spent
-- **WHEN** GitHub answers the query `200` with an error of type `RATE_LIMITED` and `x-ratelimit-remaining: 0`
+- **WHEN** GitHub answers a GraphQL query `200` with an error of type `RATE_LIMITED` and `x-ratelimit-remaining: 0`
 - **THEN** no query is made before `x-ratelimit-reset`
 
 ### Requirement: The pause lasts as long as GitHub says
@@ -51,7 +51,7 @@ token (134).
 
 #### Scenario: GraphQL's allowance is its own
 - **WHEN** the REST allowance is paused and the GraphQL one is not
-- **THEN** the query that reads a branch's open pull requests is made
+- **THEN** a GraphQL query is made
 
 #### Scenario: The pause outlives the process
 - **WHEN** the process that met the pause is stopped and started again before the pause ends

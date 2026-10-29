@@ -17,9 +17,9 @@ on deneb runs it on branches mac-studio's `sluice run` drives. A 403
 saying the limit is spent is read as GitHub's answer, so a submit or a
 wait fails on it.
 
-Clause 134 as amended on 2026-10-28, clauses 136 and 137 added the same
-day (blueprints 8bdf474), record 0071 and rules core.29, core.31,
-core.32 and core.33 carry the user's decisions of 2026-10-28.
+Clause 134 as amended on 2026-10-28 and clause 136 added the same day
+(blueprints 8bdf474), record 0071 and rules core.29, core.31 and core.32
+carry the user's decisions of 2026-10-28 that this change builds.
 
 ## What Changes
 
@@ -54,22 +54,6 @@ core.32 and core.33 carry the user's decisions of 2026-10-28.
   the list alone. sluice's check and report are posted only when what
   they say changes, compared with what the host kept of its last
   posting, and read back from GitHub only when the host holds none.
-- **One host takes a branch's requests in.** Where the records are on
-  the remote, only the instance that keeps the branch (72). Where each
-  host keeps its own records, the holder of `refs/sluice/intake/<branch>`
-  on the remote, a mark renewed by a leased push, taken where absent,
-  taken from a wait by a driver at once, taken by anyone once it stood
-  unchanged for the lease by the taker's own observation, and let go
-  by a wait that ends. A round on another host withdraws its own
-  entries of the branch's requests, naming the host that holds the
-  mark. A wait whose request another host takes in takes nothing in and
-  runs no round: it follows the request by GitHub's word and sluice's
-  check on its head, read at most once in a quarter of the interval.
-- **One query per branch.** At a discovery whose conditional list came
-  back changed, or while a request out of draft waits on its conditions,
-  one GraphQL query reads every open request into the branch with its
-  reviews, its head's checks and statuses, its ready marks and sluice's
-  own check runs, in place of the REST reads per request.
 - **BREAKING (behaviour):** a request opened by hand is taken up to a
   discovery interval later than today's three seconds; a review or
   another system's check is seen at the next discovery; a waiting submit
@@ -86,11 +70,7 @@ core.32 and core.33 carry the user's decisions of 2026-10-28.
   host's pause, and how each kind of caller meets it.
 - `forge-reads`: conditional reads with answers kept on the host,
   discovery at the deployment's interval apart from a move on the host,
-  a request read again only once it moved, postings only on change, and
-  one query per branch.
-- `request-intake-host`: one host at a time takes a branch's requests
-  in, by the lead or by the intake mark; the hand-over of entries; a
-  wait that follows its request across hosts.
+  a request read again only once it moved, and postings only on change.
 
 ### Modified Capabilities
 
@@ -117,43 +97,38 @@ core.32 and core.33 carry the user's decisions of 2026-10-28.
   and works whichever way GitHub keys its ETags (record 0071).
 - **The git fetch each round makes of a branch on a remote**: it costs
   no API allowance; clause 129's idle tick governs it.
-- **On one host, a wait that follows `sluice run`**: built on the bolt
-  `the-driver-pushes-outcomes-and-waits-follow-it` (its
-  `readers/<repository>.driver` lock and `driver_live`), which lands
-  before this change; group 3 composes with it and changes none of it.
+- **One host takes a branch's requests in, and one GraphQL query reads
+  them** (137; rule core.33): the change
+  `one-host-takes-requests-in-and-reads-them-in-one-query`, built on the
+  bolt `the-driver-pushes-outcomes-and-waits-follow-it` once it lands.
 
 ## Impact
 
 - `crates/sluice/src/retry.rs`: the class `Judged::Limited` with its
   time, and how each policy meets it.
 - New `crates/sluice/src/profiles/github/kept.rs`: the host's
-  `forge/` state: answers by address, pauses, each branch's readings,
-  the intake mark's observation.
+  `forge/` state: answers by address, pauses, each branch's readings.
 - `crates/sluice/src/profiles/github/app.rs`: the pause read before a
   call and written from GitHub's headers and words; conditional `GET`s;
   `x-ratelimit-*` and `retry-after` read on every answer.
 - `crates/sluice/src/profiles/github/rest.rs`, `forge.rs`, `fake.rs`:
-  `Pull` gains `updated_at` and `merged`; the one GraphQL query and its
-  file-backed fake.
+  `Pull` gains `updated_at` and `merged`.
 - `crates/sluice/src/profiles/github/pulls.rs`: discovery, the readings
-  per request, postings on change, the intake mark, the hand-over, the
-  follow across hosts.
-- `crates/sluice/src/profiles/pushed_refs.rs`: the mark fetched with the
-  branch, pushed and deleted under a lease.
+  per request, postings on change, a wait's own request read at most
+  once in a quarter of the interval.
 - `crates/sluice/src/instance.rs`: `[forge] discovery`.
-- `crates/sluice/src/lib.rs`, `main.rs`: the waits' cadence on GitHub,
-  the policy each command gets, a wait letting the mark go at its end.
+- `crates/sluice/src/lib.rs`, `main.rs`: the policy each command gets,
+  a round passing a spent allowance by.
 - Tests: `crates/sluice/tests/profiles/forge/github.rs`,
-  `profiles/forge.rs`, `profiles/pull_requests.rs`, `pushed_refs.rs`,
-  `cli.rs`, `instance.rs`, `support/http.rs`.
+  `profiles/forge.rs`, `profiles/pull_requests.rs`, `cli.rs`,
+  `instance.rs`, `support/http.rs`.
 - Docs: `site/src/content/docs/reference/configuration.md`,
   `reference/commands.md`, `reference/state.md`,
   `guides/github-app.md`, `guides/pull-requests.md`.
-- Sources: clauses 72, 73, 74, 128, 129, 133, 134 (as amended
-  2026-10-28), 135, 136 and 137 (added 2026-10-28), C.5 pull request,
-  C.6, C.7, C.8, S65 (blueprints 8bdf474); record 0071; rules core.11,
-  core.14, core.25, core.29 and core.31 (as amended 2026-10-28), core.32
-  and core.33 (sluice 9ddfeb3c).
+- Sources: clauses 74, 128, 129, 133, 134 (as amended 2026-10-28), 135,
+  136 (added 2026-10-28), C.5 pull request, C.7, C.8, S65 (blueprints
+  8bdf474); record 0071; rules core.11, core.14, core.29 and core.31 (as
+  amended 2026-10-28) and core.32 (sluice 9ddfeb3c).
 
 ## Touches
 
@@ -162,7 +137,6 @@ crates/sluice/src/retry.rs
 crates/sluice/src/lib.rs
 crates/sluice/src/main.rs
 crates/sluice/src/instance.rs
-crates/sluice/src/profiles/pushed_refs.rs
 crates/sluice/src/profiles/github/*.rs
 crates/sluice/tests/**
 site/src/content/docs/reference/configuration.md
