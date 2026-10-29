@@ -2690,8 +2690,10 @@ fn readers_version() -> Option<String> {
 /// its lease at its next tick, and is the reader at a tick of its own once
 /// the older reader has let go, naming its version. The tick is the next
 /// one but for a process another test of this binary forks meanwhile,
-/// which holds the older reader's lock until it runs its program: the
-/// watch then leads at the tick after.
+/// which holds the older reader's lock until it runs its program, as long
+/// as a loaded host keeps it from running: the watch then leads at a later
+/// tick, so the test ticks until it does, bounded by time, never by a count
+/// of ticks.
 #[test]
 fn a_newer_watch_takes_an_older_readers_lease() {
     let f = setup();
@@ -2714,15 +2716,49 @@ fn a_newer_watch_takes_an_older_readers_lease() {
                 return;
             }
             *written.borrow_mut() = readers_doc();
+            // A process another test forks holds the lease's lock as well
+            // until it runs its program: let go, it is free once that runs.
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while leased() && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
             assert!(!leased(), "the lease kept once the watch reads");
             older.borrow_mut().step(true).unwrap();
             assert!(!is_reader(&older.borrow()));
         }
         _ => {}
     };
-    let pause = Between {
+    // Ticks until the watch has read, and one more for it to print, at
+    // most a minute.
+    struct Until<'a> {
+        n: Cell<usize>,
+        last: Cell<Option<usize>>,
+        until: std::time::Instant,
+        written: &'a RefCell<Option<serde_json::Value>>,
+        between: &'a dyn Fn(usize),
+    }
+    impl Pause for Until<'_> {
+        fn pause(&self) -> bool {
+            let n = self.n.get() + 1;
+            self.n.set(n);
+            if self.last.get().is_some_and(|last| n > last)
+                || std::time::Instant::now() > self.until
+            {
+                return false;
+            }
+            (self.between)(n);
+            if self.written.borrow().is_some() && self.last.get().is_none() {
+                self.last.set(Some(n + 1));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            true
+        }
+    }
+    let pause = Until {
         n: Cell::new(0),
-        rounds: 6,
+        last: Cell::new(None),
+        until: std::time::Instant::now() + std::time::Duration::from_secs(60),
+        written: &written,
         between: &between,
     };
     let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
