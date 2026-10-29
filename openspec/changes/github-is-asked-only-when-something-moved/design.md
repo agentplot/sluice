@@ -201,11 +201,12 @@ moved_records = the records' version (Line) != readings.version
 ```
 
 - Nothing of the three: the pass returns with no call to GitHub.
-- `moved_records` alone: the postings of requests whose entry moved are
-  made again from the readings (no read; below).
-- `due` or `moved_branch`: the list is asked for (conditionally), and
-  `readings.asked` written. A landing closes requests and changes every
-  waiting request's forecast, so a branch that moved discovers at once.
+- Any of the three: the list is asked for, conditionally, and
+  `readings.asked`, `tip` and `version` written. A landing closes
+  requests and changes every waiting request's forecast, and an entry
+  whose state moved changes what its request shows, so either asks at
+  once; an unchanged list is a 304 and costs nothing, and the postings
+  of requests whose entry moved are made from the readings (below).
 
 `readings.asked` is in the host's state: a `sluice run` restarted, by
 hand or by a supervisor every seventeen seconds, asks nothing until the
