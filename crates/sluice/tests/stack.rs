@@ -399,7 +399,10 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     };
 
     let first = run(1);
-    assert_eq!(first.env["SLUICE_PORT_WEB"], "41400");
+    // 90: its ports from `ports_from` on; one another process on the host
+    // holds, a run of this test in another tree's among them, is passed by.
+    let port: u16 = first.env["SLUICE_PORT_WEB"].parse().unwrap();
+    assert!(port >= 41400, "a port below ports_from: {port}");
     // 94: the run ended and its container did not.
     assert!(!leftovers(&id).0.is_empty(), "the stack went with the run");
     let second = run(2);

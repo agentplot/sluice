@@ -42,21 +42,52 @@ fn setup() -> Fakes {
 fn sluice(f: &Fakes, args: &[&str]) -> (i32, String) {
     let cli = Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
     let mut out = Vec::new();
-    let code = run(
-        cli,
-        f.seams(),
-        &support::FakeHost {
-            world: f.world.clone(),
-            reserved: 0,
-        },
-        &(),
-        &(),
-        &f.clock,
-        &Rounds(Cell::new(0)),
-        &mut out,
-    )
+    let code = settled(|| {
+        run(
+            cli,
+            f.seams(),
+            &support::FakeHost {
+                world: f.world.clone(),
+                reserved: 0,
+            },
+            &(),
+            &(),
+            &f.clock,
+            &Rounds(Cell::new(0)),
+            &mut out,
+        )
+    })
     .unwrap();
     (code, String::from_utf8(out).unwrap())
+}
+
+/// `command`, a sluice run in this process, and then a moment for each
+/// lock of the host's reader and driver it found free to be free again.
+/// A lock a command lets go may still be held by a process another
+/// thread of this binary starts meanwhile, until that process runs its
+/// program, where the next command of a test, as another process on a
+/// host, finds it free (129, 135).
+fn settled<T>(command: impl FnOnce() -> T) -> T {
+    let before = host_locks_free();
+    let done = command();
+    for (i, free) in before.into_iter().enumerate() {
+        if free {
+            soon(|| host_locks_free()[i]);
+        }
+    }
+    done
+}
+
+/// Whether the repository's reader's lock, its lease and its driver's
+/// lock are each free on the fakes' host. A file not yet made is free.
+fn host_locks_free() -> [bool; 3] {
+    let free = |ext: &str| {
+        let Ok(file) = std::fs::File::open(readers_file(REPOSITORY, ext)) else {
+            return true;
+        };
+        !matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    };
+    [free("lock"), free("lease"), free("driver")]
 }
 
 /// What a waiting command says while it waits, a submission's state or
@@ -2664,18 +2695,44 @@ fn write_as(r: &mut sluice::reader::Reader, doc: &serde_json::Value) {
     }
 }
 
+/// Whether `free` holds within two seconds. A lock a process let go may
+/// still be held for a moment by a process another thread of this binary
+/// starts meanwhile, until it runs its program: a check that a lock is
+/// free allows that moment, and a check that one is held allows nothing
+/// (129). The check's own try of the lock is such a letting go, so it
+/// gives that a moment too before it answers.
+fn soon(free: impl Fn() -> bool) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if free() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// Whether a process holds the repository's reader's lease.
 fn leased() -> bool {
-    let lease = std::fs::OpenOptions::new()
+    held("lease")
+}
+
+/// Whether a process holds the repository's reader's file `ext`, its
+/// lease or its lock.
+fn held(ext: &str) -> bool {
+    let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
-        .open(readers_file(REPOSITORY, "lease"))
+        .open(readers_file(REPOSITORY, ext))
         .unwrap();
-    match lease.try_lock() {
+    match file.try_lock() {
         Ok(()) => false,
         Err(std::fs::TryLockError::WouldBlock) => true,
-        Err(e) => panic!("locking the lease: {e}"),
+        Err(e) => panic!("locking the {ext}: {e}"),
     }
 }
 
@@ -2711,10 +2768,13 @@ fn a_newer_watch_takes_an_older_readers_lease() {
         _ if written.borrow().is_none() => {
             if readers_version().as_deref() != Some("0.53.0") {
                 assert!(leased(), "the watch let its lease go before it read");
+                // The forked process lets the older reader's lock go once
+                // it runs its program; the watch leads at the tick after.
+                assert!(soon(|| !held("lock")), "the older reader's lock kept");
                 return;
             }
             *written.borrow_mut() = readers_doc();
-            assert!(!leased(), "the lease kept once the watch reads");
+            assert!(soon(|| !leased()), "the lease kept once the watch reads");
             older
                 .borrow_mut()
                 .step(true, sluice::reader::Drives::Nobody)
@@ -2749,7 +2809,10 @@ fn a_watch_of_the_same_version_follows() {
     write_as(&mut reader.borrow_mut(), &doc);
     support::set_version("0.53.0");
     let between = |_: usize| {
-        assert!(!leased(), "the lease of a reader of its own version");
+        assert!(
+            soon(|| !leased()),
+            "the lease of a reader of its own version"
+        );
         let mut reader = reader.borrow_mut();
         reader.step(true, sluice::reader::Drives::Nobody).unwrap();
         assert!(is_reader(&reader));
@@ -2793,7 +2856,7 @@ fn an_older_watch_follows_once_its_lease_is_taken() {
             let r = newer.as_mut().unwrap();
             r.step(true, sluice::reader::Drives::Nobody).unwrap();
             write_as(r, &seven);
-            assert!(!leased());
+            assert!(soon(|| !leased()));
         }
         _ => {}
     };
@@ -2886,7 +2949,7 @@ fn a_newer_wait_never_takes_a_lease() {
     write_as(&mut reader.borrow_mut(), &doc);
     support::set_version("0.53.0");
     let between = |_: usize| {
-        assert!(!leased(), "a wait took the lease");
+        assert!(soon(|| !leased()), "a wait took the lease");
         let mut reader = reader.borrow_mut();
         reader.step(true, sluice::reader::Drives::Nobody).unwrap();
         assert!(is_reader(&reader));
@@ -3781,6 +3844,7 @@ fn the_first_run_stops() {
         if n == 1 {
             assert!(f.world.started().is_empty());
             drop(first.borrow_mut().take());
+            assert!(soon(|| !driver_live()), "the driver's lock kept");
         }
     };
     let pause = Between {
@@ -3791,7 +3855,7 @@ fn the_first_run_stops() {
     let (code, out) = sluice_with(&f, &pause, &["run"]);
     assert_eq!(code, sluice::STOPPED, "{out}");
     assert_eq!(state_of(&f, 1), "landed");
-    assert!(!driver_live());
+    assert!(soon(|| !driver_live()));
 }
 
 /// 129, 135: the driver is the reader: with nothing queued, its pass
@@ -3812,8 +3876,8 @@ fn a_driver_with_nothing_queued() {
     assert_eq!(untimed(&doc), untimed(&json(&overview)));
     assert_eq!(doc["branches"][0]["branch"], BRANCH, "{doc}");
     // It let both places go as it ended.
-    assert!(!driver_live());
-    assert!(reader_free());
+    assert!(soon(|| !driver_live()));
+    assert!(soon(reader_free));
 }
 
 /// Whether the reader's lock is free: the test can take it, as the driver
@@ -3969,7 +4033,7 @@ fn a_wait_was_the_reader() {
             // No round of the wait's read the run's result, and the place
             // is the driver's to take.
             assert_eq!(state_of(&f, 1), "testing");
-            assert!(reader_free());
+            assert!(soon(reader_free));
             for _ in 0..3 {
                 sluice(&f, &["step", BRANCH]);
             }
@@ -4056,6 +4120,7 @@ fn the_driver_stops_while_a_wait_follows_it() {
             assert!(f.world.started().is_empty());
             assert_eq!(state_of(&f, 1), "queued");
             drop(first.borrow_mut().take());
+            assert!(soon(|| !driver_live()), "the driver's lock kept");
         }
     };
     let pause = Between {
@@ -5323,7 +5388,7 @@ fn sluice_with(f: &Fakes, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
         world: f.world.clone(),
         reserved: 0,
     };
-    let code = run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out).unwrap();
+    let code = settled(|| run(cli, f.seams(), &host, &(), &(), &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 
@@ -5768,7 +5833,8 @@ fn sluice_pulls(
         world: f.world.clone(),
         reserved: 0,
     };
-    let code = run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out).unwrap();
+    let code =
+        settled(|| run(cli, f.seams(), &host, &(), pulls, &f.clock, pause, &mut out)).unwrap();
     (code, String::from_utf8(out).unwrap())
 }
 
