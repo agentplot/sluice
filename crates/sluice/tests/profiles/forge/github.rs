@@ -237,6 +237,17 @@ impl GitHub {
             .count()
     }
 
+    /// The methods of the calls to a path starting `path` the fake saw,
+    /// in the order it saw them.
+    pub fn methods(&self, path: &str) -> Vec<String> {
+        self.fake
+            .requests()
+            .into_iter()
+            .filter(|r| r.path.starts_with(path))
+            .map(|r| r.method)
+            .collect()
+    }
+
     pub fn url(&self) -> &str {
         self.fake.url()
     }
