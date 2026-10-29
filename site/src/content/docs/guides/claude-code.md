@@ -249,8 +249,14 @@ worktree reported it, `sluice inbox` prints nothing and no turn starts. The
 board collects when the session starts too, so a session that restarted
 gets what it missed. The `wake` option in `/config` turns the collecting
 and the turn off, and the outcome then stays pending until the session runs
-`sluice inbox` or a wait reports it. The board needs a sluice with `sluice
-inbox`, and says so in a toast where the host's sluice has none.
+`sluice inbox` or a wait reports it.
+
+The board runs with the sluice releases its plugin names, from the first
+with `sluice inbox` up to the first it does not know. Where the host's
+sluice is older or newer, the board says so once in the session, in a toast
+naming both releases and whether sluice or the board is to be upgraded, and
+then shows nothing and delivers nothing; `/sluice` answers with the same
+words. Upgrade whichever it names and start the session again.
 
 Before it submits, the board forecasts the session's worktree whenever its
 commit, its branch or the submissions queued there move, as `sluice submit

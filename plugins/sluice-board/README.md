@@ -86,8 +86,17 @@ sluice's queue inside a Claude Code session.
   no turn starts. The board collects too when the session starts, so a
   session that restarted gets what it missed. Turn the collecting and the
   turn off with the `wake` option in `/config`: the outcome then stays
-  pending for the session's own `sluice inbox` or a wait. The board needs
-  a sluice with `sluice inbox`, and says so in a toast where it has none.
+  pending for the session's own `sluice inbox` or a wait.
+- **The sluice it runs with**: `.claude-plugin/sluice.json` names the
+  releases, from the first with `sluice inbox` (`from`) up to, not
+  including, the first the board does not know (`before`). On its first
+  queue the board asks `sluice --version`; where the host's sluice is
+  outside them, it says so once in the session, in a toast naming both
+  releases and whether sluice or the board is to be upgraded, and from
+  then on shows nothing, collects nothing, starts no turn and runs no
+  further watch; `/sluice` answers with the same words. So outcomes are
+  delivered by `sluice inbox` alone, never by a board that keeps its own
+  list. A sluice built with no release (`0.0.0`) is run with.
 - **Forecast**: while this session's worktree has commits ahead of its
   branch and no submission of its own queued, the board runs `sluice
   submit <branch> --check --json` whenever the head, the branch or the
