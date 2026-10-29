@@ -3,6 +3,7 @@
 mod support;
 
 use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
@@ -2893,6 +2894,19 @@ fn leased() -> bool {
     }
 }
 
+/// Whether the repository's reader's lease is free by `until`: a process
+/// another test of this binary forks while a watch holds it holds it too,
+/// until it runs its program.
+fn lease_free_by(until: Instant) -> bool {
+    while leased() {
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 /// The version of sluice the repository's reader names.
 fn readers_version() -> Option<String> {
     let bytes = std::fs::read(readers_file(REPOSITORY, "version")).ok()?;
@@ -2904,42 +2918,62 @@ fn readers_version() -> Option<String> {
 /// its lease at its next tick, and is the reader at a tick of its own once
 /// the older reader has let go, naming its version. The tick is the next
 /// one but for a process another test of this binary forks meanwhile,
-/// which holds the older reader's lock until it runs its program: the
-/// watch then leads at the tick after.
+/// which holds the older reader's lock, or the watch's lease, until it
+/// runs its program, for as long as a loaded host keeps it from that: the
+/// watch then leads at a later tick. Once the older reader has let go,
+/// the test waits a little before each tick at which the watch has not
+/// led yet, for at most a minute.
 #[test]
 fn a_newer_watch_takes_an_older_readers_lease() {
+    struct Ticks<F: Fn(usize) -> bool>(Cell<usize>, F);
+
+    impl<F: Fn(usize) -> bool> Pause for Ticks<F> {
+        fn pause(&self) -> bool {
+            self.0.set(self.0.get() + 1);
+            (self.1)(self.0.get())
+        }
+    }
+
     let f = setup();
     let doc = seven_testing();
     let older = RefCell::new(reader_as("0.52.0"));
     write_as(&mut older.borrow_mut(), &doc);
     support::set_version("0.53.0");
+    let until = Instant::now() + Duration::from_secs(60);
+    let read_at = Cell::new(None);
     let written = RefCell::new(None);
-    let between = |n: usize| match n {
-        1 => {}
-        2 => {
-            assert!(leased(), "the watch took no lease");
-            let mut older = older.borrow_mut();
-            older.step(true).unwrap();
-            assert!(!is_reader(&older), "the older reader kept reading");
-        }
-        _ if written.borrow().is_none() => {
-            if readers_version().as_deref() != Some("0.53.0") {
-                assert!(leased(), "the watch let its lease go before it read");
-                return;
+    let between = |n: usize| {
+        match n {
+            1 => {}
+            2 => {
+                assert!(leased(), "the watch took no lease");
+                let mut older = older.borrow_mut();
+                older.step(true).unwrap();
+                assert!(!is_reader(&older), "the older reader kept reading");
             }
-            *written.borrow_mut() = readers_doc();
-            assert!(!leased(), "the lease kept once the watch reads");
-            older.borrow_mut().step(true).unwrap();
-            assert!(!is_reader(&older.borrow()));
+            _ if read_at.get().is_none() => {
+                if readers_version().as_deref() != Some("0.53.0") {
+                    assert!(leased(), "the watch let its lease go before it read");
+                    assert!(Instant::now() < until, "the watch never led");
+                    std::thread::sleep(Duration::from_millis(20));
+                    return true;
+                }
+                read_at.set(Some(n));
+                *written.borrow_mut() = readers_doc();
+                assert!(lease_free_by(until), "the lease kept once the watch reads");
+                older.borrow_mut().step(true).unwrap();
+                assert!(!is_reader(&older.borrow()));
+            }
+            _ => {}
         }
-        _ => {}
+        // Three ticks more once the watch has read, which print nothing.
+        read_at.get().is_none_or(|at| n <= at + 3)
     };
-    let pause = Between {
-        n: Cell::new(0),
-        rounds: 6,
-        between: &between,
-    };
-    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let (_, out) = sluice_with(
+        &f,
+        &Ticks(Cell::new(0), between),
+        &["overview", "--json", "--watch"],
+    );
     let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
     assert_eq!(lines.len(), 2, "{out}");
     assert_eq!(lines[0], doc);
