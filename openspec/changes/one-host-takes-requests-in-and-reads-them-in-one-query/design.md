@@ -68,20 +68,28 @@ in this pass:
 
   | The mark | This host | It |
   |---|---|---|
-  | absent | any | takes it (leased on absence) |
+  | absent | a driver | takes the requests in and pushes nothing |
+  | absent | a wait, its host running no driver | pushes it (leased on absence) and takes the requests in |
   | its own | any | renews it when a third of `[peers] lease` has passed since `renewed` |
   | a wait's | a driver | takes it at once |
   | another's, id unchanged for `[peers] lease` since first seen | any | takes it |
   | another's | otherwise | takes nothing in |
 
   **A branch no other host has touched gets no mark** (the user,
-  2026-10-28). A host that finds the mark absent and no sign that
-  another host has ever taken part in the branch takes the requests in
-  without pushing one; it pushes the mark only once another host has
-  shown itself. What counts as another host having touched the branch,
-  read from the remote alone and never by a fetch of its own (core.27),
-  is settled by this change's first task, which amends clause 137 and
-  record 0071 before anything is built.
+  2026-10-28 and 2026-10-29: "No intake ref on the remote yet means
+  this host alone"). The remote is all the hosts share, so the mark's
+  absence is the one sign, read from the remote alone (core.27), that
+  no other host has shown itself. A driver that finds no mark takes the
+  requests in and pushes none, and pays nothing on a repository only it
+  reaches. A wait on a host where no driver lives may be beside another
+  host's driver it cannot see, so where it finds no mark it shows
+  itself: it pushes the mark, leased on its absence, holds it as a wait
+  and takes the requests in. The driver reads that mark in the fetch of
+  the branch its next round makes and takes it at once, by the table's
+  third row; from then on the mark stands, renewed by its holder. A
+  wait beside its host's driver takes nothing in (the bolt) and so
+  never pushes the mark. A wait that holds it and ends drops it, which
+  returns the branch to no mark.
 
   A push refused at the lease is another host's take: this host takes
   nothing in this pass and reads the mark again next discovery. A
@@ -92,7 +100,7 @@ in this pass:
   Ctrl-C; a failed drop leaves it to lapse.
 
 **The hand-over.** On a branch whose records are each host's own, a
-pass on a host that does not hold the mark withdraws every entry of its
+pass on a host that finds the mark another host's withdraws every entry of its
 own records submitted from a `pull/<n>` place and neither out nor
 landing (122), with the event naming the host that holds the mark
 (`withdrawn: <host> takes main's pull requests in`). It posts nothing
@@ -189,16 +197,21 @@ question.
   window is one pass, the two queues are each host's own, and a landing
   is a leased push, so nothing lands twice; the hand-over withdraws the
   wait's entry at its next pass.
-- [A branch with no mark is taken in by two hosts until one shows
-  itself] → The user's decision: a repository one host uses pays no
-  push; the first sign of another host brings the mark, and the
-  hand-over settles any request both took in.
+- [A branch with no mark is taken in by a driver and a wait on another
+  host for one pass, until the driver's next fetch reads the wait's
+  mark] → The user's decision: a repository one host uses pays no push;
+  the wait's mark is the first sign of another host, the driver takes
+  it, and the hand-over settles any request both took in.
+- [Two hosts' drivers on a branch with no mark both take its requests
+  in, since neither pushes on absence] → Neither shows itself until a
+  wait on a host with no driver pushes the mark; the hand-over then
+  settles it.
 
 ## Migration Plan
 
-The intake mark appears on the remote of a branch that takes requests,
-keeps its records in each host's files and has been touched by more
-than one host, at its first discovery after this sluice is installed; a
+The intake mark appears on the remote of a branch that takes requests
+and keeps its records in each host's files once a wait on a host where
+no driver lives takes its requests in; a
 host on an older sluice ignores it and takes requests in as today until
 it is upgraded, which the hand-over then settles. Rolling back leaves
 the mark unread and harmless; `git push origin

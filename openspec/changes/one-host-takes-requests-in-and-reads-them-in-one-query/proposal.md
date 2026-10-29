@@ -24,22 +24,27 @@ Clause 137 (added 2026-10-28, blueprints 8bdf474), record 0071 and rules
 core.32 and core.33 carry the user's decisions of 2026-10-28. The user
 decided the same day that a branch no other host has touched gets no
 intake push: on a repository only one host uses, the mark's renewal, a
-push about every hundred seconds, buys nothing.
+push about every hundred seconds, buys nothing; and on 2026-10-29 that
+no mark on the remote means the host there alone (clause 137 as
+amended, blueprints 8ab8466).
 
 ## What Changes
 
 - **One host takes a branch's requests in.** Where the records are on
   the remote, only the instance that keeps the branch (72). Where each
   host keeps its own records, the holder of `refs/sluice/intake/<branch>`
-  on the remote, a mark renewed by a leased push, taken where absent,
-  taken from a wait by a driver at once, taken by anyone once it stood
-  unchanged for the lease by the taker's own observation, and let go
-  by a wait that ends. A branch no other host has touched gets no mark
-  pushed (the user, 2026-10-28). A round on another host withdraws its
-  own entries of the branch's requests, naming the host that holds the
-  mark. A wait whose request another host takes in takes nothing in and
-  runs no round: it follows the request by GitHub's word and sluice's
-  check on its head, read at most once in a quarter of the interval.
+  on the remote, a mark renewed by a leased push, taken from a wait by
+  a driver at once, taken by anyone once it stood unchanged for the
+  lease by the taker's own observation, and let go by a wait that ends.
+  No mark means the host there alone (the user, 2026-10-28 and
+  2026-10-29): a driver that finds none takes the requests in and
+  pushes none; a wait on a host where no driver lives pushes it, leased
+  on its absence, and the driver takes it from the wait at its next
+  fetch. A round on another host withdraws its own entries of the
+  branch's requests, naming the host that holds the mark. A wait whose
+  request another host takes in takes nothing in and runs no round: it
+  follows the request by GitHub's word and sluice's check on its head,
+  read at most once in a quarter of the interval.
 - **One query per branch.** At a discovery whose conditional list came
   back changed, or while a request out of draft waits on its conditions,
   one GraphQL query reads every open request into the branch with its
