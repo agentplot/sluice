@@ -181,3 +181,42 @@ fn a_watch_goes_on_where_the_policy_is_on_a_branch_other_than_heads() {
     repo.git(&["switch", "-q", "main"]);
     assert_goes_on(repo.dir());
 }
+
+/// The reader's document a watch with `state` as its host's state writes:
+/// its path, once there is one.
+fn readers_doc(state: &Path) -> Option<std::path::PathBuf> {
+    let dir = state.join("sluice/readers");
+    std::fs::read_dir(dir)
+        .ok()?
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "json"))
+}
+
+/// 129: a watch that is the reader over a repository where nothing moves
+/// writes its document once and marks each read's end on it all the same:
+/// after three of its ticks the bytes are as after the first, its time is
+/// within a tick and a read of now, and it names its tick.
+#[test]
+fn a_readers_marks_move_while_its_document_stands() {
+    let repo = Repo::new("marks");
+    repo.branch("bolt/x", "main", &[(".config/sluice.toml", Some(POLICY))]);
+    repo.git(&["switch", "-q", "main"]);
+    let watch = Watch::start(repo.dir());
+    let first = watch.first_line();
+    assert_eq!(first["tick"], 1, "{first}");
+    let path = readers_doc(watch.state.path()).expect("the reader's document");
+    let bytes = std::fs::read(&path).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(doc["tick"], 1, "{doc}");
+    std::thread::sleep(Duration::from_millis(3500));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "rewritten");
+    let ended = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let since = std::time::SystemTime::now()
+        .duration_since(ended)
+        .unwrap_or_default();
+    assert!(since < Duration::from_secs(2), "last marked {since:?} ago");
+    assert!(
+        watch.lines.try_recv().is_err(),
+        "a line though nothing moved"
+    );
+}

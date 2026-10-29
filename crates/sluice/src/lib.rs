@@ -29,6 +29,7 @@ pub mod words;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -827,6 +828,16 @@ impl Clock for Skipped {
     }
 }
 
+/// How long a command pauses between its reads, the tick its reader names
+/// (64, 129): a watching overview reads about once a second; a run, a
+/// waiting submit or `sluice wait` rounds every three.
+pub fn tick(command: Option<&Command>) -> Duration {
+    match command {
+        Some(Command::Overview { .. }) => Duration::from_secs(1),
+        _ => Duration::from_secs(3),
+    }
+}
+
 pub struct Sleep(pub std::time::Duration);
 
 impl Pause for Sleep {
@@ -901,6 +912,7 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock).as_peer(host.peer());
+    let tick = tick(cli.command.as_ref());
     // 124: the hook reads the policy only as far as guarding needs.
     let s = match &cli.command {
         Some(Command::Hook { .. }) => s.guarding(),
@@ -964,7 +976,9 @@ pub fn run(
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
                 }
-                return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
+                return submit_group(
+                    &s, host, pushers, clock, req, no_wait, json, pause, tick, out,
+                );
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
             let subject = subject.into_iter().next();
@@ -1009,6 +1023,7 @@ pub fn run(
                 no_wait,
                 json,
                 pause,
+                tick,
                 out,
             )
         }
@@ -1056,6 +1071,7 @@ pub fn run(
                 deadline,
                 json,
                 pause,
+                tick,
                 copy: None,
                 worktree: Some(&worktree),
             };
@@ -1308,7 +1324,7 @@ pub fn run(
             }
         },
         Command::Overview { json, watch } => {
-            overview::run(&s, host, clock, json, watch, pause, out)
+            overview::run(&s, host, clock, json, watch, pause, tick, out)
         }
         Command::Amend {
             id,
@@ -1883,6 +1899,7 @@ fn submit(
     no_wait: bool,
     json: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let accepted = match s.submit(&req)? {
@@ -1929,6 +1946,7 @@ fn submit(
         deadline: None,
         json,
         pause,
+        tick,
         copy,
         worktree: Some(&req.worktree),
     };
@@ -1963,6 +1981,7 @@ fn submit_group(
     no_wait: bool,
     json: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let branch = &req.branch;
@@ -2013,6 +2032,7 @@ fn submit_group(
         deadline: None,
         json,
         pause,
+        tick,
         copy: None,
         worktree: None,
     };
@@ -2223,6 +2243,9 @@ struct Waiting<'a> {
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
     pause: &'a dyn Pause,
+    /// How long `pause` pauses, the tick the wait names as its reader
+    /// (64, 129).
+    tick: Duration,
     /// 124: how the host's copy differed from what the submit waited on
     /// submitted, carried by its `--json` document.
     copy: Option<&'a CopyDiffers>,
@@ -2500,32 +2523,38 @@ impl Reading {
         let (id, branch) = (sub.id, sub.branch.clone());
         // The reader's document, when it was read from one.
         let followed = match &mut self.reader {
-            Reader::Lead(lead) => match overview::document(s, waiting.host, waiting.clock) {
-                Ok((branches, doc)) => {
-                    // Ctrl-C reaching the git a branch's read runs is no
-                    // refusal of that branch's (26).
-                    if !INTERRUPTED.load(Ordering::SeqCst) {
-                        lead.write(&doc)?;
+            Reader::Lead(lead) => {
+                // A read whose start it could not mark leaves a forecast
+                // reading past this reader, which decides nothing (64).
+                let _ = lead.begin();
+                match overview::document(s, waiting.host, waiting.clock) {
+                    Ok((branches, doc)) => {
+                        // Ctrl-C reaching the git a branch's read runs is no
+                        // refusal of that branch's (26).
+                        if !INTERRUPTED.load(Ordering::SeqCst) {
+                            lead.write(&overview::ticked(doc, waiting.tick))?;
+                        }
+                        self.view = branches
+                            .into_iter()
+                            .find(|b| b.branch == branch && b.unread.is_none());
+                        None
                     }
-                    self.view = branches
-                        .into_iter()
-                        .find(|b| b.branch == branch && b.unread.is_none());
-                    None
-                }
-                // The records, or the host's part, could not be read: the
-                // failure is the reader's document, in the words it was
-                // refused with (133), and its own part is read as a wait
-                // alone reads it. Ctrl-C reaching the git a read runs is no
-                // failure of the queues'.
-                Err(e) => {
-                    if !INTERRUPTED.load(Ordering::SeqCst) {
-                        lead.write(&told::document(Kind::Internal, &format!("{e:#}"), &[]))?;
+                    // The records, or the host's part, could not be read: the
+                    // failure is the reader's document, in the words it was
+                    // refused with (133), and its own part is read as a wait
+                    // alone reads it. Ctrl-C reaching the git a read runs is no
+                    // failure of the queues'.
+                    Err(e) => {
+                        if !INTERRUPTED.load(Ordering::SeqCst) {
+                            let failed = told::document(Kind::Internal, &format!("{e:#}"), &[]);
+                            lead.write(&overview::ticked(failed, waiting.tick))?;
+                        }
+                        self.view = s.branch_view_of(&branch).ok();
+                        *sub = record(s, id, &branch)?;
+                        return Ok(());
                     }
-                    self.view = s.branch_view_of(&branch).ok();
-                    *sub = record(s, id, &branch)?;
-                    return Ok(());
                 }
-            },
+            }
             Reader::Follow(follow) => {
                 // The reader's read that failed is no whole document either:
                 // the last view stands, and no record is read for it (129).
