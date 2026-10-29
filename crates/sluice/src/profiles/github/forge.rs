@@ -141,6 +141,46 @@ pub struct Comment {
     pub url: String,
 }
 
+/// A branch's open pull requests as their list gave them, and whether the
+/// list changed since the host last read it: `false` only when GitHub
+/// answered that what the host keeps of it stands (136).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub pulls: Vec<Pull>,
+    pub changed: bool,
+}
+
+/// An open pull request read whole, as one query reads every one of a
+/// branch's (136): its reviews that decide anything, the checks other
+/// systems posted on its head, sluice's own check runs there and when it
+/// was marked ready for review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub pull: Pull,
+    /// Each reviewer's latest review that decides anything, which
+    /// [`approvals`] counts as it counts every review.
+    pub reviews: Vec<Review>,
+    /// Other systems' check runs and commit statuses on its head, the
+    /// latest of each name.
+    pub checks: Vec<Check>,
+    /// sluice's own check runs on its head, each by its name.
+    pub posted: Vec<Posted>,
+    /// When it was marked ready for review, oldest first, the last ten.
+    pub readied: Vec<DateTime<Utc>>,
+}
+
+/// Each reviewer's latest review that decides anything, in the order
+/// given: what GitHub's `latestOpinionatedReviews` holds of `reviews`,
+/// oldest first.
+pub fn latest_opinionated(reviews: &[Review]) -> Vec<Review> {
+    let mut out: Vec<Review> = Vec::new();
+    for r in reviews.iter().filter(|r| r.state != "COMMENTED") {
+        out.retain(|o| o.user != r.user);
+        out.push(r.clone());
+    }
+    out
+}
+
 /// ADR 0044: the name of sluice's check of `task` on `system`.
 pub fn check_name(task: &str, system: Option<&str>) -> String {
     match system {
@@ -156,6 +196,19 @@ pub trait Forge {
 
     /// The open pull requests into `base`.
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>>;
+
+    /// The open pull requests into `base`, and whether their list changed
+    /// since the host last read it; a forge that cannot tell says it did.
+    fn listed(&self, repo: &Repo, base: &str) -> Result<Listed> {
+        Ok(Listed {
+            pulls: self.pulls(repo, base)?,
+            changed: true,
+        })
+    }
+
+    /// Every open pull request into `base` read whole, in one query where
+    /// the forge answers one (136; rule core.32).
+    fn requests(&self, repo: &Repo, base: &str) -> Result<Vec<Request>>;
 
     /// Pull request `number`, open or closed; `None` when there is none.
     fn pull(&self, repo: &Repo, number: u64) -> Result<Option<Pull>>;
@@ -270,5 +323,37 @@ mod tests {
         assert_eq!(approvals(&rs, "head"), 2);
         assert_eq!(approvals(&rs, "old"), 1);
         assert_eq!(approvals(&[], "head"), 0);
+    }
+
+    /// 136: each reviewer's latest review that decides anything counts as
+    /// every review does.
+    #[test]
+    fn the_latest_opinionated_reviews_count_as_every_review() {
+        let rs = [
+            review("ann", "APPROVED", "old"),
+            review("bob", "APPROVED", "head"),
+            review("cat", "APPROVED", "head"),
+            review("cat", "COMMENTED", "head"),
+            review("dan", "APPROVED", "head"),
+            review("dan", "CHANGES_REQUESTED", "head"),
+            review("ann", "APPROVED", "head"),
+            review("ann", "DISMISSED", "head"),
+        ];
+        let latest = latest_opinionated(&rs);
+        assert_eq!(
+            latest
+                .iter()
+                .map(|r| (r.user.as_str(), r.state.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("bob", "APPROVED"),
+                ("cat", "APPROVED"),
+                ("dan", "CHANGES_REQUESTED"),
+                ("ann", "DISMISSED"),
+            ]
+        );
+        for head in ["head", "old"] {
+            assert_eq!(approvals(&latest, head), approvals(&rs, head), "{head}");
+        }
     }
 }
