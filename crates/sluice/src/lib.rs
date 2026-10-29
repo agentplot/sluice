@@ -985,6 +985,7 @@ pub fn run(
             if check {
                 return forecast(
                     &s,
+                    host,
                     pushers,
                     &worktree,
                     head.as_deref(),
@@ -1820,9 +1821,14 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
     }
 }
 
+/// 64, 124, 129: `sluice submit --check`: formed on the branch and its
+/// queue as the host's live reader last read them, asking the remote
+/// nothing, where that reader keeps its tick and its read holds all the
+/// forecast forms from; otherwise read as a round reads them.
 #[allow(clippy::too_many_arguments)]
 fn forecast(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pushers: &dyn Pushers,
     worktree: &str,
     from: Option<&str>,
@@ -1831,9 +1837,12 @@ fn forecast(
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let got = match from {
-        Some(from) => s.forecast_branch(from, branch, after)?,
-        None => s.forecast(worktree, branch, after)?,
+    let got = match forecast_read(s, host, worktree, from, branch, after)? {
+        Some(got) => got,
+        None => match from {
+            Some(from) => s.forecast_branch(from, branch, after)?,
+            None => s.forecast(worktree, branch, after)?,
+        },
     };
     let f = match got {
         Ok(f) => f,
@@ -1852,6 +1861,45 @@ fn forecast(
         Forecast::Clear => LANDED,
         Forecast::Conflict { .. } => CONFLICT,
     })
+}
+
+/// 64, 129: the forecast formed on the read of `branch` in the document of
+/// the host's reader, while that reader keeps its tick (rule core.25):
+/// `--head`'s branch taken from the same read where it holds it, and read
+/// as today, once, where not. `None` where there is no such reader, its
+/// read does not hold the branch, or holds too little to form on.
+fn forecast_read(
+    s: &Sluice<'_>,
+    host: &dyn exec::Host,
+    worktree: &str,
+    from: Option<&str>,
+    branch: &str,
+    after: &[u64],
+) -> Result<Option<Result<Forecasted, SubmitRefusal>>> {
+    let now = std::time::SystemTime::now();
+    let Some(doc) = reader::current(&host.readers()?, &host.repository()?, now)? else {
+        return Ok(None);
+    };
+    let Some(view) = branch_in(&doc, branch) else {
+        return Ok(None);
+    };
+    let Some(from) = from else {
+        let session = s.seams().driver.session(worktree)?;
+        if session.detached {
+            return Ok(None);
+        }
+        return s.forecast_read(&view, &session.head, &session.from.worktree, after);
+    };
+    if let Some(head) = branch_in(&doc, from).and_then(|v| v.revision) {
+        return s.forecast_read(&view, &head, from, after);
+    }
+    let Some(head) = s.seams().branch.read(from)? else {
+        return Ok(Some(Err(SubmitRefusal::NoHead(from.into()))));
+    };
+    Ok(Some(match s.forecast_read(&view, &head, from, after)? {
+        Some(got) => got,
+        None => s.forecast_head(&head, from, branch, after)?,
+    }))
 }
 
 /// A forecast as `submit --check --json` and `exec --json` print it: its

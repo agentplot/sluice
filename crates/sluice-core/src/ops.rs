@@ -706,9 +706,11 @@ impl Sluice<'_> {
         self.forecast_head(&head, from, branch, after)
     }
 
-    /// `own` is the work the head is, as its driver names it: submissions
-    /// of it are left out, as a submission of it would withdraw them (67).
-    fn forecast_head(
+    /// 64, 65, 47a: the forecast of `head` on the branch as a round reads
+    /// it. `own` is the work the head is, as its driver names it:
+    /// submissions of it are left out, as a submission of it would
+    /// withdraw them (67).
+    pub fn forecast_head(
         &self,
         head: &Rev,
         own: &str,
