@@ -42,7 +42,7 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -264,9 +264,11 @@ impl Files {
 /// holds its lock, the document is a read's, a `branches` array and a
 /// whole-second `tick`, and either its last read ended no more than a tick
 /// before `now`, or a read began after it ended, no more than a tick
-/// after. A mark more than a tick ahead of `now` is none. It takes no
-/// lease and never leads: a lock it gets is no reader's, and is dropped at
-/// once.
+/// after. Times are counted in whole seconds, as the tick is: a reader
+/// pauses a whole tick between reads, so what the pause itself takes past
+/// it is no lateness. A mark more than a tick ahead of `now` is none. It
+/// takes no lease and never leads: a lock it gets is no reader's, and is
+/// dropped at once.
 pub fn current(dir: &Path, repository: &str, now: SystemTime) -> Result<Option<Value>> {
     let files = Files::of(dir, repository);
     let Ok(bytes) = std::fs::read(&files.doc) else {
@@ -279,23 +281,24 @@ pub fn current(dir: &Path, repository: &str, now: SystemTime) -> Result<Option<V
         return Ok(None);
     };
     let tick = match (doc.get("branches"), doc.get("tick").and_then(Value::as_u64)) {
-        (Some(Value::Array(_)), Some(tick)) => Duration::from_secs(tick),
+        (Some(Value::Array(_)), Some(tick)) => tick,
         _ => return Ok(None),
+    };
+    // Whether `later` is no more than a tick after `earlier`.
+    let within = |earlier: SystemTime, later: SystemTime| {
+        later
+            .duration_since(earlier)
+            .map_or(true, |d| d.as_secs() <= tick)
     };
     let mark = |path: &Path| {
         let at = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
-        (at <= now + tick).then_some(at)
+        within(now, at).then_some(at)
     };
     let Some(ended) = mark(&files.doc) else {
         return Ok(None);
     };
-    let on_time = now.duration_since(ended).map_or(true, |d| d <= tick);
-    let reading = mark(&files.lock).is_some_and(|began| {
-        began
-            .duration_since(ended)
-            .is_ok_and(|d| !d.is_zero() && d <= tick)
-    });
-    Ok((on_time || reading).then_some(doc))
+    let reading = mark(&files.lock).is_some_and(|began| began > ended && within(ended, began));
+    Ok((within(ended, now) || reading).then_some(doc))
 }
 
 /// The lock on `path`, when no live process holds it. Opening it never
@@ -363,6 +366,8 @@ pub fn untimed(doc: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// A scratch readers directory, removed when dropped.
@@ -795,6 +800,21 @@ mod tests {
             Some(read.clone()),
             "a slow read"
         );
+        // Begun a tick, and what its pause took past it, after the last.
+        mark(&lock, ago(20) + Duration::from_millis(40));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            Some(read.clone()),
+            "a pause's time"
+        );
+        mark(&doc, ago(1) - Duration::from_millis(40));
+        mark(&lock, ago(22));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            Some(read.clone()),
+            "ended a tick ago"
+        );
+        mark(&doc, ago(21));
 
         mark(&lock, ago(18));
         assert_eq!(
