@@ -21,7 +21,6 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -107,15 +106,6 @@ impl GitHub {
     /// The fake API over the fake GitHub kept in `file`; `bare` is the
     /// repository GitHub's git is, if any.
     pub fn start(file: &Path, bare: Option<&Path>) -> GitHub {
-        GitHub::start_on(
-            TcpListener::bind("127.0.0.1:0").expect("a port"),
-            file,
-            bare,
-        )
-    }
-
-    /// The fake on `listener`'s port.
-    pub fn start_on(listener: TcpListener, file: &Path, bare: Option<&Path>) -> GitHub {
         let forge = Arc::new(FileForge::new(file, &repo()));
         let held = forge.clone();
         let bare = bare.map(Path::to_path_buf);
@@ -187,7 +177,7 @@ impl GitHub {
             headers.extend(beside);
             versioned(r, (status, headers, body))
         };
-        let fake = Fake::start_on(listener, move |r| {
+        let fake = Fake::start(move |r| {
             let a = respond(r);
             answering
                 .lock()
