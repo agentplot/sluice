@@ -1351,6 +1351,190 @@ fn the_overview_names_a_hand_pushed_revision() {
     assert_eq!(after["depth"], 0, "{after}");
 }
 
+/// A worktree on `unit/<name>` cut from `base`, with one commit writing
+/// `files`, submitted nowhere: its directory.
+fn worktree(s: &Setup, name: &str, base: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = s.sessions.path().join(name);
+    s.repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        &format!("unit/{name}"),
+        dir.to_str().unwrap(),
+        base,
+    ]);
+    for (path, content) in files {
+        std::fs::write(dir.join(path), content).unwrap();
+    }
+    let at = dir.to_str().unwrap();
+    s.repo.git(&["-C", at, "add", "-A"]);
+    s.repo.git(&["-C", at, "commit", "-q", "-m", name]);
+    dir
+}
+
+/// Every line of `trace`, a `GIT_TRACE` file, that runs a git command
+/// asking a remote anything.
+fn remote_calls(trace: &Path) -> Vec<String> {
+    std::fs::read_to_string(trace)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| {
+            ["git fetch", "git ls-remote", "git push", "git-upload-pack"]
+                .iter()
+                .any(|c| l.contains(c))
+        })
+        .map(String::from)
+        .collect()
+}
+
+/// 64, 129: beside a live reader keeping its tick, whose last read holds
+/// `main`, with `#1` queued on it, and `bolt/y`, both on a remote, a
+/// forecast of `bolt/y` onto `main` takes both from that read and asks
+/// the remote nothing: it forecasts as the read says with the remote gone.
+#[test]
+fn a_forecast_beside_a_current_reader_asks_the_remote_nothing() {
+    let s = Setup::new("forecast-reader", "origin");
+    s.repo.git(&["branch", "bolt/y", "main"]);
+    s.repo
+        .git(&["push", "-q", "origin", "bolt/y:refs/heads/bolt/y"]);
+    s.repo.git(&["fetch", "-q", "origin"]);
+    let out = s.submit_files("one", "main", "main", &[("shared.txt", "one\n")]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = s.submit_files("y", "bolt/y", "bolt/y", &[("shared.txt", "two\n")]);
+    assert!(out.status.success(), "{}", text(&out));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let out = s.sluice(&["step", "bolt/y"]);
+        assert!(out.status.success(), "{}", text(&out));
+        let out = s.sluice(&["status", "bolt/y", "--json", "--all"]);
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        if v["submissions"][0]["state"] == "landed" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{v}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let out = s.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let mut doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    doc["tick"] = 3600.into();
+    let part = |name: &str| {
+        doc["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["branch"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} in {doc}"))
+    };
+    let (main, bolt) = (part("main"), part("bolt/y"));
+    assert!(
+        main["revision"].is_string() && bolt["revision"].is_string(),
+        "{doc}"
+    );
+    let repository = doc["repository"].as_str().unwrap().to_string();
+    let readers = s.state.path().join("sluice/readers");
+    let mut reader =
+        match sluice::reader::Reader::take(&readers, &repository, sluice::VERSION).unwrap() {
+            sluice::reader::Reader::Lead(lead) => lead,
+            sluice::reader::Reader::Follow(_) => panic!("a reader of {repository} already"),
+        };
+    reader.write(&doc).unwrap();
+    let aside = s.origin.path().with_extension("aside");
+    std::fs::rename(s.origin.path(), &aside).unwrap();
+
+    let trace = s.seen.path().join("trace");
+    let out = s
+        .command(s.repo.dir())
+        .args(["submit", "main", "--check", "--head", "bolt/y", "--json"])
+        .env("GIT_TRACE", &trace)
+        .output()
+        .unwrap();
+    std::fs::rename(&aside, s.origin.path()).unwrap();
+    assert_eq!(out.status.code(), Some(sluice::CONFLICT), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["onto"], main["revision"], "{v}");
+    assert_eq!(v["head"], bolt["revision"], "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([1]), "{v}");
+    assert_eq!(
+        v["conflict"]["paths"],
+        serde_json::json!(["shared.txt"]),
+        "{v}"
+    );
+    assert_eq!(remote_calls(&trace), Vec::<String>::new());
+}
+
+/// 64, 124: with no reader on this host, a forecast reads `main` as a
+/// round does: the work another host submitted to it, which this host
+/// does not hold, is fetched, and the forecast is formed against it.
+#[test]
+fn a_forecast_with_no_reader_fetches_another_hosts_work() {
+    let s = Setup::signed("forecast-other-host");
+    let other = Repo::clone_of(s.origin.path(), "forecast-other-host-b");
+    let config = Scratch::new("forecast-other-host-b-config");
+    let state = Scratch::new("forecast-other-host-b-state");
+    std::fs::create_dir_all(config.path().join("sluice")).unwrap();
+    std::fs::write(
+        config.path().join("sluice/config.toml"),
+        format!(
+            "[signing]\nsigner = \"a\"\nkey = {:?}\n\n[peers]\nname = \"b\"\n",
+            s.config.path().join("signing").display().to_string()
+        ),
+    )
+    .unwrap();
+    let sessions = Scratch::new("forecast-other-host-b-sessions");
+    let dir = sessions.path().join("b");
+    other.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "unit/b",
+        dir.to_str().unwrap(),
+        "main",
+    ]);
+    std::fs::write(dir.join("shared.txt"), "b's\n").unwrap();
+    let at = dir.to_str().unwrap();
+    other.git(&["-C", at, "add", "-A"]);
+    other.git(&["-C", at, "commit", "-q", "-m", "b"]);
+    let out = s
+        .command(&dir)
+        .env("XDG_CONFIG_HOME", config.path())
+        .env("XDG_STATE_HOME", state.path())
+        .args(["submit", "main", "--no-wait", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let theirs: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = theirs["id"].as_u64().unwrap();
+    let head = other.rev("unit/b");
+    assert!(
+        !s.repo
+            .git_raw(&["cat-file", "-e", &format!("{head}^{{commit}}")])
+            .status
+            .success(),
+        "b's work is on this host already"
+    );
+
+    let mine = worktree(&s, "a", "main", &[("shared.txt", "a's\n")]);
+    let out = s
+        .command(&mine)
+        .args(["submit", "main", "--check", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::CONFLICT), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ahead"], serde_json::json!([id]), "{v}");
+    assert_eq!(v["conflict"]["with"][0]["id"], id, "{v}");
+    assert_eq!(
+        v["conflict"]["paths"],
+        serde_json::json!(["shared.txt"]),
+        "{v}"
+    );
+}
+
 /// A branch whose policy this sluice refuses is refused alone (26, S64).
 mod refused_alone {
     use super::*;
