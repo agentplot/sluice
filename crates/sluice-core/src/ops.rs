@@ -1039,6 +1039,15 @@ impl Sluice<'_> {
         })
     }
 
+    /// 129: whether `branch`'s records hold a submission not out, the
+    /// question `sluice run` asks of each branch on every pass, read from
+    /// the records alone: no revision of the branch and no policy, so a
+    /// branch with nothing in play costs its pass the records' read.
+    pub fn in_play(&self, branch: &str) -> Result<bool> {
+        let line = Line::load(branch, self.seams.state.read_held(branch)?)?;
+        Ok(line.subs.values().any(|s| !s.state.is_out()))
+    }
+
     /// 26: a branch's queue as last written, at the revision its records
     /// last saw, as the overview reads it (ADR 0046): a remote branch is
     /// not fetched for a read. Only a branch whose records have seen no
@@ -1596,6 +1605,10 @@ mod tests {
             Ok((branch == BRANCH).then(|| Rev::new("tip")))
         }
 
+        fn held(&self, branch: &str) -> Result<Option<Rev>> {
+            Branch::read(self, branch)
+        }
+
         fn copy(&self, _: &str) -> Result<HostCopy> {
             Ok(HostCopy::Itself)
         }
@@ -1640,6 +1653,14 @@ mod tests {
 
         fn wait_lock<'a>(&'a self, _: &str) -> Result<Box<dyn Guard + 'a>> {
             Ok(Box::new(Held))
+        }
+
+        fn refresh(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn read_held(&self, branch: &str) -> Result<Snapshot> {
+            Records::read(self, branch)
         }
 
         fn read(&self, branch: &str) -> Result<Snapshot> {
@@ -2313,5 +2334,46 @@ mod tests {
         assert!(!h.sluice().guarding().protects("unit/x", &tip).unwrap());
         let e = format!("{:#}", h.sluice().protects(BRANCH, &tip).unwrap_err());
         assert!(e.contains("later"), "{e}");
+    }
+
+    /// 129: whether a branch is in play is read from its records alone,
+    /// no revision and no policy read: none while nothing is queued, and
+    /// one queued submission is in play.
+    #[test]
+    fn in_play_reads_the_records_alone() {
+        let f = sluice_fakes::Fakes::new();
+        f.world.init(
+            "main",
+            &[(POLICY_PATH, "[branches.main]\nrequired = [\"#gate\"]\n")],
+        );
+        let seams = Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        };
+        let s = Sluice::new(seams, &Noon);
+        let (revisions, files) = (f.world.revision_reads(), f.world.file_reads());
+        assert!(!s.in_play("main").unwrap());
+        assert!(!s.in_play("none").unwrap());
+        assert_eq!(f.world.revision_reads(), revisions);
+        assert_eq!(f.world.file_reads(), files);
+
+        let head = f.world.work(&f.world.tip("main"), &[("a", Some("1"))]);
+        f.world.session("unit/a", "agent", &head);
+        s.submit(&SubmitRequest {
+            worktree: "unit/a".into(),
+            branch: "main".into(),
+            after: vec![],
+            priority: 0,
+            subject: None,
+        })
+        .unwrap()
+        .unwrap();
+        let (revisions, files) = (f.world.revision_reads(), f.world.file_reads());
+        assert!(s.in_play("main").unwrap());
+        assert_eq!(f.world.revision_reads(), revisions);
+        assert_eq!(f.world.file_reads(), files);
     }
 }

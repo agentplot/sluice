@@ -947,6 +947,13 @@ pub trait Branch {
     /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
 
+    /// 129: the branch's revision as the host's own files hold it, with no
+    /// fetch: a branch in the host's own refs as [`Branch::read`] reads it,
+    /// and a branch on a remote at its revision as last fetched. What a
+    /// reader's tick that decides nothing reads; a round, a submission and
+    /// a status read with [`Branch::read`].
+    fn held(&self, branch: &str) -> Result<Option<Rev>>;
+
     /// 124: what this host holds of the branch apart from it, read on the
     /// host alone, with no fetch.
     fn copy(&self, branch: &str) -> Result<HostCopy>;
@@ -1303,6 +1310,18 @@ pub trait State {
     /// 61: the branch's live records, and the version they were read at:
     /// nothing under [`FINISHED`] (131).
     fn read(&self, branch: &str) -> Result<Snapshot>;
+
+    /// 129: ask each remote that keeps branches' records, once, for the
+    /// records of every branch on it and the hosts' signs of life: what a
+    /// reader's tick does first. Records in the host's own files need no
+    /// asking. A remote that refuses leaves every branch on it read as last
+    /// fetched, [`State::stale`] naming the refusal, and fails nothing.
+    fn refresh(&self) -> Result<()>;
+
+    /// 129: the branch's records as the host's own files hold them, after
+    /// the last [`State::refresh`], with no fetch: what a reader's tick
+    /// that decides nothing reads. A round reads with [`State::read`].
+    fn read_held(&self, branch: &str) -> Result<Snapshot>;
 
     /// 80: why the branch's last read could not reach the records it keeps
     /// elsewhere and read what was last fetched; `None` when the read was

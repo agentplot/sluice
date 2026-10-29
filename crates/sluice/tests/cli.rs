@@ -7401,8 +7401,12 @@ mod refused_alone {
             self.host.repository_gone(repository)
         }
 
-        fn holds_policy(&self) -> anyhow::Result<bool> {
-            self.host.holds_policy()
+        fn tips(&self) -> anyhow::Result<Vec<sluice_seams::Rev>> {
+            self.host.tips()
+        }
+
+        fn holds_policy(&self, tips: &[sluice_seams::Rev]) -> anyhow::Result<bool> {
+            self.host.holds_policy(tips)
         }
 
         fn readers(&self) -> anyhow::Result<std::path::PathBuf> {
@@ -7467,5 +7471,295 @@ mod refused_alone {
             "{out}"
         );
         assert_eq!(f.world.started().len(), 1, "{BRANCH}'s run started: {out}");
+    }
+}
+
+/// What `sluice run` reads of a branch's policy and records from pass to
+/// pass over the fakes (129).
+mod read_once {
+    use std::cell::Cell;
+    use std::path::Path;
+
+    use clap::Parser;
+    use sluice::profiles::local_files::LocalFiles;
+    use sluice::{run, Cli, Pause};
+    use sluice_core::policy::POLICY_PATH;
+    use sluice_core::{Seams, Sluice, SubmitRequest};
+    use sluice_fakes::Fakes;
+    use sluice_seams::State as _;
+
+    use super::support::{self, Scratch};
+    use super::{setup, work, Between, Rounds, BRANCH};
+
+    /// `sluice <args>` over `seams`, `pause` between its passes.
+    fn on(f: &Fakes, seams: Seams<'_>, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
+        let cli =
+            Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
+        let mut out = Vec::new();
+        let host = support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        };
+        let code = run(cli, seams, &host, &(), &(), &f.clock, pause, &mut out).unwrap();
+        (code, String::from_utf8(out).unwrap())
+    }
+
+    /// A submission of `worktree`'s work on the tip, queued.
+    fn queue(f: &Fakes, worktree: &str, path: &str) {
+        work(f, worktree, "agent", &[(path, Some("n"))]);
+        let (code, out) =
+            super::sluice(f, &["submit", BRANCH, "--worktree", worktree, "--no-wait"]);
+        assert_eq!(code, 0, "{out}");
+    }
+
+    /// How many times `sluice run --rounds <rounds>` read the policy from
+    /// git, over a branch whose submission's run never ends, so every
+    /// pass runs a round.
+    fn policy_reads_over(rounds: &str) -> usize {
+        let f = setup();
+        f.world.hangs("plugin:test");
+        f.world.hangs("tests:t-batch-cards");
+        queue(&f, "unit/a", "plugin/lib/plan.py");
+        let before = f.world.reads_of(POLICY_PATH);
+        let (_, out) = on(
+            &f,
+            f.seams(),
+            &Rounds(Cell::new(0)),
+            &["run", "--rounds", rounds],
+        );
+        assert!(!out.contains("could not be read"), "{out}");
+        f.world.reads_of(POLICY_PATH) - before
+    }
+
+    /// reader-tick, "Policy read once while the revision stands": six
+    /// passes whose rounds read the policy at one revision read it from
+    /// git as often as one pass does.
+    #[test]
+    fn the_policy_is_read_once_while_the_revision_stands() {
+        let one = policy_reads_over("1");
+        assert!(one >= 1, "a round reads the policy");
+        assert_eq!(policy_reads_over("6"), one);
+    }
+
+    /// How a run of `rounds` passes over a branch whose revision holds a
+    /// policy sluice refuses went, and how many times it read the policy.
+    fn refused_over(rounds: &str) -> (i32, String, usize) {
+        let f = setup();
+        queue(&f, "unit/a", "plugin/lib/plan.py");
+        f.world
+            .hand_commit(BRANCH, &[(POLICY_PATH, Some("[branches.\"bolt/*\"\n"))]);
+        let before = f.world.reads_of(POLICY_PATH);
+        let (code, out) = on(
+            &f,
+            f.seams(),
+            &Rounds(Cell::new(0)),
+            &["run", "--rounds", rounds],
+        );
+        (code, out, f.world.reads_of(POLICY_PATH) - before)
+    }
+
+    /// reader-tick, "A refused policy stays refused at its revision": three
+    /// passes say the branch passed by in one pass's words, once, and read
+    /// the policy from git as often as one pass does.
+    #[test]
+    fn a_refused_policy_stays_refused_at_its_revision() {
+        let (code, one, reads) = refused_over("1");
+        assert_eq!(code, sluice::INTERNAL, "{one}");
+        let said = format!("{BRANCH} could not be read, passed by: ");
+        let words: Vec<&str> = one.lines().filter(|l| l.starts_with(&said)).collect();
+        assert_eq!(words.len(), 1, "{one}");
+        let (code, three, again) = refused_over("3");
+        assert_eq!(code, sluice::INTERNAL, "{three}");
+        let lines: Vec<&str> = three.lines().filter(|l| l.starts_with(&said)).collect();
+        assert_eq!(lines, words, "{three}");
+        assert_eq!(again, reads);
+    }
+
+    /// The fakes, with the records in local files under `dir`.
+    fn with_files<'a>(f: &'a Fakes, files: &'a LocalFiles) -> Seams<'a> {
+        Seams {
+            state: files,
+            ..f.seams()
+        }
+    }
+
+    /// The fakes over local files under a scratch directory holding one
+    /// landed submission of the branch.
+    fn landed_on_files(name: &str) -> (Fakes, Scratch) {
+        let f = setup();
+        let dir = Scratch::new(name);
+        let files = LocalFiles::new(dir.path());
+        work(&f, "unit/a", "agent", &[("plugin/lib/plan.py", Some("a"))]);
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &Rounds(Cell::new(0)),
+            &["submit", BRANCH, "--worktree", "unit/a"],
+        );
+        assert_eq!(code, sluice::LANDED, "{out}");
+        (f, dir)
+    }
+
+    /// A submission of `worktree`'s work, written to the records under
+    /// `dir` by another process.
+    fn submit_elsewhere(f: &Fakes, dir: &Path, worktree: &str, path: &str) {
+        work(f, worktree, "agent-b", &[(path, Some("b"))]);
+        let files = LocalFiles::new(dir);
+        let s = Sluice::new(with_files(f, &files), &f.clock);
+        s.submit(&SubmitRequest {
+            worktree: worktree.into(),
+            branch: BRANCH.into(),
+            after: vec![],
+            priority: 0,
+            subject: None,
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    /// The state of the branch's submission `id` in the records under
+    /// `dir`.
+    fn state_of(f: &Fakes, dir: &Path, id: u64) -> String {
+        let files = LocalFiles::new(dir);
+        let (_, out) = on(
+            f,
+            with_files(f, &files),
+            &Rounds(Cell::new(0)),
+            &["status", &id.to_string(), "--json"],
+        );
+        super::json(&out)["state"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// reader-tick, "Records read again once they moved": between three
+    /// idle passes the branch's records change on disk under their
+    /// version, which no write of sluice's does, and are not walked again;
+    /// once another process's submission moves their version, the next
+    /// pass reads them whole and queues it, as it always has (26, 129).
+    #[test]
+    fn records_are_read_again_once_they_moved() {
+        let (f, dir) = landed_on_files("tick-records");
+        let records = dir.path().join("sluice").join(BRANCH).join("branch.json");
+        let kept = std::fs::read(&records).unwrap();
+        let between = |n: usize| match n {
+            1 => std::fs::write(&records, "not the records\n").unwrap(),
+            3 => {
+                std::fs::write(&records, &kept).unwrap();
+                submit_elsewhere(&f, dir.path(), "unit/b", "tests/t_cards.py");
+            }
+            _ => {}
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 8,
+            between: &between,
+        };
+        let files = LocalFiles::new(dir.path());
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &pause,
+            &["run", "--rounds", "9"],
+        );
+        assert_eq!(code, 0, "walked while their version stood: {out}");
+        assert!(!out.contains("could not be read"), "{out}");
+        assert_eq!(state_of(&f, dir.path(), 2), "landed", "{out}");
+    }
+
+    /// Every file under `from`, copied to `to`.
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let at = to.join(e.file_name());
+            match e.file_type().unwrap().is_dir() {
+                true => copy(&e.path(), &at),
+                false => {
+                    std::fs::copy(e.path(), &at).unwrap();
+                }
+            }
+        }
+    }
+
+    /// The files of a branch's records under `dir`, by path, leaving out
+    /// the version, the lock and anything dotted.
+    fn branch_files(dir: &Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        fn visit(at: &Path, base: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+            for e in std::fs::read_dir(at).unwrap() {
+                let e = e.unwrap();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || (at == base && (name == "version" || name == "lock")) {
+                    continue;
+                }
+                match e.file_type().unwrap().is_dir() {
+                    true => visit(&e.path(), base, out),
+                    false => {
+                        let rel = e.path().strip_prefix(base).unwrap().display().to_string();
+                        out.insert(rel, std::fs::read_to_string(e.path()).unwrap());
+                    }
+                }
+            }
+        }
+        visit(dir, dir, &mut out);
+        out
+    }
+
+    /// reader-tick, "A submission written mid-tick is not lost": a write
+    /// of a submission to the branch's records stopped with its pending
+    /// write on disk, none of its files changed; the next pass reads the
+    /// records as that write leaves them, and the submission lands (51).
+    #[test]
+    fn a_submission_written_mid_tick_is_not_lost() {
+        let (f, dir) = landed_on_files("tick-pending");
+        let branch = dir.path().join("sluice").join(BRANCH);
+        let between = |n: usize| {
+            if n != 1 {
+                return;
+            }
+            // The write as another process made it, in a copy of the
+            // records, left pending here.
+            let elsewhere = Scratch::new("tick-pending-elsewhere");
+            copy(dir.path(), elsewhere.path());
+            submit_elsewhere(&f, elsewhere.path(), "unit/b", "tests/t_cards.py");
+            let written = elsewhere.path().join("sluice").join(BRANCH);
+            let (was, now) = (branch_files(&branch), branch_files(&written));
+            let put: std::collections::BTreeMap<&String, &String> = now
+                .iter()
+                .filter(|(p, t)| was.get(*p) != Some(*t))
+                .collect();
+            let remove: Vec<&String> = was.keys().filter(|p| !now.contains_key(*p)).collect();
+            let version: u64 = std::fs::read_to_string(written.join("version"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let pending = serde_json::json!({
+                "version": version,
+                "put": put,
+                "append": {},
+                "lengths": {},
+                "remove": remove,
+            });
+            std::fs::write(branch.join(".pending.json"), pending.to_string()).unwrap();
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 6,
+            between: &between,
+        };
+        let files = LocalFiles::new(dir.path());
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &pause,
+            &["run", "--rounds", "7"],
+        );
+        assert_eq!(code, 0, "{out}");
+        assert!(!branch.join(".pending.json").exists(), "{out}");
+        assert_eq!(state_of(&f, dir.path(), 2), "landed", "{out}");
+        assert!(files.read(BRANCH).unwrap().version > 0);
     }
 }

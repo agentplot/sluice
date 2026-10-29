@@ -4,6 +4,8 @@
 //! ancestry, so a conflict is exactly what `git merge` would report (ADR
 //! 0009). `docs/plans/phase-1-integrations.md` section 1 is the reference.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -21,6 +23,19 @@ const EMAIL: &str = "sluice@localhost";
 pub struct LocalRefs {
     repo: gix::Repository,
     git_dir: PathBuf,
+    /// The repository as its configuration was when `<common>/config` had
+    /// the length and modification time kept with it: gix reads the
+    /// configuration once, when it opens a repository, so a remote added
+    /// since is seen by opening it again (129).
+    config: RefCell<(Option<Stamp>, gix::Repository)>,
+}
+
+/// A file's length and modification time, `None` when it can't be read.
+type Stamp = (u64, std::time::SystemTime);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()?))
 }
 
 impl LocalRefs {
@@ -29,7 +44,116 @@ impl LocalRefs {
         let repo = gix::open(path)
             .map_err(|e| anyhow!("opening the repository at {}: {e}", path.display()))?;
         let git_dir = repo.git_dir().to_path_buf();
-        Ok(LocalRefs { repo, git_dir })
+        // Taken after the opening, so a configuration that moved between
+        // the two is read again at the next asking.
+        let at = stamp(&repo.common_dir().join("config"));
+        let config = RefCell::new((at, repo.clone()));
+        Ok(LocalRefs {
+            repo,
+            git_dir,
+            config,
+        })
+    }
+
+    /// The repository with its configuration as `<common>/config` holds it
+    /// now, opened again only when that file's length or modification time
+    /// moved since it was last read (129).
+    fn configured(&self) -> Result<std::cell::Ref<'_, gix::Repository>> {
+        let now = stamp(&self.repo.common_dir().join("config"));
+        if self.config.borrow().0 != now {
+            let repo = gix::open(&self.git_dir).map_err(|e| {
+                anyhow!("opening the repository at {}: {e}", self.git_dir.display())
+            })?;
+            *self.config.borrow_mut() = (now, repo);
+        }
+        Ok(std::cell::Ref::map(self.config.borrow(), |(_, r)| r))
+    }
+
+    /// The names of the repository's remotes, as `git remote` lists them,
+    /// read with no process (129).
+    pub fn remotes(&self) -> Result<Vec<String>> {
+        Ok(self
+            .configured()?
+            .remote_names()
+            .into_iter()
+            .map(|n| n.to_string())
+            .collect())
+    }
+
+    /// The fetch address of the remote `remote` as configured, before any
+    /// `insteadOf`: the forge it names is the one an identity is for. Read
+    /// with no process (129).
+    pub fn remote_url(&self, remote: &str) -> Result<String> {
+        let repo = self.configured()?;
+        let url = repo
+            .try_find_remote_without_url_rewrite(remote)
+            .transpose()
+            .map_err(|e| anyhow!("reading the remote {remote:?}: {e}"))?
+            .and_then(|r| r.url(gix::remote::Direction::Fetch).map(|u| u.to_bstring()));
+        match url {
+            Some(url) => Ok(url.to_string()),
+            None => bail!("the remote {remote:?} has no url"),
+        }
+    }
+
+    /// The repository's default branch: the branch its common directory's
+    /// HEAD names, a bare repository's or the main checkout's, as `git
+    /// symbolic-ref --short -q HEAD` names it there. `None` when HEAD names
+    /// no branch. Read with no process (129).
+    pub fn default_branch(&self) -> Result<Option<String>> {
+        let head = self
+            .repo
+            .try_find_reference("main-worktree/HEAD")
+            .map_err(|e| anyhow!("reading the repository's HEAD: {e}"))?;
+        Ok(head.and_then(|h| match h.target() {
+            gix::refs::TargetRef::Symbolic(name) => Some(name.shorten().to_string()),
+            gix::refs::TargetRef::Object(_) => None,
+        }))
+    }
+
+    /// The repository's branches, `refs/heads/*`, by name, read with no
+    /// process (129).
+    pub fn branch_names(&self) -> Result<Vec<String>> {
+        let refs = self
+            .repo
+            .references()
+            .map_err(|e| anyhow!("reading the branches: {e}"))?;
+        let mut names = Vec::new();
+        for r in refs
+            .local_branches()
+            .map_err(|e| anyhow!("reading the branches: {e}"))?
+        {
+            let r = r.map_err(|e| anyhow!("reading the branches: {e}"))?;
+            if let Some(name) = r.name().as_bstr().to_string().strip_prefix("refs/heads/") {
+                names.push(name.to_string());
+            }
+        }
+        Ok(names)
+    }
+
+    /// The tips of every branch the host holds, its own and each remote's
+    /// tracking branch as last fetched, each once, read with no process
+    /// (129).
+    pub fn tips(&self) -> Result<Vec<Rev>> {
+        let refs = self
+            .repo
+            .references()
+            .map_err(|e| anyhow!("reading the branches: {e}"))?;
+        let mut tips: Vec<Rev> = Vec::new();
+        let listed = refs
+            .local_branches()
+            .and_then(|l| Ok(l.chain(refs.remote_branches()?)))
+            .map_err(|e| anyhow!("reading the branches: {e}"))?;
+        for r in listed {
+            let mut r = r.map_err(|e| anyhow!("reading the branches: {e}"))?;
+            // A ref that names nothing, as git's listing passes it by.
+            let Ok(id) = r.peel_to_id() else { continue };
+            let tip = Rev::new(id.to_string());
+            if !tips.contains(&tip) {
+                tips.push(tip);
+            }
+        }
+        Ok(tips)
     }
 
     /// The repository's common git directory, the same from every
@@ -54,6 +178,71 @@ impl LocalRefs {
         let Some(mut r) = found else { return Ok(None) };
         let id = r.peel_to_id().map_err(|e| anyhow!("peeling {name}: {e}"))?;
         Ok(Some(Rev::new(id.to_string())))
+    }
+
+    /// Every ref under `prefix`, such as `refs/sluice-fetched/origin/state/`,
+    /// by the rest of its name, with the revision it names; read with no
+    /// process (129).
+    pub fn refs_under(&self, prefix: &str) -> Result<Vec<(String, Rev)>> {
+        let refs = self
+            .repo
+            .references()
+            .map_err(|e| anyhow!("reading {prefix}: {e}"))?;
+        let mut out = Vec::new();
+        for r in refs
+            .prefixed(prefix)
+            .map_err(|e| anyhow!("reading {prefix}: {e}"))?
+        {
+            let mut r = r.map_err(|e| anyhow!("reading {prefix}: {e}"))?;
+            let name = r.name().as_bstr().to_string();
+            let Some(rest) = name.strip_prefix(prefix) else {
+                continue;
+            };
+            let id = r.peel_to_id().map_err(|e| anyhow!("peeling {name}: {e}"))?;
+            out.push((rest.to_string(), Rev::new(id.to_string())));
+        }
+        Ok(out)
+    }
+
+    /// Every file of `commit`'s tree, by path, with its blob and its
+    /// bytes, read with no process (129): what `git ls-tree -r` lists and
+    /// `git cat-file --batch` reads of it.
+    pub fn tree_files(&self, commit: &str) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
+        let id = ObjectId::from_hex(commit.as_bytes())
+            .map_err(|e| anyhow!("{commit} is not an object id: {e}"))?;
+        let tree = self
+            .repo
+            .find_object(id)
+            .map_err(|e| anyhow!("reading {commit}: {e}"))?
+            .peel_to_tree()
+            .map_err(|e| anyhow!("{commit} has no tree: {e}"))?;
+        let mut files = BTreeMap::new();
+        self.files_of(&tree, "", &mut files)?;
+        Ok(files)
+    }
+
+    fn files_of(
+        &self,
+        tree: &gix::Tree<'_>,
+        under: &str,
+        files: &mut BTreeMap<String, (String, Vec<u8>)>,
+    ) -> Result<()> {
+        let decoded = tree
+            .decode()
+            .map_err(|e| anyhow!("reading the tree {}: {e}", tree.id))?;
+        for e in &decoded.entries {
+            let path = format!("{under}{}", e.filename);
+            let object = self
+                .repo
+                .find_object(e.oid)
+                .map_err(|err| anyhow!("reading {path}: {err}"))?;
+            if e.mode.is_tree() {
+                self.files_of(&object.into_tree(), &format!("{path}/"), files)?;
+            } else if e.mode.is_blob_or_symlink() {
+                files.insert(path, (e.oid.to_string(), object.data.clone()));
+            }
+        }
+        Ok(())
     }
 
     /// Set `branch`, the host's copy of a branch kept on a remote, to `to`
@@ -244,6 +433,11 @@ fn is_object_id(field: &[u8]) -> bool {
 impl Branch for LocalRefs {
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.read_ref(&full_name(branch))
+    }
+
+    /// The host's ref is the branch here: as [`LocalRefs::read`] reads it.
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        self.read(branch)
     }
 
     /// The host's ref is the branch here: it has no copy apart from it.

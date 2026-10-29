@@ -124,6 +124,14 @@ pub trait Rig {
     /// The number of times the branch was moved.
     fn moves(&self) -> usize;
 
+    /// Whether the branch is kept on a remote (C.7).
+    fn on_remote(&self) -> bool;
+
+    /// Another host's commit applying `changes` on the branch where it is
+    /// kept, its remote or the host's own refs, with nothing fetched to
+    /// this host: the branch's new revision (129).
+    fn elsewhere(&self, changes: &[(&str, Option<&str>)]) -> Rev;
+
     /// The places made, and those not yet released.
     fn made_places(&self) -> Vec<String>;
     fn live_places(&self) -> Vec<String>;
@@ -444,6 +452,14 @@ impl Rig for Harness {
 
     fn requests(&self) -> Vec<RunRequest> {
         self.w().requests()
+    }
+
+    fn on_remote(&self) -> bool {
+        self.w().is_on_remote(BRANCH)
+    }
+
+    fn elsewhere(&self, changes: &[(&str, Option<&str>)]) -> Rev {
+        self.w().hand_commit(BRANCH, changes)
     }
 
     fn moves(&self) -> usize {

@@ -100,6 +100,11 @@ pub struct BranchView {
     /// Nothing else of the branch is read, and no other branch is hidden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unread: Option<String>,
+    /// 80, 129: the read of the branch's records on its remote that could
+    /// not be made, in the remote's words: what is shown is what was last
+    /// fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<String>,
 }
 
 impl BranchView {
@@ -122,6 +127,7 @@ impl BranchView {
             held: None,
             held_checkouts: Vec::new(),
             unread: Some(format!("{why:#}")),
+            stale: None,
         }
     }
 }
@@ -262,6 +268,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         held: line.doc.held.clone(),
         held_checkouts: line.doc.failed_releases.clone(),
         unread: None,
+        stale: None,
     })
 }
 
@@ -370,8 +377,11 @@ impl Sluice<'_> {
     /// 26, 61: one branch's part of the overview, as last written, read
     /// at the revision its records last saw: what `sluice status` and a
     /// waiting command show of its combinations (ADR 0042).
+    ///
+    /// 129: the records as the host holds them since the tick's ask, with
+    /// no fetch, and, where that ask was refused, its words.
     pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
-        let snapshot = self.seams.state.read(branch)?;
+        let snapshot = self.seams.state.read_held(branch)?;
         let base = Line::load(branch, snapshot.clone())?.doc.base;
         let policy = match &base {
             Some(rev) => self
@@ -383,13 +393,15 @@ impl Sluice<'_> {
             Some(p) => p.rules_for(branch)?.cloned(),
             None => None,
         };
-        branch_view(BranchRead {
+        let mut view = branch_view(BranchRead {
             executor: policy.and_then(|p| p.limits.executor),
             progress: self.seams.state.progress(branch)?,
             branch: branch.to_string(),
             snapshot,
             rules,
-        })
+        })?;
+        view.stale = self.seams.state.stale(branch).map(|r| r.to_string());
+        Ok(view)
     }
 }
 
@@ -415,6 +427,7 @@ pub struct HostView {
 impl Sluice<'_> {
     /// Every host serving a remote, by its last sign of life. A reader:
     /// what this host has observed of each beat is read, never written.
+    /// 129: after a tick's ask, the signs of life it fetched.
     pub fn hosts(&self) -> Result<Vec<HostView>> {
         let now = self.now();
         let mut out = Vec::new();
@@ -678,6 +691,7 @@ mod tests {
             held: None,
             held_checkouts: Vec::new(),
             unread: None,
+            stale: None,
         }
     }
 

@@ -11,12 +11,12 @@ mod support;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use support::{Repo, Scratch};
+use support::{OnDisk, Repo, Scratch};
 
 const POLICY: &str = "[tests]\nrunner = \"command\"\ncommand = \"true\"\n";
 
@@ -28,17 +28,17 @@ const ENDS_WITHIN: Duration = Duration::from_secs(10);
 struct Watch {
     child: Child,
     lines: mpsc::Receiver<String>,
-    state: Scratch,
-    _config: Scratch,
+    /// Where what it says on stderr is kept.
+    stderr: PathBuf,
+    _own: Option<(Scratch, Scratch)>,
 }
 
 impl Watch {
     fn start(dir: &Path) -> Watch {
         let config = Scratch::new("watch-config");
         let state = Scratch::new("watch-state");
-        let stderr = File::create(state.path().join("stderr")).unwrap();
-        let mut child = support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
-            .args(["overview", "--json", "--watch"])
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        support::isolated(&mut c)
             .current_dir(dir)
             .env("XDG_CONFIG_HOME", config.path())
             .env("XDG_STATE_HOME", state.path())
@@ -46,9 +46,23 @@ impl Watch {
             .env_remove("SLUICE_OTEL")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .stdin(Stdio::null())
+            .stdin(Stdio::null());
+        let stderr = state.path().join("stderr");
+        Watch::spawn(c, stderr, Some((state, config)))
+    }
+
+    /// A watch of `d`'s repository, with its config, state and counting
+    /// git.
+    fn of(d: &OnDisk) -> Watch {
+        let stderr = d.state.path().join("watch-stderr");
+        Watch::spawn(d.command(d.repo.dir()), stderr, None)
+    }
+
+    fn spawn(mut c: Command, stderr: PathBuf, own: Option<(Scratch, Scratch)>) -> Watch {
+        let mut child = c
+            .args(["overview", "--json", "--watch"])
             .stdout(Stdio::piped())
-            .stderr(stderr)
+            .stderr(File::create(&stderr).unwrap())
             .spawn()
             .unwrap();
         let out = BufReader::new(child.stdout.take().unwrap());
@@ -63,8 +77,8 @@ impl Watch {
         Watch {
             child,
             lines,
-            state,
-            _config: config,
+            stderr,
+            _own: own,
         }
     }
 
@@ -87,6 +101,19 @@ impl Watch {
         self.lines.iter().map(|l| parse(&l)).collect()
     }
 
+    /// Every line it printed within `within`, while it goes on.
+    fn lines_within(&self, within: Duration) -> Vec<serde_json::Value> {
+        let until = Instant::now() + within;
+        let mut lines = Vec::new();
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            match self.lines.recv_timeout(left) {
+                Ok(l) => lines.push(parse(&l)),
+                Err(_) => break,
+            }
+        }
+        lines
+    }
+
     /// The first line it printed.
     fn first_line(&self) -> serde_json::Value {
         let line = self
@@ -98,7 +125,7 @@ impl Watch {
 
     /// What it said on stderr so far.
     fn stderr(&self) -> String {
-        std::fs::read_to_string(self.state.path().join("stderr")).unwrap_or_default()
+        std::fs::read_to_string(&self.stderr).unwrap_or_default()
     }
 }
 
@@ -180,4 +207,97 @@ fn a_watch_goes_on_where_the_policy_is_on_a_branch_other_than_heads() {
     repo.branch("bolt/x", "main", &[(".config/sluice.toml", Some(POLICY))]);
     repo.git(&["switch", "-q", "main"]);
     assert_goes_on(repo.dir());
+}
+
+/// A policy a branch's records can be kept under.
+const MAIN: &str =
+    "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n[branches.main]\ntimeout = \"1m\"\n";
+
+/// How long a watch is watched for further starts: two ticks at least,
+/// the watch pausing a second between them.
+const TICKS: Duration = Duration::from_millis(2500);
+
+/// overview-reader, "Set up with nothing submitted, watched for many
+/// ticks": no records, `main` holding the policy; the watch, the reader,
+/// goes on, and asks git nothing once it has printed its first line
+/// (129).
+#[test]
+fn a_set_up_repository_with_nothing_submitted_is_watched_with_no_git() {
+    let d = OnDisk::new("watched-unsubmitted", MAIN);
+    let mut watch = Watch::of(&d);
+    let first = watch.first_line();
+    assert_eq!(first["branches"], serde_json::json!([]), "{first}");
+    assert!(first.get("set_up").is_none(), "{first}");
+    let before = d.git.count();
+    let status = watch.ended_within(TICKS);
+    assert!(status.is_none(), "{status:?}: {}", watch.stderr());
+    assert_eq!(d.git.count(), before, "{:?}", &d.git.starts()[before..]);
+}
+
+/// overview-reader, "The policy removed while a watch runs": `main`, the
+/// one branch holding the policy, moves to a commit removing it; the
+/// watch asks again at its next tick and ends on `"set_up": false` (129).
+#[test]
+fn a_watch_ends_once_the_policy_is_removed_while_it_runs() {
+    let d = OnDisk::new("watched-removed", MAIN);
+    let mut watch = Watch::of(&d);
+    let first = watch.first_line();
+    assert!(first.get("set_up").is_none(), "{first}");
+    d.repo.git(&["rm", "-q", ".config/sluice.toml"]);
+    d.repo.git(&["commit", "-q", "-m", "no sluice"]);
+    let status = watch.ended_within(ENDS_WITHIN);
+    assert!(
+        status.is_some_and(|s| s.success()),
+        "{status:?}: {}",
+        watch.stderr()
+    );
+    let lines = watch.all_lines();
+    let last = lines.last().expect("a line after the first");
+    assert_eq!(last["branches"], serde_json::json!([]), "{last}");
+    assert_eq!(last["set_up"], false, "{last}");
+}
+
+/// reader-tick, "A watch of a set-up repository with nothing queued" and
+/// "Held worktrees are named without git": with one landed submission
+/// and the repository's own worktree on `main`, every line the watch, the
+/// reader, prints names that worktree under `sessions`, and it starts git
+/// no more after its first line (129).
+#[test]
+fn a_watch_with_nothing_queued_names_held_worktrees_with_no_git() {
+    let d = OnDisk::new("watched-idle", MAIN);
+    d.land("a");
+    let watch = Watch::of(&d);
+    let first = watch.first_line();
+    let before = d.git.count();
+    let mut lines = vec![first];
+    lines.extend(watch.lines_within(TICKS));
+    let own = std::fs::canonicalize(d.repo.dir()).unwrap();
+    for line in &lines {
+        assert_eq!(line["branches"][0]["branch"], "main", "{line}");
+        let names = line["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["branch"] == "main" && s["worktree"] == own.to_str().unwrap());
+        assert!(names, "{line}");
+    }
+    assert_eq!(d.git.count(), before, "{:?}", &d.git.starts()[before..]);
+}
+
+/// reader-tick, "Policy read again once the branch moves": `main` lands a
+/// revision whose policy sets `parallel = 4` while a watch, the reader,
+/// runs; its next line shows `main` testing up to 4 at once (56, 129).
+#[test]
+fn a_watch_reads_the_policy_again_once_the_branch_moves() {
+    let d = OnDisk::new("watched-moved", &format!("{MAIN}parallel = 2\n"));
+    d.land("a");
+    let watch = Watch::of(&d);
+    let first = watch.first_line();
+    assert_eq!(first["branches"][0]["branch"], "main", "{first}");
+    assert_eq!(first["branches"][0]["parallel"], 2, "{first}");
+    let policy = format!("{MAIN}parallel = 4\n");
+    d.land_with("b", &[(".config/sluice.toml", &policy)]);
+    let lines = watch.lines_within(ENDS_WITHIN);
+    let last = lines.last().expect("a line once main moved");
+    assert_eq!(last["branches"][0]["parallel"], 4, "{lines:?}");
 }

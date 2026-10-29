@@ -21,12 +21,15 @@ use crate::reader::{no_sluice, untimed, Reader};
 use crate::told::{self, Kind};
 use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
-/// Every branch's part, and the whole document as `--json` prints it.
+/// Every branch's part, and the whole document as `--json` prints it:
+/// each remote that keeps branches' records asked once, first, and every
+/// branch read as the host holds it since (129).
 pub fn document(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
+    s.seams().state.refresh()?;
     let branches = s.overview(host.default_branch()?.as_ref())?;
     let mut sessions = sessions_json(&s.session_places()?, &s.held()?);
     // ADR 0035: each worktree's session run going, from the host's state;
@@ -90,6 +93,8 @@ pub fn run(
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
     let mut last: Option<serde_json::Value> = None;
+    // 129: what it last asked of whether the repository has sluice.
+    let mut asked: Option<Asked> = None;
     // 129: it ends only when stopped, when its output is closed, when its
     // repository is gone, or where the repository has no sluice; anything
     // else that fails is tried again at the next tick, which is its cadence
@@ -97,7 +102,11 @@ pub fn run(
     loop {
         let doc = match &mut reader {
             Reader::Lead(lead) => {
-                let doc = match read(s, host, clock) {
+                // 129: what the last tick kept by revision and this one does
+                // not use is forgotten.
+                s.next_pass();
+                host.next_pass();
+                let doc = match read(s, host, clock, &mut asked) {
                     // Ctrl-C reaches the git a read runs in the foreground:
                     // a branch's read it ended is no refusal of the branch's
                     // (26).
@@ -138,13 +147,38 @@ pub fn run(
     }
 }
 
+/// What a watch last asked of whether the repository has sluice: the tips
+/// the host held, and whether any held the policy (129).
+struct Asked {
+    tips: Vec<sluice_seams::Rev>,
+    holds: bool,
+}
+
 /// The reader's document of one tick: the overview, which says
 /// `"set_up": false` where the records list no branch and no branch the
 /// host holds, its own or a remote's as last fetched, has the policy (129).
-/// A check of the branches that fails is a read it could not make (133).
-fn read(s: &Sluice<'_>, host: &dyn Host, clock: &dyn Clock) -> Result<serde_json::Value> {
+/// The policy is looked for again only once the tips the host holds, or
+/// the records' list of branches, changed since `asked`: a list with a
+/// branch in it forgets what was asked, so its emptying asks again. A
+/// check of the branches that fails is a read it could not make (133).
+fn read(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+    asked: &mut Option<Asked>,
+) -> Result<serde_json::Value> {
     let (branches, mut doc) = document(s, host, clock)?;
-    if branches.is_empty() && !host.holds_policy()? {
+    if !branches.is_empty() {
+        *asked = None;
+        return Ok(doc);
+    }
+    let tips = host.tips()?;
+    let holds = match asked.take() {
+        Some(a) if a.tips == tips => a.holds,
+        _ => host.holds_policy(&tips)?,
+    };
+    *asked = Some(Asked { tips, holds });
+    if !holds {
         doc["set_up"] = false.into();
     }
     Ok(doc)
@@ -191,6 +225,10 @@ fn write_overview(
         )?;
         if let Some(hold) = &b.held {
             writeln!(out, "  {}", held_line(&b.branch, hold))?;
+        }
+        // 80, 129: its records as last fetched, and why.
+        if let Some(why) = &b.stale {
+            writeln!(out, "  {why}: shown as last fetched")?;
         }
         write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
         let names = branch_names(b);

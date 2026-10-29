@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use sluice_core::policy::{Policy, POLICY_PATH};
 use sluice_seams::{Branch, Formed, HostCopy, LandingCommit, Moved, Rev};
 
 use super::local_refs::LocalRefs;
-use super::pushed_refs::{remotes, PushedRefs};
+use super::pushed_refs::PushedRefs;
 use crate::identity::Identity;
 use crate::retry;
 use crate::{Pusher, Pushers};
@@ -25,6 +25,11 @@ pub struct Branches {
     /// The retry policy every call to a remote runs under (134).
     retry: Rc<retry::Policy>,
     pushed: RefCell<BTreeMap<String, Rc<PushedRefs>>>,
+    /// 129: each policy the routing read, by the revision it was read at:
+    /// as far as guarding needs, or the words it was refused with; and the
+    /// revisions this pass used, the rest dropped at the next.
+    guarded: RefCell<BTreeMap<Rev, std::result::Result<Option<Policy>, String>>>,
+    used: RefCell<std::collections::BTreeSet<Rev>>,
 }
 
 impl Branches {
@@ -50,7 +55,18 @@ impl Branches {
             identity,
             retry,
             pushed: RefCell::default(),
+            guarded: RefCell::default(),
+            used: RefCell::default(),
         })
+    }
+
+    /// 129: start a pass, a tick or a wait's read: the policies the last
+    /// did not use are forgotten.
+    pub fn next_pass(&self) {
+        let used = std::mem::take(&mut *self.used.borrow_mut());
+        self.guarded
+            .borrow_mut()
+            .retain(|rev, _| used.contains(rev));
     }
 
     /// The repository's git directory.
@@ -61,6 +77,21 @@ impl Branches {
     /// The repository's common git directory.
     pub fn common_dir(&self) -> Result<PathBuf> {
         self.local.common_dir()
+    }
+
+    /// The repository's remotes, read with no process (129).
+    pub fn remotes(&self) -> Result<Vec<String>> {
+        self.local.remotes()
+    }
+
+    /// The repository's default branch, read with no process (129).
+    pub fn default_branch(&self) -> Result<Option<String>> {
+        self.local.default_branch()
+    }
+
+    /// The repository, as gix reads its refs and objects.
+    pub fn local(&self) -> &LocalRefs {
+        &self.local
     }
 
     /// The remote `branch` is on: the one the policy at any revision of
@@ -103,17 +134,13 @@ impl Branches {
         self.local.read_file(rev, path)
     }
 
-    /// Whether this host has fetched any branch's state from `remote`.
+    /// Whether this host has fetched any branch's state from `remote`,
+    /// read with no process (129).
     pub fn fetched_state(&self, remote: &str) -> Result<bool> {
-        let out = std::process::Command::new("git")
-            .arg("--git-dir")
-            .arg(&self.dir)
-            .args(["for-each-ref", "--count=1", "--format=%(refname)"])
-            .arg(format!("refs/sluice-fetched/{remote}/state/"))
-            .env_remove("GIT_DIR")
-            .stdin(std::process::Stdio::null())
-            .output()?;
-        Ok(out.status.success() && !out.stdout.is_empty())
+        Ok(!self
+            .local
+            .refs_under(&format!("refs/sluice-fetched/{remote}/state/"))?
+            .is_empty())
     }
 
     /// The pushed refs profile for `remote`, as this binding reaches it.
@@ -130,7 +157,7 @@ impl Branches {
         if let Some(rev) = self.local.read(branch)? {
             out.push((branch.to_string(), rev));
         }
-        for r in remotes(&self.dir)? {
+        for r in self.local.remotes()? {
             if let Some(rev) = self.local.read_ref(&format!("refs/remotes/{r}/{branch}"))? {
                 out.push((format!("{r}/{branch}"), rev));
             }
@@ -212,14 +239,30 @@ impl Branches {
     /// whatever this binding is for (124; record 0069; rule core.27). Only
     /// a `remote` or a `[signers]` it can't read refuses, naming `name` and
     /// `rev`.
+    ///
+    /// 129: read from git once per revision while it is kept, a refusal in
+    /// the same words; a read that failed is made again.
     fn policy_at(&self, name: &str, rev: &Rev) -> Result<Option<Policy>> {
-        let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {
-            return Ok(None);
+        self.used.borrow_mut().insert(rev.clone());
+        let kept = self.guarded.borrow().get(rev).cloned();
+        let decided = match kept {
+            Some(d) => d,
+            None => {
+                let decided = match self.local.read_file(rev, POLICY_PATH)? {
+                    None => Ok(None),
+                    Some(bytes) => std::str::from_utf8(&bytes)
+                        .map_err(anyhow::Error::from)
+                        .and_then(Policy::guarding)
+                        .map(Some)
+                        .map_err(|e| format!("{e:#}")),
+                };
+                self.guarded
+                    .borrow_mut()
+                    .insert(rev.clone(), decided.clone());
+                decided
+            }
         };
-        let text = std::str::from_utf8(&bytes)?;
-        Ok(Some(
-            Policy::guarding(text).with_context(|| format!("{name}'s policy at {rev}"))?,
-        ))
+        decided.map_err(|words| anyhow!(words).context(format!("{name}'s policy at {rev}")))
     }
 
     /// The profile for `branch`: its remote's, or `None` for local refs.
@@ -265,6 +308,13 @@ impl Branch for Branches {
         match self.route(branch)? {
             Some(p) => p.read(branch),
             None => self.local.read(branch),
+        }
+    }
+
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        match self.route(branch)? {
+            Some(p) => p.held(branch),
+            None => self.local.held(branch),
         }
     }
 
