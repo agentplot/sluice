@@ -1689,6 +1689,63 @@ fn overview_names_each_submission_with_its_subject() {
     );
 }
 
+/// 64, 7, 10: the overview names each combination's revision it was
+/// formed on, the branch's revision as its read found it, and the landed
+/// submissions a queued one's `after` names: `#1` and `#2` under test as
+/// one combination, and `#5` queued, after `#3`, which landed.
+#[test]
+fn the_overview_names_each_combinations_base_and_the_landed_afters() {
+    let f = setup();
+    for w in ["a", "b", "c"] {
+        let worktree = format!("unit/{w}");
+        work(&f, &worktree, w, &[(&format!("plugin/{w}"), Some(w))]);
+        let (code, out) = sluice(
+            &f,
+            &["submit", BRANCH, "--worktree", &worktree, "--no-wait"],
+        );
+        assert_eq!(code, 0, "{out}");
+    }
+    // #1 and #2 wait on each other, so #3 is tested and lands alone.
+    let amend = |id: &str, after: &str| {
+        assert_eq!(sluice(&f, &["amend", id, "--after", after]).0, 0);
+    };
+    amend("1", "2");
+    amend("2", "1");
+    let landed = |id: &str| json(&sluice(&f, &["status", id, "--json"]).1)["state"] == "landed";
+    for _ in 0..10 {
+        if landed("3") {
+            break;
+        }
+        sluice(&f, &["step", BRANCH]);
+    }
+    assert!(landed("3") && !landed("1"));
+    f.world.hold_runs(true);
+    amend("1", "3");
+    sluice(&f, &["step", BRANCH]);
+    for (w, after) in [("d", None), ("e", Some("3"))] {
+        let worktree = format!("unit/{w}");
+        work(&f, &worktree, w, &[(&format!("plugin/{w}"), Some(w))]);
+        let mut args = vec!["submit", BRANCH, "--worktree", &worktree, "--no-wait"];
+        args.extend(after.iter().flat_map(|a| ["--after", *a]));
+        assert_eq!(sluice(&f, &args).0, 0);
+    }
+
+    let (code, out) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0, "{out}");
+    let b = &json(&out)["branches"][0];
+    let tip = f.world.tip(BRANCH);
+    assert_eq!(b["revision"], tip.as_str(), "{b}");
+    assert_eq!(b["after_landed"], serde_json::json!([3]), "{b}");
+    let both = b["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["submissions"] == serde_json::json!([1, 2]))
+        .unwrap_or_else(|| panic!("#1 and #2 under test as one combination: {b}"));
+    assert_eq!(both["on"], tip.as_str(), "{b}");
+    assert_eq!(both["state"], "testing", "{b}");
+}
+
 /// ADR 0028: a combination under test carries its run's tasks, as a
 /// round kept them, and its text line says how many have ended.
 #[test]

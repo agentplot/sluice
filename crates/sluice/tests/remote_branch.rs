@@ -1318,6 +1318,39 @@ fn a_policy_refused_on_the_remote_is_cleared_by_a_push() {
     s.repo.git(&["cat-file", "-e", &format!("{bolt}:a.txt")]);
 }
 
+/// `branch`'s part of `sluice overview --json` as `s` reads it.
+fn overview_of(s: &Setup, branch: &str) -> serde_json::Value {
+    let out = s.sluice(&["overview", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["branch"] == branch)
+        .cloned()
+        .unwrap_or_else(|| panic!("{branch} in {v}"))
+}
+
+/// 64, 124: with `main`'s records on its remote and nothing queued, the
+/// overview names the revision its read found of `main` there, a commit
+/// pushed to it by hand, beside the revision its records last saw.
+#[test]
+fn the_overview_names_a_hand_pushed_revision() {
+    let s = Setup::signed("overview-hand-pushed");
+    s.submit("a");
+    s.step_until_out();
+    assert_eq!(s.states(), ["landed"]);
+    let before = overview_of(&s, "main");
+    assert_eq!(before["revision"], s.remote_main().as_str(), "{before}");
+    let other = Repo::clone_of(s.origin.path(), "overview-hand-pushed-b");
+    let pushed = other.push_change("by-hand.txt", "pushed by hand\n");
+    let after = overview_of(&s, "main");
+    assert_eq!(after["revision"], pushed.as_str(), "{after}");
+    assert_eq!(after["at"], before["at"], "{after}");
+    assert_eq!(after["depth"], 0, "{after}");
+}
+
 /// A branch whose policy this sluice refuses is refused alone (26, S64).
 mod refused_alone {
     use super::*;
