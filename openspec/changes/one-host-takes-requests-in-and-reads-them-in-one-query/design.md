@@ -57,8 +57,9 @@ in this pass:
   `{"host":"<peer name>","holder":"driver"|"wait","sluice":"<version>"}`,
   a new commit at each renewal so its id moves. `PushedRefs` gains
   `intake_mark(branch) -> Option<(Rev, Mark)>`, read from the ref the
-  branch's fetch now also brings (`+refs/sluice/intake/<branch>:refs/sluice/<remote>/intake/<branch>`,
-  one fetch, no extra call), and `put_intake_mark(branch, from:
+  branch's fetch now also brings (`+refs/sluice/intake/<branch>*:refs/sluice-fetched/<remote>/intake/<branch>*`
+  with `--prune`, a pattern so that a remote with no mark answers the
+  same fetch, one fetch, no extra call), and `put_intake_mark(branch, from:
   Option<&Rev>, mark)` and `drop_intake_mark(branch, from: &Rev)`, each
   a leased push through `PushedRefs::push` under the retry policy
   (core.5, core.29).
