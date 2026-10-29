@@ -12,7 +12,7 @@ use sluice_seams::{Contested, Decided, Formed, Guard, HostCopy, Rev, Session, Su
 use crate::line::Line;
 use crate::order::{self, Entry};
 use crate::records::{Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
-use crate::Sluice;
+use crate::{Found, Sluice};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubmitRequest {
@@ -165,7 +165,9 @@ impl Requester {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AmendRefusal {
-    NoSuchSubmission,
+    /// On none of the branches read: the branches that could not be read,
+    /// none when every branch was (26).
+    NoSuchSubmission(Vec<Unread>),
     /// A session may not change another's order (actors table).
     NotYours,
     /// Under test or judged: its order is fixed (6).
@@ -173,6 +175,15 @@ pub enum AmendRefusal {
     /// Landed, withdrawn, blamed or conflicting.
     NotQueued(State),
     UnknownAfter(Vec<u64>),
+}
+
+/// What a lookup by number found (26).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Lookup {
+    Found(Submission),
+    /// On none of the branches read: the branches that could not be read,
+    /// none when every branch was.
+    Unfound(Vec<Unread>),
 }
 
 /// How a withdrawal went: done now, or done before (5, 48).
@@ -186,7 +197,8 @@ pub enum Withdrew {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WithdrawRefusal {
-    NoSuchSubmission,
+    /// As [`AmendRefusal::NoSuchSubmission`].
+    NoSuchSubmission(Vec<Unread>),
     NotYours,
     /// Landed or landing (5).
     Final(State),
@@ -702,8 +714,9 @@ impl Sluice<'_> {
         after: Option<Vec<u64>>,
         priority: Option<i64>,
     ) -> Result<Result<(), AmendRefusal>> {
-        let Some(branch) = self.find(id)? else {
-            return Ok(Err(AmendRefusal::NoSuchSubmission));
+        let branch = match self.find(id)? {
+            Found::On(branch) => branch,
+            Found::Unfound(unread) => return Ok(Err(AmendRefusal::NoSuchSubmission(unread))),
         };
         // Finished, it is past changing: refused as it was before it moved.
         if let Some(s) = self.only_finished(&branch, id)? {
@@ -758,8 +771,9 @@ impl Sluice<'_> {
     /// 48, 5: withdraw a submission, by its submitter, its planner or the
     /// operator.
     pub fn withdraw(&self, id: u64, by: &Requester) -> Result<Result<Withdrew, WithdrawRefusal>> {
-        let Some(branch) = self.find(id)? else {
-            return Ok(Err(WithdrawRefusal::NoSuchSubmission));
+        let branch = match self.find(id)? {
+            Found::On(branch) => branch,
+            Found::Unfound(unread) => return Ok(Err(WithdrawRefusal::NoSuchSubmission(unread))),
         };
         // Withdrawn or landed is final (5): answered from the records, with
         // no lock taken and nothing written. One withdrawn already was asked
@@ -804,16 +818,42 @@ impl Sluice<'_> {
         })
     }
 
-    /// 49, 26: a submission as last written, read with no step running.
+    /// 49, 26: a submission as last written, read with no step running,
+    /// from the branches that read (rule core.11).
     pub fn state(&self, id: u64) -> Result<Option<Submission>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(None);
         };
-        let mut line = self.read_line(&branch)?;
+        self.held_on(&branch, id)
+    }
+
+    /// Submission `id` as `branch`'s records hold it, live or finished.
+    fn held_on(&self, branch: &str, id: u64) -> Result<Option<Submission>> {
+        let mut line = self.read_line(branch)?;
         if let Some(s) = line.subs.remove(&id) {
             return Ok(Some(s));
         }
-        self.finished_sub(&branch, id)
+        self.finished_sub(branch, id)
+    }
+
+    /// 49, 26: submission `id` as `sluice wait <n>` and `sluice status
+    /// <n>` look it up: as last written, or the submission it became when
+    /// its branch's records moved to its remote (design D10). A branch
+    /// that cannot be read is passed by, and named, with the words it was
+    /// refused with, only when `id` is on none of those read (rule
+    /// core.11).
+    pub fn lookup(&self, id: u64) -> Result<Lookup> {
+        let mut unread = match self.find(id)? {
+            Found::On(branch) => match self.held_on(&branch, id)? {
+                Some(s) => return Ok(Lookup::Found(s)),
+                None => Vec::new(),
+            },
+            Found::Unfound(unread) => unread,
+        };
+        Ok(match self.moved(id, &mut unread)? {
+            Some(s) => Lookup::Found(s),
+            None => Lookup::Unfound(unread),
+        })
     }
 
     /// 122: the commit submission `id`'s work is on its branch as, if it
@@ -822,7 +862,7 @@ impl Sluice<'_> {
     /// at the landing's revision or past it, as a round confirms a landing
     /// (24). Read with no step running; it writes nothing (rule core.4).
     pub fn landed_as(&self, id: u64) -> Result<Option<Rev>> {
-        let Some(branch) = self.find(id)? else {
+        let Found::On(branch) = self.find(id)? else {
             return Ok(None);
         };
         let line = self.read_line(&branch)?;
@@ -849,18 +889,39 @@ impl Sluice<'_> {
     }
 
     /// Design D10: the submission that `old`, a submission of this host's
-    /// own records, became when the branch's records moved to its remote.
+    /// own records, became when the branch's records moved to its remote,
+    /// from the branches that read (26).
     pub fn moved_to(&self, old: u64) -> Result<Option<Submission>> {
+        self.moved(old, &mut Vec::new())
+    }
+
+    /// [`Sluice::moved_to`], adding to `unread` each branch it passed by
+    /// that is not there yet.
+    fn moved(&self, old: u64, unread: &mut Vec<Unread>) -> Result<Option<Submission>> {
         for b in self.seams.state.branches()? {
-            let line = self.read_line(&b)?;
-            if let Some(s) = line.subs.values().find(|s| s.was == Some(old)) {
-                return Ok(Some(s.clone()));
-            }
-            for id in line.finished.keys() {
-                if let Some(s) = self.finished_sub(&b, *id)? {
-                    if s.was == Some(old) {
-                        return Ok(Some(s));
+            match self.moved_on(&b, old) {
+                Ok(Some(s)) => return Ok(Some(s)),
+                Ok(None) => {}
+                Err(e) => {
+                    if !unread.iter().any(|u| u.branch == b) {
+                        unread.push(Unread::of(&b, &e));
                     }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The submission of `branch` that `old` became, if any.
+    fn moved_on(&self, branch: &str, old: u64) -> Result<Option<Submission>> {
+        let line = self.read_line(branch)?;
+        if let Some(s) = line.subs.values().find(|s| s.was == Some(old)) {
+            return Ok(Some(s.clone()));
+        }
+        for id in line.finished.keys() {
+            if let Some(s) = self.finished_sub(branch, *id)? {
+                if s.was == Some(old) {
+                    return Ok(Some(s));
                 }
             }
         }
@@ -1054,11 +1115,24 @@ pub struct PendingOutcome {
     pub notification: String,
 }
 
-/// A branch whose records could not be read, in the reader's words.
+/// A branch whose records could not be read, in the reader's words,
+/// whole (26, 133): a lookup passes it by, and a collection reads the
+/// other branches still.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unread {
     pub branch: String,
     pub error: String,
+}
+
+impl Unread {
+    /// `branch`, refused with `e`, worded as the overview words a branch
+    /// it could not read.
+    pub fn of(branch: &str, e: &anyhow::Error) -> Unread {
+        Unread {
+            branch: branch.into(),
+            error: format!("{e:#}"),
+        }
+    }
 }
 
 /// 51, 135: a session's pending outcomes, with the lock of each branch that

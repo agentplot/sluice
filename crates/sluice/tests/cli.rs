@@ -7565,3 +7565,345 @@ fn status_sends_the_remotes_revision_from_a_bolt() {
     assert_eq!(f.world.copy_of(BRANCH), Some(made));
     assert_eq!(f.world.tip(BRANCH), landing);
 }
+
+// ---------------------------------------------------------------------------
+// A branch that cannot be read is refused alone (26, S64)
+// ---------------------------------------------------------------------------
+
+mod refused_alone {
+    use super::*;
+
+    /// The branch whose records cannot be read, listed before [`BRANCH`].
+    const REFUSED: &str = "bolt/b";
+
+    /// Another bolt, listed after `bolt/b`.
+    const OTHER: &str = "bolt/c";
+
+    /// Submission 1 queued on [`BRANCH`] and 2 on `bolt/b`; with
+    /// `refused`, every read of `bolt/b`'s records then fails with
+    /// [`UNREADABLE`].
+    fn queued(refused: bool) -> Fakes {
+        let f = setup();
+        f.world.init(REFUSED, &[(".config/sluice.toml", POLICY)]);
+        work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+        sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+        let head = f
+            .world
+            .work(&f.world.tip(REFUSED), &[("plugin/b", Some("b"))]);
+        f.world.session("unit/b", "agent-b", &head);
+        sluice(
+            &f,
+            &["submit", REFUSED, "--worktree", "unit/b", "--no-wait"],
+        );
+        if refused {
+            f.world.fail_state_reads(REFUSED, Some(UNREADABLE));
+        }
+        f
+    }
+
+    /// 26, S64: a wait on a submission to another branch finds it past
+    /// the branch that cannot be read and follows it to its landing.
+    #[test]
+    fn a_wait_follows_its_submission_past_a_branch_that_cannot_be_read() {
+        let f = queued(true);
+        let (code, out) = sluice(&f, &["wait", "1", "--json"]);
+        assert_eq!(code, LANDED, "{out}");
+        let v = json(&out);
+        assert_eq!(
+            (v["id"].clone(), v["state"].clone()),
+            (1.into(), "landed".into())
+        );
+    }
+
+    /// 26: status, amend and withdraw answer for a submission on another
+    /// branch as when the branch that cannot be read reads, and say
+    /// nothing of it.
+    #[test]
+    fn status_amend_and_withdraw_answer_as_when_every_branch_reads() {
+        let answers = |f: &Fakes| -> Vec<(i32, String)> {
+            [
+                &["status", "1"][..],
+                &["status", "1", "--json"],
+                &["amend", "1", "--priority", "1"],
+                &["amend", "1", "--priority", "2", "--json"],
+                &["withdraw", "1"],
+            ]
+            .iter()
+            .map(|args| sluice(f, args))
+            .collect()
+        };
+        let past = answers(&queued(true));
+        assert_eq!(past, answers(&queued(false)));
+        for (code, out) in &past {
+            assert_eq!(*code, 0, "{out}");
+            assert!(!out.contains(REFUSED), "{out}");
+        }
+    }
+
+    /// 26: a number on the branch that cannot be read is on none of the
+    /// branches read: said so with the branch and its words, never no
+    /// submission, exit 3; under `--json`, the internal error document.
+    #[test]
+    fn a_number_on_the_branch_that_cannot_be_read_names_it() {
+        let f = queued(true);
+        let named = format!("{REFUSED} could not be read: {UNREADABLE}");
+        let (code, out) = sluice(&f, &["wait", "2"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        assert_eq!(
+            out,
+            format!("submission 2 is on none of the branches sluice could read\n{named}\n")
+        );
+
+        let (code, out) = sluice(&f, &["status", "2", "--json"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        let v = json(&out);
+        assert_eq!(v["error"]["kind"], "internal", "{v}");
+        assert_eq!(
+            v["error"]["message"],
+            format!("submission 2 is on none of the branches sluice could read; {named}")
+        );
+        assert_eq!(v["error"]["next"], serde_json::json!(["sluice overview"]));
+
+        for args in [&["amend", "2", "--priority", "1"][..], &["withdraw", "2"]] {
+            let (code, out) = sluice(&f, args);
+            assert_eq!(code, sluice::INTERNAL, "{args:?}: {out}");
+            assert!(out.ends_with(&format!("{named}\n")), "{args:?}: {out}");
+            assert!(!out.contains("no submission"), "{args:?}: {out}");
+        }
+    }
+
+    /// 26: with every branch read, a number on none is still no
+    /// submission, exit 1.
+    #[test]
+    fn a_number_on_no_branch_when_every_branch_reads_is_no_submission() {
+        let f = queued(false);
+        let (code, out) = sluice(&f, &["wait", "9999"]);
+        assert_eq!(code, FAILED, "{out}");
+        assert_eq!(out, "no submission 9999\n");
+    }
+
+    /// The line `sluice run` says a branch it passed by with.
+    fn passed_by(words: &str) -> String {
+        format!("{REFUSED} could not be read, passed by: {words}")
+    }
+
+    /// A submission from `worktree` to `branch`, on its tip.
+    fn submit_to(f: &Fakes, branch: &str, worktree: &str, path: &str) {
+        let head = f.world.work(&f.world.tip(branch), &[(path, Some("n"))]);
+        f.world.session(worktree, "agent", &head);
+        let (code, out) = sluice(f, &["submit", branch, "--worktree", worktree, "--no-wait"]);
+        assert_eq!(code, 0, "{out}");
+    }
+
+    /// [`queued`], with another bolt's submission queued as well.
+    fn two_bolts_queued() -> Fakes {
+        let f = queued(true);
+        f.world.init(OTHER, &[(".config/sluice.toml", POLICY)]);
+        submit_to(&f, OTHER, "unit/c", "plugin/c");
+        f
+    }
+
+    /// The state of submission `id`, as `sluice status <id>` reads it.
+    fn state_of(f: &Fakes, id: u64) -> String {
+        let (_, out) = sluice(f, &["status", &id.to_string(), "--json"]);
+        json(&out)["state"].as_str().unwrap_or_default().to_string()
+    }
+
+    /// 26, S64, rule core.14: `sluice run` passes by the branch it cannot
+    /// read, says so once while the same words stand, and lands every
+    /// other branch's work; its last round having passed the branch by,
+    /// it exits 3 as a step of that branch would.
+    #[test]
+    fn sluice_run_passes_a_branch_by_and_lands_the_rest() {
+        let f = two_bolts_queued();
+        let (code, out) = sluice(&f, &["run", "--rounds", "3"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        let said: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with(&format!("{REFUSED} ")))
+            .collect();
+        assert_eq!(said, [passed_by(UNREADABLE)], "{out}");
+        assert_eq!(state_of(&f, 1), "landed", "{out}");
+        assert_eq!(state_of(&f, 3), "landed", "{out}");
+    }
+
+    /// 26, 121: a branch read on one pass and refused again on the next
+    /// is said again, and the run, refused on its last round, exits 3.
+    #[test]
+    fn sluice_run_says_a_branch_refused_anew_again() {
+        let f = two_bolts_queued();
+        let between = |n: usize| match n {
+            1 => f.world.fail_state_reads(REFUSED, None),
+            2 => f.world.fail_state_reads(REFUSED, Some(UNREADABLE)),
+            _ => {}
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 3,
+            between: &between,
+        };
+        let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "3"]);
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        let said = out.lines().filter(|l| *l == passed_by(UNREADABLE)).count();
+        assert_eq!(said, 2, "{out}");
+    }
+
+    /// 26, S64: a bounded run whose last round read the branch it passed
+    /// by before exits 0, having said it once.
+    #[test]
+    fn sluice_run_read_by_its_last_round_exits_0() {
+        let f = two_bolts_queued();
+        let between = |n: usize| {
+            if n == 1 {
+                f.world.fail_state_reads(REFUSED, None);
+            }
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 3,
+            between: &between,
+        };
+        let (code, out) = sluice_with(&f, &pause, &["run", "--rounds", "3"]);
+        assert_eq!(code, 0, "{out}");
+        let said = out.lines().filter(|l| *l == passed_by(UNREADABLE)).count();
+        assert_eq!(said, 1, "{out}");
+    }
+
+    /// A fakes' host whose config names the systems it runs (87).
+    struct Naming {
+        host: support::FakeHost,
+        systems: Vec<String>,
+    }
+
+    impl sluice::exec::Host for Naming {
+        fn reserved(&self) -> usize {
+            self.host.reserved()
+        }
+
+        fn peer(&self) -> sluice_core::Peer {
+            sluice_core::Peer {
+                systems: Some(self.systems.clone()),
+                ..self.host.peer()
+            }
+        }
+
+        fn worktree(&self, dir: &str) -> anyhow::Result<String> {
+            self.host.worktree(dir)
+        }
+
+        fn lock_sessions(&self) -> anyhow::Result<Box<dyn std::any::Any>> {
+            self.host.lock_sessions()
+        }
+
+        fn begin_session(
+            &self,
+            held: &dyn std::any::Any,
+            run: &sluice::sessions::SessionRun,
+        ) -> anyhow::Result<()> {
+            self.host.begin_session(held, run)
+        }
+
+        fn end_session(&self, worktree: &str) -> anyhow::Result<()> {
+            self.host.end_session(worktree)
+        }
+
+        fn session_tasks(
+            &self,
+            worktree: &str,
+            tasks: &[sluice_seams::TaskProgress],
+        ) -> anyhow::Result<()> {
+            self.host.session_tasks(worktree, tasks)
+        }
+
+        fn run_dir(&self, run: &sluice_seams::RunHandle) -> Option<std::path::PathBuf> {
+            self.host.run_dir(run)
+        }
+
+        fn end_run(&self, run: &sluice_seams::RunHandle) -> anyhow::Result<()> {
+            self.host.end_run(run)
+        }
+
+        fn revision(&self, rev: &str) -> anyhow::Result<Option<String>> {
+            self.host.revision(rev)
+        }
+
+        fn name(&self) -> String {
+            self.host.name()
+        }
+
+        fn repository(&self) -> anyhow::Result<String> {
+            self.host.repository()
+        }
+
+        fn repository_gone(&self, repository: &str) -> bool {
+            self.host.repository_gone(repository)
+        }
+
+        fn holds_policy(&self) -> anyhow::Result<bool> {
+            self.host.holds_policy()
+        }
+
+        fn readers(&self) -> anyhow::Result<std::path::PathBuf> {
+            self.host.readers()
+        }
+
+        fn default_branch(&self) -> anyhow::Result<Option<sluice_core::overview::OrderFrom>> {
+            self.host.default_branch()
+        }
+    }
+
+    /// 26, 87, S64, rule core.14: on a host whose config names its
+    /// systems, `sluice run` checks them against every branch's policy it
+    /// can read, passes by the one whose policy this sluice refuses, runs
+    /// the rest's rounds, and exits 3 for the branch it passed by.
+    #[test]
+    fn sluice_run_on_a_host_naming_its_systems_runs_past_a_refused_policy() {
+        let f = queued(false);
+        f.world.hand_commit(
+            BRANCH,
+            &[(
+                POLICY_PATH,
+                Some(&format!(
+                    "{POLICY}\n[systems]\nlinux-x64 = {{ os = \"linux\", arch = \"x86_64\" }}\n"
+                )),
+            )],
+        );
+        f.world.hand_commit(
+            REFUSED,
+            &[(
+                POLICY_PATH,
+                Some(&format!(
+                    "{POLICY}\n[[checkout.cache]]\nkey = [\"Cargo.lock\"]\npaths = [\"target\"]\n"
+                )),
+            )],
+        );
+        let host = Naming {
+            host: support::FakeHost {
+                world: f.world.clone(),
+                reserved: 0,
+            },
+            systems: vec!["linux-x64".into()],
+        };
+        let cli = Cli::try_parse_from(["sluice", "run", "--rounds", "1"]).unwrap();
+        let mut out = Vec::new();
+        let code = run(
+            cli,
+            f.seams(),
+            &host,
+            &(),
+            &(),
+            &f.clock,
+            &Rounds(Cell::new(0)),
+            &mut out,
+        )
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(code, sluice::INTERNAL, "{out}");
+        assert!(
+            out.lines().any(|l| l.starts_with(&passed_by(""))
+                && l.contains("Remove [[checkout.cache]] from .config/sluice.toml")),
+            "{out}"
+        );
+        assert_eq!(f.world.started().len(), 1, "{BRANCH}'s run started: {out}");
+    }
+}

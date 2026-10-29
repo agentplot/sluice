@@ -60,7 +60,12 @@ With `remote` set, GitHub's copy of `main` is the real one:
   each remote, such as `origin/main`, and `main` is on GitHub if any of
   them says `remote = "origin"`. So a machine whose own `main` is old,
   or from before the policy, needs only a `git fetch`. Two copies
-  naming different remotes are refused, and the error names both.
+  naming different remotes are refused, and the error names both. A
+  copy whose policy sluice refuses for anything else, such as a table
+  it no longer keeps, still says where `main` is. sluice judges the
+  rest of the policy on GitHub's `main`, so pushing a fixed policy
+  there clears the refusal on every machine, with no copy to fix by
+  hand.
 - **Only the branch goes to GitHub.** The queue, the test results and
   the logs stay in `.git/sluice/` on your machine, as before. On one
   machine nothing else needs them.

@@ -25,8 +25,6 @@ pub struct Branches {
     /// The retry policy every call to a remote runs under (134).
     retry: Rc<retry::Policy>,
     pushed: RefCell<BTreeMap<String, Rc<PushedRefs>>>,
-    /// 124: whether the policy is read only as far as guarding needs.
-    guarding: bool,
 }
 
 impl Branches {
@@ -52,17 +50,7 @@ impl Branches {
             identity,
             retry,
             pushed: RefCell::default(),
-            guarding: false,
         })
-    }
-
-    /// The same binding, for branch protection: each policy is read only
-    /// as far as guarding needs, [`Policy::guarding`] (124).
-    pub fn guarding(self) -> Self {
-        Branches {
-            guarding: true,
-            ..self
-        }
     }
 
     /// The repository's git directory.
@@ -78,18 +66,23 @@ impl Branches {
     /// The remote `branch` is on: the one the policy at any revision of
     /// it this host holds names, its own ref or a remote's tracking ref as
     /// last fetched, with no fetch made to decide it (124; rule core.27).
-    /// A revision that lags, holds no policy or names no remote decides
-    /// nothing against one that names a remote, and two naming different
-    /// remotes are refused. The gate itself is read from the revision the
-    /// profile reads (rule core.15).
+    /// Each revision's policy is read only as far as the deciding needs,
+    /// the remote it names for `branch` and whether it names signers, so a
+    /// revision refused elsewhere in its policy decides as any other does
+    /// (record 0069). A revision that lags, holds no policy or names no
+    /// remote decides nothing against one that names a remote, and two
+    /// naming different remotes are refused. The gate, and the rest of the
+    /// policy, are read whole from the revision the profile reads (56;
+    /// rule core.15).
     pub fn remote(&self, branch: &str) -> Result<Option<String>> {
         Ok(self.routing(branch, branch)?.remote)
     }
 
     /// The remote `branch` would be made on from `from` (branches-1 104):
     /// the one the policy at any revision of `from` this host holds names
-    /// for `branch`, read as [`Branches::remote`] reads it, with no fetch
-    /// (124; rule core.27).
+    /// for `branch`, each read as [`Branches::remote`] reads it, only as far
+    /// as the deciding needs, with no fetch (124; record 0069; rule
+    /// core.27).
     pub fn remote_if_made_from(&self, branch: &str, from: &str) -> Result<Option<String>> {
         Ok(self.routing(branch, from)?.remote)
     }
@@ -97,7 +90,10 @@ impl Branches {
     /// The policy `branch` is routed by, and the revision it was read at:
     /// the first revision this host holds whose policy names the remote
     /// [`Branches::remote`] reads, or, when none names one, the first
-    /// holding a policy, with no fetch (124; rule core.27).
+    /// holding a policy, with no fetch (124; rule core.27). The policy is
+    /// read only as far as the deciding needs, the remote each pattern
+    /// names and whether signers are named, every other table and field
+    /// left at its defaults (record 0069).
     pub fn policy_of(&self, branch: &str) -> Result<Option<(Rev, Policy)>> {
         Ok(self.routing(branch, branch)?.at)
     }
@@ -145,10 +141,14 @@ impl Branches {
     /// Where `branch` is, read off the revisions of `from` this host
     /// holds (124; rule core.27): the remote any of their policies names
     /// for `branch`, with the first revision naming it and its policy, or,
-    /// when none names one, the first revision holding a policy. A
-    /// revision that holds no policy or names no remote decides nothing;
-    /// two naming different remotes are refused, naming both, since
-    /// nothing the host holds says which is right (record 0060).
+    /// when none names one, the first revision holding a policy. Each
+    /// policy is read only as far as the deciding needs, the remote named
+    /// for `branch` and whether signers are named, so a revision this
+    /// sluice refuses elsewhere in its policy votes as every other does
+    /// (record 0069). A revision that holds no policy or names no remote
+    /// decides nothing; two naming different remotes are refused, naming
+    /// both, since nothing the host holds says which is right (record
+    /// 0060).
     fn routing(&self, branch: &str, from: &str) -> Result<Routing> {
         let mut named: Option<(String, String, Rev, Policy)> = None;
         let mut first: Option<(Rev, Policy)> = None;
@@ -158,7 +158,7 @@ impl Branches {
                 continue;
             }
             read.push(rev.clone());
-            let Some(policy) = self.policy_at(branch, &rev)? else {
+            let Some(policy) = self.policy_at(&name, &rev)? else {
                 continue;
             };
             let remote = policy.rules_for(branch)?.and_then(|r| r.remote.clone());
@@ -196,7 +196,8 @@ impl Branches {
         })
     }
 
-    /// The remote the policy at `rev` names for `branch`.
+    /// The remote the policy at `rev` names for `branch`, read as the
+    /// routing reads it (124; record 0069).
     fn named(&self, branch: &str, rev: &Rev) -> Result<Option<String>> {
         let Some(policy) = self.policy_at(branch, rev)? else {
             return Ok(None);
@@ -204,20 +205,20 @@ impl Branches {
         Ok(policy.rules_for(branch)?.and_then(|r| r.remote.clone()))
     }
 
-    /// The policy at `rev`, that `branch` is routed by: read only as far as
-    /// guarding needs when bound for branch protection (124), and in full
-    /// otherwise.
-    fn policy_at(&self, branch: &str, rev: &Rev) -> Result<Option<Policy>> {
+    /// The policy at `rev`, read from the ref the user knows as `name`,
+    /// only as far as deciding where a branch is needs: the remote each
+    /// `[branches]` pattern names and whether `[signers]` names a signer,
+    /// [`Policy::guarding`], every other table and field passed over,
+    /// whatever this binding is for (124; record 0069; rule core.27). Only
+    /// a `remote` or a `[signers]` it can't read refuses, naming `name` and
+    /// `rev`.
+    fn policy_at(&self, name: &str, rev: &Rev) -> Result<Option<Policy>> {
         let Some(bytes) = self.local.read_file(rev, POLICY_PATH)? else {
             return Ok(None);
         };
         let text = std::str::from_utf8(&bytes)?;
-        let policy = match self.guarding {
-            true => Policy::guarding(text),
-            false => Policy::parse(text),
-        };
         Ok(Some(
-            policy.with_context(|| format!("{branch}'s policy at {rev}"))?,
+            Policy::guarding(text).with_context(|| format!("{name}'s policy at {rev}"))?,
         ))
     }
 
