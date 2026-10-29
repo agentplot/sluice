@@ -39,6 +39,6 @@ group ends with its check task passing.
 
 ## 3. The gate
 
-- [ ] 3.1 Confirm no call to GitHub is made outside `App::answer`: `rg -n 'ureq::|\.call\(' crates/sluice/src/profiles/github` finds only `app.rs`, and no `thread::sleep` in `crates/sluice/src/profiles/github` waits on GitHub's allowance. True when both hold and the commit message says so.
-- [ ] 3.2 Remove this change's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names this change.
+- [x] 3.1 Confirm no call to GitHub is made outside `App::answer`: `rg -n 'ureq::|\.call\(' crates/sluice/src/profiles/github` finds only `app.rs`, and no `thread::sleep` in `crates/sluice/src/profiles/github` waits on GitHub's allowance. True when both hold and the commit message says so.
+- [x] 3.2 Remove this change's item from `docs/architecture/_open.md`, and the file once it is empty. True when nothing there names this change.
 - [ ] 3.3 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
