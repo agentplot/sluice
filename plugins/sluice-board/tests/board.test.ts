@@ -48,13 +48,16 @@ import {
   pullOf,
   pullsOf,
   recentInWay,
+  releaseOf,
   rewatchWait,
   shown,
   signature,
   statusLine,
   submitted,
+  supported,
   taskLines,
   unreadReason,
+  unsupported,
   WATCH_SINCE,
 } from "../hooks/board";
 import type { Flaky, Mine, Overview } from "../types";
@@ -968,5 +971,33 @@ describe("forecasts", () => {
     expect(clearText("main", { id: 220, branch: "main", conflict: false, active: false })).toBe(
       "[sluice] Your work no longer conflicts with main or anything queued.",
     );
+  });
+});
+
+describe("the releases of sluice the board runs with", () => {
+  const range = { from: "0.55.0", before: "1.0.0" };
+  test("its manifest's range, and none where it names none", () => {
+    expect(supported('{ "from": "0.55.0", "before": "1.0.0" }')).toEqual(range);
+    expect(supported('{ "from": "0.55.0" }')).toBeNull();
+    expect(supported("not json")).toBeNull();
+    expect(supported(null)).toBeNull();
+  });
+  test("a release from what sluice printed; none for a build of no release", () => {
+    expect(releaseOf("sluice 0.56.0")).toEqual([0, 56, 0]);
+    expect(releaseOf("sluice 0.0.0")).toBeNull();
+    expect(releaseOf("sluice")).toBeNull();
+    expect(releaseOf(null)).toBeNull();
+  });
+  test("older than its inbox, or as new as the first it does not know: said; between: runs", () => {
+    expect(unsupported("sluice 0.54.9", range)).toBe(
+      "the sluice board needs sluice 0.55.0 or later, which has `sluice inbox`, and this host's is sluice 0.54.9: it shows nothing and delivers nothing until sluice is upgraded",
+    );
+    expect(unsupported("sluice 0.55.0", range)).toBeNull();
+    expect(unsupported("sluice 0.99.12", range)).toBeNull();
+    expect(unsupported("sluice 1.0.0", range)).toBe(
+      "the sluice board runs with sluice before 1.0.0, and this host's is sluice 1.0.0: it shows nothing and delivers nothing until the board is updated",
+    );
+    expect(unsupported("sluice 0.0.0", range)).toBeNull();
+    expect(unsupported(null, range)).toBeNull();
   });
 });

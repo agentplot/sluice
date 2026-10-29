@@ -1980,6 +1980,95 @@ mod tests {
         assert!(found(&h, "unit-a").is_empty(), "delivered once");
     }
 
+    /// 51, record 0070: a landing moved to the finished records that an
+    /// earlier sluice marked delivered under `told` was delivered: a
+    /// collect never finds it pending, so no session is told it twice.
+    #[test]
+    fn a_finished_record_marked_told_is_never_pending() {
+        let h = Host::new();
+        let landed = decided(5, "unit-a", State::Landed);
+        let mut doc = String::from_utf8(crate::records::to_document(&landed)).unwrap();
+        let last = doc.rfind('}').unwrap();
+        doc.insert_str(
+            last,
+            ",\n  \"told\": \"2026-10-27T10:00:00Z\",\n  \"told_to\": \"/w/unit-a\"\n",
+        );
+        let index = crate::records::to_line(&crate::records::FinishedLine {
+            id: 5,
+            state: State::Landed,
+            worktree: "unit-a".into(),
+            subject: None,
+        });
+        {
+            let mut records = h.records.borrow_mut();
+            records
+                .files
+                .insert(crate::records::finished_file(5), doc.into_bytes());
+            records
+                .files
+                .insert(crate::records::FINISHED_INDEX.into(), index);
+        }
+        assert_eq!(
+            h.sluice().state(5).unwrap().unwrap().delivered.as_deref(),
+            Some("2026-10-27T10:00:00Z")
+        );
+        assert!(found(&h, "unit-a").is_empty());
+        assert!(found_one(&h, 5, "unit-a").is_empty());
+    }
+
+    /// 51, 67: a submission blamed and then withdrawn, as a resubmission
+    /// withdraws it, keeps its blame and the outbox item the blame left, and
+    /// is no outcome pending, live or finished: its session hears of the
+    /// submission that took its place, never of the blame again.
+    #[test]
+    fn a_withdrawn_submissions_earlier_blame_is_never_pending() {
+        let h = Host::new();
+        let mut blamed = decided(4, "unit-a", State::Failed);
+        blamed.state = State::Withdrawn;
+        blamed.withdrawn = Some(crate::records::Withdrawal {
+            by: "resubmission".into(),
+            at: "2026-10-29T02:40:56Z".into(),
+        });
+        keep(&h, &blamed);
+        let mut doc = crate::records::BranchDoc::new(BRANCH);
+        doc.outbox.push(crate::records::OutboxItem {
+            id: "4:failed".into(),
+            submission: 4,
+            outcome: crate::records::DecidedRecord::Failed {
+                failed: vec!["cli:test".into()],
+                combination: Rev::new("c4"),
+                submissions: vec![4],
+                timed_out: false,
+                logs: Vec::new(),
+            },
+        });
+        let mut finished = decided(3, "unit-a", State::Failed);
+        finished.state = State::Withdrawn;
+        let index = crate::records::to_line(&crate::records::FinishedLine {
+            id: 3,
+            state: State::Withdrawn,
+            worktree: "unit-a".into(),
+            subject: None,
+        });
+        {
+            let mut records = h.records.borrow_mut();
+            records.files.insert(
+                crate::records::BRANCH_FILE.into(),
+                crate::records::to_document(&doc),
+            );
+            records.files.insert(
+                crate::records::finished_file(3),
+                crate::records::to_document(&finished),
+            );
+            records
+                .files
+                .insert(crate::records::FINISHED_INDEX.into(), index);
+        }
+        assert!(found(&h, "unit-a").is_empty());
+        assert!(found_one(&h, 4, "unit-a").is_empty());
+        assert!(found_one(&h, 3, "unit-a").is_empty());
+    }
+
     /// 51: an outcome whose outbox item stands is delivered under that item's
     /// id, and marking it removes the item, so no round pushes it.
     #[test]

@@ -11,6 +11,9 @@ fi
 [ "$*" = --version ] && echo "sluice 0.11.0" && exit 0
 case "$*" in
 "overview --watch --json")
+  # Its pid, under the test's own directory, for the test to tell that
+  # this source ended: the watcher execs it, so it is the source's pid.
+  echo $$ >>"$FAKE/watch-pids"
   [ -f "$FAKE/watch-$here.jsonl" ] || exit 1
   cat "$FAKE/watch-$here.jsonl"
   # Held open, as a real watch is, while the test wants it.
