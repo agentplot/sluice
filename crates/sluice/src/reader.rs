@@ -9,8 +9,13 @@
 //!
 //! ```text
 //! $XDG_STATE_HOME/sluice/readers/     (default ~/.local/state)
-//!   <repository, flat>.lock      locked by the reader for as long as it runs
-//!   <repository, flat>.json      the overview it last read, written whole
+//!   <repository, flat>.lock      locked by the reader for as long as it runs;
+//!                                its time is when the reader's last read
+//!                                began
+//!   <repository, flat>.json      the overview it last read, written whole,
+//!                                naming the reader's tick; its time is when
+//!                                that read ended, the document rewritten or
+//!                                not
 //!   <repository, flat>.version   the reader's version of sluice, written
 //!                                whole when it takes the lock
 //!   <repository, flat>.lease     locked by a watch of a newer sluice that
@@ -29,9 +34,15 @@
 //! from before it empties the lock file at every try, and a follower
 //! prints the document as it finds it. A reader of such a sluice names no
 //! version and never looks at the lease, so it is followed until it stops.
+//!
+//! The two times are how a forecast tells a reader that keeps its tick
+//! from one that has stalled, with nothing written to the document when
+//! nothing changed (64): [`current`] reads them, and never reads or leads
+//! in the reader's place.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -48,7 +59,7 @@ pub enum Reader {
 
 /// The reader: it holds the lock until it is dropped.
 pub struct Lead {
-    _lock: File,
+    lock: File,
     files: Files,
     /// The version of sluice it is.
     version: String,
@@ -87,18 +98,8 @@ impl Reader {
     /// first step.
     pub fn take(dir: &Path, repository: &str, version: &str) -> Result<Reader> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let name = flat_name(repository);
         let mut follow = Follow {
-            // A name kept whole is up to 246 bytes, so no file of it adds
-            // more than `.version`'s eight bytes, nor reaches 255.
-            files: Files {
-                lock: dir.join(format!("{name}.lock")),
-                doc: dir.join(format!("{name}.json")),
-                tmp: dir.join(format!(".{name}.tmp")),
-                version: dir.join(format!("{name}.version")),
-                vtmp: dir.join(format!(".{name}.vtmp")),
-                lease: dir.join(format!("{name}.lease")),
-            },
+            files: Files::of(dir, repository),
             version: version.to_string(),
             lease: None,
         };
@@ -138,14 +139,31 @@ impl Reader {
 }
 
 impl Lead {
+    /// 64, 129: mark that a read begins: the lock file's time is now, set
+    /// through the file the lead holds.
+    pub fn begin(&self) -> Result<()> {
+        self.lock
+            .set_modified(SystemTime::now())
+            .with_context(|| format!("marking {}", self.files.lock.display()))
+    }
+
     /// Replace the reader's document with `doc`, whole, at the reader's
-    /// start and each time it changes but for its time.
+    /// start and each time it changes but for its time. A read that
+    /// changed nothing marks its end all the same: the document's time is
+    /// now, its bytes as they were (64, 129); a document that cannot be
+    /// marked is written whole.
     pub fn write(&mut self, doc: &Value) -> Result<()> {
         let now = untimed(doc);
-        if self.last.as_ref() == Some(&now) {
-            return Ok(());
-        }
         let Files { doc: path, tmp, .. } = &self.files;
+        if self.last.as_ref() == Some(&now) {
+            let marked = OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|f| f.set_modified(SystemTime::now()));
+            if marked.is_ok() {
+                return Ok(());
+            }
+        }
         write_whole(tmp, path, &serde_json::to_vec(doc)?)?;
         self.last = Some(now);
         Ok(())
@@ -208,7 +226,7 @@ impl Follow {
         let named = serde_json::json!({ "version": self.version });
         write_whole(vtmp, version, &serde_json::to_vec(&named)?)?;
         Ok(Lead {
-            _lock: lock,
+            lock,
             files: self.files.clone(),
             version: self.version.clone(),
             last: None,
@@ -217,6 +235,21 @@ impl Follow {
 }
 
 impl Files {
+    /// The files of `repository`'s reader among the readers in `dir`. A
+    /// name kept whole is up to 246 bytes, so no file of it adds more than
+    /// `.version`'s eight bytes, nor reaches 255.
+    fn of(dir: &Path, repository: &str) -> Files {
+        let name = flat_name(repository);
+        Files {
+            lock: dir.join(format!("{name}.lock")),
+            doc: dir.join(format!("{name}.json")),
+            tmp: dir.join(format!(".{name}.tmp")),
+            version: dir.join(format!("{name}.version")),
+            vtmp: dir.join(format!(".{name}.vtmp")),
+            lease: dir.join(format!("{name}.lease")),
+        }
+    }
+
     /// The version the reader's file names; `None` when there is no whole
     /// one, as a reader of a sluice from before it writes none.
     fn reader_version(&self) -> Option<String> {
@@ -224,6 +257,48 @@ impl Files {
         let named = serde_json::from_slice::<Value>(&bytes).ok()?;
         Some(named.get("version")?.as_str()?.to_string())
     }
+}
+
+/// 64, 129: the last document of `repository`'s reader among the readers
+/// in `dir`, while that reader keeps its tick at `now`: a live process
+/// holds its lock, the document is a read's, a `branches` array and a
+/// whole-second `tick`, and either its last read ended no more than a tick
+/// before `now`, or a read began after it ended, no more than a tick
+/// after. Times are counted in whole seconds, as the tick is: a reader
+/// pauses a whole tick between reads, so what the pause itself takes past
+/// it is no lateness. A mark more than a tick ahead of `now` is none. It
+/// takes no lease and never leads: a lock it gets is no reader's, and is
+/// dropped at once.
+pub fn current(dir: &Path, repository: &str, now: SystemTime) -> Result<Option<Value>> {
+    let files = Files::of(dir, repository);
+    let Ok(bytes) = std::fs::read(&files.doc) else {
+        return Ok(None);
+    };
+    if try_lock(&files.lock)?.is_some() {
+        return Ok(None);
+    }
+    let Ok(doc) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
+    let tick = match (doc.get("branches"), doc.get("tick").and_then(Value::as_u64)) {
+        (Some(Value::Array(_)), Some(tick)) => tick,
+        _ => return Ok(None),
+    };
+    // Whether `later` is no more than a tick after `earlier`.
+    let within = |earlier: SystemTime, later: SystemTime| {
+        later
+            .duration_since(earlier)
+            .map_or(true, |d| d.as_secs() <= tick)
+    };
+    let mark = |path: &Path| {
+        let at = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+        within(now, at).then_some(at)
+    };
+    let Some(ended) = mark(&files.doc) else {
+        return Ok(None);
+    };
+    let reading = mark(&files.lock).is_some_and(|began| began > ended && within(ended, began));
+    Ok((within(ended, now) || reading).then_some(doc))
 }
 
 /// The lock on `path`, when no live process holds it. Opening it never
@@ -291,6 +366,8 @@ pub fn untimed(doc: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// A scratch readers directory, removed when dropped.
@@ -630,6 +707,149 @@ mod tests {
         drop(second);
         let _third = lead(Reader::take(&s.0, REPO, NEW).unwrap());
         assert_eq!(next.read(), Some(doc("2026-10-25T09:00:01Z", 1)));
+    }
+
+    /// A read's document as a reader of `tick` seconds writes it.
+    fn ticked(at: &str, depth: u64, tick: u64) -> Value {
+        let mut d = doc(at, depth);
+        d["tick"] = tick.into();
+        d
+    }
+
+    /// Set `path`'s time to `at`.
+    fn mark(path: &Path, at: SystemTime) {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    fn time(path: &Path) -> SystemTime {
+        std::fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    /// 64, 129: a read that changes nothing moves the document's time to
+    /// its end and leaves its bytes; a read's start moves the lock's.
+    #[test]
+    fn an_unchanged_write_moves_the_documents_time_and_not_its_bytes() {
+        let s = Scratch::new("marks");
+        let mut lead = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        lead.write(&ticked("2026-10-29T09:00:00Z", 1, 1)).unwrap();
+        let bytes = std::fs::read(&lead.files.doc).unwrap();
+        let long_ago = SystemTime::now() - Duration::from_secs(600);
+        mark(&lead.files.doc, long_ago);
+        mark(&lead.files.lock, long_ago);
+        lead.begin().unwrap();
+        lead.write(&ticked("2026-10-29T09:00:01Z", 1, 1)).unwrap();
+        assert_eq!(std::fs::read(&lead.files.doc).unwrap(), bytes);
+        for path in [&lead.files.doc, &lead.files.lock] {
+            let since = SystemTime::now().duration_since(time(path)).unwrap();
+            assert!(since < Duration::from_secs(60), "{}", path.display());
+        }
+    }
+
+    /// 64, 129: the document is current after a read, while its reader
+    /// lives; none with the lock free.
+    #[test]
+    fn current_gives_the_document_after_a_read_and_none_with_the_lock_free() {
+        let s = Scratch::new("current");
+        let mut lead = lead(Reader::take(&s.0, REPO, NEW).unwrap());
+        let read = ticked("2026-10-29T09:00:00Z", 1, 3);
+        lead.begin().unwrap();
+        lead.write(&read).unwrap();
+        let now = SystemTime::now();
+        assert_eq!(current(&s.0, REPO, now).unwrap(), Some(read.clone()));
+        assert_eq!(
+            current(&s.0, "/Users/someone/other/.git", now).unwrap(),
+            None
+        );
+        drop(lead);
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None);
+        // The lock it took for an instant is free again.
+        lead_of(&s);
+    }
+
+    fn lead_of(s: &Scratch) -> Lead {
+        lead(Reader::take(&s.0, REPO, NEW).unwrap())
+    }
+
+    /// 64, 129: five ticks after its last read, with no read begun since,
+    /// a reader has stalled; one twenty seconds into a read it began a
+    /// second after the last ended is current; a mark more than a tick
+    /// ahead is none.
+    #[test]
+    fn current_reads_the_marks_against_the_tick() {
+        let s = Scratch::new("stalled");
+        let mut lead = lead_of(&s);
+        let read = ticked("2026-10-29T09:00:00Z", 1, 1);
+        lead.write(&read).unwrap();
+        let (doc, lock) = (lead.files.doc.clone(), lead.files.lock.clone());
+        let now = SystemTime::now();
+        let ago = |secs: u64| now - Duration::from_secs(secs);
+
+        mark(&lock, ago(6));
+        mark(&doc, ago(5));
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None, "stalled");
+
+        mark(&doc, ago(21));
+        mark(&lock, ago(20));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            Some(read.clone()),
+            "a slow read"
+        );
+        // Begun a tick, and what its pause took past it, after the last.
+        mark(&lock, ago(20) + Duration::from_millis(40));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            Some(read.clone()),
+            "a pause's time"
+        );
+        mark(&doc, ago(1) - Duration::from_millis(40));
+        mark(&lock, ago(22));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            Some(read.clone()),
+            "ended a tick ago"
+        );
+        mark(&doc, ago(21));
+
+        mark(&lock, ago(18));
+        assert_eq!(
+            current(&s.0, REPO, now).unwrap(),
+            None,
+            "begun three ticks late"
+        );
+
+        mark(&doc, now + Duration::from_secs(5));
+        mark(&lock, now + Duration::from_secs(6));
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None, "marks ahead");
+
+        mark(&doc, now);
+        assert_eq!(current(&s.0, REPO, now).unwrap(), Some(read));
+    }
+
+    /// 64, 129: a reader's failure document, one with no tick, as a reader
+    /// from before it writes, and one that is no whole document, are no
+    /// read to forecast from.
+    #[test]
+    fn current_gives_none_for_a_failure_document() {
+        let s = Scratch::new("failure");
+        let mut lead = lead_of(&s);
+        let failed = serde_json::json!({
+            "schema": "sluice/error@1",
+            "error": { "kind": "internal", "message": "the records could not be read" },
+            "tick": 1,
+        });
+        lead.write(&failed).unwrap();
+        let now = SystemTime::now();
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None);
+        lead.write(&doc("2026-10-29T09:00:00Z", 1)).unwrap();
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None, "no tick");
+        std::fs::write(&lead.files.doc, br#"{"branches":[],"tick":1"#).unwrap();
+        assert_eq!(current(&s.0, REPO, now).unwrap(), None, "cut short");
     }
 
     /// A half-written temporary file is never read: a follower reads the

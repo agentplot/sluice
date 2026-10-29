@@ -318,6 +318,10 @@ impl Branch for Branches {
         }
     }
 
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        self.local.holds(rev)
+    }
+
     fn copy(&self, branch: &str) -> Result<HostCopy> {
         match self.route(branch)? {
             Some(p) => p.copy(branch),

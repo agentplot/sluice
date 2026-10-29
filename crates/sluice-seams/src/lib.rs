@@ -951,8 +951,16 @@ pub trait Branch {
     /// fetch: a branch in the host's own refs as [`Branch::read`] reads it,
     /// and a branch on a remote at its revision as last fetched. What a
     /// reader's tick that decides nothing reads; a round, a submission and
-    /// a status read with [`Branch::read`].
+    /// a status read with [`Branch::read`]. A reader names it beside the
+    /// records it read, so a forecast forms on what that read found (64,
+    /// 124).
     fn held(&self, branch: &str) -> Result<Option<Rev>>;
+
+    /// 64, 124: whether this host has `rev`'s objects, so a merge can be
+    /// formed on it here with nothing fetched.
+    fn holds(&self, _rev: &Rev) -> Result<bool> {
+        Ok(true)
+    }
 
     /// 124: what this host holds of the branch apart from it, read on the
     /// host alone, with no fetch.
@@ -1313,9 +1321,12 @@ pub trait State {
 
     /// 129: ask each remote that keeps branches' records, once, for the
     /// records of every branch on it and the hosts' signs of life: what a
-    /// reader's tick does first. Records in the host's own files need no
-    /// asking. A remote that refuses leaves every branch on it read as last
-    /// fetched, [`State::stale`] naming the refusal, and fails nothing.
+    /// reader's tick does first. The same ask brings each branch's
+    /// revision, the work submitted to the remote and the combinations
+    /// formed on its branches, so what a reader writes is all a forecast
+    /// forms from (64). Records in the host's own files need no asking. A
+    /// remote that refuses leaves every branch on it read as last fetched,
+    /// [`State::stale`] naming the refusal, and fails nothing.
     fn refresh(&self) -> Result<()>;
 
     /// 129: the branch's records as the host's own files hold them, after

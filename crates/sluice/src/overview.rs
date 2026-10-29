@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::SecondsFormat;
@@ -63,6 +64,9 @@ pub fn document(
     Ok((branches, doc))
 }
 
+/// `tick` is how long `pause` pauses, which a watch that reads names in
+/// its documents (64, 129).
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     s: &Sluice<'_>,
     host: &dyn Host,
@@ -70,6 +74,7 @@ pub fn run(
     json: bool,
     watch: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     if !watch {
@@ -106,6 +111,9 @@ pub fn run(
                 // not use is forgotten.
                 s.next_pass();
                 host.next_pass();
+                // A read whose start it could not mark leaves a forecast
+                // reading past this reader, which decides nothing (64).
+                let _ = lead.begin();
                 let doc = match read(s, host, clock, &mut asked) {
                     // Ctrl-C reaches the git a read runs in the foreground:
                     // a branch's read it ended is no refusal of the branch's
@@ -118,6 +126,7 @@ pub fn run(
                     // overview prints it.
                     Err(e) => told::document(Kind::Internal, &format!("{e:#}"), &[]),
                 };
+                let doc = ticked(doc, tick);
                 // What it read is printed all the same; the reader's last
                 // document stands for a write that failed until one succeeds.
                 let _ = lead.write(&doc);
@@ -145,6 +154,14 @@ pub fn run(
         // try leaves it as it was.
         let _ = reader.step(true);
     }
+}
+
+/// `doc` as a reader writes it: naming its tick, the pause between its
+/// reads, in whole seconds, so a forecast can tell whether it keeps it
+/// (64, 129).
+pub(crate) fn ticked(mut doc: serde_json::Value, tick: Duration) -> serde_json::Value {
+    doc["tick"] = tick.as_secs().into();
+    doc
 }
 
 /// What a watch last asked of whether the repository has sluice: the tips

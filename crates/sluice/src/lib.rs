@@ -29,6 +29,7 @@ pub mod words;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -827,6 +828,16 @@ impl Clock for Skipped {
     }
 }
 
+/// How long a command pauses between its reads, the tick its reader names
+/// (64, 129): a watching overview reads about once a second; a run, a
+/// waiting submit or `sluice wait` rounds every three.
+pub fn tick(command: Option<&Command>) -> Duration {
+    match command {
+        Some(Command::Overview { .. }) => Duration::from_secs(1),
+        _ => Duration::from_secs(3),
+    }
+}
+
 pub struct Sleep(pub std::time::Duration);
 
 impl Pause for Sleep {
@@ -901,6 +912,7 @@ pub fn run(
     out: &mut dyn Write,
 ) -> Result<i32> {
     let s = Sluice::new(seams, clock).as_peer(host.peer());
+    let tick = tick(cli.command.as_ref());
     // 124: the hook reads the policy only as far as guarding needs.
     let s = match &cli.command {
         Some(Command::Hook { .. }) => s.guarding(),
@@ -964,13 +976,16 @@ pub fn run(
                 if takes_pulls(&s, &req.branch)? {
                     return submit_pull_group(&s, pulls, clock, req, no_wait, json, pause, out);
                 }
-                return submit_group(&s, host, pushers, clock, req, no_wait, json, pause, out);
+                return submit_group(
+                    &s, host, pushers, clock, req, no_wait, json, pause, tick, out,
+                );
             }
             let worktree = worktree.into_iter().next().unwrap_or_else(|| ".".into());
             let subject = subject.into_iter().next();
             if check {
                 return forecast(
                     &s,
+                    host,
                     pushers,
                     &worktree,
                     head.as_deref(),
@@ -1009,6 +1024,7 @@ pub fn run(
                 no_wait,
                 json,
                 pause,
+                tick,
                 out,
             )
         }
@@ -1056,6 +1072,7 @@ pub fn run(
                 deadline,
                 json,
                 pause,
+                tick,
                 copy: None,
                 worktree: Some(&worktree),
             };
@@ -1317,7 +1334,7 @@ pub fn run(
             }
         },
         Command::Overview { json, watch } => {
-            overview::run(&s, host, clock, json, watch, pause, out)
+            overview::run(&s, host, clock, json, watch, pause, tick, out)
         }
         Command::Amend {
             id,
@@ -1813,9 +1830,14 @@ fn refusal_next(r: &SubmitRefusal, branch: &str) -> Vec<String> {
     }
 }
 
+/// 64, 124, 129: `sluice submit --check`: formed on the branch and its
+/// queue as the host's live reader last read them, asking the remote
+/// nothing, where that reader keeps its tick and its read holds all the
+/// forecast forms from; otherwise read as a round reads them.
 #[allow(clippy::too_many_arguments)]
 fn forecast(
     s: &Sluice<'_>,
+    host: &dyn exec::Host,
     pushers: &dyn Pushers,
     worktree: &str,
     from: Option<&str>,
@@ -1824,9 +1846,12 @@ fn forecast(
     json: bool,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    let got = match from {
-        Some(from) => s.forecast_branch(from, branch, after)?,
-        None => s.forecast(worktree, branch, after)?,
+    let got = match forecast_read(s, host, worktree, from, branch, after)? {
+        Some(got) => got,
+        None => match from {
+            Some(from) => s.forecast_branch(from, branch, after)?,
+            None => s.forecast(worktree, branch, after)?,
+        },
     };
     let f = match got {
         Ok(f) => f,
@@ -1845,6 +1870,49 @@ fn forecast(
         Forecast::Clear => LANDED,
         Forecast::Conflict { .. } => CONFLICT,
     })
+}
+
+/// 64, 129: the forecast formed on the read of `branch` in the document of
+/// the host's reader, while that reader keeps its tick (rule core.25):
+/// `--head`'s branch taken from the same read where it holds it, and read
+/// as today, once, where not. `None` where there is no such reader, its
+/// read does not hold the branch, or holds too little to form on.
+fn forecast_read(
+    s: &Sluice<'_>,
+    host: &dyn exec::Host,
+    worktree: &str,
+    from: Option<&str>,
+    branch: &str,
+    after: &[u64],
+) -> Result<Option<Result<Forecasted, SubmitRefusal>>> {
+    let now = std::time::SystemTime::now();
+    // A reader this cannot look for is none: the forecast reads as a round.
+    let found = host
+        .readers()
+        .and_then(|dir| reader::current(&dir, &host.repository()?, now));
+    let Ok(Some(doc)) = found else {
+        return Ok(None);
+    };
+    let Some(view) = branch_in(&doc, branch) else {
+        return Ok(None);
+    };
+    let Some(from) = from else {
+        let session = s.seams().driver.session(worktree)?;
+        if session.detached {
+            return Ok(None);
+        }
+        return s.forecast_read(&view, &session.head, &session.from.worktree, after);
+    };
+    if let Some(head) = branch_in(&doc, from).and_then(|v| v.revision) {
+        return s.forecast_read(&view, &head, from, after);
+    }
+    let Some(head) = s.seams().branch.read(from)? else {
+        return Ok(Some(Err(SubmitRefusal::NoHead(from.into()))));
+    };
+    Ok(Some(match s.forecast_read(&view, &head, from, after)? {
+        Some(got) => got,
+        None => s.forecast_head(&head, from, branch, after)?,
+    }))
 }
 
 /// A forecast as `submit --check --json` and `exec --json` print it: its
@@ -1892,6 +1960,7 @@ fn submit(
     no_wait: bool,
     json: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let accepted = match s.submit(&req)? {
@@ -1938,6 +2007,7 @@ fn submit(
         deadline: None,
         json,
         pause,
+        tick,
         copy,
         worktree: Some(&req.worktree),
     };
@@ -1972,6 +2042,7 @@ fn submit_group(
     no_wait: bool,
     json: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     let branch = &req.branch;
@@ -2022,6 +2093,7 @@ fn submit_group(
         deadline: None,
         json,
         pause,
+        tick,
         copy: None,
         worktree: None,
     };
@@ -2232,6 +2304,9 @@ struct Waiting<'a> {
     deadline: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
     pause: &'a dyn Pause,
+    /// How long `pause` pauses, the tick the wait names as its reader
+    /// (64, 129).
+    tick: Duration,
     /// 124: how the host's copy differed from what the submit waited on
     /// submitted, carried by its `--json` document.
     copy: Option<&'a CopyDiffers>,
@@ -2513,32 +2588,38 @@ impl Reading {
         let (id, branch) = (sub.id, sub.branch.clone());
         // The reader's document, when it was read from one.
         let followed = match &mut self.reader {
-            Reader::Lead(lead) => match overview::document(s, waiting.host, waiting.clock) {
-                Ok((branches, doc)) => {
-                    // Ctrl-C reaching the git a branch's read runs is no
-                    // refusal of that branch's (26).
-                    if !INTERRUPTED.load(Ordering::SeqCst) {
-                        lead.write(&doc)?;
+            Reader::Lead(lead) => {
+                // A read whose start it could not mark leaves a forecast
+                // reading past this reader, which decides nothing (64).
+                let _ = lead.begin();
+                match overview::document(s, waiting.host, waiting.clock) {
+                    Ok((branches, doc)) => {
+                        // Ctrl-C reaching the git a branch's read runs is no
+                        // refusal of that branch's (26).
+                        if !INTERRUPTED.load(Ordering::SeqCst) {
+                            lead.write(&overview::ticked(doc, waiting.tick))?;
+                        }
+                        self.view = branches
+                            .into_iter()
+                            .find(|b| b.branch == branch && b.unread.is_none());
+                        None
                     }
-                    self.view = branches
-                        .into_iter()
-                        .find(|b| b.branch == branch && b.unread.is_none());
-                    None
-                }
-                // The records, or the host's part, could not be read: the
-                // failure is the reader's document, in the words it was
-                // refused with (133), and its own part is read as a wait
-                // alone reads it. Ctrl-C reaching the git a read runs is no
-                // failure of the queues'.
-                Err(e) => {
-                    if !INTERRUPTED.load(Ordering::SeqCst) {
-                        lead.write(&told::document(Kind::Internal, &format!("{e:#}"), &[]))?;
+                    // The records, or the host's part, could not be read: the
+                    // failure is the reader's document, in the words it was
+                    // refused with (133), and its own part is read as a wait
+                    // alone reads it. Ctrl-C reaching the git a read runs is no
+                    // failure of the queues'.
+                    Err(e) => {
+                        if !INTERRUPTED.load(Ordering::SeqCst) {
+                            let failed = told::document(Kind::Internal, &format!("{e:#}"), &[]);
+                            lead.write(&overview::ticked(failed, waiting.tick))?;
+                        }
+                        self.view = s.branch_view_of(&branch).ok();
+                        *sub = record(s, id, &branch)?;
+                        return Ok(());
                     }
-                    self.view = s.branch_view_of(&branch).ok();
-                    *sub = record(s, id, &branch)?;
-                    return Ok(());
                 }
-            },
+            }
             Reader::Follow(follow) => {
                 // The reader's read that failed is no whole document either:
                 // the last view stands, and no record is read for it (129).

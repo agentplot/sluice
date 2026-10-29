@@ -120,12 +120,8 @@ fn main() {
     } else {
         None
     };
-    // A watching overview reads the records about once a second; a run,
-    // a waiting submit or `sluice wait` rounds every three.
-    let every = match cli.command {
-        Some(Command::Overview { .. }) => Duration::from_secs(1),
-        _ => Duration::from_secs(3),
-    };
+    // The tick a reader names in its document is the pause it takes.
+    let every = sluice::tick(cli.command.as_ref());
     let mut out = std::io::stdout();
     let skipped = Skipped::new(every);
     let (clock, pause): (&dyn Clock, &dyn Pause) = match std::env::var(ROUND_SLEEP_VAR).as_deref() {

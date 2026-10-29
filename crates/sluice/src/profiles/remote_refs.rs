@@ -44,6 +44,9 @@ use crate::signing::statement::{Claims, Run, RunResult, Statement};
 /// 116).
 const SET_ASIDE: &str = "refs/sluice/set-aside";
 
+/// Every head submitted to the remote, by its revision (82).
+const HEADS: &str = "refs/sluice/heads/*";
+
 /// The file of a branch's state commit holding its version.
 const VERSION: &str = "version";
 
@@ -155,6 +158,17 @@ impl RemoteRefs {
     fn fetched(&self, name: &str) -> String {
         let rest = name.strip_prefix("refs/sluice/").unwrap_or(name);
         format!("refs/sluice-fetched/{}/{rest}", self.remote())
+    }
+
+    /// 82: the refspec that fetches every head submitted to the remote.
+    fn heads_spec(&self) -> String {
+        format!("+{HEADS}:refs/sluice-fetched/{}/heads/*", self.remote())
+    }
+
+    /// 82: the refspec that fetches `branch`'s combinations open to claims.
+    fn combinations_spec(&self, branch: &str) -> String {
+        let remote = self.remote();
+        format!("+refs/sluice/combinations/{branch}/*:refs/sluice-fetched/{remote}/combinations/{branch}/*")
     }
 
     /// Fetch `name` from the remote; `None` when it has none.
@@ -510,13 +524,23 @@ fn snapshot(r: Read) -> Snapshot {
 /// (rule core.29): the records of every branch on it and every host's sign
 /// of life, in one fetch, each replacing what was last fetched; a branch's
 /// records or a host's sign of life gone from the remote is gone here.
-/// A remote that cannot be read is a [`ReadRefused`] naming what was asked
-/// (133).
+/// The same fetch brings every branch on the remote into its tracking
+/// ref, the work submitted to it and the combinations formed on its
+/// branches, so a reader's read holds all a forecast forms from and asks
+/// the remote nothing more for it (64); a branch gone from the remote is
+/// gone from its tracking refs, so no revision of it is named as the
+/// remote's (124). A remote that cannot be read is a [`ReadRefused`]
+/// naming what was asked (133).
 pub(crate) fn ask(pushed: &PushedRefs) -> Result<()> {
     let remote = pushed.remote();
     let state = format!("+refs/sluice/state/*:refs/sluice-fetched/{remote}/state/*");
     let hosts = format!("+refs/sluice/hosts/*:refs/sluice-fetched/{remote}/hosts/*");
-    pushed.fetch_specs("refs/sluice/*", &[&state, &hosts], &["--prune"])?;
+    let branches = format!("+refs/heads/*:refs/remotes/{remote}/*");
+    let heads = format!("+{HEADS}:refs/sluice-fetched/{remote}/heads/*");
+    let combinations =
+        format!("+refs/sluice/combinations/*:refs/sluice-fetched/{remote}/combinations/*");
+    let specs = [&state, &hosts, &branches, &heads, &combinations].map(String::as_str);
+    pushed.fetch_specs("refs/sluice/*", &specs, &["--prune"])?;
     Ok(())
 }
 
@@ -527,7 +551,6 @@ pub(crate) fn fetched_branches(pushed: &PushedRefs) -> Result<Vec<(String, Rev)>
         .local()
         .refs_under(&format!("refs/sluice-fetched/{}/state/", pushed.remote()))
 }
-
 /// `refs/sluice/state/<branch>`, for a branch git may name.
 fn state_ref(branch: &str) -> Result<String> {
     if branch.is_empty()
@@ -683,9 +706,8 @@ impl State for RemoteRefs {
     }
 
     fn fetch_heads(&self, _branch: &str) -> Result<()> {
-        let asked = "refs/sluice/heads/*";
-        let spec = format!("+{asked}:refs/sluice-fetched/{}/heads/*", self.remote());
-        self.pushed.fetch_spec(asked, &spec, &["--prune"])?;
+        self.pushed
+            .fetch_spec(HEADS, &self.heads_spec(), &["--prune"])?;
         Ok(())
     }
 
@@ -793,11 +815,8 @@ impl State for RemoteRefs {
     fn fetch_candidates(&self, branch: &str) -> Result<()> {
         state_ref(branch)?;
         let asked = format!("refs/sluice/combinations/{branch}/*");
-        let spec = format!(
-            "+{asked}:refs/sluice-fetched/{}/combinations/{branch}/*",
-            self.remote()
-        );
-        self.pushed.fetch_spec(&asked, &spec, &["--prune"])?;
+        self.pushed
+            .fetch_spec(&asked, &self.combinations_spec(branch), &["--prune"])?;
         Ok(())
     }
 

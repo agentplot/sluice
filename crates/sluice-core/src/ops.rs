@@ -11,7 +11,8 @@ use sluice_seams::{Contested, Decided, Formed, Guard, HostCopy, Rev, Session, Su
 
 use crate::line::Line;
 use crate::order::{self, Entry};
-use crate::records::{Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
+use crate::overview::{after_landed, BranchView};
+use crate::records::{CandidateState, Event, State, Submission, Withdrawal, SUBMISSION_SCHEMA};
 use crate::{Found, Sluice};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,6 +225,115 @@ pub struct Forecasted {
     /// The submissions formed ahead of the head, in order.
     pub ahead: Vec<u64>,
     pub forecast: Forecast,
+}
+
+/// 64: a branch's queue as a forecast forms on it, read from its records
+/// or from a reader's read of them: one forming path for both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Queue {
+    /// The branch's revision the forecast forms on.
+    tip: Rev,
+    /// The submissions not out of the queue, by number.
+    subs: BTreeMap<u64, Queued>,
+    /// The combinations formed on the branch (10).
+    combinations: Vec<Combination>,
+    /// The landed submissions a queued one's `after` names (7).
+    landed: BTreeSet<u64>,
+}
+
+/// A submission in the queue, as a forecast orders and forms it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Queued {
+    head: Rev,
+    from: Submitter,
+    state: State,
+    priority: i64,
+    after: Vec<u64>,
+}
+
+/// A combination formed on the branch, as a forecast takes it (10).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Combination {
+    on: Rev,
+    submissions: Vec<u64>,
+    revision: Rev,
+    state: CandidateState,
+}
+
+impl Queued {
+    fn of(s: &Submission) -> Queued {
+        Queued {
+            head: s.head.clone(),
+            from: s.from.clone(),
+            state: s.state,
+            priority: s.priority,
+            after: s.after.clone(),
+        }
+    }
+}
+
+impl Queue {
+    /// The queue the records hold, formed on `tip`, the branch's revision
+    /// as its caller just read it.
+    pub(crate) fn from_line(line: &Line, tip: Rev) -> Queue {
+        Queue {
+            tip,
+            subs: line
+                .subs
+                .values()
+                .filter(|s| !s.state.is_out())
+                .map(|s| (s.id, Queued::of(s)))
+                .collect(),
+            combinations: line
+                .doc
+                .candidates
+                .iter()
+                .map(|c| Combination {
+                    on: c.on.clone(),
+                    submissions: c.submissions.clone(),
+                    revision: c.revision.clone(),
+                    state: c.state,
+                })
+                .collect(),
+            landed: after_landed(line).into_iter().collect(),
+        }
+    }
+
+    /// 64: the queue a reader's read of the branch found, formed on the
+    /// revision that read found; `None` where it names none, or names a
+    /// combination with no revision it was formed on, as a document from
+    /// before them does.
+    pub(crate) fn from_view(view: &BranchView) -> Option<Queue> {
+        let combinations = view
+            .candidates
+            .iter()
+            .map(|c| {
+                Some(Combination {
+                    on: c.on.clone()?,
+                    submissions: c.submissions.clone(),
+                    revision: c.revision.clone(),
+                    state: c.state,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Queue {
+            tip: view.revision.clone()?,
+            subs: view
+                .submissions
+                .iter()
+                .filter(|s| !s.state.is_out())
+                .map(|s| (s.id, Queued::of(s)))
+                .collect(),
+            combinations,
+            landed: view.after_landed.iter().copied().collect(),
+        })
+    }
+
+    fn sub(&self, id: u64) -> Result<&Queued> {
+        self.subs
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("no submission {id} in the queue"))
+    }
 }
 
 /// A branch's queue as read from its records (26, 49).
@@ -596,9 +706,11 @@ impl Sluice<'_> {
         self.forecast_head(&head, from, branch, after)
     }
 
-    /// `own` is the work the head is, as its driver names it: submissions
-    /// of it are left out, as a submission of it would withdraw them (67).
-    fn forecast_head(
+    /// 64, 65, 47a: the forecast of `head` on the branch as a round reads
+    /// it. `own` is the work the head is, as its driver names it:
+    /// submissions of it are left out, as a submission of it would
+    /// withdraw them (67).
+    pub fn forecast_head(
         &self,
         head: &Rev,
         own: &str,
@@ -614,8 +726,57 @@ impl Sluice<'_> {
         Ok(Ok(self.forecast_onto(head, own, branch, tip, after)?))
     }
 
+    /// 64, 124, 129: the forecast of `head` as a submission of `own` to
+    /// the branch `view` is of, formed on the queue a reader's read of it
+    /// found, with nothing fetched. `None` where that read names no
+    /// revision of the branch, or could not read it, or the host lacks
+    /// the revision, the head, a queued submission's work or a
+    /// combination formed on that revision: the forecast is then read as
+    /// a round reads the branch.
+    pub fn forecast_read(
+        &self,
+        view: &BranchView,
+        head: &Rev,
+        own: &str,
+        after: &[u64],
+    ) -> Result<Option<Result<Forecasted, SubmitRefusal>>> {
+        if view.unread.is_some() {
+            return Ok(None);
+        }
+        let Some(queue) = Queue::from_view(view) else {
+            return Ok(None);
+        };
+        let branch = self.seams.branch;
+        if !branch.holds(&queue.tip)? || !branch.holds(head)? || self.lacks(&queue)? {
+            return Ok(None);
+        }
+        if self.rules_at(&view.branch, &queue.tip)?.is_none() {
+            return Ok(Some(Err(SubmitRefusal::NotManaged)));
+        }
+        Ok(Some(Ok(self.forecast_on(&queue, head, own, after)?)))
+    }
+
+    /// Whether this host lacks work a forecast on `queue` may form from:
+    /// a queued submission's head, or a combination formed on its tip.
+    fn lacks(&self, queue: &Queue) -> Result<bool> {
+        let branch = self.seams.branch;
+        for s in queue.subs.values() {
+            if !branch.holds(&s.head)? {
+                return Ok(true);
+            }
+        }
+        for c in queue.combinations.iter().filter(|c| c.on == queue.tip) {
+            if !branch.holds(&c.revision)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The forecast on `tip`, the branch's revision as its caller just read
-    /// it: `sluice exec`'s, which read it for its run.
+    /// it: `sluice exec`'s, which read it for its run. Work submitted from
+    /// another host, or a combination one formed, that is not on this host
+    /// is fetched first, as a round fetches it (124).
     pub(crate) fn forecast_onto(
         &self,
         head: &Rev,
@@ -625,17 +786,34 @@ impl Sluice<'_> {
         after: &[u64],
     ) -> Result<Forecasted> {
         let line = self.read_line(branch)?;
+        let queue = Queue::from_line(&line, tip);
+        if self.lacks(&queue)? {
+            self.seams.state.fetch_heads(branch)?;
+            self.seams.state.fetch_candidates(branch)?;
+        }
+        self.forecast_on(&queue, head, own, after)
+    }
 
+    /// 64, 65, 47a: the forecast of `head`, submitted by `own`, on
+    /// `queue`, read from the records or a reader's read of them.
+    fn forecast_on(
+        &self,
+        queue: &Queue,
+        head: &Rev,
+        own: &str,
+        after: &[u64],
+    ) -> Result<Forecasted> {
+        let tip = queue.tip.clone();
         // The queue as the next step would order it, with the head at the
         // back.
         const PROBE: u64 = u64::MAX;
         let mut entries = Vec::new();
-        for s in line.subs.values() {
-            if s.state.is_out() || s.state == State::Landing || s.from.worktree == own {
+        for (id, s) in &queue.subs {
+            if s.state == State::Landing || s.from.worktree == own {
                 continue;
             }
             entries.push(Entry {
-                id: s.id,
+                id: *id,
                 priority: s.priority,
                 after: s.after.clone(),
             });
@@ -645,19 +823,17 @@ impl Sluice<'_> {
             priority: i64::MIN,
             after: Vec::new(),
         });
-        let landed: BTreeSet<u64> = line.landed();
-        let pinned: Vec<Vec<u64>> = line
-            .doc
-            .candidates
+        let pinned: Vec<Vec<u64>> = queue
+            .combinations
             .iter()
             .filter(|c| c.on == tip && c.state.pins())
             .map(|c| c.submissions.clone())
             .collect();
-        let ord = order::order(&entries, &landed, &pinned);
+        let ord = order::order(&entries, &queue.landed, &pinned);
         // Its `after` entries are ahead of it, waiting or not.
         let mut ahead_ids: Vec<u64> = ord.chain.into_iter().filter(|i| *i != PROBE).collect();
         for a in after {
-            if !ahead_ids.contains(a) && line.subs.get(a).is_some_and(|s| !s.state.is_out()) {
+            if !ahead_ids.contains(a) && queue.subs.contains_key(a) {
                 ahead_ids.push(*a);
             }
         }
@@ -669,9 +845,8 @@ impl Sluice<'_> {
             prefix.push(id);
             // A candidate a round formed on this revision with exactly these
             // submissions is the same merge (10): taken, not formed again.
-            if let Some(c) = line
-                .doc
-                .candidates
+            if let Some(c) = queue
+                .combinations
                 .iter()
                 .find(|c| c.on == tip && c.submissions == prefix)
             {
@@ -680,7 +855,7 @@ impl Sluice<'_> {
                 continue;
             }
             // An entry ahead that conflicts itself would leave the chain.
-            match self.seams.branch.form(&prev, &line.sub(id)?.head)? {
+            match self.seams.branch.form(&prev, &queue.sub(id)?.head)? {
                 Formed::Revision(r) => {
                     prev = r.clone();
                     ahead.push((id, r));
@@ -692,10 +867,13 @@ impl Sluice<'_> {
         }
         let forecast = match self.seams.branch.form(&prev, head)? {
             Formed::Revision(_) => Forecast::Clear,
-            Formed::Conflict { paths } => Forecast::Conflict {
-                with: self.contested(&line, &tip, &ahead, head)?,
-                paths,
-            },
+            Formed::Conflict { paths } => {
+                let work = |id| queue.sub(id).map(|s| (s.head.clone(), s.from.clone()));
+                Forecast::Conflict {
+                    with: self.contested(&work, &tip, &ahead, head)?,
+                    paths,
+                }
+            }
         };
         Ok(Forecasted {
             head: head.clone(),
@@ -2375,5 +2553,148 @@ mod tests {
         assert!(s.in_play("main").unwrap());
         assert_eq!(f.world.revision_reads(), revisions);
         assert_eq!(f.world.file_reads(), files);
+    }
+}
+
+#[cfg(test)]
+mod forecasts {
+    use chrono::{DateTime, TimeZone, Utc};
+    use sluice_fakes::Fakes;
+
+    use super::*;
+    use crate::policy::POLICY_PATH;
+    use crate::{Clock, Seams};
+
+    const POLICY: &str = "[branches.main]\nrequired = [\"#gate\"]\nparallel = 4\n";
+
+    struct Noon;
+
+    impl Clock for Noon {
+        fn now(&self) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 10, 29, 12, 0, 0).unwrap()
+        }
+    }
+
+    fn sluice(f: &Fakes) -> Sluice<'_> {
+        let seams = Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        };
+        Sluice::new(seams, &Noon)
+    }
+
+    fn submit(s: &Sluice<'_>, worktree: &str) -> u64 {
+        let req = SubmitRequest {
+            worktree: worktree.into(),
+            branch: "main".into(),
+            after: Vec::new(),
+            priority: 0,
+            subject: None,
+        };
+        s.submit(&req).unwrap().unwrap().id
+    }
+
+    /// `main` with `#1` under test, its combination formed on `main`'s
+    /// revision, and `#2` queued behind it; and a head of `unit/c` that
+    /// conflicts with `#1`.
+    fn queued() -> (Fakes, Rev, Rev) {
+        let f = Fakes::new();
+        let tip = f.world.init("main", &[(POLICY_PATH, POLICY), ("lib", "1")]);
+        f.world.task("a:test", "");
+        f.world.hold_runs(true);
+        let one = f.world.work(&tip, &[("lib", Some("2"))]);
+        f.world.session("unit/a", "agent-a", &one);
+        let two = f.world.work(&tip, &[("other", Some("x"))]);
+        f.world.session("unit/b", "agent-b", &two);
+        let s = sluice(&f);
+        assert_eq!(submit(&s, "unit/a"), 1);
+        s.step("main").unwrap();
+        assert_eq!(submit(&s, "unit/b"), 2);
+        let head = f.world.work(&tip, &[("lib", Some("3"))]);
+        (f, head, one)
+    }
+
+    fn view(s: &Sluice<'_>) -> BranchView {
+        s.overview(None)
+            .unwrap()
+            .into_iter()
+            .find(|v| v.branch == "main")
+            .expect("main has records")
+    }
+
+    /// 64, 65: a forecast formed on a reader's read of the queue is the
+    /// forecast the records of the same queue give: the same revision,
+    /// the same submissions ahead, and the same conflict, named with whom.
+    #[test]
+    fn a_forecast_from_a_view_is_the_forecast_from_the_records() {
+        let (f, head, _) = queued();
+        let s = sluice(&f);
+        let tip = f.world.tip("main");
+        let view = view(&s);
+        assert_eq!(view.revision.as_ref(), Some(&tip));
+        assert!(view.candidates.iter().any(|c| c.on.as_ref() == Some(&tip)));
+        let records = s.forecast_onto(&head, "unit/c", "main", tip, &[]).unwrap();
+        let read = s
+            .forecast_read(&view, &head, "unit/c", &[])
+            .unwrap()
+            .expect("formed on the read")
+            .unwrap();
+        assert_eq!(read, records);
+        assert_eq!(read.ahead, [1, 2]);
+        let Forecast::Conflict { paths, with } = &read.forecast else {
+            panic!("no conflict: {read:?}");
+        };
+        assert_eq!(paths, &["lib"]);
+        let with: Vec<(u64, &str)> = with
+            .iter()
+            .map(|c| (c.id, c.from.worktree.as_str()))
+            .collect();
+        assert_eq!(with, [(1, "unit/a")]);
+    }
+
+    /// 64: a read that names no revision of the branch, one that could not
+    /// read it, or one from before the revisions a combination was formed
+    /// on were named, is no read to form on.
+    #[test]
+    fn a_view_with_no_revision_gives_none() {
+        let (f, head, _) = queued();
+        let s = sluice(&f);
+        let mut none = view(&s);
+        none.revision = None;
+        assert_eq!(s.forecast_read(&none, &head, "unit/c", &[]).unwrap(), None);
+        let mut before = view(&s);
+        before.candidates[0].on = None;
+        assert_eq!(
+            s.forecast_read(&before, &head, "unit/c", &[]).unwrap(),
+            None
+        );
+        let unread = BranchView::unread("main", &anyhow::anyhow!("refused"));
+        assert_eq!(
+            s.forecast_read(&unread, &head, "unit/c", &[]).unwrap(),
+            None
+        );
+    }
+
+    /// 64, 124: where the host lacks a queued submission's head, or the
+    /// head forecast, the read is not formed on; the records' forecast
+    /// forms all the same.
+    #[test]
+    fn a_missing_head_gives_none() {
+        let (f, head, one) = queued();
+        let s = sluice(&f);
+        let tip = f.world.tip("main");
+        let read = view(&s);
+        f.world.lack(&one, true);
+        assert_eq!(s.forecast_read(&read, &head, "unit/c", &[]).unwrap(), None);
+        f.world.lack(&one, false);
+        f.world.lack(&head, true);
+        assert_eq!(s.forecast_read(&read, &head, "unit/c", &[]).unwrap(), None);
+        f.world.lack(&head, false);
+        f.world.lack(&one, true);
+        let formed = s.forecast_onto(&head, "unit/c", "main", tip, &[]).unwrap();
+        assert_eq!(formed.ahead, [1, 2]);
     }
 }
