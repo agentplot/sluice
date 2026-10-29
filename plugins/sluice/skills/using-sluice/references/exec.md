@@ -19,8 +19,8 @@ run.
 ## `sluice exec <branch>`
 
 ```console
-$ sluice exec bolt/x
-running the checks 8d41b6c affects against bolt/x (c41e8f2)
+$ sluice exec feature/x
+running the checks 8d41b6c affects against feature/x (c41e8f2)
 ports: SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
 …what the tests print…
 passed: 2 tasks

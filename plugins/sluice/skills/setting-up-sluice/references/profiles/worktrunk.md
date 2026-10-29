@@ -7,8 +7,8 @@ runs it as `wt submit` with no configuration.
 ## The change
 
 ```sh
-wt merge bolt/x --no-squash --no-remove   # before
-wt submit bolt/x                          # after
+wt merge main --no-squash --no-remove   # before
+wt submit main                          # after
 ```
 
 - sluice always lands a merge commit (first parent the branch, second the
@@ -24,7 +24,7 @@ wt submit bolt/x                          # after
 - `--timeout 9m` is its own: it submits as `--no-wait` does, then follows
   the submission as `sluice wait <branch>` does, with its output and exits,
   exit `5` when the time runs out. An agent with capped tool calls runs
-  `wt submit bolt/x --timeout 9m --json` in its background, again while it
+  `wt submit main --timeout 9m --json` in its background, again while it
   exits `5`, from its submit to its landing, which removes the worktree.
 - Run again in a worktree whose submission is queued, under test or
   landed, of the revision a submit from the worktree would send now (its
@@ -57,7 +57,7 @@ wt submit bolt/x                          # after
 `wt merge` into a gated branch is refused by sluice's git hook:
 
 ```
-error: bolt/x is protected by sluice; submit the change to sluice instead
+error: main is protected by sluice; submit the change to sluice instead
 ```
 
 ## Worktree paths

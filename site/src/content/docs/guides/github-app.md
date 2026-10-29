@@ -109,10 +109,10 @@ role included.
 From now on a push to `main` from anyone but sluice is refused, yours
 too. To land work, submit it.
 
-Do the same for the `bolt/*` ruleset if your bolts live on GitHub
-([bolts on GitHub](/sluice/guides/github/#bolts-on-github)). That
+Do the same for the ruleset on your feature branches' pattern if they live on GitHub
+([feature branches on GitHub](/sluice/guides/github/#feature-branches-on-github)). That
 ruleset also restricts creations and deletions, since `sluice branch`
-makes and deletes bolts as the app.
+makes and deletes them as the app.
 
 ## 6. Check it
 

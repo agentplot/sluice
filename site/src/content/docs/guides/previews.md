@@ -1,6 +1,6 @@
 ---
 title: Previews
-description: A running copy of what a branch landed, at addresses a person opens, held until the caller releases it. For a crew that puts each landing in front of a person to try.
+description: A running copy of what a branch landed, at addresses a person opens, held until the caller releases it. For a tool that puts each landing in front of a person to try.
 sidebar:
   order: 3
 ---
@@ -12,10 +12,10 @@ back the addresses to open. The preview stays up until something asks
 for its release. Nobody keeps a worktree of the branch for it.
 
 ```console
-$ sluice preview bolt/checkout-flow 2eb676c
-preview/2eb676c8e45d of bolt/checkout-flow at 2eb676c: starting
-  api  https://api-2eb676c--bolt-checkout-flow--shop.localhost/docs
-  web  https://web-2eb676c--bolt-checkout-flow--shop.localhost
+$ sluice preview feature/checkout-flow 2eb676c
+preview/2eb676c8e45d of feature/checkout-flow at 2eb676c: starting
+  api  https://api-2eb676c--feature-checkout-flow--shop.localhost/docs
+  web  https://web-2eb676c--feature-checkout-flow--shop.localhost
   ports: SLUICE_PORT_API=20001 SLUICE_PORT_WEB=20000
 ```
 
@@ -81,8 +81,8 @@ names in its environment:
 | variable | example |
 |---|---|
 | `SLUICE_PORT_WEB` | `20000` |
-| `SLUICE_NAME_WEB` | `web-2eb676c--bolt-checkout-flow--shop` |
-| `SLUICE_BRANCH` | `bolt/checkout-flow` |
+| `SLUICE_NAME_WEB` | `web-2eb676c--feature-checkout-flow--shop` |
+| `SLUICE_BRANCH` | `feature/checkout-flow` |
 | `SLUICE_REVISION` | the full revision |
 | `SLUICE_PLACE` | a short name of the checkout's own, for labels |
 
@@ -153,28 +153,29 @@ it never came up.
 
 ```console
 $ sluice previews
-preview/2eb676c8e45d of bolt/checkout-flow at 2eb676c: up
-  api  https://api-2eb676c--bolt-checkout-flow--shop.localhost/docs
-  web  https://web-2eb676c--bolt-checkout-flow--shop.localhost
+preview/2eb676c8e45d of feature/checkout-flow at 2eb676c: up
+  api  https://api-2eb676c--feature-checkout-flow--shop.localhost/docs
+  web  https://web-2eb676c--feature-checkout-flow--shop.localhost
   ports: SLUICE_PORT_API=20001 SLUICE_PORT_WEB=20000
 $ sluice release preview/2eb676c8e45d
 released preview/2eb676c8e45d: its command's run ended, the release command run, its ports and names free
 ```
 
-## Driving previews from a crew
+## Driving previews from your own tools
 
-sluice knows no bolt, no landing card and no proxy. A caller such as
-crew or flywheel decides when a preview is made and when it goes:
+sluice knows no landing card and no proxy. A caller, such as a tool that
+keeps agents' work for a feature branch, decides when a preview is made
+and when it goes:
 
 ```
- unit lands on the bolt at R1  -->  sluice preview <bolt> R1 --json
-                                    addresses onto R1's landing card
- next unit lands at R2         -->  sluice preview <bolt> R2 --json
-                                    addresses onto R2's card
-                                    sluice release <R1's preview>
- the bolt lands on main        -->  sluice release <the bolt's last preview>
- after a crash                 -->  sluice previews --json
-                                    release any whose revision is on no live card
+ work lands on the branch at R1  -->  sluice preview <branch> R1 --json
+                                      addresses onto R1's landing card
+ the next work lands at R2       -->  sluice preview <branch> R2 --json
+                                      addresses onto R2's card
+                                      sluice release <R1's preview>
+ the branch lands on main        -->  sluice release <the branch's last preview>
+ after a crash                   -->  sluice previews --json
+                                      release any whose revision is on no live card
 ```
 
 - **One preview per landing**, of the revision the landing card names.

@@ -80,7 +80,7 @@ anywhere.
 
 A branch sluice lands on is one with a queue, or one your policy gives a
 gate under `[branches]`. Don't check one out in any worktree: not
-`main`, not a bolt.
+`main`, not a feature branch agents land on.
 
 sluice moves the branch under such a worktree. Its index and files stay
 as they were, so after a landing `git status` there shows every landed
@@ -96,9 +96,9 @@ round tries again, and meanwhile `sluice status <branch>` says so above
 the queue:
 
 ```console
-$ sluice status bolt/payments
-bolt/payments at c43609b · 2 in the queue · testing 1 at once (up to 4)
-this host's bolt/payments is at 10e4791, behind the landing c43609b: git holds the lock on refs/heads/bolt/payments
+$ sluice status feature/payments
+feature/payments at c43609b · 2 in the queue · testing 1 at once (up to 4)
+this host's feature/payments is at 10e4791, behind the landing c43609b: git holds the lock on refs/heads/feature/payments
 ```
 
 The protection hook judges a write by the branch's own value on this
@@ -129,7 +129,7 @@ git -C ~/code/repo fetch origin
 git -C ~/code/repo/main switch --detach origin/main
 ```
 
-One such worktree can show anything: `origin/main`, a bolt, an agent's
+One such worktree can show anything: `origin/main`, a feature branch, an agent's
 branch. Git refuses to check out a branch that another worktree has
 checked out, and every agent's worktree has its own, so a detached
 checkout is also the only way to look at those. Building and installing
@@ -169,7 +169,7 @@ conflicts.
 
 ## Following the queue
 
-A tool that keeps worktrees for agents, such as a crew, reads the queue
+A tool that keeps worktrees for agents reads the queue
 from `sluice overview --json`, or follows `sluice overview --json
 --watch`, which prints the document again whenever it changes:
 

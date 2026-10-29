@@ -34,7 +34,7 @@ systems = ["macos-arm64"]
 ssh = ".config/sluice.sessions"  # one allowed-signers line per host
 confined = false
 
-[branches."bolt/*"]
+[branches."feature/*"]           # a placeholder: the project's own pattern
 remote = "origin"
 required = ["#check-fast"]
 trust = ["sessions", "box", "mac"]   # no systems: a pass from any one

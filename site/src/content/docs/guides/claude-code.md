@@ -205,7 +205,7 @@ line ends with the same count, or says it alone when nothing is queued.
 
 Press a conflict to open it the same way. It shows the files in conflict,
 then what is in the way: each submission it conflicted with and the
-worktree it came from, as in `in the way: #217 (bolt/runner)`, or `what
+worktree it came from, as in `in the way: #217 (feature/runner)`, or `what
 main has landed` when it conflicted with no submission. Last comes what to
 do next: `next: take main into the worktree, resolve and commit, then
 sluice submit main`. The board builds it from the conflict's own line and

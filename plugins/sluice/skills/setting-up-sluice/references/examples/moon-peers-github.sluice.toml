@@ -1,7 +1,7 @@
 # .config/sluice.toml: many hosts as peers, with no server. The queue for
 # every branch with a remote lives on origin under refs/sluice/; boxes
 # the operator keeps running take main's runs, one per system, and the
-# session hosts take the bolts'. main must pass cli:build on three
+# session hosts take the feature branches'. main must pass cli:build on three
 # systems.
 
 [tests]
@@ -23,7 +23,8 @@ confined = true              # container checkouts; no session reaches its engin
 ssh = ".config/sluice.sessions" # one line per session host's key
 confined = false
 
-[branches."bolt/*"]
+# feature/* is a placeholder: name the pattern as the project names its branches
+[branches."feature/*"]
 remote = "origin"
 required = ["#check-fast"]
 trust = ["sessions", "box"] # no systems named: any one system

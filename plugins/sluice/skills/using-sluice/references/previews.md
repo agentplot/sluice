@@ -1,10 +1,10 @@
 # Previews
 
 ```console
-$ sluice preview bolt/x 2eb676c
-preview/2eb676c8e45d of bolt/x at 2eb676c: starting
-  api  https://api-2eb676c--bolt-x--shop.localhost/docs
-  web  https://web-2eb676c--bolt-x--shop.localhost
+$ sluice preview feature/x 2eb676c
+preview/2eb676c8e45d of feature/x at 2eb676c: starting
+  api  https://api-2eb676c--feature-x--shop.localhost/docs
+  web  https://web-2eb676c--feature-x--shop.localhost
   ports: SLUICE_PORT_API=20001 SLUICE_PORT_WEB=20000
 ```
 

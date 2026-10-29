@@ -68,7 +68,7 @@ systems = ["linux-x64"]
 ssh = ".config/sluice.sessions"   # one line per agent host's key
 confined = false
 
-[branches."bolt/*"]
+[branches."feature/*"]
 remote = "origin"
 trust = ["sessions", "box"]
 
@@ -86,7 +86,7 @@ A branch with `confined = true` counts only results from signers you
 said that of.
 
 Agents' hosts sign as `sessions` here. Their results land work on the
-bolts, where reviewers trust them, and never on `main`, whose gate
+feature branches, where reviewers trust them, and never on `main`, whose gate
 trusts only the box. A host signs with its own key, and `sluice run` on
 it claims only runs of branches that trust its signer.
 

@@ -41,9 +41,9 @@ longer keeps, still says which remote the branch is on; the rest of the policy
 is judged at the branch's revision on the remote, so pushing a fixed policy
 there clears the refusal on every host.
 
-A branch made later under a pattern with `remote`, such as a bolt, is never
-pushed by hand: `sluice branch create bolt/<b> --from main` makes it on the
-remote as sluice's app, and `sluice branch delete bolt/<b>` deletes it once it
+A branch made later under a pattern with `remote`, such as a feature branch, is never
+pushed by hand: `sluice branch create <branch> --from main` makes it on the
+remote as sluice's app, and `sluice branch delete <branch>` deletes it once it
 has landed into `main`. A submission to a branch the remote lacks is refused
 with the `sluice branch create` to run.
 
@@ -51,9 +51,9 @@ with the `sluice branch create` to run.
 
 A branch ruleset on the branch (**Settings › Rules › Rulesets**): restrict
 updates on, block force pushes on, bypass list sluice's GitHub App alone
-([github-app](github-app.md)). The ruleset on a bolt pattern also restricts
-creations and deletions, since sluice makes and deletes bolts;
-`sluice forge check bolt/<b>` checks it before any bolt exists. Leave GitHub's merge queue off and require no
+([github-app](github-app.md)). The ruleset on a pattern of branches sluice makes also restricts
+creations and deletions, since sluice makes and deletes them;
+`sluice forge check <branch>` checks it before any branch under it exists. Leave GitHub's merge queue off and require no
 status checks on the branch: sluice's gate runs before the push.
 
 Until the app is set up, sluice pushes with the host's own git credentials,
