@@ -139,6 +139,15 @@ Every read sluice makes carries the version of the answer it last got
 at that address, kept on the host, and GitHub answers an unchanged one
 without counting it against the allowance.
 
+When a branch's list of open pull requests has changed, or while one of
+them waits for a check another system posts, sluice reads them all with
+one GraphQL query. It reads their reviews, the checks on their heads and
+when they were marked ready for review, in place of reads for each pull
+request. That query counts against GitHub's GraphQL allowance, which is
+separate from the one its other calls count against. If GitHub refuses
+the query for a reason other than a spent allowance, sluice reads each
+pull request on its own for that pass and says so once.
+
 When GitHub says the allowance is spent, every sluice on the host stops
 calling it until the time GitHub named, or for a minute, then longer,
 where it names none. None calls to find out whether the time has come.
