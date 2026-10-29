@@ -42,6 +42,16 @@ ends_within() {
   took=$(($(date +%s) - began))
 }
 
+# The fake sluice's watches this test started that still run, by the pids
+# they wrote in its own directory: never a pattern over command lines,
+# which another run of this suite from the same checkout matches as well.
+watching() {
+  [ -f "$FAKE/watch-pids" ] || return 0
+  while read -r p; do
+    kill -0 "$p" 2>/dev/null && echo "$p"
+  done <"$FAKE/watch-pids"
+}
+
 # The pids of the sources a watcher started.
 sources_of() {
   cat "$S/run/$1"/*.pids 2>/dev/null | cut -f1
@@ -367,9 +377,9 @@ w=$!
 within 15 'grep -q "^work: overview --watch --json" "$FAKE/sluice-calls"' || fail "no source started"
 kill -TERM "$w"
 wait "$w" 2>/dev/null
-within 5 '! pgrep -f "$here/fake/sluice overview --watch" >/dev/null' || fail "the source outlived its watcher"
+within 5 '[ -z "$(watching)" ]' || fail "the source outlived its watcher"
 rm -f "$FAKE/hold"
-pkill -f "$here/fake/sluice overview --watch" 2>/dev/null
+for p in $(watching); do kill "$p" 2>/dev/null; done
 pass
 
 fresh 'watch: a pid kept alone and used again is left alone'
@@ -398,7 +408,7 @@ within 30 '[ "$(grep -c "^pane list" "$FAKE/herdr-calls")" -ge 12 ]' || fail "th
   fail "a new source every tick: $(grep -c 'overview --watch' "$FAKE/sluice-calls") started"
 kill "$w" 2>/dev/null
 wait "$w" 2>/dev/null
-within 5 '! pgrep -f "$here/fake/sluice overview --watch" >/dev/null' || fail "the source outlived its watcher"
+within 5 '[ -z "$(watching)" ]' || fail "the source outlived its watcher"
 rm -f "$FAKE/hold"
 pass
 
