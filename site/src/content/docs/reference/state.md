@@ -69,6 +69,13 @@ every repository on the host and never pushed:
 
 ```
 ~/.local/state/sluice/
+  forge/answers/<h>.json
+                       GitHub's last answer at one address, with the ETag
+                       and time it came with, so the next read asks GitHub
+                       only whether it changed
+  forge/pauses/<app>-<installation>-<allowance>.json
+                       until when GitHub said the app's allowance of calls
+                       on that installation is spent, in GitHub's words
   ports/<n>            a block of ports, naming the checkout that holds it
   readers/<repository>.lock
                        held by the first watch or wait of the repository for
@@ -108,6 +115,13 @@ A preview's record is kept apart from the other checkouts' so that a
 sluice older than previews never reads one. A preview's command counts
 in `running/` and is listed in `sessions/` while it runs, as an agent's
 run is.
+
+Every sluice on the host reads `forge/` before it calls GitHub. An
+answer is used only when GitHub replies that it hasn't changed, and one
+no read has used for a day is removed. A pause stops every sluice on
+the host from calling GitHub until the time GitHub named. Nothing in
+`forge/` holds a token, and any file in it may be removed at any time:
+sluice then asks GitHub as if it had kept nothing.
 
 A block of ports is free again when the checkout named in it is gone.
 A file in `running/` counts against the bound while its `.hold` is held
