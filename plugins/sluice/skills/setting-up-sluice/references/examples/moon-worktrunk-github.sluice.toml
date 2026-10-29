@@ -20,8 +20,9 @@ docker = true         # the integration tests start a database container
 [landing]
 subject = "chore(land): #{id} {from}"
 
-# Small, fast landings many times a day.
-[branches."bolt/*"]
+# Small, fast landings many times a day. feature/* is a placeholder:
+# name the pattern as the project names its branches.
+[branches."feature/*"]
 required = ["#check-fast"]
 parallel = 4
 trust = ["open", "sandbox", "cache"]

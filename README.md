@@ -205,7 +205,7 @@ failed: tests:t-cards
   on main + #2 + #3 (5b81d07)
   #2 passed on its own, so the failure is from this submission
   log of tests:t-cards: /…/sluice/.logs/main/c4/tests:t-cards.log
-the agent working in unit/cards fixes it there and submits again
+the agent working in cards fixes it there and submits again
 ```
 
 The exit code says the same: `0` landed, `1` failed, `2` a conflict or a
@@ -245,7 +245,7 @@ sets it up.
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed, at the addresses the policy's `[preview]` names, until it is released. `--wait`, `--json`. |
 | `sluice previews` | Every preview on the host, with its addresses and state. |
 | `sluice release <preview>` | Release a preview, by its name or its revision. `--json` for scripts. |
-| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`; `sluice branch accept <branch> <revision>` accepts the revision a held branch is read at, which lacks its last landing. |
+| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a feature branch, on its remote when its policy names one; `sluice branch delete <branch>` deletes it once it has landed into `main`; `sluice branch accept <branch> <revision>` accepts the revision a held branch is read at, which lacks its last landing. |
 
 An agent names itself with `SLUICE_AGENT`. How many runs a host tests at
 once is the host's own setting, in `~/.config/sluice/config.toml`:

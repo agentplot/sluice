@@ -132,38 +132,40 @@ host whose rounds read a landing. Keep a detached worktree at
 `origin/main` instead, as [worktrees beside
 sluice](/sluice/guides/worktrees/) shows.
 
-## Bolts on GitHub
+## Feature branches on GitHub
 
-A bolt is a branch sluice lands on like `main`. Give its pattern a
-`remote` to keep it on GitHub too, so agents on any host can work on one:
+A feature branch that agents land on is a branch sluice lands on like
+`main`. Give its pattern a `remote` to keep it on GitHub too, so agents
+on any host can work on one. Write the pattern your project already
+uses; `feature/*` here is a placeholder:
 
 ```toml
-[branches."bolt/*"]
+[branches."feature/*"]
 required = ["#check-fast"]
 remote = "origin"
 ```
 
-sluice makes the bolt there, at `main`'s revision on GitHub, and deletes
+sluice makes the branch there, at `main`'s revision on GitHub, and deletes
 it once it has landed on `main`:
 
 ```console
-$ sluice branch create bolt/payments --from main
-created bolt/payments at 6ac0084c…, main's revision
-$ sluice branch delete bolt/payments --into main
-deleted bolt/payments, which was at 9f2e1d0a…, landed into main
+$ sluice branch create feature/payments --from main
+created feature/payments at 6ac0084c…, main's revision
+$ sluice branch delete feature/payments --into main
+deleted feature/payments, which was at 9f2e1d0a…, landed into main
 ```
 
-Cut agents' worktrees from `origin/bolt/payments`. A host that has only
-fetched the bolt, with no local branch of it, submits to it all the same.
-A submission to a bolt GitHub doesn't have is refused, and the refusal
+Cut agents' worktrees from `origin/feature/payments`. A host that has only
+fetched the branch, with no local branch of it, submits to it all the same.
+A submission to a branch GitHub doesn't have is refused, and the refusal
 says to make it with `sluice branch create`.
 
-Protect bolts as `main` is: one ruleset on `bolt/*` restricting
+Protect these branches as `main` is: one ruleset on their pattern restricting
 creations, updates, deletions and force pushes, with sluice's app as
-its only bypass. `sluice forge check bolt/payments` checks it.
+its only bypass. `sluice forge check feature/payments` checks it.
 
-Each host keeps its own queue for a bolt. The lease keeps every landing
-safe, but two hosts landing on one bolt land in the order their pushes
+Each host keeps its own queue for such a branch. The lease keeps every landing
+safe, but two hosts landing on one branch land in the order their pushes
 reach GitHub, and `sluice branch delete` sees only this host's queue.
 
 ## When `main` moves under the queue

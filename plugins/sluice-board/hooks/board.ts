@@ -884,6 +884,60 @@ export function cannotFollow(version: string | null): string {
 }
 
 /**
+ * The sluice releases the board runs with, as its `.claude-plugin/sluice.json`
+ * names them: from the first that has `sluice inbox`, which alone marks an
+ * outcome delivered (51; rule core.31), up to, not including, the first it
+ * does not know.
+ */
+export type Supported = { from: string; before: string };
+
+/** `.claude-plugin/sluice.json` read, or null where it holds no range. */
+export function supported(text: string | null): Supported | null {
+  try {
+    const v = JSON.parse(text ?? "") as Partial<Supported> | null;
+    if (v && typeof v.from === "string" && typeof v.before === "string")
+      return { from: v.from, before: v.before };
+  } catch {
+    // No range: the board runs as it always has.
+  }
+  return null;
+}
+
+/**
+ * A release's numbers from what `sluice --version` printed (`sluice 0.56.0`),
+ * or null where it printed none, or names a build of no release (`0.0.0`).
+ */
+export function releaseOf(printed: string | null): number[] | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(printed ?? "");
+  if (!m) return null;
+  const n = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return n.every((x) => x === 0) ? null : n;
+}
+
+function before(a: number[], b: number[]): boolean {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return (a[i] ?? 0) < (b[i] ?? 0);
+  return false;
+}
+
+/**
+ * What the board says, once a session, where the host's sluice is outside
+ * `range`, and runs no further: null where it runs with it, or where sluice
+ * names no release.
+ */
+export function unsupported(printed: string | null, range: Supported): string | null {
+  const at = releaseOf(printed);
+  const from = releaseOf(range.from);
+  const upTo = releaseOf(range.before);
+  if (!at || !from || !upTo) return null;
+  const which = `sluice ${at.join(".")}`;
+  if (before(at, from))
+    return `the sluice board needs sluice ${range.from} or later, which has \`sluice inbox\`, and this host's is ${which}: it shows nothing and delivers nothing until sluice is upgraded`;
+  if (!before(at, upTo))
+    return `the sluice board runs with sluice before ${range.before}, and this host's is ${which}: it shows nothing and delivers nothing until the board is updated`;
+  return null;
+}
+
+/**
  * Why a watch ended with no overview: the command could not be started
  * (`got` null), else sluice's first line on stderr, else its exit, or the
  * signal that ended it.

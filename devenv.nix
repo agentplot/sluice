@@ -402,7 +402,7 @@ in
     exec = ''
       set -euo pipefail
       cd "$(git rev-parse --show-toplevel)"
-      vale --glob='!**/decisions/**' site/src/content/docs "$@"
+      vale --glob='!{**/decisions/**,**/architecture/rules.md}' site/src/content/docs "$@"
     '';
   };
 
