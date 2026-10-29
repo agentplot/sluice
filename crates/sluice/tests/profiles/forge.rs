@@ -1125,13 +1125,14 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
         gh.calls("POST", &format!("/repos/o/r/issues/{n}/comments")),
         1
     );
-    assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
     // Never judged, the comment was made again blind: nothing read
-    // whether GitHub held it, but the read just made.
+    // whether GitHub held it. Counted before the test's own read, which
+    // the policy may try again on a connection a loaded host dropped.
     assert_eq!(
         gh.calls("GET", &format!("/repos/o/r/issues/{n}/comments")),
-        1
+        0
     );
+    assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
 }
 
 /// The remote-retry spec's "A run's dispatch answered 502": a dispatch
