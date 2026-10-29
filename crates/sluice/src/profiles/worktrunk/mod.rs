@@ -103,7 +103,7 @@ impl Driver for Worktrunk {
             );
         }
         // Who submitted: the session's own name when its harness sets one
-        // (crew's roles do), else its branch.
+        // (`SLUICE_AGENT`), else its branch.
         let agent = std::env::var("SLUICE_AGENT")
             .ok()
             .filter(|a| !a.is_empty())

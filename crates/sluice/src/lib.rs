@@ -248,7 +248,8 @@ pub enum Command {
         #[arg(long)]
         check: bool,
         /// With --check, the branch whose revision to forecast in place of
-        /// the worktree's head: a bolt's against the branch it lands on.
+        /// the worktree's head, such as a feature branch's against the
+        /// branch it lands on.
         #[arg(long, value_name = "BRANCH", requires = "check")]
         head: Option<String>,
         /// Only say where this worktree's last submission, or its pull
@@ -3984,7 +3985,7 @@ fn copy_behind_line(branch: &str, copy: &CopyBehind) -> String {
 }
 
 /// Session-runs-1 clause 97: every worktree sluice holds ports or runs
-/// for, for a person or a crew to release.
+/// for, for a person or a tool to release.
 fn write_worktrees(places: &[SessionPlace], out: &mut dyn Write) -> Result<()> {
     if places.is_empty() {
         writeln!(out, "no worktree holds ports or runs here")?;
