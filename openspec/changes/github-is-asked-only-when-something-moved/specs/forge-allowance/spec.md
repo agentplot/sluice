@@ -58,7 +58,7 @@ token (134).
 - **THEN** the new process makes no call to GitHub before the pause ends
 
 ### Requirement: A command waits the pause out within its own limit
-A `sluice submit`, waiting or not, a `sluice wait` and a `--status` that
+A waiting `sluice submit`, a `sluice wait` and a `--status` that
 meet a pause SHALL wait until it ends, up to their `--timeout` where they
 take one, saying once on stderr until when, with GitHub's words, and
 SHALL then go on. Ctrl-C SHALL stop the wait at once. A command whose
@@ -75,6 +75,16 @@ limit ends first SHALL end as it ends when its time runs out (134).
 #### Scenario: Ctrl-C during the pause
 - **WHEN** a waiting submit is waiting out a pause and the operator presses Ctrl-C
 - **THEN** it stops at once, as a stopped wait does
+
+### Requirement: A submit that does not wait fails at once on a pause
+A `sluice submit --no-wait` that meets a pause SHALL NOT wait for it: it
+SHALL fail at once with exit `3`, naming the time the pause ends and
+GitHub's words, and SHALL make no call to GitHub under that allowance
+(134; the user, 2026-10-28).
+
+#### Scenario: A no-wait submit meets the pause
+- **WHEN** `sluice submit main --no-wait` starts at 14:05 while the host's state says GitHub's allowance is spent until 14:20
+- **THEN** it exits `3` at once, saying GitHub's allowance of calls is spent until 14:20, and no pull request is opened
 
 ### Requirement: A round passes the forge's part by
 A round of `sluice run` or `sluice step` that meets a pause SHALL NOT

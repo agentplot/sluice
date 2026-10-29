@@ -30,8 +30,10 @@ core.32 and core.33 carry the user's decisions of 2026-10-28.
   then longer, where GitHub names neither), written in the host's state
   per installation and per allowance. Every process of sluice on the
   host reads it before it calls GitHub and makes no call while it
-  stands. A submit, a wait or a status waits it out within its own
-  `--timeout`, saying once until when; a round of `sluice run` or
+  stands. A waiting submit, a wait or a status waits it out within its
+  own `--timeout`, saying once until when; a submit with `--no-wait`
+  fails at once, exit 3, naming when the pause ends (the user,
+  2026-10-28); a round of `sluice run` or
   `sluice step` passes intake by, says so once, and lands what has
   passed. This is a class of rule core.29's one retry policy.
 - **Every read is conditional.** Every `GET` to GitHub carries the ETag
@@ -70,8 +72,8 @@ core.32 and core.33 carry the user's decisions of 2026-10-28.
   own check runs, in place of the REST reads per request.
 - **BREAKING (behaviour):** a request opened by hand is taken up to a
   discovery interval later than today's three seconds; a review or
-  another system's check is seen at the next discovery; a submit or a
-  wait meeting a spent allowance waits where it failed.
+  another system's check is seen at the next discovery; a waiting submit
+  or a wait meeting a spent allowance waits where it failed.
 - The host's configuration reference, the GitHub App guide, the pull
   requests guide, the commands reference and the state reference say
   what sluice now does.

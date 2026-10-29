@@ -117,10 +117,13 @@ How long a policy may wait for a pause is its own, beside its bound:
 | Policy | Built for | Waits a pause |
 |---|---|---|
 | `Policy::waiting(deadline)` | waiting submit, `sluice wait` | until the deadline (`--timeout`), or without end |
-| `Policy::command()` | a submit that does not wait, `--status`, `sluice branch`, `forge check` | until its `--timeout` where it takes one, or without end |
+| `Policy::command()` | `--status`, `sluice branch`, `forge check` | until its `--timeout` where it takes one, or without end |
+| `Policy::command().unpaused()` | a submit that does not wait (the user, 2026-10-28) | never: it fails at once, exit 3, naming the time the pause ends |
 | `Policy::round()` (new) | the rounds of `sluice run` and `sluice step`, intake among them | never |
 
-`main.rs` gives `Command::Run` and `Command::Step` `Policy::round()`,
+`main.rs` gives a submit with `--no-wait` `Policy::command().unpaused()`:
+its `Limited` error is the command's, exit 3, saying until when (the
+user, 2026-10-28). `main.rs` gives `Command::Run` and `Command::Step` `Policy::round()`,
 which is `Policy::command()`'s thirty seconds with no wait for a pause.
 A command that waits says once on stderr, at the first pause it meets,
 `sluice: GitHub's allowance of calls is spent until <HH:MM>; waiting`
@@ -398,10 +401,11 @@ question.
   window is one pass, the two queues are each host's own, and a landing
   is a leased push, so nothing lands twice; the hand-over withdraws the
   wait's entry at its next pass.
-- [A no-wait submit waits up to an hour for a spent allowance] → The
-  user's decision: it says until when, once, on stderr; `--timeout`
-  bounds it; Ctrl-C stops it. Failing would only make the agent call
-  again.
+- [A no-wait submit fails while the allowance is spent, and its agent
+  may submit again at once] → The user's decision (2026-10-28): it
+  fails at once, exit 3, naming the time the pause ends, so the agent
+  knows when to try; a submit again before then makes no call to GitHub,
+  since the pause is read first.
 - [The kept answers hold request titles and bodies on disk] → The
   host's records hold the same subjects; the directory is the user's
   own state, written with the user's mode.
@@ -421,8 +425,3 @@ then settles. Rolling back leaves `forge/` and the mark unread and
 harmless; `git push origin :refs/sluice/intake/<branch>` removes the
 mark.
 
-## Open Questions
-
-- Whether a submit that does not wait should wait out a spent allowance
-  without end, as decided here, or fail at once with exit 3 naming the
-  time it resets.
