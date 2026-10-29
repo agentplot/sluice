@@ -215,12 +215,7 @@ impl App {
     /// API at `api`, each call under `policy`.
     pub fn new(id: u64, pem: &[u8], api: &str, now: Now, policy: Rc<Policy>) -> Result<App> {
         let key = EncodingKey::from_rsa_pem(pem).context("the app's key is no RSA private key")?;
-        let http = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent("sluice")
-            .build()
-            .into();
+        let http = http_config().into();
         Ok(App {
             id,
             key,
@@ -249,6 +244,18 @@ impl App {
     /// `self`, keeping its answers and pauses in `kept`.
     pub fn keeping(mut self, kept: Kept) -> App {
         self.kept = Some(kept);
+        self
+    }
+
+    /// `self`, finding the address of each call's host with `resolver`
+    /// instead of the host's own lookup: a test's, which can give an
+    /// address no connection is ever made to.
+    pub fn resolving(mut self, resolver: impl ureq::unversioned::resolver::Resolver) -> App {
+        self.http = ureq::Agent::with_parts(
+            http_config(),
+            ureq::unversioned::transport::DefaultConnector::default(),
+            resolver,
+        );
         self
     }
 
@@ -730,6 +737,16 @@ impl App {
             heard,
         })
     }
+}
+
+/// How every call is made: a status GitHub answers is read, not an error,
+/// and no call takes longer than thirty seconds.
+fn http_config() -> ureq::config::Config {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .user_agent("sluice")
+        .build()
 }
 
 /// How a call that got no answer stands: never judged when no connection

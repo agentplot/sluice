@@ -1078,75 +1078,62 @@ fn a_write_that_makes_something_is_read_back_before_it_is_made_again() {
 #[test]
 fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
     use sluice::profiles::github::forge::Forge as _;
-    use std::net::TcpListener;
-    let dir = support::Scratch::new("forge-unconnected");
-    let file = github::file(dir.path());
-    // A port below every system's range of ports it hands out (49152 up on
-    // macOS, 32768 up on Linux): once GitHub goes away no other test's
-    // server, bound to a port the system picks, and no connection's own end
-    // takes it. One the system had picked was taken now and then on a
-    // loaded host, and the comment's first try reached something there and
-    // was reset, so it was read back.
-    let (listener, port) = (0..)
-        .map(|k: u32| {
-            10_000 + (std::process::id().wrapping_add(k.wrapping_mul(7919)) % 20_000) as u16
-        })
-        .find_map(|port| Some((TcpListener::bind(("127.0.0.1", port)).ok()?, port)))
-        .unwrap();
-    // GitHub sells the app its token, then goes away: the comment's
-    // first try finds nothing on the port, and the pause brings GitHub
-    // back on it.
-    let selling = support::http::serve(listener, 2, |r: &Request| {
-        if r.path.ends_with("/access_tokens") {
-            let ends = Utc::now() + TimeDelta::hours(1);
-            return json(
-                201,
-                json!({ "token": "token", "expires_at": ends.to_rfc3339() }),
-            );
-        }
-        json(
-            200,
-            json!({ "id": INSTALLATION, "app_id": APP, "permissions": {} }),
-        )
-    });
-    let back: Rc<RefCell<Option<github::GitHub>>> = Rc::default();
-    let (up, at) = (back.clone(), file.clone());
-    let policy = Policy::command().pausing(
-        move |_| {
-            if up.borrow().is_none() {
-                let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-                *up.borrow_mut() = Some(github::GitHub::start_on(listener, &at, None));
-            }
-            true
-        },
-        Instant::now,
-    );
-    let url = format!("http://127.0.0.1:{port}");
-    let app = App::new(APP, KEY, &url, Box::new(Utc::now), Rc::new(policy)).unwrap();
+    let (_dir, gh, app, n) = on_github("forge-unconnected", policy());
+    let unreachable = Unreachable::default();
+    let app = app.resolving(unreachable.clone());
     app.token(&repo()).unwrap();
-    assert_eq!(selling.join().unwrap().len(), 2);
-    let n = sluice::profiles::github::fake::FileForge::new(&file, &repo())
-        .open_by("ann", "main", "unit/a", "aaa", false, None)
-        .unwrap();
+    // The comment's first try is sent to port 0 of GitHub's host, where
+    // no socket listens or can: its connection is never made, whatever
+    // else the host runs.
+    unreachable.next(1);
     app.comment(&repo(), n, "posted").unwrap();
-    let gh = back.borrow();
-    let gh = gh.as_ref().expect("GitHub back after the first try");
+    assert_eq!(unreachable.left(), 0, "the first try was never sent");
     // Never judged, the comment was made again blind: nothing read
-    // whether GitHub held it before it was made, and it was made once.
-    // A read after it is no blind try's: the one a loaded host makes when
-    // it dropped the made comment's answer (core.29).
+    // whether GitHub held it before it was made, and it was made once
+    // (core.29).
     let methods = gh.methods(&format!("/repos/o/r/issues/{n}/comments"));
-    assert_eq!(
-        methods.first().map(String::as_str),
-        Some("POST"),
-        "{methods:?}"
-    );
-    assert_eq!(
-        methods.iter().filter(|m| *m == "POST").count(),
-        1,
-        "{methods:?}"
-    );
+    assert_eq!(methods, ["POST"]);
     assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
+}
+
+/// A lookup of each call's host that gives, for the next calls it is
+/// told of, the host's addresses at port 0, which no socket can listen
+/// on: a connection to them is refused, or the address is not one a
+/// connection can be made to, and never reaches anything.
+#[derive(Clone, Debug, Default)]
+struct Unreachable(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Unreachable {
+    /// Send the next `n` calls nowhere.
+    fn next(&self, n: usize) {
+        self.0.store(n, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many of them are still to be sent nowhere.
+    fn left(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ureq::unversioned::resolver::Resolver for Unreachable {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut addrs = ureq::unversioned::resolver::DefaultResolver::default()
+            .resolve(uri, config, timeout)?;
+        if self
+            .0
+            .fetch_update(SeqCst, SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            addrs.iter_mut().for_each(|a| a.set_port(0));
+        }
+        Ok(addrs)
+    }
 }
 
 /// The remote-retry spec's "A run's dispatch answered 502": a dispatch
