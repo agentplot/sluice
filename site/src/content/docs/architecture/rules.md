@@ -41,6 +41,8 @@ out, what it allows and the clauses and decisions it rests on.
 - **[core.8](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A failure is attributed to one entry, and only after every candidate ahead of it has a verdict.
 - **[core.9](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A replay is recorded as a replay, never as a run.
 - **[core.22](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A result counts for a gate only through a signer the branch's policy names and a claim that signer may make, never through what a record says of its executor alone; on a branch in one host's own files, through the runs that host's sluice starts.
+- **[core.34](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A check's results are weighed together only under one grant: a key's outcomes for a flake, and the pass that proves a replay, are read only from results whose executor gave the run's own grant, on every branch, signed or not, and a result recorded with no grant only with others that have none.
+- **[core.35](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A check that did not pass in a run whose executor reports refusing the run something has no outcome; the refusal is read from the executor's own report, never from what a check printed or how it failed, and a check that passed keeps its pass.
 
 ## Places
 
