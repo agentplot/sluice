@@ -1121,16 +1121,20 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
     app.comment(&repo(), n, "posted").unwrap();
     let gh = back.borrow();
     let gh = gh.as_ref().expect("GitHub back after the first try");
-    assert_eq!(
-        gh.calls("POST", &format!("/repos/o/r/issues/{n}/comments")),
-        1
-    );
     // Never judged, the comment was made again blind: nothing read
-    // whether GitHub held it. Counted before the test's own read, which
-    // the policy may try again on a connection a loaded host dropped.
+    // whether GitHub held it before it was made, and it was made once.
+    // A read after it is no blind try's: the one a loaded host makes when
+    // it dropped the made comment's answer (core.29).
+    let methods = gh.methods(&format!("/repos/o/r/issues/{n}/comments"));
     assert_eq!(
-        gh.calls("GET", &format!("/repos/o/r/issues/{n}/comments")),
-        0
+        methods.first().map(String::as_str),
+        Some("POST"),
+        "{methods:?}"
+    );
+    assert_eq!(
+        methods.iter().filter(|m| *m == "POST").count(),
+        1,
+        "{methods:?}"
     );
     assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
 }
