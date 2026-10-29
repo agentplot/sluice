@@ -18,3 +18,10 @@ when its code lands, and the file is deleted when it is empty.
   user's decision of 2026-10-28 that a branch no other host has touched
   gets no intake push amends clause 137 and record 0071 in its first
   task.
+
+- **core.34, core.35 and record 0072** (clauses 138 and 139, added
+  2026-10-29): today a check's key is the task runner's hash alone, so
+  a fail under one sandbox profile is weighed against a pass under
+  another, and a check that failed because the sandbox refused it
+  something is recorded as a fail. Built by the change
+  `a-checks-key-holds-its-executor`.

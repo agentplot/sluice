@@ -64,7 +64,7 @@ latest landings, blames and conflicts. The words are those of the Claude
 Code plugin's `/sluice` pane, and the popup redraws as the queue moves.
 Each submission stands with its subject, or the branch it was submitted
 from where its submit gave none, beside its number: `#14 Herdr popup`,
-`#13 unit/forecast`. The `/sluice` pane shows its number alone for now.
+`#13 forecast`. The `/sluice` pane shows its number alone for now.
 The tab bar names them the same way.
 A branch with nothing queued is left out once a quarter hour has passed
 since its last landing, blame or conflict; one line counts the branches
@@ -76,7 +76,7 @@ does, the combination shows how many have ended and a bar, and its tasks
 are listed beneath its tests:
 
 ```
-    ▶ testing main + #12 Batch review cards + #13 unit/forecast  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
+    ▶ testing main + #12 Batch review cards + #13 forecast  3/5 ▓▓▓▓▓▓░░░░  2m10s / 15m
         #check-fast #check-tools · sandbox
         ✓ sluice:test      1m48s
         ✓ site:prose    replayed

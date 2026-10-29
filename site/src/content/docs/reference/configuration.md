@@ -21,7 +21,7 @@ network = "localhost"
 [landing]
 subject = "chore(land): #{id} {from}"
 
-[branches."bolt/*"]
+[branches."feature/*"]
 required = ["#suite"]
 parallel = 4
 batch = false
@@ -259,7 +259,7 @@ protected: only sluice moves it.
 The moon targets that must pass for a submission to land on this branch,
 run only where the combination affects them. A repository that tags
 every test `suite` requires `#suite`; a slower tag such as `#live` can be
-required on `main` and not on bolts. With `runner = "command"` the
+required on `main` and not on feature branches. With `runner = "command"` the
 command is the only test and `required` is left out.
 
 With `runner = "moon"`, a branch with no `required`, or one whose tags no
@@ -271,12 +271,12 @@ such a branch when it reads the policy back.
 
 How many queued submissions are tested at the same time.
 
-Say three agents submit A, B and C to `bolt/x`, in that order. sluice
-tests three combinations: `bolt/x + A`, `bolt/x + A + B`, and
-`bolt/x + A + B + C`. With `parallel = 4`, all three are tested at once,
+Say three agents submit A, B and C to `feature/x`, in that order. sluice
+tests three combinations: `feature/x + A`, `feature/x + A + B`, and
+`feature/x + A + B + C`. With `parallel = 4`, all three are tested at once,
 on the bet that they will pass. If they do, A, B and C land one after
-another with no waiting. If `bolt/x + A + B` fails, B is blamed, A lands,
-and C is tested again as `bolt/x + A + C`. The higher the number, the
+another with no waiting. If `feature/x + A + B` fails, B is blamed, A lands,
+and C is tested again as `feature/x + A + C`. The higher the number, the
 faster a queue drains when things pass, and the more work is thrown away
 when something fails. After a failure sluice tests fewer at once, and
 builds back up to this number as things pass. With `batch = true`,
@@ -424,7 +424,7 @@ on the remote too, under `refs/sluice/`. A branch without
 `remote` is a local branch, and a `remote` the repository has no remote
 of that name for lands nothing and says so. A branch must be on its
 remote before anything is submitted to it: `sluice branch create
-<branch> --from main` makes one there, such as a bolt, and a submission
+<branch> --from main` makes one there, such as a feature branch, and a submission
 to a branch the remote lacks is refused saying so. A host with no local
 copy of the branch, only a fetched `origin/<branch>`, reads `remote` from
 the policy there. The guide [sluice on GitHub](/sluice/guides/github/)

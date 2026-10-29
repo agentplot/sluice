@@ -2,8 +2,9 @@
 //! pane or a status line (26, 49; ADR 0023). A reader only: it releases,
 //! counts and writes nothing (rules core.11, core.14), so `sluice
 //! previews`' own tidying is left to it. A watch writes only the reader's
-//! document in the host's state, when it is the reader, and ends where
-//! the repository has no sluice (129; ADR 0056).
+//! document in the host's state, when it is the reader, which it never is
+//! while `sluice run` lives on the host (135), and ends where the
+//! repository has no sluice (129; ADR 0056).
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -18,7 +19,7 @@ use sluice_core::{Clock, Sluice};
 
 use crate::exec::Host;
 use crate::preview::preview_json;
-use crate::reader::{no_sluice, untimed, Reader};
+use crate::reader::{no_sluice, untimed, Drives, Reader};
 use crate::told::{self, Kind};
 use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
@@ -31,6 +32,16 @@ pub fn document(
     clock: &dyn Clock,
 ) -> Result<(Vec<BranchView>, serde_json::Value)> {
     s.seams().state.refresh()?;
+    document_held(s, host, clock)
+}
+
+/// As [`document`], asking no remote: every branch read as the host holds
+/// it since the last ask (129).
+fn document_held(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+) -> Result<(Vec<BranchView>, serde_json::Value)> {
     let branches = s.overview(host.default_branch()?.as_ref())?;
     let mut sessions = sessions_json(&s.session_places()?, &s.held()?);
     // ADR 0035: each worktree's session run going, from the host's state;
@@ -91,9 +102,11 @@ pub fn run(
     // document, reading nothing itself, until it finds the lock free
     // (rule core.25). A watch of a newer sluice than the reader's takes
     // its lease (129): the older reader lets go and follows, and the
-    // newer watch reads from its next tick.
-    let repository = host.repository()?;
-    let mut reader = Reader::take(&host.readers()?, &repository, host.version())?;
+    // newer watch reads from its next tick. Where `sluice run` lives on the
+    // host, the place is its: the watch follows it, and one that read lets
+    // go (135).
+    let (readers, repository) = (host.readers()?, host.repository()?);
+    let mut reader = Reader::take(&readers, &repository, host.version())?;
     // Once at the start, then each time anything but the time it was read
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
@@ -152,7 +165,7 @@ pub fn run(
         }
         // A watch may take an older reader's lease; a lock it could not
         // try leaves it as it was.
-        let _ = reader.step(true);
+        let _ = reader.step(true, Drives::probe(&readers, &repository));
     }
 }
 
@@ -166,7 +179,7 @@ pub(crate) fn ticked(mut doc: serde_json::Value, tick: Duration) -> serde_json::
 
 /// What a watch last asked of whether the repository has sluice: the tips
 /// the host held, and whether any held the policy (129).
-struct Asked {
+pub(crate) struct Asked {
     tips: Vec<sluice_seams::Rev>,
     holds: bool,
 }
@@ -184,7 +197,20 @@ fn read(
     clock: &dyn Clock,
     asked: &mut Option<Asked>,
 ) -> Result<serde_json::Value> {
-    let (branches, mut doc) = document(s, host, clock)?;
+    s.seams().state.refresh()?;
+    read_held(s, host, clock, asked)
+}
+
+/// As [`read`], asking no remote: every branch read as the host holds it
+/// since the last ask, as `sluice run` reads after its pass's own (129,
+/// 135).
+pub(crate) fn read_held(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+    asked: &mut Option<Asked>,
+) -> Result<serde_json::Value> {
+    let (branches, mut doc) = document_held(s, host, clock)?;
     if !branches.is_empty() {
         *asked = None;
         return Ok(doc);

@@ -24,10 +24,10 @@ renamed, removed or added under `sluice/submission@1`. Decided means
 
 ```
 failed: tests:t-batch-cards
-  on bolt/x + #12 + #13 (e20a6f9)
+  on feature/x + #12 + #13 (e20a6f9)
   #12 passed on its own, so the failure is from this submission
-  log of tests:t-batch-cards: .git/sluice/.logs/bolt/x/c7/tests:t-batch-cards.log
-the agent working in unit/batch-review fixes it there and submits again
+  log of tests:t-batch-cards: .git/sluice/.logs/feature/x/c7/tests:t-batch-cards.log
+the agent working in batch-review fixes it there and submits again
 ```
 
 - sluice blames one submission, and only after every combination ahead of it
@@ -44,9 +44,9 @@ the agent working in unit/batch-review fixes it there and submits again
 
   ```
   timed out: scripts/ci:test was running when the time limit ended the run
-    on bolt/x + #33 (990de53)
-    log of scripts/ci:test: .git/sluice/.logs/bolt/x/c7/scripts%2Fci:test.log
-  nothing was recorded for scripts/ci:test: if the host was slow, the agent working in unit/ci submits the same head again; if scripts/ci:test never ends, it fixes it there and submits again
+    on feature/x + #33 (990de53)
+    log of scripts/ci:test: .git/sluice/.logs/feature/x/c7/scripts%2Fci:test.log
+  nothing was recorded for scripts/ci:test: if the host was slow, the agent working in ci submits the same head again; if scripts/ci:test never ends, it fixes it there and submits again
   ```
 
   Read the log. A test that stopped printing is waiting on something that
@@ -94,7 +94,7 @@ submission is blamed, and each test is named with why:
 ```
 not run: cli:tools
   cli:tools could not run: exited 77, which [tests] not_run names: it could not run here
-the host could not run cli:tools: once it can, the agent working in unit/tools submits again
+the host could not run cli:tools: once it can, the agent working in tools submits again
 ```
 
 sluice tells these apart on its own and records nothing for them: a run
@@ -153,8 +153,8 @@ The report decides nothing; read the failure from `sluice submit` or
 
 ```
 conflict: plugin/lib/plan.py
-  conflicts with #12 (crw-1-unit-1, unit/touches)
-the agent working in unit/forecast merges or rebases onto bolt/x there and submits again
+  conflicts with #12 (agent-1, touches)
+the agent working in forecast merges or rebases onto feature/x there and submits again
 ```
 
 Bring the branch (and, if it has not landed yet, wait for #12, or rebase on

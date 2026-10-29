@@ -910,7 +910,7 @@ printf '%s' "$out" | grep -q '^Waiting for sluice' || fail "before the watcher r
 [ -n "$(ls "$S/want")" ] || fail "the watcher was not asked to read it"
 pass
 
-# A combination of 30 tasks, crew's at the time: 18 passed, a:failed
+# A combination of 30 tasks: 18 passed, a:failed
 # failed, b:running running, 10 waiting; and 5 entries under RECENT.
 tall=$(printf '%s\n' "$board" | jq -c '.branches[0].candidates[0].tasks = (
     [range(18) | {target: "p\(.):test", state: "passed", started: "2026-10-16T19:43:00Z", ended: "2026-10-16T19:43:\(10 + .)Z"}]
@@ -960,9 +960,9 @@ printf '%s' "$up" | grep -q "^… $((above - 1)) lines above" || fail "Up from t
 pass
 
 fresh 'status: a branch with nothing queued is left out'
-feed "$(printf '%s\n' "$board" | jq -c '.branches += [range(30) | {branch: "bolt/b\(.)", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}]')"
+feed "$(printf '%s\n' "$board" | jq -c '.branches += [range(30) | {branch: "feature/b\(.)", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}]')"
 out=$(frame_of "$work" --once)
-printf '%s' "$out" | grep -q 'bolt/b' && fail "an idle branch is shown: $out"
+printf '%s' "$out" | grep -q 'feature/b' && fail "an idle branch is shown: $out"
 printf '%s' "$out" | grep -q '^main at 9ecc34a' || fail "the busy branch went: $out"
 printf '%s' "$out" | grep -q '^30 other branches with nothing queued$' || fail "the idle branches are not counted: $out"
 feed "$(printf '%s\n' "$board" | jq -c '.branches |= map(.depth = 0 | .submissions = [] | .candidates = [] | .recent = [])')"
@@ -972,13 +972,13 @@ printf '%s' "$out" | grep -q 'other branch' && fail "with every branch idle it c
 pass
 
 fresh 'status: an idle branch is shown a quarter of an hour after its last event'
-fresh_doc() { printf '%s\n' "$board" | jq -c --arg at "$1" '.branches += [{branch: "bolt/done", at: "1234567", depth: 0, submissions: [], candidates: [],
+fresh_doc() { printf '%s\n' "$board" | jq -c --arg at "$1" '.branches += [{branch: "feature/done", at: "1234567", depth: 0, submissions: [], candidates: [],
   recent: [{schema: "sluice/log@1", at: $at, event: "landed", ids: [77], to: "abcdef0"}]}]'; }
 feed "$(fresh_doc 2026-10-16T19:40:00Z)"
-frame_of "$work" --once | grep -q '^bolt/done at 1234567' || fail "a landing five minutes old is not shown"
+frame_of "$work" --once | grep -q '^feature/done at 1234567' || fail "a landing five minutes old is not shown"
 feed "$(fresh_doc 2026-10-16T19:20:00Z)"
 out=$(frame_of "$work" --once)
-printf '%s' "$out" | grep -q 'bolt/done' && fail "a landing 25 minutes old is still shown: $out"
+printf '%s' "$out" | grep -q 'feature/done' && fail "a landing 25 minutes old is still shown: $out"
 pass
 
 fresh 'status: a pane outside git shows every repository'
@@ -1118,7 +1118,7 @@ pass
 
 fresh "status: branches keep the overview's order"
 feed "$(printf '%s\n' "$board" | jq -c '.branches = [(.branches[0] | .branch = "release"),
-  {branch: "bolt/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
+  {branch: "feature/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
 out=$(frame_of "$work" --once)
 [ "$(printf '%s\n' "$out" | sed -n -E 's/^(release|main) at .*/\1/p' | tr '\n' ' ')" = 'release main ' ] ||
   fail "the branches are not in the document's order: $out"
@@ -1136,10 +1136,10 @@ focused_p1=$(jq -c --arg w "$work" '.focused_pane_cwd = $w | .focused_pane_id = 
 
 fresh "status: the focused pane's named branch comes first"
 feed "$(printf '%s\n' "$board" | jq -c '.branches = [(.branches[0] | .branch = "release"),
-  {branch: "bolt/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
-named p1 bolt/a
+  {branch: "feature/a", at: "1234567", depth: 0, submissions: [], candidates: [], recent: []}, .branches[0]]')"
+named p1 feature/a
 out=$(HERDR_PLUGIN_CONTEXT_JSON=$focused_p1 sh "$plugin/bin/status.sh" --once)
-[ "$(printf '%s\n' "$out" | sed -n -E 's/^(release|main|bolt\/a) at .*/\1/p' | tr '\n' ' ')" = 'bolt/a release main ' ] ||
+[ "$(printf '%s\n' "$out" | sed -n -E 's/^(release|main|feature\/a) at .*/\1/p' | tr '\n' ' ')" = 'feature/a release main ' ] ||
   fail "the named branch is not first: $out"
 printf '%s' "$out" | grep -q 'with nothing queued$' && fail "the named branch is counted with nothing queued: $out"
 SLUICE_HERDR_TICK=1 sh "$plugin/bin/watch.sh" --ticks 1 2>/dev/null

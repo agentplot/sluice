@@ -174,11 +174,27 @@ Find out what the repository already uses before writing anything:
 | reviews or other systems' checks must pass before landing | pull requests ([profiles/pull-requests.md](references/profiles/pull-requests.md)) |
 | a stack a person should try after each landing | previews ([profiles/previews.md](references/profiles/previews.md)) |
 
+Before proposing any branch or pattern, read how the project already
+names its branches, and follow it:
+
+```sh
+git branch -r                                   # the branches the remote holds
+grep -n '^\[branches' .config/sluice.toml       # the patterns a policy already names
+ls CONTRIBUTING* docs/CONTRIBUTING* 2>/dev/null # where a project writes its conventions
+```
+
+Propose only names the project uses or its conventions describe. The
+patterns in this skill and its references, such as `feature/*`, are
+placeholders that show the shape of a table; never offer them as a
+scheme to adopt.
+
 Then ask the user, before writing anything:
 
 1. **Which branches agents will submit to.** A name (`main`), or a family
-   of them (`dev/*`, `bolt/*` for small fast landings). Each becomes a
-   `[branches."<pattern>"]` table, and only sluice moves those branches.
+   of them, written in the project's own naming (for example
+   `<prefix>/*` for integration branches that take small fast landings).
+   Each becomes a `[branches."<pattern>"]` table, and only sluice moves
+   those branches.
 2. **For each, what must pass before work lands there.** In a moon
    repository, offer the tags its tasks carry:
 
@@ -186,14 +202,14 @@ Then ask the user, before writing anything:
    moon query tasks | jq -r '[.tasks[][].tags[]?] | unique | .[]'   # every tag; then --tags <tag> for its tasks
    ```
 
-   A fast tag such as `#check-fast` suits a family of bolts, and a slower
+   A fast tag such as `#check-fast` suits a family of integration branches, and a slower
    one such as `#e2e` can be added on `main` only.
 3. **For each that lives on GitHub, whether the team lands on it through
    pull requests today.** Ask only for a branch whose policy will name a
    remote on GitHub: one kept on this host has no pull requests, and
    sluice refuses the table without `remote`. Ask per branch, since a team
-   often reviews everything into `main` and lets agents land on `bolt/*`
-   straight from their worktrees. On no, write no `pull_requests` table
+   often reviews everything into `main` and lets agents land on a family
+   of integration branches straight from their worktrees. On no, write no `pull_requests` table
    for it; on yes, see [a branch the team lands by pull
    request](#a-branch-the-team-lands-by-pull-request).
 
@@ -321,12 +337,13 @@ Then choose, and tell the user why:
   timer collects them. A pass lands the whole batch; a failure costs a second
   round, testing the shorter combinations, before the blamed submission is named.
   `parallel` is then the largest batch.
-- One branch can't do both. Bolts and `main` can differ: `batch = false` on
-  `bolt/*` with a short gate, `batch = true` on `main` with the full one.
+- One branch can't do both. A family of integration branches and `main`
+  can differ: `batch = false` on that pattern with a short gate,
+  `batch = true` on `main` with the full one.
 - Set `timeout` to about twice the gate's usual time; the default is an hour.
 - Set `hold` on a branch whose every move starts a build or a deployment,
   such as `main`, to how far apart submissions may arrive and still land in
-  one move, e.g. `"5m"`. Leave it off bolt branches.
+  one move, e.g. `"5m"`. Leave it off integration branches that nothing deploys.
 - Leave `release_retries` unset. A checkout whose release command fails is
   tried three more times, one a round, then held for the user to release
   with `sluice release <checkout>`; it never holds the branch.
@@ -495,9 +512,9 @@ file (checked first on each host, as *The host's file* says), then one
 landing that adds `[signers]` and rewrites `trust`, then `sluice run` kept
 running on each standing executor.
 
-A bolt pattern with `remote = "origin"` needs no push by hand: `sluice branch
-create bolt/<b> --from main` makes each bolt there as the app, and its
-ruleset restricts creations and deletions as well as updates.
+A pattern with `remote = "origin"` needs no push by hand: `sluice branch
+create <branch> --from main` makes each branch under it there as the app,
+and its ruleset restricts creations and deletions as well as updates.
 
 ## 7. Check it end to end
 

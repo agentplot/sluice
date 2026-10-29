@@ -34,7 +34,7 @@ queue; the policy's `[branches."<pattern>"]` tables are the whole list.
 
 ```sh
 sluice submit --check main      # would it conflict? writes nothing
-sluice submit --check main --head bolt/x   # the same for a branch no worktree holds
+sluice submit --check main --head feature/x   # the same for a branch no worktree holds
 sluice submit main              # submit, wait, exit with the outcome
 wt submit main                  # the same under worktrunk; removes the worktree on landing
 sluice submit main --subject "Batch review cards"   # one line saying what lands
@@ -130,7 +130,7 @@ sluice inbox --json                       # {"outcomes":[...]}, each the submiss
 ```
 
 Several worktrees whose heads must go in together, such as a set of
-approved bolts, are submitted as one act: `sluice submit main --worktree
+approved feature branches, are submitted as one act: `sluice submit main --worktree
 ../a --worktree ../b`, with one `--subject` per `--worktree`, in their
 order, or none. sluice queues all of them, in that order, or none,
 and forms no combination on any of them until every one is queued. Once
@@ -205,7 +205,7 @@ agent you start in that worktree, told the same. It is the one that can
 fix a failure or a conflict there. Never ask the user to run `sluice
 submit`, in that worktree or any other.
 
-A way on that sluice prints, such as `the agent working in unit/a fixes it
+A way on that sluice prints, such as `the agent working in fix-a fixes it
 there and submits again`, is for the agent it names: tell that agent, or
 start one in that worktree, and never hand it to the user.
 
@@ -298,15 +298,20 @@ refused. See [references/previews.md](references/previews.md).
 
 ## Branches
 
-A branch sluice lands on, such as a bolt, is made and deleted by sluice,
-never pushed or deleted by hand:
+A branch sluice lands on, such as a feature branch, is made and deleted by
+sluice, never pushed or deleted by hand:
 
 ```sh
-sluice branch create bolt/x --from main   # at main's revision, on its remote if the policy names one
-sluice branch delete bolt/x               # once it has landed into main and nothing is queued on it
+sluice branch create <branch> --from main   # at main's revision, on its remote if the policy names one
+sluice branch delete <branch>               # once it has landed into main and nothing is queued on it
 ```
 
-Each refusal says why; `--into <branch>` names another branch the bolt
+Name a new branch as the project names its branches: read `git branch -r`,
+the policy's `[branches."<pattern>"]` tables and any CONTRIBUTING file
+first, and pick a name the policy's patterns match. The names in this
+skill, such as `feature/x`, are placeholders, not a scheme to adopt.
+
+Each refusal says why; `--into <branch>` names another branch it
 landed into, and `--json` gives the revision made or deleted.
 
 ## Amend and withdraw

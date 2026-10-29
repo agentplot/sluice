@@ -37,15 +37,7 @@ pub struct Fake {
 
 impl Fake {
     pub fn start(handler: impl Fn(&Request) -> Answer + Send + Sync + 'static) -> Fake {
-        Fake::start_on(TcpListener::bind("127.0.0.1:0").expect("a port"), handler)
-    }
-
-    /// The fake on `listener`'s port: one that a test brings up on a port
-    /// nothing answered on before.
-    pub fn start_on(
-        listener: TcpListener,
-        handler: impl Fn(&Request) -> Answer + Send + Sync + 'static,
-    ) -> Fake {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let kept = seen.clone();
@@ -70,23 +62,6 @@ impl Fake {
     pub fn requests(&self) -> Vec<Request> {
         self.seen.lock().unwrap().clone()
     }
-}
-
-/// Answer the next `n` connections to `listener` with `handler`, one after
-/// another, then close it, so a connection to its port is refused: a
-/// remote that went away. Joined, every one was answered.
-pub fn serve(
-    listener: TcpListener,
-    n: usize,
-    handler: impl Fn(&Request) -> Answer + Send + 'static,
-) -> std::thread::JoinHandle<Vec<Request>> {
-    std::thread::spawn(move || {
-        let kept = Mutex::new(Vec::new());
-        for stream in listener.incoming().take(n) {
-            answer(stream.expect("a connection"), &kept, &handler);
-        }
-        kept.into_inner().unwrap()
-    })
 }
 
 /// Read one request from `stream`, keep it in `kept`, and write

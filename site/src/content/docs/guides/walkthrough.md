@@ -50,7 +50,7 @@ network = "localhost"
 [landing]
 subject = "chore(land): #{id} {from}"
 
-[branches."bolt/*"]
+[branches."feature/*"]
 required = ["#suite"]
 parallel = 4
 batch = false
@@ -72,7 +72,7 @@ that matter most:
 **`[tests]`** says how tests run: with moon, so only the tasks a
 combination affects run and unchanged ones replay their earlier result,
 or as one command. Which tasks must pass is not here: it is set per
-branch, because that is the point. A branch like `bolt/*` here lands
+branch, because that is the point. A branch like `feature/*` here lands
 small changes many times a day and wants a fast gate; `main` lands whole
 features and can demand more.
 
@@ -150,7 +150,7 @@ either, becomes one command, run in the agent's worktree with its work
 committed:
 
 ```sh
-sluice submit bolt/concurrent-units
+sluice submit feature/concurrent-units
 ```
 
 A hook that ran the suite before merging goes: sluice runs the suite on
@@ -171,8 +171,8 @@ git `reference-transaction` hook that refuses any other update and logs
 the attempt:
 
 ```console
-$ git merge unit/touches        # on bolt/concurrent-units
-error: bolt/concurrent-units is protected by sluice; submit the change to sluice instead
+$ git merge touches        # on feature/concurrent-units
+error: feature/concurrent-units is protected by sluice; submit the change to sluice instead
 ```
 
 The hook calls the installed `sluice`, never one built from a submission,
@@ -190,11 +190,11 @@ driver, and the one here. A tool's own merge stage, or worktrunk's
 `wt submit`, calls the same `sluice submit` underneath.
 
 ```console
-$ sluice submit bolt/concurrent-units
-submission 12 to bolt/concurrent-units · nothing queued ahead
-testing bolt/concurrent-units + #12 · 3s of 15m
-testing bolt/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
-testing bolt/concurrent-units + #12 · 2 tasks to run, 31 replayed
+$ sluice submit feature/concurrent-units
+submission 12 to feature/concurrent-units · nothing queued ahead
+testing feature/concurrent-units + #12 · 3s of 15m
+testing feature/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
+testing feature/concurrent-units + #12 · 2 tasks to run, 31 replayed
 passed · landed as b7d2e94
 ```
 
@@ -208,35 +208,35 @@ without waiting. The agent's worktree and branch stay as they were:
 removing them after a landing is a driver's business, and the plain
 driver leaves it to the agent.
 
-The agent in `unit/batch-review` submitted two minutes later, so its
+The agent in `batch-review` submitted two minutes later, so its
 combination includes #12:
 
 ```console
-$ sluice submit bolt/concurrent-units
-submission 13 to bolt/concurrent-units · 1 queued ahead (#12)
-testing bolt/concurrent-units + #12 + #13 · 4 tasks to run, 29 replayed
+$ sluice submit feature/concurrent-units
+submission 13 to feature/concurrent-units · 1 queued ahead (#12)
+testing feature/concurrent-units + #12 + #13 · 4 tasks to run, 29 replayed
 failed: tests:t-batch-cards
-  on bolt/concurrent-units + #12 + #13 (e20a6f9)
+  on feature/concurrent-units + #12 + #13 (e20a6f9)
   #12 passed on its own, so the failure is from this submission
-  log of tests:t-batch-cards: .git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log
-the agent working in unit/batch-review fixes it there and submits again
+  log of tests:t-batch-cards: .git/sluice/.logs/feature/concurrent-units/c7/tests:t-batch-cards.log
+the agent working in batch-review fixes it there and submits again
 ```
 
 A conflict is found before any test runs:
 
 ```console
-$ sluice submit bolt/concurrent-units
-submission 14 to bolt/concurrent-units · 1 queued ahead (#12)
+$ sluice submit feature/concurrent-units
+submission 14 to feature/concurrent-units · 1 queued ahead (#12)
 conflict: plugin/lib/plan.py
-  conflicts with #12 (crw-1-unit-1, unit/touches)
-the agent working in unit/forecast merges or rebases onto bolt/concurrent-units there and submits again
+  conflicts with #12 (agent-1, touches)
+the agent working in forecast merges or rebases onto feature/concurrent-units there and submits again
 ```
 
 And before submitting, an agent can ask whether its work would conflict:
 
 ```console
-$ sluice submit --check bolt/concurrent-units
-would conflict: plugin/lib/plan.py with #12 (crw-1-unit-1, unit/touches)
+$ sluice submit --check feature/concurrent-units
+would conflict: plugin/lib/plan.py with #12 (agent-1, touches)
 ```
 
 ## 6. What keeps the queue moving
@@ -251,7 +251,7 @@ lock lets only one round run at a time.
 Two commands do the same thing without submitting anything:
 
 ```sh
-sluice step bolt/concurrent-units   # one round, for one branch, then exit
+sluice step feature/concurrent-units   # one round, for one branch, then exit
 sluice run                          # rounds for every branch with a queue, until stopped
 ```
 
@@ -265,12 +265,12 @@ In the repository's git directory, never committed and never pushed,
 readable with plain tools whether or not sluice is running:
 
 ```
-.git/sluice/bolt/concurrent-units/
+.git/sluice/feature/concurrent-units/
   version              57: bumped on every write, so two rounds never both write
   submissions/14.json  a submission still in the queue
   .finished/12.json    one that landed or was withdrawn, moved out of the way
   log.jsonl            every submission, test run, result, blame and landing, in order
-.git/sluice/.logs/bolt/concurrent-units/<candidate>/<task>.log
+.git/sluice/.logs/feature/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
 .git/sluice/results.jsonl
                        every test result of the repository, with its executor
@@ -287,15 +287,15 @@ its branch as merged. What was tested rides along as trailers, which
 outlive the state files:
 
 ```console
-$ git log -1 bolt/concurrent-units
+$ git log -1 feature/concurrent-units
 commit b7d2e94f03
 Merge: c41e8f2 3f9c2e1
 Author: sluice <sluice@localhost>
 
-    chore(land): #12 unit/touches
+    chore(land): #12 touches
 
     Sluice-Submission: 12
-    Sluice-From: crw-1-unit-1 (unit/touches)
+    Sluice-From: agent-1 (touches)
     Sluice-Tested: 9ab3d07c11
     Sluice-Result: passed (2 run, 31 replayed)
 ```
@@ -303,10 +303,10 @@ Author: sluice <sluice@localhost>
 ## 9. Reading and changing the queue
 
 ```console
-$ sluice status bolt/concurrent-units
-bolt/concurrent-units at b7d2e94 · 1 in the queue · testing 2 at once (up to 4)
-  #14 unit/forecast  testing   crw-1-unit-3  unit/forecast   bolt/concurrent-units + #14
-2 no longer in the queue: sluice status bolt/concurrent-units --all
+$ sluice status feature/concurrent-units
+feature/concurrent-units at b7d2e94 · 1 in the queue · testing 2 at once (up to 4)
+  #14 forecast  testing   agent-3  forecast   feature/concurrent-units + #14
+2 no longer in the queue: sluice status feature/concurrent-units --all
 ```
 
 It shows the submissions still in the queue, each by its number and its

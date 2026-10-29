@@ -93,8 +93,8 @@ does nothing elsewhere. It never submits, withdraws or lands anything.
 - **The tab bar**: the focused repository's queue on one line, as the
   board's band says it, each submission with its subject or its branch:
   `sluice main · 3 submissions · testing main + #12 Batch review cards +
-  #13 unit/forecast 2m10s/15m · #14 Herdr popup waiting · last #9
-  unit/sidebar blamed on 4f1c2aa`. When
+  #13 forecast 2m10s/15m · #14 Herdr popup waiting · last #9
+  sidebar blamed on 4f1c2aa`. When
   agents' checks hold the queue back, the host has no run free while a
   submission is queued, and the line ends `· 1 slot to an agent's checks`.
   A branch with checkouts held because their release failed ends its line

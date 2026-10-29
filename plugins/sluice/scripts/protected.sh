@@ -7,7 +7,7 @@ sluice_policy() {
   git -C "$1" show HEAD:.config/sluice.toml 2>/dev/null
 }
 
-# The branch patterns the policy names, one per line: `main`, `bolt/*`.
+# The branch patterns the policy names, one per line: `main`, `feature/*`.
 # A `[branches."<pattern>"]` table protects its pattern (rule core.4);
 # its `.pull_requests` sub-table names the same pattern again.
 sluice_patterns() {

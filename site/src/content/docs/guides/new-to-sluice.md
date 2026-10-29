@@ -26,7 +26,7 @@ machine.
 
 sluice is no agent orchestrator: it starts no agents, gives them no
 work, and makes no worktree for an agent. Something else runs the
-agents, such as Claude Code, herdr or a crew of your own, and tells each
+agents, such as Claude Code, herdr or a tool of your own, and tells each
 one to submit through sluice when its work is done. With
 [the Claude Code plugin](/sluice/guides/claude-code/) installed, Claude
 submits through sluice in any repository with a `.config/sluice.toml`.

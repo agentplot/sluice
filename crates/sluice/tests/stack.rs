@@ -15,6 +15,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use support::{Repo, Scratch};
 
@@ -266,12 +267,32 @@ fn stacks(executor: &str) {
     s.submit("stack/b", "b", "b.txt");
     s.submit("hang/c", "c", "hang");
 
-    let out = s
-        .command(s.repo.dir())
-        .args(["run", "--rounds", "40"])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", text(&out));
+    // Rounds until all three are decided, however slowly a loaded host
+    // brings the stacks up: bounded by time, generously, never by a count
+    // of rounds.
+    let decided = |b: &str| {
+        let states = s.states(b);
+        states.len() == 1 && ["landed", "failed", "conflict", "withdrawn"].contains(&&*states[0])
+    };
+    let until = Instant::now() + Duration::from_secs(20 * 60);
+    let out = loop {
+        let out = s
+            .command(s.repo.dir())
+            .args(["run", "--rounds", "10"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        if ["stack/a", "stack/b", "hang/c"].iter().all(|b| decided(b)) {
+            break out;
+        }
+        assert!(
+            Instant::now() < until,
+            "not decided in 20 minutes: {}\n{}\n{}",
+            s.status("stack/a"),
+            s.status("stack/b"),
+            s.status("hang/c")
+        );
+    };
 
     // 31: two stacks on their own ports, up at once, each test reaching
     // its own; both land.
@@ -431,8 +452,9 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     };
 
     let first = run(1);
-    // 31: the port is its block's, from 41400; the block is the first
-    // whose port nothing on the host already holds.
+    // 31, 90: the port is its block's, from `ports_from`, 41400, on; the
+    // block is the first whose port nothing on the host already holds, a
+    // run of this test in another tree's among them.
     let held: Vec<u32> = std::fs::read_dir(blocks.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
