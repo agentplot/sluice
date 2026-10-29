@@ -48,4 +48,4 @@ configures, reads or runs changes, only what a tick costs.
 ## 5. The gate
 
 - [x] 5.1 Confirm no tick path starts git but the refresh's fetch: `rg -n 'Command::new\("git"\)' crates/sluice/src` lists each remaining call, and none of them is reached from `Command::Run`'s pass or `overview::document` with nothing in play, as the counting-git tests show. True when the commit message names each remaining call and the path that reaches it.
-- [ ] 5.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
+- [x] 5.2 Run the gate's checks on the committed work with `sluice exec main`, and `sluice exec main -- moon run root:changes`. True when every task passes and the change validates strictly.
