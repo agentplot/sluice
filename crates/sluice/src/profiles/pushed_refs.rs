@@ -424,10 +424,7 @@ impl PushedRefs {
         )?;
         if let Pushed::Refused(out) = &pushed {
             let report = String::from_utf8_lossy(&out.stdout);
-            if report
-                .lines()
-                .any(|l| l.starts_with('!') && l.contains("[rejected]"))
-            {
+            if report.lines().any(at_the_lease) {
                 return Ok(false);
             }
         }
@@ -474,6 +471,23 @@ impl PushedRefs {
         }
         Ok(())
     }
+}
+
+/// Whether a line of `git push --porcelain` says the remote's ref was not
+/// what the push was leased on: git's own refusal, from the ref the remote
+/// advertised, or the remote's, from the ref it found under its lock when
+/// another push moved it meanwhile.
+fn at_the_lease(line: &str) -> bool {
+    line.starts_with('!')
+        && (line.contains("[rejected]")
+            || line.contains("[remote rejected]")
+                && [
+                    "failed to update ref",
+                    "cannot lock ref",
+                    "incorrect old value",
+                ]
+                .iter()
+                .any(|w| line.contains(w)))
 }
 
 /// 137: the remote's ref of `branch`'s intake mark.

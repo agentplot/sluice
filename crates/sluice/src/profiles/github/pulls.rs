@@ -19,6 +19,18 @@
 //! its head, its last change on GitHub, its draft mark or its entry moved,
 //! or, out of draft and still short of its conditions, at each asking.
 //!
+//! One host at a time takes a branch's pull requests in (137; rule
+//! core.33): where its records are on its remote, the instance that keeps
+//! the branch; where each host keeps its own, the holder of its intake
+//! mark, `refs/sluice/intake/<branch>` on its remote, or, where none
+//! stands, the host that finds none. `sluice run` pushes the mark when it
+//! starts and renews it when a third of the lease has passed, never at each
+//! pass; a wait on a host where `sluice run` does not live pushes it the
+//! same way where none stands, and lets it go when it ends; a step pushes
+//! none. A host that does not take the branch's pull requests in asks
+//! GitHub nothing about them, and withdraws its own submissions of them,
+//! naming the host that does, which takes each in again.
+//!
 //! The driver's `session("pull/<n>")` fetches `refs/pull/<n>/head`; its
 //! `notify` posts the outcome and, when a pull request is sent back,
 //! comments once. Intake moves no branch (rule core.4): it fetches heads
@@ -46,12 +58,13 @@ use sluice_seams::{
 
 use super::app::Repo;
 use super::forge::{approvals, Forge, Posted, Posting, Pull, Standing, Status, SLUICE_CHECK};
+use super::kept::Observed;
 use super::kept::{Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
-use crate::profiles::pushed_refs::{remote_url, PushedRefs};
+use crate::profiles::pushed_refs::{remote_url, Holder, Mark, PushedRefs};
 use crate::retry;
-use crate::{Followed, GroupRefused, Opened, Short};
+use crate::{Followed, GroupRefused, Opened, Short, Taker};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
 
 /// The place a pull request's entry is submitted from.
@@ -290,6 +303,15 @@ pub struct Pulls {
     /// What GitHub last said of each pull request a wait follows, by
     /// number, and when (136).
     seen: RefCell<BTreeMap<u64, Seen>>,
+    /// This host as its peers name it, and its lease (72, 73, 137).
+    peer: sluice_core::Peer,
+    /// The intake marks this process pushed as a wait and still holds, by
+    /// branch: the branch's remote and the mark's commit, let go when the
+    /// wait ends (137).
+    held: RefCell<BTreeMap<String, (String, Rev)>>,
+    /// The host that takes each branch's pull requests in, by branch, as
+    /// this process's last intake found it, where that is another host.
+    away: RefCell<BTreeMap<String, String>>,
 }
 
 /// A pull request as a wait last read it from GitHub, and its timeline
@@ -298,6 +320,9 @@ struct Seen {
     at: DateTime<Utc>,
     pull: Option<Pull>,
     readied: Option<Vec<DateTime<Utc>>>,
+    /// sluice's check on its head, where a wait follows it across hosts
+    /// and read it then.
+    posted: Option<Posted>,
 }
 
 /// A pull request's state: what sluice posts, and what a submit that
@@ -330,6 +355,17 @@ struct Target {
     repo: Repo,
     conditions: Conditions,
     tip: Rev,
+    /// Whether its records are on its remote (C.6).
+    signed: bool,
+}
+
+/// 137: whether this host takes a branch's pull requests in this pass.
+enum Taking {
+    /// It does; `took` when it took the mark from another host, after
+    /// which it asks GitHub at once, since what it last read is old.
+    Here { took: bool },
+    /// Another host does, by its name.
+    Elsewhere(String),
 }
 
 impl Pulls {
@@ -338,7 +374,9 @@ impl Pulls {
     /// `forge`, and fetched as `identity` where it has one, each fetch and
     /// push under `retry`; each branch's open pull requests asked for
     /// every `discovery` while nothing on the host moves, and what was read
-    /// of them kept in `kept` (136).
+    /// of them kept in `kept` (136); `peer` is this host as its peers name
+    /// it, with its lease (137).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dir: &Path,
         common: &Path,
@@ -347,6 +385,7 @@ impl Pulls {
         retry: Rc<retry::Policy>,
         kept: Kept,
         discovery: Duration,
+        peer: sluice_core::Peer,
     ) -> Pulls {
         Pulls {
             dir: dir.to_path_buf(),
@@ -361,6 +400,9 @@ impl Pulls {
             kept,
             discovery: chrono::TimeDelta::from_std(discovery).unwrap_or(chrono::TimeDelta::MAX),
             seen: RefCell::default(),
+            peer,
+            held: RefCell::default(),
+            away: RefCell::default(),
         }
     }
 
@@ -387,6 +429,7 @@ impl Pulls {
         let Some(rules) = s.rules_at(branch, &tip)? else {
             return Ok(None);
         };
+        let signed = rules.signed;
         let (Some(conditions), Some(remote)) = (rules.pull_requests, rules.remote) else {
             return Ok(None);
         };
@@ -401,7 +444,193 @@ impl Pulls {
             repo,
             conditions,
             tip,
+            signed,
         }))
+    }
+
+    /// 137: whether this host takes `t`'s pull requests in this pass, as
+    /// `taker`, at `now`. Where the branch's records are on its remote, the
+    /// instance that keeps it does (72). Where each host keeps its own, the
+    /// holder of the intake mark does, read from the branch's last fetch:
+    ///
+    /// - none stands: a driver or a wait pushes it, leased on its absence,
+    ///   and takes them in; a step takes them in and pushes none;
+    /// - this host's: a driver or a wait renews it when a third of the
+    ///   lease has passed since it last did, or at once to name itself its
+    ///   holder; a step takes them in;
+    /// - another host's wait's, and this is a driver: it takes it at once;
+    /// - another host's, unchanged for the lease since this host first saw
+    ///   it, by this host's own observation: a driver or a wait takes it;
+    /// - otherwise another host takes them in.
+    ///
+    /// A push refused at its lease is another host's take: this host takes
+    /// nothing in this pass.
+    fn takes(
+        &self,
+        s: &Sluice<'_>,
+        t: &Target,
+        pushed: &PushedRefs,
+        branch: &str,
+        taker: Taker,
+        now: DateTime<Utc>,
+    ) -> Result<Taking> {
+        if t.signed {
+            return Ok(match s.keeps(branch)? {
+                true => Taking::Here { took: false },
+                false => Taking::Elsewhere(format!("the host that keeps {branch}")),
+            });
+        }
+        let holder = match taker {
+            Taker::Driver => Some(Holder::Driver),
+            Taker::Wait => Some(Holder::Wait),
+            Taker::Step => None,
+        };
+        let lease = chrono::TimeDelta::from_std(self.peer.lease).unwrap_or(chrono::TimeDelta::MAX);
+        let seen = self.kept.observed(&t.repo, branch);
+        let Some((rev, mark)) = pushed.intake_mark(branch)? else {
+            return match holder {
+                None => Ok(Taking::Here { took: false }),
+                // The host there alone: what it read stands.
+                Some(h) => self.put_mark(t, pushed, branch, None, h, now, false),
+            };
+        };
+        if mark.host == self.peer.name {
+            let Some(h) = holder else {
+                return Ok(Taking::Here { took: false });
+            };
+            let renewed = seen
+                .filter(|o| o.seen == rev.0)
+                .and_then(|o| o.renewed)
+                .filter(|r| now - *r < lease / 3);
+            if mark.holder == h && renewed.is_some() {
+                if h == Holder::Wait {
+                    self.held
+                        .borrow_mut()
+                        .insert(branch.to_string(), (t.remote.clone(), rev));
+                }
+                return Ok(Taking::Here { took: false });
+            }
+            return self.put_mark(t, pushed, branch, Some(&rev), h, now, false);
+        }
+        if holder == Some(Holder::Driver) && mark.holder == Holder::Wait {
+            return self.put_mark(t, pushed, branch, Some(&rev), Holder::Driver, now, true);
+        }
+        let since = match seen.filter(|o| o.seen == rev.0) {
+            Some(o) => o.since,
+            None => {
+                let first = Observed {
+                    seen: rev.0.clone(),
+                    since: now,
+                    renewed: None,
+                };
+                self.kept.observe(&t.repo, branch, Some(&first))?;
+                return Ok(Taking::Elsewhere(mark.host));
+            }
+        };
+        match holder {
+            Some(h) if now - since >= lease => {
+                self.put_mark(t, pushed, branch, Some(&rev), h, now, true)
+            }
+            _ => Ok(Taking::Elsewhere(mark.host)),
+        }
+    }
+
+    /// 137: push this host's mark as `holder` over `from`, leased on it:
+    /// [`Taking::Here`] with `took` once pushed, kept as seen and renewed
+    /// now, and held for letting go when its holder is a wait; refused at
+    /// its lease, the host that moved it, read in the branch's fetch again.
+    #[allow(clippy::too_many_arguments)]
+    fn put_mark(
+        &self,
+        t: &Target,
+        pushed: &PushedRefs,
+        branch: &str,
+        from: Option<&Rev>,
+        holder: Holder,
+        now: DateTime<Utc>,
+        took: bool,
+    ) -> Result<Taking> {
+        let mark = Mark {
+            host: self.peer.name.clone(),
+            holder,
+            sluice: crate::VERSION.to_string(),
+        };
+        let Some(rev) = pushed.put_intake_mark(branch, from, &mark)? else {
+            self.held.borrow_mut().remove(branch);
+            pushed.read(branch)?;
+            let host = match pushed.intake_mark(branch)? {
+                Some((_, m)) => m.host,
+                None => "another host".to_string(),
+            };
+            return Ok(Taking::Elsewhere(host));
+        };
+        let seen = Observed {
+            seen: rev.0.clone(),
+            since: now,
+            renewed: Some(now),
+        };
+        self.kept.observe(&t.repo, branch, Some(&seen))?;
+        match holder {
+            Holder::Wait => self
+                .held
+                .borrow_mut()
+                .insert(branch.to_string(), (t.remote.clone(), rev)),
+            Holder::Driver => self.held.borrow_mut().remove(branch),
+        };
+        Ok(Taking::Here { took })
+    }
+
+    /// 122, 137: on a host that finds another host's mark, withdraw every
+    /// submission of its own records taken from a pull request, neither out
+    /// of the queue nor landing, the log naming `host`, which takes each in
+    /// again; nothing is posted on the pull requests, which `host` posts.
+    /// Submissions from the host's own worktrees stay.
+    fn hand_over(&self, s: &Sluice<'_>, branch: &str, host: &str) -> Result<()> {
+        let by = Requester::Intake(handed_over_to(host, branch));
+        for sub in s.status(branch)?.submissions {
+            if number(&sub.from.worktree).is_none()
+                || sub.state.is_out()
+                || sub.state == State::Landing
+            {
+                continue;
+            }
+            // Landing since: it lands, and nothing of it is withdrawn.
+            let _ = s.withdraw(sub.id, &by)?;
+        }
+        Ok(())
+    }
+
+    /// 137: let go of every intake mark this process holds as a wait, each
+    /// by a push leased on its last value; one another host has taken since
+    /// is left, and one that could not be let go lapses after the lease.
+    pub fn let_go_marks(&self) {
+        let held = std::mem::take(&mut *self.held.borrow_mut());
+        for (branch, (remote, rev)) in held {
+            let dropped = self
+                .pushed(&remote)
+                .and_then(|p| p.drop_intake_mark(&branch, &rev));
+            match dropped {
+                Ok(_) => {}
+                Err(e) => crate::telemetry::warn(&format!(
+                    "sluice: warning: letting go of {branch}'s intake mark: {e:#}; \
+                     it lapses after the lease"
+                )),
+            }
+        }
+    }
+
+    /// Each open pull request's latest submission among `open`, past one
+    /// this host handed over to the host that took the branch's pull
+    /// requests in, which stands for no act on the pull request (137).
+    fn latest_of(
+        &self,
+        s: &Sluice<'_>,
+        branch: &str,
+        open: &[String],
+    ) -> Result<BTreeMap<String, Submission>> {
+        let mut latest = s.latest_of(branch, open)?;
+        latest.retain(|_, e| !handed_over(e, branch));
+        Ok(latest)
     }
 
     /// The file of intake's lock on `branch`, and its path.
@@ -536,7 +765,13 @@ impl Pulls {
     /// asked of GitHub unless the host's interval has passed since any
     /// process on the host asked, a submit on the host moved one of its
     /// pull requests, or the branch or its records moved since (136).
-    fn take_in(&self, s: &Sluice<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
+    fn take_in(
+        &self,
+        s: &Sluice<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        taker: Taker,
+    ) -> Result<bool> {
         let Some(t) = self.target(s, branch)? else {
             return Ok(false);
         };
@@ -548,9 +783,27 @@ impl Pulls {
             .borrow_mut()
             .insert(branch.to_string(), t.conditions.log_lines);
         let now = clock.now();
+        let pushed = self.pushed(&t.remote)?;
+        // 137: whether this host takes the branch's pull requests in, before
+        // anything is asked of GitHub; one that does not asks nothing.
+        let took = match self.takes(s, &t, &pushed, branch, taker, now)? {
+            Taking::Here { took } => took,
+            Taking::Elsewhere(host) => {
+                self.away
+                    .borrow_mut()
+                    .insert(branch.to_string(), host.clone());
+                if !t.signed {
+                    self.hand_over(s, branch, &host)?;
+                }
+                self.register(&t.repo, &s.status(branch)?.submissions);
+                return Ok(true);
+            }
+        };
+        self.away.borrow_mut().remove(branch);
         let kept = self.kept.readings(&t.repo, branch);
         let version = s.seams().state.read(branch)?.version;
-        let due = kept.asked.is_none_or(|a| now - a >= self.discovery)
+        let due = took
+            || kept.asked.is_none_or(|a| now - a >= self.discovery)
             || self.kept.moved_since(&t.repo, branch, kept.asked);
         // Whether the branch, and its records, stand as at the last asking.
         let at_tip = kept.tip.as_deref() == Some(t.tip.0.as_str());
@@ -596,8 +849,7 @@ impl Pulls {
             .filter(|p| p.from_repo(&t.repo))
             .map(|p| place(p.number))
             .collect();
-        let mut latest = s.latest_of(branch, &open)?;
-        let pushed = self.pushed(&t.remote)?;
+        let mut latest = self.latest_of(s, branch, &open)?;
         let ours: Vec<&Pull> = pulls.iter().filter(|p| p.from_repo(&t.repo)).collect();
         for p in &ours {
             self.known.borrow_mut().insert(
@@ -635,7 +887,7 @@ impl Pulls {
             status = s.status(branch)?;
             self.register(&t.repo, &status.submissions);
             names = self::names(&status.submissions);
-            latest = s.latest_of(branch, &open)?;
+            latest = self.latest_of(s, branch, &open)?;
         }
         for p in ours {
             // 128: what sluice reads of one pull request, or cannot,
@@ -711,7 +963,7 @@ impl Pulls {
         open: &[String],
         mut work: BTreeMap<u64, Reading>,
     ) -> Result<()> {
-        let latest = s.latest_of(branch, open)?;
+        let latest = self.latest_of(s, branch, open)?;
         for (n, r) in &mut work {
             r.entry = entry(latest.get(&place(*n)));
         }
@@ -1566,6 +1818,19 @@ fn removal(log: &[sluice_core::records::LogLine], id: u64) -> Option<DateTime<Ut
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// 137: who a hand-over's withdrawal names: the host that takes
+/// `branch`'s pull requests in.
+fn handed_over_to(host: &str, branch: &str) -> String {
+    format!("{host} takes {branch}'s pull requests in")
+}
+
+/// 137: whether `e` was withdrawn by its host's hand-over of `branch`'s
+/// pull requests to another host.
+fn handed_over(e: &Submission, branch: &str) -> bool {
+    let tail = format!(" takes {branch}'s pull requests in");
+    e.state == State::Withdrawn && e.withdrawn.as_ref().is_some_and(|w| w.by.ends_with(&tail))
+}
+
 /// Who a resubmission's withdrawal names: the core withdraws the earlier
 /// submissions from a place as it queues its new one (47, 67).
 const RESUBMISSION: &str = "resubmission";
@@ -2218,14 +2483,28 @@ impl crate::PullRequests for Pulls {
         Ok(out)
     }
 
-    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
+    fn intake(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        taker: Taker,
+    ) -> Result<bool> {
         let memo = ReadOnce {
             branch: seams.branch,
             read: RefCell::default(),
         };
-        let s = Sluice::new(once(seams, &memo), clock);
-        self.take_in(&s, clock, branch)
+        let s = Sluice::new(once(seams, &memo), clock).as_peer(self.peer.clone());
+        self.take_in(&s, clock, branch, taker)
             .with_context(|| format!("taking in {branch}'s pull requests"))
+    }
+
+    fn elsewhere(&self, branch: &str) -> Option<String> {
+        self.away.borrow().get(branch).cloned()
+    }
+
+    fn let_go(&self) {
+        self.let_go_marks();
     }
 
     fn open(
@@ -2315,6 +2594,9 @@ impl crate::PullRequests for Pulls {
         // 136: GitHub is asked about the request no more often than once
         // in a quarter of the host's interval; between, what it last said.
         let now = clock.now();
+        if self.away.borrow().contains_key(branch) {
+            return self.follow_across(forge, &t.repo, n, now);
+        }
         let fresh = self
             .seen
             .borrow()
@@ -2329,6 +2611,7 @@ impl crate::PullRequests for Pulls {
                     at: now,
                     pull: pull.clone(),
                     readied: None,
+                    posted: None,
                 };
                 self.seen.borrow_mut().insert(n, seen);
                 pull
@@ -2345,7 +2628,7 @@ impl crate::PullRequests for Pulls {
             Ok(r)
         };
         let status = s.status(branch)?;
-        let latest = s.latest_of(branch, &[place(n)])?.remove(&place(n));
+        let latest = self.latest_of(&s, branch, &[place(n)])?.remove(&place(n));
         if let Some(e) = &latest {
             let current = pull.as_ref().is_none_or(|p| p.head == e.head.0);
             if current && matches!(e.state, State::Landed | State::Failed | State::Conflict) {
@@ -2404,6 +2687,88 @@ impl crate::PullRequests for Pulls {
 }
 
 impl Pulls {
+    /// 137: where pull request `n` stands while another host takes its
+    /// branch's pull requests in: by GitHub's word and sluice's check on its
+    /// head, which that host posts, each read no more often than once in a
+    /// quarter of the host's interval (136), what was last read standing
+    /// between. Merged is landed; sluice's check failed on its head is sent
+    /// back, as the check names; closed and not merged is closed.
+    fn follow_across(
+        &self,
+        forge: &dyn Forge,
+        repo: &Repo,
+        n: u64,
+        now: DateTime<Utc>,
+    ) -> Result<Followed> {
+        let fresh = self
+            .seen
+            .borrow()
+            .get(&n)
+            .filter(|seen| now - seen.at < self.discovery / 4)
+            .map(|seen| (seen.pull.clone(), seen.posted.clone()));
+        let (pull, posted) = match fresh {
+            Some(read) => read,
+            None => {
+                let pull = forge.pull(repo, n)?;
+                let posted = match &pull {
+                    Some(p) if p.open || p.merged => forge.posted(repo, &p.head)?,
+                    _ => None,
+                };
+                let seen = Seen {
+                    at: now,
+                    pull: pull.clone(),
+                    readied: None,
+                    posted: posted.clone(),
+                };
+                self.seen.borrow_mut().insert(n, seen);
+                (pull, posted)
+            }
+        };
+        let Some(p) = pull else {
+            return Ok(Followed::Closed);
+        };
+        let posting = posted.map(|p| p.posting);
+        if p.merged {
+            let title = posting
+                .map(|p| p.title)
+                .filter(|t| t.starts_with("landed"))
+                .unwrap_or_else(|| "landed".into());
+            return Ok(Followed::Landed { title });
+        }
+        if let Some(posting) = posting.as_ref().filter(|p| p.status == Status::Failure) {
+            if p.open {
+                return Ok(Followed::SentBack {
+                    conflict: posting.title.starts_with("conflict"),
+                    title: posting.title.clone(),
+                    summary: posting.summary.clone(),
+                });
+            }
+        }
+        if !p.open {
+            return Ok(Followed::Closed);
+        }
+        let (title, lines) = match posting {
+            Some(posting) => (
+                posting.title,
+                posting
+                    .summary
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            None => ("waiting".into(), Vec::new()),
+        };
+        Ok(Followed::Open {
+            title,
+            lines,
+            submission: None,
+            names: BTreeMap::new(),
+            head: Some(p.head.clone()),
+            draft: p.draft,
+        })
+    }
+
     /// 125: every worktree read before anything is pushed, and a refusal
     /// for each refused; then, in order, each request marked one of the
     /// group before its head reaches it: an open request's description
@@ -2758,6 +3123,7 @@ mod tests {
             Rc::new(retry::Policy::command()),
             Kept::new(&dir.join("state")),
             crate::instance::DISCOVERY,
+            sluice_core::Peer::default(),
         );
         let mut reading = Reading::default();
         let view = VerdictView {

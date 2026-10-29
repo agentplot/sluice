@@ -208,8 +208,10 @@ impl Sluice<'_> {
     /// does, or when the instance that does has written nothing for the
     /// lease by this host's own observation and there is work to do.
     /// Taking is a write (62), after which the former lead's next write is
-    /// refused. A branch in this host's own files has no lead.
-    fn keeps(&self, branch: &str) -> Result<bool> {
+    /// refused. A branch in this host's own files has no lead. Intake asks
+    /// it too, to take a branch's pull requests in only where this
+    /// instance keeps the branch (137).
+    pub fn keeps(&self, branch: &str) -> Result<bool> {
         let line = self.read_line(branch)?;
         // 133: the round's first read of the records, answered from what was
         // last fetched, refuses the round before anything is decided.
