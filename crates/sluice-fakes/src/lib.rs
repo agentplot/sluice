@@ -116,6 +116,9 @@ struct Inner {
     levels: usize,
     /// How many merges were formed.
     forms: usize,
+    /// Revisions whose objects the host lacks, as one another host made
+    /// and none fetched here (64, 124): [`Branch::holds`] reads it.
+    lacking: BTreeSet<Rev>,
     /// The words the remote refuses each host's reads of a branch with, by
     /// host and branch (133).
     refused_branch: BTreeMap<(String, String), String>,
@@ -772,6 +775,16 @@ impl World {
     /// (73).
     pub fn be_host(&self, host: &str) {
         self.0.borrow_mut().host = host.into();
+    }
+
+    /// From now, the host lacks `rev`'s objects, or, with `false`, holds
+    /// them again (64, 124).
+    pub fn lack(&self, rev: &Rev, lacking: bool) {
+        let mut inner = self.0.borrow_mut();
+        match lacking {
+            true => inner.lacking.insert(rev.clone()),
+            false => inner.lacking.remove(rev),
+        };
     }
 
     /// From now, `origin` refuses this host's reads of `branch` with
@@ -1486,6 +1499,18 @@ impl Branch for FakeBranch {
             return Err(World::refused(format!("refs/heads/{branch}"), said));
         }
         Ok(inner.refs.get(branch).cloned())
+    }
+
+    /// The branch, read with no call to the remote: no refusal of its
+    /// reads stands in the way.
+    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
+        Ok(self.0 .0.borrow().refs.get(branch).cloned())
+    }
+
+    /// A revision of the world the host was not made to lack.
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        let inner = self.0 .0.borrow();
+        Ok(inner.commits.contains_key(rev) && !inner.lacking.contains(rev))
     }
 
     fn copy(&self, branch: &str) -> Result<HostCopy> {

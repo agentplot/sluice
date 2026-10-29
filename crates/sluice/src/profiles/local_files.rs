@@ -338,6 +338,12 @@ impl State for LocalFiles {
         Ok(Snapshot { version, files })
     }
 
+    /// 64, 129: the records are on this host, and no remote is asked
+    /// anything for them: as [`State::read`].
+    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
+        self.read(branch)
+    }
+
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {
         Ok(self.read_all_finished(branch)?.remove(name))
     }

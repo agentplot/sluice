@@ -246,6 +246,17 @@ impl Branch for LocalRefs {
         self.read_ref(&full_name(branch))
     }
 
+    /// The branch is the host's own ref: as read.
+    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
+        self.read(branch)
+    }
+
+    /// 64: an object lookup; a revision that names no object id is none
+    /// the host holds.
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        Ok(ObjectId::from_hex(rev.as_str().as_bytes()).is_ok_and(|id| self.repo.has_object(id)))
+    }
+
     /// The host's ref is the branch here: it has no copy apart from it.
     fn copy(&self, _branch: &str) -> Result<HostCopy> {
         Ok(HostCopy::Itself)

@@ -453,6 +453,13 @@ impl State for Records {
         }
     }
 
+    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
+        match self.route(branch)? {
+            None => self.local.read_with_branch(branch),
+            Some(r) => r.read_with_branch(branch),
+        }
+    }
+
     fn stale(&self, branch: &str) -> Option<ReadRefused> {
         let remote = self.routes.borrow().get(branch).cloned().flatten()?;
         let r = self.remotes.borrow().get(&remote).cloned()?;

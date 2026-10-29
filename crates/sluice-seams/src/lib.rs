@@ -947,6 +947,20 @@ pub trait Branch {
     /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
 
+    /// 64, 124, 129: the branch's revision as this host holds it, read
+    /// with no call to a remote: for a branch on a remote, the remote's as
+    /// last fetched. A reader names it beside the records it read, so a
+    /// forecast forms on what that read found.
+    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
+        self.read(branch)
+    }
+
+    /// 64, 124: whether this host has `rev`'s objects, so a merge can be
+    /// formed on it here with nothing fetched.
+    fn holds(&self, _rev: &Rev) -> Result<bool> {
+        Ok(true)
+    }
+
     /// 124: what this host holds of the branch apart from it, read on the
     /// host alone, with no fetch.
     fn copy(&self, branch: &str) -> Result<HostCopy>;
@@ -1303,6 +1317,15 @@ pub trait State {
     /// 61: the branch's live records, and the version they were read at:
     /// nothing under [`FINISHED`] (131).
     fn read(&self, branch: &str) -> Result<Snapshot>;
+
+    /// 64, 124, 129: the branch's live records, as [`State::read`] reads
+    /// them, with the branch's revision, the work submitted to it and the
+    /// combinations formed on it brought in the same call to the remote
+    /// that keeps them: a reader's read, so what it writes is all a
+    /// forecast forms from.
+    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
+        self.read(branch)
+    }
 
     /// 80: why the branch's last read could not reach the records it keeps
     /// elsewhere and read what was last fetched; `None` when the read was

@@ -266,7 +266,7 @@ impl PushedRefs {
             None => Ok(Pushed::Done),
             Some(Judged::Unknown) => {
                 let shown = name.strip_prefix("refs/heads/").unwrap_or(name);
-                let holds = match self.holds(name) {
+                let holds = match self.on_remote(name) {
                     Ok(at) if at.as_deref() == to => return Ok(Pushed::Done),
                     Ok(Some(at)) => format!("{} holds {shown} at {at}", self.remote),
                     Ok(None) => format!("{} has no {shown}", self.remote),
@@ -280,7 +280,7 @@ impl PushedRefs {
 
     /// The revision the remote's ref `name` holds, listed under the retry
     /// policy as a read; `None` when it has no such ref.
-    fn holds(&self, name: &str) -> Result<Option<String>> {
+    fn on_remote(&self, name: &str) -> Result<Option<String>> {
         let out = self.remote_git(&["ls-remote", "--refs", self.target(), name])?;
         if !out.status.success() {
             bail!(
@@ -567,6 +567,17 @@ impl Branch for PushedRefs {
     /// 42: the remote's revision of the branch, fetched on every read.
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.fetch(branch)
+    }
+
+    /// 64, 124: the remote-tracking ref, as the last fetch of the branch
+    /// left it; never a fetch.
+    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
+        self.local.read_ref(&self.tracking(branch))
+    }
+
+    /// Every object fetched is on this host.
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        self.local.holds(rev)
     }
 
     /// 124: the host's `refs/heads/<branch>`, sluice's copy of the remote's

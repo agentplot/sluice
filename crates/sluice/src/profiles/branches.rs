@@ -268,6 +268,17 @@ impl Branch for Branches {
         }
     }
 
+    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
+        match self.route(branch)? {
+            Some(p) => p.fetched(branch),
+            None => self.local.fetched(branch),
+        }
+    }
+
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        self.local.holds(rev)
+    }
+
     fn copy(&self, branch: &str) -> Result<HostCopy> {
         match self.route(branch)? {
             Some(p) => p.copy(branch),
