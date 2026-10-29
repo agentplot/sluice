@@ -32,7 +32,7 @@ sluice's queue inside a Claude Code session.
   one that ended, `… sluice:e2e running 1m12s` for one still running. Press
   it again to fold them.
 - **A conflict** opens on a press to its files, what is in the way and what
-  to do next: `in the way: #217 (bolt/runner)`, or `what main has landed`,
+  to do next: `in the way: #217 (feature/runner)`, or `what main has landed`,
   then `next: take main into the worktree, resolve and commit, then sluice
   submit main`. Press it again to fold it. A RECENT conflict opens this
   way, and so does this session's own forecast conflict.

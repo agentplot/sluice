@@ -16,7 +16,7 @@ ready = ["docker", "info"]                # optional: the host can run the tasks
 not_run = [77]                            # optional: exits meaning "could not run here"
 cold = ["#bench"]                         # optional: tests run with none of the host's caches
 
-[branches."bolt/*"]
+[branches."feature/*"]                    # a placeholder: the project's own pattern
 required = ["#check-fast"]                # moon targets: a tag (#tag) or project:task
 trust = ["open", "sandbox", "cache"]   # "cache" lets moon replays count
 
