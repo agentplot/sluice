@@ -5,8 +5,8 @@ A branch's pull requests SHALL be taken in by one host at a time. Where
 its records are on its remote, only the instance that keeps the branch
 SHALL take them in. Where each host keeps its own records, only the
 holder of the branch's intake mark, `refs/sluice/intake/<branch>` on its
-remote, or where none stands a host whose `sluice run` finds none, SHALL
-take them in. No other host SHALL ask GitHub for the branch's open pull
+remote, or where none stands the host that finds none, SHALL take them
+in. No other host SHALL ask GitHub for the branch's open pull
 requests (58, 72, 137; rule core.33).
 
 #### Scenario: Records on the remote
@@ -21,7 +21,8 @@ requests (58, 72, 137; rule core.33).
 The mark SHALL name the host and whether its holder is the host's
 `sluice run` or a wait, SHALL be renewed by a push leased on the value
 read whenever a third of the host's lease has passed since it was last
-renewed, and SHALL be read in the fetch the branch's round already makes.
+renewed, never at each pass, and SHALL be read in the fetch the branch's
+round already makes.
 A push refused at its lease SHALL leave the mark to the host that moved
 it (45, 137).
 
@@ -34,20 +35,29 @@ it (45, 137).
 - **THEN** one push is refused at its lease, and that host takes nothing in
 
 ### Requirement: The intake mark is taken by rule
-No mark means the host there alone: a `sluice run` that finds none SHALL
-take the requests in and push none, and a wait on a host where no `sluice
-run` lives SHALL push the mark, leased on its absence. A `sluice run`
-SHALL take the mark from a wait at once; any host SHALL take it once it
-has stood unchanged for the lease by the taker's own observation, never
-by comparing the hosts' clocks (73, 137).
+A `sluice run` SHALL push the mark when it starts, leased on its
+absence. A wait on a host where no `sluice run` lives SHALL push it the
+same way where none stands. A step SHALL push none, and SHALL take the
+requests in only where the mark is its host's or none stands. A `sluice
+run` SHALL take the mark from a wait at once; any host SHALL take it
+once it has stood unchanged for the lease by the taker's own
+observation, never by comparing the hosts' clocks (73, 137).
 
-#### Scenario: A mark nobody holds
-- **WHEN** main takes pull requests, keeps its records in each host's files, has no intake mark, and `sluice run` on host A passes main
-- **THEN** A takes main's pull requests in and pushes no mark
+#### Scenario: A driver shows itself
+- **WHEN** main takes pull requests, keeps its records in each host's files, has no intake mark, and `sluice run` on host A starts
+- **THEN** A pushes the mark naming A and a driver, and takes main's pull requests in
+
+#### Scenario: Two drivers see each other
+- **WHEN** `sluice run` on host A holds the mark and `sluice run` on host B starts
+- **THEN** B pushes no mark and takes nothing in
 
 #### Scenario: A wait shows itself
-- **WHEN** host A's `sluice run` takes main's pull requests in with no mark, and a wait on host B, where no `sluice run` lives, passes main
-- **THEN** B pushes the mark naming B and a wait, and A's next pass reads it in its fetch of main and takes it at once
+- **WHEN** main has no intake mark and a wait on host B, where no `sluice run` lives, passes main
+- **THEN** B pushes the mark naming B and a wait, and takes main's pull requests in
+
+#### Scenario: Waits and steps alone keep no mark
+- **WHEN** host A reaches main by a wait and steps alone, and the wait has ended
+- **THEN** no mark stands, and A's steps take main's pull requests in and push none
 
 #### Scenario: A driver takes from a wait
 - **WHEN** a wait on host A holds the mark and `sluice run` on host B passes main
