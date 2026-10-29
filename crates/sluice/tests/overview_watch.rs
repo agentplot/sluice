@@ -289,12 +289,12 @@ fn a_watch_with_nothing_queued_names_held_worktrees_with_no_git() {
 /// runs; its next line shows `main` testing up to 4 at once (56, 129).
 #[test]
 fn a_watch_reads_the_policy_again_once_the_branch_moves() {
-    let d = OnDisk::new("watched-moved", MAIN);
+    let d = OnDisk::new("watched-moved", &format!("{MAIN}parallel = 2\n"));
     d.land("a");
     let watch = Watch::of(&d);
     let first = watch.first_line();
     assert_eq!(first["branches"][0]["branch"], "main", "{first}");
-    assert_ne!(first["branches"][0]["parallel"], 4, "{first}");
+    assert_eq!(first["branches"][0]["parallel"], 2, "{first}");
     let policy = format!("{MAIN}parallel = 4\n");
     d.land_with("b", &[(".config/sluice.toml", &policy)]);
     let lines = watch.lines_within(ENDS_WITHIN);
