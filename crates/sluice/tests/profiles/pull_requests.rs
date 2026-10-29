@@ -4327,7 +4327,7 @@ fn a_live_driver_keeps_the_mark() {
 
 /// request-intake-host, "Two takers at once": waits on hosts A and B,
 /// where no `sluice run` lives, each push the mark leased on its absence;
-/// one host holds it, and the other takes nothing in.
+/// one host holds it at a time, and the other takes nothing in.
 #[test]
 fn two_takers_at_once_one_holds() {
     let g = OnGitHub::new("intake-two", "reviews = 1");
@@ -4353,17 +4353,25 @@ fn two_takers_at_once_one_holds() {
         pb.wait_with_output().unwrap(),
     );
     let shown = format!("{}\n{}", text(&oa), text(&ob));
-    let pushed: Vec<Value> = g
-        .marks_pushed()
-        .into_iter()
-        .filter(|m| !m.is_null())
-        .collect();
-    let hosts: std::collections::BTreeSet<String> = pushed
-        .iter()
-        .map(|m| m["host"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(hosts.len(), 1, "one host held it: {pushed:?}\n{shown}");
-    assert!(pushed.iter().all(|m| m["holder"] == "wait"), "{pushed:?}");
+    // One host holds it at a time: a push by another host only once the
+    // holder let it go. The wait that ends first drops it, and the other,
+    // still waiting, may then push its own where none stands.
+    let pushed = g.marks_pushed();
+    assert!(pushed.iter().any(|m| !m.is_null()), "{shown}");
+    let mut holder: Option<&str> = None;
+    for m in &pushed {
+        if m.is_null() {
+            holder = None;
+            continue;
+        }
+        let host = m["host"].as_str().unwrap();
+        assert!(
+            holder.is_none_or(|h| h == host),
+            "one host held it at a time: {pushed:?}\n{shown}"
+        );
+        assert_eq!(m["holder"], "wait", "{pushed:?}");
+        holder = Some(host);
+    }
     // Waiting on a review, nothing is submitted; the one that held it read
     // the request, and the other asked nothing of the list but its own
     // finding of its request.
