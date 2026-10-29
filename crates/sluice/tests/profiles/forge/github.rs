@@ -361,7 +361,7 @@ fn sync(forge: &FileForge, bare: &Path) {
             .status
             .success();
         if merged {
-            forge.close(p.number).unwrap();
+            forge.merge(p.number).unwrap();
         }
     }
 }
@@ -428,6 +428,8 @@ fn pull_json(p: &Pull) -> Value {
         "state": if p.open { "open" } else { "closed" },
         "head": { "sha": p.head, "ref": p.head_ref, "repo": { "full_name": p.head_repo } },
         "base": { "ref": p.base },
+        "updated_at": p.updated_at.map(|t| t.to_rfc3339()),
+        "merged_at": p.updated_at.filter(|_| p.merged).map(|t| t.to_rfc3339()),
     })
 }
 
@@ -638,7 +640,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
             json(200, json!({ "state": "pending", "statuses": [] }))
         }
         ("POST", ["check-runs"]) => {
-            forge
+            let id = forge
                 .post_named(
                     &repo,
                     body["head_sha"].as_str().unwrap(),
@@ -647,7 +649,7 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
                     &posting(&body),
                 )
                 .unwrap();
-            json(201, json!({}))
+            json(201, json!({ "id": id }))
         }
         ("PATCH", ["check-runs", id]) => {
             let id: u64 = id.parse().unwrap();
@@ -688,14 +690,14 @@ fn answer(forge: &FileForge, bare: Option<&Path>, failing: &Failing, r: &Request
             )
         }
         ("POST", ["issues", n, "comments"]) => {
-            forge
+            let id = forge
                 .comment(
                     &repo,
                     n.parse().unwrap(),
                     body["body"].as_str().unwrap_or_default(),
                 )
                 .unwrap();
-            json(201, json!({}))
+            json(201, json!({ "id": id }))
         }
         ("PATCH", ["issues", "comments", id]) => {
             forge

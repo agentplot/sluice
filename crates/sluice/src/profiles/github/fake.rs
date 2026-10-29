@@ -2,7 +2,10 @@
 //! for tests: what GitHub would hold, and what a test does to it as a
 //! person would, opening, reviewing, checking, drafting and closing.
 //! Every call reads the file and every change writes it, so a fake API
-//! answering from it and the test that changes it see one GitHub.
+//! answering from it and the test that changes it see one GitHub. A change
+//! GitHub records as one of the pull request's, a push, a review, a
+//! comment, an edit, a draft or ready mark, a close, moves its
+//! `updated_at`, as GitHub's does; another system's check moves nothing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -81,6 +84,7 @@ impl FileForge {
         Ok(out)
     }
 
+    /// Change pull request `number`, which moves its `updated_at`.
     fn with_pull<T>(&self, number: u64, f: impl FnOnce(&mut Pull) -> T) -> Result<T> {
         self.change(|h| {
             let p = h
@@ -88,6 +92,7 @@ impl FileForge {
                 .iter_mut()
                 .find(|p| p.number == number)
                 .ok_or_else(|| anyhow!("no pull request {number}"))?;
+            p.updated_at = Some(Utc::now());
             Ok(f(p))
         })
     }
@@ -120,6 +125,8 @@ impl FileForge {
                 head_ref: head_ref.into(),
                 head_repo: from.map_or(repo, str::to_string),
                 base: base.into(),
+                updated_at: Some(Utc::now()),
+                merged: false,
             });
             Ok(number)
         })
@@ -143,6 +150,7 @@ impl FileForge {
                 h.readied.entry(number).or_default().push(Utc::now());
             }
             p.draft = draft;
+            p.updated_at = Some(Utc::now());
             Ok(())
         })
     }
@@ -151,9 +159,25 @@ impl FileForge {
         self.with_pull(number, |p| p.open = false)
     }
 
+    /// Closed as merged: its head is in the branch it is into.
+    pub fn merge(&self, number: u64) -> Result<()> {
+        self.with_pull(number, |p| {
+            p.open = false;
+            p.merged = true;
+        })
+    }
+
+    /// Pull request `number` changed on GitHub in a way sluice reads.
+    fn touch(h: &mut Held, number: u64) {
+        if let Some(p) = h.pulls.iter_mut().find(|p| p.number == number) {
+            p.updated_at = Some(Utc::now());
+        }
+    }
+
     /// `user` reviews pull request `number` on `commit`.
     pub fn review(&self, number: u64, user: &str, state: &str, commit: &str) -> Result<()> {
         self.change(|h| {
+            FileForge::touch(h, number);
             h.reviews.entry(number).or_default().push(Review {
                 user: user.into(),
                 state: state.into(),
@@ -228,7 +252,7 @@ impl Forge for FileForge {
         name: &str,
         existing: Option<u64>,
         posting: &Posting,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         self.change(|h| {
             let id = match existing {
                 Some(id) => id,
@@ -246,7 +270,7 @@ impl Forge for FileForge {
                 posting: posting.clone(),
             });
             h.posts.push((rev.into(), name.into(), posting.clone()));
-            Ok(())
+            Ok(id)
         })
     }
 
@@ -254,8 +278,9 @@ impl Forge for FileForge {
         Ok(self.held()?.comments.remove(&number).unwrap_or_default())
     }
 
-    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()> {
+    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<u64> {
         self.change(|h| {
+            FileForge::touch(h, number);
             let id = h.next;
             h.next += 1;
             h.comments.entry(number).or_default().push(Comment {
@@ -263,7 +288,7 @@ impl Forge for FileForge {
                 body: body.into(),
                 url: format!("https://github.com/{repo}/pull/{number}#issuecomment-{id}"),
             });
-            Ok(())
+            Ok(id)
         })
     }
 

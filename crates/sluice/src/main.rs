@@ -6,8 +6,8 @@ use clap::Parser;
 use sluice::profiles::Bound;
 use sluice::retry::Policy;
 use sluice::telemetry::Telemetry;
-use sluice::{run, Cli, Command, Sleep};
-use sluice_core::SystemClock;
+use sluice::{run, Cli, Command, Pause, Skipped, Sleep};
+use sluice_core::{Clock, SystemClock};
 
 fn main() {
     let cli = Cli::try_parse().unwrap_or_else(|e| {
@@ -127,14 +127,19 @@ fn main() {
         _ => Duration::from_secs(3),
     };
     let mut out = std::io::stdout();
+    let skipped = Skipped::new(every);
+    let (clock, pause): (&dyn Clock, &dyn Pause) = match std::env::var(ROUND_SLEEP_VAR).as_deref() {
+        Ok("record") => (&skipped, &skipped),
+        _ => (&SystemClock, &Sleep(every)),
+    };
     let code = match run(
         cli,
         bound.seams(),
         &bound,
         &bound.branch,
         &*bound.pulls,
-        &SystemClock,
-        &Sleep(every),
+        clock,
+        pause,
         &mut out,
     ) {
         Ok(code) => code,
@@ -218,6 +223,10 @@ fn retry(cli: &Cli) -> Policy {
 
 /// Set to `record` in tests, the retry policy's pauses are skipped.
 const RETRY_SLEEP_VAR: &str = "SLUICE_RETRY_SLEEP";
+
+/// Set to `record` in tests, the pauses between a run's or a wait's rounds
+/// are skipped, and the clock the command reads moved on by each.
+const ROUND_SLEEP_VAR: &str = "SLUICE_ROUND_SLEEP";
 
 /// `put` sluice's hook, for this executable, in the repository holding the
 /// folder the command runs in.

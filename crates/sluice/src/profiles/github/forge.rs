@@ -34,6 +34,13 @@ pub struct Pull {
     pub head_repo: String,
     /// The branch it is into.
     pub base: String,
+    /// When GitHub last changed it: a push, a review, a comment, a draft
+    /// or ready mark, an edit; never another system's check (136).
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+    /// Merged, which a closed pull request sluice landed is.
+    #[serde(default)]
+    pub merged: bool,
 }
 
 impl Pull {
@@ -175,13 +182,20 @@ pub trait Forge {
     /// Every check run sluice's app posted on `rev`, each by its name.
     fn posted_all(&self, repo: &Repo, rev: &str) -> Result<Vec<Posted>>;
 
-    /// Post sluice's check run on `rev`: update `existing`, or add one.
-    fn post(&self, repo: &Repo, rev: &str, existing: Option<u64>, posting: &Posting) -> Result<()> {
+    /// Post sluice's check run on `rev`: update `existing`, or add one;
+    /// its id.
+    fn post(
+        &self,
+        repo: &Repo,
+        rev: &str,
+        existing: Option<u64>,
+        posting: &Posting,
+    ) -> Result<u64> {
         self.post_named(repo, rev, SLUICE_CHECK, existing, posting)
     }
 
     /// Post sluice's check run named `name` on `rev`: update `existing`,
-    /// or add one.
+    /// or add one; its id.
     fn post_named(
         &self,
         repo: &Repo,
@@ -189,7 +203,7 @@ pub trait Forge {
         name: &str,
         existing: Option<u64>,
         posting: &Posting,
-    ) -> Result<()>;
+    ) -> Result<u64>;
 
     /// The bodies of the comments on pull request `number`.
     fn comments(&self, repo: &Repo, number: u64) -> Result<Vec<String>> {
@@ -203,7 +217,8 @@ pub trait Forge {
     /// The comments on pull request `number`, oldest first.
     fn comment_list(&self, repo: &Repo, number: u64) -> Result<Vec<Comment>>;
 
-    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<()>;
+    /// Comment `body` on pull request `number`; the comment's id.
+    fn comment(&self, repo: &Repo, number: u64, body: &str) -> Result<u64>;
 
     /// Replace comment `id`'s body.
     fn edit_comment(&self, repo: &Repo, id: u64, body: &str) -> Result<()>;

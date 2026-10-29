@@ -794,6 +794,39 @@ pub fn stop_on_interrupt() -> Result<()> {
     Ok(())
 }
 
+/// A pause between rounds that skips its time and moves its own clock on
+/// by it, a clock nothing else moves: a test follows a wait over minutes
+/// in a moment, with every time it reads, a deadline's and the host's
+/// interval's among them, as the wait would have read it.
+pub struct Skipped {
+    every: std::time::Duration,
+    start: chrono::DateTime<chrono::Utc>,
+    moved: std::cell::Cell<std::time::Duration>,
+}
+
+impl Skipped {
+    pub fn new(every: std::time::Duration) -> Skipped {
+        Skipped {
+            every,
+            start: chrono::Utc::now(),
+            moved: std::cell::Cell::default(),
+        }
+    }
+}
+
+impl Pause for Skipped {
+    fn pause(&self) -> bool {
+        self.moved.set(self.moved.get() + self.every);
+        !INTERRUPTED.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for Skipped {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.start + chrono::TimeDelta::from_std(self.moved.get()).unwrap_or_default()
+    }
+}
+
 pub struct Sleep(pub std::time::Duration);
 
 impl Pause for Sleep {

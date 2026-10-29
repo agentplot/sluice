@@ -10,6 +10,16 @@
 //!   an allowance is spent, in its words, and how many such answers came
 //!   in a row; `resource` is GitHub's own name for the allowance, `core`
 //!   for REST and `graphql`.
+//! - `requests/<owner>/<repo>/<base>.json`: each branch's readings, when
+//!   its open pull requests were last asked for, at which revision of the
+//!   branch and version of its records, and what was last read and posted
+//!   of each request ([`Readings`]), changed under the exclusive lock of
+//!   the `.lock` beside it, which goes with its process. It says only what
+//!   was last read, so that a request that has not moved is not read
+//!   again (rule core.14).
+//! - `requests/<owner>/<repo>/<base>.moved`: touched by a submit on the
+//!   host that opened, updated or marked ready a request into the branch;
+//!   newer than the last asking, it asks at once.
 //!
 //! Each file is written whole to a file of its own and renamed over the
 //! last, so a reader finds a whole one or the one before; a file that does
@@ -17,6 +27,7 @@
 //! Answers not used for a day are removed by a process that keeps one, at
 //! most once an hour. Nothing here holds a token.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -25,6 +36,9 @@ use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use super::app::Repo;
+use super::forge::Posted;
 
 /// How long an answer no call used is kept.
 const UNUSED: Duration = Duration::from_secs(24 * 60 * 60);
@@ -59,6 +73,48 @@ pub struct Allowance {
     pub app: u64,
     pub installation: u64,
     pub resource: String,
+}
+
+/// A branch's readings: when its open pull requests were last asked for,
+/// at which revision of the branch and which version of its records, and
+/// what was last read of each open request, by number (136).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Readings {
+    pub asked: Option<DateTime<Utc>>,
+    pub tip: Option<String>,
+    pub version: Option<u64>,
+    #[serde(default)]
+    pub requests: BTreeMap<u64, Reading>,
+}
+
+/// What was last read and posted of one pull request (128, 136).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reading {
+    /// Its head, last change and draft mark as the list last said.
+    pub head: String,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub draft: bool,
+    /// Its latest submission on this host and that one's state, by word.
+    pub entry: Option<(u64, String)>,
+    /// What it lacked of its conditions when they were last read.
+    pub missing: Option<Vec<String>>,
+    /// When it was marked ready for review, as its timeline last said.
+    pub readied: Option<Vec<DateTime<Utc>>>,
+    /// The head sluice's check runs were last posted or read on, and each
+    /// of them there by its name.
+    pub posted_on: Option<String>,
+    #[serde(default)]
+    pub posted: BTreeMap<String, Posted>,
+    /// The forecast it was last shown with, while the branch and its
+    /// records stand.
+    pub forecast: Option<String>,
+    /// The id of sluice's report comment on it, and a digest of what the
+    /// comment says.
+    pub report: Option<u64>,
+    pub report_said: Option<String>,
+    /// The notifications a comment on it delivered.
+    #[serde(default)]
+    pub said: Vec<String>,
 }
 
 /// The host's `forge/` directory.
@@ -141,6 +197,68 @@ impl Kept {
             }
         }
         Ok(())
+    }
+
+    /// Where `repo`'s readings of `base` are kept, before `.json`,
+    /// `.lock` or `.moved`.
+    fn requests_path(&self, repo: &Repo, base: &str, ext: &str) -> PathBuf {
+        self.dir
+            .join("requests")
+            .join(&repo.owner)
+            .join(&repo.name)
+            .join(format!("{}.{ext}", crate::runs::flat_name(base)))
+    }
+
+    /// `repo`'s readings of `base`; empty when none are kept, or they are
+    /// torn.
+    pub fn readings(&self, repo: &Repo, base: &str) -> Readings {
+        read(&self.requests_path(repo, base, "json")).unwrap_or_default()
+    }
+
+    /// Change `repo`'s readings of `base` by `f`, under their lock, and
+    /// keep what it leaves.
+    pub fn change_readings<T>(
+        &self,
+        repo: &Repo,
+        base: &str,
+        f: impl FnOnce(&mut Readings) -> T,
+    ) -> Result<T> {
+        let path = self.requests_path(repo, base, "lock");
+        let dir = path.parent().expect("a kept file has a directory");
+        std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| path.display().to_string())?;
+        lock.lock().with_context(|| path.display().to_string())?;
+        let mut readings = self.readings(repo, base);
+        let out = f(&mut readings);
+        write(&self.requests_path(repo, base, "json"), &readings)?;
+        Ok(out)
+    }
+
+    /// A submit on the host opened, updated or marked ready a pull request
+    /// of `repo` into `base`: the next pass asks at once.
+    pub fn moved(&self, repo: &Repo, base: &str) -> Result<()> {
+        let path = self.requests_path(repo, base, "moved");
+        let dir = path.parent().expect("a kept file has a directory");
+        std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
+        std::fs::File::create(&path)
+            .and_then(|f| f.set_modified(SystemTime::now()))
+            .with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Whether a submit on the host moved a request of `repo` into `base`
+    /// after `asked`, or ever, where it was never asked.
+    pub fn moved_since(&self, repo: &Repo, base: &str, asked: Option<DateTime<Utc>>) -> bool {
+        let Ok(at) =
+            std::fs::metadata(self.requests_path(repo, base, "moved")).and_then(|m| m.modified())
+        else {
+            return false;
+        };
+        asked.is_none_or(|asked| DateTime::<Utc>::from(at) > asked)
     }
 
     /// The pause kept for `allowance`, standing or past; `None` when none
@@ -257,6 +375,67 @@ mod tests {
         kept.sweep(now + SWEEP).unwrap();
         assert_eq!(kept.answer(old), None);
         assert!(kept.answer(fresh).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 136: a branch's readings are kept under their lock and read back,
+    /// each branch apart, and torn ones read as none.
+    #[test]
+    fn readings_are_kept_under_their_lock_and_read_back() {
+        let dir = scratch("readings");
+        let kept = Kept::new(&dir);
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(kept.readings(&repo, "main"), Readings::default());
+        let asked = Utc::now();
+        let reading = Reading {
+            head: "abc".into(),
+            draft: true,
+            missing: Some(vec!["a draft".into()]),
+            ..Reading::default()
+        };
+        let back = kept
+            .change_readings(&repo, "bolt/x", |r| {
+                r.asked = Some(asked);
+                r.tip = Some("t1".into());
+                r.version = Some(4);
+                r.requests.insert(7, reading.clone());
+                r.requests.len()
+            })
+            .unwrap();
+        assert_eq!(back, 1);
+        let r = kept.readings(&repo, "bolt/x");
+        assert_eq!(
+            (r.asked, r.tip.as_deref(), r.version),
+            (Some(asked), Some("t1"), Some(4))
+        );
+        assert_eq!(r.requests[&7], reading);
+        assert_eq!(kept.readings(&repo, "bolt"), Readings::default());
+        assert!(dir.join("forge/requests/o/r/bolt%2Fx.lock").exists());
+        // The lock is free once the change is kept: another takes it.
+        kept.change_readings(&repo, "bolt/x", |r| r.requests.clear())
+            .unwrap();
+        assert!(kept.readings(&repo, "bolt/x").requests.is_empty());
+        std::fs::write(dir.join("forge/requests/o/r/bolt%2Fx.json"), b"{\"asked\"").unwrap();
+        assert_eq!(kept.readings(&repo, "bolt/x"), Readings::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 136: a submit's touch newer than the last asking asks at once; one
+    /// older does not, and none never does.
+    #[test]
+    fn a_move_newer_than_the_asking_asks_at_once() {
+        let dir = scratch("moved");
+        let kept = Kept::new(&dir);
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        let before = Utc::now() - TimeDelta::seconds(5);
+        assert!(!kept.moved_since(&repo, "main", Some(before)));
+        assert!(!kept.moved_since(&repo, "main", None));
+        kept.moved(&repo, "main").unwrap();
+        assert!(kept.moved_since(&repo, "main", Some(before)));
+        assert!(kept.moved_since(&repo, "main", None));
+        let after = Utc::now() + TimeDelta::seconds(5);
+        assert!(!kept.moved_since(&repo, "main", Some(after)));
+        assert!(!kept.moved_since(&repo, "bolt/x", Some(before)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

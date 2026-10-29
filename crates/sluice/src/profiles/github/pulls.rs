@@ -3,14 +3,25 @@
 //! GitHub. A pull request waits until it is out of draft and its
 //! conditions hold on its head (C.7), and is then submitted through the
 //! same `submit` as any session's work, from the place `pull/<n>`. Nothing
-//! of a waiting pull request is stored: each round reads it from GitHub.
+//! of a waiting pull request decides anything from the host's state: what
+//! it keeps of each ([`Reading`]) only spares reading again what has not
+//! moved (136).
 //!
-//! Intake runs before each round of such a branch: it submits each ready
-//! pull request, withdraws the entry of one closed, back in draft or on a
-//! new head, forecasts every waiting one, and posts each one's state as
-//! the `sluice` check run on its head. The driver's `session("pull/<n>")`
-//! fetches `refs/pull/<n>/head`; its `notify` posts the outcome and, when
-//! a pull request is sent back, comments once. Intake moves no branch
+//! Intake runs before each round of such a branch, and asks GitHub for the
+//! branch's open pull requests once the host's `[forge] discovery` has
+//! passed since any process on the host asked, or at once after a submit
+//! on the host moved one, the branch moved or its records did; otherwise
+//! it asks nothing (136). When it asks, it submits each ready pull
+//! request, withdraws the entry of one closed, back in draft or on a new
+//! head, forecasts every waiting one, and posts each one's state as the
+//! `sluice` check run on its head, only where what it says changed. A
+//! pull request's reviews, checks and timeline are read again only once
+//! its head, its last change on GitHub, its draft mark or its entry moved,
+//! or, out of draft and still short of its conditions, at each asking.
+//!
+//! The driver's `session("pull/<n>")` fetches `refs/pull/<n>/head`; its
+//! `notify` posts the outcome and, when a pull request is sent back,
+//! comments once. Intake moves no branch
 //! (rule core.4): it fetches heads and asks the core to submit, forecast
 //! and withdraw, as any driver does.
 
@@ -19,6 +30,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SubsecRound, Utc};
@@ -34,7 +46,8 @@ use sluice_seams::{
 };
 
 use super::app::Repo;
-use super::forge::{approvals, Forge, Posting, Pull, Standing, Status, SLUICE_CHECK};
+use super::forge::{approvals, Forge, Posted, Posting, Pull, Standing, Status, SLUICE_CHECK};
+use super::kept::{Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
 use crate::profiles::pushed_refs::{remote_url, PushedRefs};
@@ -269,6 +282,23 @@ pub struct Pulls {
     shown: RefCell<BTreeMap<u64, Shown>>,
     /// Each branch's `pull_requests.log_lines`, as intake last read it.
     log_lines: RefCell<BTreeMap<String, Option<usize>>>,
+    /// What the host keeps of its calls to GitHub, each branch's readings
+    /// among them (136).
+    kept: Kept,
+    /// How often a branch's open pull requests are asked for while
+    /// nothing on the host moves (136).
+    discovery: chrono::TimeDelta,
+    /// What GitHub last said of each pull request a wait follows, by
+    /// number, and when (136).
+    seen: RefCell<BTreeMap<u64, Seen>>,
+}
+
+/// A pull request as a wait last read it from GitHub, and its timeline
+/// once read.
+struct Seen {
+    at: DateTime<Utc>,
+    pull: Option<Pull>,
+    readied: Option<Vec<DateTime<Utc>>>,
 }
 
 /// A pull request's state: what sluice posts, and what a submit that
@@ -307,13 +337,17 @@ impl Pulls {
     /// The pull requests of the repository whose git directory is `dir`
     /// and whose common directory is `common`, read and posted on
     /// `forge`, and fetched as `identity` where it has one, each fetch and
-    /// push under `retry`.
+    /// push under `retry`; each branch's open pull requests asked for
+    /// every `discovery` while nothing on the host moves, and what was read
+    /// of them kept in `kept` (136).
     pub fn new(
         dir: &Path,
         common: &Path,
         forge: Option<Rc<dyn Forge>>,
         identity: Option<(Rc<dyn Identity>, PathBuf)>,
         retry: Rc<retry::Policy>,
+        kept: Kept,
+        discovery: Duration,
     ) -> Pulls {
         Pulls {
             dir: dir.to_path_buf(),
@@ -325,6 +359,9 @@ impl Pulls {
             entries: RefCell::default(),
             shown: RefCell::default(),
             log_lines: RefCell::default(),
+            kept,
+            discovery: chrono::TimeDelta::from_std(discovery).unwrap_or(chrono::TimeDelta::MAX),
+            seen: RefCell::default(),
         }
     }
 
@@ -444,7 +481,7 @@ impl Pulls {
     }
 
     /// Post `shown` on `head`, unless sluice's check there already reads
-    /// it.
+    /// it, as `r` keeps what it last posted or read there (136).
     fn show(
         &self,
         forge: &dyn Forge,
@@ -452,17 +489,16 @@ impl Pulls {
         number: u64,
         head: &str,
         shown: Shown,
+        r: &mut Reading,
     ) -> Result<()> {
-        let posted = forge.posted(repo, head)?;
-        if posted.as_ref().map(|p| &p.posting) != Some(&shown.posting) {
-            forge.post(repo, head, posted.map(|p| p.id), &shown.posting)?;
-        }
+        post_check(forge, repo, head, SLUICE_CHECK, &shown.posting, r)?;
         self.shown.borrow_mut().insert(number, shown);
         Ok(())
     }
 
     /// Comment `body` on pull request `number` unless a comment tells
-    /// notification `id` already.
+    /// notification `id` already: one `r` keeps as said, or one its
+    /// comments hold (136).
     fn comment_once(
         &self,
         forge: &dyn Forge,
@@ -470,10 +506,15 @@ impl Pulls {
         number: u64,
         id: &str,
         body: &str,
+        r: &mut Reading,
     ) -> Result<()> {
+        if r.said.iter().any(|s| s == id) {
+            return Ok(());
+        }
         let m = delivered_marker(id);
         let comments = forge.comment_list(repo, number)?;
         if comments.iter().any(|c| c.body.contains(&m)) {
+            r.said.push(id.to_string());
             return Ok(());
         }
         // ADR 0044: a pull request sent back is pointed at its report.
@@ -487,11 +528,16 @@ impl Pulls {
             repo,
             number,
             &format!("{m}\n{body}\n\nEvery check of the combination: [sluice's report]({report})."),
-        )
+        )?;
+        r.said.push(id.to_string());
+        Ok(())
     }
 
-    /// One intake pass over `branch`, reading the branch once.
-    fn take_in(&self, s: &Sluice<'_>, branch: &str) -> Result<bool> {
+    /// One intake pass over `branch`, reading the branch once: nothing
+    /// asked of GitHub unless the host's interval has passed since any
+    /// process on the host asked, a submit on the host moved one of its
+    /// pull requests, or the branch or its records moved since (136).
+    fn take_in(&self, s: &Sluice<'_>, clock: &dyn Clock, branch: &str) -> Result<bool> {
         let Some(t) = self.target(s, branch)? else {
             return Ok(false);
         };
@@ -499,6 +545,22 @@ impl Pulls {
         let Some(_lock) = self.lock(branch)? else {
             return Ok(true);
         };
+        self.log_lines
+            .borrow_mut()
+            .insert(branch.to_string(), t.conditions.log_lines);
+        let now = clock.now();
+        let kept = self.kept.readings(&t.repo, branch);
+        let version = s.seams().state.read(branch)?.version;
+        let due = kept.asked.is_none_or(|a| now - a >= self.discovery)
+            || self.kept.moved_since(&t.repo, branch, kept.asked);
+        // Whether the branch, and its records, stand as at the last asking.
+        let at_tip = kept.tip.as_deref() == Some(t.tip.0.as_str());
+        let still = at_tip && kept.version == Some(version);
+        if !due && still {
+            // A notification of this round finds its pull request.
+            self.register(&t.repo, &s.status(branch)?.submissions);
+            return Ok(true);
+        }
         let pulls = forge.pulls(&t.repo, branch)?;
         let mut status = s.status(branch)?;
         self.register(&t.repo, &status.submissions);
@@ -547,12 +609,29 @@ impl Pulls {
                 },
             );
         }
+        // 136: what was read of each while it stands, else what is read
+        // of it this pass.
+        let work: RefCell<BTreeMap<u64, Reading>> = RefCell::new(
+            ours.iter()
+                .map(|p| {
+                    let r = standing(&kept, p, latest.get(&place(p.number)), at_tip, still);
+                    (p.number, r)
+                })
+                .collect(),
+        );
         // 125: a group is taken whole, before any of it is considered alone.
+        let groups = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest, &log, &work);
         let Groups {
             taken,
             bound,
             mut unread,
-        } = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest, &log)?;
+        } = match groups {
+            Ok(g) => g,
+            Err(e) => {
+                self.keep_readings(s, &t, branch, now, &open, work.into_inner())?;
+                return Err(e);
+            }
+        };
         if taken {
             status = s.status(branch)?;
             self.register(&t.repo, &status.submissions);
@@ -560,13 +639,14 @@ impl Pulls {
             latest = s.latest_of(branch, &open)?;
         }
         for p in ours {
-            self.log_lines
-                .borrow_mut()
-                .insert(branch.to_string(), t.conditions.log_lines);
             // 128: what sluice reads of one pull request, or cannot,
             // decides that pull request alone; the next round reads it
             // again.
             let step = || -> Result<Option<anyhow::Error>> {
+                let mut work = work.borrow_mut();
+                let r = work
+                    .get_mut(&p.number)
+                    .expect("a reading of each open request");
                 let c = self.consider(
                     s,
                     forge,
@@ -579,6 +659,7 @@ impl Pulls {
                     &status.submissions,
                     &log,
                     &names,
+                    r,
                 )?;
                 if let Some(shown) = c.shown {
                     let report = match latest.get(&place(p.number)) {
@@ -594,6 +675,7 @@ impl Pulls {
                         &names,
                         shown,
                         report.as_ref(),
+                        r,
                     )?;
                 }
                 Ok(c.failed)
@@ -612,7 +694,35 @@ impl Pulls {
                 )),
             }
         }
+        self.keep_readings(s, &t, branch, now, &open, work.into_inner())?;
         Ok(true)
+    }
+
+    /// 136: keep what this pass asked and read of `branch`'s pull
+    /// requests: when it asked, at the branch's revision and its records'
+    /// version as they stand once intake wrote, so its own submissions and
+    /// withdrawals are no move; each open request's reading, with its
+    /// entry as it stands now; and nothing of a request no longer open.
+    fn keep_readings(
+        &self,
+        s: &Sluice<'_>,
+        t: &Target,
+        branch: &str,
+        asked: DateTime<Utc>,
+        open: &[String],
+        mut work: BTreeMap<u64, Reading>,
+    ) -> Result<()> {
+        let latest = s.latest_of(branch, open)?;
+        for (n, r) in &mut work {
+            r.entry = entry(latest.get(&place(*n)));
+        }
+        let version = s.seams().state.read(branch)?.version;
+        self.kept.change_readings(&t.repo, branch, |kept| {
+            kept.asked = Some(asked);
+            kept.tip = Some(t.tip.0.clone());
+            kept.version = Some(version);
+            kept.requests = work;
+        })
     }
 
     /// ADR 0044: post what pull request `p` shows of its submission: its
@@ -630,9 +740,10 @@ impl Pulls {
         names: &BTreeMap<u64, String>,
         mut shown: Shown,
         report: Option<&VerdictView>,
+        r: &mut Reading,
     ) -> Result<()> {
         let Some(view) = report.filter(|v| render::has_report(v)) else {
-            return self.show(forge, repo, number, head, shown);
+            return self.show(forge, repo, number, head, shown, r);
         };
         let scrub = crate::scrub::Scrub::new(std::env::vars());
         let read_log = |at: &str| std::fs::read_to_string(at).ok();
@@ -645,43 +756,57 @@ impl Pulls {
         };
         let text = render::report(view, &cx);
         shown.posting.text = Some(text.clone());
-        self.show(forge, repo, number, head, shown)?;
+        self.show(forge, repo, number, head, shown, r)?;
 
-        // The comment: found by its marker, created at the first result,
-        // edited after, never posted twice.
-        let marker = render::marker(&view.branch);
-        let mine = forge
-            .comment_list(repo, number)?
-            .into_iter()
-            .find(|c| c.body.starts_with(&marker));
+        // The comment: by the id the host keeps, else found by its marker,
+        // created at the first result, edited after, never posted twice,
+        // and edited only when what it says changed (136).
+        let said = digest(&text);
+        let mine = match r.report {
+            Some(id) => Some((id, r.report_said.clone())),
+            None => {
+                let marker = render::marker(&view.branch);
+                forge
+                    .comment_list(repo, number)?
+                    .into_iter()
+                    .find(|c| c.body.starts_with(&marker))
+                    .map(|c| (c.id, Some(digest(&c.body))))
+            }
+        };
         match mine {
-            Some(c) if c.body != text => forge.edit_comment(repo, c.id, &text)?,
-            Some(_) => {}
-            None if view.standing != Stands::FormedAgain => forge.comment(repo, number, &text)?,
+            Some((id, before)) => {
+                if before.as_deref() != Some(said.as_str()) {
+                    if let Err(e) = forge.edit_comment(repo, id, &text) {
+                        // Gone, perhaps: found again by its marker next time.
+                        r.report = None;
+                        return Err(e);
+                    }
+                }
+                r.report = Some(id);
+                r.report_said = Some(said);
+            }
+            None if view.standing != Stands::FormedAgain => {
+                r.report = Some(forge.comment(repo, number, &text)?);
+                r.report_said = Some(said);
+            }
             None => {}
         }
 
         // A check per required check per system (many-hosts-3's C.5
-        // addition), read back so nothing that reads the same is posted.
-        let posted = forge.posted_all(repo, head)?;
-        let post = |name: &str, posting: Posting| -> Result<()> {
-            let existing = posted.iter().find(|x| x.name == name);
-            if existing.map(|x| &x.posting) != Some(&posting) {
-                forge.post_named(repo, head, name, existing.map(|x| x.id), &posting)?;
-            }
-            Ok(())
-        };
+        // addition), posted only where it differs from what was last
+        // posted or read back.
         let mut named = Vec::new();
         for row in &view.rows {
             let (name, posting) = render::row_check(row, &cx);
             named.push(name.clone());
-            post(&name, posting)?;
+            post_check(forge, repo, head, &name, &posting, r)?;
         }
         for (task, system) in &view.pending {
             let name = super::forge::check_name(task, system.as_deref());
             if !named.contains(&name) {
                 named.push(name.clone());
-                post(&name, render::pending_check(Status::InProgress, "testing"))?;
+                let posting = render::pending_check(Status::InProgress, "testing");
+                post_check(forge, repo, head, &name, &posting, r)?;
             }
         }
         // 20: one this pull request's combination left shows no outcome
@@ -696,11 +821,21 @@ impl Pulls {
         } else {
             Status::InProgress
         };
-        for x in posted
-            .iter()
-            .filter(|x| x.name != SLUICE_CHECK && !named.contains(&x.name))
-        {
-            post(&x.name, render::pending_check(status, waits))?;
+        let left: Vec<String> = r
+            .posted
+            .keys()
+            .filter(|name| *name != SLUICE_CHECK && !named.contains(name))
+            .cloned()
+            .collect();
+        for name in left {
+            post_check(
+                forge,
+                repo,
+                head,
+                &name,
+                &render::pending_check(status, waits),
+                r,
+            )?;
         }
         Ok(())
     }
@@ -721,6 +856,7 @@ impl Pulls {
         subs: &[Submission],
         log: &[sluice_core::records::LogLine],
         names: &BTreeMap<u64, String>,
+        r: &mut Reading,
     ) -> Result<Considered> {
         let here = place(p.number);
         // A submit's pull request whose submission left the queue without
@@ -728,7 +864,7 @@ impl Pulls {
         // ready mark, at or after the second it left: whatever its head,
         // no round submits it in its agent's name before then (120, S56).
         let from = submits(p);
-        let held = is_held(forge, &t.repo, p, latest, log)?;
+        let held = is_held(p, latest, log, || timeline(forge, &t.repo, p.number, r))?;
         // Its draft shows the hold, and is not the hold: one GitHub
         // refuses holds it all the same, and the next pass tries again.
         if held && !p.draft {
@@ -749,7 +885,7 @@ impl Pulls {
             match e.state {
                 State::Withdrawn => {
                     if let Some(by) = withdrawn_by_another(e).filter(|_| from.is_none()) {
-                        if !retried_by_hand(forge, &t.repo, p, log, e.id)
+                        if !retried_by_hand(p, log, e.id, || timeline(forge, &t.repo, p.number, r))
                             .with_context(|| format!("reading {here}'s timeline"))?
                         {
                             rests = Some(by);
@@ -763,14 +899,16 @@ impl Pulls {
                     // back; a submit's, once it is no longer held.
                     let retried = match from {
                         Some(_) => !held,
-                        None => retried_by_hand(forge, &t.repo, p, log, e.id)
-                            .with_context(|| format!("reading {here}'s timeline"))?,
+                        None => {
+                            retried_by_hand(p, log, e.id, || timeline(forge, &t.repo, p.number, r))
+                                .with_context(|| format!("reading {here}'s timeline"))?
+                        }
                     };
                     if !retried {
                         let outcome = Outcome::of(e)?;
                         if let Some(body) = comment(branch, &outcome, names, from) {
                             let id = format!("{}:{}", e.id, e.state.word());
-                            self.comment_once(forge, &t.repo, p.number, &id, &body)?;
+                            self.comment_once(forge, &t.repo, p.number, &id, &body, r)?;
                         }
                         if !held {
                             return Ok(outcome_shown(branch, &outcome, names).into());
@@ -789,7 +927,7 @@ impl Pulls {
         } else if let Some(g) = group {
             g.missing.clone()
         } else {
-            self.missing(forge, t, p)?
+            self.conditions(forge, t, p, r)?
         };
         // 128: a waiting pull request needs its head only for its
         // forecast, and is shown waiting without one; one missing nothing
@@ -826,13 +964,22 @@ impl Pulls {
                     let ahead: Vec<String> = a.ahead.iter().map(|i| name(*i, names)).collect();
                     queued(branch, &ahead)
                 }
-                Err(r) => waiting(
+                Err(refused) => waiting(
                     branch,
                     from,
-                    &[format!("refused: {}", refusal_word(&r))],
+                    &[format!("refused: {}", refusal_word(&refused))],
                     None,
                 ),
             }));
+        }
+        // 136: what was forecast stands while the branch, its records and
+        // the request do.
+        if let Some(forecast) = r.forecast.clone() {
+            return Ok(match group {
+                Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
+                None => waiting(branch, from, &missing, Some(forecast)),
+            }
+            .into());
         }
         let forecast = match s
             .forecast(&place(p.number), branch, &[])?
@@ -862,13 +1009,32 @@ impl Pulls {
                 };
                 format!("forecast: conflicts with {with} in {}", paths.join(", "))
             }
-            Err(r) => format!("forecast: none, {}", refusal_word(&r)),
+            Err(refused) => format!("forecast: none, {}", refusal_word(&refused)),
         };
+        r.forecast = Some(forecast.clone());
         Ok(match group {
             Some(g) => waiting_in_group(branch, from, &missing, g, Some(forecast)),
             None => waiting(branch, from, &missing, Some(forecast)),
         }
         .into())
+    }
+
+    /// 136: what pull request `p` lacks before sluice takes it, as `r`
+    /// keeps it while it stands and lacks nothing; read again otherwise,
+    /// since another system's check moves nothing GitHub lists.
+    fn conditions(
+        &self,
+        forge: &dyn Forge,
+        t: &Target,
+        p: &Pull,
+        r: &mut Reading,
+    ) -> Result<Vec<String>> {
+        if let Some(met) = r.missing.as_ref().filter(|m| m.is_empty()) {
+            return Ok(met.clone());
+        }
+        let missing = self.missing(forge, t, p)?;
+        r.missing = Some(missing.clone());
+        Ok(missing)
     }
 
     /// What pull request `p` lacks before sluice takes it: out of draft,
@@ -923,6 +1089,7 @@ impl Pulls {
         pulls: &[&Pull],
         latest: &BTreeMap<String, Submission>,
         log: &[sluice_core::records::LogLine],
+        work: &RefCell<BTreeMap<u64, Reading>>,
     ) -> Result<Groups> {
         let mut groups: BTreeMap<String, Vec<(Group, &Pull)>> = BTreeMap::new();
         for p in pulls {
@@ -950,9 +1117,16 @@ impl Pulls {
             // else its conditions.
             let mut missing = BTreeMap::new();
             for p in by_k.values() {
-                let lacks = match is_held(forge, &t.repo, p, latest.get(&place(p.number)), log) {
+                let mut work = work.borrow_mut();
+                let r = work
+                    .get_mut(&p.number)
+                    .expect("a reading of each open request");
+                let held = is_held(p, latest.get(&place(p.number)), log, || {
+                    timeline(forge, &t.repo, p.number, r)
+                });
+                let lacks = match held {
                     Ok(true) => Ok(vec![NEXT_SUBMIT.to_string()]),
-                    Ok(false) => self.missing(forge, t, p),
+                    Ok(false) => self.conditions(forge, t, p, r),
                     Err(e) => Err(e),
                 };
                 match lacks {
@@ -1218,6 +1392,107 @@ impl Pulls {
     }
 }
 
+/// 136: sluice's check run `name` on `head` posted as `posting`, unless
+/// it reads so already: as `r` keeps what was last posted or read on that
+/// head, and as GitHub holds it where `r` keeps nothing of that head.
+fn post_check(
+    forge: &dyn Forge,
+    repo: &Repo,
+    head: &str,
+    name: &str,
+    posting: &Posting,
+    r: &mut Reading,
+) -> Result<()> {
+    if r.posted_on.as_deref() != Some(head) {
+        r.posted = forge
+            .posted_all(repo, head)?
+            .into_iter()
+            .map(|p| (p.name.clone(), p))
+            .collect();
+        r.posted_on = Some(head.to_string());
+    }
+    let existing = r.posted.get(name).map(|p| p.id);
+    if r.posted.get(name).map(|p| &p.posting) != Some(posting) {
+        let id = forge.post_named(repo, head, name, existing, posting)?;
+        r.posted.insert(
+            name.to_string(),
+            Posted {
+                id,
+                name: name.to_string(),
+                posting: posting.clone(),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// What a report comment says, kept short: the first 32 hex digits of its
+/// SHA-256.
+fn digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A pull request's latest submission as a reading keeps it: its id and
+/// its state's word.
+fn entry(latest: Option<&Submission>) -> Option<(u64, String)> {
+    latest.map(|e| (e.id, e.state.word().to_string()))
+}
+
+/// 136: what is known of `p` this pass. While its head, last change,
+/// draft mark and latest submission are as last read, the reading kept
+/// stands: what it lacked while the branch stands at the revision it was
+/// read at (`at_tip`), whose policy names the conditions, and its forecast
+/// while the branch's records stand too (`still`). Otherwise only what
+/// sluice posted on it and commented is carried on, and everything else is
+/// read again.
+fn standing(
+    kept: &Readings,
+    p: &Pull,
+    latest: Option<&Submission>,
+    at_tip: bool,
+    still: bool,
+) -> Reading {
+    let entry = entry(latest);
+    let fresh = Reading {
+        head: p.head.clone(),
+        updated_at: p.updated_at,
+        draft: p.draft,
+        entry: entry.clone(),
+        ..Reading::default()
+    };
+    match kept.requests.get(&p.number) {
+        Some(r)
+            if r.head == p.head
+                && r.updated_at == p.updated_at
+                && r.draft == p.draft
+                && r.entry == entry =>
+        {
+            let mut r = r.clone();
+            if !at_tip {
+                r.missing = None;
+            }
+            if !still {
+                r.forecast = None;
+            }
+            r
+        }
+        Some(r) => Reading {
+            posted_on: r.posted_on.clone(),
+            posted: r.posted.clone(),
+            report: r.report,
+            report_said: r.report_said.clone(),
+            said: r.said.clone(),
+            ..fresh
+        },
+        None => fresh,
+    }
+}
+
 /// A combination's name in a pull request's words: `main + #38 + #41`.
 fn combination(branch: &str, ids: &[u64], names: &BTreeMap<u64, String>) -> String {
     let mut s = branch.to_string();
@@ -1324,18 +1599,40 @@ fn left_unlanded(e: &Submission) -> bool {
 /// Whether a submit's pull request `p` waits for its submitter's act: its
 /// latest submission, `latest`, left the queue without landing, and no
 /// ready mark has followed since (120, S56).
+/// `readied` reads when it was marked ready for review; a draft is held
+/// with no read, since only a ready mark, which ends its draft, lets it go
+/// (136).
 fn is_held(
-    forge: &dyn Forge,
-    repo: &Repo,
     p: &Pull,
     latest: Option<&Submission>,
     log: &[sluice_core::records::LogLine],
+    readied: impl FnOnce() -> Result<Vec<DateTime<Utc>>>,
 ) -> Result<bool> {
     match latest.filter(|e| submits(p).is_some() && left_unlanded(e)) {
-        Some(e) => Ok(!readied_since(forge, repo, p.number, acts_from(log, e))
-            .with_context(|| format!("reading {}'s timeline", place(p.number)))?),
+        Some(_) if p.draft => Ok(true),
+        Some(e) => {
+            let readied =
+                readied().with_context(|| format!("reading {}'s timeline", place(p.number)))?;
+            Ok(!readied_since(&readied, acts_from(log, e)))
+        }
         None => Ok(false),
     }
+}
+
+/// 136: when pull request `number` was marked ready for review, as `r`
+/// keeps its timeline while it stands, else read.
+fn timeline(
+    forge: &dyn Forge,
+    repo: &Repo,
+    number: u64,
+    r: &mut Reading,
+) -> Result<Vec<DateTime<Utc>>> {
+    if let Some(readied) = &r.readied {
+        return Ok(readied.clone());
+    }
+    let readied = forge.readied(repo, number)?;
+    r.readied = Some(readied.clone());
+    Ok(readied)
 }
 
 /// The second from which a ready mark is its submitter's act after `e`
@@ -1354,31 +1651,24 @@ fn acts_from(log: &[sluice_core::records::LogLine], e: &Submission) -> DateTime<
     }
 }
 
-/// Whether pull request `number` was marked ready for review at or after
-/// `at`, to the whole second.
-fn readied_since(forge: &dyn Forge, repo: &Repo, number: u64, at: DateTime<Utc>) -> Result<bool> {
-    Ok(forge
-        .readied(repo, number)?
-        .iter()
-        .any(|r| r.trunc_subsecs(0) >= at))
+/// Whether a pull request marked ready for review at `readied` was so at
+/// or after `at`, to the whole second.
+fn readied_since(readied: &[DateTime<Utc>], at: DateTime<Utc>) -> bool {
+    readied.iter().any(|r| r.trunc_subsecs(0) >= at)
 }
 
 /// Whether pull request `p`, opened by hand and sent back as submission
 /// `id`, or withdrawn by someone other than its agent, was marked ready
-/// for review after it left: intake then submits the same head again.
+/// for review after it left, as `readied` reads its timeline: intake then
+/// submits the same head again.
 fn retried_by_hand(
-    forge: &dyn Forge,
-    repo: &Repo,
     p: &Pull,
     log: &[sluice_core::records::LogLine],
     id: u64,
+    readied: impl FnOnce() -> Result<Vec<DateTime<Utc>>>,
 ) -> Result<bool> {
     let removed = removal(log, id);
-    Ok(!p.draft
-        && forge
-            .readied(repo, p.number)?
-            .iter()
-            .any(|at| removed.is_some_and(|r| *at > r)))
+    Ok(!p.draft && readied()?.iter().any(|at| removed.is_some_and(|r| *at > r)))
 }
 
 /// A submit's ready mark on pull request `number`, a draft first unless
@@ -1922,7 +2212,7 @@ impl crate::PullRequests for Pulls {
             read: RefCell::default(),
         };
         let s = Sluice::new(once(seams, &memo), clock);
-        self.take_in(&s, branch)
+        self.take_in(&s, clock, branch)
             .with_context(|| format!("taking in {branch}'s pull requests"))
     }
 
@@ -2010,7 +2300,38 @@ impl crate::PullRequests for Pulls {
             bail!("{branch} takes no pull requests");
         };
         let forge = self.forge(branch)?;
-        let pull = forge.pull(&t.repo, n)?;
+        // 136: GitHub is asked about the request no more often than once
+        // in a quarter of the host's interval; between, what it last said.
+        let now = clock.now();
+        let fresh = self
+            .seen
+            .borrow()
+            .get(&n)
+            .filter(|seen| now - seen.at < self.discovery / 4)
+            .map(|seen| seen.pull.clone());
+        let pull = match fresh {
+            Some(pull) => pull,
+            None => {
+                let pull = forge.pull(&t.repo, n)?;
+                let seen = Seen {
+                    at: now,
+                    pull: pull.clone(),
+                    readied: None,
+                };
+                self.seen.borrow_mut().insert(n, seen);
+                pull
+            }
+        };
+        let readied = || -> Result<Vec<DateTime<Utc>>> {
+            if let Some(r) = self.seen.borrow().get(&n).and_then(|s| s.readied.clone()) {
+                return Ok(r);
+            }
+            let r = forge.readied(&t.repo, n)?;
+            if let Some(seen) = self.seen.borrow_mut().get_mut(&n) {
+                seen.readied = Some(r.clone());
+            }
+            Ok(r)
+        };
         let status = s.status(branch)?;
         let latest = s.latest_of(branch, &[place(n)])?.remove(&place(n));
         if let Some(e) = &latest {
@@ -2022,8 +2343,8 @@ impl crate::PullRequests for Pulls {
                     Some(p) if p.open && e.state != State::Landed => {
                         let log = Line::read_log(&s.seams().state.read(branch)?)?;
                         match submits(p) {
-                            Some(_) => readied_since(forge, &t.repo, n, acts_from(&log, e))?,
-                            None => retried_by_hand(forge, &t.repo, p, &log, e.id)?,
+                            Some(_) => readied_since(&readied()?, acts_from(&log, e)),
+                            None => retried_by_hand(p, &log, e.id, readied)?,
                         }
                     }
                     _ => false,
@@ -2041,9 +2362,23 @@ impl crate::PullRequests for Pulls {
         let submission = latest
             .filter(|e| !e.state.is_out() && pull.as_ref().is_some_and(|p| p.head == e.head.0));
         let names = names(&status.submissions);
+        // As this process last showed it, else as the host last posted it
+        // (136).
         let (title, lines) = match self.shown.borrow().get(&n) {
             Some(shown) => (shown.posting.title.clone(), shown.lines.clone()),
-            None => ("waiting".into(), Vec::new()),
+            None => {
+                let posted = self
+                    .kept
+                    .readings(&t.repo, branch)
+                    .requests
+                    .remove(&n)
+                    .filter(|r| pull.as_ref().is_some_and(|p| r.head == p.head))
+                    .and_then(|mut r| r.posted.remove(SLUICE_CHECK));
+                match posted {
+                    Some(p) => (p.posting.title, Vec::new()),
+                    None => ("waiting".into(), Vec::new()),
+                }
+            }
         };
         Ok(Followed::Open {
             title,
@@ -2241,6 +2576,11 @@ impl Pulls {
         } else {
             Ok(opened)
         };
+        // 136: the host's next pass asks for the branch's pull requests at
+        // once, the ones this act opened, updated or marked ready among them.
+        if let Err(e) = self.kept.moved(&t.repo, branch) {
+            crate::telemetry::warn(&format!("sluice: warning: {e:#}"));
+        }
         // 124: how the host's copy differs, and ADR 0050: why the runner
         // could not be asked, beneath what the act did.
         let beneath = |mut opened: Vec<Opened>| {
@@ -2313,18 +2653,27 @@ impl Pulls {
         let outcome = Outcome::decided(&n.decided);
         let shown = outcome_shown(&n.branch, &outcome, &names);
         // ADR 0044: a pull request that landed is closed, so no intake
-        // reads it again: its report is posted with the outcome.
+        // reads it again: its report is posted with the outcome. What the
+        // host keeps of the request says what is posted already (136).
         let log_lines = self.log_lines.borrow().get(&n.branch).copied().flatten();
-        self.show_report(
-            forge,
-            &e.repo,
-            e.number,
-            &e.head,
-            log_lines,
-            &names,
-            shown,
-            n.report.as_ref(),
-        )?;
+        let reading = |f: &mut dyn FnMut(&mut Reading) -> Result<()>| -> Result<()> {
+            self.kept.change_readings(&e.repo, &n.branch, |kept| {
+                f(kept.requests.entry(e.number).or_default())
+            })?
+        };
+        reading(&mut |r| {
+            self.show_report(
+                forge,
+                &e.repo,
+                e.number,
+                &e.head,
+                log_lines,
+                &names,
+                shown.clone(),
+                n.report.as_ref(),
+                r,
+            )
+        })?;
         if matches!(outcome, Outcome::Landed { .. }) {
             return Ok(Delivery::Delivered { to });
         }
@@ -2341,7 +2690,7 @@ impl Pulls {
         };
         let from = pull.as_ref().and_then(submits);
         if let Some(body) = comment(&n.branch, &outcome, &names, from) {
-            self.comment_once(forge, &e.repo, e.number, &n.id, &body)?;
+            reading(&mut |r| self.comment_once(forge, &e.repo, e.number, &n.id, &body, r))?;
         }
         Ok(Delivery::Delivered { to })
     }
@@ -2395,7 +2744,10 @@ mod tests {
             Some(forge.clone()),
             None,
             Rc::new(retry::Policy::command()),
+            Kept::new(&dir.join("state")),
+            crate::instance::DISCOVERY,
         );
+        let mut reading = Reading::default();
         let view = VerdictView {
             branch: "main".into(),
             id: 12,
@@ -2410,7 +2762,7 @@ mod tests {
         };
         let names = BTreeMap::from([(12, "#12".to_string())]);
         let shown = queued("main", &[]);
-        let post = |v: &VerdictView| {
+        let mut post = |v: &VerdictView| {
             pulls
                 .show_report(
                     &*forge,
@@ -2421,6 +2773,7 @@ mod tests {
                     &names,
                     shown.clone(),
                     Some(v),
+                    &mut reading,
                 )
                 .unwrap()
         };
