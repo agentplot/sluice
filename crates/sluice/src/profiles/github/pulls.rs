@@ -21,9 +21,8 @@
 //!
 //! The driver's `session("pull/<n>")` fetches `refs/pull/<n>/head`; its
 //! `notify` posts the outcome and, when a pull request is sent back,
-//! comments once. Intake moves no branch
-//! (rule core.4): it fetches heads and asks the core to submit, forecast
-//! and withdraw, as any driver does.
+//! comments once. Intake moves no branch (rule core.4): it fetches heads
+//! and asks the core to submit, forecast and withdraw, as any driver does.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
