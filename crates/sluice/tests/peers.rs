@@ -31,6 +31,8 @@ struct Host {
     config: Scratch,
     state: Scratch,
     sessions: Scratch,
+    /// The git every command it runs starts, counting its starts (129).
+    git: support::CountingGit,
 }
 
 impl Host {
@@ -54,6 +56,7 @@ impl Host {
             state: Scratch::new(&format!("{name}-state")),
             sessions: Scratch::new(&format!("{name}-sessions")),
             config,
+            git: support::CountingGit::new(),
         }
     }
 
@@ -68,6 +71,7 @@ impl Host {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .stdin(Stdio::null());
+        self.git.on(&mut c);
         c
     }
 
@@ -78,6 +82,12 @@ impl Host {
     /// A session on `unit/<name>` off `main`, one commit of its own,
     /// submitted to `main` without waiting; returns its id.
     fn submit(&self, name: &str) -> u64 {
+        self.submit_to(name, "main")
+    }
+
+    /// A session on `unit/<name>` off `branch`, one commit of its own,
+    /// submitted to `branch` without waiting; returns its id.
+    fn submit_to(&self, name: &str, branch: &str) -> u64 {
         let dir: PathBuf = self.sessions.path().join(name);
         self.repo.git(&[
             "worktree",
@@ -86,7 +96,7 @@ impl Host {
             "-b",
             &format!("unit/{name}"),
             dir.to_str().unwrap(),
-            "main",
+            branch,
         ]);
         std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
         let git = |args: &[&str]| {
@@ -98,7 +108,7 @@ impl Host {
         git(&["commit", "-q", "-m", name]);
         let out = self
             .command(&dir)
-            .args(["submit", "main", "--no-wait", "--json"])
+            .args(["submit", branch, "--no-wait", "--json"])
             .output()
             .unwrap();
         assert!(out.status.success(), "{}", text(&out));
@@ -322,4 +332,168 @@ fn a_host_whose_own_main_is_refused_counts_the_remotes_signers() {
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&landed.stdout).contains(&format!("#{id}")));
+}
+
+/// One host whose `main` and `release` keep their records on origin, each
+/// with one submission landed, and the remote.
+fn two_branches_landed(name: &str) -> (Host, Scratch) {
+    let k = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+    let repo = Repo::new(name);
+    repo.write(
+        ".config/sluice.toml",
+        &format!(
+            "[tests]\nrunner = \"command\"\ncommand = \"true\"\n\n\
+             [signers.a]\nssh = \"{}\"\n\n\
+             [branches.main]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = [\"a\"]\n\n\
+             [branches.release]\ntimeout = \"1m\"\nremote = \"origin\"\ntrust = [\"a\"]\n",
+            line("a", &k)
+        ),
+    );
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+    repo.git(&["branch", "release"]);
+    let origin = repo.bare_origin();
+    let host = Host::new(repo, name, "a", &k);
+    for (n, branch) in [("m", "main"), ("r", "release")] {
+        let id = host.submit_to(n, branch);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while host.state_of(id) != "landed" {
+            let out = host.sluice(&["step", branch]);
+            assert!(out.status.success(), "{}", text(&out));
+            assert!(Instant::now() < deadline, "{branch}: {}", host.state_of(id));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    (host, origin)
+}
+
+/// The starts of git among `starts` that are the tick's one ask of
+/// origin.
+fn asks(starts: &[String]) -> usize {
+    starts
+        .iter()
+        .filter(|l| {
+            l.starts_with("--git-dir") && l.contains(" fetch ") && l.contains("refs/sluice/state/*")
+        })
+        .count()
+}
+
+/// reader-tick, "Two branches' records on one remote": with nothing
+/// queued, each pass of `sluice run` after its first starts git once, for
+/// one fetch from origin (129).
+#[test]
+fn each_pass_asks_origin_once_for_both_branches() {
+    let (host, _origin) = two_branches_landed("ticks-two");
+    let run = |rounds: &str| -> Vec<String> {
+        let before = host.git.count();
+        let out = host
+            .command(host.repo.dir())
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["run", "--rounds", rounds])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        host.git.starts()[before..].to_vec()
+    };
+    let one = run("1");
+    let six = run("6");
+    assert_eq!(six.len(), one.len() + 5, "one: {one:?}; six: {six:?}");
+    assert_eq!(asks(&six), asks(&one) + 5, "{six:?}");
+}
+
+/// A watch of `host`'s repository, the reader; ended when dropped.
+struct Watching {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Watching {
+    fn start(host: &Host) -> Watching {
+        let mut child = host
+            .command(host.repo.dir())
+            .args(["overview", "--json", "--watch"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let out = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (send, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufRead::lines(out).map_while(Result::ok) {
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Watching { child, lines }
+    }
+
+    fn next(&self, within: Duration) -> Option<serde_json::Value> {
+        let line = self.lines.recv_timeout(within).ok()?;
+        Some(serde_json::from_str(&line).unwrap())
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// reader-tick, "Two branches' records on one remote", the watch: each
+/// tick of the reader's watch after its first starts git once, for one
+/// fetch from origin (129).
+#[test]
+fn each_watch_tick_asks_origin_once_for_both_branches() {
+    let (host, _origin) = two_branches_landed("ticks-watch");
+    let watch = Watching::start(&host);
+    let first = watch.next(Duration::from_secs(10)).expect("a first line");
+    let branches: Vec<&str> = first["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["branch"].as_str().unwrap())
+        .collect();
+    assert_eq!(branches, ["main", "release"], "{first}");
+    let before = host.git.count();
+    std::thread::sleep(Duration::from_millis(2500));
+    let starts = host.git.starts()[before..].to_vec();
+    assert!(!starts.is_empty(), "no tick asked");
+    assert_eq!(asks(&starts), starts.len(), "{starts:?}");
+}
+
+/// reader-tick, "The remote refuses the tick's ask": the watch's line
+/// shows both branches as last fetched, each saying it could not refresh
+/// in the remote's words, and the next tick asks again (80, 129, 133).
+#[test]
+fn a_refused_ask_shows_both_branches_as_last_fetched() {
+    let (host, origin) = two_branches_landed("ticks-refused");
+    let watch = Watching::start(&host);
+    let first = watch.next(Duration::from_secs(10)).expect("a first line");
+    let at: Vec<serde_json::Value> = first["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["at"].clone())
+        .collect();
+    let away = origin.path().with_extension("away");
+    std::fs::rename(origin.path(), &away).unwrap();
+    let refused = watch.next(Duration::from_secs(10));
+    let before = host.git.count();
+    std::thread::sleep(Duration::from_millis(2500));
+    let again = host.git.starts()[before..].to_vec();
+    std::fs::rename(&away, origin.path()).unwrap();
+    let refused = refused.expect("a line once origin refused");
+    let branches = refused["branches"].as_array().unwrap();
+    assert_eq!(branches.len(), 2, "{refused}");
+    for (b, at) in branches.iter().zip(&at) {
+        assert_eq!(&b["at"], at, "as last fetched: {refused}");
+        let stale = b["stale"].as_str().unwrap_or_default();
+        assert!(
+            stale.contains("origin") && stale.contains("does not appear to be a git repository"),
+            "{refused}"
+        );
+    }
+    assert!(asks(&again) >= 1, "the next tick asks again: {again:?}");
 }

@@ -14,7 +14,7 @@ use sluice_core::release::{ReleaseOutcome, Releasing};
 use sluice_core::session::{Abandoned, Recorded, SessionPlan, SessionRefusal, SessionStart};
 use sluice_core::{Clock, Forecast, Sluice};
 use sluice_seams::{
-    AtBound, Outcome, Progress, Released, RunHandle, RunOutcome, RunReport, TaskProgress,
+    AtBound, Outcome, Progress, Released, Rev, RunHandle, RunOutcome, RunReport, TaskProgress,
 };
 
 use crate::sessions::SessionRun;
@@ -56,11 +56,19 @@ pub trait Host {
     /// Whether `repository`, a common git directory as [`Host::repository`]
     /// names it, is gone from the host: what ends a watch of it (129).
     fn repository_gone(&self, repository: &str) -> bool;
-    /// Whether any branch tip the host holds, its own or a remote's
-    /// tracking branch as last fetched, has the policy file, with nothing
-    /// fetched: where none has and no branch has records, the repository
-    /// has no sluice (129; rule core.27).
-    fn holds_policy(&self) -> Result<bool>;
+    /// Every branch tip the host holds, its own and each remote's tracking
+    /// branch as last fetched, each once, with nothing fetched and no
+    /// process started: what whether the repository has sluice rests on
+    /// (129; rule core.27).
+    fn tips(&self) -> Result<Vec<Rev>>;
+    /// Whether any of `tips`, as [`Host::tips`] read them, has the policy
+    /// file, with no process started: where none has and no branch has
+    /// records, the repository has no sluice (129; rule core.27).
+    fn holds_policy(&self, tips: &[Rev]) -> Result<bool>;
+    /// 129: start a pass of `sluice run`, a watch tick or a wait's read:
+    /// what the host's profiles keep by revision and the last did not use
+    /// is forgotten.
+    fn next_pass(&self) {}
     /// Where each repository's reader of its queues keeps its lock and the
     /// overview it last read (129; ADR 0056).
     fn readers(&self) -> Result<PathBuf>;

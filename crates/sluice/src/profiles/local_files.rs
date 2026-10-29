@@ -54,6 +54,9 @@ pub struct LocalFiles {
     /// The branches whose lock this process holds through a live guard:
     /// `write` refuses any other.
     held: RefCell<BTreeSet<String>>,
+    /// 129: each branch's records as last read whole, answered again while
+    /// their version stands and no write is pending.
+    kept: RefCell<BTreeMap<String, Snapshot>>,
 }
 
 /// A write in progress, written before any file it changes and removed
@@ -98,6 +101,7 @@ impl LocalFiles {
         LocalFiles {
             root,
             held: RefCell::new(BTreeSet::new()),
+            kept: RefCell::default(),
         }
     }
 
@@ -311,14 +315,28 @@ impl State for LocalFiles {
         self.locked(branch, &dir, file)
     }
 
+    /// 129: read whole only once the version moved since the branch was
+    /// last read, or a write is pending. Every write moves the version
+    /// only once its files are in place, and a pending write stands from
+    /// before its first file changes until after the version moved, so a
+    /// version that stands with no write pending is records that stand.
     fn read(&self, branch: &str) -> Result<Snapshot> {
         let dir = self.dir(branch)?;
+        let at = read_version(&dir)?;
+        let pending_at = dir.join(PENDING).exists();
+        if !pending_at {
+            if let Some(kept) = self.kept.borrow().get(branch).filter(|k| k.version == at) {
+                return Ok(kept.clone());
+            }
+        }
         let mut files = BTreeMap::new();
         walk(&dir, &dir, &mut files)?;
         let mut version = read_version(&dir)?;
+        let mut pending = false;
         // With no lock held, a write a crash left part done is read as
         // whole: what is read is what sluice last wrote (51).
         if let Ok(bytes) = std::fs::read(dir.join(PENDING)) {
+            pending = true;
             let p: Pending = serde_json::from_slice(&bytes).context("parsing a pending write")?;
             for (name, t) in &p.put {
                 if finished_name(name).is_none() {
@@ -335,7 +353,25 @@ impl State for LocalFiles {
             }
             version = p.version;
         }
-        Ok(Snapshot { version, files })
+        let read = Snapshot { version, files };
+        // Kept only when no write was pending, or finished, while it was
+        // walked: nothing kept is part of a write.
+        if !pending_at && !pending && version == at {
+            self.kept
+                .borrow_mut()
+                .insert(branch.to_string(), read.clone());
+        }
+        Ok(read)
+    }
+
+    /// The host's own files: nothing to ask.
+    fn refresh(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// The host's own files are the records: as [`LocalFiles::read`].
+    fn read_held(&self, branch: &str) -> Result<Snapshot> {
+        self.read(branch)
     }
 
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {

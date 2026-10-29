@@ -220,6 +220,10 @@ impl Branch for RecordedRefs {
         self.inner.read(branch)
     }
 
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        self.inner.held(branch)
+    }
+
     fn copy(&self, branch: &str) -> Result<HostCopy> {
         self.inner.copy(branch)
     }
@@ -684,6 +688,32 @@ impl Rig for Real {
         *self.branch.moves.borrow()
     }
 
+    fn on_remote(&self) -> bool {
+        self.origin.is_some()
+    }
+
+    /// Another clone's push to the remote, or, for a branch in the host's
+    /// own refs, a commit on it there.
+    fn elsewhere(&self, changes: &[(&str, Option<&str>)]) -> Rev {
+        let Some(origin) = &self.origin else {
+            return Rev::new(self.repo.branch(BRANCH, BRANCH, changes));
+        };
+        let other = Repo::clone_of(origin.path(), "elsewhere");
+        other.git(&["switch", "-q", BRANCH]);
+        for (path, content) in changes {
+            match content {
+                Some(c) => other.write(path, c),
+                None => {
+                    other.git(&["rm", "-q", path]);
+                }
+            }
+        }
+        other.git(&["add", "-A"]);
+        other.git(&["commit", "-q", "-m", "elsewhere"]);
+        other.git(&["push", "-q", "origin", &format!("HEAD:{BRANCH}")]);
+        Rev::new(other.rev("HEAD"))
+    }
+
     fn tree(&self, rev: &Rev) -> String {
         git(
             self.repo.dir(),
@@ -771,6 +801,8 @@ fn releasing_once() -> String {
 }
 
 scenarios! {
+    a_branch_is_held_as_the_host_last_read_it: bolt();
+    records_held_after_a_refresh_are_the_records_read: bolt();
     s1_two_heads_pass_and_land_in_order: bolt();
     s2_a_conflict_is_told_before_any_check_runs: bolt();
     s3_the_second_fails_and_only_its_session_hears: bolt();
@@ -822,6 +854,8 @@ macro_rules! peers_scenarios {
 }
 
 peers_scenarios! {
+    peers_held => a_branch_is_held_as_the_host_last_read_it: bolt();
+    peers_records_held => records_held_after_a_refresh_are_the_records_read: bolt();
     peers_s1 => s1_two_heads_pass_and_land_in_order: bolt();
     peers_s3 => s3_the_second_fails_and_only_its_session_hears: bolt();
     peers_s4 => s4_the_first_fails_and_the_second_is_formed_again_without_it: bolt();

@@ -52,6 +52,8 @@ struct Setup {
     /// The host's state, the setup's own, so another agent's runs on this
     /// host never take the bound its rounds start under (71).
     state: Scratch,
+    /// The git every command it runs starts, counting its starts (129).
+    git: support::CountingGit,
 }
 
 impl Setup {
@@ -136,6 +138,7 @@ impl Setup {
             sessions: Scratch::new(&format!("{name}-sessions")),
             config: Scratch::new(&format!("{name}-config")),
             state: Scratch::new(&format!("{name}-state")),
+            git: support::CountingGit::new(),
         }
     }
 
@@ -150,6 +153,7 @@ impl Setup {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .stdin(Stdio::null());
+        self.git.on(&mut c);
         c
     }
 
@@ -1486,4 +1490,86 @@ mod refused_alone {
         );
         assert!(part("bolt/a").get("unread").is_none(), "{v}");
     }
+}
+
+/// The git `s`'s binary started for `args`, run once in the repository
+/// with its pauses between rounds skipped.
+fn started(s: &Setup, args: &[&str]) -> Vec<String> {
+    let before = s.git.count();
+    let out = s
+        .command(s.repo.dir())
+        .env("SLUICE_ROUND_SLEEP", "record")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{args:?}: {}", text(&out));
+    s.git.starts()[before..].to_vec()
+}
+
+/// reader-tick, "A branch on a remote with its records on the host":
+/// with nothing queued, `sluice run` starts git no more over six passes
+/// than over one, and fetches nothing after its first (129).
+#[test]
+fn an_idle_branch_on_a_remote_is_passed_over_with_no_git() {
+    let s = Setup::new("idle-remote", "origin");
+    s.submit("a");
+    s.step_until_out();
+    let one = started(&s, &["run", "--rounds", "1"]);
+    let six = started(&s, &["run", "--rounds", "6"]);
+    assert_eq!(six.len(), one.len(), "one: {one:?}; six: {six:?}");
+    let fetches = |starts: &[String]| starts.iter().filter(|l| l.contains("fetch")).count();
+    assert_eq!(fetches(&six), fetches(&one), "{six:?}");
+}
+
+/// reader-tick, "A branch on a remote moved there and nothing in play":
+/// another host lands on `origin`'s `main`; a watch shows `main` at its
+/// revision as last fetched, fetching nothing, and the next submission's
+/// round fetches `main` before it forms anything (121, 129).
+#[test]
+fn a_branch_moved_on_its_remote_is_shown_as_last_fetched_until_a_round() {
+    let s = Setup::new("moved-remote", "origin");
+    s.submit("a");
+    s.step_until_out();
+    let landed = s.remote_main();
+    let pushed = Repo::clone_of(s.origin.path(), "moved-elsewhere").push_change("b.txt", "b\n");
+    assert_eq!(s.remote_main(), pushed);
+
+    let mut watch = s
+        .command(s.repo.dir())
+        .args(["overview", "--json", "--watch"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(watch.stdout.take().unwrap()),
+        &mut first,
+    )
+    .unwrap();
+    let _ = watch.kill();
+    let _ = watch.wait();
+    let doc: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(doc["branches"][0]["branch"], "main", "{doc}");
+    assert_eq!(doc["branches"][0]["at"], landed.as_str(), "{doc}");
+    assert_eq!(
+        s.repo.rev("refs/remotes/origin/main"),
+        landed,
+        "the watch fetched"
+    );
+
+    s.submit("c");
+    s.step_until_out();
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(s.origin.path())
+        .args(["merge-base", "--is-ancestor", &pushed, "refs/heads/main"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} is not on the landing",
+        &pushed[..7]
+    );
+    assert_eq!(s.states(), ["landed", "landed"]);
 }

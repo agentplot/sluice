@@ -359,3 +359,71 @@ fn the_common_dir_is_one_from_every_worktree() {
     assert_eq!(from_main, repo.dir().join(".git"));
     let _ = std::fs::remove_dir_all(&linked);
 }
+
+/// `git` in `dir`'s repository, its output's lines.
+fn lines(repo: &Repo, args: &[&str]) -> Vec<String> {
+    repo.git(args).lines().map(str::to_string).collect()
+}
+
+/// 129: the default branch, read with no process, is the branch the
+/// common directory's HEAD names, as `git symbolic-ref --short -q HEAD`
+/// names it there, and none while that HEAD is detached; the branches
+/// are what `git for-each-ref refs/heads` lists, packed or loose.
+#[test]
+fn the_default_branch_and_the_branches_read_as_git_names_them() {
+    let repo = Repo::new("named");
+    repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    repo.branch("unit/y", "main", &[("b", Some("2"))]);
+    let r = refs(&repo);
+    // `branch` leaves the worktree detached at main.
+    assert!(repo
+        .git_raw(&["symbolic-ref", "-q", "HEAD"])
+        .stdout
+        .is_empty());
+    assert_eq!(r.default_branch().unwrap(), None);
+    repo.git(&["switch", "-q", "main"]);
+    let named = repo.git(&["symbolic-ref", "--short", "-q", "HEAD"]);
+    assert_eq!(r.default_branch().unwrap().as_deref(), Some(named.as_str()));
+    repo.git(&["pack-refs", "--all"]);
+    repo.branch("loose/z", "main", &[("c", Some("3"))]);
+    let mut listed = lines(
+        &repo,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    );
+    listed.sort();
+    let mut read = r.branch_names().unwrap();
+    read.sort();
+    assert_eq!(read, listed);
+    assert_eq!(read, ["bolt/x", "loose/z", "main", "unit/y"]);
+}
+
+/// 129: in a bare repository with worktrees, the default branch is the
+/// bare repository's HEAD from every worktree, whatever each has checked
+/// out, and the branches are the repository's.
+#[test]
+fn a_bare_repositorys_default_branch_is_its_own_heads() {
+    let repo = Repo::new("bare-src");
+    repo.branch("bolt/x", "main", &[("a", Some("1"))]);
+    repo.git(&["switch", "-q", "main"]);
+    let bare = support::Scratch::new("bare.git");
+    repo.git(&["clone", "-q", "--bare", ".", bare.path().to_str().unwrap()]);
+    let wt = bare.path().join("bolt");
+    let git = |args: &[&str]| {
+        let mut a = vec!["--git-dir", bare.path().to_str().unwrap()];
+        a.extend(args);
+        repo.git(&a)
+    };
+    git(&["worktree", "add", "-q", wt.to_str().unwrap(), "bolt/x"]);
+    let r = LocalRefs::open(&wt).unwrap();
+    let named = git(&["symbolic-ref", "--short", "-q", "HEAD"]);
+    assert_eq!(named, "main");
+    assert_eq!(r.default_branch().unwrap().as_deref(), Some("main"));
+    let mut listed: Vec<String> = git(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    listed.sort();
+    let mut read = r.branch_names().unwrap();
+    read.sort();
+    assert_eq!(read, listed);
+}

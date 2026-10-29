@@ -466,3 +466,71 @@ fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
         index.as_bytes()
     );
 }
+
+/// 129: a second read at one version, with no write pending, walks
+/// nothing: what is on disk is read again only once the version moved.
+#[test]
+fn a_second_read_at_one_version_walks_nothing() {
+    let dir = Scratch::new("kept-read");
+    let s = LocalFiles::new(dir.path());
+    write(&s, "main", changes(&[("branch.json", "{\"v\":1}\n")], &[]));
+    let first = s.read("main").unwrap();
+    // Changed under the version, as no write of sluice's ever does.
+    let branch = dir.path().join("sluice/main");
+    std::fs::write(branch.join("branch.json"), "{\"v\":\"by hand\"}\n").unwrap();
+    assert_eq!(s.read("main").unwrap(), first, "walked again");
+    write(&s, "main", changes(&[("log.jsonl", "{}\n")], &[]));
+    let moved = s.read("main").unwrap();
+    assert_eq!(moved.version, first.version + 1);
+    assert_eq!(moved.files["branch.json"], b"{\"v\":\"by hand\"}\n");
+}
+
+/// 129, 62: a write from another `LocalFiles` on the same directory, as
+/// another process's, is seen at the next read.
+#[test]
+fn a_write_from_another_process_is_seen_at_the_next_read() {
+    let dir = Scratch::new("kept-other");
+    let reader = LocalFiles::new(dir.path());
+    let writer = LocalFiles::new(dir.path());
+    write(
+        &writer,
+        "main",
+        changes(&[("branch.json", "{\"v\":1}\n")], &[]),
+    );
+    assert_eq!(reader.read("main").unwrap().version, 1);
+    assert_eq!(reader.read("main").unwrap().version, 1);
+    write(
+        &writer,
+        "main",
+        changes(&[("submissions/1.json", "{\"id\":1}\n")], &[]),
+    );
+    let read = reader.read("main").unwrap();
+    assert_eq!(read.version, 2);
+    assert_eq!(read.files["submissions/1.json"], b"{\"id\":1}\n");
+}
+
+/// 129, 51: a pending write a stopped writer left is read as whole by a
+/// reader that had kept the records before it, at every read while it
+/// stands.
+#[test]
+fn a_stopped_writers_pending_write_is_read_whole_over_what_was_kept() {
+    let dir = Scratch::new("kept-pending");
+    let s = LocalFiles::new(dir.path());
+    write(&s, "main", changes(&[("branch.json", "{\"v\":1}\n")], &[]));
+    assert_eq!(s.read("main").unwrap().version, 1);
+    let branch = dir.path().join("sluice/main");
+    std::fs::write(
+        branch.join(".pending.json"),
+        r#"{"version":2,"put":{"submissions/2.json":"{\"id\":2}\n"},"append":{},"lengths":{}}"#,
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let read = s.read("main").unwrap();
+        assert_eq!(read.version, 2);
+        assert_eq!(read.files["submissions/2.json"], b"{\"id\":2}\n");
+    }
+    drop(s.wait_lock("main").unwrap());
+    let read = s.read("main").unwrap();
+    assert_eq!(read.version, 2);
+    assert_eq!(read.files["submissions/2.json"], b"{\"id\":2}\n");
+}

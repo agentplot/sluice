@@ -486,6 +486,9 @@ pub struct Places {
     blocks: Option<PathBuf>,
     /// How a session's place's release command is built from its policy.
     release: Option<ReleaseBuilder>,
+    /// The repository at its common directory, as gix reads it, once
+    /// opened: its worktrees, read with no process (129).
+    repo: std::cell::OnceCell<gix::Repository>,
 }
 
 impl Places {
@@ -495,7 +498,19 @@ impl Places {
             runs,
             blocks: None,
             release: None,
+            repo: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The repository at its common directory, opened at its first
+    /// reading.
+    fn repo(&self) -> Result<&gix::Repository> {
+        if let Some(r) = self.repo.get() {
+            return Ok(r);
+        }
+        let r = gix::open(&self.common)
+            .map_err(|e| anyhow!("opening the repository at {}: {e}", self.common.display()))?;
+        Ok(self.repo.get_or_init(|| r))
     }
 
     /// Build a session's place's release command with `builder`.
@@ -1021,10 +1036,46 @@ impl Places {
     }
 }
 
+/// The worktree at `worktree` whose HEAD is the ref `head`, with the
+/// branch it names and that branch's revision, as `git worktree list`
+/// reads them: `None` when HEAD is detached or names no branch, and the
+/// null revision for a branch not yet made.
+fn on_branch(repo: &gix::Repository, head: &str, worktree: PathBuf) -> Result<Option<CheckedOut>> {
+    let found = repo
+        .try_find_reference(head)
+        .map_err(|e| anyhow!("reading {head}: {e}"))?;
+    let Some(found) = found else {
+        return Ok(None);
+    };
+    let gix::refs::TargetRef::Symbolic(name) = found.target() else {
+        return Ok(None);
+    };
+    let full = name.as_bstr().to_string();
+    let Some(branch) = full.strip_prefix("refs/heads/") else {
+        return Ok(None);
+    };
+    let at = match repo
+        .try_find_reference(name)
+        .map_err(|e| anyhow!("reading {full}: {e}"))?
+    {
+        Some(mut r) => r
+            .peel_to_id()
+            .map_err(|e| anyhow!("peeling {full}: {e}"))?
+            .to_string(),
+        None => gix::ObjectId::null(repo.object_hash()).to_string(),
+    };
+    Ok(Some(CheckedOut {
+        worktree,
+        branch: branch.to_string(),
+        head: Rev(at),
+    }))
+}
+
 /// The worktrees `git worktree list --porcelain -z` names with a branch
 /// checked out: a bare entry, a detached one and one whose directory is
-/// gone (`prunable`) are left out.
-fn parse_worktree_list(out: &[u8]) -> Vec<CheckedOut> {
+/// gone (`prunable`) are left out. What [`Checkout::checked_out`] reads
+/// with no process is this, which its tests compare it with.
+pub fn parse_worktree_list(out: &[u8]) -> Vec<CheckedOut> {
     let mut found = Vec::new();
     let mut fields: Vec<&[u8]> = Vec::new();
     let mut flush = |fields: &mut Vec<&[u8]>| {
@@ -1253,6 +1304,10 @@ impl Checkout for Places {
 
     fn remove_unnamed_scratch(&self) -> Result<Vec<PathBuf>> {
         let listed = self.list_scratch()?;
+        // 129: nothing in the scratch root to name, and no record read.
+        if listed.is_empty() {
+            return Ok(Vec::new());
+        }
         self.remove_unnamed(listed)
     }
 
@@ -1371,15 +1426,33 @@ impl Checkout for Places {
         self.write_record(name, &made)
     }
 
+    /// Every worktree with a branch checked out, read as `git worktree
+    /// list` lists them with no process started (129): the main worktree
+    /// where the repository is not bare, then each linked one whose
+    /// directory is there or which is locked; one whose HEAD names no
+    /// branch is left out, as [`parse_worktree_list`] leaves it.
     fn checked_out(&self) -> Result<Vec<CheckedOut>> {
-        let out = self.git(&["worktree", "list", "--porcelain", "-z"])?;
-        if !out.status.success() {
-            bail!(
-                "git worktree list: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+        let repo = self.repo()?;
+        let mut found = Vec::new();
+        if !repo.is_bare() {
+            if let Some(dir) = repo.workdir() {
+                found.extend(on_branch(repo, "main-worktree/HEAD", dir.to_path_buf())?);
+            }
         }
-        Ok(parse_worktree_list(&out.stdout)
+        let linked = repo
+            .worktrees()
+            .map_err(|e| anyhow!("listing the worktrees: {e}"))?;
+        for w in linked {
+            // Its directory gone, as `git worktree prune` would remove it.
+            if w.is_prunable() {
+                continue;
+            }
+            let (Ok(base), Ok(id)) = (w.base(), w.id()) else {
+                continue;
+            };
+            found.extend(on_branch(repo, &format!("worktrees/{id}/HEAD"), base)?);
+        }
+        Ok(found
             .into_iter()
             .map(|mut c| {
                 // As a session's place names its worktree (`session_name`).

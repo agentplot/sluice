@@ -1461,3 +1461,94 @@ pub fn a_held_checkout_never_holds_its_branch(h: &impl Rig) {
     assert!(h.live_places().contains(&first));
     assert_eq!(h.tested().last(), Some(&vec![two]));
 }
+
+/// 129, 124: what a reader that decides nothing reads of the branch is the
+/// branch as the host holds it: in the host's own refs, as a read reads
+/// it; on a remote, its revision as last fetched, with nothing fetched,
+/// until a read fetches what another host landed there.
+pub fn a_branch_is_held_as_the_host_last_read_it(h: &impl Rig) {
+    let s = h.sluice();
+    let b = s.seams().branch;
+    let tip = b.read(BRANCH).unwrap();
+    assert_eq!(tip, Some(h.tip()));
+    assert_eq!(b.held(BRANCH).unwrap(), tip);
+    let moved = h.elsewhere(&[("c/lib", Some("landed elsewhere"))]);
+    if h.on_remote() {
+        assert_eq!(b.held(BRANCH).unwrap(), tip, "held as last fetched");
+        assert_eq!(b.held(BRANCH).unwrap(), tip, "held fetched nothing");
+    } else {
+        assert_eq!(b.held(BRANCH).unwrap(), Some(moved.clone()));
+    }
+    assert_eq!(b.read(BRANCH).unwrap(), Some(moved.clone()));
+    assert_eq!(b.held(BRANCH).unwrap(), Some(moved));
+}
+
+/// 129: a branch's records as the host holds them after a tick's ask are
+/// the records a read reads, before and after a round writes them.
+pub fn records_held_after_a_refresh_are_the_records_read(h: &impl Rig) {
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    h.submit("unit/a");
+    let s = h.sluice();
+    let state = s.seams().state;
+    state.refresh().unwrap();
+    assert_eq!(
+        state.read_held(BRANCH).unwrap(),
+        state.read(BRANCH).unwrap()
+    );
+    h.settle();
+    state.refresh().unwrap();
+    let held = state.read_held(BRANCH).unwrap();
+    assert_eq!(held, state.read(BRANCH).unwrap());
+    assert!(held.version > 1, "a round wrote the records");
+}
+
+/// The cases of this file the fakes run here, the real profiles in the
+/// `sluice` crate's conformance tests.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{policy, Harness};
+
+    /// The bolt policy, its branch kept on `origin`.
+    fn on_origin() -> Harness {
+        let h = Harness::new(&policy(false, "fail", 4).replace(
+            "trust = [\"open\", \"sandbox\", \"container\"]\n",
+            "trust = [\"open\", \"sandbox\", \"container\"]\nremote = \"origin\"\n",
+        ));
+        h.w().on_remote(BRANCH);
+        h
+    }
+
+    /// satisfies: 129, 124
+    #[test]
+    fn a_branch_in_the_hosts_refs_is_held_as_read() {
+        a_branch_is_held_as_the_host_last_read_it(&Harness::bolt());
+    }
+
+    /// satisfies: 129, 124, C.7
+    #[test]
+    fn a_branch_on_a_remote_is_held_as_last_fetched() {
+        a_branch_is_held_as_the_host_last_read_it(&on_origin());
+    }
+
+    /// satisfies: 129
+    #[test]
+    fn reading_a_branch_as_held_fetches_nothing() {
+        let h = on_origin();
+        let s = h.sluice();
+        let b = s.seams().branch;
+        let fetched = h.w().fetches();
+        h.elsewhere(&[("c/lib", Some("landed elsewhere"))]);
+        b.held(BRANCH).unwrap();
+        b.held(BRANCH).unwrap();
+        assert_eq!(h.w().fetches(), fetched);
+        b.read(BRANCH).unwrap();
+        assert_eq!(h.w().fetches(), fetched + 1);
+    }
+
+    /// satisfies: 129, 26
+    #[test]
+    fn records_held_after_a_refresh_are_the_records_read_on_the_fakes() {
+        records_held_after_a_refresh_are_the_records_read(&Harness::bolt());
+    }
+}

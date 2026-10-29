@@ -1010,6 +1010,78 @@ fn checked_out_lists_the_worktrees_on_a_branch() {
     p.release(NAME).unwrap();
 }
 
+/// 129: the worktrees on a branch, read with no process, are what
+/// `git worktree list --porcelain -z` names, as the listing's reading
+/// takes it: the main worktree and a linked one on their branches, a
+/// locked one, and a locked one whose directory is gone, but no detached
+/// one and none whose directory is gone that is not locked (prunable).
+#[test]
+fn checked_out_reads_the_worktrees_as_git_lists_them() {
+    let repo = Repo::new("listed");
+    let at = support::Scratch::new("listed-worktrees");
+    let add = |name: &str, args: &[&str]| -> PathBuf {
+        let path = at.path().join(name);
+        let mut a = vec!["worktree", "add", "-q"];
+        a.extend(args);
+        a.push(path.to_str().unwrap());
+        a.push("main");
+        repo.git(&a);
+        path
+    };
+    add("linked", &["-b", "unit/linked"]);
+    add("detached", &["--detach"]);
+    let gone = add("gone", &["-b", "unit/gone"]);
+    std::fs::remove_dir_all(&gone).unwrap();
+    let locked = add("locked", &["-b", "unit/locked"]);
+    repo.git(&["worktree", "lock", locked.to_str().unwrap()]);
+    let held = add("held", &["-b", "unit/held"]);
+    repo.git(&[
+        "worktree",
+        "lock",
+        "--reason",
+        "away",
+        held.to_str().unwrap(),
+    ]);
+    std::fs::remove_dir_all(&held).unwrap();
+    let p = places(&repo);
+
+    let out = repo.git_raw(&["worktree", "list", "--porcelain", "-z"]);
+    assert!(out.status.success());
+    let canon = |c: &mut sluice_seams::CheckedOut| {
+        if let Ok(p) = std::fs::canonicalize(&c.worktree) {
+            c.worktree = p;
+        }
+    };
+    let mut listed = sluice::profiles::places::parse_worktree_list(&out.stdout);
+    listed.iter_mut().for_each(canon);
+    listed.sort_by(|a, b| a.worktree.cmp(&b.worktree));
+    let mut read = p.checked_out().unwrap();
+    read.sort_by(|a, b| a.worktree.cmp(&b.worktree));
+    assert_eq!(read, listed);
+    let mut branches: Vec<&str> = read.iter().map(|c| c.branch.as_str()).collect();
+    branches.sort();
+    assert_eq!(
+        branches,
+        ["main", "unit/held", "unit/linked", "unit/locked"]
+    );
+}
+
+/// 129: with nothing under the scratch root, unnamed scratch is looked
+/// for with no place's record read: records that could not be listed
+/// fail nothing.
+#[test]
+fn an_empty_scratch_root_reads_no_record() {
+    let repo = Repo::new("empty-tmp");
+    let p = places(&repo);
+    let root = repo.dir().join(".git/sluice");
+    std::fs::create_dir_all(root.join(".tmp")).unwrap();
+    // A file where the records' directory is: a read of it fails.
+    std::fs::write(root.join(".places"), "not a directory\n").unwrap();
+    assert!(p.remove_unnamed_scratch().unwrap().is_empty());
+    std::fs::create_dir_all(root.join(".tmp/0123456789")).unwrap();
+    assert!(p.remove_unnamed_scratch().is_err(), "a record read");
+}
+
 /// A run of the place `name` in `place` that ends at once, whose release
 /// command runs `release`.
 fn ended_run(r: &Runs, name: &str, place: &Place, release: &str) {
