@@ -104,7 +104,7 @@ export function withTasks(): Overview {
 /**
  * The fixture with #218, from `design-runner`, removed from main for a
  * conflict in `docs/builds.md` with the submissions `with`; #217 came from
- * `bolt/runner`.
+ * `feature/runner`.
  */
 export function withConflict(with_: number[] = [217]): Overview {
   const doc = overview();
@@ -120,7 +120,7 @@ export function withConflict(with_: number[] = [217]): Overview {
   main.recent_from = {
     "9": "fix-cards",
     "11": "unit/a",
-    "217": "bolt/runner",
+    "217": "feature/runner",
     "218": "design-runner",
   };
   return doc;

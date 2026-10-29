@@ -308,10 +308,10 @@ describe("the branches' order", () => {
   test("the band keeps the overview's order, whatever the names", () => {
     const d = overview();
     const main = d.branches[0]!;
-    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "feature/a" }, main];
     expect(bandLines(d, NOW).map((l) => l.split(" · ")[0])).toEqual([
       "sluice release",
-      "sluice bolt/a",
+      "sluice feature/a",
       "sluice main",
     ]);
   });
@@ -319,25 +319,25 @@ describe("the branches' order", () => {
   test("a branch named for the session comes first, the rest as the overview has them", () => {
     const d = overview();
     const main = d.branches[0]!;
-    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "bolt/a" }, main];
-    expect(bandLines(d, NOW, "bolt/a").map((l) => l.split(" · ")[0])).toEqual([
-      "sluice bolt/a",
+    d.branches = [{ ...main, branch: "release" }, { ...main, branch: "feature/a" }, main];
+    expect(bandLines(d, NOW, "feature/a").map((l) => l.split(" · ")[0])).toEqual([
+      "sluice feature/a",
       "sluice release",
       "sluice main",
     ]);
     expect(namedFirst(d.branches, "main").map((b) => b.branch)).toEqual([
       "main",
       "release",
-      "bolt/a",
+      "feature/a",
     ]);
     expect(namedFirst(d.branches, "hotfix").map((b) => b.branch)).toEqual([
       "release",
-      "bolt/a",
+      "feature/a",
       "main",
     ]);
     expect(namedFirst(d.branches, null).map((b) => b.branch)).toEqual([
       "release",
-      "bolt/a",
+      "feature/a",
       "main",
     ]);
   });
@@ -700,10 +700,10 @@ describe("what sluice inbox printed", () => {
   });
 
   test("exit 3: the turn, and a toast of the branch sluice could not read", () => {
-    const stderr = "sluice: could not read bolt/x's records: it is gone\n";
+    const stderr = "sluice: could not read feature/x's records: it is gone\n";
     expect(collectedWords({ exitCode: 3, stdout: `${LANDED}\n`, stderr })).toEqual({
       text: LANDED,
-      toast: "sluice: could not read bolt/x's records: it is gone",
+      toast: "sluice: could not read feature/x's records: it is gone",
     });
   });
 
@@ -851,7 +851,7 @@ describe("forecasts", () => {
   const queued = {
     conflict: {
       paths: ["docs/builds.md", "docs/identity.md"],
-      with: [{ id: 217, from: { agent: "runner", worktree: "bolt/runner" } }],
+      with: [{ id: 217, from: { agent: "runner", worktree: "feature/runner" } }],
     },
   };
 
@@ -919,7 +919,7 @@ describe("forecasts", () => {
 
   test("an opened conflict: its files, what is in the way, and the next step", () => {
     const next = "next: take main into the worktree, resolve and commit, then sluice submit main";
-    const b = { ...free().branches[0]!, recent_from: { "217": "bolt/runner" } };
+    const b = { ...free().branches[0]!, recent_from: { "217": "feature/runner" } };
     const line = (w: number[]) => ({
       at: "2026-10-16T19:45:00Z",
       event: "conflict" as const,
@@ -929,13 +929,13 @@ describe("forecasts", () => {
     });
     expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([217])))).toEqual([
       "files: docs/builds.md",
-      "in the way: #217 (bolt/runner)",
+      "in the way: #217 (feature/runner)",
       next,
     ]);
     // An id the sluice gave no worktree for is named alone.
     expect(conflictLines("main", ["a", "b"], recentInWay(b, line([217, 219])))).toEqual([
       "files: a, b",
-      "in the way: #217 (bolt/runner), #219",
+      "in the way: #217 (feature/runner), #219",
       next,
     ]);
     expect(conflictLines("main", ["docs/builds.md"], recentInWay(b, line([])))[1]).toBe(
@@ -952,7 +952,7 @@ describe("forecasts", () => {
         "Merge main into your worktree now and resolve it while it is small (check with `sluice submit --check main`).",
     );
     expect(conflictText("main", queued.conflict)).toContain(
-      "with #217 (bolt/runner), in docs/builds.md, docs/identity.md.",
+      "with #217 (feature/runner), in docs/builds.md, docs/identity.md.",
     );
     expect(forecastToast("main", queued.conflict)).toBe(
       "sluice: your work would conflict with main in docs/builds.md +1",
