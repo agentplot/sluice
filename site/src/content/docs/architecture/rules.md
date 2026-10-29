@@ -33,7 +33,7 @@ out, what it allows and the clauses and decisions it rests on.
 ## Forge reads
 
 - **[core.32](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** sluice asks the forge only what could have moved: the open requests at the deployment's interval or after a move on the host, every read conditional on the answer the host keeps for its address, a request's reviews, checks, ready marks and comments only once it or its entry moved or while it waits on its conditions, a draft by the list alone, one query per branch where the forge answers one, and its own check and report posted only when what they say changes.
-- **[core.33](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A branch's requests are taken in by one host at a time: the instance that keeps the branch where its records are on its remote, otherwise the holder of the branch's intake mark there; a request's entry is advanced only on that host, and a wait elsewhere takes nothing in and follows its request on the forge.
+- **[core.33](https://github.com/agentplot/sluice/blob/main/docs/architecture/core.md#details)** A branch's requests are taken in by one host at a time: the instance that keeps the branch where its records are on its remote, otherwise the holder of the branch's intake mark there, which a driver pushes when it starts and renews never each pass, or where none stands the host there alone; a request's entry is advanced only on that host, and a wait elsewhere takes nothing in and follows its request on the forge.
 
 ## Verdicts and attribution
 

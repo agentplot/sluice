@@ -863,6 +863,17 @@ the one `sluice submit --status --json` prints,
 request waits for. Once its submission is decided, it prints the
 submission's record.
 
+When another host takes the branch's pull requests in, the wait takes
+none in and runs no rounds of that branch. It follows the pull request
+on GitHub instead, reading it and sluice's check on its head at most
+once in a quarter of `[forge] discovery`. It prints the check's title
+and summary as they change. It reports what GitHub shows with the words
+and exit of a submission's outcome. Merged is `passed · landed as
+b7d2e94`, exit `0`. Sent back is as the check names it, `failed: …`
+with exit `1` or `conflict: …` with exit `2`. Closed without landing is
+closed. Under `--json` it prints `{"pull_request","branch","state",
+"title"}`, the state `landed`, `failed` or `conflict`.
+
 A wait in the worktree a submission came from, or a pull request was
 opened from, reports that submission's outcome to the session working
 there, so it marks the outcome delivered once its report is written,

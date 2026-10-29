@@ -125,6 +125,42 @@ submit sees its own pull request at once. `[forge] discovery` in the
 sluice starts no service of its own, so how `sluice run` stays up (a
 terminal, a login item, a service manager) is your choice.
 
+### One host takes the pull requests in
+
+When several hosts reach `main`, one at a time takes its pull requests
+in, so no pull request is tested on two hosts. Where `main`'s records
+are on its remote, that is the host that keeps `main`. Where each host
+keeps its own records, it is the host that holds `main`'s intake mark,
+the ref `refs/sluice/intake/main` on the remote:
+
+- `sluice run` pushes the mark when it starts, and pushes it again
+  every third of `[peers] lease`, never each round. A second host's
+  `sluice run` finds it and takes nothing in.
+- A `sluice wait` or waiting submit on a host where `sluice run` isn't
+  running pushes the mark where none stands, and removes it when it
+  ends. A `sluice run` takes the mark from a wait at once.
+- Any host takes the mark once it has stood unchanged for `[peers]
+  lease` as that host has watched it, as when the host that held it
+  stopped.
+- A `sluice step` pushes no mark. A repository one host reaches with
+  waits and steps alone keeps none between them.
+
+A host that doesn't hold the mark asks GitHub nothing about `main`'s
+pull requests. It withdraws its own queued submissions of them, naming
+the host that holds the mark, and that host takes each in again. A
+submission that is landing finishes, and work submitted from the host's
+own worktrees stays in its queue. A wait on that host follows its pull
+request on GitHub, as [`sluice wait`](/sluice/reference/commands/#sluice-wait)
+says.
+
+The mark is safe to remove, as after moving to another host:
+
+```sh
+git push origin :refs/sluice/intake/main
+```
+
+The next host to pass `main` takes the pull requests in.
+
 ## An agent submits
 
 ```console

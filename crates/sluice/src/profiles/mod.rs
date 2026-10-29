@@ -123,6 +123,15 @@ impl Bound {
             .forge
             .as_ref()
             .map_or(crate::instance::DISCOVERY, |f| f.discovery);
+        // 137: this host as its peers name it, and its lease, for the
+        // intake mark.
+        let peer = sluice_core::Peer {
+            name: instance.peers.name.clone().unwrap_or_else(checks::hostname),
+            lease: instance.peers.lease,
+            alive: instance.peers.alive,
+            signer: instance.signing.as_ref().map(|s| s.signer.clone()),
+            systems: instance.systems.clone(),
+        };
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),
             &common,
@@ -131,6 +140,7 @@ impl Bound {
             retry.clone(),
             github::kept::Kept::new(&crate::instance::state_dir()?),
             discovery,
+            peer,
         ));
         // C.6: a branch's records are on its remote when its policy names
         // signers, and this host's own files otherwise.
