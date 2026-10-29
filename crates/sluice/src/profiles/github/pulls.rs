@@ -297,8 +297,10 @@ pub struct Pulls {
     seen: RefCell<BTreeMap<u64, Seen>>,
     /// 129: the policies intake read, by revision, kept across its passes.
     policies: sluice_core::Policies,
-    /// 129: the default branch's policy, and the revision it was read at.
-    default_policy: RefCell<Option<(Rev, Policy)>>,
+    /// 129: the default branch's policy as read at a revision, and that
+    /// revision: the policy, no policy file, or the words it was refused
+    /// with.
+    default_policy: RefCell<Option<(Rev, std::result::Result<Option<Policy>, String>)>>,
 }
 
 /// A pull request as a wait last read it from GitHub, and its timeline
@@ -2219,24 +2221,32 @@ impl crate::PullRequests for Pulls {
             return Ok(Vec::new());
         };
         // 129: at its revision as the host holds it, with no fetch, and
-        // read from git once while that revision stands.
+        // read from git once while that revision stands, its refusal in
+        // the same words; a read that failed is made again.
         let Some(rev) = seams.branch.held(&default)? else {
             return Ok(Vec::new());
         };
         let kept = match &*self.default_policy.borrow() {
-            Some((at, p)) if *at == rev => Some(p.clone()),
+            Some((at, decided)) if *at == rev => Some(decided.clone()),
             _ => None,
         };
-        let policy = match kept {
-            Some(p) => p,
+        let decided = match kept {
+            Some(d) => d,
             None => {
-                let Some(bytes) = seams.branch.read_file(&rev, POLICY_PATH)? else {
-                    return Ok(Vec::new());
+                let decided = match seams.branch.read_file(&rev, POLICY_PATH)? {
+                    None => Ok(None),
+                    Some(bytes) => std::str::from_utf8(&bytes)
+                        .map_err(anyhow::Error::from)
+                        .and_then(Policy::parse)
+                        .map(Some)
+                        .map_err(|e| format!("{e:#}")),
                 };
-                let p = Policy::parse(std::str::from_utf8(&bytes)?)?;
-                *self.default_policy.borrow_mut() = Some((rev, p.clone()));
-                p
+                *self.default_policy.borrow_mut() = Some((rev, decided.clone()));
+                decided
             }
+        };
+        let Some(policy) = decided.map_err(|words| anyhow!(words))? else {
+            return Ok(Vec::new());
         };
         let mut names = local.branch_names()?;
         names.extend(
@@ -2762,6 +2772,7 @@ fn lock_name(branch: &str) -> String {
 mod tests {
     use super::*;
     use crate::profiles::github::fake::FileForge;
+    use crate::PullRequests as _;
     use sluice_core::verdict_view::{Row, RowResult};
 
     fn row(system: &str, replayed: bool) -> Row {
@@ -2869,6 +2880,43 @@ mod tests {
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
             .all(|p| p.posting.status == Status::Queued));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// reader-tick, "A refused policy stays refused at its revision", of
+    /// the branches intake takes in: the default branch's policy sluice
+    /// refuses is read from git once while its revision stands, each pass
+    /// refused in the first's words, and read again once the branch moves;
+    /// no policy file is kept the same way (129).
+    #[test]
+    fn a_refused_policy_is_kept_with_its_words() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        gix::init_bare(&dir).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            None,
+            None,
+            Rc::new(retry::Policy::command()),
+            Kept::new(&dir.join("state")),
+            crate::instance::DISCOVERY,
+        );
+        let fakes = sluice_fakes::Fakes::new();
+        fakes
+            .world
+            .init("main", &[(POLICY_PATH, "[branches.\"main\"\n")]);
+        let refused = || format!("{:#}", pulls.branches(fakes.seams()).unwrap_err());
+        let words = refused();
+        assert_eq!([refused(), refused()], [words.clone(), words]);
+        assert_eq!(fakes.world.reads_of(POLICY_PATH), 1);
+        // Moved: read again, and its having no policy file kept.
+        fakes.world.hand_commit("main", &[(POLICY_PATH, None)]);
+        for _ in 0..3 {
+            assert!(pulls.branches(fakes.seams()).unwrap().is_empty());
+        }
+        assert_eq!(fakes.world.reads_of(POLICY_PATH), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 
