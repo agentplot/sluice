@@ -947,13 +947,14 @@ pub trait Branch {
     /// 42: the branch's current revision, or `None` when it does not exist.
     fn read(&self, branch: &str) -> Result<Option<Rev>>;
 
-    /// 64, 124, 129: the branch's revision as this host holds it, read
-    /// with no call to a remote: for a branch on a remote, the remote's as
-    /// last fetched. A reader names it beside the records it read, so a
-    /// forecast forms on what that read found.
-    fn fetched(&self, branch: &str) -> Result<Option<Rev>> {
-        self.read(branch)
-    }
+    /// 129: the branch's revision as the host's own files hold it, with no
+    /// fetch: a branch in the host's own refs as [`Branch::read`] reads it,
+    /// and a branch on a remote at its revision as last fetched. What a
+    /// reader's tick that decides nothing reads; a round, a submission and
+    /// a status read with [`Branch::read`]. A reader names it beside the
+    /// records it read, so a forecast forms on what that read found (64,
+    /// 124).
+    fn held(&self, branch: &str) -> Result<Option<Rev>>;
 
     /// 64, 124: whether this host has `rev`'s objects, so a merge can be
     /// formed on it here with nothing fetched.
@@ -1318,14 +1319,20 @@ pub trait State {
     /// nothing under [`FINISHED`] (131).
     fn read(&self, branch: &str) -> Result<Snapshot>;
 
-    /// 64, 124, 129: the branch's live records, as [`State::read`] reads
-    /// them, with the branch's revision, the work submitted to it and the
-    /// combinations formed on it brought in the same call to the remote
-    /// that keeps them: a reader's read, so what it writes is all a
-    /// forecast forms from.
-    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
-        self.read(branch)
-    }
+    /// 129: ask each remote that keeps branches' records, once, for the
+    /// records of every branch on it and the hosts' signs of life: what a
+    /// reader's tick does first. The same ask brings each branch's
+    /// revision, the work submitted to the remote and the combinations
+    /// formed on its branches, so what a reader writes is all a forecast
+    /// forms from (64). Records in the host's own files need no asking. A
+    /// remote that refuses leaves every branch on it read as last fetched,
+    /// [`State::stale`] naming the refusal, and fails nothing.
+    fn refresh(&self) -> Result<()>;
+
+    /// 129: the branch's records as the host's own files hold them, after
+    /// the last [`State::refresh`], with no fetch: what a reader's tick
+    /// that decides nothing reads. A round reads with [`State::read`].
+    fn read_held(&self, branch: &str) -> Result<Snapshot>;
 
     /// 80: why the branch's last read could not reach the records it keeps
     /// elsewhere and read what was last fetched; `None` when the read was

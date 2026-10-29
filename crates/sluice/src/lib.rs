@@ -1133,6 +1133,16 @@ pub fn run(
                 // bounded run whose last pass passed one by ends as a step
                 // of that branch would.
                 let mut failed: BTreeMap<String, String> = BTreeMap::new();
+                // 129: what the last pass read by revision and this one
+                // does not use is forgotten.
+                s.next_pass();
+                host.next_pass();
+                // 129: each remote that keeps branches' records asked once,
+                // first; a refusal is its branches' alone, read as last
+                // fetched.
+                if let Err(e) = seams.state.refresh() {
+                    telemetry::warn(&format!("sluice: warning: {e:#}"));
+                }
                 // 97, previews-1 101: every pass, whether or not a branch
                 // has a queue.
                 exec::tell_abandoned(out, false, &s.release_abandoned()?)?;
@@ -1146,14 +1156,13 @@ pub fn run(
                 branches.dedup();
                 for branch in branches {
                     intake(pulls, seams, clock, &branch, false, out);
-                    // 26, rule core.14: a branch whose status read or round
-                    // fails is that branch's alone; the pass goes on to
-                    // every other branch.
-                    let ran = s.status(&branch).and_then(|status| {
-                        if !status.submissions.iter().any(|x| !x.state.is_out()) {
-                            return Ok(None);
-                        }
-                        s.round(&branch).map(Some)
+                    // 26, rule core.14: a branch whose records' read or
+                    // round fails is that branch's alone; the pass goes on
+                    // to every other branch. 129: one with nothing in play
+                    // costs the pass its records' read alone.
+                    let ran = s.in_play(&branch).and_then(|in_play| match in_play {
+                        false => Ok(None),
+                        true => s.round(&branch).map(Some),
                     });
                     let round = match ran {
                         Ok(round) => {
@@ -2508,6 +2517,10 @@ fn wait_on(
             return Ok(Waited::Undecided(sub, STOPPED));
         }
         first = false;
+        // 129: what the last read kept by revision and this one does not
+        // use is forgotten.
+        s.next_pass();
+        waiting.host.next_pass();
         if let Some(pulls) = waiting.pulls {
             // A spent allowance waited out to the wait's deadline: the
             // wait's time is up; to Ctrl-C: stopped (134).

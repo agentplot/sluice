@@ -91,6 +91,9 @@ pub struct RemoteRefs {
     /// Statements already verified, by their blob, so a round verifies
     /// only what it has not seen.
     verified: RefCell<BTreeMap<String, Option<Vec<ResultLine>>>>,
+    /// 129: a tick's ask fetched the hosts' signs of life since
+    /// [`State::beats`] last answered: the next answers from it.
+    asked: std::cell::Cell<bool>,
 }
 
 impl RemoteRefs {
@@ -109,7 +112,24 @@ impl RemoteRefs {
             read: RefCell::default(),
             stale: RefCell::default(),
             verified: RefCell::default(),
+            asked: std::cell::Cell::new(false),
         }
+    }
+
+    /// 129: a tick's ask of the remote was made: `refused` when it was
+    /// refused. Every branch on it, as fetched, is read as last fetched
+    /// with the refusal as its stale read, or as fetched now with none,
+    /// and the next [`State::beats`] answers from what was fetched.
+    pub fn asked(&self, refused: Option<&ReadRefused>) -> Result<()> {
+        self.asked.set(true);
+        let mut stale = self.stale.borrow_mut();
+        for (branch, _) in fetched_branches(&self.pushed)? {
+            match refused {
+                Some(r) => stale.insert(branch, r.clone()),
+                None => stale.remove(&branch),
+            };
+        }
+        Ok(())
     }
 
     pub fn remote(&self) -> &str {
@@ -159,54 +179,36 @@ impl RemoteRefs {
             .map(|r| r.0))
     }
 
-    /// Every file of a commit's tree, by path, with its blob.
+    /// Every file of a commit's tree, by path, with its blob, read with
+    /// no process (129).
     fn tree(&self, commit: &str) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
-        let listing = self.git_ok(&["ls-tree", "-r", "-z", "--full-tree", commit])?;
-        let mut entries = Vec::new();
-        for item in listing.split(|b| *b == 0).filter(|s| !s.is_empty()) {
-            let item = std::str::from_utf8(item)?;
-            let (meta, path) = item
-                .split_once('\t')
-                .ok_or_else(|| anyhow!("git ls-tree printed {item:?}"))?;
-            let oid = meta
-                .split_whitespace()
-                .nth(2)
-                .ok_or_else(|| anyhow!("git ls-tree printed {item:?}"))?;
-            entries.push((path.to_string(), oid.to_string()));
-        }
-        let mut child = command(self.pushed.git_dir(), &["cat-file", "--batch"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .context("running git cat-file")?;
-        {
-            let mut stdin = child.stdin.take().expect("piped");
-            for (_, oid) in &entries {
-                writeln!(stdin, "{oid}")?;
+        self.pushed.local().tree_files(commit)
+    }
+
+    /// `branch`'s state at `commit`, as kept when it was last read there.
+    fn state_at(&self, branch: &str, name: &str, commit: Option<String>) -> Result<Read> {
+        let kept = self.read.borrow().get(branch).cloned();
+        let read = match (commit, kept) {
+            (None, _) => Read::default(),
+            (Some(commit), Some(r)) if r.commit.as_deref() == Some(commit.as_str()) => r,
+            (Some(commit), _) => {
+                let files = self.tree(&commit)?;
+                let version = match files.get(VERSION) {
+                    Some((_, v)) => std::str::from_utf8(v)?
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("{name}'s version"))?,
+                    None => bail!("{name} on {} has no version", self.remote()),
+                };
+                Read {
+                    version,
+                    commit: Some(commit),
+                    files,
+                }
             }
-        }
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
-            bail!("git cat-file --batch failed");
-        }
-        let mut files = BTreeMap::new();
-        let mut rest = out.stdout.as_slice();
-        for (path, oid) in entries {
-            let nl = rest
-                .iter()
-                .position(|b| *b == b'\n')
-                .ok_or_else(|| anyhow!("git cat-file ended early"))?;
-            let header = std::str::from_utf8(&rest[..nl])?;
-            let size: usize = header
-                .rsplit(' ')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .ok_or_else(|| anyhow!("git cat-file printed {header:?}"))?;
-            let body = rest[nl + 1..nl + 1 + size].to_vec();
-            rest = &rest[nl + 1 + size + 1..];
-            files.insert(path, (oid, body));
-        }
-        Ok(files)
+        };
+        self.read.borrow_mut().insert(branch.into(), read.clone());
+        Ok(read)
     }
 
     /// A blob of `bytes` in the repository.
@@ -380,56 +382,15 @@ impl RemoteRefs {
     /// Read `branch`'s state from the remote, keeping it for a write.
     fn read_remote(&self, branch: &str) -> Result<Read> {
         let name = state_ref(branch)?;
-        let fetched = self.fetch(&name);
-        self.read_fetched(branch, &name, fetched)
-    }
-
-    /// 64, 129: as [`RemoteRefs::read_remote`], with the branch into its
-    /// tracking ref, the work submitted to the remote and the branch's
-    /// combinations in the same fetch, so a reader's read holds what a
-    /// forecast forms from and asks the remote nothing more for it. A
-    /// remote that has no such branch, or no records of it, is refused the
-    /// whole fetch, so the records are then read alone; where they are
-    /// there, the branch is what the remote lacks, and its tracking ref is
-    /// removed, so no revision of it is named as the remote's (124).
-    fn read_with_branch_remote(&self, branch: &str) -> Result<Read> {
-        let name = state_ref(branch)?;
-        let state = format!("+{name}:{}", self.fetched(&name));
-        let tracking = self.pushed.tracking(branch);
-        let head = format!("+refs/heads/{branch}:{tracking}");
-        let (heads, combinations) = (self.heads_spec(), self.combinations_spec(branch));
-        let specs = [&state, &head, &heads, &combinations].map(String::as_str);
-        let fetched = match self.pushed.fetch_spec(&name, &specs, &["--prune"]) {
-            Ok(true) => Ok(self.pushed.read_ref(&self.fetched(&name))?.map(|r| r.0)),
-            Ok(false) => {
-                let read = self.read_remote(branch)?;
-                if read.commit.is_some() && self.stale(branch).is_none() {
-                    self.git_ok(&["update-ref", "-d", &tracking])?;
-                }
-                return Ok(read);
-            }
-            Err(e) => Err(e),
-        };
-        self.read_fetched(branch, &name, fetched)
-    }
-
-    /// The state `fetched` from the remote as `name`, or, where the remote
-    /// could not be read, as last fetched, kept for a write.
-    fn read_fetched(
-        &self,
-        branch: &str,
-        name: &str,
-        fetched: Result<Option<String>>,
-    ) -> Result<Read> {
         // 80: a remote that cannot be reached leaves the state as it was
         // last fetched, readable, and the read says so.
-        let fetched = match fetched {
+        let fetched = match self.fetch(&name) {
             Ok(f) => {
                 self.stale.borrow_mut().remove(branch);
                 f
             }
             Err(e) => {
-                let last = self.pushed.read_ref(&self.fetched(name))?;
+                let last = self.pushed.read_ref(&self.fetched(&name))?;
                 let Some(last) = last else { return Err(e) };
                 tracing::warn!(
                     sluice.branch = branch,
@@ -438,7 +399,7 @@ impl RemoteRefs {
                 );
                 let refused = read_refused(&e).cloned().unwrap_or_else(|| ReadRefused {
                     remote: self.remote().into(),
-                    asked: name.into(),
+                    asked: name.clone(),
                     said: format!("{e:#}"),
                     note: None,
                 });
@@ -446,26 +407,15 @@ impl RemoteRefs {
                 Some(last.0)
             }
         };
-        let read = match fetched {
-            None => Read::default(),
-            Some(commit) => {
-                let files = self.tree(&commit)?;
-                let version = match files.get(VERSION) {
-                    Some((_, v)) => std::str::from_utf8(v)?
-                        .trim()
-                        .parse()
-                        .with_context(|| format!("{name}'s version"))?,
-                    None => bail!("{name} on {} has no version", self.remote()),
-                };
-                Read {
-                    version,
-                    commit: Some(commit),
-                    files,
-                }
-            }
-        };
-        self.read.borrow_mut().insert(branch.into(), read.clone());
-        Ok(read)
+        self.state_at(branch, &name, fetched)
+    }
+
+    /// 129: `branch`'s state as last fetched, with no fetch: read whole only
+    /// once the fetched commit moved since it was last read.
+    fn read_fetched(&self, branch: &str) -> Result<Read> {
+        let name = state_ref(branch)?;
+        let at = self.pushed.read_ref(&self.fetched(&name))?.map(|r| r.0);
+        self.state_at(branch, &name, at)
     }
 
     /// The statements under a signer's ref, verified, as result lines;
@@ -556,8 +506,8 @@ impl RemoteRefs {
     }
 }
 
-/// The live records of a state as read: every file but its version and
-/// what git keeps beside them.
+/// A branch's state as read, as the records seam gives it: its version,
+/// and its files but the version and anything dotted.
 fn snapshot(r: Read) -> Snapshot {
     Snapshot {
         version: r.version,
@@ -570,6 +520,37 @@ fn snapshot(r: Read) -> Snapshot {
     }
 }
 
+/// 129: a tick's one ask of `pushed`'s remote, under the retry policy
+/// (rule core.29): the records of every branch on it and every host's sign
+/// of life, in one fetch, each replacing what was last fetched; a branch's
+/// records or a host's sign of life gone from the remote is gone here.
+/// The same fetch brings every branch on the remote into its tracking
+/// ref, the work submitted to it and the combinations formed on its
+/// branches, so a reader's read holds all a forecast forms from and asks
+/// the remote nothing more for it (64); a branch gone from the remote is
+/// gone from its tracking refs, so no revision of it is named as the
+/// remote's (124). A remote that cannot be read is a [`ReadRefused`]
+/// naming what was asked (133).
+pub(crate) fn ask(pushed: &PushedRefs) -> Result<()> {
+    let remote = pushed.remote();
+    let state = format!("+refs/sluice/state/*:refs/sluice-fetched/{remote}/state/*");
+    let hosts = format!("+refs/sluice/hosts/*:refs/sluice-fetched/{remote}/hosts/*");
+    let branches = format!("+refs/heads/*:refs/remotes/{remote}/*");
+    let heads = format!("+{HEADS}:refs/sluice-fetched/{remote}/heads/*");
+    let combinations =
+        format!("+refs/sluice/combinations/*:refs/sluice-fetched/{remote}/combinations/*");
+    let specs = [&state, &hosts, &branches, &heads, &combinations].map(String::as_str);
+    pushed.fetch_specs("refs/sluice/*", &specs, &["--prune"])?;
+    Ok(())
+}
+
+/// 129: the branches whose state this host fetched from `pushed`'s remote,
+/// with the commit each was fetched at, read with no process.
+pub(crate) fn fetched_branches(pushed: &PushedRefs) -> Result<Vec<(String, Rev)>> {
+    pushed
+        .local()
+        .refs_under(&format!("refs/sluice-fetched/{}/state/", pushed.remote()))
+}
 /// `refs/sluice/state/<branch>`, for a branch git may name.
 fn state_ref(branch: &str) -> Result<String> {
     if branch.is_empty()
@@ -726,7 +707,7 @@ impl State for RemoteRefs {
 
     fn fetch_heads(&self, _branch: &str) -> Result<()> {
         self.pushed
-            .fetch_spec(HEADS, &[&self.heads_spec()], &["--prune"])?;
+            .fetch_spec(HEADS, &self.heads_spec(), &["--prune"])?;
         Ok(())
     }
 
@@ -748,44 +729,41 @@ impl State for RemoteRefs {
 
     /// Every host's last beat: its commit, which changes with every beat,
     /// and its document.
+    ///
+    /// 129: once a tick's ask fetched them, the next answer reads what it
+    /// fetched, with no fetch of its own.
     fn beats(&self) -> Result<BTreeMap<String, (String, Vec<u8>)>> {
-        let spec = format!(
-            "+refs/sluice/hosts/*:refs/sluice-fetched/{}/hosts/*",
-            self.remote()
-        );
-        let out = self.pushed.remote_git(&[
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--prune",
-            self.pushed.target(),
-            &spec,
-        ])?;
-        if !out.status.success() {
-            bail!(
-                "reading hosts' signs of life from {} failed: {}",
-                self.remote(),
-                String::from_utf8_lossy(&out.stderr).trim()
+        if !self.asked.replace(false) {
+            let spec = format!(
+                "+refs/sluice/hosts/*:refs/sluice-fetched/{}/hosts/*",
+                self.remote()
             );
+            let out = self.pushed.remote_git(&[
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--prune",
+                self.pushed.target(),
+                &spec,
+            ])?;
+            if !out.status.success() {
+                bail!(
+                    "reading hosts' signs of life from {} failed: {}",
+                    self.remote(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
         }
         let prefix = format!("refs/sluice-fetched/{}/hosts/", self.remote());
-        let listed =
-            self.git_ok(&["for-each-ref", "--format=%(objectname) %(refname)", &prefix])?;
         let mut out = BTreeMap::new();
-        for line in String::from_utf8_lossy(&listed).lines() {
-            let Some((oid, name)) = line.split_once(' ') else {
-                continue;
-            };
-            let Some(host) = name.strip_prefix(&prefix) else {
-                continue;
-            };
+        for (host, at) in self.pushed.local().refs_under(&prefix)? {
             let beat = self
-                .tree(oid)?
+                .tree(at.as_str())?
                 .remove("beat.json")
                 .map(|(_, b)| b)
                 .unwrap_or_default();
-            out.insert(host.to_string(), (oid.to_string(), beat));
+            out.insert(host, (at.0, beat));
         }
         Ok(out)
     }
@@ -838,7 +816,7 @@ impl State for RemoteRefs {
         state_ref(branch)?;
         let asked = format!("refs/sluice/combinations/{branch}/*");
         self.pushed
-            .fetch_spec(&asked, &[&self.combinations_spec(branch)], &["--prune"])?;
+            .fetch_spec(&asked, &self.combinations_spec(branch), &["--prune"])?;
         Ok(())
     }
 
@@ -900,8 +878,18 @@ impl State for RemoteRefs {
         Ok(snapshot(self.read_remote(branch)?))
     }
 
-    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
-        Ok(snapshot(self.read_with_branch_remote(branch)?))
+    /// 129: the tick's one ask of the remote, a refusal read as every
+    /// branch on it stale.
+    fn refresh(&self) -> Result<()> {
+        let refused = match ask(&self.pushed) {
+            Ok(()) => None,
+            Err(e) => Some(read_refused(&e).cloned().ok_or(e)?),
+        };
+        self.asked(refused.as_ref())
+    }
+
+    fn read_held(&self, branch: &str) -> Result<Snapshot> {
+        Ok(snapshot(self.read_fetched(branch)?))
     }
 
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {

@@ -61,8 +61,12 @@ pub struct Records {
     signing: Option<instance::Signing>,
     remotes: RefCell<BTreeMap<String, Rc<RemoteRefs>>>,
     routes: RefCell<BTreeMap<String, Option<String>>>,
-    /// The branches whose state is on a remote, once listed.
-    listed: RefCell<Option<Vec<String>>>,
+    /// The branches whose state is on each remote, as listed once before
+    /// a tick asked it.
+    listed: RefCell<Option<BTreeMap<String, Vec<String>>>>,
+    /// 129: the remotes a tick has asked, whose branches are listed from
+    /// what the ask fetched.
+    asked: RefCell<std::collections::BTreeSet<String>>,
     /// 124: whether it is bound for branch protection, which verifies and
     /// signs no run.
     guarding: bool,
@@ -79,6 +83,7 @@ impl Records {
             remotes: RefCell::default(),
             routes: RefCell::default(),
             listed: RefCell::default(),
+            asked: RefCell::default(),
             guarding: false,
         }
     }
@@ -92,6 +97,12 @@ impl Records {
             guarding: true,
             ..self
         }
+    }
+
+    /// 129: start a pass: the policies its routing read and the last pass
+    /// did not use are forgotten.
+    pub fn next_pass(&self) {
+        self.branches.next_pass();
     }
 
     /// The host's own records, for what only this host keeps.
@@ -134,8 +145,7 @@ impl Records {
     /// host has read a state from are listed all the same (26).
     fn signed_remotes(&self) -> Result<Vec<String>> {
         let mut out = Vec::new();
-        let common = self.branches.common_dir()?;
-        if let Some(default) = super::default_branch(&common)? {
+        if let Some((default, _)) = super::default_branch(self.branches.local())? {
             if let Ok(Some((_, policy))) = self.branches.policy_of(&default) {
                 if !policy.signers.is_empty() {
                     for (_, rules) in &policy.branches {
@@ -148,7 +158,7 @@ impl Records {
                 }
             }
         }
-        for remote in super::pushed_refs::remotes(self.branches.git_dir())? {
+        for remote in self.branches.remotes()? {
             if !out.contains(&remote) && self.branches.fetched_state(&remote)? {
                 out.push(remote);
             }
@@ -453,10 +463,36 @@ impl State for Records {
         }
     }
 
-    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
+    /// 129: each remote that may hold a branch's state asked once, for
+    /// every branch's state and every host's sign of life, under the retry
+    /// policy (rule core.29). A refusal marks every branch on that remote
+    /// as last fetched in the remote's words, as a refused read of one
+    /// does (rule core.28), and asks the next remote all the same.
+    fn refresh(&self) -> Result<()> {
+        for remote in self.signed_remotes()? {
+            let p = self.branches.pushed_refs(&remote)?;
+            let refused = match super::remote_refs::ask(&p) {
+                Ok(()) => None,
+                Err(e) => Some(read_refused(&e).cloned().ok_or(e)?),
+            };
+            self.asked.borrow_mut().insert(remote.clone());
+            for (branch, _) in super::remote_refs::fetched_branches(&p)? {
+                // A branch whose policy cannot be read is that branch's
+                // alone, said wherever it is read (26).
+                let _ = self.route(&branch);
+            }
+            let opened = self.remotes.borrow().get(&remote).cloned();
+            if let Some(r) = opened {
+                r.asked(refused.as_ref())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn read_held(&self, branch: &str) -> Result<Snapshot> {
         match self.route(branch)? {
-            None => self.local.read_with_branch(branch),
-            Some(r) => r.read_with_branch(branch),
+            None => self.local.read_held(branch),
+            Some(r) => r.read_held(branch),
         }
     }
 
@@ -502,12 +538,27 @@ impl State for Records {
     }
 
     /// Every branch with records: this host's own, and every branch whose
-    /// state is on one of the repository's remotes, read once (80).
+    /// state is on one of the repository's remotes: as a tick's ask of the
+    /// remote fetched them, read with no process (129), or, before any
+    /// tick asked it, as the remote lists them, read once (80).
     fn branches(&self) -> Result<Vec<String>> {
         let mut all = self.local.branches()?;
+        let asked: Vec<String> = self.asked.borrow().iter().cloned().collect();
+        let mut found = Vec::new();
+        for remote in &asked {
+            let p = self.branches.pushed_refs(remote)?;
+            found.extend(
+                super::remote_refs::fetched_branches(&p)?
+                    .into_iter()
+                    .map(|(b, _)| b),
+            );
+        }
         if self.listed.borrow().is_none() {
-            let mut found = Vec::new();
+            let mut listed = BTreeMap::new();
             for remote in self.signed_remotes()? {
+                if asked.contains(&remote) {
+                    continue;
+                }
                 let p = self.branches.pushed_refs(&remote)?;
                 let out =
                     p.remote_git(&["ls-remote", "--refs", p.target(), "refs/sluice/state/*"])?;
@@ -516,19 +567,24 @@ impl State for Records {
                     // already routed is read as last fetched (80).
                     continue;
                 }
-                found.extend(
-                    String::from_utf8_lossy(&out.stdout)
-                        .lines()
-                        .filter_map(|l| l.split('\t').nth(1))
-                        .filter_map(|r| r.strip_prefix("refs/sluice/state/"))
-                        .map(str::to_string),
-                );
+                let on: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .filter_map(|l| l.split('\t').nth(1))
+                    .filter_map(|r| r.strip_prefix("refs/sluice/state/"))
+                    .map(str::to_string)
+                    .collect();
+                listed.insert(remote, on);
             }
-            *self.listed.borrow_mut() = Some(found);
+            *self.listed.borrow_mut() = Some(listed);
         }
-        for b in self.listed.borrow().iter().flatten() {
-            if !all.contains(b) {
-                all.push(b.clone());
+        for (remote, on) in self.listed.borrow().iter().flatten() {
+            if !asked.contains(remote) {
+                found.extend(on.iter().cloned());
+            }
+        }
+        for b in found {
+            if !all.contains(&b) {
+                all.push(b);
             }
         }
         all.sort();

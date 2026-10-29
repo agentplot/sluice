@@ -90,6 +90,176 @@ impl Drop for Scratch {
     }
 }
 
+/// A git that counts its starts (129): a directory holding a `git` script
+/// that appends its arguments, one line per start, to a log, then runs the
+/// git found on the path when it was made, by its absolute path. A test
+/// puts the directory first on the path of the sluice it starts, and
+/// every other isolation stays.
+pub struct CountingGit {
+    scratch: Scratch,
+}
+
+impl CountingGit {
+    pub fn new() -> CountingGit {
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|d| d.join("git"))
+            .find(|p| p.is_file())
+            .expect("git on the path");
+        let scratch = Scratch::new("counting-git");
+        let bin = scratch.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+                scratch.path().join("log").display(),
+                real.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        CountingGit { scratch }
+    }
+
+    /// `c` with this git first on its path: the path `c` was given, or
+    /// the test's own.
+    pub fn on<'a>(&self, c: &'a mut Command) -> &'a mut Command {
+        let given = c
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v.map(|v| v.to_os_string()));
+        let rest = given
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
+        let mut path = vec![self.scratch.path().join("bin")];
+        path.extend(std::env::split_paths(&rest));
+        c.env("PATH", std::env::join_paths(path).unwrap())
+    }
+
+    /// Each start so far, its arguments as one line.
+    pub fn starts(&self) -> Vec<String> {
+        std::fs::read_to_string(self.scratch.path().join("log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// How many times it has started.
+    pub fn count(&self) -> usize {
+        self.starts().len()
+    }
+}
+
+/// A repository on disk whose `main` holds a policy, driven through the
+/// binary with the host's config and state its own and git counting its
+/// starts (129).
+pub struct OnDisk {
+    pub repo: Repo,
+    pub git: CountingGit,
+    pub config: Scratch,
+    pub state: Scratch,
+    pub sessions: Scratch,
+}
+
+impl OnDisk {
+    /// `policy` committed on `main`, the branch checked out.
+    pub fn new(name: &str, policy: &str) -> OnDisk {
+        let repo = Repo::new(name);
+        repo.write(".config/sluice.toml", policy);
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-q", "-m", "sluice's policy"]);
+        OnDisk {
+            repo,
+            git: CountingGit::new(),
+            config: Scratch::new(&format!("{name}-config")),
+            state: Scratch::new(&format!("{name}-state")),
+            sessions: Scratch::new(&format!("{name}-sessions")),
+        }
+    }
+
+    /// The binary, run in `dir` under [`isolated`], with this setup's
+    /// config, state and counting git, in no session.
+    pub fn command(&self, dir: &Path) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        isolated(&mut c)
+            .current_dir(dir)
+            .env("XDG_CONFIG_HOME", self.config.path())
+            .env("XDG_STATE_HOME", self.state.path())
+            .env_remove("SLUICE_AGENT")
+            .env_remove("SLUICE_OTEL")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null());
+        self.git.on(&mut c);
+        c
+    }
+
+    /// The binary run in the repository with `args`, its pauses between
+    /// rounds skipped.
+    pub fn sluice(&self, args: &[&str]) -> std::process::Output {
+        self.command(self.repo.dir())
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// A session's worktree on `unit/<name>` off `main`, with one commit
+    /// of its own file: its directory.
+    pub fn session(&self, name: &str) -> PathBuf {
+        self.session_with(name, &[])
+    }
+
+    /// [`OnDisk::session`], its commit also writing `files`.
+    pub fn session_with(&self, name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = self.sessions.path().join(name);
+        self.repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("unit/{name}"),
+            dir.to_str().unwrap(),
+            "main",
+        ]);
+        std::fs::write(dir.join(format!("{name}.txt")), name).unwrap();
+        for (path, content) in files {
+            std::fs::write(dir.join(path), content).unwrap();
+        }
+        let at = dir.to_str().unwrap();
+        self.repo.git(&["-C", at, "add", "-A"]);
+        self.repo.git(&["-C", at, "commit", "-q", "-m", name]);
+        dir
+    }
+
+    /// [`OnDisk::session`] submitted to `main` and waited on until it
+    /// landed.
+    pub fn land(&self, name: &str) {
+        self.land_with(name, &[]);
+    }
+
+    /// [`OnDisk::session_with`] submitted to `main` and waited on until it
+    /// landed.
+    pub fn land_with(&self, name: &str, files: &[(&str, &str)]) {
+        let dir = self.session_with(name, files);
+        let out = self
+            .command(&dir)
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["submit", "main"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// A repository with one worktree, built with the git command.
 pub struct Repo {
     pub scratch: Scratch,
@@ -332,7 +502,12 @@ impl sluice::exec::Host for FakeHost {
         self.world.is_repository_gone()
     }
 
-    fn holds_policy(&self) -> anyhow::Result<bool> {
+    fn tips(&self) -> anyhow::Result<Vec<sluice_seams::Rev>> {
+        self.world.tips()
+    }
+
+    /// The fakes hold every tip [`FakeHost::tips`] reads.
+    fn holds_policy(&self, _tips: &[sluice_seams::Rev]) -> anyhow::Result<bool> {
         self.world.holds_path(sluice_core::policy::POLICY_PATH)
     }
 

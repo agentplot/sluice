@@ -3673,6 +3673,46 @@ fn nothing_moved_asks_once_a_minute() {
     assert_eq!(g.posts(), posts);
 }
 
+/// reader-tick, "A branch that takes pull requests between discoveries":
+/// none open and the host's interval a minute, six passes of `sluice run`
+/// within it start git exactly as often as one, and ask GitHub nothing
+/// after the first (129, 136).
+#[test]
+fn passes_between_discoveries_start_no_git_and_ask_github_nothing() {
+    let g = OnGitHub::new("pr-idle-ticks", "");
+    g.settle();
+    g.on_main();
+    let git = support::CountingGit::new();
+    let run = |rounds: &str| -> (Vec<String>, Vec<(String, String)>) {
+        g.discovery_passes();
+        let (starts, calls) = (git.count(), g.gh.fake.requests().len());
+        let out = git
+            .on(&mut g.command(env!("CARGO_BIN_EXE_sluice"), g.repo.dir()))
+            .env("SLUICE_ROUND_SLEEP", "record")
+            .args(["run", "--rounds", rounds])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+        let asked = g.gh.fake.requests()[calls..]
+            .iter()
+            .map(|r| (r.method.clone(), r.path.clone()))
+            .collect();
+        (git.starts()[starts..].to_vec(), asked)
+    };
+    let lists = g.lists();
+    let (one, asked_one) = run("1");
+    let (six, asked_six) = run("6");
+    assert_eq!(six.len(), one.len(), "one: {one:?}; six: {six:?}");
+    assert_eq!(g.lists(), lists + 2, "asked at each run's first pass alone");
+    for call in &asked_six {
+        assert!(
+            asked_one.contains(call),
+            "{call:?} beyond one pass's: {asked_six:?}"
+        );
+    }
+    assert!(asked_six.len() <= asked_one.len(), "{asked_six:?}");
+}
+
 /// forge-reads, "The host sets the interval": under `discovery = "2m"`,
 /// forty passes over two minutes less three seconds ask once; the next
 /// pass, two minutes after, asks again. Too short a `discovery` is

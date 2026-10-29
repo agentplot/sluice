@@ -83,6 +83,72 @@ pub struct Sluice<'a> {
     peer: Peer,
     /// 124: whether it reads the policy only as far as guarding needs.
     guarding: bool,
+    /// 129: each policy read, by the revision it was read at.
+    policies: Keeping<'a>,
+}
+
+/// 129: each policy a reader read, by the revision it was read at and
+/// whether it was read whole or only as far as guarding needs: what the
+/// policy's bytes decided there, the policy, no policy file, or the words
+/// it was refused with. A read that failed, an object missing or git's own
+/// I/O, decided nothing and is not kept. Each pass of `sluice run`, each
+/// watch tick and each wait's read marks the revisions it used, and
+/// [`Policies::next_pass`] drops those the last did not use, so what is
+/// kept is at most a policy per branch and worktree in sight. A policy at
+/// a revision is a function of that revision's bytes and of this sluice:
+/// keeping it holds nothing the core decides between steps (rule core.14).
+#[derive(Default)]
+pub struct Policies {
+    kept: std::cell::RefCell<std::collections::BTreeMap<(Rev, bool), Decided>>,
+    used: std::cell::RefCell<std::collections::BTreeSet<(Rev, bool)>>,
+}
+
+/// What a policy's bytes decided at a revision.
+#[derive(Clone)]
+enum Decided {
+    Read(Option<Policy>),
+    /// The words it was refused with, beneath the revision's.
+    Refused(String),
+}
+
+impl Policies {
+    /// Start a pass, a tick or a wait's read: forget every policy the last
+    /// did not use.
+    pub fn next_pass(&self) {
+        let used = std::mem::take(&mut *self.used.borrow_mut());
+        self.kept.borrow_mut().retain(|k, _| used.contains(k));
+    }
+
+    fn get(&self, key: &(Rev, bool)) -> Option<Decided> {
+        let found = self.kept.borrow().get(key).cloned();
+        if found.is_some() {
+            self.used.borrow_mut().insert(key.clone());
+        }
+        found
+    }
+
+    fn keep(&self, key: (Rev, bool), decided: Decided) {
+        self.used.borrow_mut().insert(key.clone());
+        self.kept.borrow_mut().insert(key, decided);
+    }
+}
+
+/// The policies a sluice keeps: its own, or a store it was given that
+/// outlives it.
+enum Keeping<'a> {
+    Own(Policies),
+    Shared(&'a Policies),
+}
+
+impl std::ops::Deref for Keeping<'_> {
+    type Target = Policies;
+
+    fn deref(&self) -> &Policies {
+        match self {
+            Keeping::Own(p) => p,
+            Keeping::Shared(p) => p,
+        }
+    }
 }
 
 /// 72 to 74: who this instance is among the hosts that keep a branch
@@ -127,7 +193,24 @@ impl<'a> Sluice<'a> {
             serves: Serves::Stepped,
             peer: Peer::default(),
             guarding: false,
+            policies: Keeping::Own(Policies::default()),
         }
+    }
+
+    /// The same sluice, keeping the policies it reads in `policies`, which
+    /// outlive it: a reader that makes a sluice per pass keeps them across
+    /// its passes (129).
+    pub fn keeping(self, policies: &'a Policies) -> Self {
+        Sluice {
+            policies: Keeping::Shared(policies),
+            ..self
+        }
+    }
+
+    /// 129: start a pass of `sluice run`, a watch tick or a wait's read:
+    /// the policies the last did not use are forgotten.
+    pub fn next_pass(&self) {
+        self.policies.next_pass();
     }
 
     /// The same sluice, as `peer` among the hosts of a branch whose
@@ -259,20 +342,41 @@ impl<'a> Sluice<'a> {
     /// 56: the policy, read from a revision of the branch; for guarding,
     /// only as far as guarding needs (124). A policy it refuses names the
     /// revision, which is the one a push fixes (record 0069).
+    ///
+    /// 129: read from git once per revision while the reader keeps it,
+    /// its refusal included, in the same words; a read that failed is made
+    /// again.
     pub fn policy_at(&self, rev: &Rev) -> Result<Option<Policy>> {
-        let Some(bytes) = self.seams.branch.read_file(rev, POLICY_PATH)? else {
-            return Ok(None);
-        };
-        let read = || -> Result<Policy> {
-            let text = std::str::from_utf8(&bytes)?;
-            match self.guarding {
-                true => Policy::guarding(text),
-                false => Policy::parse(text),
+        let key = (rev.clone(), self.guarding);
+        let decided = match self.policies.get(&key) {
+            Some(d) => d,
+            None => {
+                let decided = match self.seams.branch.read_file(rev, POLICY_PATH)? {
+                    None => Decided::Read(None),
+                    Some(bytes) => {
+                        let read = || -> Result<Policy> {
+                            let text = std::str::from_utf8(&bytes)?;
+                            match self.guarding {
+                                true => Policy::guarding(text),
+                                false => Policy::parse(text),
+                            }
+                        };
+                        match read() {
+                            Ok(p) => Decided::Read(Some(p)),
+                            Err(e) => Decided::Refused(format!("{e:#}")),
+                        }
+                    }
+                };
+                self.policies.keep(key, decided.clone());
+                decided
             }
         };
-        Ok(Some(
-            read().with_context(|| format!("{POLICY_PATH} at {rev}"))?,
-        ))
+        match decided {
+            Decided::Read(p) => Ok(p),
+            Decided::Refused(words) => {
+                Err(anyhow!(words).context(format!("{POLICY_PATH} at {rev}")))
+            }
+        }
     }
 
     /// 27, 56: the gate of `branch`, read from its revision `rev`; a policy
@@ -400,4 +504,106 @@ pub enum Found {
     /// On none of the branches read; the branches that could not be read,
     /// none when every branch was.
     Unfound(Vec<Unread>),
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+    use sluice_fakes::Fakes;
+
+    use super::*;
+
+    struct Noon;
+
+    impl Clock for Noon {
+        fn now(&self) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 10, 29, 12, 0, 0).unwrap()
+        }
+    }
+
+    fn seams(f: &Fakes) -> Seams<'_> {
+        Seams {
+            checkout: &f.checkout,
+            tests: &f.tests,
+            branch: &f.branch,
+            driver: &f.driver,
+            state: &f.state,
+        }
+    }
+
+    /// 129, reader-tick "A branch's policy is read once per revision": six
+    /// passes at one revision read the policy from git once; a second
+    /// revision is read once more; a revision a whole pass left unused is
+    /// forgotten, and read again when asked.
+    #[test]
+    fn a_policy_is_read_once_per_revision() {
+        let f = Fakes::new();
+        let at = f.world.init("main", &[(POLICY_PATH, "[branches.main]\n")]);
+        let s = Sluice::new(seams(&f), &Noon);
+        let reads = f.world.file_reads();
+        for _ in 0..6 {
+            s.next_pass();
+            assert!(s.policy_at(&at).unwrap().is_some());
+            assert!(s.rules_at("main", &at).unwrap().is_some());
+        }
+        assert_eq!(f.world.file_reads(), reads + 1);
+        let moved = f.world.hand_commit("main", &[("a", Some("1"))]);
+        s.next_pass();
+        assert!(s.policy_at(&moved).unwrap().is_some());
+        assert!(s.policy_at(&moved).unwrap().is_some());
+        assert_eq!(f.world.file_reads(), reads + 2);
+        s.next_pass();
+        s.next_pass();
+        assert!(s.policy_at(&at).unwrap().is_some());
+        assert_eq!(f.world.file_reads(), reads + 3);
+    }
+
+    /// 129, reader-tick "A refused policy stays refused at its revision":
+    /// the refusal is kept, in the same words, and read from git once.
+    #[test]
+    fn a_refused_policy_is_kept_with_its_words() {
+        let f = Fakes::new();
+        let at = f.world.init("main", &[(POLICY_PATH, "[branches.main\n")]);
+        let s = Sluice::new(seams(&f), &Noon);
+        let reads = f.world.file_reads();
+        let first = format!("{:#}", s.rules_at("main", &at).unwrap_err());
+        assert!(
+            first.starts_with(&format!("main's policy: {POLICY_PATH} at {at}: ")),
+            "{first}"
+        );
+        for _ in 0..3 {
+            s.next_pass();
+            assert_eq!(format!("{:#}", s.rules_at("main", &at).unwrap_err()), first);
+        }
+        assert_eq!(f.world.file_reads(), reads + 1);
+    }
+
+    /// 129: a read that failed decided nothing, and is made again.
+    #[test]
+    fn a_failed_read_is_made_again() {
+        let f = Fakes::new();
+        f.world.init("main", &[(POLICY_PATH, "[branches.main]\n")]);
+        let s = Sluice::new(seams(&f), &Noon);
+        let reads = f.world.file_reads();
+        let missing = Rev::new("missing");
+        assert!(s.policy_at(&missing).is_err());
+        assert!(s.policy_at(&missing).is_err());
+        assert_eq!(f.world.file_reads(), reads + 2);
+    }
+
+    /// 129: a sluice made per pass keeps the policies it reads in a store
+    /// that outlives it.
+    #[test]
+    fn a_kept_store_outlives_the_sluice() {
+        let f = Fakes::new();
+        let at = f.world.init("main", &[(POLICY_PATH, "[branches.main]\n")]);
+        let kept = Policies::default();
+        let reads = f.world.file_reads();
+        for _ in 0..3 {
+            kept.next_pass();
+            let s = Sluice::new(seams(&f), &Noon).keeping(&kept);
+            assert!(s.policy_at(&at).unwrap().is_some());
+        }
+        assert_eq!(f.world.file_reads(), reads + 1);
+    }
 }
