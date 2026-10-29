@@ -5,9 +5,11 @@
 //! repository that stands for GitHub's git, it keeps each open pull
 //! request's head at its branch there and writes `refs/pull/<n>/head`, as
 //! GitHub does. It marks a pull request a draft or ready for review
-//! through GraphQL, as GitHub alone does, unless told to refuse. It
-//! answers an error for a pull request's reviews, or for the list of pull
-//! requests, while told to fail them, and answers a read of a pull
+//! through GraphQL, as GitHub alone does, unless told to refuse, and
+//! answers GraphQL's query of a branch's open pull requests whole, fifty
+//! to a page, unless told to refuse it. It answers an error for a pull
+//! request's reviews, the query that reads them among them, or for the
+//! list of pull requests, while told to fail them, and answers a read of a pull
 //! request 503 as often as told to. It refuses a pull request whose body
 //! is longer than GitHub holds with GitHub's `422`, and keeps nothing of
 //! it. Told to, it troubles the next calls of a method and path: answers
@@ -27,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use sluice::profiles::github::fake::{FileForge, LOGIN};
-use sluice::profiles::github::forge::{Forge, Posting, Pull, Standing, Status};
+use sluice::profiles::github::forge::{Forge, Posting, Pull, Request as Whole, Standing, Status};
 use sluice::profiles::github::Repo;
 
 use crate::support::http::{json, Answer, Fake, Request, CUT};
@@ -52,6 +54,8 @@ pub struct GitHub {
     pub fake: Fake,
     /// While set, GraphQL refuses to mark a pull request a draft or ready.
     refuse: Arc<AtomicBool>,
+    /// While set, GraphQL refuses the query of a branch's pull requests.
+    refuse_query: Arc<AtomicBool>,
     /// The calls answered with an error.
     failing: Arc<Mutex<Failing>>,
     /// How many reads of a pull request from now are answered 503.
@@ -111,6 +115,8 @@ impl GitHub {
         let bare = bare.map(Path::to_path_buf);
         let refuse = Arc::new(AtomicBool::new(false));
         let refusing = refuse.clone();
+        let refuse_query = Arc::new(AtomicBool::new(false));
+        let refusing_query = refuse_query.clone();
         let failing = Arc::new(Mutex::new(Failing::default()));
         let fails = failing.clone();
         let unavailable = Arc::new(AtomicUsize::new(0));
@@ -170,7 +176,9 @@ impl GitHub {
                 return json(503, json!({ "message": "Service Unavailable" }));
             }
             let (status, mut headers, body) = if r.method == "POST" && r.path == "/graphql" {
-                graphql(&held, refusing.load(Ordering::SeqCst), r)
+                let f = fails.lock().unwrap();
+                let refuse_query = refusing_query.load(Ordering::SeqCst) || !f.reviews.is_empty();
+                graphql(&held, refusing.load(Ordering::SeqCst), refuse_query, r)
             } else {
                 answer(&held, bare.as_deref(), &fails.lock().unwrap(), r)
             };
@@ -189,6 +197,7 @@ impl GitHub {
             forge,
             fake,
             refuse,
+            refuse_query,
             failing,
             unavailable,
             troubles,
@@ -248,7 +257,25 @@ impl GitHub {
         self.refuse.store(refuse, Ordering::SeqCst);
     }
 
-    /// Answer an error for pull request `n`'s reviews, or give them again.
+    /// Refuse, or answer again, the query of a branch's pull requests
+    /// whole, as GitHub refuses one it cannot answer.
+    pub fn refuse_query(&self, refuse: bool) {
+        self.refuse_query.store(refuse, Ordering::SeqCst);
+    }
+
+    /// How many queries of a branch's pull requests whole the fake saw.
+    pub fn queries(&self) -> usize {
+        self.fake
+            .requests()
+            .iter()
+            .filter(|r| {
+                r.method == "POST" && r.path == "/graphql" && r.body.contains("pullRequests(")
+            })
+            .count()
+    }
+
+    /// Answer an error for pull request `n`'s reviews, or give them again:
+    /// the query of every pull request's reviews fails while one fails.
     pub fn fail_reviews(&self, n: u64, fail: bool) {
         let mut f = self.failing.lock().unwrap();
         if fail {
@@ -275,10 +302,12 @@ impl GitHub {
     }
 }
 
-/// GitHub's GraphQL API, for the two mutations sluice makes: a pull
-/// request, by its node id, marked a draft or ready for review. GraphQL
-/// answers a request it refuses with 200 and `errors`.
-fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
+/// GitHub's GraphQL API, for the two mutations sluice makes, a pull
+/// request, by its node id, marked a draft or ready for review, refused
+/// while `refuse`; and for its one query, a branch's open pull requests
+/// whole, refused while `refuse_query`. GraphQL answers a request it
+/// refuses with 200 and `errors`.
+fn graphql(forge: &FileForge, refuse: bool, refuse_query: bool, r: &Request) -> Answer {
     let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
     let query = body["query"].as_str().unwrap_or_default();
     let error = |kind: &str, message: &str| {
@@ -287,6 +316,12 @@ fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
             json!({ "data": null, "errors": [{ "type": kind, "message": message }] }),
         )
     };
+    if query.contains("pullRequests(") {
+        if refuse_query {
+            return error("FORBIDDEN", "Resource not accessible by integration");
+        }
+        return pull_requests(forge, &body["variables"]);
+    }
     let (mutation, draft) = if query.contains("convertPullRequestToDraft") {
         ("convertPullRequestToDraft", true)
     } else if query.contains("markPullRequestReadyForReview") {
@@ -316,6 +351,77 @@ fn graphql(forge: &FileForge, refuse: bool, r: &Request) -> Answer {
         200,
         json!({ "data": { mutation: { "pullRequest": { "isDraft": draft } } } }),
     )
+}
+
+/// The page of the query's answer `variables` ask for: the open pull
+/// requests into `base`, fifty from the one after the cursor `after`, each
+/// whole as GitHub's GraphQL spells it.
+fn pull_requests(forge: &FileForge, variables: &Value) -> Answer {
+    const FIRST: usize = 50;
+    let base = variables["base"].as_str().unwrap_or_default();
+    let from: usize = variables["after"]
+        .as_str()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let all = forge.requests(&repo(), base).unwrap();
+    let page: Vec<Value> = all.iter().skip(from).take(FIRST).map(whole_json).collect();
+    let next = from + page.len();
+    json(
+        200,
+        json!({ "data": { "repository": { "pullRequests": {
+            "pageInfo": { "hasNextPage": next < all.len(), "endCursor": next.to_string() },
+            "nodes": page,
+        } } } }),
+    )
+}
+
+/// A pull request read whole, as a node of GraphQL's answer.
+fn whole_json(q: &Whole) -> Value {
+    let p = &q.pull;
+    let author = if p.author == LOGIN {
+        json!({ "__typename": "Bot", "login": SLUG })
+    } else {
+        json!({ "__typename": "User", "login": p.author })
+    };
+    let upper = |s: &str| json!(s.to_ascii_uppercase());
+    let mut contexts: Vec<Value> = q
+        .posted
+        .iter()
+        .map(|r| {
+            let run = run_json(r.id, &r.name, &r.posting);
+            json!({
+                "__typename": "CheckRun", "databaseId": r.id, "name": r.name,
+                "status": upper(run["status"].as_str().unwrap()),
+                "conclusion": run["conclusion"].as_str().map(upper),
+                "title": run["output"]["title"], "summary": run["output"]["summary"],
+                "text": run["output"]["text"], "checkSuite": { "app": { "databaseId": APP } },
+            })
+        })
+        .collect();
+    for c in &q.checks {
+        let (status, conclusion) = match c.standing {
+            Standing::Pending => ("IN_PROGRESS", Value::Null),
+            Standing::Passed => ("COMPLETED", json!("SUCCESS")),
+            Standing::Failed => ("COMPLETED", json!("FAILURE")),
+        };
+        contexts.push(json!({
+            "__typename": "CheckRun", "databaseId": 1, "name": c.name, "status": status,
+            "conclusion": conclusion, "title": null, "summary": null, "text": null,
+            "checkSuite": { "app": { "databaseId": 1 } },
+        }));
+    }
+    json!({
+        "number": p.number, "id": p.node_id, "title": p.title, "body": p.body,
+        "isDraft": p.draft, "updatedAt": p.updated_at.map(|t| t.to_rfc3339()),
+        "headRefOid": p.head, "headRefName": p.head_ref, "author": author,
+        "headRepository": (!p.head_repo.is_empty()).then(|| json!({ "nameWithOwner": p.head_repo })),
+        "baseRefName": p.base,
+        "latestOpinionatedReviews": { "nodes": q.reviews.iter().map(|r| json!({
+            "author": { "login": r.user }, "state": r.state, "commit": { "oid": r.commit },
+        })).collect::<Vec<_>>() },
+        "timelineItems": { "nodes": q.readied.iter().map(|t| json!({ "createdAt": t.to_rfc3339() })).collect::<Vec<_>>() },
+        "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "contexts": { "nodes": contexts } } } } ] },
+    })
 }
 
 /// `a`, GitHub's answer to `r`, with an ETag when it is a `GET`'s 200:

@@ -1911,7 +1911,10 @@ fn run_again_follows_a_pull_request_waiting_for_a_review() {
         g.gh.fake
             .requests()
             .iter()
-            .filter(|r| (r.method == "PATCH" && r.path == edit) || r.path == "/graphql")
+            .filter(|r| {
+                (r.method == "PATCH" && r.path == edit)
+                    || (r.path == "/graphql" && !r.body.contains("pullRequests("))
+            })
             .count()
     };
     let before = writes();
@@ -1955,7 +1958,10 @@ fn run_again_without_waiting_answers_with_a_pull_request() {
         g.gh.fake
             .requests()
             .iter()
-            .filter(|r| (r.method == "PATCH" && r.path == edit) || r.path == "/graphql")
+            .filter(|r| {
+                (r.method == "PATCH" && r.path == edit)
+                    || (r.path == "/graphql" && !r.body.contains("pullRequests("))
+            })
             .count()
     };
     let before = writes();
@@ -3731,7 +3737,7 @@ impl OnGitHub {
 /// forge-reads, "Nothing moved" and "A restart asks nothing new": twenty
 /// passes of `sluice run` over a minute ask for main's open pull requests
 /// once, and a step started again then asks nothing; the one waiting for a
-/// review is read again only at that asking.
+/// review is read again only at that asking, by the one query.
 #[test]
 fn nothing_moved_asks_once_a_minute() {
     let g = OnGitHub::new("pr-discovery", "reviews = 1");
@@ -3739,15 +3745,12 @@ fn nothing_moved_asks_once_a_minute() {
     g.settle();
     g.on_main();
     g.discovery_passes();
-    let (lists, beside) = (g.lists(), g.beside_reads(n, &head));
+    let (lists, beside, queries) = (g.lists(), g.beside_reads(n, &head), g.gh.queries());
     let out = g.skipping(g.repo.dir(), &["run", "--rounds", "20"]);
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(g.lists(), lists + 1, "{}", text(&out));
-    assert_eq!(
-        g.beside_reads(n, &head),
-        beside + 1,
-        "its reviews, at the asking"
-    );
+    assert_eq!(g.gh.queries(), queries + 1, "its reviews, at the asking");
+    assert_eq!(g.beside_reads(n, &head), beside, "nothing read alone");
     assert_eq!(
         g.posted(&head).unwrap().1,
         "waiting: needs 1 review",
@@ -3764,7 +3767,8 @@ fn nothing_moved_asks_once_a_minute() {
         lists + 1,
         "a restart asks nothing within the minute"
     );
-    assert_eq!(g.beside_reads(n, &head), beside + 1);
+    assert_eq!(g.gh.queries(), queries + 1);
+    assert_eq!(g.beside_reads(n, &head), beside);
     assert_eq!(g.posts(), posts);
 }
 
@@ -3935,8 +3939,9 @@ fn a_draft_is_read_from_the_list_alone() {
 
 /// forge-reads, "A pull request waiting on a check": out of draft, it
 /// waits for `qa/approved`, which another system passes on its head,
-/// moving nothing GitHub lists; the next asking reads its checks again
-/// and submits it. pull-request-intake: "the next asking submits it".
+/// moving nothing GitHub lists; the next asking reads its checks again,
+/// by the one query, and submits it. pull-request-intake: "the next
+/// asking submits it".
 #[test]
 fn a_pull_request_waiting_on_a_check_is_read_at_each_asking() {
     let g = OnGitHub::new("pr-discovery-qa", "checks = [\"qa/approved\"]");
@@ -3949,19 +3954,21 @@ fn a_pull_request_waiting_on_a_check_is_read_at_each_asking() {
             &format!("/repos/o/r/commits/{head}/check-runs?per_page"),
         )
     };
-    let before = checks(&g);
+    let (before, queries) = (checks(&g), g.gh.queries());
     let updated = g.pull_from("unit/qa").updated_at;
     g.gh.forge
         .check(&head, "qa/approved", Standing::Passed)
         .unwrap();
     assert_eq!(g.pull_from("unit/qa").updated_at, updated);
     g.step();
-    assert_eq!(checks(&g), before + 1);
+    assert_eq!(g.gh.queries(), queries + 1);
+    assert_eq!(checks(&g), before, "nothing read alone");
     assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
 }
 
 /// forge-reads, "A new head": a pull request's head moves, and its reviews
-/// and checks are read again at the next asking, against its new head.
+/// and checks are read again at the next asking, against its new head, by
+/// the one query.
 #[test]
 fn a_new_head_is_read_again() {
     let g = OnGitHub::new(
@@ -3971,14 +3978,15 @@ fn a_new_head_is_read_again() {
     let (n, old) = g.by_hand("unit/heads", &[("h.txt", Some("h\n"))], false);
     g.step();
     let reviews = g.gh.calls("GET", &format!("/repos/o/r/pulls/{n}/reviews"));
+    let queries = g.gh.queries();
     let new = g.push_more("unit/heads", "h2.txt");
     g.step();
+    assert_eq!(g.gh.queries(), queries + 1);
     assert_eq!(
         g.gh.calls("GET", &format!("/repos/o/r/pulls/{n}/reviews")),
-        reviews + 1
+        reviews
     );
-    let checks = format!("/repos/o/r/commits/{new}/check-runs?per_page");
-    assert_eq!(g.gh.calls("GET", &checks), 1);
+    assert_eq!(g.beside_reads(n, &new), 0);
     assert_eq!(
         g.posted(&new).unwrap().1,
         "waiting: needs 1 review, qa/approved"
@@ -4730,4 +4738,101 @@ fn a_wait_stopped_by_ctrl_c_lets_go() {
     let out = wait.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(sluice::STOPPED), "{}", text(&out));
     assert_eq!(g.mark(), None, "{}", text(&out));
+}
+
+// ---------------------------------------------------------------------------
+// forge-reads: one query reads a branch's open pull requests whole, and a
+// refused one falls back to the reads per pull request (136; rule core.32)
+// ---------------------------------------------------------------------------
+
+/// forge-reads, "Three pull requests, one query": main has three open pull
+/// requests out of draft, waiting on a review and `qa/approved`, and its
+/// list comes back changed: one GraphQL query reads them, and nothing of
+/// any one is read alone, its reviews, checks, timeline or sluice's check
+/// runs; each is shown what it lacks.
+#[test]
+fn three_pull_requests_one_query() {
+    let g = OnGitHub::new("pr-one-query", "reviews = 1\nchecks = [\"qa/approved\"]");
+    let opened: Vec<(u64, String)> = ["a", "b", "c"]
+        .iter()
+        .map(|x| {
+            g.by_hand(
+                &format!("unit/three-{x}"),
+                &[(&format!("{x}.txt"), Some("x\n"))],
+                false,
+            )
+        })
+        .collect();
+    g.step();
+    assert_eq!(g.gh.queries(), 1);
+    for (n, head) in &opened {
+        assert_eq!(g.beside_reads(*n, head), 0, "#{n} read alone");
+        assert_eq!(g.posted_reads(head), 0, "#{n}'s check runs read back");
+        assert_eq!(
+            g.posted(head).unwrap().1,
+            "waiting: needs 1 review, qa/approved"
+        );
+    }
+}
+
+/// forge-reads, "Reviews counted as before": one reviewer approved the
+/// pull request's older head and another its head; under `reviews = 2`
+/// it counts one approval, and lacks one review.
+#[test]
+fn the_querys_reviews_count_as_before() {
+    let g = OnGitHub::new("pr-one-query-reviews", "reviews = 2");
+    let (n, old) = g.by_hand("unit/counted", &[("c.txt", Some("c\n"))], false);
+    g.gh.forge.review(n, "ann", "APPROVED", &old).unwrap();
+    let head = g.push_more("unit/counted", "c2.txt");
+    g.gh.forge.review(n, "bob", "APPROVED", &head).unwrap();
+    g.step();
+    assert_eq!(g.gh.queries(), 1);
+    assert_eq!(g.beside_reads(n, &head), 0);
+    assert_eq!(g.posted(&head).unwrap().1, "waiting: needs 1 review");
+    // A second approval on the head: the list changes, and the next
+    // asking submits it.
+    g.gh.forge.review(n, "cat", "APPROVED", &head).unwrap();
+    g.step();
+    assert_eq!(g.gh.queries(), 2);
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+}
+
+/// forge-reads, "The query refused": GitHub answers the query with an
+/// error that is not `RATE_LIMITED`; that pass reads each pull request by
+/// REST, says so once, and shows each what it lacks.
+#[test]
+fn a_refused_query_falls_back_to_the_reads_per_pull_request() {
+    let g = OnGitHub::new("pr-one-query-refused", "reviews = 1");
+    let (one, one_head) = g.by_hand("unit/refused-one", &[("1.txt", Some("1\n"))], false);
+    let (two, two_head) = g.by_hand("unit/refused-two", &[("2.txt", Some("2\n"))], false);
+    g.gh.refuse_query(true);
+    let said = g.round();
+    let warning = "GitHub refused the query that reads them whole, so each is read alone this pass";
+    assert_eq!(said.matches(warning).count(), 1, "{said}");
+    assert!(
+        said.contains("Resource not accessible by integration"),
+        "{said}"
+    );
+    assert_eq!(g.gh.queries(), 1);
+    for (n, head) in [(one, &one_head), (two, &two_head)] {
+        assert_eq!(
+            g.gh.calls("GET", &format!("/repos/o/r/pulls/{n}/reviews")),
+            1,
+            "#{n}"
+        );
+        assert_eq!(g.posted(head).unwrap().1, "waiting: needs 1 review");
+    }
+    // Answered again: the next asking reads them whole.
+    g.gh.refuse_query(false);
+    g.gh.forge
+        .review(one, "reviewer", "APPROVED", &one_head)
+        .unwrap();
+    let said = g.round();
+    assert!(!said.contains(warning), "{said}");
+    assert_eq!(g.gh.queries(), 2);
+    assert_eq!(
+        g.gh.calls("GET", &format!("/repos/o/r/pulls/{one}/reviews")),
+        1
+    );
+    assert_eq!(g.of(one).len(), 1, "{:?}", g.subs());
 }
