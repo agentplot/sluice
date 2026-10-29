@@ -1081,8 +1081,18 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
     use std::net::TcpListener;
     let dir = support::Scratch::new("forge-unconnected");
     let file = github::file(dir.path());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    // A port below every system's range of ports it hands out (49152 up on
+    // macOS, 32768 up on Linux): once GitHub goes away no other test's
+    // server, bound to a port the system picks, and no connection's own end
+    // takes it. One the system had picked was taken now and then on a
+    // loaded host, and the comment's first try reached something there and
+    // was reset, so it was read back.
+    let (listener, port) = (0..)
+        .map(|k: u32| {
+            10_000 + (std::process::id().wrapping_add(k.wrapping_mul(7919)) % 20_000) as u16
+        })
+        .find_map(|port| Some((TcpListener::bind(("127.0.0.1", port)).ok()?, port)))
+        .unwrap();
     // GitHub sells the app its token, then goes away: the comment's
     // first try finds nothing on the port, and the pause brings GitHub
     // back on it.
