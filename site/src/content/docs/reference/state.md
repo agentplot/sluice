@@ -76,6 +76,17 @@ every repository on the host and never pushed:
   forge/pauses/<app>-<installation>-<allowance>.json
                        until when GitHub said the app's allowance of calls
                        on that installation is spent, in GitHub's words
+  forge/requests/<owner>/<repository>/<branch>.json
+                       when sluice last asked GitHub for the open pull
+                       requests into the branch, and what it read and
+                       posted of each, so that one that hasn't changed
+                       isn't read again
+  forge/requests/<owner>/<repository>/<branch>.lock
+                       held while that file is written
+  forge/requests/<owner>/<repository>/<branch>.moved
+                       touched by a submit that opened, updated or marked
+                       ready a pull request into the branch, so the next
+                       round asks at once
   ports/<n>            a block of ports, naming the checkout that holds it
   readers/<repository>.lock
                        held by the first watch or wait of the repository for
@@ -119,9 +130,12 @@ run is.
 Every sluice on the host reads `forge/` before it calls GitHub. An
 answer is used only when GitHub replies that it hasn't changed, and one
 no read has used for a day is removed. A pause stops every sluice on
-the host from calling GitHub until the time GitHub named. Nothing in
-`forge/` holds a token, and any file in it may be removed at any time:
-sluice then asks GitHub as if it had kept nothing.
+the host from calling GitHub until the time GitHub named. A branch's
+file in `requests/` says when its pull requests were last asked for, so
+a sluice started again asks nothing until `[forge] discovery` has passed
+since any sluice on the host asked. Nothing in `forge/` holds a token,
+and any file in it may be removed at any time: sluice then asks GitHub
+as if it had kept nothing.
 
 A block of ports is free again when the checkout named in it is gone.
 A file in `running/` counts against the bound while its `.hold` is held
