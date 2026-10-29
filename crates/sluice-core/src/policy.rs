@@ -5,8 +5,11 @@
 //! profiles that bind the check and place seams and their settings, which
 //! the core passes on (52; rule core.1). It reads the `[branches]` tables,
 //! the gate of each branch, and `[executor]`, the limits a run is held to
-//! (83). Branch protection reads only which branches are guarded and
-//! where their records are, [`Policy::guarding`] (124).
+//! (83). Two readers read only which branches are guarded and where
+//! their records are, [`Policy::guarding`]: branch protection, and the
+//! routing that decides which remote a branch is on, so a revision
+//! refused elsewhere in its policy still says where its branch is (124;
+//! ADRs 0059, 0069).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -660,12 +663,16 @@ impl Policy {
         })
     }
 
-    /// 124: the policy as branch protection reads it, only what guarding
-    /// needs: each `[branches]` pattern in the order written, with the
-    /// default gate and its `remote`, and the names `[signers]` gives, so
-    /// that `signers.is_empty()` says what it says in [`Policy::parse`]
-    /// (C.6). Every other table and field, known or not, is passed over,
-    /// and the rest of the policy is its defaults (ADR 0059).
+    /// 124: the policy only as far as guarding needs, which is as far as
+    /// deciding which remote a branch is on needs: each `[branches]`
+    /// pattern in the order written, with the default gate and its
+    /// `remote`, and the names `[signers]` gives, so that
+    /// `signers.is_empty()` says what it says in [`Policy::parse`] (C.6).
+    /// Every other table and field, known or not, is passed over, and the
+    /// rest of the policy is its defaults. It has two callers, branch
+    /// protection (ADR 0059) and the routing of a branch to its remote
+    /// (ADR 0069); the policy is read whole, with [`Policy::parse`], at
+    /// the revision a branch's gate is read from (56).
     pub fn guarding(text: &str) -> Result<Policy> {
         let form: GuardingForm = toml::from_str(text).context("reading .config/sluice.toml")?;
         let mut written: Vec<_> = form.branches.into_iter().collect();

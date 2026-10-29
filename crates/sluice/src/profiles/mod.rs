@@ -116,7 +116,6 @@ impl Bound {
             .map(|a| (a as Rc<dyn Identity>, program.clone()));
         let forge = app.map(|a| a as Rc<dyn github::Forge>);
         let branch = branches::Branches::open_as(dir, identity.clone(), retry.clone())?;
-        let branch = if guarding { branch.guarding() } else { branch };
         let common = branch.common_dir()?;
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),

@@ -22,7 +22,7 @@ pub mod text;
 pub mod verdict;
 pub mod verdict_view;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use sluice_seams::{Branch, Checkout, Driver, Rev, State, Tests, Written};
 
@@ -33,7 +33,7 @@ use crate::refused::Refusal;
 
 pub use ops::{
     Accepted, AmendRefusal, CopyDiffers, CopyHow, Forecast, Forecasted, GroupRequest, KeptOut,
-    Pending, PendingOutcome, Refused, Requester, Status, SubmitRefusal, SubmitRequest,
+    Lookup, Pending, PendingOutcome, Refused, Requester, Status, SubmitRefusal, SubmitRequest,
     SubmittedHead, Unread, WithdrawRefusal, Withdrew,
 };
 pub use step::{Round, Step};
@@ -257,25 +257,34 @@ impl<'a> Sluice<'a> {
     }
 
     /// 56: the policy, read from a revision of the branch; for guarding,
-    /// only as far as guarding needs (124).
+    /// only as far as guarding needs (124). A policy it refuses names the
+    /// revision, which is the one a push fixes (record 0069).
     pub fn policy_at(&self, rev: &Rev) -> Result<Option<Policy>> {
         let Some(bytes) = self.seams.branch.read_file(rev, POLICY_PATH)? else {
             return Ok(None);
         };
-        let text = std::str::from_utf8(&bytes)?;
-        Ok(Some(if self.guarding {
-            Policy::guarding(text)?
-        } else {
-            Policy::parse(text)?
-        }))
+        let read = || -> Result<Policy> {
+            let text = std::str::from_utf8(&bytes)?;
+            match self.guarding {
+                true => Policy::guarding(text),
+                false => Policy::parse(text),
+            }
+        };
+        Ok(Some(
+            read().with_context(|| format!("{POLICY_PATH} at {rev}"))?,
+        ))
     }
 
-    /// 27, 56: the gate of `branch`, read from its revision `rev`.
+    /// 27, 56: the gate of `branch`, read from its revision `rev`; a policy
+    /// refused there names the branch and the revision (record 0069).
     pub fn rules_at(&self, branch: &str, rev: &Rev) -> Result<Option<Rules>> {
-        Ok(match self.policy_at(rev)? {
-            None => None,
-            Some(p) => p.rules_for(branch)?.cloned(),
-        })
+        let rules = || -> Result<Option<Rules>> {
+            Ok(match self.policy_at(rev)? {
+                None => None,
+                Some(p) => p.rules_for(branch)?.cloned(),
+            })
+        };
+        rules().with_context(|| format!("{branch}'s policy"))
     }
 
     fn gate(&self, branch: &str, rev: &Rev) -> Result<Rules> {
@@ -355,13 +364,40 @@ impl<'a> Sluice<'a> {
         Ok(aside)
     }
 
-    /// The branch that holds submission `id`.
-    pub fn find(&self, id: u64) -> Result<Option<String>> {
+    /// The branch that holds submission `id`, from every branch with
+    /// records that reads: one whose records cannot be read, or whose
+    /// finished record of `id` cannot be, is passed by into the unread
+    /// list with the words it was refused with, and only the list of
+    /// branches failing fails the lookup (26; rule core.11).
+    pub fn find(&self, id: u64) -> Result<Found> {
+        let mut unread = Vec::new();
         for b in self.seams.state.branches()? {
-            if self.read_line(&b)?.has(id) {
-                return Ok(Some(b));
+            let held = self.read_line(&b).and_then(|line| {
+                if line.subs.contains_key(&id) {
+                    return Ok(true);
+                }
+                if line.finished.contains_key(&id) {
+                    self.finished_sub(&b, id)?;
+                    return Ok(true);
+                }
+                Ok(false)
+            });
+            match held {
+                Ok(true) => return Ok(Found::On(b)),
+                Ok(false) => {}
+                Err(e) => unread.push(Unread::of(&b, &e)),
             }
         }
-        Ok(None)
+        Ok(Found::Unfound(unread))
     }
+}
+
+/// Where a lookup by number found a submission (26).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// On this branch.
+    On(String),
+    /// On none of the branches read; the branches that could not be read,
+    /// none when every branch was.
+    Unfound(Vec<Unread>),
 }
