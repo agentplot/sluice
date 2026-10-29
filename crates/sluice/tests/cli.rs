@@ -79,13 +79,18 @@ fn settled<T>(command: impl FnOnce() -> T) -> T {
 }
 
 /// Whether the repository's reader's lock, its lease and its driver's
-/// lock are each free on the fakes' host. A file not yet made is free.
+/// lock are each free on the fakes' host: no process holds it alone. A
+/// file not yet made is free. Asked shared, as the reader probes, so the
+/// probe a process started meanwhile still holds reads as no lease.
 fn host_locks_free() -> [bool; 3] {
     let free = |ext: &str| {
         let Ok(file) = std::fs::File::open(readers_file(REPOSITORY, ext)) else {
             return true;
         };
-        !matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+        !matches!(
+            file.try_lock_shared(),
+            Err(std::fs::TryLockError::WouldBlock)
+        )
     };
     [free("lock"), free("lease"), free("driver")]
 }
@@ -2701,7 +2706,7 @@ fn write_as(r: &mut sluice::reader::Reader, doc: &serde_json::Value) {
 /// free allows that moment, and a check that one is held allows nothing
 /// (129). The check's own try of the lock is such a letting go, so it
 /// gives that a moment too before it answers.
-fn soon(free: impl Fn() -> bool) -> bool {
+fn soon(mut free: impl FnMut() -> bool) -> bool {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         if free() {
@@ -2715,7 +2720,23 @@ fn soon(free: impl Fn() -> bool) -> bool {
     }
 }
 
-/// Whether a process holds the repository's reader's lease.
+/// Whether `r`, stepped as a newer watch steps, is as `done` says within
+/// two seconds: the lease or the lock it takes may be held for a moment
+/// by a process another thread of this binary starts, until it runs its
+/// program, as [`soon`] allows; a watch tries again at its next tick.
+fn soon_stepped(
+    r: &mut sluice::reader::Reader,
+    done: impl Fn(&sluice::reader::Reader) -> bool,
+) -> bool {
+    soon(|| {
+        r.step(true, sluice::reader::Drives::Nobody).unwrap();
+        done(r)
+    })
+}
+
+/// Whether a process holds the repository's reader's lease: asked shared,
+/// as the reader asks it, so a probe's lock a process started meanwhile
+/// still holds is none (129).
 fn leased() -> bool {
     let lease = std::fs::OpenOptions::new()
         .create(true)
@@ -2723,7 +2744,7 @@ fn leased() -> bool {
         .truncate(false)
         .open(readers_file(REPOSITORY, "lease"))
         .unwrap();
-    match lease.try_lock() {
+    match lease.try_lock_shared() {
         Ok(()) => false,
         Err(std::fs::TryLockError::WouldBlock) => true,
         Err(e) => panic!("locking the lease: {e}"),
@@ -2836,10 +2857,7 @@ fn a_watch_of_the_same_version_follows() {
     write_as(&mut reader.borrow_mut(), &doc);
     support::set_version("0.53.0");
     let between = |_: usize| {
-        assert!(
-            soon(|| !leased()),
-            "the lease of a reader of its own version"
-        );
+        assert!(!leased(), "the lease of a reader of its own version");
         let mut reader = reader.borrow_mut();
         reader.step(true, sluice::reader::Drives::Nobody).unwrap();
         assert!(is_reader(&reader));
@@ -2870,8 +2888,10 @@ fn an_older_watch_follows_once_its_lease_is_taken() {
         1 => {
             let mut r = reader_as("0.53.0");
             assert!(!is_reader(&r));
-            r.step(true, sluice::reader::Drives::Nobody).unwrap();
-            assert!(leased(), "no lease taken of an older reader");
+            assert!(
+                soon_stepped(&mut r, |_| leased()),
+                "no lease taken of an older reader"
+            );
             *at_lease.borrow_mut() = readers_doc();
             // What the older watch would write, were it to read again.
             sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
@@ -2881,7 +2901,7 @@ fn an_older_watch_follows_once_its_lease_is_taken() {
             assert_eq!(readers_doc(), *at_lease.borrow(), "written after its lease");
             let mut newer = newer.borrow_mut();
             let r = newer.as_mut().unwrap();
-            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            assert!(soon_stepped(r, is_reader), "the older reader's lock kept");
             write_as(r, &seven);
             assert!(soon(|| !leased()));
         }
@@ -2919,8 +2939,10 @@ fn an_older_wait_follows_once_its_lease_is_taken() {
         1 => {
             assert!(readers_doc().is_some(), "the wait is no reader");
             let mut r = reader_as("0.53.0");
-            r.step(true, sluice::reader::Drives::Nobody).unwrap();
-            assert!(leased(), "no lease taken of an older reader");
+            assert!(
+                soon_stepped(&mut r, |_| leased()),
+                "no lease taken of an older reader"
+            );
             *at_lease.borrow_mut() = readers_doc();
             // What the older wait would write, were it to read again.
             sluice(&f, &["submit", BRANCH, "--worktree", "unit/b", "--no-wait"]);
@@ -2930,7 +2952,7 @@ fn an_older_wait_follows_once_its_lease_is_taken() {
             assert_eq!(readers_doc(), *at_lease.borrow(), "written after its lease");
             let mut newer = newer.borrow_mut();
             let r = newer.as_mut().unwrap();
-            r.step(true, sluice::reader::Drives::Nobody).unwrap();
+            assert!(soon_stepped(r, is_reader), "the older reader's lock kept");
             write_as(r, &three);
         }
         _ => {}
@@ -2976,7 +2998,7 @@ fn a_newer_wait_never_takes_a_lease() {
     write_as(&mut reader.borrow_mut(), &doc);
     support::set_version("0.53.0");
     let between = |_: usize| {
-        assert!(soon(|| !leased()), "a wait took the lease");
+        assert!(!leased(), "a wait took the lease");
         let mut reader = reader.borrow_mut();
         reader.step(true, sluice::reader::Drives::Nobody).unwrap();
         assert!(is_reader(&reader));

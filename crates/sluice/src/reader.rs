@@ -152,7 +152,7 @@ impl Reader {
                 let let_go = match drives {
                     Drives::Itself => false,
                     Drives::Another => true,
-                    Drives::Nobody => try_lock(&lead.files.lease)?.is_none(),
+                    Drives::Nobody => leased(&lead.files.lease)?,
                 };
                 if let_go {
                     *self = Reader::Follow(Follow {
@@ -290,7 +290,7 @@ impl Follow {
         match try_lock(&self.files.lock)? {
             // The lock is free, and neither a driver nor the newer watch
             // holding the lease, if one does, is the one to take it.
-            Some(lock) if drives == Drives::Nobody && try_lock(&self.files.lease)?.is_some() => {
+            Some(lock) if drives == Drives::Nobody && !leased(&self.files.lease)? => {
                 self.lead(lock).map(Some)
             }
             Some(_) => Ok(None),
@@ -345,6 +345,27 @@ impl Files {
 
 /// The lock on `path`, when no live process holds it. Opening it never
 /// empties the file.
+/// Whether a newer watch holds the lease at `path`: it holds it alone.
+/// Asked shared, as [`driver_live`] asks, and let go at once: a process
+/// started meanwhile by another thread holds what it inherits until it
+/// runs its program, and a shared lock it holds is no lease to the next
+/// probe, where an exclusive one would read as a newer watch's (129).
+fn leased(path: &Path) -> Result<bool> {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+}
+
 fn try_lock(path: &Path) -> Result<Option<File>> {
     let file = OpenOptions::new()
         .create(true)
@@ -474,7 +495,27 @@ mod tests {
 
     /// Whether any reader of `r`'s repository holds its lease.
     fn leased(r: &Reader) -> bool {
-        try_lock(&files(r).lease).unwrap().is_none()
+        super::leased(&files(r).lease).unwrap()
+    }
+
+    /// 129: a probe of the lease that a process started meanwhile still
+    /// holds, as one inherits it until it runs its program, is no lease:
+    /// the lead keeps reading, and a follower beside the free lock leads.
+    #[test]
+    fn a_probe_of_the_lease_left_held_is_no_lease() {
+        let s = Scratch::new("probe");
+        let mut lead = Reader::take(&s.0, REPO, OLD).unwrap();
+        let probe = File::open(&files(&lead).lease).unwrap();
+        probe.try_lock_shared().unwrap();
+        for _ in 0..3 {
+            lead.step(true, Drives::Nobody).unwrap();
+            assert!(is_lead(&lead));
+        }
+        drop(lead);
+        let mut next = Reader::take(&s.0, REPO, OLD).unwrap();
+        next.step(true, Drives::Nobody).unwrap();
+        assert!(is_lead(&next));
+        drop(probe);
     }
 
     /// 129: a lead names its version of sluice beside its lock, whole.
