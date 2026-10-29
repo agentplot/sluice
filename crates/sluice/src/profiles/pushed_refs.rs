@@ -209,13 +209,21 @@ impl PushedRefs {
         })
     }
 
-    /// Fetch `refspec`, whose source is `asked`, with `flags` before the
-    /// remote. `Ok(false)` when the remote has no such ref; a fetch that
-    /// fails otherwise is a [`ReadRefused`] (133).
-    pub(crate) fn fetch_spec(&self, asked: &str, refspec: &str, flags: &[&str]) -> Result<bool> {
+    /// Fetch `refspecs` in one `git fetch`, `asked` naming what they ask
+    /// for, with `flags` before the remote, under the retry policy (rule
+    /// core.29). `Ok(false)` when the remote has no ref one of them names
+    /// exactly, which fetches none of them; a fetch that fails otherwise is
+    /// a [`ReadRefused`] (133).
+    pub(crate) fn fetch_spec(
+        &self,
+        asked: &str,
+        refspecs: &[&str],
+        flags: &[&str],
+    ) -> Result<bool> {
         let mut args = vec!["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"];
         args.extend(flags);
-        args.extend([self.target(), refspec]);
+        args.push(self.target());
+        args.extend(refspecs);
         let Called { out, note, .. } = self.call(Kind::Read, &args)?;
         if out.status.success() {
             return Ok(true);
@@ -296,7 +304,8 @@ impl PushedRefs {
             .map(|(at, _)| at.to_string()))
     }
 
-    fn tracking(&self, branch: &str) -> String {
+    /// The remote-tracking ref of `branch`, which a fetch of it writes.
+    pub(crate) fn tracking(&self, branch: &str) -> String {
         format!("refs/remotes/{}/{branch}", self.remote)
     }
 
@@ -310,7 +319,7 @@ impl PushedRefs {
     /// replaces; `None` when the remote has no such ref, a [`ReadRefused`]
     /// when it cannot be read. Writes no branch.
     pub fn fetch_ref(&self, src: &str, dst: &str) -> Result<Option<Rev>> {
-        if !self.fetch_spec(src, &format!("+{src}:{dst}"), &[])? {
+        if !self.fetch_spec(src, &[&format!("+{src}:{dst}")], &[])? {
             return Ok(None);
         }
         self.local.read_ref(dst)

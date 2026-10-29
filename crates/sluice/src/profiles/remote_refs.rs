@@ -44,6 +44,9 @@ use crate::signing::statement::{Claims, Run, RunResult, Statement};
 /// 116).
 const SET_ASIDE: &str = "refs/sluice/set-aside";
 
+/// Every head submitted to the remote, by its revision (82).
+const HEADS: &str = "refs/sluice/heads/*";
+
 /// The file of a branch's state commit holding its version.
 const VERSION: &str = "version";
 
@@ -135,6 +138,17 @@ impl RemoteRefs {
     fn fetched(&self, name: &str) -> String {
         let rest = name.strip_prefix("refs/sluice/").unwrap_or(name);
         format!("refs/sluice-fetched/{}/{rest}", self.remote())
+    }
+
+    /// 82: the refspec that fetches every head submitted to the remote.
+    fn heads_spec(&self) -> String {
+        format!("+{HEADS}:refs/sluice-fetched/{}/heads/*", self.remote())
+    }
+
+    /// 82: the refspec that fetches `branch`'s combinations open to claims.
+    fn combinations_spec(&self, branch: &str) -> String {
+        let remote = self.remote();
+        format!("+refs/sluice/combinations/{branch}/*:refs/sluice-fetched/{remote}/combinations/{branch}/*")
     }
 
     /// Fetch `name` from the remote; `None` when it has none.
@@ -366,15 +380,56 @@ impl RemoteRefs {
     /// Read `branch`'s state from the remote, keeping it for a write.
     fn read_remote(&self, branch: &str) -> Result<Read> {
         let name = state_ref(branch)?;
+        let fetched = self.fetch(&name);
+        self.read_fetched(branch, &name, fetched)
+    }
+
+    /// 64, 129: as [`RemoteRefs::read_remote`], with the branch into its
+    /// tracking ref, the work submitted to the remote and the branch's
+    /// combinations in the same fetch, so a reader's read holds what a
+    /// forecast forms from and asks the remote nothing more for it. A
+    /// remote that has no such branch, or no records of it, is refused the
+    /// whole fetch, so the records are then read alone; where they are
+    /// there, the branch is what the remote lacks, and its tracking ref is
+    /// removed, so no revision of it is named as the remote's (124).
+    fn read_with_branch_remote(&self, branch: &str) -> Result<Read> {
+        let name = state_ref(branch)?;
+        let state = format!("+{name}:{}", self.fetched(&name));
+        let tracking = self.pushed.tracking(branch);
+        let head = format!("+refs/heads/{branch}:{tracking}");
+        let (heads, combinations) = (self.heads_spec(), self.combinations_spec(branch));
+        let specs = [&state, &head, &heads, &combinations].map(String::as_str);
+        let fetched = match self.pushed.fetch_spec(&name, &specs, &["--prune"]) {
+            Ok(true) => Ok(self.pushed.read_ref(&self.fetched(&name))?.map(|r| r.0)),
+            Ok(false) => {
+                let read = self.read_remote(branch)?;
+                if read.commit.is_some() && self.stale(branch).is_none() {
+                    self.git_ok(&["update-ref", "-d", &tracking])?;
+                }
+                return Ok(read);
+            }
+            Err(e) => Err(e),
+        };
+        self.read_fetched(branch, &name, fetched)
+    }
+
+    /// The state `fetched` from the remote as `name`, or, where the remote
+    /// could not be read, as last fetched, kept for a write.
+    fn read_fetched(
+        &self,
+        branch: &str,
+        name: &str,
+        fetched: Result<Option<String>>,
+    ) -> Result<Read> {
         // 80: a remote that cannot be reached leaves the state as it was
         // last fetched, readable, and the read says so.
-        let fetched = match self.fetch(&name) {
+        let fetched = match fetched {
             Ok(f) => {
                 self.stale.borrow_mut().remove(branch);
                 f
             }
             Err(e) => {
-                let last = self.pushed.read_ref(&self.fetched(&name))?;
+                let last = self.pushed.read_ref(&self.fetched(name))?;
                 let Some(last) = last else { return Err(e) };
                 tracing::warn!(
                     sluice.branch = branch,
@@ -383,7 +438,7 @@ impl RemoteRefs {
                 );
                 let refused = read_refused(&e).cloned().unwrap_or_else(|| ReadRefused {
                     remote: self.remote().into(),
-                    asked: name.clone(),
+                    asked: name.into(),
                     said: format!("{e:#}"),
                     note: None,
                 });
@@ -498,6 +553,20 @@ impl RemoteRefs {
             .join(self.remote())
             .join(what)
             .join(format!("{branch}.json")))
+    }
+}
+
+/// The live records of a state as read: every file but its version and
+/// what git keeps beside them.
+fn snapshot(r: Read) -> Snapshot {
+    Snapshot {
+        version: r.version,
+        files: r
+            .files
+            .into_iter()
+            .filter(|(p, _)| p != VERSION && !p.starts_with('.'))
+            .map(|(p, (_, b))| (p, b))
+            .collect(),
     }
 }
 
@@ -656,9 +725,8 @@ impl State for RemoteRefs {
     }
 
     fn fetch_heads(&self, _branch: &str) -> Result<()> {
-        let asked = "refs/sluice/heads/*";
-        let spec = format!("+{asked}:refs/sluice-fetched/{}/heads/*", self.remote());
-        self.pushed.fetch_spec(asked, &spec, &["--prune"])?;
+        self.pushed
+            .fetch_spec(HEADS, &[&self.heads_spec()], &["--prune"])?;
         Ok(())
     }
 
@@ -769,11 +837,8 @@ impl State for RemoteRefs {
     fn fetch_candidates(&self, branch: &str) -> Result<()> {
         state_ref(branch)?;
         let asked = format!("refs/sluice/combinations/{branch}/*");
-        let spec = format!(
-            "+{asked}:refs/sluice-fetched/{}/combinations/{branch}/*",
-            self.remote()
-        );
-        self.pushed.fetch_spec(&asked, &spec, &["--prune"])?;
+        self.pushed
+            .fetch_spec(&asked, &[&self.combinations_spec(branch)], &["--prune"])?;
         Ok(())
     }
 
@@ -832,16 +897,11 @@ impl State for RemoteRefs {
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {
-        let r = self.read_remote(branch)?;
-        Ok(Snapshot {
-            version: r.version,
-            files: r
-                .files
-                .into_iter()
-                .filter(|(p, _)| p != VERSION && !p.starts_with('.'))
-                .map(|(p, (_, b))| (p, b))
-                .collect(),
-        })
+        Ok(snapshot(self.read_remote(branch)?))
+    }
+
+    fn read_with_branch(&self, branch: &str) -> Result<Snapshot> {
+        Ok(snapshot(self.read_with_branch_remote(branch)?))
     }
 
     fn read_finished(&self, branch: &str, name: &str) -> Result<Option<Vec<u8>>> {

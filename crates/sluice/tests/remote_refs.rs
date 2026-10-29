@@ -585,3 +585,131 @@ fn a_state_write_refused_at_the_lease_is_one_push() {
     let pushes = std::fs::read_to_string(&log).unwrap_or_default();
     assert_eq!(pushes.lines().count(), 1, "one push: {pushes}");
 }
+
+/// Count each fetch `repo` makes from `origin` in a file, one line a
+/// fetch: git runs this in place of `git upload-pack` on the remote.
+fn count_fetches(repo: &Repo) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let log = repo.dir().join(".git/fetches.log");
+    let pack = repo.dir().join(".git/upload-pack");
+    std::fs::write(
+        &pack,
+        format!(
+            "#!/bin/sh\necho fetch >> '{}'\nexec git upload-pack \"$@\"\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&pack, std::fs::Permissions::from_mode(0o755)).unwrap();
+    repo.git(&["config", "remote.origin.uploadpack", pack.to_str().unwrap()]);
+    log
+}
+
+/// `rev` is an object `repo` holds.
+fn holds(repo: &Repo, rev: &str) -> bool {
+    repo.git_raw(&["cat-file", "-e", &format!("{rev}^{{commit}}")])
+        .status
+        .success()
+}
+
+/// The revision `name` holds in `repo`, or `None` when it has none.
+fn ref_at(repo: &Repo, name: &str) -> Option<String> {
+    let out = repo.git_raw(&["rev-parse", "--verify", "-q", name]);
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// 64, 129: a read of the records with the branch brings, in one fetch,
+/// the branch into its tracking ref, the work another host submitted and
+/// the combinations formed on the branch.
+#[test]
+fn a_read_with_the_branch_brings_the_branch_and_the_work_in_one_fetch() {
+    let (a, _bare, b) = two_hosts("rr-with-branch");
+    let (ha, hb) = (
+        host(&a, BTreeMap::new(), None),
+        host(&b, BTreeMap::new(), None),
+    );
+    {
+        let _g = hb.lock("main").unwrap().unwrap();
+        hb.write("main", 0, put(&[("branch.json", "{}\n")]))
+            .unwrap();
+    }
+    let moved = b.push_change("moved", "on the remote\n");
+    let head = b.branch("unit/b", "main", &[("work", Some("b's\n"))]);
+    hb.publish_head("main", &Rev::new(head.clone())).unwrap();
+    let combination = b.branch("combined", "main", &[("both", Some("1 and 2\n"))]);
+    hb.publish_candidate("main", "c1", &Rev::new(combination.clone()))
+        .unwrap();
+    assert!(!holds(&a, &head) && !holds(&a, &combination));
+
+    let fetches = count_fetches(&a);
+    let read = ha.read_with_branch("main").unwrap();
+    assert_eq!(read.version, 1);
+    assert_eq!(read.files["branch.json"], b"{}\n");
+    assert_eq!(ha.stale("main"), None);
+    let fetched = std::fs::read_to_string(&fetches).unwrap();
+    assert_eq!(fetched.lines().count(), 1, "one fetch: {fetched}");
+    assert_eq!(
+        ref_at(&a, "refs/remotes/origin/main").as_deref(),
+        Some(moved.as_str())
+    );
+    assert!(holds(&a, &head), "the head submitted from b");
+    assert!(holds(&a, &combination), "the combination b formed");
+}
+
+/// 64, 129: where the remote no longer holds the branch, its records are
+/// read all the same, and no revision of the branch is left to name as
+/// the remote's (124).
+#[test]
+fn a_branch_the_remote_lacks_still_gives_the_records() {
+    let (a, bare, _b) = two_hosts("rr-no-branch");
+    let h = host(&a, BTreeMap::new(), None);
+    {
+        let _g = h.lock("main").unwrap().unwrap();
+        h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
+    }
+    assert!(ref_at(&a, "refs/remotes/origin/main").is_some());
+    let out = support::git_command()
+        .arg("--git-dir")
+        .arg(bare.path())
+        .args(["update-ref", "-d", "refs/heads/main"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let read = h.read_with_branch("main").unwrap();
+    assert_eq!(read.version, 1);
+    assert_eq!(read.files["branch.json"], b"{}\n");
+    assert_eq!(h.stale("main"), None);
+    assert_eq!(ref_at(&a, "refs/remotes/origin/main"), None);
+}
+
+/// 64, 80, 129: a remote out of reach gives the records as last fetched,
+/// and the read says it is stale, in the remote's words; the branch's
+/// tracking ref stays as it was.
+#[test]
+fn a_remote_out_of_reach_gives_the_records_last_fetched() {
+    let (a, bare, _b) = two_hosts("rr-with-branch-stale");
+    let h = host(&a, BTreeMap::new(), None);
+    {
+        let _g = h.lock("main").unwrap().unwrap();
+        h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
+    }
+    assert_eq!(h.read_with_branch("main").unwrap().version, 1);
+    let tracked = ref_at(&a, "refs/remotes/origin/main");
+    let aside = bare.path().with_extension("aside");
+    std::fs::rename(bare.path(), &aside).unwrap();
+    let read = h.read_with_branch("main").unwrap();
+    assert_eq!(read.version, 1, "the records last fetched");
+    let stale = h.stale("main").expect("a stale read");
+    assert_eq!(stale.remote, "origin");
+    assert_eq!(stale.asked, "refs/sluice/state/main");
+    assert!(
+        stale
+            .said
+            .contains("does not appear to be a git repository"),
+        "{stale:?}"
+    );
+    assert_eq!(ref_at(&a, "refs/remotes/origin/main"), tracked);
+    std::fs::rename(&aside, bare.path()).unwrap();
+}
