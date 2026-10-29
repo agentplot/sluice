@@ -21,8 +21,8 @@ worktrunk runs any `wt-<name>` it finds there as `wt <name>`, so
 submits:
 
 ```sh
-wt merge bolt/concurrent-units --no-squash --no-remove   # before
-wt submit bolt/concurrent-units                          # after
+wt merge feature/concurrent-units --no-squash --no-remove   # before
+wt submit feature/concurrent-units                          # after
 ```
 
 `--no-squash` has no counterpart because sluice always lands a merge
@@ -70,8 +70,8 @@ preview defaults each name from `SLUICE_PLACE`, as
 the reason, like any other write that is not sluice's own.
 
 ```console
-$ wt merge bolt/concurrent-units
-error: bolt/concurrent-units is protected by sluice; submit the change to sluice instead
+$ wt merge feature/concurrent-units
+error: feature/concurrent-units is protected by sluice; submit the change to sluice instead
 ```
 
 ## Side by side
@@ -110,11 +110,11 @@ An agent whose tool calls can't outlast a result submits and waits with
 one command, run in rounds, each one with a time limit:
 
 ```sh
-wt submit bolt/concurrent-units --timeout 9m --json   # again while it exits 5
+wt submit feature/concurrent-units --timeout 9m --json   # again while it exits 5
 ```
 
 The first run submits as `--no-wait` does, its answer on stderr, then
-follows the new submission as `sluice wait bolt/concurrent-units` does,
+follows the new submission as `sluice wait feature/concurrent-units` does,
 prints what that prints, and exits as it does:
 
 | exit | the submission |

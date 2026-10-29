@@ -14,7 +14,7 @@ readable with plain tools whether or not sluice is running.
   results.jsonl        every test result of the repository, with its executor
   .next-id             the next submission's id
   .lock                held while an id is given or a branch's records are written
-  bolt/concurrent-units/
+  feature/concurrent-units/
     version            57: bumped on every write, so two rounds never both write
     branch.json        the queue's own state, one document
     submissions/14.json
@@ -25,9 +25,9 @@ readable with plain tools whether or not sluice is running.
                        state and worktree
     log.jsonl          every submission, test run, result, blame and landing, in order
     lock               held by a round of this branch
-  .logs/bolt/concurrent-units/<candidate>/<task>.log
+  .logs/feature/concurrent-units/<candidate>/<task>.log
                        what each failed test printed, for the last 20 failed combinations
-  .refused/bolt/concurrent-units.json
+  .refused/feature/concurrent-units.json
                        while this host's rounds can't read the branch's remote:
                        what they couldn't read, since when, for how many rounds,
                        and which of it the log holds yet
@@ -251,7 +251,7 @@ branch against:
 - `copies`: for a branch kept on a remote, each host whose own branch
   of that name a round could not set to `landed`, by the host's name:
   `{"build-2": {"at": "10e4791a2b", "lacks": "c43609b8e1", "why": "git
-  holds the lock on refs/heads/bolt/x", "since":
+  holds the lock on refs/heads/feature/x", "since":
   "2026-10-23T09:16:40Z"}}`. `at` is the revision that host's branch
   holds, `null` when it has none. Each host writes only its own entry,
   and takes it out on the round that sets its branch to `landed`.
@@ -266,9 +266,9 @@ over them.
 {
   "schema": "sluice/submission@1",
   "id": 13,
-  "branch": "bolt/concurrent-units",
+  "branch": "feature/concurrent-units",
   "head": "8d41b6c2e5",
-  "from": { "agent": "crw-1-unit-2", "worktree": "unit/batch-review",
+  "from": { "agent": "agent-2", "worktree": "batch-review",
             "path": "/home/me/wt/unit-batch-review", "host": "build-1",
             "session": "herdr:w1:p2@/tmp/herdr/herdr.sock" },
   "submitted": "2026-10-11T09:16:40Z",
@@ -279,7 +279,7 @@ over them.
   "tested": { "combination": "e20a6f9b48", "on": "c41e8f2d90", "submissions": [12, 13] },
   "result": "failed",
   "failed": [ { "task": "tests:t-batch-cards", "hash": "5c0e97aa21",
-               "log": ".git/sluice/.logs/bolt/concurrent-units/c7/tests:t-batch-cards.log" } ],
+               "log": ".git/sluice/.logs/feature/concurrent-units/c7/tests:t-batch-cards.log" } ],
   "delivered": "2026-10-11T09:21:55Z",
   "delivered_to": "herdr:w1:p2@/tmp/herdr/herdr.sock"
 }
@@ -306,7 +306,7 @@ the outcome types a notice into that pane, one line to the agent there,
 when the round runs on the same host:
 
 ```text
-[sluice] #13 failed on bolt/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
+[sluice] #13 failed on feature/concurrent-units: tests:t-batch-cards. sluice wait 13 shows why.
 ```
 
 `delivered` is when the outcome was delivered, and `delivered_to` is
@@ -348,8 +348,8 @@ reads a finished submission's one file, and `sluice status <branch>
 branch's next write.
 
 A pull request's submission comes from `pull/<n>`, its number on
-GitHub, in place of a worktree: `"from": { "agent": "crw-1-unit-2",
-"worktree": "pull/41", "head": "unit/cards" }`, with no `path`; `head`
+GitHub, in place of a worktree: `"from": { "agent": "agent-2",
+"worktree": "pull/41", "head": "cards" }`, with no `path`; `head`
 is the branch the pull request was opened from. Its agent is the one the pull request's
 description names, in the comment `sluice submit` writes there, or
 else whoever opened it. Each new commit on the pull request is a new
@@ -402,7 +402,7 @@ logged when a round sets one that was behind. `copy` is the revision
 this host's branch holds:
 
 ```json
-{"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/bolt/x"}
+{"schema":"sluice/log@1","event":"copy-behind","host":"build-2","copy":"10e4791a2b","lacks":"c43609b8e1","why":"git holds the lock on refs/heads/feature/x"}
 {"schema":"sluice/log@1","event":"copy-levelled","host":"build-2","copy":"c43609b8e1"}
 ```
 
@@ -477,15 +477,15 @@ shows its worktree as merged. What was tested rides along as trailers,
 which outlive the state files:
 
 ```console
-$ git log -1 bolt/concurrent-units
+$ git log -1 feature/concurrent-units
 commit b7d2e94f03
 Merge: c41e8f2 3f9c2e1
 Author: sluice <sluice@localhost>
 
-    chore(land): #12 unit/touches
+    chore(land): #12 touches
 
     Sluice-Submission: 12
-    Sluice-From: crw-1-unit-1 (unit/touches)
+    Sluice-From: agent-1 (touches)
     Sluice-Tested: 9ab3d07c11
     Sluice-Result: passed (2 run, 31 replayed)
 ```

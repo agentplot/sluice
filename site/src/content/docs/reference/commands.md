@@ -23,7 +23,7 @@ sidebar:
 | `sluice preview <branch> <revision>` | Bring up a revision the branch has landed in a checkout of its own, at addresses a person opens, until it is released. `--wait` returns once its command has ended; `--json` for scripts. |
 | `sluice previews` | Every preview on the host, with its addresses and state. `--json` for scripts. |
 | `sluice release <name>` | Release a preview, by its name or its revision: its release command runs, its checkout goes, its ports and names are free. Given a checkout held because its release failed, `sluice/try/<branch>/<n>`, run its release once more. `--accept-failure` frees either without running the release command. `--json` for scripts. |
-| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a bolt, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
+| `sluice branch create <branch> --from <branch>` | Make a branch sluice lands on, such as a feature branch, at another such branch's current revision: on its remote when its policy names one. `--json` for scripts. |
 | `sluice branch delete <branch>` | Delete it once its work has landed into `main`, or the branch `--into` names, and nothing is queued on it. `--json` for scripts. |
 | `sluice branch accept <branch> <revision>` | Accept the revision a held branch is read at, which lacks its last landing, as the one it stands on: the next round forms the queue on it. The operator's to do, never an agent's. `--json` for scripts. |
 | `sluice forge check [<branch>]` | Whether sluice's own identity on GitHub is set up so only sluice may move the branch there. `--json` for scripts. |
@@ -33,12 +33,12 @@ sidebar:
 `sluice submit <branch> --check` forms the combination the worktree's
 head would land in were it submitted now, behind every submission
 queued on the branch, and says whether it would conflict. It queues
-nothing and changes nothing. A bolt's branch, which no worktree holds,
+nothing and changes nothing. A feature branch that no worktree holds
 is forecast with `--head`; the submissions made from that branch are
 left out, as submitting it again would withdraw them:
 
 ```console
-$ sluice submit main --check --head bolt/runner
+$ sluice submit main --check --head feature/runner
 would conflict: docs/architecture/builds.md with #217 (wldn-design, design/runner-credential)
 ```
 
@@ -67,7 +67,7 @@ it's required.
 ```console
 $ sluice submit main
 refused: main requires root:integration (.config/sluice.toml line 59), which the task runner in this worktree keeps out of CI, so it is never run and main cannot pass while it is required
-the agent working in unit/integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
+the agent working in integration lets it run in CI there, or drops it from main's policy in the same submission that lets it run, and submits again
 ```
 
 A task required through a tag names the tag: `main requires app:serve
@@ -85,10 +85,10 @@ taken with a warning saying why, and `--json --no-wait` carries it as
 branch as one act, in the order given:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --worktree ../bolt-c
-submission 41 to main from ../bolt-a · nothing queued ahead
-submission 42 to main from ../bolt-b · 1 queued ahead (#41)
-submission 43 to main from ../bolt-c · 2 queued ahead (#41, #42)
+$ sluice submit main --worktree ../feature-a --worktree ../feature-b --worktree ../feature-c
+submission 41 to main from ../feature-a · nothing queued ahead
+submission 42 to main from ../feature-b · 1 queued ahead (#41)
+submission 43 to main from ../feature-c · 2 queued ahead (#41, #42)
 ```
 
 sluice queues all of them or none. When a worktree holds changes beyond
@@ -107,7 +107,7 @@ none. The first subject is the first worktree's, and each names its
 own submission's landing commit, or titles its own pull request:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b --subject "Runner credentials" --subject "Runner cache"
+$ sluice submit main --worktree ../feature-a --worktree ../feature-b --subject "Runner credentials" --subject "Runner cache"
 ```
 
 One subject for several worktrees, or any count but one each or none,
@@ -124,18 +124,18 @@ reports each one's outcome in the order given, each under `submission
 is contested with:
 
 ```console
-$ sluice submit main --worktree ../bolt-a --worktree ../bolt-b
-submission 44 to main from ../bolt-a · nothing queued ahead
-submission 45 to main from ../bolt-b · 1 queued ahead (#44)
+$ sluice submit main --worktree ../feature-a --worktree ../feature-b
+submission 44 to main from ../feature-a · nothing queued ahead
+submission 45 to main from ../feature-b · 1 queued ahead (#44)
 #44 queued
 testing main + #44 + #45 · 12s of 45m
-submission 44 from ../bolt-a:
+submission 44 from ../feature-a:
 testing main + #44 · 12 tasks to run, 0 replayed
 passed · landed as b7d2e94
-submission 45 from ../bolt-b:
+submission 45 from ../feature-b:
 conflict: docs/architecture/builds.md
-  conflicts with #44 (ops, bolt/runner)
-the agent working in bolt/docs merges or rebases onto main there and submits again
+  conflicts with #44 (ops, feature/runner)
+the agent working in feature/docs merges or rebases onto main there and submits again
 ```
 
 It exits `0` when every one landed, and otherwise with the exit of the
@@ -176,8 +176,8 @@ the ones the head affects against the branch, read from the branch's own
 policy, never the worktree's.
 
 ```console
-$ sluice exec bolt/concurrent-units
-running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
+$ sluice exec feature/concurrent-units
+running the checks 8d41b6c affects against feature/concurrent-units (c41e8f2)
 ports: SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
 …what the tests print…
 passed: 2 tasks
@@ -234,7 +234,7 @@ A worktree keeps its ports and what its runs left running until it is
 released, however long since its last run: sluice cannot tell an agent
 that is thinking from one that is gone. `sluice status` with no argument
 lists every worktree it holds in the repository, with its branch, its
-last run, how that run ended and its ports, so a person or a crew can
+last run, how that run ended and its ports, so a person or a tool can
 release one with `sluice release --worktree <path>`. `--json` gives the
 same as one document, a `worktrees` list with `worktree`, `branch`,
 `last_run`, `ports`, `removed` and, once a run there has ended,
@@ -243,8 +243,8 @@ same as one document, a `worktrees` list with `worktree`, `branch`,
 ```console
 $ sluice status
 worktrees held until released:
-  /home/me/wt/unit-a  bolt/concurrent-units  last run 2026-10-14T09:12:40Z  last result passed on 1a2b3c4, recorded  SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
-  /home/me/wt/unit-b  bolt/concurrent-units  last run 2026-10-11T16:03:05Z  last result command failed on 5d6e7f8  SLUICE_PORT_DB=20003 SLUICE_PORT_WEB=20002
+  /home/me/wt/unit-a  feature/concurrent-units  last run 2026-10-14T09:12:40Z  last result passed on 1a2b3c4, recorded  SLUICE_PORT_DB=20001 SLUICE_PORT_WEB=20000
+  /home/me/wt/unit-b  feature/concurrent-units  last run 2026-10-11T16:03:05Z  last result command failed on 5d6e7f8  SLUICE_PORT_DB=20003 SLUICE_PORT_WEB=20002
 release one with: sluice release --worktree <worktree>
 ```
 
@@ -296,9 +296,9 @@ That command says so first. The branch's state logs it `gone`, with how
 its release went, once:
 
 ```console
-$ sluice exec bolt/concurrent-units
+$ sluice exec feature/concurrent-units
 freed /home/me/wt/unit-c: it no longer exists; its release ran once from its scratch directory; its runs ended, its ports free
-running the checks 8d41b6c affects against bolt/concurrent-units (c41e8f2)
+running the checks 8d41b6c affects against feature/concurrent-units (c41e8f2)
 …
 ```
 
@@ -377,13 +377,13 @@ and writes nothing, and it reads with no sluice running.
 
 ```console
 $ sluice overview
-bolt/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
-  sluice/try/bolt/concurrent-units/9 is held: its release failed 4 times: usage: scripts/preview up
-    sluice release sluice/try/bolt/concurrent-units/9 runs it again; sluice release sluice/try/bolt/concurrent-units/9 --accept-failure frees it without
-  testing bolt/concurrent-units + #13 Batch review cards + #14 unit/forecast · 3/5 tasks · running tests:t-cards 2m10s · 6m02s of 15m
+feature/concurrent-units at c41e8f2 · 2 in the queue · testing 1 at once (up to 4)
+  sluice/try/feature/concurrent-units/9 is held: its release failed 4 times: usage: scripts/preview up
+    sluice release sluice/try/feature/concurrent-units/9 runs it again; sluice release sluice/try/feature/concurrent-units/9 --accept-failure frees it without
+  testing feature/concurrent-units + #13 Batch review cards + #14 forecast · 3/5 tasks · running tests:t-cards 2m10s · 6m02s of 15m
   2026-10-16T09:15:02Z  landed #12 Fix the forecast's dates as c41e8f2
-  2026-10-16T09:11:40Z  blamed #11 unit/sidebar on 9a03c1e
-checking /home/me/wt/unit-a → bolt/concurrent-units 3/8 since 2026-10-16T09:17:02Z
+  2026-10-16T09:11:40Z  blamed #11 sidebar on 9a03c1e
+checking /home/me/wt/unit-a → feature/concurrent-units 3/8 since 2026-10-16T09:17:02Z
 host: 2 of 4 runs · 1 queue · 1 agent
 2 worktrees held · 0 previews
 ```
@@ -423,7 +423,7 @@ line or a script. Fields are only ever added to it.
 | `branches[].candidates[].tasks[]` | while a combination is under test with the moon runner, each of its tasks: `target`, `state` (`waiting`, `running`, `passed`, `failed` or `replayed`), and, once known, `started`, `ended` and `exit`; left out when nothing has been said of them |
 | `branches[].submissions[]` | each submission still queued, as `sluice status <id> --json` prints it |
 | `branches[].recent[]` | the branch's last ten `landed`, `blamed` and `conflict` lines of its log, oldest first, exactly as written |
-| `branches[].recent_from` | each submission the recent lines name, a landing's `ids`, a blame's `id` and a conflict's `id` and `with`, mapped to the worktree it came from, as its `from.worktree` says, a pull request's as `pull/<n>`: `{"12": "unit/a", "13": "pull/41"}`. It's `{}` when the branch has no recent lines |
+| `branches[].recent_from` | each submission the recent lines name, a landing's `ids`, a blame's `id` and a conflict's `id` and `with`, mapped to the worktree it came from, as its `from.worktree` says, a pull request's as `pull/<n>`: `{"12": "fix-a", "13": "pull/41"}`. It's `{}` when the branch has no recent lines |
 | `branches[].recent_subjects` | the subject each submission `recent_from` names was given at its submit, as written, whether it is still queued or has moved to the finished records: `{"12": "Batch review cards"}`. A submission whose submit gave none has no key, and a reader names it by `recent_from`. It's `{}` when no recent submission has a subject |
 | `branches[].held` | while the branch is held ([`sluice branch`](#sluice-branch)): `read`, the revision it is read at, `lacks`, the landing that revision lacks, and `since`; left out otherwise |
 | `branches[].held_checkouts[]` | the branch's checkouts whose release failed, as `sluice status <branch> --json` lists them: `place`, `failed`, `tries`, `at`, `stopped` (tried no more: held) and, on a branch whose state is on its remote, the `host` that made it. Read from the branch's state, so every host's overview lists them. It's `[]` when there are none |
@@ -490,12 +490,12 @@ may run it every few seconds.
 
 ```console
 $ sluice
-worktree unit/cards (crw-1-unit-2) at /home/me/shop.unit-cards
-#14 Forecast concurrent units to bolt/concurrent-units · testing
-bolt/concurrent-units: 2 in the queue · testing 1 at once (up to 4)
+worktree cards (agent-2) at /home/me/shop.cards
+#14 Forecast concurrent units to feature/concurrent-units · testing
+feature/concurrent-units: 2 in the queue · testing 1 at once (up to 4)
 place: SLUICE_PORT_WEB=20000 · last run 2026-10-16T09:16:44Z
 next: sluice status 14
-next: sluice withdraw 14 --as crw-1-unit-2
+next: sluice withdraw 14 --as agent-2
 ```
 
 `--json` prints one line, `sluice/home@1`, whose fields are only ever
@@ -517,13 +517,13 @@ person to try: the repository's own stack, brought up by the policy's
 in a checkout of its own, with a port and a name for each of
 `[checkout] ports`. It is held until something asks for its release. The
 [previews guide](/sluice/guides/previews/) says what it is for and how a
-crew drives it.
+tool of your own drives it.
 
 ```console
-$ sluice preview bolt/concurrent-units 2eb676c
-preview/2eb676c8e45d of bolt/concurrent-units at 2eb676c: starting
+$ sluice preview feature/concurrent-units 2eb676c
+preview/2eb676c8e45d of feature/concurrent-units at 2eb676c: starting
   api  http://localhost:20001/docs
-  web  https://web-2eb676c--bolt-concurrent-units--shop.localhost
+  web  https://web-2eb676c--feature-concurrent-units--shop.localhost
   ports: SLUICE_PORT_API=20001 SLUICE_PORT_WEB=20000
 ```
 
@@ -548,8 +548,8 @@ until it is released. `--wait` returns once the command has ended and
 exits 1 for a failure. `--json` prints one document:
 
 ```console
-$ sluice preview bolt/concurrent-units 2eb676c --wait --json
-{"name":"preview/2eb676c8e45d","branch":"bolt/concurrent-units","revision":"2eb676c8e45d…","state":"up","made":"2026-10-14T09:12:40Z","checkout":"/home/me/shop/.git/sluice/.previews/preview+2F2eb676c8e45d","addresses":{"api":"http://localhost:20001/docs","web":"https://web-2eb676c--bolt-concurrent-units--shop.localhost"},"names":{"SLUICE_NAME_API":"api-2eb676c--bolt-concurrent-units--shop","SLUICE_NAME_WEB":"web-2eb676c--bolt-concurrent-units--shop"},"ports":{"SLUICE_PORT_API":"20001","SLUICE_PORT_WEB":"20000"},"exit":0}
+$ sluice preview feature/concurrent-units 2eb676c --wait --json
+{"name":"preview/2eb676c8e45d","branch":"feature/concurrent-units","revision":"2eb676c8e45d…","state":"up","made":"2026-10-14T09:12:40Z","checkout":"/home/me/shop/.git/sluice/.previews/preview+2F2eb676c8e45d","addresses":{"api":"http://localhost:20001/docs","web":"https://web-2eb676c--feature-concurrent-units--shop.localhost"},"names":{"SLUICE_NAME_API":"api-2eb676c--feature-concurrent-units--shop","SLUICE_NAME_WEB":"web-2eb676c--feature-concurrent-units--shop"},"ports":{"SLUICE_PORT_API":"20001","SLUICE_PORT_WEB":"20000"},"exit":0}
 ```
 
 A failed preview's document carries `output`, the end of what its
@@ -579,12 +579,12 @@ worktree and its branch as `wt merge` did, following worktrunk's
 worktrunk](/sluice/guides/worktrunk/) has the move from `wt merge`.
 
 ```console
-$ wt submit bolt/concurrent-units
-submission 12 to bolt/concurrent-units · nothing queued ahead
-testing bolt/concurrent-units + #12 · 4s of 15m
-testing bolt/concurrent-units + #12 · 31/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
-testing bolt/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
-testing bolt/concurrent-units + #12 · 2 tasks to run, 31 replayed
+$ wt submit feature/concurrent-units
+submission 12 to feature/concurrent-units · nothing queued ahead
+testing feature/concurrent-units + #12 · 4s of 15m
+testing feature/concurrent-units + #12 · 31/33 tasks · running tests:t-cards 1m10s, tests:e2e 40s · 1m52s of 15m
+testing feature/concurrent-units + #12 · 32/33 tasks · running tests:t-cards 1m31s · 2m13s of 15m
+testing feature/concurrent-units + #12 · 2 tasks to run, 31 replayed
 passed · landed as b7d2e94
 ```
 
@@ -608,7 +608,7 @@ any other, and sluice submits it once they hold:
 
 ```console
 $ wt submit main --subject "Batch review cards"
-pushed unit/batch-review · opened #41: Batch review cards
+pushed batch-review · opened #41: Batch review cards
 waiting: needs 1 review, qa/approved
   forecast: merges without conflict behind #38, #40
 queued behind #38, #40
@@ -631,7 +631,7 @@ beside it:
 
 ```console
 $ wt submit main --no-wait --subject "Batch review cards"
-pushed unit/batch-review · opened #41: Batch review cards
+pushed batch-review · opened #41: Batch review cards
 submission 12 to main from #41 · nothing queued ahead
 $ wt submit main --no-wait --json
 {"id":12,"branch":"main","ahead":[],"pull_request":41}
@@ -651,7 +651,7 @@ like any others. After a run the time limit ended, with no new commits:
 
 ```console
 $ wt submit main
-pushed unit/batch-review · updated #41: Batch review cards · marked ready for review
+pushed batch-review · updated #41: Batch review cards · marked ready for review
 queued behind #38
 testing main + #38 + #41
 testing main + #38 + #41 · 2 tasks to run, 0 replayed
@@ -688,8 +688,8 @@ from any host, refuses it. Its records stay, and `sluice status
 <branch>` still reads them.
 
 ```console
-$ sluice branch delete bolt/payments
-refused: #12 still queued on bolt/payments; wait for them to land, or withdraw them
+$ sluice branch delete feature/payments
+refused: #12 still queued on feature/payments; wait for them to land, or withdraw them
 ```
 
 A branch is held when the revision a round reads it at lacks the last
@@ -702,8 +702,8 @@ once the hold ends. `sluice step`, `sluice run`, `sluice status
 so, naming both revisions:
 
 ```console
-$ sluice step bolt/payments
-held: bolt/payments reads 10e4791, which lacks the landing c43609b; put the landing back on bolt/payments, or run sluice branch accept bolt/payments 10e4791
+$ sluice step feature/payments
+held: feature/payments reads 10e4791, which lacks the landing c43609b; put the landing back on feature/payments, or run sluice branch accept feature/payments 10e4791
 ```
 
 The hold ends by itself on the first round that reads the branch at a
@@ -721,8 +721,8 @@ stands on the revision it was made at, so a branch deleted and made
 again owes nothing to the landings of the one deleted.
 
 ```console
-$ sluice branch accept bolt/payments 10e4791
-accepted bolt/payments at 10e4791a2b5c6d7e8f90a1b2c3d4e5f6a7b8c9d0, which lacks the landing c43609b8e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6; the next round forms the queue on it
+$ sluice branch accept feature/payments 10e4791
+accepted feature/payments at 10e4791a2b5c6d7e8f90a1b2c3d4e5f6a7b8c9d0, which lacks the landing c43609b8e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6; the next round forms the queue on it
 ```
 
 All three exit `0` when done, `1` when a branch they name doesn't exist,
@@ -814,7 +814,7 @@ find a submission, and say they could not, the same way:
 ```console
 $ sluice wait 250
 submission 250 is on none of the branches sluice could read
-bolt/cache could not be read: [checkout] declares a cache, which sluice no longer keeps: …
+feature/cache could not be read: [checkout] declares a cache, which sluice no longer keeps: …
 ```
 
 With `--timeout`, as `90s`, `9m` or `1h30m`, it returns once that long
@@ -902,12 +902,12 @@ $ sluice inbox
 testing main + #12 · 12 tasks to run, 0 replayed
 passed · landed as b7d2e94
 
-[sluice] #13 failed on bolt/cards: cli:test. sluice wait 13 shows why.
-testing bolt/cards + #13 · 3 tasks to run, 0 replayed
+[sluice] #13 failed on feature/cards: cli:test. sluice wait 13 shows why.
+testing feature/cards + #13 · 3 tasks to run, 0 replayed
 failed: cli:test
-  on bolt/cards + #13 (e20a6f9)
-  log of cli:test: .git/sluice/.logs/bolt/cards/c4/cli:test.log
-the agent working in unit/cards fixes it there and submits again
+  on feature/cards + #13 (e20a6f9)
+  log of cli:test: .git/sluice/.logs/feature/cards/c4/cli:test.log
+the agent working in cards fixes it there and submits again
 ```
 
 Each outcome opens with its notice, the one line a round types into the
@@ -934,8 +934,8 @@ the one line. It is `[]` when nothing is pending:
       "id": 12,
       "branch": "main",
       "head": "4f0c1d2e9a",
-      "from": { "agent": "unit-cards", "worktree": "unit/cards",
-                "path": "/home/me/wt/unit-cards" },
+      "from": { "agent": "cards", "worktree": "cards",
+                "path": "/home/me/wt/cards" },
       "submitted": "2026-10-28T09:12:03Z",
       "after": [],
       "priority": 0,
@@ -944,7 +944,7 @@ the one line. It is `[]` when nothing is pending:
       "tested": { "combination": "9ab3d07c11", "on": "c41e8f2d90", "submissions": [12] },
       "result": "passed",
       "delivered": "2026-10-28T10:02:41Z",
-      "delivered_to": "/home/me/wt/unit-cards",
+      "delivered_to": "/home/me/wt/cards",
       "landed_as": "b7d2e94f03",
       "notice": "[sluice] #12 landed on main as b7d2e94."
     }
@@ -964,7 +964,7 @@ adds fields.
 
 A branch whose records it cannot read stops no other: it delivers what
 it could read, says which branch it could not and why on stderr,
-`sluice: could not read bolt/cards's records: …`, and exits `3`. Under
+`sluice: could not read feature/cards's records: …`, and exits `3`. Under
 `--json`, the document adds `unread`, `[{"branch","error"}]`, present
 only then.
 
@@ -1046,7 +1046,7 @@ With `--json`, a command that cannot do what it was asked still prints
 JSON on stdout, one document in place of the one it would have printed:
 
 ```json
-{"error":{"kind":"refused","message":"no branch bolt/none","next":["sluice branch create bolt/none --from main","sluice overview"]}}
+{"error":{"kind":"refused","message":"no branch feature/none","next":["sluice branch create feature/none --from main","sluice overview"]}}
 ```
 
 `kind` is `refused` (exit `2`), `not_found` (exit `1`) or `internal`
@@ -1118,7 +1118,7 @@ it was refused with, and again only when those words change or when the
 branch is refused again after a pass that read it:
 
 ```console
-bolt/cache could not be read, passed by: [checkout] declares a cache, which sluice no longer keeps: …
+feature/cache could not be read, passed by: [checkout] declares a cache, which sluice no longer keeps: …
 ```
 
 `sluice run --rounds <n>` whose last round passed a branch by ends as
@@ -1127,7 +1127,7 @@ run, it exits `3`. Its stderr has one line for each branch it passed by
 in that round, naming the branch with the words it was refused with:
 
 ```console
-sluice: bolt/cache: [checkout] declares a cache, which sluice no longer keeps: …
+sluice: feature/cache: [checkout] declares a cache, which sluice no longer keeps: …
 ```
 
 So cron or a timer that starts it learns from the exit, not only from
