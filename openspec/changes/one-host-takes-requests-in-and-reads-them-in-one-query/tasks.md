@@ -35,7 +35,7 @@ group ends with its check task passing.
 - [x] 2.2 In `pulls.rs`, ask `requests` at a discovery whose list came back changed, while a request out of draft waits on its conditions, or when a request has no reading, and fill every reading (`missing`, `readied`, `posted`, `posted_on`) from it, so `consider` reads nothing per request; on a refusal other than `Limited`, read per request for that pass and say so once. True when the tests of 2.3 pass.
 - [x] 2.3 Tests in `crates/sluice/tests/profiles/pull_requests.rs` (file forge) and `crates/sluice/tests/profiles/forge/github.rs` (fake API, its `graphql()` taught to answer the `pullRequests` query) for each scenario of the forge-reads requirements "One query reads a branch's open pull requests whole" and "A refused query falls back to the reads per pull request". True when `sluice exec main -- cargo test -p sluice --features tools --test pull_requests --test forge` passes.
 - [x] 2.4 Docs (rule core.26): `site/src/content/docs/guides/github-app.md` says sluice reads a branch's open pull requests with one GraphQL query when they changed, from GitHub's GraphQL allowance, which is apart from the REST one. True when `sluice exec main -- moon run site:prose` passes with no Vale warning on the pages this group touched.
-- [ ] 2.5 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools root:changes site:prose`. True when every task passes.
+- [x] 2.5 Check the group: commit, then run `sluice exec main -- moon run cli:test cli:tools root:changes site:prose`. True when every task passes.
 
 ## 3. The gate
 
