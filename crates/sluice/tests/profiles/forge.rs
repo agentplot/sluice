@@ -462,6 +462,7 @@ impl OnGitHub {
         .current_dir(self.repo.dir())
         .args(args)
         .env("XDG_CONFIG_HOME", self.config.path())
+        .env("XDG_STATE_HOME", self.config.path())
         .env("SLUICE_FORGE_API", self.fake.url())
         .env("GH_TOKEN", "operator")
         .env_remove("GITHUB_TOKEN")
@@ -1124,13 +1125,14 @@ fn a_comment_whose_first_try_cannot_connect_is_posted_once() {
         gh.calls("POST", &format!("/repos/o/r/issues/{n}/comments")),
         1
     );
-    assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
     // Never judged, the comment was made again blind: nothing read
-    // whether GitHub held it, but the read just made.
+    // whether GitHub held it. Counted before the test's own read, which
+    // the policy may try again on a connection a loaded host dropped.
     assert_eq!(
         gh.calls("GET", &format!("/repos/o/r/issues/{n}/comments")),
-        1
+        0
     );
+    assert_eq!(app.comments(&repo(), n).unwrap(), ["posted"]);
 }
 
 /// The remote-retry spec's "A run's dispatch answered 502": a dispatch
@@ -1202,4 +1204,362 @@ fn a_dispatch_answered_502_is_made_once() {
         .filter(|r| r.path.ends_with("/dispatches"))
         .count();
     assert_eq!(dispatched, 1);
+}
+
+// 134 as amended 2026-10-28, 136; rules core.29, core.32; ADR 0071: a
+// spent allowance pauses every process on the host, and every read is
+// conditional on the answer the host keeps.
+
+/// `policy`, its pauses kept and skipped, its clock moved on by each.
+fn pausing_as(policy: Policy) -> (Rc<Policy>, Rc<RefCell<Vec<Duration>>>) {
+    let pauses = Rc::new(RefCell::new(Vec::new()));
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let (kept, moved) = (pauses.clone(), clock.clone());
+    let policy = policy.pausing(
+        move |d| {
+            kept.borrow_mut().push(d);
+            moved.set(moved.get() + d);
+            true
+        },
+        move || clock.get(),
+    );
+    (Rc::new(policy), pauses)
+}
+
+/// The app on `gh`, under `policy`, keeping its answers and pauses in
+/// `state`, as each process on one host does.
+fn kept_app(gh: &github::GitHub, state: &std::path::Path, policy: Rc<Policy>) -> App {
+    App::new(APP, KEY, gh.url(), Box::new(Utc::now), policy)
+        .unwrap()
+        .keeping(sluice::profiles::github::kept::Kept::new(state))
+}
+
+/// The fake GitHub holding one open pull request, its number, and the
+/// directory standing for the host's state.
+fn kept_github(name: &str) -> (support::Scratch, support::Scratch, github::GitHub, u64) {
+    let dir = support::Scratch::new(name);
+    let state = support::Scratch::new(&format!("{name}-state"));
+    let gh = github::GitHub::start(&github::file(dir.path()), None);
+    let n = gh
+        .forge
+        .open_by("ann", "main", "unit/a", "aaa", false, None)
+        .unwrap();
+    (dir, state, gh, n)
+}
+
+fn headers(pairs: &[(&str, String)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
+}
+
+/// GitHub's 403 for the primary allowance spent until `reset`.
+fn primary_spent(reset: DateTime<Utc>) -> github::Trouble {
+    github::Trouble::Limited {
+        status: 403,
+        headers: headers(&[
+            ("x-ratelimit-remaining", "0".into()),
+            ("x-ratelimit-reset", reset.timestamp().to_string()),
+            ("x-ratelimit-resource", "core".into()),
+        ]),
+        body: json!({ "message": "API rate limit exceeded for installation ID 7." }),
+    }
+}
+
+/// Whether `d` is `want` to within the second GitHub's reset is given in.
+fn about(d: Duration, want: Duration) -> bool {
+    d <= want && want - d <= Duration::from_secs(1)
+}
+
+/// The forge-allowance spec's "The primary allowance spent", and the
+/// remote-retry spec's "A spent allowance is no answer": a read answered
+/// 403 with no call remaining is not made again before the reset, and a
+/// waiting command reads again after it.
+#[test]
+fn a_spent_allowance_is_waited_out_to_its_reset() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("allowance-primary");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    let path = format!("/repos/o/r/pulls/{n}");
+    gh.trouble("GET", &path, 1, primary_spent(reset));
+    let (policy, pauses) = pausing_as(Policy::waiting(None));
+    let app = kept_app(&gh, state.path(), policy);
+    assert_eq!(app.pull(&repo(), n).unwrap().unwrap().number, n);
+    assert_eq!(gh.answered("GET", &path, 403), 1);
+    assert_eq!(gh.answered("GET", &path, 200), 1);
+    let pauses = pauses.borrow().clone();
+    assert_eq!(pauses.len(), 1, "the pause alone, no backoff: {pauses:?}");
+    // Until the reset, which GitHub gives to the second.
+    let twenty = Duration::from_secs(20 * 60);
+    assert!(
+        about(pauses[0], twenty) || about(pauses[0] + Duration::from_secs(1), twenty),
+        "{pauses:?}"
+    );
+}
+
+/// The forge-allowance spec's "One process meets it, another honours it":
+/// a round refused with the allowance spent makes no call after it, and
+/// another process on the host makes none before the reset either.
+#[test]
+fn every_process_on_the_host_honours_the_pause() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("allowance-host");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    gh.trouble("GET", "/repos/o/r/pulls", 1, primary_spent(reset));
+    let run = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    let e = run.pulls(&repo(), "main").unwrap_err();
+    let limited = sluice::retry::limited(&e).expect("a spent allowance");
+    assert_eq!(limited.until.timestamp(), reset.timestamp());
+    assert!(
+        limited
+            .words
+            .contains("API rate limit exceeded for installation ID 7."),
+        "{e:#}"
+    );
+    let (policy, pauses) = pausing_as(Policy::round());
+    let submit = kept_app(&gh, state.path(), policy);
+    let e = submit.pull(&repo(), n).unwrap_err();
+    assert!(sluice::retry::limited(&e).is_some(), "{e:#}");
+    assert_eq!(gh.calls("GET", "/repos/o/r/pulls"), 1, "one call, refused");
+    assert!(pauses.borrow().is_empty(), "a round waits no pause");
+}
+
+/// The forge-allowance spec's "The pause outlives the process": a process
+/// started again before the pause ends makes no call before it ends, and
+/// one waiting it out calls once it has.
+#[test]
+fn the_pause_outlives_the_process() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("allowance-restart");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    let path = format!("/repos/o/r/pulls/{n}");
+    gh.trouble("GET", &path, 1, primary_spent(reset));
+    {
+        let first = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+        assert!(first.pull(&repo(), n).is_err());
+    }
+    let (policy, pauses) = pausing_as(Policy::command());
+    let again = kept_app(&gh, state.path(), policy);
+    assert_eq!(again.pull(&repo(), n).unwrap().unwrap().number, n);
+    assert_eq!(
+        gh.calls("GET", &path),
+        2,
+        "one refused, one after the pause"
+    );
+    assert_eq!(pauses.borrow().len(), 1);
+}
+
+/// The forge-allowance spec's "GraphQL's allowance spent" and "GraphQL's
+/// allowance is its own": a query answered `RATE_LIMITED` pauses the
+/// GraphQL allowance alone, and a paused REST allowance stops no query.
+#[test]
+fn graphqls_allowance_is_its_own() {
+    use sluice::profiles::github::forge::Forge as _;
+    use sluice::profiles::github::Bearer;
+    let (_dir, state, gh, _) = kept_github("allowance-graphql");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    let query = json!({ "query": "query { viewer { login } }" }).to_string();
+    let app = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    // REST spent: the query is made all the same.
+    gh.trouble("GET", "/repos/o/r/pulls", 1, primary_spent(reset));
+    assert!(app.pulls(&repo(), "main").is_err());
+    app.post_api(
+        sluice::profiles::github::Call::Read,
+        "/graphql",
+        Bearer::Repo(&repo()),
+        &query,
+    )
+    .unwrap();
+    assert_eq!(gh.calls("POST", "/graphql"), 1);
+
+    let (_dir, state, gh, n) = kept_github("allowance-graphql-spent");
+    gh.trouble(
+        "POST",
+        "/graphql",
+        1,
+        github::Trouble::Limited {
+            status: 200,
+            headers: headers(&[
+                ("x-ratelimit-remaining", "0".into()),
+                ("x-ratelimit-reset", reset.timestamp().to_string()),
+                ("x-ratelimit-resource", "graphql".into()),
+            ]),
+            body: json!({ "data": null, "errors": [{
+                "type": "RATE_LIMITED", "message": "API rate limit exceeded for installation ID 7."
+            }] }),
+        },
+    );
+    let app = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    for _ in 0..2 {
+        let e = app
+            .post_api(
+                sluice::profiles::github::Call::Read,
+                "/graphql",
+                Bearer::Repo(&repo()),
+                &query,
+            )
+            .unwrap_err();
+        let l = sluice::retry::limited(&e).expect("limited");
+        assert_eq!(l.until.timestamp(), reset.timestamp());
+    }
+    assert_eq!(gh.calls("POST", "/graphql"), 1, "no query before the reset");
+    // REST is not paused by GraphQL's.
+    assert!(app.pull(&repo(), n).unwrap().is_some());
+}
+
+/// The forge-allowance spec's "A secondary limit with retry-after", and
+/// the remote-retry spec's "A 429 is no backoff": a 429 naming a time is
+/// not called again before it, whatever the backoff's pauses would be.
+#[test]
+fn a_429_waits_as_long_as_github_says() {
+    use sluice::profiles::github::forge::Forge as _;
+    for secs in [90u64, 120] {
+        let (_dir, state, gh, n) = kept_github(&format!("allowance-429-{secs}"));
+        let path = format!("/repos/o/r/pulls/{n}");
+        gh.trouble(
+            "GET",
+            &path,
+            1,
+            github::Trouble::Limited {
+                status: 429,
+                headers: headers(&[("retry-after", secs.to_string())]),
+                body: json!({ "message": "You have exceeded a secondary rate limit." }),
+            },
+        );
+        let (policy, pauses) = pausing_as(Policy::waiting(None));
+        let app = kept_app(&gh, state.path(), policy);
+        assert!(app.pull(&repo(), n).unwrap().is_some());
+        assert_eq!(gh.calls("GET", &path), 2);
+        assert_eq!(*pauses.borrow(), [Duration::from_secs(secs)]);
+    }
+}
+
+/// The forge-allowance spec's "A secondary limit naming no time": the
+/// first pause lasts a minute and the second, in a row, two.
+#[test]
+fn a_secondary_limit_naming_no_time_doubles() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("allowance-secondary");
+    let path = format!("/repos/o/r/pulls/{n}");
+    gh.trouble(
+        "GET",
+        &path,
+        2,
+        github::Trouble::Limited {
+            status: 403,
+            headers: vec![],
+            body: json!({ "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." }),
+        },
+    );
+    let (policy, pauses) = pausing_as(Policy::command());
+    let app = kept_app(&gh, state.path(), policy);
+    assert!(app.pull(&repo(), n).unwrap().is_some());
+    assert_eq!(gh.calls("GET", &path), 3);
+    assert_eq!(
+        *pauses.borrow(),
+        [Duration::from_secs(60), Duration::from_secs(120)]
+    );
+}
+
+/// The forge-allowance spec's "The last call": a read that succeeds with
+/// no call remaining is used, and the next call is not made before the
+/// reset.
+#[test]
+fn the_last_call_of_an_allowance_starts_the_pause() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("allowance-last");
+    let reset = Utc::now() + TimeDelta::minutes(20);
+    gh.trouble(
+        "GET",
+        "/repos/o/r/pulls",
+        1,
+        github::Trouble::With(headers(&[
+            ("x-ratelimit-remaining", "0".into()),
+            ("x-ratelimit-reset", reset.timestamp().to_string()),
+        ])),
+    );
+    let app = kept_app(&gh, state.path(), Rc::new(Policy::round().recording()));
+    assert_eq!(app.pulls(&repo(), "main").unwrap().len(), 1);
+    let e = app.pull(&repo(), n).unwrap_err();
+    assert_eq!(
+        sluice::retry::limited(&e).map(|l| l.until.timestamp()),
+        Some(reset.timestamp())
+    );
+    assert_eq!(gh.calls("GET", &format!("/repos/o/r/pulls/{n}")), 0);
+}
+
+/// The forge-reads spec's "An unchanged list", "Another process on the
+/// host" and "GitHub answers 200 to a kept ETag": every read carries the
+/// ETag kept for its address, whichever process kept it; a 304 is
+/// answered from what is kept, and a 200 replaces it.
+#[test]
+fn every_read_is_conditional() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, _) = kept_github("reads-conditional");
+    let list = "/repos/o/r/pulls?state=open&base=main";
+    let run = kept_app(&gh, state.path(), policy());
+    let first = run.pulls(&repo(), "main").unwrap();
+    let second = run.pulls(&repo(), "main").unwrap();
+    assert_eq!(first, second);
+    assert_eq!(gh.answered("GET", list, 200), 1);
+    assert_eq!(gh.answered("GET", list, 304), 1);
+    let sent: Vec<Option<String>> = gh
+        .fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.starts_with(list))
+        .map(|r| r.header("If-None-Match").map(String::from))
+        .collect();
+    assert_eq!(sent.len(), 2);
+    assert!(sent[0].is_none() && sent[1].is_some(), "{sent:?}");
+
+    // Another process on the host carries the ETag the first kept.
+    let wait = kept_app(&gh, state.path(), policy());
+    assert_eq!(wait.pulls(&repo(), "main").unwrap(), first);
+    let last = gh
+        .fake
+        .requests()
+        .into_iter()
+        .rfind(|r| r.path.starts_with(list))
+        .unwrap();
+    assert_eq!(last.header("If-None-Match").map(String::from), sent[1]);
+    assert_eq!(gh.answered("GET", list, 304), 2);
+
+    // Changed on GitHub: a 200 with a new ETag, used and kept.
+    gh.forge
+        .open_by("bob", "main", "unit/b", "bbb", false, None)
+        .unwrap();
+    assert_eq!(wait.pulls(&repo(), "main").unwrap().len(), 2);
+    assert_eq!(gh.answered("GET", list, 200), 2);
+    assert_eq!(run.pulls(&repo(), "main").unwrap().len(), 2);
+    assert_eq!(gh.answered("GET", list, 304), 3);
+}
+
+/// The forge-reads spec's "No token on disk": after reading and posting
+/// as the app, no file under the host's state holds its token.
+#[test]
+fn no_token_is_kept_on_the_host() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, n) = kept_github("reads-no-token");
+    let app = kept_app(&gh, state.path(), policy());
+    app.pulls(&repo(), "main").unwrap();
+    app.comment(&repo(), n, "posted").unwrap();
+    app.comments(&repo(), n).unwrap();
+    assert_eq!(app.token(&repo()).unwrap(), github::TOKEN);
+    let mut files = 0;
+    let mut dirs = vec![state.path().to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else {
+                files += 1;
+                let text = String::from_utf8_lossy(&std::fs::read(&p).unwrap()).to_string();
+                assert!(!text.contains(github::TOKEN), "{}", p.display());
+            }
+        }
+    }
+    assert!(files > 0, "answers were kept");
 }

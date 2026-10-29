@@ -484,6 +484,7 @@ reserved = 1   # default: 0; runs of the bound agents' own runs never use
 [forge]
 app_id = 123456                  # the GitHub App sluice pushes as
 key = "~/.config/sluice/app.pem" # its private key on this host
+discovery = "60s"                # default: 60s; how often it asks for pull requests
 
 [signing]
 signer = "box"                   # the policy's name for this host's key
@@ -501,7 +502,7 @@ dir = "~/.cache/sccache"
 |---|---|---|
 | [`[runs]`](#runs) | How many runs share the host's cores at once, how many of its cores they use, and how many runs are kept for submissions. | Always; each key has a default. |
 | [`[runs] systems`](#runs-systems) | The systems the host runs. | It runs only some of the systems a policy names. |
-| [`[forge]`](#forge) | The GitHub App sluice pushes as. | It lands on a branch whose remote is on GitHub. |
+| [`[forge]`](#forge) | The GitHub App sluice pushes as, and how often it asks GitHub for a branch's pull requests. | It lands on a branch whose remote is on GitHub. |
 | [`[signing]`](#signing) | The signer the host signs its results as, and its key. | It runs checks for a branch whose state is on its remote. |
 | [`[peers]`](#peers) | How long a quiet host keeps a branch, how often this host shows it is alive, and its name among the hosts. | It shares a branch's remote with other hosts. |
 | [`[[caches]]`](#caches) | The caches every run on the host shares. | Its builds share a cache, a compile server's or the task runner's. |
@@ -618,6 +619,17 @@ own. The guide [Give sluice its own GitHub
 identity](/sluice/guides/github-app/) sets it up, and
 [`sluice forge check`](/sluice/reference/commands/#sluice-forge-check)
 says whether it is set up right.
+
+`discovery` is how often sluice asks GitHub for the open pull requests
+into a branch that takes them while nothing on the host changes, a
+duration such as `"60s"` or `"2m"`. The default is `"60s"` and the
+least is `"10s"`: sluice refuses a shorter one, naming `discovery`. A
+submit on the host, a landing, or a change to the branch's queue asks
+at once whatever it is set to. What it sets is how soon sluice sees what
+happens on GitHub alone: a pull request opened by hand, a review, or
+another system's check. A shorter one sees those sooner and spends more
+of the app's allowance of calls, which every repository the app is
+installed on shares. Between two askings, sluice asks GitHub nothing.
 
 ### `[runs] systems`
 

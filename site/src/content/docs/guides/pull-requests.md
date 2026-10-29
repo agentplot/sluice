@@ -115,10 +115,15 @@ keep a `sluice run` going while you work:
 sluice run
 ```
 
-Each round fetches `main`, asks GitHub for the open pull requests into
-`main`, posts their states, and moves the queue. sluice starts no
-service of its own, so how `sluice run` stays up (a terminal, a login
-item, a service manager) is your choice.
+Each round fetches `main` and moves the queue. Once a minute it also asks
+GitHub for the open pull requests into `main` and posts their states.
+It asks at once when a submit on the host opened or updated a pull
+request, or when the queue changed. A pull request opened by hand, a review, or another
+system's check is seen within that minute of happening; an agent's
+submit sees its own pull request at once. `[forge] discovery` in the
+[host's config](/sluice/reference/configuration/#forge) sets the minute.
+sluice starts no service of its own, so how `sluice run` stays up (a
+terminal, a login item, a service manager) is your choice.
 
 ## An agent submits
 
@@ -278,7 +283,8 @@ request's description without the group's mark.
 ## A person opens one by hand
 
 Open a pull request into `main` from any branch of the repository, as
-you always have. The next round finds it and posts its state. A draft
+you always have. sluice finds it the next time it asks GitHub, within
+`[forge] discovery` of your opening it, and posts its state. A draft
 waits; mark it ready for review when it is. Pull requests from forks
 are never taken.
 
@@ -407,10 +413,10 @@ sequenceDiagram
   Its `sluice` check names who withdrew it.
 - **Back to draft, or closed.** It leaves the queue.
 - **sluice can't read it.** sluice may fail to fetch a pull request's
-  head from GitHub, or to read its reviews or checks. Each round then
+  head from GitHub, or to read its reviews or checks. sluice then
   prints a warning naming the pull request and what failed, and goes on
-  with the branch's other pull requests. sluice reads it again each round
-  until it can, or until the pull request is closed. A draft's `sluice`
+  with the branch's other pull requests. sluice reads it again each time
+  it asks GitHub until it can, or until the pull request is closed. A draft's `sluice`
   check reads `waiting: a draft` either way.
 - **One of a group closed before the group is taken.** The rest wait,
   and say they wait for it, until a submit names them again.

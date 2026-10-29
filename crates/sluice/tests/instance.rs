@@ -88,7 +88,8 @@ fn guarding_reads_only_the_forge() {
         i.forge,
         Some(sluice::instance::Forge {
             app_id: 42,
-            key: key.clone()
+            key: key.clone(),
+            discovery: sluice::instance::DISCOVERY,
         })
     );
     assert_eq!((i.signing, i.bound), (None, 1));
@@ -115,6 +116,35 @@ fn guarding_reads_only_the_forge() {
             .forge,
         None
     );
+}
+
+/// 136: a branch's open pull requests are asked for once a minute where
+/// the host sets no `[forge] discovery`, at the interval it sets, and
+/// never more often than every ten seconds.
+#[test]
+fn discovery_is_read_from_the_forge() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    let dir = Scratch::new("instance-discovery");
+    let key = dir.path().join("app.pem");
+    std::fs::write(&key, "key").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let forge = |lines: &str| {
+        read(&format!(
+            "[forge]\napp_id = 42\nkey = {:?}\n{lines}",
+            key.display().to_string()
+        ))
+    };
+    let discovery = |lines: &str| forge(lines).unwrap().forge.unwrap().discovery;
+    assert_eq!(discovery(""), Duration::from_secs(60));
+    assert_eq!(discovery("discovery = \"2m\"\n"), Duration::from_secs(120));
+    assert_eq!(discovery("discovery = \"10s\"\n"), Duration::from_secs(10));
+    let e = format!("{:#}", forge("discovery = \"5s\"\n").unwrap_err());
+    assert!(
+        e.contains("[forge] discovery = \"5s\" is shorter than ten seconds"),
+        "{e}"
+    );
+    assert!(forge("discovery = \"soon\"\n").is_err());
 }
 
 #[cfg(feature = "tools")]

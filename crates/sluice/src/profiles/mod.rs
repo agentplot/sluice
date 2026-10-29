@@ -117,12 +117,20 @@ impl Bound {
         let forge = app.map(|a| a as Rc<dyn github::Forge>);
         let branch = branches::Branches::open_as(dir, identity.clone(), retry.clone())?;
         let common = branch.common_dir()?;
+        // 136: each branch's open pull requests asked for at the host's
+        // interval, what was read of them kept in the host's state.
+        let discovery = instance
+            .forge
+            .as_ref()
+            .map_or(crate::instance::DISCOVERY, |f| f.discovery);
         let pulls = Rc::new(github::pulls::Pulls::new(
             branch.git_dir(),
             &common,
             forge,
             identity.clone(),
             retry.clone(),
+            github::kept::Kept::new(&crate::instance::state_dir()?),
+            discovery,
         ));
         // C.6: a branch's records are on its remote when its policy names
         // signers, and this host's own files otherwise.
