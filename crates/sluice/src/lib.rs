@@ -1877,7 +1877,11 @@ fn forecast_read(
     after: &[u64],
 ) -> Result<Option<Result<Forecasted, SubmitRefusal>>> {
     let now = std::time::SystemTime::now();
-    let Some(doc) = reader::current(&host.readers()?, &host.repository()?, now)? else {
+    // A reader this cannot look for is none: the forecast reads as a round.
+    let found = host
+        .readers()
+        .and_then(|dir| reader::current(&dir, &host.repository()?, now));
+    let Ok(Some(doc)) = found else {
         return Ok(None);
     };
     let Some(view) = branch_in(&doc, branch) else {
