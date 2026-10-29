@@ -474,6 +474,36 @@ mod tests {
         }
     }
 
+    /// 129: a process forked while the lead held its lock holds it until it
+    /// runs its program, after the lead let go: the follower holding the
+    /// lease keeps it, and nobody leads, for as long as that process holds
+    /// the lock; once it lets go, the lease holder leads at its next step
+    /// and lets the lease go.
+    #[test]
+    fn a_lease_holder_leads_once_a_forked_process_lets_the_lock_go() {
+        let s = Scratch::new("forked-lock");
+        let mut old = Reader::take(&s.0, REPO, OLD).unwrap();
+        let mut new = Reader::take(&s.0, REPO, NEW).unwrap();
+        new.step(true).unwrap();
+        assert!(holds_lease(&new));
+        // A fork's copy of the lead's descriptor of its lock.
+        let forked = match &old {
+            Reader::Lead(l) => l.lock.try_clone().unwrap(),
+            Reader::Follow(_) => panic!("a follower, where the lock was free"),
+        };
+        old.step(true).unwrap();
+        for _ in 0..3 {
+            new.step(true).unwrap();
+            old.step(true).unwrap();
+            assert!(!is_lead(&old) && !is_lead(&new));
+            assert!(holds_lease(&new));
+        }
+        drop(forked);
+        new.step(true).unwrap();
+        assert!(is_lead(&new) && !leased(&new));
+        assert_eq!(files(&new).reader_version().as_deref(), Some(NEW));
+    }
+
     /// 129: a follower of the reader's own version takes no lease, nor one
     /// beside a lock whose version is absent or no whole one, as a reader
     /// of a sluice from before it names none.
