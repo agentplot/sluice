@@ -147,6 +147,15 @@ nothing to set aside.
   a real fail is blamed only on the third run in a row (115). The
   denial is named so the profile or the host's `[[caches]]` can grant
   what the tool needs.
+- **Refusals a passing run already meets.** On 2026-10-29 a passing
+  `sluice exec main` on sluice itself logged moon failing to write
+  `.moon/cache/outputs/` in the worktree and the shared cache's
+  `blobs/temp/` under the bare repository's `moon-home`. If those are
+  Seatbelt denials, every failing run would carry them, and every real
+  fail would wait for the third run (115). Group 2's first task lists
+  the denials a passing run of sluice's own gate meets; each is granted
+  (they are the place's and a cache's own paths) before the reading is
+  built, or record 0072 is amended first.
 - **`log show` time**: seconds to tens of seconds over a long run's
   span, paid only by a run that did not pass, and once.
 - **A user who cannot read the kernel's log** gets the error with the
