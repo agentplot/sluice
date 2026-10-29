@@ -177,6 +177,7 @@ mod tests {
             id: "c1".into(),
             submissions: vec![12],
             revision: Rev("0123456789abcdef0123456789abcdef01234567".into()),
+            on: None,
             state: CandidateState::Testing,
             started: Some("2026-10-21T12:03:50Z".into()),
             limit,

@@ -3,12 +3,14 @@
 //! its latest landings, blames and conflicts (26, 49; ADR 0023).
 //!
 //! Read from the records alone (61; rule core.11): it takes no lock,
-//! holds no decision and writes nothing (rule core.14). A branch is read
-//! at the revision its records last saw, never fetched, so a reader that
-//! asks every second costs no remote a request.
+//! holds no decision and writes nothing (rule core.14). A branch's policy
+//! is read at the revision its records last saw, and its revision as the
+//! host holds it, never fetched but in the call that reads its records,
+//! so a reader that asks every second asks a remote no more than for
+//! them (64, 129).
 
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -53,6 +55,12 @@ pub struct BranchView {
     pub branch: String,
     /// The branch's revision as its records last saw it.
     pub at: Option<Rev>,
+    /// 64: the branch's revision as the read found it, the remote's for a
+    /// branch on a remote, which a forecast forms on; `None` where the
+    /// read could not ask the branch's remote or the remote holds no such
+    /// branch, for a branch read alone, and in a document from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<Rev>,
     /// The records' version: it moves on every write, so a reader redraws
     /// only when it does.
     pub version: u64,
@@ -73,6 +81,11 @@ pub struct BranchView {
     /// The submissions still in a chain, as `sluice status <id> --json`
     /// prints each.
     pub submissions: Vec<Submission>,
+    /// 7, 64: the submissions a queued submission's `after` names that
+    /// have landed, in number order: with the queue, all a forecast orders
+    /// it by. `[]` in a document from before it.
+    #[serde(default)]
+    pub after_landed: Vec<u64>,
     /// The latest `landed`, `blamed` and `conflict` lines of the branch's
     /// log, oldest first, exactly as written.
     pub recent: Vec<serde_json::Value>,
@@ -109,6 +122,7 @@ impl BranchView {
         BranchView {
             branch: branch.to_string(),
             at: None,
+            revision: None,
             version: 0,
             window: 0,
             parallel: None,
@@ -116,6 +130,7 @@ impl BranchView {
             depth: 0,
             candidates: Vec::new(),
             submissions: Vec::new(),
+            after_landed: Vec::new(),
             recent: Vec::new(),
             recent_from: BTreeMap::new(),
             recent_subjects: BTreeMap::new(),
@@ -155,6 +170,11 @@ pub struct CandidateView {
     pub id: String,
     pub submissions: Vec<u64>,
     pub revision: Rev,
+    /// 10, 64: the branch's revision it was formed on, which a forecast
+    /// on that revision takes it from; `None` in a document from before
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<Rev>,
     pub state: CandidateState,
     /// When its run started, from the branch's log.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,6 +222,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
             id: c.id.clone(),
             submissions: c.submissions.clone(),
             revision: c.revision.clone(),
+            on: Some(c.on.clone()),
             state: c.state,
             started: (c.state != CandidateState::Formed)
                 .then(|| started(&c.revision))
@@ -221,6 +242,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         })
         .collect();
     let submissions: Vec<Submission> = in_queue(line.subs.values()).cloned().collect();
+    let after_landed = after_landed(&line);
     let recent = recent(&log, RECENT)?;
     // An id in neither the live records nor the finished index, which only
     // a hand-edited record gives, is left out.
@@ -249,6 +271,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
     Ok(BranchView {
         branch,
         at: line.doc.base.clone(),
+        revision: None,
         version: line.version,
         window: line.doc.window,
         parallel: rules.as_ref().map(|r| r.parallel),
@@ -256,6 +279,7 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         depth: submissions.len(),
         candidates,
         submissions,
+        after_landed,
         recent,
         recent_from,
         recent_subjects,
@@ -263,6 +287,17 @@ pub fn branch_view(read: BranchRead) -> Result<BranchView> {
         held_checkouts: line.doc.failed_releases.clone(),
         unread: None,
     })
+}
+
+/// 7: the submissions a queued submission's `after` names that have
+/// landed, in number order.
+pub fn after_landed(line: &Line) -> Vec<u64> {
+    let landed = line.landed();
+    let named: BTreeSet<u64> = in_queue(line.subs.values())
+        .flat_map(|s| s.after.iter().copied())
+        .filter(|a| landed.contains(a))
+        .collect();
+    named.into_iter().collect()
 }
 
 /// The submissions a recent line names: a landing's `ids`, a blame's
@@ -347,13 +382,16 @@ impl Sluice<'_> {
     /// the revision its records last saw, in the order `from`'s policy
     /// names them (ADR 0036). A branch whose policy, revision or records
     /// could not be read is shown with the refusal and hides no other
-    /// (26; 129, 133): only the records' own list fails it whole.
+    /// (26; 129, 133): only the records' own list fails it whole. Each
+    /// branch's records are read with the branch, its work and its
+    /// combinations, and its view names the revision that read found,
+    /// so a forecast can form from what a reader wrote (64, 129).
     pub fn overview(&self, from: Option<&OrderFrom>) -> Result<Vec<BranchView>> {
         let mut out = Vec::new();
         let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
             let view = self
-                .branch_view_of(&branch)
+                .branch_view_with_branch(&branch)
                 .unwrap_or_else(|e| BranchView::unread(&branch, &e));
             if from.is_some_and(|f| f.branch == branch) {
                 order_at = view.at.clone().or(order_at);
@@ -372,6 +410,26 @@ impl Sluice<'_> {
     /// waiting command show of its combinations (ADR 0042).
     pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
         let snapshot = self.seams.state.read(branch)?;
+        self.view_of(branch, snapshot)
+    }
+
+    /// 64, 129: `branch`'s part of a whole overview: its records read with
+    /// the branch, its work and its combinations, naming the revision of
+    /// the branch that read found, none where it could not ask the
+    /// branch's remote.
+    fn branch_view_with_branch(&self, branch: &str) -> Result<BranchView> {
+        let snapshot = self.seams.state.read_with_branch(branch)?;
+        let mut view = self.view_of(branch, snapshot)?;
+        view.revision = match self.seams.state.stale(branch) {
+            Some(_) => None,
+            None => self.seams.branch.fetched(branch)?,
+        };
+        Ok(view)
+    }
+
+    /// `branch`'s part of the overview from `snapshot`, its records as
+    /// read, at the revision they last saw.
+    fn view_of(&self, branch: &str, snapshot: Snapshot) -> Result<BranchView> {
         let base = Line::load(branch, snapshot.clone())?.doc.base;
         let policy = match &base {
             Some(rev) => self
@@ -665,6 +723,7 @@ mod tests {
         BranchView {
             branch: branch.into(),
             at: None,
+            revision: None,
             version: 0,
             window: 0,
             parallel: None,
@@ -672,6 +731,7 @@ mod tests {
             depth: 0,
             candidates: Vec::new(),
             submissions: Vec::new(),
+            after_landed: Vec::new(),
             recent,
             recent_from: BTreeMap::new(),
             recent_subjects: BTreeMap::new(),
@@ -773,6 +833,88 @@ mod tests {
                  \"state\":\"{state}\"}}"
             ),
         )
+    }
+
+    /// `id`'s record in `state`, queued after `after`.
+    fn after(id: u64, state: &str, after: &[u64]) -> (String, String) {
+        let (path, doc) = submission(id, "unit/a", state);
+        let after = format!("\"after\":{after:?}");
+        (path, doc.replace("\"after\":[]", &after))
+    }
+
+    /// 7, 64: a branch names the landed submissions a queued one's
+    /// `after` names, live or moved to the finished index, in number
+    /// order; one no queued submission names, or one still queued, is no
+    /// part of it.
+    #[test]
+    fn a_branch_names_the_landed_submissions_its_queue_waits_behind() {
+        const GATE: &str = "[branches.main]\nrequired = []\n";
+        let subs = [
+            after(1, "landed", &[]),
+            after(3, "landed", &[]),
+            after(5, "queued", &[4, 3, 6]),
+            after(6, "queued", &[]),
+            after(7, "failed", &[1]),
+        ];
+        let mut files: Vec<(&str, String)> =
+            subs.iter().map(|(p, d)| (p.as_str(), d.clone())).collect();
+        files.push((
+            crate::records::FINISHED_INDEX,
+            "{\"id\":4,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n".into(),
+        ));
+        let v = read(GATE, &files);
+        assert_eq!(v.after_landed, [3, 4]);
+        assert_eq!(
+            serde_json::to_value(&v).unwrap()["after_landed"],
+            serde_json::json!([3, 4])
+        );
+        let none = read(GATE, &[]);
+        assert_eq!(
+            serde_json::to_value(&none).unwrap()["after_landed"],
+            serde_json::json!([])
+        );
+    }
+
+    /// 10, 64: each combination names the branch's revision it was formed
+    /// on beside its own; a document from before it reads with none.
+    #[test]
+    fn a_combination_names_the_revision_it_was_formed_on() {
+        const GATE: &str = "[branches.main]\nrequired = []\n";
+        let mut doc = crate::records::BranchDoc::new("main");
+        doc.candidates = vec![serde_json::from_value(serde_json::json!({
+            "id": "c1", "on": "r0", "submissions": [1, 2], "revision": "c12",
+            "state": "testing",
+        }))
+        .unwrap()];
+        let branch = String::from_utf8(crate::records::to_document(&doc)).unwrap();
+        let v = read(GATE, &[(crate::records::BRANCH_FILE, branch)]);
+        assert_eq!(v.candidates[0].on, Some(Rev::new("r0")));
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["candidates"][0]["on"], "r0");
+        assert_eq!(json["candidates"][0]["revision"], "c12");
+        assert_eq!(
+            json["candidates"][0]["submissions"],
+            serde_json::json!([1, 2])
+        );
+
+        let mut before = json.clone();
+        before["candidates"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("on");
+        before.as_object_mut().unwrap().remove("after_landed");
+        let read: BranchView = serde_json::from_value(before).unwrap();
+        assert_eq!(read.candidates[0].on, None);
+        assert_eq!(read.after_landed, Vec::<u64>::new());
+    }
+
+    /// 64: a branch read from its records alone names no revision of the
+    /// branch, and says nothing of one.
+    #[test]
+    fn a_branch_read_alone_names_no_revision() {
+        let v = read("[branches.main]\nrequired = []\n", &[]);
+        assert_eq!(v.revision, None);
+        assert!(serde_json::to_value(&v).unwrap().get("revision").is_none());
     }
 
     /// 26, 49, 61: each submission a recent line names, by the worktree
