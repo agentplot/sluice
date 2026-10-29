@@ -121,6 +121,10 @@ pub struct Reading {
     /// The notifications a comment on it delivered.
     #[serde(default)]
     pub said: Vec<String>,
+    /// Whether this pass's one query read it whole, so that what it lacks
+    /// stands for the pass, whatever it is; never kept.
+    #[serde(skip)]
+    pub whole: bool,
 }
 
 /// 137: a branch's intake mark as this host last saw it: its commit,

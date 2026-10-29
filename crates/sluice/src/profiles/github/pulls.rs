@@ -57,7 +57,9 @@ use sluice_seams::{
 };
 
 use super::app::Repo;
-use super::forge::{approvals, Forge, Posted, Posting, Pull, Standing, Status, SLUICE_CHECK};
+use super::forge::{
+    approvals, Check, Forge, Posted, Posting, Pull, Request, Review, Standing, Status, SLUICE_CHECK,
+};
 use super::kept::Observed;
 use super::kept::{Kept, Reading, Readings};
 use super::render;
@@ -813,7 +815,8 @@ impl Pulls {
             self.register(&t.repo, &s.status(branch)?.submissions);
             return Ok(true);
         }
-        let pulls = forge.pulls(&t.repo, branch)?;
+        let listed = forge.listed(&t.repo, branch)?;
+        let (pulls, changed) = (listed.pulls, listed.changed);
         let mut status = s.status(branch)?;
         self.register(&t.repo, &status.submissions);
         let mut names = names(&status.submissions);
@@ -870,6 +873,38 @@ impl Pulls {
                 })
                 .collect(),
         );
+        // 136: one query reads every open pull request whole, when their
+        // list changed, while one out of draft waits on its conditions, or
+        // when one has nothing kept; a draft is read by the list alone.
+        let asks = ours.iter().any(|p| {
+            !p.draft
+                && (changed
+                    || !kept.requests.contains_key(&p.number)
+                    || waits(p, latest.get(&place(p.number)), &work.borrow()[&p.number]))
+        });
+        if asks {
+            match forge.requests(&t.repo, branch) {
+                Ok(read) => {
+                    let mut work = work.borrow_mut();
+                    for q in &read {
+                        if let Some(r) = work.get_mut(&q.pull.number) {
+                            read_whole(r, q, &t.conditions);
+                        }
+                    }
+                }
+                // GraphQL's allowance spent: the round passes the forge's
+                // part by, and the next discovery asks again (134).
+                Err(e) if retry::limited(&e).is_some() => {
+                    self.keep_readings(s, &t, branch, now, &open, work.into_inner())?;
+                    return Err(e);
+                }
+                // Refused otherwise: each is read alone this pass.
+                Err(e) => crate::telemetry::warn(&format!(
+                    "sluice: warning: taking in {branch}'s pull requests: GitHub refused the \
+                     query that reads them whole, so each is read alone this pass: {e:#}"
+                )),
+            }
+        }
         // 125: a group is taken whole, before any of it is considered alone.
         let groups = self.take_groups(s, forge, &t, &pushed, branch, &ours, &latest, &log, &work);
         let Groups {
@@ -1280,7 +1315,7 @@ impl Pulls {
         p: &Pull,
         r: &mut Reading,
     ) -> Result<Vec<String>> {
-        if let Some(met) = r.missing.as_ref().filter(|m| m.is_empty()) {
+        if let Some(met) = r.missing.as_ref().filter(|m| r.whole || m.is_empty()) {
             return Ok(met.clone());
         }
         let missing = self.missing(forge, t, p)?;
@@ -1292,33 +1327,20 @@ impl Pulls {
     /// and its reviews and checks on its head (C.7).
     fn missing(&self, forge: &dyn Forge, t: &Target, p: &Pull) -> Result<Vec<String>> {
         let here = place(p.number);
-        let mut missing = Vec::new();
         if p.draft {
-            missing.push("a draft".to_string());
-            return Ok(missing);
+            return Ok(lacks(&t.conditions, p, &[], &[]));
         }
         let reviews = forge
             .reviews(&t.repo, p.number)
             .with_context(|| format!("reading {here}'s reviews"))?;
-        let have = approvals(&reviews, &p.head);
-        if have < t.conditions.reviews {
-            let need = t.conditions.reviews - have;
-            missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
-        }
-        if !t.conditions.checks.is_empty() {
-            let checks = forge
+        let checks = if t.conditions.checks.is_empty() {
+            Vec::new()
+        } else {
+            forge
                 .checks(&t.repo, &p.head)
-                .with_context(|| format!("reading {here}'s checks"))?;
-            for name in &t.conditions.checks {
-                if !checks
-                    .iter()
-                    .any(|c| &c.name == name && c.standing == Standing::Passed)
-                {
-                    missing.push(name.clone());
-                }
-            }
-        }
-        Ok(missing)
+                .with_context(|| format!("reading {here}'s checks"))?
+        };
+        Ok(lacks(&t.conditions, p, &reviews, &checks))
     }
 
     /// 125: each group of bound pull requests submitted whole, through one
@@ -1675,6 +1697,58 @@ fn post_check(
         );
     }
     Ok(())
+}
+
+/// What pull request `p` lacks of `conditions` before sluice takes it, by
+/// `reviews` and the `checks` on its head: out of draft, and its reviews
+/// and checks (C.7).
+fn lacks(conditions: &Conditions, p: &Pull, reviews: &[Review], checks: &[Check]) -> Vec<String> {
+    let mut missing = Vec::new();
+    if p.draft {
+        missing.push("a draft".to_string());
+        return missing;
+    }
+    let have = approvals(reviews, &p.head);
+    if have < conditions.reviews {
+        let need = conditions.reviews - have;
+        missing.push(format!("{need} review{}", if need == 1 { "" } else { "s" }));
+    }
+    for name in &conditions.checks {
+        if !checks
+            .iter()
+            .any(|c| &c.name == name && c.standing == Standing::Passed)
+        {
+            missing.push(name.clone());
+        }
+    }
+    missing
+}
+
+/// 136: whether pull request `p` waits on its conditions, as `r` read
+/// them: it has no submission at its head, and lacked something when last
+/// read, or was not read. Another system's check moves nothing GitHub
+/// lists, so such a request is read again at each discovery.
+fn waits(p: &Pull, latest: Option<&Submission>, r: &Reading) -> bool {
+    latest.is_none_or(|e| e.head.0 != p.head) && r.missing.as_ref().is_none_or(|m| !m.is_empty())
+}
+
+/// 136: fill `r` from `q`, the pull request as the one query read it
+/// whole, when it is at the head the list gave: what it lacks of
+/// `conditions`, its ready marks, and sluice's check runs on its head, so
+/// nothing of it is read alone this pass.
+fn read_whole(r: &mut Reading, q: &Request, conditions: &Conditions) {
+    if r.head != q.pull.head || r.draft != q.pull.draft {
+        return;
+    }
+    r.missing = Some(lacks(conditions, &q.pull, &q.reviews, &q.checks));
+    r.readied = Some(q.readied.clone());
+    r.posted = q
+        .posted
+        .iter()
+        .map(|p| (p.name.clone(), p.clone()))
+        .collect();
+    r.posted_on = Some(q.pull.head.clone());
+    r.whole = true;
 }
 
 /// What a report comment says, kept short: the first 32 hex digits of its
