@@ -12,6 +12,13 @@
 //! What the remote answered is never tried again. Each try is traced at
 //! debug level and nothing of it is written to a branch's log: a refusal
 //! that stands is logged once by whoever reports it (133).
+//!
+//! A forge's word that its allowance of calls is spent is a class of its
+//! own, never backed off (134 as amended 2026-10-28; rule core.29; ADR
+//! 0071): the policy sleeps until the time the forge named when it may,
+//! a wait to its deadline or without end, and otherwise stops at once, a
+//! round and a submit that does not wait among them (the user,
+//! 2026-10-28).
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -20,6 +27,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use backon::{BlockingRetryable, ExponentialBuilder};
+use chrono::{DateTime, Local, Utc};
 
 /// How long a call of a command that does not wait is tried for:
 /// seconds (134), room for two tokens bought afresh and settled, and four
@@ -43,6 +51,42 @@ pub enum Judged {
     /// Not known whether the remote judged it: a connection cut, or a
     /// server error, after the call was sent.
     Unknown,
+    /// The remote's allowance of calls is spent until `until`: no call is
+    /// made before it, and none to find out whether it has ended.
+    Limited { until: DateTime<Utc> },
+}
+
+/// A call not made, or refused, because the forge's allowance of calls is
+/// spent until `until` (134; ADR 0071): `words` are the forge's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Limited {
+    pub app: u64,
+    pub until: DateTime<Utc>,
+    pub words: String,
+}
+
+impl fmt::Display for Limited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GitHub's allowance of calls for app {} is spent until {}: {}",
+            self.app,
+            clock(self.until),
+            self.words
+        )
+    }
+}
+
+impl std::error::Error for Limited {}
+
+/// `t` as the host's clock shows it, hours and minutes.
+pub fn clock(t: DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%H:%M").to_string()
+}
+
+/// The spent allowance `e` was stopped on, if it was.
+pub fn limited(e: &anyhow::Error) -> Option<&Limited> {
+    e.chain().find_map(|c| c.downcast_ref::<Limited>())
 }
 
 /// What a call does to the remote.
@@ -147,8 +191,13 @@ pub fn unspent(e: &anyhow::Error) -> String {
 pub struct Policy {
     bound: Duration,
     until: Option<Instant>,
+    /// Whether it waits out a spent allowance: to `until`, or without end.
+    waits: bool,
     sleep: Rc<dyn Fn(Duration) -> bool>,
     now: Rc<dyn Fn() -> Instant>,
+    /// An instant of `now` and the time of day then, so the time of day
+    /// moves as `now` does, a recorded pause's included.
+    origin: (Instant, DateTime<Utc>),
     seed: Option<u64>,
 }
 
@@ -158,8 +207,10 @@ impl Policy {
         Policy {
             bound,
             until: None,
+            waits: true,
             sleep: Rc::new(interruptible),
             now: Rc::new(Instant::now),
+            origin: (Instant::now(), Utc::now()),
             seed: None,
         }
     }
@@ -171,9 +222,36 @@ impl Policy {
         Policy::new(bound).until(deadline)
     }
 
-    /// Any other command's: thirty seconds.
+    /// Any other command's: thirty seconds, waiting out a spent allowance
+    /// to its `until`, or without end.
     pub fn command() -> Policy {
         Policy::new(COMMAND_FOR)
+    }
+
+    /// A round's, of `sluice run` or `sluice step`: a command's thirty
+    /// seconds, never waiting out a spent allowance (133, 134).
+    pub fn round() -> Policy {
+        Policy::command().unpaused()
+    }
+
+    /// `self`, stopping at once on a spent allowance: a round's, and a
+    /// submit's that does not wait (the user, 2026-10-28).
+    pub fn unpaused(mut self) -> Policy {
+        self.waits = false;
+        self
+    }
+
+    /// The time of day as the policy reads it: moved on by every pause it
+    /// made, a skipped one's included.
+    pub fn wall(&self) -> DateTime<Utc> {
+        let (at, then) = self.origin;
+        let since = (self.now)().saturating_duration_since(at);
+        then + chrono::TimeDelta::from_std(since).unwrap_or_default()
+    }
+
+    /// Whether the policy waits out a spent allowance.
+    pub fn waits(&self) -> bool {
+        self.waits
     }
 
     /// `self`, ending at `until` whatever its bound leaves.
@@ -191,6 +269,7 @@ impl Policy {
     ) -> Policy {
         self.sleep = Rc::new(sleep);
         self.now = Rc::new(now);
+        self.origin = ((self.now)(), Utc::now());
         self
     }
 
@@ -220,14 +299,18 @@ impl Policy {
         match judged {
             Judged::Never | Judged::Credential => true,
             Judged::Unknown => kind == Kind::Read,
-            Judged::Answered => false,
+            Judged::Answered | Judged::Limited { .. } => false,
         }
     }
 
     /// Make the call `op` until a try succeeds, or a try fails in a way
     /// [`Policy::again`] does not try again, or the pauses would pass the
     /// bound, or the end instant has come, or the sleeper says stop.
-    /// `op` is told each try's number and how the one before failed.
+    /// `op` is told each try's number and how the one before failed. A
+    /// try that met a spent allowance is never backed off: the policy
+    /// sleeps until its time and tries again when it waits a pause and
+    /// its end instant is later, sleeps to its end instant and stops when
+    /// that is sooner, and stops at once when it waits none.
     pub fn run<T, E>(
         &self,
         kind: Kind,
@@ -241,7 +324,7 @@ impl Policy {
         let cut = Rc::new(Cell::new(false));
         // Set when the policy, not the class, ended the tries.
         let ran_out = Cell::new(false);
-        let attempt = || -> Result<T, Judged> {
+        let mut attempt = || -> Result<T, Judged> {
             let judged = match after.get() {
                 Some(j) if cut.get() => return Err(j),
                 _ => {
@@ -262,61 +345,85 @@ impl Policy {
             after.set(Some(judged));
             Err(judged)
         };
-        let mut backoff = ExponentialBuilder::new()
-            .with_jitter()
-            .with_min_delay(FIRST)
-            .with_max_delay(LONGEST)
-            .without_max_times()
-            .with_total_delay(Some(self.bound));
-        if let Some(seed) = self.seed {
-            backoff = backoff.with_jitter_seed(seed);
-        }
-        let (sleep, now, until, stop) = (
-            self.sleep.clone(),
-            self.now.clone(),
-            self.until,
-            cut.clone(),
-        );
-        let pause = move |d: Duration| {
-            let d = match until {
-                Some(u) => d.min(u.saturating_duration_since(now())),
-                None => d,
+        let result = loop {
+            let mut backoff = ExponentialBuilder::new()
+                .with_jitter()
+                .with_min_delay(FIRST)
+                .with_max_delay(LONGEST)
+                .without_max_times()
+                .with_total_delay(Some(self.bound));
+            if let Some(seed) = self.seed {
+                backoff = backoff.with_jitter_seed(seed);
+            }
+            let (sleep, now, until, stop) = (
+                self.sleep.clone(),
+                self.now.clone(),
+                self.until,
+                cut.clone(),
+            );
+            let pause = move |d: Duration| {
+                let d = match until {
+                    Some(u) => d.min(u.saturating_duration_since(now())),
+                    None => d,
+                };
+                if !sleep(d) {
+                    stop.set(true);
+                }
             };
-            if !sleep(d) {
-                stop.set(true);
+            let result = (&mut attempt)
+                .retry(backoff)
+                .sleep(pause)
+                .when(|j| {
+                    if cut.get() {
+                        ran_out.set(true);
+                        return false;
+                    }
+                    if !Policy::again(kind, *j) {
+                        return false;
+                    }
+                    if self.until.is_some_and(|u| (self.now)() >= u) {
+                        ran_out.set(true);
+                        return false;
+                    }
+                    // The backoff may yield no pause; whether it does is
+                    // known only after this, so assume it will run out.
+                    ran_out.set(true);
+                    true
+                })
+                .notify(|j, d| {
+                    ran_out.set(false);
+                    tracing::debug!(
+                        kind = ?kind,
+                        judged = ?j,
+                        tried = tries.get(),
+                        pause_ms = d.as_millis() as u64,
+                        "a call to a remote is tried again"
+                    );
+                })
+                .call();
+            let until = match result {
+                Err(Judged::Limited { until }) if !cut.get() && self.waits => until,
+                r => break r,
+            };
+            let mut wait = (until - self.wall()).to_std().unwrap_or_default();
+            let mut last = false;
+            if let Some(end) = self.until {
+                let left = end.saturating_duration_since((self.now)());
+                if left <= wait {
+                    (wait, last) = (left, true);
+                }
+            }
+            tracing::debug!(
+                kind = ?kind,
+                tried = tries.get(),
+                pause_ms = wait.as_millis() as u64,
+                "a call to a remote waits out a spent allowance"
+            );
+            if !(self.sleep)(wait) || last {
+                ran_out.set(true);
+                break result;
             }
         };
-        let result = attempt
-            .retry(backoff)
-            .sleep(pause)
-            .when(|j| {
-                if cut.get() {
-                    ran_out.set(true);
-                    return false;
-                }
-                if !Policy::again(kind, *j) {
-                    return false;
-                }
-                if self.until.is_some_and(|u| (self.now)() >= u) {
-                    ran_out.set(true);
-                    return false;
-                }
-                // The backoff may yield no pause; whether it does is
-                // known only after this, so assume it will run out.
-                ran_out.set(true);
-                true
-            })
-            .notify(|j, d| {
-                ran_out.set(false);
-                tracing::debug!(
-                    kind = ?kind,
-                    judged = ?j,
-                    tried = tries.get(),
-                    pause_ms = d.as_millis() as u64,
-                    "a call to a remote is tried again"
-                );
-            })
-            .call();
         match result {
             Ok(v) => Ok(v),
             Err(judged) => Err(Stopped {
@@ -350,11 +457,16 @@ mod tests {
     /// A policy whose pauses are recorded and skipped, its clock moved on
     /// by each, its jitter fixed.
     fn recorded(bound: Duration) -> (Policy, Rc<RefCell<Vec<Duration>>>, Rc<Cell<Instant>>) {
+        recorded_as(Policy::new(bound))
+    }
+
+    /// `policy`, its pauses recorded and skipped as [`recorded`]'s are.
+    fn recorded_as(policy: Policy) -> (Policy, Rc<RefCell<Vec<Duration>>>, Rc<Cell<Instant>>) {
         let pauses = Rc::new(RefCell::new(Vec::new()));
         let clock = Rc::new(Cell::new(Instant::now()));
         let (p, c) = (pauses.clone(), clock.clone());
         let now = clock.clone();
-        let policy = Policy::new(bound).seeded(7).pausing(
+        let policy = policy.seeded(7).pausing(
             move |d| {
                 p.borrow_mut().push(d);
                 c.set(c.get() + d);
@@ -542,5 +654,133 @@ mod tests {
         );
         assert_eq!(lasted(&anyhow::anyhow!("a fake's")), Duration::ZERO);
         assert_eq!(unspent(&anyhow::anyhow!("a fake's")), "a fake's");
+    }
+
+    /// A call met by a spent allowance until `ahead` from the policy's
+    /// time, `fails` times, then answered: how many tries it took and how
+    /// it ended.
+    fn limited_call(
+        policy: &Policy,
+        ahead: Duration,
+        fails: u32,
+    ) -> (u32, Result<(), Stopped<String>>) {
+        let mut made = 0;
+        let r = policy.run(Kind::Read, |_| {
+            made += 1;
+            if made <= fails {
+                let until = policy.wall() + chrono::TimeDelta::from_std(ahead).unwrap();
+                Err(Failed::new(
+                    Judged::Limited { until },
+                    format!("try {made}"),
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        (made, r)
+    }
+
+    const PAUSE: Duration = Duration::from_secs(20 * 60);
+
+    #[test]
+    fn a_wait_with_no_deadline_sleeps_to_the_allowance_and_tries_again() {
+        let (policy, pauses, _) = recorded_as(Policy::waiting(None));
+        let (made, r) = limited_call(&policy, PAUSE, 1);
+        assert!(r.is_ok());
+        assert_eq!(made, 2);
+        assert_eq!(*pauses.borrow(), [PAUSE], "no backoff, the pause alone");
+    }
+
+    #[test]
+    fn a_command_sleeps_to_the_allowance_without_end() {
+        let (policy, pauses, _) = recorded_as(Policy::command());
+        let (made, r) = limited_call(&policy, Duration::from_secs(3600), 2);
+        assert!(r.is_ok());
+        assert_eq!(made, 3);
+        assert_eq!(pauses.borrow().len(), 2);
+        assert!(pauses
+            .borrow()
+            .iter()
+            .all(|p| *p == Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn a_wait_whose_deadline_comes_first_stops_at_it_with_no_try() {
+        let (policy, pauses, clock) = recorded_as(Policy::waiting(None));
+        let policy = policy.until(Some(clock.get() + Duration::from_secs(300)));
+        let (made, r) = limited_call(&policy, PAUSE, u32::MAX);
+        let e = r.expect_err("the deadline came first");
+        assert_eq!(made, 1);
+        assert_eq!(*pauses.borrow(), [Duration::from_secs(300)]);
+        assert!(matches!(e.judged, Judged::Limited { .. }));
+        assert_eq!(
+            e.spent,
+            Some(Spent {
+                tries: 1,
+                lasted: Duration::from_secs(300)
+            })
+        );
+    }
+
+    #[test]
+    fn a_round_stops_at_once_on_a_spent_allowance() {
+        for policy in [Policy::round(), Policy::command().unpaused()] {
+            let (policy, pauses, _) = recorded_as(policy);
+            let (made, r) = limited_call(&policy, PAUSE, u32::MAX);
+            let e = r.expect_err("no wait");
+            assert_eq!((made, e.error.as_str()), (1, "try 1"));
+            assert!(matches!(e.judged, Judged::Limited { .. }));
+            assert!(e.spent.is_none());
+            assert!(pauses.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn ctrl_c_stops_the_wait_for_an_allowance() {
+        let slept = Rc::new(RefCell::new(Vec::new()));
+        let s = slept.clone();
+        let policy = Policy::waiting(None).pausing(
+            move |d| {
+                s.borrow_mut().push(d);
+                false
+            },
+            Instant::now,
+        );
+        let (made, r) = limited_call(&policy, PAUSE, u32::MAX);
+        let e = r.expect_err("stopped");
+        assert_eq!(made, 1);
+        assert_eq!(slept.borrow().len(), 1);
+        assert!(e.spent.is_some());
+    }
+
+    #[test]
+    fn the_policys_time_moves_with_its_pauses() {
+        let (policy, _, clock) = recorded(COMMAND_FOR);
+        let before = policy.wall();
+        clock.set(clock.get() + Duration::from_secs(90));
+        assert_eq!(policy.wall() - before, chrono::TimeDelta::seconds(90));
+    }
+
+    #[test]
+    fn a_spent_allowance_says_until_when_in_the_hosts_time() {
+        let until = DateTime::parse_from_rfc3339("2026-10-28T14:20:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let e = anyhow::Error::new(Limited {
+            app: 4242,
+            until,
+            words: "API rate limit exceeded".into(),
+        })
+        .context("listing o/r's pull requests");
+        let l = limited(&e).expect("limited");
+        assert_eq!(l.until, until);
+        assert_eq!(
+            l.to_string(),
+            format!(
+                "GitHub's allowance of calls for app 4242 is spent until {}: API rate limit exceeded",
+                until.with_timezone(&Local).format("%H:%M")
+            )
+        );
+        assert!(limited(&anyhow::anyhow!("other")).is_none());
     }
 }

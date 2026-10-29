@@ -533,6 +533,27 @@ fn the_sandbox_holds_writes_and_the_network() {
     drop(listener);
 }
 
+/// C.3: a sandboxed command may open a pseudo-terminal, as a test that
+/// starts a terminal multiplexer does.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_sandbox_lets_a_command_open_a_pseudo_terminal() {
+    let repo = Repo::new("checks-sandbox-pty");
+    let c = checks(&repo);
+    let mut req = request(
+        &repo,
+        "p1",
+        command("/usr/bin/script -q /dev/null /usr/bin/true"),
+    );
+    req.limits = Limits {
+        executor: Some("sandbox".into()),
+        network: Some(Network::Denied),
+        memory: None,
+        docker: false,
+    };
+    assert_eq!(finish(&c, &req).tasks[0].outcome, Outcome::Pass);
+}
+
 /// 35, C.2: a sandboxed run may write the host's declared cache directory
 /// and reach its declared socket with no network, and write nothing
 /// beside them; a declared socket nobody listens on changes nothing, and

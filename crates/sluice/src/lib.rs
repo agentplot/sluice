@@ -675,17 +675,40 @@ impl PullRequests for () {
     }
 }
 
-/// Take in `branch`'s pull requests before its round: whether it takes
-/// any. One that cannot be read is said and the round goes on, landing
-/// what is queued.
-fn intake(pulls: &dyn PullRequests, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> bool {
-    match pulls.intake(seams, clock, branch) {
-        Ok(takes) => takes,
-        Err(e) => {
-            telemetry::warn(&format!("sluice: warning: {e:#}"));
-            true
+/// Take in `branch`'s pull requests before its round. One that cannot be
+/// read is said and the round goes on, landing what is queued. A spent
+/// allowance of GitHub's calls is the error returned: one the retry
+/// policy stopped on at once, a round's, is said once for its pause on
+/// `out`, or on stderr under `--json` (133, 134; ADR 0071); one it waited
+/// out to its end, a wait's deadline or Ctrl-C, carries how long, and
+/// was said on stderr as the wait began.
+fn intake(
+    pulls: &dyn PullRequests,
+    seams: Seams<'_>,
+    clock: &dyn Clock,
+    branch: &str,
+    json: bool,
+    out: &mut dyn Write,
+) -> Option<anyhow::Error> {
+    thread_local! {
+        /// The end of the last pause a round said it passed by.
+        static SAID: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> =
+            const { std::cell::Cell::new(None) };
+    }
+    let e = pulls.intake(seams, clock, branch).err()?;
+    let Some(limited) = retry::limited(&e) else {
+        telemetry::warn(&format!("sluice: warning: {e:#}"));
+        return None;
+    };
+    let waited = e.downcast_ref::<retry::Spent>().is_some();
+    if !waited && SAID.get() != Some(limited.until) {
+        SAID.set(Some(limited.until));
+        let line = format!("{branch}'s pull requests passed by: {limited}");
+        if json || writeln!(out, "{line}").is_err() {
+            telemetry::warn(&format!("sluice: {line}"));
         }
     }
+    Some(e)
 }
 
 #[derive(Subcommand, Debug)]
@@ -770,6 +793,39 @@ pub fn stop_on_interrupt() -> Result<()> {
     // SAFETY: the handler only stores to an atomic.
     unsafe { sigaction(Signal::SIGINT, &action) }?;
     Ok(())
+}
+
+/// A pause between rounds that skips its time and moves its own clock on
+/// by it, a clock nothing else moves: a test follows a wait over minutes
+/// in a moment, with every time it reads, a deadline's and the host's
+/// interval's among them, as the wait would have read it.
+pub struct Skipped {
+    every: std::time::Duration,
+    start: chrono::DateTime<chrono::Utc>,
+    moved: std::cell::Cell<std::time::Duration>,
+}
+
+impl Skipped {
+    pub fn new(every: std::time::Duration) -> Skipped {
+        Skipped {
+            every,
+            start: chrono::Utc::now(),
+            moved: std::cell::Cell::default(),
+        }
+    }
+}
+
+impl Pause for Skipped {
+    fn pause(&self) -> bool {
+        self.moved.set(self.moved.get() + self.every);
+        !INTERRUPTED.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for Skipped {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.start + chrono::TimeDelta::from_std(self.moved.get()).unwrap_or_default()
+    }
 }
 
 pub struct Sleep(pub std::time::Duration);
@@ -1012,7 +1068,7 @@ pub fn run(
         }
         Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
         Command::Step { branch, json } => {
-            intake(pulls, seams, clock, &branch);
+            intake(pulls, seams, clock, &branch, json, out);
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, json, &round.released)?;
             preview::tell_dropped(out, json, &round.previews)?;
@@ -1104,7 +1160,7 @@ pub fn run(
                     branches.sort();
                     branches.dedup();
                     for branch in branches {
-                        intake(pulls, seams, clock, &branch);
+                        intake(pulls, seams, clock, &branch, false, out);
                         // 26, rule core.14: a branch whose status read or round
                         // fails is that branch's alone; the pass goes on to
                         // every other branch.
@@ -2323,6 +2379,12 @@ enum Waited {
     Unread(Submission, anyhow::Error),
 }
 
+/// Whether `e` is a spent allowance of GitHub's calls the retry policy
+/// waited out to its end, a wait's deadline: the wait's time is up (134).
+fn waited_out(e: &anyhow::Error) -> bool {
+    retry::limited(e).is_some() && e.downcast_ref::<retry::Spent>().is_some()
+}
+
 /// `e`, a wait's read or round that failed, when it failed as a forge
 /// could not answer for as long as the retry policy tried, which ends the
 /// wait as it could not read (134; rule core.29); any other failure is
@@ -2431,7 +2493,16 @@ fn wait_on(
         let driven = reading.driven();
         if !driven {
             if let Some(pulls) = waiting.pulls {
-                intake(pulls, s.seams(), waiting.clock, &branch);
+                // A spent allowance waited out to the wait's deadline: the
+                // wait's time is up; to Ctrl-C: stopped (134).
+                let spent = intake(pulls, s.seams(), waiting.clock, &branch, waiting.json, out);
+                if spent.is_some_and(|e| waited_out(&e)) {
+                    let code = match INTERRUPTED.load(Ordering::SeqCst) {
+                        true => STOPPED,
+                        false => WAITING,
+                    };
+                    return Ok(Waited::Undecided(sub, code));
+                }
             }
             match s.round(&branch) {
                 Ok(round) => {
@@ -3141,6 +3212,9 @@ fn submit_pull(
                 let PullMode::Wait { .. } = mode else {
                     return Err(e);
                 };
+                if waited_out(&e) && !INTERRUPTED.load(Ordering::SeqCst) {
+                    return Ok(WAITING);
+                }
                 let what = format!("the pull request from {worktree} into {branch}");
                 let code = could_not_read(&unread(e)?, &what, &again, json, out)?;
                 // Ctrl-C ended the retry policy's pauses.
@@ -3194,7 +3268,13 @@ fn submit_pull(
         // while it lives.
         let driven = probe();
         if !driven || first && !matches!(mode, PullMode::Wait { .. }) {
-            intake(pulls, seams, clock, branch);
+            // The user, 2026-10-28: a submit that does not wait fails at
+            // once on a spent allowance, naming when it ends (134).
+            match intake(pulls, seams, clock, branch, json, out) {
+                Some(e) if no_wait => return Err(e),
+                Some(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
+                _ => {}
+            }
         }
         first = false;
         let followed = match pulls.follow(seams, clock, branch, number) {
@@ -3202,6 +3282,7 @@ fn submit_pull(
             Err(e) if no_wait || status => return Err(e),
             // Ctrl-C ended the retry policy's pauses: stopped, below.
             Err(_) if INTERRUPTED.load(Ordering::SeqCst) => None,
+            Err(e) if waited_out(&e) => return Ok(WAITING),
             Err(e) => return could_not_read(&unread(e)?, &what, &again, json, out),
         };
         match followed {
@@ -3487,7 +3568,11 @@ fn submit_pull_group(
         // 135: as `submit_pull`, the first pass's intake the submit's own.
         let driven = probe();
         if !driven || first {
-            intake(pulls, seams, clock, branch);
+            match intake(pulls, seams, clock, branch, json, out) {
+                Some(e) if no_wait => return Err(e),
+                Some(_) if INTERRUPTED.load(Ordering::SeqCst) => break 'wait Some(STOPPED),
+                _ => {}
+            }
         }
         first = false;
         for (i, o) in opened.iter().enumerate() {

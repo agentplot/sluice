@@ -370,7 +370,8 @@ fn choose(limits: &Limits) -> Result<Kind> {
 }
 
 /// A Seatbelt profile: everything a user may do, but writes only to
-/// `writable`, files named in `stamps`, and the terminal and null devices;
+/// `writable`, files named in `stamps`, and the terminal and null devices,
+/// a new pseudo-terminal's included;
 /// the network as `network` says: `Denied`, none, local sockets included;
 /// `Localhost`, listening and connecting on localhost only, by address or
 /// by name, and no other connection (name lookups included).
@@ -405,7 +406,9 @@ fn seatbelt(
     for s in stamps {
         p.push_str(&format!("  (regex #\"/{}$\")\n", regex_escape(s)));
     }
-    p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
+    // C.3: the null and terminal devices, and `/dev/ptmx`, from which a
+    // command opens a pseudo-terminal of its own, whose end is a `ttys`.
+    p.push_str("  (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/ptmx\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ttys\"))\n");
     match network {
         Some(Network::Denied) => p.push_str("(deny network*)\n"),
         Some(Network::Localhost) => p.push_str(
