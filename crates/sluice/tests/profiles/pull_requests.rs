@@ -3385,3 +3385,149 @@ fn a_bolts_landing_worktree_submits_the_bolt_as_github_holds_it() {
     assert_eq!(held.pulls[0].head, again);
     assert!(held.pulls[0].open && !held.pulls[0].draft);
 }
+
+// ---------------------------------------------------------------------------
+// forge-allowance: a command waits the pause out within its own limit, a
+// round passes the forge's part by (134 as amended 2026-10-28; ADR 0071)
+// ---------------------------------------------------------------------------
+
+/// GitHub's words in the pause the tests leave on the host.
+const SPENT: &str = "API rate limit exceeded for installation ID 7.";
+
+impl OnGitHub {
+    /// The host's state says GitHub's REST allowance for the app's
+    /// installation is spent for `minutes` more, as another process on the
+    /// host found: until when.
+    fn spent_for(&self, minutes: i64) -> chrono::DateTime<chrono::Utc> {
+        let until = chrono::Utc::now() + chrono::TimeDelta::minutes(minutes);
+        let dir = self.state.path().join("sluice/forge/pauses");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!(
+                "{}-{}-core.json",
+                github::APP,
+                github::INSTALLATION
+            )),
+            serde_json::json!({ "until": until, "words": SPENT, "streak": 1 }).to_string(),
+        )
+        .unwrap();
+        until
+    }
+
+    /// How many calls the fake took under the installation's allowance:
+    /// every call to the repository but finding the installation, which
+    /// is the app's own.
+    fn repo_calls(&self) -> usize {
+        self.gh
+            .fake
+            .requests()
+            .iter()
+            .filter(|r| r.path.starts_with("/repos/o/r/") && r.path != "/repos/o/r/installation")
+            .count()
+    }
+}
+
+/// `until` as the host's clock shows it.
+fn hhmm(until: chrono::DateTime<chrono::Utc>) -> String {
+    until
+        .with_timezone(&chrono::Local)
+        .format("%H:%M")
+        .to_string()
+}
+
+/// The forge-allowance spec's "A waiting submit meets the pause": stderr
+/// says once until when GitHub's allowance is spent, the submit calls
+/// GitHub again once it has passed, and goes on to its outcome.
+#[test]
+fn a_waiting_submit_waits_out_the_pause() {
+    let g = OnGitHub::new("pr-spent-submit", "");
+    let w = g.session("paused", &[("p.txt", "p\n")]);
+    let until = g.spent_for(20);
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(sluice::LANDED), "{}", text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let said = format!(
+        "sluice: GitHub's allowance of calls is spent until {}; waiting: {SPENT}",
+        hhmm(until)
+    );
+    assert_eq!(stderr.matches(&said).count(), 1, "{stderr}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("allowance"));
+    assert!(!g.pull_from("unit/paused").open, "landed");
+}
+
+/// The forge-allowance spec's "A wait whose timeout comes first": `sluice
+/// wait --timeout 5m` beside a pause twenty minutes long exits `5` with
+/// the submission as it stands, having made no call to GitHub.
+#[test]
+fn a_wait_whose_timeout_comes_first_calls_nothing() {
+    let g = OnGitHub::new("pr-spent-wait", "");
+    let (n, _) = g.by_hand("unit/slow", &[("slow", Some("x\n"))], false);
+    g.step();
+    let id = g.of(n)[0]["id"].as_u64().expect("taken in").to_string();
+    g.spent_for(20);
+    let before = g.repo_calls();
+    let out = g.sluice(&["wait", &id, "--timeout", "5m"]);
+    assert_eq!(out.status.code(), Some(sluice::WAITING), "{}", text(&out));
+    assert_eq!(g.repo_calls(), before, "no call to GitHub: {}", text(&out));
+}
+
+/// The user, 2026-10-28: a submit that does not wait fails at once on a
+/// spent allowance, exit 3, naming when it ends, and calls nothing.
+#[test]
+fn a_submit_that_does_not_wait_fails_at_once_on_the_pause() {
+    let g = OnGitHub::new("pr-spent-no-wait", "");
+    let w = g.session("hurried", &[("h.txt", "h\n")]);
+    let until = g.spent_for(20);
+    let before = g.repo_calls();
+    let out = g
+        .command(env!("CARGO_BIN_EXE_sluice"), &w)
+        .args(["submit", "main", "--no-wait"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    let said = text(&out);
+    assert!(
+        said.contains(&format!(
+            "GitHub's allowance of calls for app {} is spent until {}: {SPENT}",
+            github::APP,
+            hhmm(until)
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("waiting"), "{said}");
+    assert_eq!(g.repo_calls(), before);
+    assert!(g.gh.forge.by_ref("unit/hurried").unwrap().is_none());
+}
+
+/// The forge-allowance spec's "A landing during the pause" and "Said
+/// once": `sluice run` under a pause lands a combination that passed,
+/// calls nothing of the installation's allowance, and says the pause once.
+#[test]
+fn a_round_lands_through_the_pause_and_says_it_once() {
+    let g = OnGitHub::new("pr-spent-run", "");
+    let (n, head) = g.by_hand("unit/through", &[("t.txt", Some("t\n"))], false);
+    g.step();
+    assert_eq!(g.of(n).len(), 1, "{:?}", g.subs());
+    let until = g.spent_for(20);
+    let before = g.repo_calls();
+    let out = g.sluice(&["run", "--rounds", "6"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let said = format!(
+        "main's pull requests passed by: GitHub's allowance of calls for app {} is spent until {}: {SPENT}",
+        github::APP,
+        hhmm(until)
+    );
+    assert_eq!(stdout.matches(&said).count(), 1, "{}", text(&out));
+    assert_eq!(g.of(n)[0]["state"], "landed", "{:?}", g.subs());
+    let landed = g.main_on_github();
+    assert_eq!(
+        github::rev(g.bare.path(), &format!("{landed}^2")).unwrap(),
+        head
+    );
+    assert_eq!(g.repo_calls(), before, "no call under the allowance");
+}

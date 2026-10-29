@@ -191,8 +191,12 @@ fn hook(cli: Cli, retry: Rc<Policy>) -> i32 {
 
 /// The retry policy every call to a remote runs under (134): a wait's five
 /// minutes, ending at its `--timeout`, for a waiting submit and `sluice
-/// wait`, and thirty seconds for anything else. Tests that run the binary
-/// set `SLUICE_RETRY_SLEEP=record` to skip its pauses.
+/// wait`, and thirty seconds for anything else. A spent allowance is
+/// waited out by a waiting submit and `sluice wait` within their
+/// `--timeout`, and by any other command but a round of `sluice run` or
+/// `sluice step` and a submit that does not wait, which stop on it at
+/// once (134 as amended 2026-10-28; the user, 2026-10-28). Tests that run
+/// the binary set `SLUICE_RETRY_SLEEP=record` to skip its pauses.
 fn retry(cli: &Cli) -> Policy {
     let policy = match &cli.command {
         Some(Command::Wait { timeout, .. }) => Policy::waiting(timeout.map(|t| Instant::now() + t)),
@@ -202,6 +206,8 @@ fn retry(cli: &Cli) -> Policy {
             status: false,
             ..
         }) => Policy::waiting(None),
+        Some(Command::Submit { no_wait: true, .. }) => Policy::command().unpaused(),
+        Some(Command::Run { .. } | Command::Step { .. }) => Policy::round(),
         _ => Policy::command(),
     };
     match std::env::var(RETRY_SLEEP_VAR).as_deref() {
