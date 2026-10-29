@@ -201,8 +201,39 @@ fn leftovers(id: &str) -> (String, String) {
     )
 }
 
+/// The fixture `id`, whose containers go when its test ends, so a test
+/// gone red leaves none of them running.
+struct Fixture(String);
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let Ok(out) = Command::new("docker")
+            .args([
+                "ps",
+                "-aq",
+                "--filter",
+                &format!("label=sluice.fixture={}", self.0),
+            ])
+            .output()
+        else {
+            return;
+        };
+        let ids = String::from_utf8_lossy(&out.stdout);
+        let ids: Vec<&str> = ids.split_whitespace().collect();
+        if !ids.is_empty() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f"])
+                .args(&ids)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
 fn stacks(executor: &str) {
     let id = format!("{}-{executor}", std::process::id());
+    let _fixture = Fixture(id.clone());
     let repo = Repo::new("stack");
     let check = format!(
         "export FIXTURE={id}\nexport PLAYWRIGHT_BROWSERS_PATH={}\n{CHECK}",
@@ -324,6 +355,7 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     use sluice_seams::{Checkout, Limits, Progress, Rev, RunRequest, Setting, Settings, Tests};
 
     let id = format!("{}-session", std::process::id());
+    let _fixture = Fixture(id.clone());
     let repo = Repo::new("stack-session");
     repo.write("check.sh", &format!("export FIXTURE={id}\n{SESSION_CHECK}"));
     repo.write("release.sh", RELEASE);
@@ -420,10 +452,17 @@ fn a_sessions_stack_stays_between_runs_and_goes_on_release() {
     };
 
     let first = run(1);
-    // 90: its ports from `ports_from` on; one another process on the host
-    // holds, a run of this test in another tree's among them, is passed by.
-    let port: u16 = first.env["SLUICE_PORT_WEB"].parse().unwrap();
-    assert!(port >= 41400, "a port below ports_from: {port}");
+    // 31, 90: the port is its block's, from `ports_from`, 41400, on; the
+    // block is the first whose port nothing on the host already holds, a
+    // run of this test in another tree's among them.
+    let held: Vec<u32> = std::fs::read_dir(blocks.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .map(|n| n.parse().unwrap())
+        .collect();
+    assert_eq!(held.len(), 1, "blocks of ports held: {held:?}");
+    assert_eq!(first.env["SLUICE_PORT_WEB"], (41400 + held[0]).to_string());
     // 94: the run ended and its container did not.
     assert!(!leftovers(&id).0.is_empty(), "the stack went with the run");
     let second = run(2);
@@ -471,6 +510,7 @@ echo "$SLUICE_NAME_WEB $SLUICE_PORT_WEB $SLUICE_BRANCH $SLUICE_REVISION" > given
 #[test]
 fn a_previews_stack_stays_up_until_it_is_released() {
     let id = format!("{}-preview", std::process::id());
+    let _fixture = Fixture(id.clone());
     let repo = Repo::new("stack-preview");
     repo.write(
         ".config/sluice.toml",
