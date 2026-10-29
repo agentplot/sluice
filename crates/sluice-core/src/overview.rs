@@ -58,7 +58,8 @@ pub struct BranchView {
     /// 64: the branch's revision as the read found it, the remote's for a
     /// branch on a remote, which a forecast forms on; `None` where the
     /// read could not ask the branch's remote or the remote holds no such
-    /// branch, for a branch read alone, and in a document from before it.
+    /// branch, for a view built from records alone, and in a document from
+    /// before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Rev>,
     /// The records' version: it moves on every write, so a reader redraws
@@ -397,7 +398,7 @@ impl Sluice<'_> {
         let mut order_at = from.and_then(|f| f.local.clone());
         for branch in self.seams.state.branches()? {
             let view = self
-                .branch_view_with_revision(&branch)
+                .branch_view_of(&branch)
                 .unwrap_or_else(|e| BranchView::unread(&branch, &e));
             if from.is_some_and(|f| f.branch == branch) {
                 order_at = view.at.clone().or(order_at);
@@ -411,26 +412,14 @@ impl Sluice<'_> {
         Ok(out)
     }
 
-    /// 64, 129: `branch`'s part of a whole overview, as
-    /// [`Sluice::branch_view_of`] reads it, naming the branch's revision as
-    /// the host holds it since the tick's ask, none where that ask was
-    /// refused.
-    fn branch_view_with_revision(&self, branch: &str) -> Result<BranchView> {
-        let mut view = self.branch_view_of(branch)?;
-        view.revision = match self.seams.state.stale(branch) {
-            Some(_) => None,
-            None => self.seams.branch.held(branch)?,
-        };
-        Ok(view)
-    }
-
     /// 26, 61: one branch's part of the overview, as last written, read
     /// at the revision its records last saw: what `sluice status` and a
-    /// waiting command show of its combinations (ADR 0042). It names no
-    /// revision of the branch.
+    /// waiting command show of its combinations (ADR 0042).
     ///
     /// 129: the records as the host holds them since the tick's ask, with
-    /// no fetch, and, where that ask was refused, its words.
+    /// no fetch, and, where that ask was refused, its words; and the
+    /// branch's revision as the host holds it, none where that ask was
+    /// refused, so a forecast can form from what a reader wrote (64).
     pub fn branch_view_of(&self, branch: &str) -> Result<BranchView> {
         let snapshot = self.seams.state.read_held(branch)?;
         let base = Line::load(branch, snapshot.clone())?.doc.base;
@@ -451,7 +440,12 @@ impl Sluice<'_> {
             snapshot,
             rules,
         })?;
-        view.stale = self.seams.state.stale(branch).map(|r| r.to_string());
+        let stale = self.seams.state.stale(branch);
+        view.revision = match &stale {
+            Some(_) => None,
+            None => self.seams.branch.held(branch)?,
+        };
+        view.stale = stale.map(|r| r.to_string());
         Ok(view)
     }
 }
