@@ -105,12 +105,10 @@ A test can fail because of the host: docker down, a full disk, a slow
 program start, a port held by a stray process. Check the host before you
 touch code or resubmit.
 
-A repository can tell sluice what its tests need, in `[tests]`:
+A test that needs something on the host, a container engine, a database
+or a stack, starts it and waits for it within the branch's timeout. A
+repository tells sluice, in `[tests]`, how such a test says it could not:
 
-- `ready`: a command that shows the host can run the tests, such as
-  `["docker", "info"]`. sluice runs it before each run of the tests and
-  refuses the run while it fails. It runs it again after a run in which a
-  test did not pass, and if it fails then, those tests could not run.
 - `not_run`: exits by which a test says it could not run here, such as
   `[77]`.
 
@@ -118,7 +116,7 @@ A test that could not run has no result. Nothing is recorded under its key,
 the combination is tested again, and nobody is blamed:
 
 ```
-could not run: cli:tools: the host failed [tests] ready `docker info` after the run: ended exit status: 1: Cannot connect to the Docker daemon
+could not run: cli:tools: exited 77, which [tests] not_run names: it could not run here
 nothing was recorded for a test that could not run: once the host can run it, run again
 ```
 
@@ -132,9 +130,9 @@ the host could not run cli:tools: once it can, the agent working in tools submit
 ```
 
 sluice tells these apart on its own and records nothing for them: a run
-that never started, `[tests] ready` failing, a `not_run` exit, and a test
-the time limit ended. A host failure none of them catches is recorded like
-any fail, under the test's key. A later pass on the same key then makes the
+that never started, a `not_run` exit, and a test the time limit ended. A
+host failure none of them catches is recorded like any fail, under the
+test's key. A later pass on the same key then makes the
 test read as flaky, and on a branch with `flaky = "fail"` the same head
 fails each time it is submitted:
 

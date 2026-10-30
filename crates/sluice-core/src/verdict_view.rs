@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn could_not_run_flaky_and_set_aside() {
         let s = sub(serde_json::json!({"failed": [
-            {"task": "site:check", "not_run": "the host failed [tests] ready `docker info` in 3 runs"},
+            {"task": "site:check", "not_run": "exited 77, which [tests] not_run names: it could not run here, in 3 runs"},
             {"task": "app:e2e", "hash": "app:e2e-k", "flaky": {"here": "fail", "other":
                 {"outcome": "pass", "at": "t-1", "branch": "main", "combination": "c0"}}}
         ]}));

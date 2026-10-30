@@ -159,9 +159,9 @@ impl Sluice<'_> {
             Some(c) => {
                 tests.insert("runner".into(), Setting::Text("command".into()));
                 tests.insert("command".into(), Setting::Text(c.into()));
-                // Could-not-run-1 114: what readiness and a not-run exit
-                // say is of the checks; a command's exit is its own.
-                tests.remove("ready");
+                // Could-not-run-1 114: a not-run exit says a check could
+                // not run here; a command's exit is its own, so none of
+                // its exits is read so.
                 tests.remove("not_run");
                 Vec::new()
             }

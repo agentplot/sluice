@@ -46,8 +46,7 @@ trust = ["confined", "sandbox"]
 | `command` | a command | With `runner = "command"`, the command to run, e.g. `"tests/suite"`. |
 | `release` | a command | The release command: what removes what the tests handed to another process to keep, a container above all. It runs once a checkout is released, under the same executor, toolchain and environment as the tests, ports included, and for a worktree when `sluice release` runs in it ([ADR 0016](/sluice/decisions/0016/)). One that fails holds the checkout; see [`release_retries`](#release_retries). A list, the command first, or a string run by `sh -c`. |
 | `toolchain` | a command | Prints the shell the tests run in, e.g. `["devenv", "print-dev-env"]`. It runs in the checkout, outside the sandbox; the tests run inside it with what it printed. sluice reads nothing from it. |
-| `ready` | a command | Shows that the host can run the tests, e.g. `["docker", "info"]` for tests that need a container engine. It runs in the checkout under the same executor, toolchain and environment as the tests, within 60 seconds. When it fails before a run, the run is refused and nothing is recorded. When it fails after a run in which a test did not pass, those tests could not run: they have no result, and the combination is tested again. A list, the command first, or a string run by `sh -c`. |
-| `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result, as with `ready`. Unset, every exit but `0` is a fail. |
+| `not_run` | an exit or a list of them | Exits by which a test says it could not run here, e.g. `[77]`. A test that exits with one has no result. Unset, every exit but `0` is a fail. A test that needs a container engine, a database or a stack starts it, waits for it within the branch's [`timeout`](#timeout), and exits with one of these when it could not set up. |
 | `cold` | a list of tests | Tests that run with none of the host's [caches](#caches), e.g. `["#bench"]` for timings a warm cache would skew. Each is named as `required` names it: a moon target or a `#tag`, or the command with `runner = "command"`. A run that holds one gets no cache directory, no cache socket and none of the caches' variables, and its other tests lose only speed. |
 
 Nothing in `[tests]` chooses what runs on a branch. With
@@ -95,8 +94,7 @@ own CI workflow beside sluice.
 A combination whose tests could not run is tested again and blames
 nobody. After three runs in a row in which its tests could not run, its
 newest submission is blamed, and each test is named with why. A command
-given to `sluice exec` after `--` is held to neither `ready` nor
-`not_run`.
+given to `sluice exec` after `--` is not held to `not_run`.
 
 ## `[checkout]`: where a combination is tested
 
