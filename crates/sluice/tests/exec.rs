@@ -68,7 +68,13 @@ impl Setup {
     }
 
     fn sluice(&self, args: &[&str]) -> Output {
+        self.sluice_with(&[], args)
+    }
+
+    /// [`Setup::sluice`], with `env` set beside the rest.
+    fn sluice_with(&self, env: &[(&str, &Path)], args: &[&str]) -> Output {
         support::isolated(&mut Command::new(env!("CARGO_BIN_EXE_sluice")))
+            .envs(env.iter().copied())
             .args(args)
             .current_dir(&self.worktree)
             .env("XDG_CONFIG_HOME", self.config.path())
@@ -123,6 +129,85 @@ impl Setup {
             Err(_) => Vec::new(),
         }
     }
+}
+
+/// Where the binary looks for the container engine in place of the
+/// host's sockets (record 0074).
+const ENGINE_SOCKETS: &str = "SLUICE_ENGINE_SOCKETS";
+
+/// `bolt/x` holding a moon workspace of two projects whose `test` tasks,
+/// tagged `gate`, the policy requires of runs that ask for the container
+/// engine: `a`'s runs `a_check`, `b`'s passes. The session's head changes
+/// both. Needs moon on the path.
+fn moon_setup(name: &str, a_check: &str) -> Setup {
+    let repo = Repo::new(name);
+    repo.write(
+        ".config/sluice.toml",
+        "[tests]\nrunner = \"moon\"\n\n[executor]\ndocker = true\n\n\
+         [branches.\"bolt/*\"]\nrequired = [\"#gate\"]\ntimeout = \"5m\"\n",
+    );
+    repo.write(
+        ".moon/workspace.yml",
+        "projects:\n  a: 'a'\n  b: 'b'\n\
+         vcs:\n  client: 'git'\n  defaultBranch: 'main'\ntelemetry: false\n",
+    );
+    repo.write(".gitignore", ".moon/cache/\n");
+    repo.write("a/check.sh", a_check);
+    for (p, command) in [("a", "sh a/check.sh"), ("b", "true")] {
+        repo.write(&format!("{p}/lib"), "1");
+        repo.write(
+            &format!("{p}/moon.yml"),
+            &format!(
+                "tasks:\n  test:\n    command: '{command}'\n    inputs: ['**/*']\n    \
+                 tags: [gate]\n    options: {{runFromWorkspaceRoot: true}}\n"
+            ),
+        );
+    }
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "two projects"]);
+    repo.git(&["branch", "bolt/x", "main"]);
+    let sessions = Scratch::new(&format!("{name}-sessions"));
+    let worktree = sessions.path().join("a");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "unit/a",
+        worktree.to_str().unwrap(),
+        "bolt/x",
+    ]);
+    for p in ["a", "b"] {
+        std::fs::write(worktree.join(p).join("lib"), "2").unwrap();
+    }
+    let git = |args: &[&str]| {
+        let mut a = vec!["-C", worktree.to_str().unwrap()];
+        a.extend(args);
+        repo.git(&a)
+    };
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "a and b"]);
+    Setup {
+        repo,
+        worktree,
+        config: Scratch::new(&format!("{name}-config")),
+        state: Scratch::new(&format!("{name}-state")),
+        _sessions: sessions,
+    }
+}
+
+/// Each result `sluice exec` recorded: `(task, outcome)`.
+fn recorded(s: &Setup) -> Vec<(String, String)> {
+    s.results()
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            (
+                v["task"].as_str().unwrap().to_string(),
+                v["outcome"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
 }
 
 /// The host's configuration in `config`: a bound of `max`.
@@ -764,4 +849,62 @@ fn the_overview_counts_another_repositorys_combination_in_its_room() {
     for branch in doc["branches"].as_array().unwrap() {
         assert_eq!(branch["candidates"], serde_json::json!([]), "{doc}");
     }
+}
+
+/// 114, 139; record 0074 (design D5); the host-requirements spec's "The
+/// engine stopped during the run": a check that takes the engine away and
+/// fails is not run, with why, and nothing is recorded under its key;
+/// the check that passed beside it keeps its pass.
+#[test]
+fn a_check_that_fails_after_the_engine_went_is_not_run_and_a_pass_is_recorded() {
+    let dir = Scratch::short();
+    let socket = support::engine(dir.path(), "HTTP/1.0 200 OK");
+    let s = moon_setup(
+        "exec-engine-gone",
+        &format!("rm -f '{}'\nexit 1\n", socket.display()),
+    );
+    let out = s.sluice_with(&[(ENGINE_SOCKETS, socket.as_path())], &["exec", "bolt/x"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains(&format!(
+            "could not run: a:test: the container engine no longer answers after the run: \
+             no socket at {}",
+            socket.display()
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        recorded(&s),
+        [("b:test".to_string(), "pass".to_string())],
+        "{said}"
+    );
+}
+
+/// Record 0074; the host-requirements spec's "A test that says docker is
+/// down": what a check prints is never read as the engine gone; while
+/// the engine answers after the run, its fail is recorded under its key.
+#[test]
+fn a_check_that_says_the_engine_is_down_while_it_answers_is_recorded_as_failed() {
+    let dir = Scratch::short();
+    let socket = support::engine(dir.path(), "HTTP/1.0 200 OK");
+    let s = moon_setup(
+        "exec-engine-says",
+        "echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. \
+         Is the docker daemon running?'\nexit 1\n",
+    );
+    let out = s.sluice_with(&[(ENGINE_SOCKETS, socket.as_path())], &["exec", "bolt/x"]);
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("failed: a:test"), "{said}");
+    let mut got = recorded(&s);
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("a:test".to_string(), "fail".to_string()),
+            ("b:test".to_string(), "pass".to_string())
+        ],
+        "{said}"
+    );
 }

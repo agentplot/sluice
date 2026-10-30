@@ -79,6 +79,21 @@ impl Scratch {
         Scratch(std::fs::canonicalize(&dir).expect("canonical scratch dir"))
     }
 
+    /// A scratch directory with as short a path as the host's temporary
+    /// directory allows, for a socket: its path is at most 104 bytes on
+    /// macOS, and a run's temporary directory under `sluice exec` is long.
+    pub fn short() -> Scratch {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "s{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        Scratch(std::fs::canonicalize(&dir).expect("canonical scratch dir"))
+    }
+
     pub fn path(&self) -> &Path {
         &self.0
     }
@@ -525,4 +540,33 @@ impl sluice::exec::Host for FakeHost {
             .head()
             .map(|(branch, local)| sluice_core::overview::OrderFrom { branch, local }))
     }
+}
+
+/// A fake container engine listening at `e.sock` in `dir`, answering a
+/// `GET /_ping` with `status` and anything else with a 404; its socket's
+/// path. Make `dir` with [`Scratch::short`]: a socket's path is at most
+/// 104 bytes on macOS.
+pub fn engine(dir: &Path, status: &'static str) -> PathBuf {
+    use std::io::{Read, Write};
+    let path = dir.join("e.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { continue };
+            let mut asked = Vec::new();
+            let mut buf = [0u8; 512];
+            while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => asked.extend_from_slice(&buf[..n]),
+                }
+            }
+            let status = match asked.starts_with(b"GET /_ping ") {
+                true => status,
+                false => "HTTP/1.0 404 Not Found",
+            };
+            let _ = write!(c, "{status}\r\nApi-Version: 1.47\r\n\r\nOK");
+        }
+    });
+    path
 }
