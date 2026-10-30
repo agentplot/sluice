@@ -76,7 +76,7 @@ pub fn moved(c: &CandidateView) -> Moved {
 pub type Moved = (Vec<u64>, usize, Vec<String>, BTreeMap<String, String>);
 
 /// 84, record 0074: `waiting for a host whose container engine answers:
-/// mac-studio: no socket at /var/run/docker.sock`, for a combination with
+/// build-box: no socket at /var/run/docker.sock`, for a combination with
 /// a run some host turned down for its engine and none has taken; `None`
 /// for one that waits for nothing.
 pub fn waiting(c: &CandidateView) -> Option<String> {
@@ -295,21 +295,21 @@ mod tests {
                 "/var/run/docker.sock refused the connection".into(),
             ),
             (
-                "mac-studio".into(),
+                "build-box".into(),
                 "no socket at /var/run/docker.sock".into(),
             ),
         ]);
         assert_eq!(
             testing_line("main", &c, now(), None),
             "testing main + #12 · 26m10s of 30m · waiting for a host whose container engine \
-             answers: box: /var/run/docker.sock refused the connection; mac-studio: no socket at \
+             answers: box: /var/run/docker.sock refused the connection; build-box: no socket at \
              /var/run/docker.sock"
         );
         c.started = None;
         assert_eq!(
             testing_line("main", &c, now(), None),
             "testing main + #12 · waiting for a host whose container engine answers: box: \
-             /var/run/docker.sock refused the connection; mac-studio: no socket at \
+             /var/run/docker.sock refused the connection; build-box: no socket at \
              /var/run/docker.sock"
         );
     }
