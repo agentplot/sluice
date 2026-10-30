@@ -1,7 +1,7 @@
 ---
 number: 73
 title: The readiness probe is the branch's, run at the branch's current revision and never in the candidate's tree
-status: proposed
+status: rejected
 date: 2026-10-30
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # The readiness probe is the branch's, run at the branch's current revision and never in the candidate's tree
 
-Status: proposed to the user on 2026-10-30, as `briefs.15` has it; accepted only on their yes.
+Status: rejected by the user on 2026-10-30, on their card: "This is the third time you've come back talking to me about probes but we rejected the idea of probes outright so I don't know why we're talking about probes". The probe this record moved is itself withdrawn by record 0066 as amended the same day, which takes `[tests] ready` out of sluice; rule core.36, drawn from this record, is taken out with it.
 
 Deciders: swancloud-design's reading of 2026-10-30, sent through madswan-operator and recorded as signal 2026-10-30-madswan-operator-880be251/01: "The failure is the candidate's, not the host's, and the words say so (a module not found under the repository's own path); sluice could read a ready failure whose words name the repository's tree as the newest submission's, or run ready against the base's tree." The choice between those two is madswan-design's; the user's yes is asked on this record's card.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 16, 17, 18, 19, 56, 60, 66, 84, 114, 115, 124, 139, the policy's `[tests] ready` and its comment, S43 and S67 (blueprints 0edc91c); records 0031, 0043, 0066, 0072; rules core.7, core.15, core.20; `crates/sluice/src/profiles/checks.rs` (`ready_after`, run in the request's working directory, the run's place, with the run's environment; the `unpassed` filter before it), as origin/main held it on 2026-10-30 (d452b1db); WilldanGroup/switchboard-kit on chuck-herdr-alpha under sluice 0.58.0, bolt a40c598 removing `infra/ministack/host-ready.ts` and editing `.config/sluice.toml` in one change, entry #1005 and its combination.
