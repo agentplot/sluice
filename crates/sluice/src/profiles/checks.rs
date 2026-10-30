@@ -247,14 +247,11 @@ impl Checks {
     }
 
     /// Where the container engine is looked for: the sockets this profile
-    /// was given, else those [`ENGINE_SOCKETS_VAR`] names, else those the
-    /// sandbox opens for a run that may reach the engine.
+    /// was given, else those the sandbox opens for a run that may reach
+    /// the engine (design D2).
     fn engine_sockets(&self) -> Vec<PathBuf> {
-        if let Some(s) = &self.engine_sockets {
-            return s.clone();
-        }
-        match std::env::var_os(ENGINE_SOCKETS_VAR) {
-            Some(v) => std::env::split_paths(&v).collect(),
+        match &self.engine_sockets {
+            Some(s) => s.clone(),
             None => docker_sockets(),
         }
     }
@@ -625,25 +622,31 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// The container engine's sockets a run with `docker = true` may reach:
-/// `DOCKER_HOST`'s, and the usual places engines on macOS put theirs, by
-/// the path given and the path it resolves to.
+/// The container engine's sockets a run with `docker = true` may reach,
+/// and the ones the engine is looked for at (design D2): those
+/// [`ENGINE_SOCKETS_VAR`] names where it is set, else `DOCKER_HOST`'s and
+/// the usual places engines on macOS put theirs; each by the path given
+/// and the path it resolves to.
 fn docker_sockets() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(p) = std::env::var("DOCKER_HOST")
-        .ok()
-        .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
-    {
-        paths.push(p);
-    }
-    paths.push("/var/run/docker.sock".into());
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for p in [
-            ".docker/run/docker.sock",
-            ".orbstack/run/docker.sock",
-            ".colima/default/docker.sock",
-        ] {
-            paths.push(home.join(p));
+    if let Some(v) = std::env::var_os(ENGINE_SOCKETS_VAR) {
+        paths.extend(std::env::split_paths(&v));
+    } else {
+        if let Some(p) = std::env::var("DOCKER_HOST")
+            .ok()
+            .and_then(|h| h.strip_prefix("unix://").map(PathBuf::from))
+        {
+            paths.push(p);
+        }
+        paths.push("/var/run/docker.sock".into());
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            for p in [
+                ".docker/run/docker.sock",
+                ".orbstack/run/docker.sock",
+                ".colima/default/docker.sock",
+            ] {
+                paths.push(home.join(p));
+            }
         }
     }
     let mut all = Vec::new();
@@ -658,8 +661,11 @@ fn docker_sockets() -> Vec<PathBuf> {
     all
 }
 
-/// Where the container engine is looked for in place of the sockets the
-/// sandbox opens, as a list of paths: a fake engine, in tests.
+/// The tests' way to name where a fake container engine listens, as a
+/// list of paths: where set, these replace the host's sockets both where
+/// the engine is looked for and where the sandbox lets a run reach it, so
+/// the look finds only what the run would reach (design D2). A host names
+/// its engine by `DOCKER_HOST`.
 pub const ENGINE_SOCKETS_VAR: &str = "SLUICE_ENGINE_SOCKETS";
 
 /// How long the engine look waits for a socket to take its connection,
