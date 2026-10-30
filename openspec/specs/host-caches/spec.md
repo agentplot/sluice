@@ -106,9 +106,9 @@ naming the `dir` and saying a shared cache lies outside every checkout
 
 Every run sluice starts SHALL be given each declared `env` variable
 with its declared value, under any executor: a submission's run, an
-agent's `sluice exec`, a preview's command, and the `ready` and
-`release` commands. The repository's `toolchain` is sourced after them,
-as it is in an agent's shell (35).
+agent's `sluice exec`, a preview's command, and the `release` command.
+The repository's `toolchain` is sourced after them, as it is in an
+agent's shell (35).
 
 #### Scenario: An open run gets the variables
 
