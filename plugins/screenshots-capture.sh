@@ -229,7 +229,7 @@ herdr_config() {
   cat >>"$DEMO/config/herdr/config.toml" <<'EOF'
 
 [[keys.command]]
-key = "prefix+s"
+key = "prefix+m"
 type = "plugin_action"
 command = "agentplot.sluice.status"
 description = "sluice: the queue"
