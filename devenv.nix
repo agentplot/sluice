@@ -289,18 +289,24 @@ in
 
   # moon's task archives (.moon/cache/outputs) are a link into the git common
   # dir, so every worktree of sluice shares them: a crate's tests that passed
-  # in one worktree replay in another. The rest of .moon/cache records the
-  # checkout's absolute paths and stays its own. The worktree is found when
-  # the shell is entered, never written in at evaluation: a printed
-  # toolchain is the same from any directory, so sluice can keep one per
-  # hash of its inputs.
+  # in one worktree replay in another. Where the sandbox or the file system
+  # refuses that directory, the worktree keeps its own archives and the shell
+  # says nothing: a run writes only its place, its scratch and the caches its
+  # host declares (35; record 0049; core.34), so a host that wants them
+  # shared declares the directory one of its [[caches]]. The rest of
+  # .moon/cache records the checkout's absolute paths and stays its own. The
+  # worktree is found when the shell is entered, never written in at
+  # evaluation: a printed toolchain is the same from any directory, so sluice
+  # can keep one per hash of its inputs.
   enterShell = ''
     if _moon_root="$(git rev-parse --show-toplevel 2>/dev/null)" &&
       _moon_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
       _moon_cache="$_moon_root/.moon/cache"
       [ -L "$_moon_cache" ] && rm -f "$_moon_cache"
-      mkdir -p "$_moon_common/moon-outputs" "$_moon_cache"
-      if [ ! -L "$_moon_cache/outputs" ]; then
+      mkdir -p "$_moon_cache"
+      if mkdir -p "$_moon_common/moon-outputs" 2>/dev/null &&
+        [ -w "$_moon_common/moon-outputs" ] &&
+        [ ! -L "$_moon_cache/outputs" ]; then
         rm -rf "$_moon_cache/outputs"
         ln -s "$_moon_common/moon-outputs" "$_moon_cache/outputs"
       fi

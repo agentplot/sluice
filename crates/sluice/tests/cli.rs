@@ -8540,3 +8540,64 @@ mod read_once {
         assert!(files.read(BRANCH).unwrap().version > 0);
     }
 }
+
+/// 84, record 0074; the host-requirements spec's "Status says what it
+/// waits for": a combination whose run this host turned down for its
+/// container engine says so in `status`, its `--json` and `wait --json`,
+/// naming the host and why; one that waits for nothing says nothing of it.
+#[test]
+fn status_and_wait_say_a_combination_waits_for_a_host_whose_engine_answers() {
+    let why = "no socket at /var/run/docker.sock";
+    let f = Fakes::new();
+    f.world.init(
+        BRANCH,
+        &[
+            (
+                ".config/sluice.toml",
+                &format!("{POLICY}\n[executor]\ndocker = true\n"),
+            ),
+            ("plugin/lib/plan.py", "plan"),
+        ],
+    );
+    f.world.task("plugin:test", "plugin/");
+    f.world.engine_unmet(Some(why));
+    work(&f, "unit/a", "agent-a", &[("plugin/a", Some("a"))]);
+    sluice(&f, &["submit", BRANCH, "--worktree", "unit/a", "--no-wait"]);
+    sluice(&f, &["step", BRANCH]);
+
+    let said = format!("waiting for a host whose container engine answers: this-host: {why}");
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with(&format!("  testing {BRANCH} + #1 ")) && l.ends_with(&said)),
+        "{text}"
+    );
+    let (_, one) = sluice(&f, &["status", "1", "--json"]);
+    let one = json(&one);
+    let combination = one["tested"]["combination"].clone();
+    assert_eq!(one["waiting"], serde_json::json!({ "this-host": why }));
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    assert_eq!(
+        json(&out)["waiting"],
+        serde_json::json!([{
+            "submissions": [1],
+            "combination": combination,
+            "waiting": { "this-host": why },
+        }])
+    );
+    let (code, out) = sluice(&f, &["wait", "1", "--timeout", "2s", "--json"]);
+    assert_eq!(code, sluice::WAITING, "{out}");
+    assert_eq!(
+        json(&out)["waiting"],
+        serde_json::json!({ "this-host": why })
+    );
+
+    // Its engine answers: the run is taken, and nothing waits.
+    f.world.engine_unmet(None);
+    f.world.hold_runs(true);
+    sluice(&f, &["step", BRANCH]);
+    let (_, text) = sluice(&f, &["status", BRANCH]);
+    assert!(!text.contains("waiting for a host"), "{text}");
+    let (_, out) = sluice(&f, &["status", BRANCH, "--json"]);
+    assert_eq!(json(&out)["waiting"], serde_json::json!([]));
+}

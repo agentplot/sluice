@@ -210,14 +210,13 @@ worktree.
 A test that could not run is listed as `could not run: <test>: <why>`
 and has no result, so nothing is recorded under its key. A test could
 not run when its program could not be started, when it exits with a code
-`[tests] not_run` names, or when the host failed `[tests] ready` after a
-run in which it did not pass. A host that fails `ready` before the run
-is refused it, and the command's output says why.
+`[tests] not_run` names, or when the executor reports refusing the run
+something it needs.
 
 `sluice exec <branch> -- <command>` runs any command the same way, with
 `SLUICE_CHECKOUT`, `SLUICE_TMP` and the ports in its environment, and
-exits with the command's exit code. It records nothing, and is held to
-neither `ready` nor `not_run`.
+exits with the command's exit code. It records nothing, and is not held
+to `not_run`.
 
 Run suites through `sluice exec` so the agents on one host take turns
 under its bound rather than all running at once. A quick, narrow call,
@@ -772,8 +771,8 @@ sluice records nothing under a test's key for four failures it tells
 apart on its own, so none of them needs setting aside:
 
 - a run whose program never started;
-- a host that failed `[tests] ready`;
 - an exit `[tests] not_run` names;
+- a run whose executor reports refusing it something it needs;
 - a test the time limit ended.
 
 A host failure none of these catches still sits under the test's

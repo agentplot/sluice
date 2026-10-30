@@ -5,16 +5,13 @@
 runner = "moon"
 # Printed outside the executor and sourced inside it (section 4).
 toolchain = ["devenv", "print-dev-env"]
-# The stack and e2e tests need the container engine: a host whose engine
-# does not answer is refused the run, or, when it stops during one, leaves
-# its fails unjudged rather than recorded (could-not-run-1 114; ADR 0031).
-ready = ["docker", "info"]
 
 [executor]
 kind = "sandbox"
 # The integration tests listen on localhost; nothing reaches further.
 network = "localhost"
-# The stack test starts containers (ADR 0016).
+# The stack and e2e tests start their containers and wait for them within
+# their own limit (66; ADR 0016).
 docker = true
 
 [branches."bolt/*"]

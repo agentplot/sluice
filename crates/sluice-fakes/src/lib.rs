@@ -172,8 +172,11 @@ struct Inner {
     took: BTreeMap<String, (u64, u32)>,
     /// Checks a run leaves not run, with why (could-not-run-1 114).
     cannot_run: BTreeMap<String, String>,
-    /// A run whose policy sets `[tests] ready` is refused (84).
-    not_ready: bool,
+    /// What each host lacks of what a run asks of it, by host, as the
+    /// check seam's look at the host says it (84; record 0074).
+    unmet: BTreeMap<String, String>,
+    /// Every look at what a host lacks, by the host that looked, in order.
+    looks: Vec<String>,
     cache: BTreeMap<(String, String), String>,
     runs: Vec<RunState>,
     /// What each run says of its tasks while it goes, by run.
@@ -714,10 +717,22 @@ impl World {
         };
     }
 
-    /// The host fails a policy's `[tests] ready` from now: a run whose
-    /// request sets it is refused before anything of it runs (84).
-    pub fn not_ready(&self, not_ready: bool) {
-        self.0.borrow_mut().not_ready = not_ready;
+    /// From now, this world's host lacks what a run asks of it for `why`,
+    /// a container engine that answers, as its look says; with `None`, it
+    /// meets it again (84; record 0074).
+    pub fn engine_unmet(&self, why: Option<&str>) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        match why {
+            Some(w) => inner.unmet.insert(host, w.into()),
+            None => inner.unmet.remove(&host),
+        };
+    }
+
+    /// Each look at what the host lacks, by the host that looked, in
+    /// order.
+    pub fn engine_looks(&self) -> Vec<String> {
+        self.0.borrow().looks.clone()
     }
 
     /// The next start finds its place made and stops before starting.
@@ -1086,6 +1101,51 @@ impl World {
             };
         }
         let tree = inner.commits[&request.revision].tree.clone();
+        // A session's command (session-runs-1 clause 89): its one check is
+        // the command, which fails where a rule names it.
+        let command = match (request.tests.get("runner"), request.tests.get("command")) {
+            (Some(sluice_seams::Setting::Text(r)), Some(sluice_seams::Setting::Text(c)))
+                if r == "command" =>
+            {
+                Some(c.clone())
+            }
+            _ => None,
+        };
+        if let Some(command) = command {
+            let outcome = match inner
+                .fail_rules
+                .iter()
+                .any(|(n, f)| *n == command && f(&tree))
+            {
+                true => Outcome::Fail,
+                false => Outcome::Pass,
+            };
+            return RunReport {
+                detail: None,
+                kept_out: Vec::new(),
+                tasks: vec![TaskResult {
+                    took_ms: None,
+                    attempts: None,
+                    task: command,
+                    hash: request.revision.to_string(),
+                    outcome,
+                    source: Source::Ran {
+                        host: inner.host.clone(),
+                    },
+                }],
+                executor: Enforced {
+                    kind: "open".into(),
+                    confined: false,
+                    processors: None,
+                    memory: None,
+                    network: None,
+                    docker: request.limits.docker,
+                },
+                missing: Vec::new(),
+                not_run: Vec::new(),
+                timed_out: false,
+            };
+        }
         let since = request
             .since
             .as_ref()
@@ -1791,9 +1851,6 @@ impl Tests for FakeTests {
         {
             return Err(AtBound.into());
         }
-        if inner.not_ready && request.tests.contains_key("ready") {
-            bail!("the host is not ready: [tests] ready failed");
-        }
         if std::mem::take(&mut inner.crash_start) {
             bail!("crashed before starting a run in {}", request.place.name);
         }
@@ -1842,6 +1899,16 @@ impl Tests for FakeTests {
         let report = World::evaluate(&mut inner, &r.request);
         inner.runs[n].report = Some(report.clone());
         Ok(Progress::Finished(report))
+    }
+
+    fn unmet(&self, limits: &sluice_seams::Limits) -> Result<Option<String>> {
+        let mut inner = self.0 .0.borrow_mut();
+        let host = inner.host.clone();
+        inner.looks.push(host.clone());
+        if !limits.asks_of_host() {
+            return Ok(None);
+        }
+        Ok(inner.unmet.get(&host).cloned())
     }
 
     fn bound(&self) -> Result<usize> {

@@ -51,12 +51,17 @@ pub enum Recorded {
     Nothing,
 }
 
-/// A finished session run: what it recorded, and why its result could not
-/// be kept on its place, when it could not. Keeping it decides nothing, so
-/// a failure to keep it changes nothing else of the run (97).
+/// A finished session run: what it recorded, the report as it was read,
+/// and why its result could not be kept on its place, when it could not.
+/// Keeping it decides nothing, so a failure to keep it changes nothing
+/// else of the run (97).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finished {
     pub recorded: Recorded,
+    /// The run's report, its checks left with no outcome where what the
+    /// run asked of the host had gone after it (design D5): what the
+    /// session is told.
+    pub report: RunReport,
     pub unkept: Option<String>,
 }
 
@@ -125,6 +130,19 @@ impl Sluice<'_> {
         )?))
     }
 
+    /// 84, record 0074 (design D6): what this host lacks of what the
+    /// branch's runs ask of it, a container engine that answers, looked
+    /// at before a session run of the branch's tests, which it refuses
+    /// while it lacks one; `None` for a branch whose runs ask nothing of
+    /// the host, which is never looked at. A command's run asks nothing of
+    /// it and is never refused for it.
+    pub fn session_unmet(&self, plan: &SessionPlan) -> Result<Option<String>> {
+        if !plan.policy.limits.asks_of_host() {
+            return Ok(None);
+        }
+        self.seams.tests.unmet(&plan.policy.limits)
+    }
+
     /// 89, 83: a session run of the checks `head` affects against the
     /// branch, or of `command`, in `place`, under the branch's executor,
     /// limits and time limit; never answered from the cache, since what a
@@ -141,9 +159,9 @@ impl Sluice<'_> {
             Some(c) => {
                 tests.insert("runner".into(), Setting::Text("command".into()));
                 tests.insert("command".into(), Setting::Text(c.into()));
-                // Could-not-run-1 114: what readiness and a not-run exit
-                // say is of the checks; a command's exit is its own.
-                tests.remove("ready");
+                // Could-not-run-1 114: a not-run exit says a check could
+                // not run here; a command's exit is its own, so none of
+                // its exits is read so.
                 tests.remove("not_run");
                 Vec::new()
             }
@@ -194,6 +212,10 @@ impl Sluice<'_> {
     /// place (97), after its results, so a reader that finds it recorded
     /// finds the results (rule core.7's order). It decides nothing (rule
     /// core.18), so a failure to keep it is given back, never raised.
+    ///
+    /// A run of the checks is read with what the host lacks after it, as a
+    /// combination's is (design D5); a command's exit is its own, and
+    /// never is (design D6).
     pub fn finish_session(
         &self,
         plan: &SessionPlan,
@@ -202,6 +224,10 @@ impl Sluice<'_> {
         command: bool,
         report: &RunReport,
     ) -> Result<Finished> {
+        let report = &match command {
+            true => report.clone(),
+            false => self.after_run(&plan.policy.limits, report.clone())?,
+        };
         let recorded = self.record_finished(plan, session, started, command, report)?;
         let outcome = if report.timed_out {
             RunOutcome::TimedOut
@@ -235,7 +261,11 @@ impl Sluice<'_> {
             )
             .err()
             .map(|e| format!("{e:#}"));
-        Ok(Finished { recorded, unkept })
+        Ok(Finished {
+            recorded,
+            report: report.clone(),
+            unkept,
+        })
     }
 
     /// 97: a session run that ended with no report, lost or stopped, leaves
