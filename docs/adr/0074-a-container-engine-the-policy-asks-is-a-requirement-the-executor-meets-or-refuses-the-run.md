@@ -1,7 +1,7 @@
 ---
 number: 74
 title: A container engine the policy asks for is a requirement the executor meets, or it refuses the run and leaves it open
-status: proposed
+status: accepted
 date: 2026-10-30
 decision-makers:
 - Chuck Swanberg
@@ -9,9 +9,9 @@ decision-makers:
 
 # A container engine the policy asks for is a requirement the executor meets, or it refuses the run and leaves it open
 
-Status: proposed to the user on 2026-10-30, as `briefs.15` has it; accepted only on their yes.
+Status: accepted by the user on 2026-10-30, on their card (req_d552fafa15464f188652, "Approved").
 
-Deciders: madswan-design, on swancloud-planner's and swancloud-ops's reading of 2026-10-30 (swancloud signal 2026-10-30-swancloud-planner-425be3b2/01): mac-studio's gate runs sluice as its own user, which has no container engine it can reach, OrbStack running only under the person's login session, while sluice's own policy says `[executor] docker = true` for its stack test; madswan-planner proposed keeping the stack test off that host by a named system, which the statement's definition of a system rules out. The user's yes is asked on this record's card.
+Deciders: madswan-design, on swancloud-planner's and swancloud-ops's reading of 2026-10-30 (swancloud signal 2026-10-30-swancloud-planner-425be3b2/01): mac-studio's gate runs sluice as its own user, which has no container engine it can reach, OrbStack running only under the person's login session, while sluice's own policy says `[executor] docker = true` for its stack test; madswan-planner proposed keeping the stack test off that host by a named system, which the statement's definition of a system rules out. The user accepted it on this record's card on 2026-10-30.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` definitions (system), clauses 66, 83, 84, 85, 86, 87, 139, the C.3 sandbox row; `crates/sluice/src/profiles/checks.rs` on origin/main at 2026-10-30 (`docker_sockets`, `sandbox_profile`: `docker = true` opens the engine's socket paths in the profile and checks for no engine); records 0016, 0072; rules core.34, core.35.
 
 ## Context and problem statement
@@ -41,6 +41,6 @@ Option 2.
 
 ### Consequences
 
-- Clause 84 gains the requirement and the C.3 sandbox row names the refusal, in the statement at agentplot/blueprints; rule core.38 is added, marked proposed; `_open.md` names this record until it is built.
+- Clause 84 gains the requirement and the C.3 sandbox row names the refusal, in the statement at agentplot/blueprints; rule core.38 is added; `_open.md` names this record until it is built.
 - One unit on the yes, citing this record: an executor with no reachable container engine refuses a run whose policy asks one before claiming it, the run stays open, and status and wait say what it waits for.
 - swancloud's gate hosts need no system declared for this; a host with an engine takes the run, one without leaves it.
