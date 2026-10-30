@@ -156,8 +156,10 @@ pub struct FailedTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     /// Could-not-run-1 115: the check could not run in as many runs in a
-    /// row as the bound, and why it last could not; `None` for a check
-    /// with a result.
+    /// row as the bound, and why it last could not; or, record 0074, no
+    /// host took its run before the time limit, each that turned it down
+    /// for what it lacks named with why (66, 87). `None` for a check with
+    /// a result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_run: Option<String>,
 }
@@ -387,6 +389,11 @@ pub struct SystemRun {
     /// proved.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_replay: bool,
+    /// 84, record 0074 (design D4): each host that turned the run down
+    /// for what it lacks of what the run asks of it, a container engine
+    /// that answers, with why; a host's entry goes when it claims the run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub declined: BTreeMap<String, String>,
 }
 
 /// A run's state, from open to its own verdict.
@@ -508,6 +515,7 @@ impl From<CandidateForm> for Candidate {
                 run: f.run,
                 no_replay: false,
                 host: None,
+                declined: BTreeMap::new(),
             });
         }
         Candidate {
@@ -839,6 +847,16 @@ pub enum Event {
     Lapsed {
         combination: Rev,
         host: String,
+    },
+    /// 84, record 0074: a host turned a run down, before claiming it, for
+    /// what it lacks of what the run asks of it; once for each host and
+    /// reason while it stands.
+    Declined {
+        combination: Rev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        host: String,
+        why: String,
     },
     /// A run whose executor stopped before reporting, or that left checks
     /// not run and failed none on its own result: no outcome (60,
