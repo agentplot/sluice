@@ -1,7 +1,7 @@
 ---
 number: 75
 title: A change no required check reads lands at once beside the queue, and the combinations under test keep their runs and land with it
-status: proposed
+status: accepted
 date: 2026-10-30
 decision-makers:
 - Chuck Swanberg
@@ -9,7 +9,7 @@ decision-makers:
 
 # A change no required check reads lands at once beside the queue, and the combinations under test keep their runs and land with it
 
-Status: proposed 2026-10-30; accepted only on the user's yes.
+Status: accepted by the user on 2026-10-30, on their card (req_1ab76b00feda4d5bbfd0, "Approved").
 
 Deciders: the user, on their card of 2026-10-30 (req_3a9c29d3019847efa507), asked "Write a sluice record: a change no check reads (docs) lands at once, never waiting behind code under test?", answered "Yes, write the record for your approval"; their words before it: "It seems like a problem that we are sending doc changes through merge queues and having to wait for them. People aren't going to like that". An earlier note of theirs declined letting doc-only changes skip batching in general; this record is narrower: only work no required check reads, which never joins a combination.
 Sources: `agentplot/blueprints:design/sluice/requirements.md` clauses 6, 7, 8, 10, 11, 12, 13, 15, 17, 22, 23, 24, 36, 50, 56, 58, 70, 71, 78, 117, 122, 124, 125, 137, 140, S68, the C.2 rows (blueprints d6133ad); records 0006, 0044, 0051, 0068, 0070, 0072; rules core.4, core.5, core.6, core.15, core.17, core.22, core.33; a docs-only record of another repository's on a host, tested in one combination with code submissions 399 and 400 and waiting for their checks; Flume's entry 63, docs only, landed 44 seconds after its submit on an idle host.
@@ -79,6 +79,6 @@ Options 1, A, i, no signer, and leading heads (clause 140; clauses 8, 10, 23 and
 
 ### Consequences
 
-- Clause 140 and S68 are added, and clauses 8, 10, 23 and 24 amended, in the statement at blueprints d6133ad, each marked proposed; rule core.39 is added, marked proposed, and the details of core.6 and core.17 name what it allows; `_open.md` names this record until it is built.
+- Clause 140 and S68 are added, and clauses 8, 10, 23 and 24 amended, in the statement at blueprints d6133ad, each marked proposed; rule core.39 is added, and the details of core.6 and core.17 name what it allows; `_open.md` names this record until it is built.
 - One unit on the yes, citing this record: the round's qualifying test and landing beside before forming, the landing of a formed candidate from a revision landings beside alone moved, the entry's `beside`, and the words in submit, wait, status and a request's report.
 - A branch whose required checks read everything, or whose runner reads every check as affected, behaves as before.
