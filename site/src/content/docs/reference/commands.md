@@ -879,6 +879,14 @@ with exit `1` or `conflict: …` with exit `2`. Closed without landing is
 closed. Under `--json` it prints `{"pull_request","branch","state",
 "title"}`, the state `landed`, `failed` or `conflict`.
 
+A submission that landed beside the queue ends with `landed as 4e1a07c
+beside the queue: no required check reads its changes`, exit `0`, and
+under `--json` its record has `"beside": true`. While one waits behind
+another submission though no check reads it on the branch as it is,
+its line says `waits behind #13: its checks read this change` or
+`conflicts with #13's work`, and its record has `"beside": {"behind":
+13, "why": "read"}` or `"why": "conflict"`.
+
 A wait in the worktree a submission came from, or a pull request was
 opened from, reports that submission's outcome to the session working
 there, so it marks the outcome delivered once its report is written,

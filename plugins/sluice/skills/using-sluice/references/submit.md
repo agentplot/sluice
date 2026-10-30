@@ -53,6 +53,21 @@ has run, and the combination's time against its limit. `sluice status
 whose inputs did not change may replay its earlier result, when the branch
 trusts `"cache"`.
 
+A change no required check reads, such as docs, lands at once without
+waiting for the combinations under test, which keep their results and
+land after it untested again:
+
+```text
+landed as 4e1a07c beside the queue: no required check reads its changes
+```
+
+Under `--json` its record has `"beside": true`. When a combination's
+checks would read it, or it conflicts with a submission ahead, it takes
+the queue and says `waits behind #13: its checks read this change` or
+`conflicts with #13's work`; its record has `"beside": {"behind": 13,
+"why": "read"}`. A change to `.config/sluice.toml` or to the runner's
+own settings always takes the queue.
+
 ## Several worktrees as one act
 
 Submit a set as one act when its heads must be queued together, such as
