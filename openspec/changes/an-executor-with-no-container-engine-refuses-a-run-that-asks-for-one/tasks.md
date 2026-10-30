@@ -31,4 +31,4 @@ committed. Commits cite record 0074 and rule core.38.
 
 ## 5. The gate
 
-- [ ] 5.1 Commit and run `sluice exec main`; every gate task passes (format, lint, type check, tests, the conformance suite, `site:prose`).
+- [x] 5.1 Commit and run `sluice exec main`; every gate task passes (format, lint, type check, tests, the conformance suite, `site:prose`).
