@@ -156,8 +156,10 @@ pub struct FailedTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     /// Could-not-run-1 115: the check could not run in as many runs in a
-    /// row as the bound, and why it last could not; `None` for a check
-    /// with a result.
+    /// row as the bound, and why it last could not; or, record 0074, no
+    /// host took its run before the time limit, each that turned it down
+    /// for what it lacks named with why (66, 87). `None` for a check with
+    /// a result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_run: Option<String>,
 }
@@ -258,6 +260,65 @@ pub struct Submission {
     /// names it by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// 140: landed beside the chain, or, read at the first round and not
+    /// landed so, the entry ahead it waits behind and why; `None` for
+    /// work some required check reads at the branch's revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beside: Option<Beside>,
+    /// 125: the first head of the act it was submitted in, where the act
+    /// gave several; `None` for a submission made alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<u64>,
+}
+
+/// 140: what a submission's work was read as at the first round that
+/// read it. On disk and in JSON, `true` once landed beside the chain, or
+/// `{"behind": <n>, "why": "read" | "conflict"}` while it waits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "BesideForm", try_from = "BesideForm")]
+pub enum Beside {
+    /// Landed beside the chain, with nothing run.
+    Landed,
+    /// Takes the chain behind entry `behind`, for `why`.
+    Behind { behind: u64, why: BesideWhy },
+}
+
+/// 140: why work no check reads at the branch's revision takes the chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BesideWhy {
+    /// A formed candidate's checks would read it.
+    Read,
+    /// It does not merge cleanly with the work of the entry ahead.
+    Conflict,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum BesideForm {
+    Landed(bool),
+    Behind { behind: u64, why: BesideWhy },
+}
+
+impl From<Beside> for BesideForm {
+    fn from(b: Beside) -> BesideForm {
+        match b {
+            Beside::Landed => BesideForm::Landed(true),
+            Beside::Behind { behind, why } => BesideForm::Behind { behind, why },
+        }
+    }
+}
+
+impl TryFrom<BesideForm> for Beside {
+    type Error = String;
+
+    fn try_from(f: BesideForm) -> Result<Beside, String> {
+        match f {
+            BesideForm::Landed(true) => Ok(Beside::Landed),
+            BesideForm::Landed(false) => Err("beside is true or an entry it waits behind".into()),
+            BesideForm::Behind { behind, why } => Ok(Beside::Behind { behind, why }),
+        }
+    }
 }
 
 impl Submission {
@@ -276,6 +337,7 @@ impl Submission {
         match self.state {
             State::Landed => Some(Decided::Landed {
                 landed_as: self.landed_as.clone()?,
+                beside: self.beside == Some(Beside::Landed),
             }),
             State::Failed => {
                 let tested = self.tested.as_ref()?;
@@ -387,6 +449,11 @@ pub struct SystemRun {
     /// proved.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_replay: bool,
+    /// 84, record 0074 (design D4): each host that turned the run down
+    /// for what it lacks of what the run asks of it, a container engine
+    /// that answers, with why; a host's entry goes when it claims the run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub declined: BTreeMap<String, String>,
 }
 
 /// A run's state, from open to its own verdict.
@@ -452,6 +519,11 @@ pub struct Candidate {
     /// When its verdict read passed: a hold runs from it (117).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passed_at: Option<String>,
+    /// 140: the heads of the work landed beside the chain since it was
+    /// formed, in order. It lands as `revision` with each of them, its
+    /// runs and verdict standing (23, 24; rule core.17).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries: Vec<Rev>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -487,6 +559,8 @@ struct CandidateForm {
     not_run_runs: u32,
     #[serde(default)]
     passed_at: Option<String>,
+    #[serde(default)]
+    carries: Vec<Rev>,
 }
 
 impl From<CandidateForm> for Candidate {
@@ -508,6 +582,7 @@ impl From<CandidateForm> for Candidate {
                 run: f.run,
                 no_replay: false,
                 host: None,
+                declined: BTreeMap::new(),
             });
         }
         Candidate {
@@ -524,6 +599,7 @@ impl From<CandidateForm> for Candidate {
             replayed: f.replayed,
             not_run_runs: f.not_run_runs,
             passed_at: f.passed_at,
+            carries: f.carries,
         }
     }
 }
@@ -571,6 +647,10 @@ pub struct LandingIntent {
     pub from: Rev,
     pub to: Rev,
     pub commits: Vec<LandingCommitRecord>,
+    /// 140: a landing beside the chain, of work no required check reads,
+    /// with nothing run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub beside: bool,
 }
 
 /// An outcome decided and not yet pushed to its session (50, 51).
@@ -589,6 +669,9 @@ pub struct OutboxItem {
 pub enum DecidedRecord {
     Landed {
         landed_as: Rev,
+        /// 140: landed beside the chain, with no check run.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beside: bool,
     },
     Failed {
         failed: Vec<String>,
@@ -608,7 +691,7 @@ pub enum DecidedRecord {
 impl DecidedRecord {
     pub fn to_decided(&self) -> Decided {
         match self.clone() {
-            DecidedRecord::Landed { landed_as } => Decided::Landed { landed_as },
+            DecidedRecord::Landed { landed_as, beside } => Decided::Landed { landed_as, beside },
             DecidedRecord::Failed {
                 failed,
                 combination,
@@ -840,6 +923,16 @@ pub enum Event {
         combination: Rev,
         host: String,
     },
+    /// 84, record 0074: a host turned a run down, before claiming it, for
+    /// what it lacks of what the run asks of it; once for each host and
+    /// reason while it stands.
+    Declined {
+        combination: Rev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        host: String,
+        why: String,
+    },
     /// A run whose executor stopped before reporting, or that left checks
     /// not run and failed none on its own result: no outcome (60,
     /// could-not-run-1 114). The candidate runs again.
@@ -892,6 +985,9 @@ pub enum Event {
     Landed {
         ids: Vec<u64>,
         to: Rev,
+        /// 140: landed beside the chain, with no check run.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beside: bool,
     },
     /// 121: the branch was read at a revision lacking the landing it must
     /// contain; one line for each revision read so.
@@ -1179,6 +1275,50 @@ mod tests {
     /// 26: a submission is named by its subject, or by the branch it was
     /// submitted from where its submit gave none; a record written before
     /// subjects reads as one with none.
+    /// 140: `beside` is `true` once landed beside the chain, or the entry
+    /// it waits behind and why; a submission read as neither writes none,
+    /// and `false` is no reading of it.
+    #[test]
+    fn beside_reads_as_true_or_the_entry_it_waits_behind() {
+        let mut s = submission(None);
+        assert!(!String::from_utf8(to_document(&s))
+            .unwrap()
+            .contains("beside"));
+        s.beside = Some(Beside::Landed);
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["beside"], serde_json::json!(true));
+        s.beside = Some(Beside::Behind {
+            behind: 7,
+            why: BesideWhy::Read,
+        });
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            v["beside"],
+            serde_json::json!({ "behind": 7, "why": "read" })
+        );
+        let back: Submission = serde_json::from_value(v).unwrap();
+        assert_eq!(back.beside, s.beside);
+        let conflict: Beside = serde_json::from_str(r#"{"behind":3,"why":"conflict"}"#).unwrap();
+        assert_eq!(
+            conflict,
+            Beside::Behind {
+                behind: 3,
+                why: BesideWhy::Conflict
+            }
+        );
+        assert!(serde_json::from_str::<Beside>("false").is_err());
+        s.state = State::Landed;
+        s.landed_as = Some(Rev::new("abc"));
+        s.beside = Some(Beside::Landed);
+        assert_eq!(
+            s.decided(),
+            Some(Decided::Landed {
+                landed_as: Rev::new("abc"),
+                beside: true
+            })
+        );
+    }
+
     #[test]
     fn a_submission_is_named_by_its_subject_or_its_branch() {
         let given = submission(Some("Batch review cards"));
@@ -1609,6 +1749,7 @@ mod tests {
             submission: 5,
             outcome: DecidedRecord::Landed {
                 landed_as: Rev::new("abc1234"),
+                beside: false,
             },
         };
         let text = serde_json::to_string(&item).unwrap();
@@ -1631,7 +1772,8 @@ mod tests {
         assert_eq!(
             landed.decided(),
             Some(Decided::Landed {
-                landed_as: Rev::new("abc1234")
+                landed_as: Rev::new("abc1234"),
+                beside: false,
             })
         );
         assert_eq!(landed.notification().as_deref(), Some("12:landed"));

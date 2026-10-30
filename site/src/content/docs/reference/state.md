@@ -343,6 +343,17 @@ the round has yet to push waits in `branch.json`'s `outbox`, each item
 holding it under the key `told`, which an older sluice on another host
 still reads.
 
+A submission that landed beside the queue, because no required check
+reads its changes, has `"beside": true`. Its notice reads `[sluice] #15
+landed on feature/concurrent-units as 4e1a07c beside the queue: no
+required check reads its changes.` A submission can wait all the same,
+though no check reads its changes on the branch as it is. Then it has
+`"beside": { "behind": 13, "why": "read" }`, naming the submission
+whose combination's checks read it. With `"why": "conflict"` it names
+the submission whose work it conflicts with. A submission that a check reads on the branch as it is
+has no `beside`. A submission made with others in one act has `"act"`,
+the id of the act's first.
+
 A passed submission waiting under its branch's [`hold`](/sluice/reference/configuration/#hold)
 has `"held": { "by": [12, 13, 14], "until": "2026-10-11T09:26:40Z" }`:
 the longer combination it waits for, by its submissions, and when the

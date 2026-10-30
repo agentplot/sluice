@@ -350,6 +350,7 @@ check reads:
 | `failed: app:test` | its combination failed and it is to blame; the comment names the failed tests and where their logs are |
 | `conflict: plan.py` | it no longer merges with what is ahead of it; the comment names the files and the pull requests |
 | `landed as b7d2e94` | on `main`; GitHub marks the pull request merged |
+| `landed as 4e1a07c beside the queue` | no required check reads its changes, so it landed on `main` at once with no check run, ahead of the queue; the report says so |
 
 While a pull request waits or is queued, the check shows as pending on
 GitHub; while it is tested, in progress; failed and conflict fail it,
@@ -375,7 +376,7 @@ Total time: 4m 12s | Comparison time: 9m 40s | Estimated savings: 5m 28s (56% fa
 |----|--------------|-------|---------------|-----------------------------------|
 | 🟥 | `app:test`   | 2m 3s | Failed        | sandbox on box-1 · 2 attempts     |
 | 🟨 | `app:e2e`    | 51s   | Flaky         | passed on the same inputs at …    |
-| ⬛ | `site:check` |       | Could not run | the host failed [tests] ready …   |
+| ⬛ | `site:check` |       | Could not run | exited 77, which not_run names …  |
 | 🟩 | `app:lint`   | 18s   | Passed        | sandbox on box-1                  |
 | 🟪 | `core:test`  |       | Replayed      | from a pass the gate trusts       |
 ```

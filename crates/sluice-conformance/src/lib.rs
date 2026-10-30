@@ -221,8 +221,9 @@ pub trait Rig {
     }
 
     /// Session-runs-1 clause 89: a session's run of its checks in its own
-    /// place, against the branch, to its end, and what it recorded. The
-    /// caller stands for the run `sluice exec` would count against the bound.
+    /// place, against the branch, to its end, as the core read its report,
+    /// and what it recorded. The caller stands for the run `sluice exec`
+    /// would count against the bound.
     fn session_run(&self, worktree: &str) -> (RunReport, Recorded) {
         self.session_exec(worktree, None)
     }
@@ -253,12 +254,11 @@ pub trait Rig {
                 Progress::Lost => panic!("the session run was lost"),
             }
         };
-        let recorded = s
+        let finished = s
             .finish_session(&plan, &session, &started, command.is_some(), &report)
             .expect("the session run records");
-        assert_eq!(recorded.unkept, None, "its result is kept");
-        let recorded = recorded.recorded;
-        (report, recorded)
+        assert_eq!(finished.unkept, None, "its result is kept");
+        (finished.report, finished.recorded)
     }
 
     fn sub(&self, id: u64) -> Submission {

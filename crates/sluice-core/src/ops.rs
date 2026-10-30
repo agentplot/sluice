@@ -570,10 +570,13 @@ impl Sluice<'_> {
         let _lock = self.seams.state.wait_lock(&req.branch)?;
         let accepted = self.update(&req.branch, |l| {
             let mut accepted = Vec::new();
+            // 125, 140: the act's heads, named by its first, where it has
+            // several.
+            let act = (ids.len() > 1).then(|| ids[0]);
             for (k, ((&id, session), head)) in ids.iter().zip(&sessions).zip(&submitted).enumerate()
             {
                 let subject = req.subjects.get(k).cloned();
-                accepted.push(admit(l, req, id, session, head, subject, &now));
+                accepted.push(admit(l, req, id, act, session, head, subject, &now));
             }
             Ok(accepted)
         })?;
@@ -1576,10 +1579,12 @@ pub fn kept_out_warning(branch: &str, task: &str) -> String {
 /// 47, 67: withdraw the earlier submissions from `session`'s place and
 /// queue the head it submits, `submitted` (124), as submission `id`, in
 /// `l`, keeping its `subject` (23).
+#[allow(clippy::too_many_arguments)]
 fn admit(
     l: &mut Line,
     req: &GroupRequest,
     id: u64,
+    act: Option<u64>,
     session: &Session,
     submitted: &SubmittedHead,
     subject: Option<String>,
@@ -1643,6 +1648,8 @@ fn admit(
             was: None,
             held: None,
             subject,
+            beside: None,
+            act,
         },
     );
     l.log(
@@ -2040,6 +2047,10 @@ mod tests {
             unreachable!("a submit runs nothing")
         }
 
+        fn unmet(&self, _: &sluice_seams::Limits) -> Result<Option<String>> {
+            unreachable!("a submit runs nothing")
+        }
+
         fn bound(&self) -> Result<usize> {
             unreachable!("a submit runs nothing")
         }
@@ -2181,7 +2192,8 @@ mod tests {
         assert_eq!(
             pending.outcomes[0].decided,
             Decided::Landed {
-                landed_as: Rev::new("landed-5")
+                landed_as: Rev::new("landed-5"),
+                beside: false,
             }
         );
         pending.mark("/w/unit-a").unwrap();

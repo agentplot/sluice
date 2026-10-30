@@ -180,6 +180,10 @@ impl Tests for RecordedChecks {
         self.inner.progress(run)
     }
 
+    fn unmet(&self, limits: &sluice_seams::Limits) -> Result<Option<String>> {
+        self.inner.unmet(limits)
+    }
+
     fn bound(&self) -> Result<usize> {
         self.inner.bound()
     }

@@ -46,8 +46,8 @@ of these results:
 
 #### Scenario: Could not run
 
-- **WHEN** `site:check` could not run in three runs in a row because the policy's readiness command failed
-- **THEN** the report lists `site:check` as could not run, naming the readiness command and the three runs, not as missing
+- **WHEN** `site:check` could not run in three runs in a row because it exited with a code the policy's `not_run` lists
+- **THEN** the report lists `site:check` as could not run, naming the exit and the three runs, not as missing
 
 #### Scenario: Flaky
 

@@ -76,7 +76,18 @@ pub fn head(view: &VerdictView, cx: &Context) -> String {
         Standing::Testing => format!("testing on {b}"),
         Standing::Passed => format!("passed on {b}, waiting on the combinations ahead"),
         Standing::Landing => format!("passed on {b}, landing"),
-        Standing::Landed { landed_as } => format!("landed on {b} as {}", landed_as.short()),
+        Standing::Landed {
+            landed_as,
+            beside: false,
+        } => format!("landed on {b} as {}", landed_as.short()),
+        // 140: nothing was run, so the report has no rows.
+        Standing::Landed {
+            landed_as,
+            beside: true,
+        } => format!(
+            "landed on {b} as {} with no check run: no required check reads its changes",
+            landed_as.short()
+        ),
         Standing::Blamed { timed_out: true } => {
             format!("timed out on {b}, {} is to blame", cx.name(view.id))
         }
@@ -570,7 +581,8 @@ mod tests {
             worktree: None,
         });
         let mut could_not = row("site:check", RowResult::NotRun);
-        could_not.not_run = Some("the host failed [tests] ready `docker info`, 3 runs".into());
+        could_not.not_run =
+            Some("exited 77, which [tests] not_run names: it could not run here, 3 runs".into());
         could_not.key = None;
         view(
             Standing::Blamed { timed_out: false },
@@ -658,11 +670,29 @@ mod tests {
         let mut v = view(
             Standing::Landed {
                 landed_as: Rev::new("0cef58d1234"),
+                beside: false,
             },
             vec![row("app:lint", RowResult::Passed)],
         );
         let s = with(None, |cx| report(&v, cx));
         assert!(s.contains("## sluice: landed on main as 0cef58d\n"), "{s}");
+
+        // 140: landed beside the queue: no check ran, no row is shown.
+        let beside = view(
+            Standing::Landed {
+                landed_as: Rev::new("0cef58d1234"),
+                beside: true,
+            },
+            Vec::new(),
+        );
+        let s = with(None, |cx| report(&beside, cx));
+        assert!(
+            s.contains(
+                "## sluice: landed on main as 0cef58d with no check run: no required check \
+                 reads its changes\n"
+            ),
+            "{s}"
+        );
 
         v.standing = Standing::Testing;
         v.rows.clear();
