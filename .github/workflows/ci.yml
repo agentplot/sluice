@@ -1,8 +1,12 @@
-# sluice on GitHub: the flake builds on macOS and Linux, the fast tier runs
-# in the devenv shell a session uses, the deeper tiers run on Linux, and
-# each push to main that git-cliff finds a new version in is released
-# (cliff.toml). sluice's own gate is sluice (.config/sluice.toml); this is
-# the public build.
+# sluice on GitHub tests a tree once. sluice's own gate is sluice
+# (.config/sluice.toml), on macOS under its sandbox; a pull request runs
+# here only what that gate cannot: the fast tier and the deeper tiers on
+# Linux, in the devenv shell a session uses, and the commit messages. A
+# push to main that is a sluice landing carries the tree that gate and the
+# pull request's Linux run passed (core.17), so it builds and tests
+# nothing and goes straight to its release; a push to main no landing made
+# is built on macOS and Linux and tested whole first. Each push to main
+# that git-cliff finds a new version in is released (cliff.toml).
 name: ci
 
 on:
@@ -14,7 +18,25 @@ permissions:
   contents: read
 
 jobs:
+  # The candidate a push to main landed, from the head's Sluice-Tested
+  # trailer as git reads trailers; empty on a pull request, which has no
+  # head commit, and on a push no landing made.
+  landing:
+    runs-on: ubuntu-latest
+    outputs:
+      tested: ${{ steps.trailer.outputs.tested }}
+    steps:
+      - id: trailer
+        run: |
+          tested="$(printf '%s\n' "$MESSAGE" | git interpret-trailers --parse | sed -n 's/^Sluice-Tested: //p')"
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+
+  # The flake, only on a push no landing made.
   build:
+    needs: landing
+    if: github.event_name == 'push' && needs.landing.outputs.tested == ''
     strategy:
       fail-fast: false
       matrix:
@@ -26,11 +48,15 @@ jobs:
       - run: nix build .#default --print-build-logs
       - run: ./result/bin/sluice --help
 
+  # The fast tier: on Linux alone for a pull request, whose macOS run is
+  # sluice's gate's, and on both for a push no landing made.
   fast:
+    needs: landing
+    if: needs.landing.outputs.tested == ''
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       # On a pull request moon compares the change against its base
@@ -59,6 +85,8 @@ jobs:
   # on Linux: the profiles against real git, moon and worktrunk, and e2e.
   # The sandbox tests are the host's (Seatbelt) and are not run.
   linux:
+    needs: landing
+    if: needs.landing.outputs.tested == ''
     runs-on: ubuntu-latest
     steps:
       # As in `fast`: moon compares a pull request against `main`.
@@ -86,6 +114,8 @@ jobs:
   # session can skip the commit-msg hook, and git-cliff releases from them.
   # Merge commits are not checked.
   conventional:
+    needs: landing
+    if: needs.landing.outputs.tested == ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -117,9 +147,16 @@ jobs:
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           fi
 
+  # A landing's tests were skipped, its tree passed already; any other
+  # push's must each have passed. A skipped job skips what needs it unless
+  # the condition says otherwise, hence !cancelled().
   binaries:
-    if: needs.version.outputs.tag != ''
-    needs: [version, build, fast, linux, conventional]
+    if: |-
+      !cancelled() && needs.version.outputs.tag != '' &&
+      (needs.landing.outputs.tested != '' ||
+       (needs.build.result == 'success' && needs.fast.result == 'success' &&
+        needs.linux.result == 'success' && needs.conventional.result == 'success'))
+    needs: [landing, version, build, fast, linux, conventional]
     strategy:
       matrix:
         include:
@@ -144,8 +181,10 @@ jobs:
           path: sluice-${{ matrix.system }}.tar.gz
 
   # Tags the pushed commit and publishes the binaries with git-cliff's
-  # notes for the range. Nothing is committed back to main.
+  # notes for the range. Nothing is committed back to main. A test job a
+  # landing skipped would skip it too, as it would binaries.
   release:
+    if: ${{ !cancelled() && needs.binaries.result == 'success' }}
     needs: [version, binaries]
     runs-on: ubuntu-latest
     concurrency: release
