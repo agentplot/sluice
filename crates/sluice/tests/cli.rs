@@ -3,12 +3,13 @@
 mod support;
 
 use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use sluice::{run, Cli, Pause, CONFLICT, FAILED, LANDED};
 use sluice_core::policy::POLICY_PATH;
 use sluice_fakes::Fakes;
-use sluice_seams::{Changes, Outcome, State};
+use sluice_seams::{Changes, Outcome, Rev, State};
 
 const BRANCH: &str = "bolt/concurrent-units";
 
@@ -612,6 +613,163 @@ fn check_forecasts_a_branch_with_no_worktree() {
     assert_eq!(code, CONFLICT);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["error"]["message"], "no branch bolt/none to forecast");
+}
+
+/// 64, 129: a live reader of the fakes' repository, its tick `tick`
+/// seconds, whose read just ended found `BRANCH` at `R`, a revision on the
+/// host the branch is not at, with `#4` queued on it, `#1`'s work; while
+/// the records hold `#1` queued on the branch's tip. The reader, its
+/// document, `R`, and `#1`'s head.
+fn reader_of_four(f: &Fakes, tick: u64) -> (sluice::reader::Lead, serde_json::Value, String, Rev) {
+    let tip = f.world.tip(BRANCH);
+    let one = f.world.work(&tip, &[("plugin/lib/plan.py", Some("one"))]);
+    f.world.session("unit/touches", "crw-1-unit-1", &one);
+    sluice(
+        f,
+        &["submit", BRANCH, "--worktree", "unit/touches", "--no-wait"],
+    );
+    let (_, out) = sluice(f, &["overview", "--json"]);
+    let mut doc = json(&out);
+    let r = f.world.work(&tip, &[("plugin/r", Some("r"))]);
+    let b = &mut doc["branches"][0];
+    b["revision"] = r.as_str().into();
+    b["submissions"][0]["id"] = 4.into();
+    doc["tick"] = tick.into();
+    let lead = reader_of(REPOSITORY, &doc);
+    (lead, doc, r.as_str().to_string(), one)
+}
+
+/// Set the reader's marks: its last read ended `ended` seconds before
+/// now, and its next began `began` seconds before now.
+fn mark_reader(ended: u64, began: u64) {
+    let now = std::time::SystemTime::now();
+    for (ext, ago) in [("json", ended), ("lock", began)] {
+        std::fs::File::options()
+            .write(true)
+            .open(readers_file(REPOSITORY, ext))
+            .unwrap()
+            .set_modified(now - std::time::Duration::from_secs(ago))
+            .unwrap();
+    }
+}
+
+/// `unit/forecast`'s head, conflicting with `#1`'s work, and `--check
+/// --json` of it, read.
+fn check_forecast(f: &Fakes) -> serde_json::Value {
+    work(
+        f,
+        "unit/forecast",
+        "crw-1-unit-3",
+        &[("plugin/lib/plan.py", Some("two"))],
+    );
+    let (code, out) = sluice(
+        f,
+        &[
+            "submit",
+            "--check",
+            BRANCH,
+            "--worktree",
+            "unit/forecast",
+            "--json",
+        ],
+    );
+    assert_eq!(code, CONFLICT, "{out}");
+    json(&out)
+}
+
+/// 64, 129: beside a live reader keeping its tick, a forecast forms on the
+/// branch and the queue as the reader last read them, not on the records.
+#[test]
+fn a_forecast_takes_the_branch_from_a_current_reader() {
+    let f = setup();
+    let (_reader, _, r, _) = reader_of_four(&f, 3);
+    let v = check_forecast(&f);
+    assert_eq!(v["onto"], r.as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([4]), "{v}");
+    assert_eq!(v["conflict"]["with"][0]["id"], 4, "{v}");
+    assert_eq!(
+        v["conflict"]["with"][0]["from"]["worktree"], "unit/touches",
+        "{v}"
+    );
+}
+
+/// 64, 129: `--check --head` takes the branch it forecasts from the same
+/// read where the reader read it, as it takes the branch it lands on.
+#[test]
+fn a_forecast_of_a_bolt_takes_both_from_the_reader() {
+    let f = setup();
+    let (_reader, mut doc, r, _) = reader_of_four(&f, 3);
+    let tip = f.world.tip(BRANCH);
+    let bolt = f.world.work(&tip, &[("plugin/lib/plan.py", Some("two"))]);
+    let mut y = doc["branches"][0].clone();
+    y["branch"] = "bolt/y".into();
+    y["revision"] = bolt.as_str().into();
+    y["submissions"] = serde_json::json!([]);
+    y["candidates"] = serde_json::json!([]);
+    y["depth"] = 0.into();
+    doc["branches"].as_array_mut().unwrap().push(y);
+    rewrite_readers_doc(&doc);
+    let (code, out) = sluice(
+        &f,
+        &["submit", BRANCH, "--check", "--head", "bolt/y", "--json"],
+    );
+    assert_eq!(code, CONFLICT, "{out}");
+    let v = json(&out);
+    assert_eq!(v["head"], bolt.as_str(), "{v}");
+    assert_eq!(v["onto"], r.as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([4]), "{v}");
+}
+
+/// 64, 129: a reader whose last read ended five ticks ago, with no read
+/// begun since, has stalled: the forecast reads the records as a round.
+#[test]
+fn a_stalled_reader_is_read_past() {
+    let f = setup();
+    let (_reader, _, _, _) = reader_of_four(&f, 1);
+    mark_reader(5, 6);
+    let v = check_forecast(&f);
+    assert_eq!(v["onto"], f.world.tip(BRANCH).as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([1]), "{v}");
+}
+
+/// 64, 129: a reader twenty seconds into a read it began a second after
+/// its last ended is current: the forecast takes its last read.
+#[test]
+fn a_reader_in_a_slow_read_is_current() {
+    let f = setup();
+    let (_reader, _, r, _) = reader_of_four(&f, 1);
+    mark_reader(21, 20);
+    let v = check_forecast(&f);
+    assert_eq!(v["onto"], r.as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([4]), "{v}");
+}
+
+/// 64, 129: a read that names no revision of the branch, as a reader's
+/// that could not ask its remote, is read past as a round reads.
+#[test]
+fn a_forecast_with_no_revision_reads_as_a_round() {
+    let f = setup();
+    let (_reader, mut doc, _, _) = reader_of_four(&f, 3);
+    doc["branches"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("revision");
+    rewrite_readers_doc(&doc);
+    let v = check_forecast(&f);
+    assert_eq!(v["onto"], f.world.tip(BRANCH).as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([1]), "{v}");
+}
+
+/// 64, 124, 129: where the host lacks `#4`'s head, the reader's read is
+/// no read to form on: the forecast reads as a round does.
+#[test]
+fn a_forecast_lacking_a_head_reads_as_a_round() {
+    let f = setup();
+    let (_reader, _, _, one) = reader_of_four(&f, 3);
+    f.world.lack(&one, true);
+    let v = check_forecast(&f);
+    assert_eq!(v["onto"], f.world.tip(BRANCH).as_str(), "{v}");
+    assert_eq!(v["ahead"], serde_json::json!([1]), "{v}");
 }
 
 #[test]
@@ -1725,6 +1883,63 @@ fn overview_names_each_submission_with_its_subject() {
     );
 }
 
+/// 64, 7, 10: the overview names each combination's revision it was
+/// formed on, the branch's revision as its read found it, and the landed
+/// submissions a queued one's `after` names: `#1` and `#2` under test as
+/// one combination, and `#5` queued, after `#3`, which landed.
+#[test]
+fn the_overview_names_each_combinations_base_and_the_landed_afters() {
+    let f = setup();
+    for w in ["a", "b", "c"] {
+        let worktree = format!("unit/{w}");
+        work(&f, &worktree, w, &[(&format!("plugin/{w}"), Some(w))]);
+        let (code, out) = sluice(
+            &f,
+            &["submit", BRANCH, "--worktree", &worktree, "--no-wait"],
+        );
+        assert_eq!(code, 0, "{out}");
+    }
+    // #1 and #2 wait on each other, so #3 is tested and lands alone.
+    let amend = |id: &str, after: &str| {
+        assert_eq!(sluice(&f, &["amend", id, "--after", after]).0, 0);
+    };
+    amend("1", "2");
+    amend("2", "1");
+    let landed = |id: &str| json(&sluice(&f, &["status", id, "--json"]).1)["state"] == "landed";
+    for _ in 0..10 {
+        if landed("3") {
+            break;
+        }
+        sluice(&f, &["step", BRANCH]);
+    }
+    assert!(landed("3") && !landed("1"));
+    f.world.hold_runs(true);
+    amend("1", "3");
+    sluice(&f, &["step", BRANCH]);
+    for (w, after) in [("d", None), ("e", Some("3"))] {
+        let worktree = format!("unit/{w}");
+        work(&f, &worktree, w, &[(&format!("plugin/{w}"), Some(w))]);
+        let mut args = vec!["submit", BRANCH, "--worktree", &worktree, "--no-wait"];
+        args.extend(after.iter().flat_map(|a| ["--after", *a]));
+        assert_eq!(sluice(&f, &args).0, 0);
+    }
+
+    let (code, out) = sluice(&f, &["overview", "--json"]);
+    assert_eq!(code, 0, "{out}");
+    let b = &json(&out)["branches"][0];
+    let tip = f.world.tip(BRANCH);
+    assert_eq!(b["revision"], tip.as_str(), "{b}");
+    assert_eq!(b["after_landed"], serde_json::json!([3]), "{b}");
+    let both = b["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["submissions"] == serde_json::json!([1, 2]))
+        .unwrap_or_else(|| panic!("#1 and #2 under test as one combination: {b}"));
+    assert_eq!(both["on"], tip.as_str(), "{b}");
+    assert_eq!(both["state"], "testing", "{b}");
+}
+
 /// ADR 0028: a combination under test carries its run's tasks, as a
 /// round kept them, and its text line says how many have ended.
 #[test]
@@ -2751,6 +2966,19 @@ fn leased() -> bool {
     }
 }
 
+/// Whether the repository's reader's lease is free by `until`: a process
+/// another test of this binary forks while a watch holds it holds it too,
+/// until it runs its program.
+fn lease_free_by(until: Instant) -> bool {
+    while leased() {
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 /// The version of sluice the repository's reader names.
 fn readers_version() -> Option<String> {
     let bytes = std::fs::read(readers_file(REPOSITORY, "version")).ok()?;
@@ -2762,81 +2990,65 @@ fn readers_version() -> Option<String> {
 /// its lease at its next tick, and is the reader at a tick of its own once
 /// the older reader has let go, naming its version. The tick is the next
 /// one but for a process another test of this binary forks meanwhile,
-/// which holds the older reader's lock until it runs its program, as long
-/// as a loaded host keeps it from running: the watch then leads at a later
-/// tick, so the test ticks until it does, bounded by time, never by a count
-/// of ticks.
+/// which holds the older reader's lock, or the watch's lease, until it
+/// runs its program, for as long as a loaded host keeps it from that: the
+/// watch then leads at a later tick. Once the older reader has let go,
+/// the test waits a little before each tick at which the watch has not
+/// led yet, for at most a minute.
 #[test]
 fn a_newer_watch_takes_an_older_readers_lease() {
+    struct Ticks<F: Fn(usize) -> bool>(Cell<usize>, F);
+
+    impl<F: Fn(usize) -> bool> Pause for Ticks<F> {
+        fn pause(&self) -> bool {
+            self.0.set(self.0.get() + 1);
+            (self.1)(self.0.get())
+        }
+    }
+
     let f = setup();
     let doc = seven_testing();
     let older = RefCell::new(reader_as("0.52.0"));
     write_as(&mut older.borrow_mut(), &doc);
     support::set_version("0.53.0");
+    let until = Instant::now() + Duration::from_secs(60);
+    let read_at = Cell::new(None);
     let written = RefCell::new(None);
-    let between = |n: usize| match n {
-        1 => {}
-        2 => {
-            assert!(leased(), "the watch took no lease");
-            let mut older = older.borrow_mut();
-            older.step(true, sluice::reader::Drives::Nobody).unwrap();
-            assert!(!is_reader(&older), "the older reader kept reading");
-        }
-        _ if written.borrow().is_none() => {
-            if readers_version().as_deref() != Some("0.53.0") {
-                assert!(leased(), "the watch let its lease go before it read");
-                return;
+    let between = |n: usize| {
+        match n {
+            1 => {}
+            2 => {
+                assert!(leased(), "the watch took no lease");
+                let mut older = older.borrow_mut();
+                older.step(true, sluice::reader::Drives::Nobody).unwrap();
+                assert!(!is_reader(&older), "the older reader kept reading");
             }
-            *written.borrow_mut() = readers_doc();
-            // A process another test forks holds the lease's lock as well
-            // until it runs its program: let go, it is free once that runs.
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            while leased() && std::time::Instant::now() < until {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            _ if read_at.get().is_none() => {
+                if readers_version().as_deref() != Some("0.53.0") {
+                    assert!(leased(), "the watch let its lease go before it read");
+                    assert!(Instant::now() < until, "the watch never led");
+                    std::thread::sleep(Duration::from_millis(20));
+                    return true;
+                }
+                read_at.set(Some(n));
+                *written.borrow_mut() = readers_doc();
+                assert!(lease_free_by(until), "the lease kept once the watch reads");
+                older
+                    .borrow_mut()
+                    .step(true, sluice::reader::Drives::Nobody)
+                    .unwrap();
+                assert!(!is_reader(&older.borrow()));
             }
-            assert!(!leased(), "the lease kept once the watch reads");
-            older
-                .borrow_mut()
-                .step(true, sluice::reader::Drives::Nobody)
-                .unwrap();
-            assert!(!is_reader(&older.borrow()));
+            _ => {}
         }
-        _ => {}
+        // Three ticks more once the watch has read, which print nothing.
+        read_at.get().is_none_or(|at| n <= at + 3)
     };
-    // Ticks until the watch has read, and one more for it to print, at
-    // most a minute.
-    struct Until<'a> {
-        n: Cell<usize>,
-        last: Cell<Option<usize>>,
-        until: std::time::Instant,
-        written: &'a RefCell<Option<serde_json::Value>>,
-        between: &'a dyn Fn(usize),
-    }
-    impl Pause for Until<'_> {
-        fn pause(&self) -> bool {
-            let n = self.n.get() + 1;
-            self.n.set(n);
-            if self.last.get().is_some_and(|last| n > last)
-                || std::time::Instant::now() > self.until
-            {
-                return false;
-            }
-            (self.between)(n);
-            if self.written.borrow().is_some() && self.last.get().is_none() {
-                self.last.set(Some(n + 1));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            true
-        }
-    }
-    let pause = Until {
-        n: Cell::new(0),
-        last: Cell::new(None),
-        until: std::time::Instant::now() + std::time::Duration::from_secs(60),
-        written: &written,
-        between: &between,
-    };
-    let (_, out) = sluice_with(&f, &pause, &["overview", "--json", "--watch"]);
+    let (_, out) = sluice_with(
+        &f,
+        &Ticks(Cell::new(0), between),
+        &["overview", "--json", "--watch"],
+    );
     let lines: Vec<serde_json::Value> = out.lines().map(json).collect();
     assert_eq!(lines.len(), 2, "{out}");
     assert_eq!(lines[0], doc);
@@ -3909,7 +4121,7 @@ fn the_first_run_stops() {
 
 /// 129, 135: the driver is the reader: with nothing queued, its pass
 /// writes the whole overview as the reader's document, as a one-shot
-/// overview reads it but for its time.
+/// overview reads it but for its time, naming its tick (64).
 #[test]
 fn a_driver_with_nothing_queued() {
     let f = setup();
@@ -3922,7 +4134,9 @@ fn a_driver_with_nothing_queued() {
     let (_, overview) = sluice(&f, &["overview", "--json"]);
     let doc = readers_doc().expect("the driver's document");
     let untimed = sluice::reader::untimed;
-    assert_eq!(untimed(&doc), untimed(&json(&overview)));
+    let mut read = json(&overview);
+    read["tick"] = 3.into();
+    assert_eq!(untimed(&doc), untimed(&read));
     assert_eq!(doc["branches"][0]["branch"], BRANCH, "{doc}");
     // It let both places go as it ended.
     assert!(soon(|| !driver_live()));
@@ -7964,8 +8178,12 @@ mod refused_alone {
             self.host.repository_gone(repository)
         }
 
-        fn holds_policy(&self) -> anyhow::Result<bool> {
-            self.host.holds_policy()
+        fn tips(&self) -> anyhow::Result<Vec<sluice_seams::Rev>> {
+            self.host.tips()
+        }
+
+        fn holds_policy(&self, tips: &[sluice_seams::Rev]) -> anyhow::Result<bool> {
+            self.host.holds_policy(tips)
         }
 
         fn readers(&self) -> anyhow::Result<std::path::PathBuf> {
@@ -8030,5 +8248,295 @@ mod refused_alone {
             "{out}"
         );
         assert_eq!(f.world.started().len(), 1, "{BRANCH}'s run started: {out}");
+    }
+}
+
+/// What `sluice run` reads of a branch's policy and records from pass to
+/// pass over the fakes (129).
+mod read_once {
+    use std::cell::Cell;
+    use std::path::Path;
+
+    use clap::Parser;
+    use sluice::profiles::local_files::LocalFiles;
+    use sluice::{run, Cli, Pause};
+    use sluice_core::policy::POLICY_PATH;
+    use sluice_core::{Seams, Sluice, SubmitRequest};
+    use sluice_fakes::Fakes;
+    use sluice_seams::State as _;
+
+    use super::support::{self, Scratch};
+    use super::{setup, work, Between, Rounds, BRANCH};
+
+    /// `sluice <args>` over `seams`, `pause` between its passes.
+    fn on(f: &Fakes, seams: Seams<'_>, pause: &dyn Pause, args: &[&str]) -> (i32, String) {
+        let cli =
+            Cli::try_parse_from(std::iter::once("sluice").chain(args.iter().copied())).unwrap();
+        let mut out = Vec::new();
+        let host = support::FakeHost {
+            world: f.world.clone(),
+            reserved: 0,
+        };
+        let code = run(cli, seams, &host, &(), &(), &f.clock, pause, &mut out).unwrap();
+        (code, String::from_utf8(out).unwrap())
+    }
+
+    /// A submission of `worktree`'s work on the tip, queued.
+    fn queue(f: &Fakes, worktree: &str, path: &str) {
+        work(f, worktree, "agent", &[(path, Some("n"))]);
+        let (code, out) =
+            super::sluice(f, &["submit", BRANCH, "--worktree", worktree, "--no-wait"]);
+        assert_eq!(code, 0, "{out}");
+    }
+
+    /// How many times `sluice run --rounds <rounds>` read the policy from
+    /// git, over a branch whose submission's run never ends, so every
+    /// pass runs a round.
+    fn policy_reads_over(rounds: &str) -> usize {
+        let f = setup();
+        f.world.hangs("plugin:test");
+        f.world.hangs("tests:t-batch-cards");
+        queue(&f, "unit/a", "plugin/lib/plan.py");
+        let before = f.world.reads_of(POLICY_PATH);
+        let (_, out) = on(
+            &f,
+            f.seams(),
+            &Rounds(Cell::new(0)),
+            &["run", "--rounds", rounds],
+        );
+        assert!(!out.contains("could not be read"), "{out}");
+        f.world.reads_of(POLICY_PATH) - before
+    }
+
+    /// reader-tick, "Policy read once while the revision stands": six
+    /// passes whose rounds read the policy at one revision read it from
+    /// git as often as one pass does.
+    #[test]
+    fn the_policy_is_read_once_while_the_revision_stands() {
+        let one = policy_reads_over("1");
+        assert!(one >= 1, "a round reads the policy");
+        assert_eq!(policy_reads_over("6"), one);
+    }
+
+    /// How a run of `rounds` passes over a branch whose revision holds a
+    /// policy sluice refuses went, and how many times it read the policy.
+    fn refused_over(rounds: &str) -> (i32, String, usize) {
+        let f = setup();
+        queue(&f, "unit/a", "plugin/lib/plan.py");
+        f.world
+            .hand_commit(BRANCH, &[(POLICY_PATH, Some("[branches.\"bolt/*\"\n"))]);
+        let before = f.world.reads_of(POLICY_PATH);
+        let (code, out) = on(
+            &f,
+            f.seams(),
+            &Rounds(Cell::new(0)),
+            &["run", "--rounds", rounds],
+        );
+        (code, out, f.world.reads_of(POLICY_PATH) - before)
+    }
+
+    /// reader-tick, "A refused policy stays refused at its revision": three
+    /// passes say the branch passed by in one pass's words, once, and read
+    /// the policy from git as often as one pass does.
+    #[test]
+    fn a_refused_policy_stays_refused_at_its_revision() {
+        let (code, one, reads) = refused_over("1");
+        assert_eq!(code, sluice::INTERNAL, "{one}");
+        let said = format!("{BRANCH} could not be read, passed by: ");
+        let words: Vec<&str> = one.lines().filter(|l| l.starts_with(&said)).collect();
+        assert_eq!(words.len(), 1, "{one}");
+        let (code, three, again) = refused_over("3");
+        assert_eq!(code, sluice::INTERNAL, "{three}");
+        let lines: Vec<&str> = three.lines().filter(|l| l.starts_with(&said)).collect();
+        assert_eq!(lines, words, "{three}");
+        assert_eq!(again, reads);
+    }
+
+    /// The fakes, with the records in local files under `dir`.
+    fn with_files<'a>(f: &'a Fakes, files: &'a LocalFiles) -> Seams<'a> {
+        Seams {
+            state: files,
+            ..f.seams()
+        }
+    }
+
+    /// The fakes over local files under a scratch directory holding one
+    /// landed submission of the branch.
+    fn landed_on_files(name: &str) -> (Fakes, Scratch) {
+        let f = setup();
+        let dir = Scratch::new(name);
+        let files = LocalFiles::new(dir.path());
+        work(&f, "unit/a", "agent", &[("plugin/lib/plan.py", Some("a"))]);
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &Rounds(Cell::new(0)),
+            &["submit", BRANCH, "--worktree", "unit/a"],
+        );
+        assert_eq!(code, sluice::LANDED, "{out}");
+        (f, dir)
+    }
+
+    /// A submission of `worktree`'s work, written to the records under
+    /// `dir` by another process.
+    fn submit_elsewhere(f: &Fakes, dir: &Path, worktree: &str, path: &str) {
+        work(f, worktree, "agent-b", &[(path, Some("b"))]);
+        let files = LocalFiles::new(dir);
+        let s = Sluice::new(with_files(f, &files), &f.clock);
+        s.submit(&SubmitRequest {
+            worktree: worktree.into(),
+            branch: BRANCH.into(),
+            after: vec![],
+            priority: 0,
+            subject: None,
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    /// The state of the branch's submission `id` in the records under
+    /// `dir`.
+    fn state_of(f: &Fakes, dir: &Path, id: u64) -> String {
+        let files = LocalFiles::new(dir);
+        let (_, out) = on(
+            f,
+            with_files(f, &files),
+            &Rounds(Cell::new(0)),
+            &["status", &id.to_string(), "--json"],
+        );
+        super::json(&out)["state"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// reader-tick, "Records read again once they moved": between three
+    /// idle passes the branch's records change on disk under their
+    /// version, which no write of sluice's does, and are not walked again;
+    /// once another process's submission moves their version, the next
+    /// pass reads them whole and queues it, as it always has (26, 129).
+    #[test]
+    fn records_are_read_again_once_they_moved() {
+        let (f, dir) = landed_on_files("tick-records");
+        let records = dir.path().join("sluice").join(BRANCH).join("branch.json");
+        let kept = std::fs::read(&records).unwrap();
+        let between = |n: usize| match n {
+            1 => std::fs::write(&records, "not the records\n").unwrap(),
+            3 => {
+                std::fs::write(&records, &kept).unwrap();
+                submit_elsewhere(&f, dir.path(), "unit/b", "tests/t_cards.py");
+            }
+            _ => {}
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 8,
+            between: &between,
+        };
+        let files = LocalFiles::new(dir.path());
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &pause,
+            &["run", "--rounds", "9"],
+        );
+        assert_eq!(code, 0, "walked while their version stood: {out}");
+        assert!(!out.contains("could not be read"), "{out}");
+        assert_eq!(state_of(&f, dir.path(), 2), "landed", "{out}");
+    }
+
+    /// Every file under `from`, copied to `to`.
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let at = to.join(e.file_name());
+            match e.file_type().unwrap().is_dir() {
+                true => copy(&e.path(), &at),
+                false => {
+                    std::fs::copy(e.path(), &at).unwrap();
+                }
+            }
+        }
+    }
+
+    /// The files of a branch's records under `dir`, by path, leaving out
+    /// the version, the lock and anything dotted.
+    fn branch_files(dir: &Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        fn visit(at: &Path, base: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+            for e in std::fs::read_dir(at).unwrap() {
+                let e = e.unwrap();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || (at == base && (name == "version" || name == "lock")) {
+                    continue;
+                }
+                match e.file_type().unwrap().is_dir() {
+                    true => visit(&e.path(), base, out),
+                    false => {
+                        let rel = e.path().strip_prefix(base).unwrap().display().to_string();
+                        out.insert(rel, std::fs::read_to_string(e.path()).unwrap());
+                    }
+                }
+            }
+        }
+        visit(dir, dir, &mut out);
+        out
+    }
+
+    /// reader-tick, "A submission written mid-tick is not lost": a write
+    /// of a submission to the branch's records stopped with its pending
+    /// write on disk, none of its files changed; the next pass reads the
+    /// records as that write leaves them, and the submission lands (51).
+    #[test]
+    fn a_submission_written_mid_tick_is_not_lost() {
+        let (f, dir) = landed_on_files("tick-pending");
+        let branch = dir.path().join("sluice").join(BRANCH);
+        let between = |n: usize| {
+            if n != 1 {
+                return;
+            }
+            // The write as another process made it, in a copy of the
+            // records, left pending here.
+            let elsewhere = Scratch::new("tick-pending-elsewhere");
+            copy(dir.path(), elsewhere.path());
+            submit_elsewhere(&f, elsewhere.path(), "unit/b", "tests/t_cards.py");
+            let written = elsewhere.path().join("sluice").join(BRANCH);
+            let (was, now) = (branch_files(&branch), branch_files(&written));
+            let put: std::collections::BTreeMap<&String, &String> = now
+                .iter()
+                .filter(|(p, t)| was.get(*p) != Some(*t))
+                .collect();
+            let remove: Vec<&String> = was.keys().filter(|p| !now.contains_key(*p)).collect();
+            let version: u64 = std::fs::read_to_string(written.join("version"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let pending = serde_json::json!({
+                "version": version,
+                "put": put,
+                "append": {},
+                "lengths": {},
+                "remove": remove,
+            });
+            std::fs::write(branch.join(".pending.json"), pending.to_string()).unwrap();
+        };
+        let pause = Between {
+            n: Cell::new(0),
+            rounds: 6,
+            between: &between,
+        };
+        let files = LocalFiles::new(dir.path());
+        let (code, out) = on(
+            &f,
+            with_files(&f, &files),
+            &pause,
+            &["run", "--rounds", "7"],
+        );
+        assert_eq!(code, 0, "{out}");
+        assert!(!branch.join(".pending.json").exists(), "{out}");
+        assert_eq!(state_of(&f, dir.path(), 2), "landed", "{out}");
+        assert!(files.read(BRANCH).unwrap().version > 0);
     }
 }

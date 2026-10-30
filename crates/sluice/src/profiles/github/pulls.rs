@@ -64,7 +64,8 @@ use super::kept::Observed;
 use super::kept::{Kept, Reading, Readings};
 use super::render;
 use crate::identity::Identity;
-use crate::profiles::pushed_refs::{remote_url, Holder, Mark, PushedRefs};
+use crate::profiles::local_refs::LocalRefs;
+use crate::profiles::pushed_refs::{Holder, Mark, PushedRefs};
 use crate::retry;
 use crate::{Followed, GroupRefused, Opened, Short, Taker};
 use sluice_core::verdict_view::{Standing as Stands, VerdictView};
@@ -282,6 +283,10 @@ struct Entry {
 pub struct Pulls {
     /// The repository's git directory.
     dir: PathBuf,
+    /// The repository, as gix reads it, once opened: its default branch,
+    /// its branches and its remotes' addresses, read with no process
+    /// (129).
+    local: std::cell::OnceCell<LocalRefs>,
     /// Where intake's lock files are kept.
     locks: PathBuf,
     forge: Option<Rc<dyn Forge>>,
@@ -305,6 +310,12 @@ pub struct Pulls {
     /// What GitHub last said of each pull request a wait follows, by
     /// number, and when (136).
     seen: RefCell<BTreeMap<u64, Seen>>,
+    /// 129: the policies intake read, by revision, kept across its passes.
+    policies: sluice_core::Policies,
+    /// 129: the default branch's policy as read at a revision, and that
+    /// revision: the policy, no policy file, or the words it was refused
+    /// with.
+    default_policy: RefCell<Option<(Rev, std::result::Result<Option<Policy>, String>)>>,
     /// This host as its peers name it, and its lease (72, 73, 137).
     peer: sluice_core::Peer,
     /// The intake marks this process pushed as a wait and still holds, by
@@ -363,9 +374,9 @@ struct Target {
 
 /// 137: whether this host takes a branch's pull requests in this pass.
 enum Taking {
-    /// It does; `took` when it took the mark from another host, after
-    /// which it asks GitHub at once, since what it last read is old.
-    Here { took: bool },
+    /// It does, and asks GitHub at once: a pass decides it only once it is
+    /// due or the branch moved (129, 136).
+    Here,
     /// Another host does, by its name.
     Elsewhere(String),
 }
@@ -391,6 +402,7 @@ impl Pulls {
     ) -> Pulls {
         Pulls {
             dir: dir.to_path_buf(),
+            local: std::cell::OnceCell::new(),
             locks: common.join("sluice").join(".intake"),
             forge,
             identity,
@@ -402,10 +414,18 @@ impl Pulls {
             kept,
             discovery: chrono::TimeDelta::from_std(discovery).unwrap_or(chrono::TimeDelta::MAX),
             seen: RefCell::default(),
+            policies: sluice_core::Policies::default(),
+            default_policy: RefCell::default(),
             peer,
             held: RefCell::default(),
             away: RefCell::default(),
         }
+    }
+
+    /// 129: start a pass: the policies intake read and the last pass did
+    /// not use are forgotten.
+    pub fn next_pass(&self) {
+        self.policies.next_pass();
     }
 
     fn forge(&self, branch: &str) -> Result<&dyn Forge> {
@@ -418,16 +438,32 @@ impl Pulls {
         })
     }
 
+    /// The repository, opened at its first reading.
+    fn local(&self) -> Result<&LocalRefs> {
+        if let Some(l) = self.local.get() {
+            return Ok(l);
+        }
+        let l = LocalRefs::open(&self.dir)?;
+        Ok(self.local.get_or_init(|| l))
+    }
+
     fn pushed(&self, remote: &str) -> Result<PushedRefs> {
         PushedRefs::open_as(&self.dir, remote, self.identity.clone(), self.retry.clone())
     }
 
-    /// `branch`'s pull requests and where they are, at the revision the
-    /// branch is read at; `None` for a branch that takes none.
+    /// `branch`'s pull requests and where they are, at its revision as
+    /// the host holds it, with no fetch (129); `None` for a branch that
+    /// takes none.
     fn target(&self, s: &Sluice<'_>, branch: &str) -> Result<Option<Target>> {
-        let Some(tip) = s.seams().branch.read(branch)? else {
+        let Some(tip) = s.seams().branch.held(branch)? else {
             return Ok(None);
         };
+        self.target_at(s, branch, tip)
+    }
+
+    /// `branch`'s pull requests and where they are, at `tip`; `None` for a
+    /// branch that takes none there.
+    fn target_at(&self, s: &Sluice<'_>, branch: &str, tip: Rev) -> Result<Option<Target>> {
         let Some(rules) = s.rules_at(branch, &tip)? else {
             return Ok(None);
         };
@@ -435,7 +471,7 @@ impl Pulls {
         let (Some(conditions), Some(remote)) = (rules.pull_requests, rules.remote) else {
             return Ok(None);
         };
-        let url = remote_url(&self.dir, &remote)?;
+        let url = self.local()?.remote_url(&remote)?;
         let repo = Repo::from_url(&url).ok_or_else(|| {
             anyhow!(
                 "{branch} takes pull requests, and its remote {remote} ({url}) is not on GitHub"
@@ -478,7 +514,7 @@ impl Pulls {
     ) -> Result<Taking> {
         if t.signed {
             return Ok(match s.keeps(branch)? {
-                true => Taking::Here { took: false },
+                true => Taking::Here,
                 false => Taking::Elsewhere(format!("the host that keeps {branch}")),
             });
         }
@@ -491,14 +527,14 @@ impl Pulls {
         let seen = self.kept.observed(&t.repo, branch);
         let Some((rev, mark)) = pushed.intake_mark(branch)? else {
             return match holder {
-                None => Ok(Taking::Here { took: false }),
+                None => Ok(Taking::Here),
                 // The host there alone: what it read stands.
-                Some(h) => self.put_mark(t, pushed, branch, None, h, now, false),
+                Some(h) => self.put_mark(t, pushed, branch, None, h, now),
             };
         };
         if mark.host == self.peer.name {
             let Some(h) = holder else {
-                return Ok(Taking::Here { took: false });
+                return Ok(Taking::Here);
             };
             let renewed = seen
                 .filter(|o| o.seen == rev.0)
@@ -510,12 +546,12 @@ impl Pulls {
                         .borrow_mut()
                         .insert(branch.to_string(), (t.remote.clone(), rev));
                 }
-                return Ok(Taking::Here { took: false });
+                return Ok(Taking::Here);
             }
-            return self.put_mark(t, pushed, branch, Some(&rev), h, now, false);
+            return self.put_mark(t, pushed, branch, Some(&rev), h, now);
         }
         if holder == Some(Holder::Driver) && mark.holder == Holder::Wait {
-            return self.put_mark(t, pushed, branch, Some(&rev), Holder::Driver, now, true);
+            return self.put_mark(t, pushed, branch, Some(&rev), Holder::Driver, now);
         }
         let since = match seen.filter(|o| o.seen == rev.0) {
             Some(o) => o.since,
@@ -530,15 +566,13 @@ impl Pulls {
             }
         };
         match holder {
-            Some(h) if now - since >= lease => {
-                self.put_mark(t, pushed, branch, Some(&rev), h, now, true)
-            }
+            Some(h) if now - since >= lease => self.put_mark(t, pushed, branch, Some(&rev), h, now),
             _ => Ok(Taking::Elsewhere(mark.host)),
         }
     }
 
     /// 137: push this host's mark as `holder` over `from`, leased on it:
-    /// [`Taking::Here`] with `took` once pushed, kept as seen and renewed
+    /// [`Taking::Here`] once pushed, kept as seen and renewed
     /// now, and held for letting go when its holder is a wait; refused at
     /// its lease, the host that moved it, read in the branch's fetch again.
     #[allow(clippy::too_many_arguments)]
@@ -550,7 +584,6 @@ impl Pulls {
         from: Option<&Rev>,
         holder: Holder,
         now: DateTime<Utc>,
-        took: bool,
     ) -> Result<Taking> {
         let mark = Mark {
             host: self.peer.name.clone(),
@@ -579,7 +612,7 @@ impl Pulls {
                 .insert(branch.to_string(), (t.remote.clone(), rev)),
             Holder::Driver => self.held.borrow_mut().remove(branch),
         };
-        Ok(Taking::Here { took })
+        Ok(Taking::Here)
     }
 
     /// 122, 137: on a host that finds another host's mark, withdraw every
@@ -766,7 +799,9 @@ impl Pulls {
     /// One intake pass over `branch`, reading the branch once: nothing
     /// asked of GitHub unless the host's interval has passed since any
     /// process on the host asked, a submit on the host moved one of its
-    /// pull requests, or the branch or its records moved since (136).
+    /// pull requests, or the branch as the host holds it or its records
+    /// moved since (136). Whether any did is read with no fetch; the
+    /// branch is fetched only once one did (129).
     fn take_in(
         &self,
         s: &Sluice<'_>,
@@ -774,7 +809,7 @@ impl Pulls {
         branch: &str,
         taker: Taker,
     ) -> Result<bool> {
-        let Some(t) = self.target(s, branch)? else {
+        let Some(held) = self.target(s, branch)? else {
             return Ok(false);
         };
         let forge = self.forge(branch)?;
@@ -783,13 +818,43 @@ impl Pulls {
         };
         self.log_lines
             .borrow_mut()
-            .insert(branch.to_string(), t.conditions.log_lines);
+            .insert(branch.to_string(), held.conditions.log_lines);
         let now = clock.now();
+        let kept = self.kept.readings(&held.repo, branch);
+        let records = s.seams().state.read_held(branch)?;
+        let version = records.version;
+        let due = kept.asked.is_none_or(|a| now - a >= self.discovery)
+            || self.kept.moved_since(&held.repo, branch, kept.asked);
+        // Whether the branch as held, and its records, stand as at the last
+        // asking.
+        let still =
+            kept.tip.as_deref() == Some(held.tip.0.as_str()) && kept.version == Some(version);
+        if !due && still {
+            // A notification of this round finds its pull request.
+            let line = Line::load(branch, records)?;
+            let subs: Vec<Submission> = line.subs.into_values().collect();
+            self.register(&held.repo, &subs);
+            return Ok(true);
+        }
+        // 136: the branch where it is kept, fetched, and its pull requests
+        // as its revision there names them.
+        let Some(tip) = s.seams().branch.read(branch)? else {
+            return Ok(false);
+        };
+        let t = match tip == held.tip {
+            true => held,
+            false => match self.target_at(s, branch, tip)? {
+                Some(t) => t,
+                None => return Ok(false),
+            },
+        };
         let pushed = self.pushed(&t.remote)?;
-        // 137: whether this host takes the branch's pull requests in, before
-        // anything is asked of GitHub; one that does not asks nothing.
-        let took = match self.takes(s, &t, &pushed, branch, taker, now)? {
-            Taking::Here { took } => took,
+        // 137: whether this host takes the branch's pull requests in, by the
+        // mark the branch's fetch brought, before anything is asked of
+        // GitHub; one that does not asks nothing. One that does asks at
+        // once, the pass being due or the branch moved.
+        match self.takes(s, &t, &pushed, branch, taker, now)? {
+            Taking::Here => {}
             Taking::Elsewhere(host) => {
                 self.away
                     .borrow_mut()
@@ -800,21 +865,10 @@ impl Pulls {
                 self.register(&t.repo, &s.status(branch)?.submissions);
                 return Ok(true);
             }
-        };
+        }
         self.away.borrow_mut().remove(branch);
-        let kept = self.kept.readings(&t.repo, branch);
-        let version = s.seams().state.read(branch)?.version;
-        let due = took
-            || kept.asked.is_none_or(|a| now - a >= self.discovery)
-            || self.kept.moved_since(&t.repo, branch, kept.asked);
-        // Whether the branch, and its records, stand as at the last asking.
         let at_tip = kept.tip.as_deref() == Some(t.tip.0.as_str());
         let still = at_tip && kept.version == Some(version);
-        if !due && still {
-            // A notification of this round finds its pull request.
-            self.register(&t.repo, &s.status(branch)?.submissions);
-            return Ok(true);
-        }
         let listed = forge.listed(&t.repo, branch)?;
         let (pulls, changed) = (listed.pulls, listed.changed);
         let mut status = s.status(branch)?;
@@ -2461,6 +2515,10 @@ impl Branch for ReadOnce<'_> {
         Ok(r)
     }
 
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        self.branch.held(branch)
+    }
+
     fn copy(&self, branch: &str) -> Result<HostCopy> {
         self.branch.copy(branch)
     }
@@ -2508,34 +2566,39 @@ fn once<'a>(seams: Seams<'a>, memo: &'a ReadOnce<'a>) -> Seams<'a> {
 
 impl crate::PullRequests for Pulls {
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>> {
-        let git = |args: &[&str]| -> Result<String> {
-            let out = Command::new("git")
-                .arg("--git-dir")
-                .arg(&self.dir)
-                .args(args)
-                .env_remove("GIT_DIR")
-                .stdin(Stdio::null())
-                .output()
-                .context("running git")?;
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
-        let common = git(&["rev-parse", "--git-common-dir"])?;
-        let common = self.dir.join(common);
-        let Some(default) = crate::profiles::default_branch(&common)? else {
+        let local = self.local()?;
+        let Some((default, _)) = crate::profiles::default_branch(local)? else {
             return Ok(Vec::new());
         };
-        let Some(rev) = seams.branch.read(&default)? else {
+        // 129: at its revision as the host holds it, with no fetch, and
+        // read from git once while that revision stands, its refusal in
+        // the same words; a read that failed is made again.
+        let Some(rev) = seams.branch.held(&default)? else {
             return Ok(Vec::new());
         };
-        let Some(bytes) = seams.branch.read_file(&rev, POLICY_PATH)? else {
+        let kept = match &*self.default_policy.borrow() {
+            Some((at, decided)) if *at == rev => Some(decided.clone()),
+            _ => None,
+        };
+        let decided = match kept {
+            Some(d) => d,
+            None => {
+                let decided = match seams.branch.read_file(&rev, POLICY_PATH)? {
+                    None => Ok(None),
+                    Some(bytes) => std::str::from_utf8(&bytes)
+                        .map_err(anyhow::Error::from)
+                        .and_then(Policy::parse)
+                        .map(Some)
+                        .map_err(|e| format!("{e:#}")),
+                };
+                *self.default_policy.borrow_mut() = Some((rev, decided.clone()));
+                decided
+            }
+        };
+        let Some(policy) = decided.map_err(|words| anyhow!(words))? else {
             return Ok(Vec::new());
         };
-        let policy = Policy::parse(std::str::from_utf8(&bytes)?)?;
-        let mut names: Vec<String> =
-            git(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])?
-                .lines()
-                .map(str::to_string)
-                .collect();
+        let mut names = local.branch_names()?;
         names.extend(
             policy
                 .branches
@@ -2568,7 +2631,9 @@ impl crate::PullRequests for Pulls {
             branch: seams.branch,
             read: RefCell::default(),
         };
-        let s = Sluice::new(once(seams, &memo), clock).as_peer(self.peer.clone());
+        let s = Sluice::new(once(seams, &memo), clock)
+            .keeping(&self.policies)
+            .as_peer(self.peer.clone());
         self.take_in(&s, clock, branch, taker)
             .with_context(|| format!("taking in {branch}'s pull requests"))
     }
@@ -3159,6 +3224,7 @@ fn lock_name(branch: &str) -> String {
 mod tests {
     use super::*;
     use crate::profiles::github::fake::FileForge;
+    use crate::PullRequests as _;
     use sluice_core::verdict_view::{Row, RowResult};
 
     fn row(system: &str, replayed: bool) -> Row {
@@ -3267,6 +3333,44 @@ mod tests {
             .iter()
             .filter(|p| p.name != SLUICE_CHECK)
             .all(|p| p.posting.status == Status::Queued));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// reader-tick, "A refused policy stays refused at its revision", of
+    /// the branches intake takes in: the default branch's policy sluice
+    /// refuses is read from git once while its revision stands, each pass
+    /// refused in the first's words, and read again once the branch moves;
+    /// no policy file is kept the same way (129).
+    #[test]
+    fn a_refused_policy_is_kept_with_its_words() {
+        let dir = std::env::temp_dir().join(format!("sluice-pulls-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        gix::init_bare(&dir).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let pulls = Pulls::new(
+            &dir,
+            &dir,
+            None,
+            None,
+            Rc::new(retry::Policy::command()),
+            Kept::new(&dir.join("state")),
+            crate::instance::DISCOVERY,
+            sluice_core::Peer::default(),
+        );
+        let fakes = sluice_fakes::Fakes::new();
+        fakes
+            .world
+            .init("main", &[(POLICY_PATH, "[branches.\"main\"\n")]);
+        let refused = || format!("{:#}", pulls.branches(fakes.seams()).unwrap_err());
+        let words = refused();
+        assert_eq!([refused(), refused()], [words.clone(), words]);
+        assert_eq!(fakes.world.reads_of(POLICY_PATH), 1);
+        // Moved: read again, and its having no policy file kept.
+        fakes.world.hand_commit("main", &[(POLICY_PATH, None)]);
+        for _ in 0..3 {
+            assert!(pulls.branches(fakes.seams()).unwrap().is_empty());
+        }
+        assert_eq!(fakes.world.reads_of(POLICY_PATH), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 

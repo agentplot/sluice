@@ -116,6 +116,20 @@ struct Inner {
     levels: usize,
     /// How many merges were formed.
     forms: usize,
+    /// Revisions whose objects the host lacks, as one another host made
+    /// and none fetched here (64, 124): [`Branch::holds`] reads it.
+    lacking: BTreeSet<Rev>,
+    /// Each host's revision of a branch kept on a remote as last fetched,
+    /// by host and branch, once a read fetched it: until then, the value
+    /// its copy starts at (129).
+    fetched: BTreeMap<(String, String), Option<Rev>>,
+    /// How many reads fetched a branch kept on a remote (129).
+    fetches: usize,
+    /// How many times a branch's revision was read, fetched or as held
+    /// (129).
+    revision_reads: usize,
+    /// How many times each file of a revision was read, by path (129).
+    file_reads: BTreeMap<String, usize>,
     /// The words the remote refuses each host's reads of a branch with, by
     /// host and branch (133).
     refused_branch: BTreeMap<(String, String), String>,
@@ -522,6 +536,28 @@ impl World {
         self.0.borrow().forms
     }
 
+    /// How many reads fetched a branch kept on a remote (129).
+    pub fn fetches(&self) -> usize {
+        self.0.borrow().fetches
+    }
+
+    /// How many times a branch's revision was read, fetched or as held
+    /// (129).
+    pub fn revision_reads(&self) -> usize {
+        self.0.borrow().revision_reads
+    }
+
+    /// How many times a file of a revision was read, a policy among them
+    /// (129).
+    pub fn file_reads(&self) -> usize {
+        self.0.borrow().file_reads.values().sum()
+    }
+
+    /// How many times the file `path` of a revision was read (129).
+    pub fn reads_of(&self, path: &str) -> usize {
+        self.0.borrow().file_reads.get(path).copied().unwrap_or(0)
+    }
+
     /// `branch` at `at`, as a bolt's is kept, with no place of it.
     pub fn set_branch(&self, branch: &str, at: &Rev) {
         self.0.borrow_mut().refs.insert(branch.into(), at.clone());
@@ -533,6 +569,11 @@ impl World {
         let mut inner = self.0.borrow_mut();
         let at = inner.refs.get(branch).cloned();
         inner.remote.insert(branch.into(), at);
+    }
+
+    /// Whether `branch` is kept on a remote.
+    pub fn is_on_remote(&self, branch: &str) -> bool {
+        self.0.borrow().remote.contains_key(branch)
     }
 
     /// This host's copy of `branch`, set by hand.
@@ -774,6 +815,16 @@ impl World {
         self.0.borrow_mut().host = host.into();
     }
 
+    /// From now, the host lacks `rev`'s objects, or, with `false`, holds
+    /// them again (64, 124).
+    pub fn lack(&self, rev: &Rev, lacking: bool) {
+        let mut inner = self.0.borrow_mut();
+        match lacking {
+            true => inner.lacking.insert(rev.clone()),
+            false => inner.lacking.remove(rev),
+        };
+    }
+
     /// From now, `origin` refuses this host's reads of `branch` with
     /// `said`; with `None`, it answers them again (133).
     pub fn refuse_reads(&self, branch: &str, said: Option<&str>) {
@@ -839,6 +890,34 @@ impl World {
     /// with `None`, they are listed again (129).
     pub fn fail_ref_list(&self, said: Option<&str>) {
         self.0.borrow_mut().failed_refs = said.map(Into::into);
+    }
+
+    /// Every revision a ref the host holds names, a branch, its copy of a
+    /// branch kept on a remote, or a remote's tracking branch, each once,
+    /// with nothing fetched (129).
+    pub fn tips(&self) -> Result<Vec<Rev>> {
+        let inner = self.0.borrow();
+        if let Some(said) = &inner.failed_refs {
+            bail!("{said}");
+        }
+        let host = &inner.host;
+        let copies = inner
+            .copies
+            .iter()
+            .filter(|((h, _), _)| h == host)
+            .filter_map(|(_, at)| at.as_ref());
+        let mut tips: Vec<Rev> = Vec::new();
+        for rev in inner
+            .refs
+            .values()
+            .chain(copies)
+            .chain(inner.tracking.values())
+        {
+            if !tips.contains(rev) {
+                tips.push(rev.clone());
+            }
+        }
+        Ok(tips)
     }
 
     /// Whether any ref the host holds, a branch, its copy of a branch kept
@@ -1479,13 +1558,42 @@ pub struct FakeState(World);
 pub struct FakeClock(World);
 
 impl Branch for FakeBranch {
+    /// A branch kept on a remote is fetched: this host holds it as read
+    /// from then (129).
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
-        let inner = self.0 .0.borrow();
+        let mut inner = self.0 .0.borrow_mut();
+        inner.revision_reads += 1;
         let key = (inner.host.clone(), branch.to_string());
+        let on_remote = inner.remote.contains_key(branch);
+        if on_remote {
+            inner.fetches += 1;
+        }
         if let Some(said) = inner.refused_branch.get(&key) {
             return Err(World::refused(format!("refs/heads/{branch}"), said));
         }
-        Ok(inner.refs.get(branch).cloned())
+        let at = inner.refs.get(branch).cloned();
+        if on_remote {
+            inner.fetched.insert(key, at.clone());
+        }
+        Ok(at)
+    }
+
+    /// 129: a branch kept on a remote as this host last fetched it, with
+    /// no fetch; any other as [`FakeBranch::read`] reads it.
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        let mut inner = self.0 .0.borrow_mut();
+        inner.revision_reads += 1;
+        let Some(start) = inner.remote.get(branch) else {
+            return Ok(inner.refs.get(branch).cloned());
+        };
+        let key = (inner.host.clone(), branch.to_string());
+        Ok(inner.fetched.get(&key).unwrap_or(start).clone())
+    }
+
+    /// A revision of the world the host was not made to lack.
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        let inner = self.0 .0.borrow();
+        Ok(inner.commits.contains_key(rev) && !inner.lacking.contains(rev))
     }
 
     fn copy(&self, branch: &str) -> Result<HostCopy> {
@@ -1518,6 +1626,13 @@ impl Branch for FakeBranch {
     }
 
     fn read_file(&self, rev: &Rev, path: &str) -> Result<Option<Vec<u8>>> {
+        *self
+            .0
+             .0
+            .borrow_mut()
+            .file_reads
+            .entry(path.to_string())
+            .or_default() += 1;
         let inner = self.0 .0.borrow();
         let c = inner
             .commits
@@ -2429,6 +2544,15 @@ impl State for FakeState {
         // One thread: a held lock would never be let go.
         self.lock(branch)?
             .ok_or_else(|| anyhow!("{branch}'s lock is held, and nothing here lets it go"))
+    }
+
+    /// The fakes' records are the host's own: nothing to ask.
+    fn refresh(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn read_held(&self, branch: &str) -> Result<Snapshot> {
+        self.read(branch)
     }
 
     fn read(&self, branch: &str) -> Result<Snapshot> {

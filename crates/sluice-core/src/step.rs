@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use sluice_seams::{
     read_refused, AtBound, Contested, Delivery, Formed, HostCopy, LandingCommit, Moved,
-    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, TaskLog, Written,
+    Notification, Progress, ReadRefused, Rev, RunHandle, RunRequest, Source, Submitter, TaskLog,
+    Written,
 };
 use tracing::{info, info_span, warn};
 
@@ -1416,7 +1417,8 @@ impl Sluice<'_> {
                 }
                 Formed::Conflict { paths } => {
                     prefix.pop();
-                    let with = self.contested(line, &base, &ahead, &head)?;
+                    let work = |id| line.sub(id).map(|s| (s.head.clone(), s.from.clone()));
+                    let with = self.contested(&work, &base, &ahead, &head)?;
                     self.remove_conflict(line, id, paths, with, now);
                     removed = true;
                 }
@@ -1489,10 +1491,12 @@ impl Sluice<'_> {
     /// 65: every submission ahead the head conflicts with alone, or, when
     /// none does, every one ahead up to the one at which the conflict
     /// appeared. `ahead` pairs each submission ahead with the candidate
-    /// revision through it.
+    /// revision through it; `work` gives a submission's head and who
+    /// submitted it, by its number, from the records or a reader's read of
+    /// them (64).
     pub(crate) fn contested(
         &self,
-        line: &Line,
+        work: &dyn Fn(u64) -> Result<(Rev, Submitter)>,
         base: &Rev,
         ahead: &[(u64, Rev)],
         head: &Rev,
@@ -1506,7 +1510,7 @@ impl Sluice<'_> {
         let mut ids = Vec::new();
         if !conflicts(base)? {
             for (id, _) in ahead {
-                let alone = self.seams.branch.form(base, &line.sub(*id)?.head)?;
+                let alone = self.seams.branch.form(base, &work(*id)?.0)?;
                 if let Formed::Revision(r) = alone {
                     if conflicts(&r)? {
                         ids.push(*id);
@@ -1526,7 +1530,7 @@ impl Sluice<'_> {
             .map(|id| {
                 Ok(Contested {
                     id,
-                    from: line.sub(id)?.from.clone(),
+                    from: work(id)?.1,
                 })
             })
             .collect()

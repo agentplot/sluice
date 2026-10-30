@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::SecondsFormat;
@@ -22,8 +23,21 @@ use crate::reader::{no_sluice, untimed, Drives, Reader};
 use crate::told::{self, Kind};
 use crate::{hashes, held_line, progress, sessions_json, Names, Pause, INTERRUPTED, STOPPED};
 
-/// Every branch's part, and the whole document as `--json` prints it.
+/// Every branch's part, and the whole document as `--json` prints it:
+/// each remote that keeps branches' records asked once, first, and every
+/// branch read as the host holds it since (129).
 pub fn document(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+) -> Result<(Vec<BranchView>, serde_json::Value)> {
+    s.seams().state.refresh()?;
+    document_held(s, host, clock)
+}
+
+/// As [`document`], asking no remote: every branch read as the host holds
+/// it since the last ask (129).
+fn document_held(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
@@ -61,6 +75,9 @@ pub fn document(
     Ok((branches, doc))
 }
 
+/// `tick` is how long `pause` pauses, which a watch that reads names in
+/// its documents (64, 129).
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     s: &Sluice<'_>,
     host: &dyn Host,
@@ -68,6 +85,7 @@ pub fn run(
     json: bool,
     watch: bool,
     pause: &dyn Pause,
+    tick: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
     if !watch {
@@ -93,6 +111,8 @@ pub fn run(
     // changes: what reads the lines finds what happened by comparing
     // `recent`.
     let mut last: Option<serde_json::Value> = None;
+    // 129: what it last asked of whether the repository has sluice.
+    let mut asked: Option<Asked> = None;
     // 129: it ends only when stopped, when its output is closed, when its
     // repository is gone, or where the repository has no sluice; anything
     // else that fails is tried again at the next tick, which is its cadence
@@ -100,7 +120,14 @@ pub fn run(
     loop {
         let doc = match &mut reader {
             Reader::Lead(lead) => {
-                let doc = match read(s, host, clock) {
+                // 129: what the last tick kept by revision and this one does
+                // not use is forgotten.
+                s.next_pass();
+                host.next_pass();
+                // A read whose start it could not mark leaves a forecast
+                // reading past this reader, which decides nothing (64).
+                let _ = lead.begin();
+                let doc = match read(s, host, clock, &mut asked) {
                     // Ctrl-C reaches the git a read runs in the foreground:
                     // a branch's read it ended is no refusal of the branch's
                     // (26).
@@ -112,6 +139,7 @@ pub fn run(
                     // overview prints it.
                     Err(e) => told::document(Kind::Internal, &format!("{e:#}"), &[]),
                 };
+                let doc = ticked(doc, tick);
                 // What it read is printed all the same; the reader's last
                 // document stands for a write that failed until one succeeds.
                 let _ = lead.write(&doc);
@@ -141,17 +169,59 @@ pub fn run(
     }
 }
 
+/// `doc` as a reader writes it: naming its tick, the pause between its
+/// reads, in whole seconds, so a forecast can tell whether it keeps it
+/// (64, 129).
+pub(crate) fn ticked(mut doc: serde_json::Value, tick: Duration) -> serde_json::Value {
+    doc["tick"] = tick.as_secs().into();
+    doc
+}
+
+/// What a watch last asked of whether the repository has sluice: the tips
+/// the host held, and whether any held the policy (129).
+pub(crate) struct Asked {
+    tips: Vec<sluice_seams::Rev>,
+    holds: bool,
+}
+
 /// The reader's document of one tick: the overview, which says
 /// `"set_up": false` where the records list no branch and no branch the
 /// host holds, its own or a remote's as last fetched, has the policy (129).
-/// A check of the branches that fails is a read it could not make (133).
-pub(crate) fn read(
+/// The policy is looked for again only once the tips the host holds, or
+/// the records' list of branches, changed since `asked`: a list with a
+/// branch in it forgets what was asked, so its emptying asks again. A
+/// check of the branches that fails is a read it could not make (133).
+fn read(
     s: &Sluice<'_>,
     host: &dyn Host,
     clock: &dyn Clock,
+    asked: &mut Option<Asked>,
 ) -> Result<serde_json::Value> {
-    let (branches, mut doc) = document(s, host, clock)?;
-    if branches.is_empty() && !host.holds_policy()? {
+    s.seams().state.refresh()?;
+    read_held(s, host, clock, asked)
+}
+
+/// As [`read`], asking no remote: every branch read as the host holds it
+/// since the last ask, as `sluice run` reads after its pass's own (129,
+/// 135).
+pub(crate) fn read_held(
+    s: &Sluice<'_>,
+    host: &dyn Host,
+    clock: &dyn Clock,
+    asked: &mut Option<Asked>,
+) -> Result<serde_json::Value> {
+    let (branches, mut doc) = document_held(s, host, clock)?;
+    if !branches.is_empty() {
+        *asked = None;
+        return Ok(doc);
+    }
+    let tips = host.tips()?;
+    let holds = match asked.take() {
+        Some(a) if a.tips == tips => a.holds,
+        _ => host.holds_policy(&tips)?,
+    };
+    *asked = Some(Asked { tips, holds });
+    if !holds {
         doc["set_up"] = false.into();
     }
     Ok(doc)
@@ -198,6 +268,10 @@ fn write_overview(
         )?;
         if let Some(hold) = &b.held {
             writeln!(out, "  {}", held_line(&b.branch, hold))?;
+        }
+        // 80, 129: its records as last fetched, and why.
+        if let Some(why) = &b.stale {
+            writeln!(out, "  {why}: shown as last fetched")?;
         }
         write_held_places(&held_places(&b.branch, Some(b), doc), out)?;
         let names = branch_names(b);

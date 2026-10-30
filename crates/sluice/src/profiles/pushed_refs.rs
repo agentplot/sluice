@@ -60,21 +60,13 @@ impl PushedRefs {
         policy: Rc<Policy>,
     ) -> Result<Self> {
         let local = LocalRefs::open(path)?;
-        let out = git(local.git_dir(), &["remote"])?;
-        if !out.status.success() {
-            bail!(
-                "git remote: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        let names = String::from_utf8_lossy(&out.stdout);
-        if !names.lines().any(|n| n == remote) {
+        if !local.remotes()?.iter().any(|n| n == remote) {
             bail!("the policy names the remote {remote:?}, which this repository does not have");
         }
         let speaker = match identity {
             None => None,
             Some((identity, program)) => {
-                let url = configured_url(local.git_dir(), remote)?;
+                let url = local.remote_url(remote)?;
                 identity.url(&url).map(|url| Speaker {
                     identity,
                     url,
@@ -217,8 +209,15 @@ impl PushedRefs {
         self.fetch_specs(asked, &[refspec], flags)
     }
 
-    /// [`PushedRefs::fetch_spec`] of several refspecs in one fetch.
-    fn fetch_specs(&self, asked: &str, refspecs: &[&str], flags: &[&str]) -> Result<bool> {
+    /// [`PushedRefs::fetch_spec`] of every one of `refspecs`, in one fetch
+    /// under the retry policy (rule core.29): `Ok(false)` when the remote
+    /// has no ref one of them names exactly, which fetches none of them.
+    pub(crate) fn fetch_specs(
+        &self,
+        asked: &str,
+        refspecs: &[&str],
+        flags: &[&str],
+    ) -> Result<bool> {
         let mut args = vec!["fetch", "--quiet", "--no-tags", "--no-write-fetch-head"];
         args.extend(flags);
         args.push(self.target());
@@ -273,7 +272,7 @@ impl PushedRefs {
             None => Ok(Pushed::Done),
             Some(Judged::Unknown) => {
                 let shown = name.strip_prefix("refs/heads/").unwrap_or(name);
-                let holds = match self.holds(name) {
+                let holds = match self.on_remote(name) {
                     Ok(at) if at.as_deref() == to => return Ok(Pushed::Done),
                     Ok(Some(at)) => format!("{} holds {shown} at {at}", self.remote),
                     Ok(None) => format!("{} has no {shown}", self.remote),
@@ -287,7 +286,7 @@ impl PushedRefs {
 
     /// The revision the remote's ref `name` holds, listed under the retry
     /// policy as a read; `None` when it has no such ref.
-    fn holds(&self, name: &str) -> Result<Option<String>> {
+    fn on_remote(&self, name: &str) -> Result<Option<String>> {
         let out = self.remote_git(&["ls-remote", "--refs", self.target(), name])?;
         if !out.status.success() {
             bail!(
@@ -447,6 +446,11 @@ impl PushedRefs {
     /// A local ref's revision, `None` when there is none.
     pub fn read_ref(&self, name: &str) -> Result<Option<Rev>> {
         self.local.read_ref(name)
+    }
+
+    /// The repository, as gix reads its refs and objects.
+    pub fn local(&self) -> &LocalRefs {
+        &self.local
     }
 
     /// Set the remote's branch `branch` to `rev`, whatever it held: a
@@ -710,35 +714,10 @@ pub(crate) fn command(git_dir: &Path, args: &[&str]) -> Command {
     c
 }
 
-/// The URL of the remote `remote` of the repository holding `path`.
+/// The URL of the remote `remote` of the repository holding `path`, as
+/// configured, before any `insteadOf`, read with no process (129).
 pub fn remote_url(path: &Path, remote: &str) -> Result<String> {
-    configured_url(LocalRefs::open(path)?.git_dir(), remote)
-}
-
-/// The names of the remotes of the repository at `git_dir`.
-pub fn remotes(git_dir: &Path) -> Result<Vec<String>> {
-    let out = git(git_dir, &["remote"])?;
-    if !out.status.success() {
-        bail!(
-            "listing remotes failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect())
-}
-
-/// The remote's URL as configured, before any `insteadOf`: the forge it
-/// names is the one an identity is for.
-fn configured_url(git_dir: &Path, remote: &str) -> Result<String> {
-    let key = format!("remote.{remote}.url");
-    let out = git(git_dir, &["config", "--get", &key])?;
-    if !out.status.success() {
-        bail!("the remote {remote:?} has no url");
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    LocalRefs::open(path)?.remote_url(remote)
 }
 
 /// `path` quoted for the shell git runs a `!` helper with.
@@ -750,6 +729,17 @@ impl Branch for PushedRefs {
     /// 42: the remote's revision of the branch, fetched on every read.
     fn read(&self, branch: &str) -> Result<Option<Rev>> {
         self.fetch(branch)
+    }
+
+    /// 129: the remote's tracking ref of the branch as last fetched, with
+    /// no fetch.
+    fn held(&self, branch: &str) -> Result<Option<Rev>> {
+        self.local.read_ref(&self.tracking(branch))
+    }
+
+    /// Every object fetched is on this host.
+    fn holds(&self, rev: &Rev) -> Result<bool> {
+        self.local.holds(rev)
     }
 
     /// 124: the host's `refs/heads/<branch>`, sluice's copy of the remote's

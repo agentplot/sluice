@@ -1660,3 +1660,73 @@ fn a_push_refused_on_the_hosts_credentials_is_made_once() {
         .count();
     assert_eq!(tried, 1, "one push");
 }
+
+/// 129: the remotes and a remote's fetch address, read with no process,
+/// are what `git remote` and `git config --get remote.<name>.url`
+/// answer, an `insteadOf` left unapplied.
+#[test]
+fn the_remotes_and_their_addresses_read_as_git_answers_them() {
+    let repo = Repo::new("remotes-read");
+    let bare = repo.bare_origin();
+    repo.git(&["remote", "add", "forge", "git@github.com:acme/widgets.git"]);
+    repo.git(&["remote", "add", "web", "https://github.com/acme/widgets"]);
+    repo.git(&[
+        "config",
+        "url.https://github.com/.insteadOf",
+        "git@github.com:",
+    ]);
+    let local = sluice::profiles::local_refs::LocalRefs::open(repo.dir()).unwrap();
+    let listed: Vec<String> = repo.git(&["remote"]).lines().map(str::to_string).collect();
+    assert_eq!(listed, ["forge", "origin", "web"]);
+    assert_eq!(local.remotes().unwrap(), listed);
+    for r in &listed {
+        let configured = repo.git(&["config", "--get", &format!("remote.{r}.url")]);
+        assert_eq!(local.remote_url(r).unwrap(), configured, "{r}");
+    }
+    assert_eq!(
+        sluice::profiles::pushed_refs::remote_url(repo.dir(), "origin").unwrap(),
+        bare.path().to_str().unwrap()
+    );
+    assert!(local.remote_url("nowhere").is_err());
+}
+
+/// 129, rule core.27: a remote added by `git remote add` after the
+/// profile opened is read, and routes the branch whose policy its
+/// tracking ref holds, at the next read.
+#[test]
+fn a_remote_added_after_the_profile_opened_routes_at_its_next_read() {
+    let up = Repo::new("added-up");
+    up.write(".config/sluice.toml", "[branches.main]\nremote = \"up\"\n");
+    up.git(&["add", "-A"]);
+    up.git(&["commit", "-q", "-m", "policy"]);
+    let bare = up.bare_origin();
+    let repo = Repo::new("added");
+    let b = Branches::open_as(repo.dir(), None, recorded()).unwrap();
+    assert_eq!(b.remote("main").unwrap(), None);
+    repo.git(&["remote", "add", "up", bare.path().to_str().unwrap()]);
+    repo.git(&["fetch", "-q", "up"]);
+    assert_eq!(b.remotes().unwrap(), ["up"]);
+    assert_eq!(b.remote("main").unwrap().as_deref(), Some("up"));
+    assert_eq!(b.read("main").unwrap(), Some(rev(up.rev("main"))));
+}
+
+/// 129: a branch held as last fetched is read with the remote out of
+/// reach, at what was last fetched, though the remote has moved since:
+/// nothing is fetched, where a read is refused.
+#[test]
+fn a_branch_held_fetches_nothing_with_the_remote_out_of_reach() {
+    let repo = Repo::new("held");
+    let bare = repo.bare_origin();
+    let p = open(&repo);
+    let fetched = p.read("main").unwrap();
+    assert_eq!(fetched, Some(rev(repo.rev("main"))));
+    Repo::clone_of(bare.path(), "held-other").push_change("b", "2\n");
+    let away = bare.path().with_extension("away");
+    std::fs::rename(bare.path(), &away).unwrap();
+    let held = p.held("main");
+    let read = p.read("main");
+    std::fs::rename(&away, bare.path()).unwrap();
+    assert_eq!(held.unwrap(), fetched);
+    assert!(read_refused(&read.unwrap_err()).is_some());
+    assert_eq!(p.held("none").unwrap(), None);
+}

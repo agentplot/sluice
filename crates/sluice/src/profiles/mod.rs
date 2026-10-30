@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use sluice_seams::{Branch, Rev};
 
 use crate::identity::Identity;
 use crate::instance::Instance;
@@ -308,103 +309,36 @@ fn forge_findings(
     Ok(found)
 }
 
-/// The repository's default branch: the branch its common directory's
-/// HEAD names, a bare repository's or the main checkout's. `None` when
-/// HEAD names no branch.
-pub(crate) fn default_branch(common: &Path) -> Result<Option<String>> {
-    let out = Command::new("git")
-        .arg("--git-dir")
-        .arg(common)
-        .args(["symbolic-ref", "--short", "-q", "HEAD"])
-        .env_remove("GIT_DIR")
-        .stdin(Stdio::null())
-        .output()
-        .context("running git")?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok((out.status.success() && !name.is_empty()).then_some(name))
+/// The repository's default branch, the branch its common directory's
+/// HEAD names, a bare repository's or the main checkout's, with its
+/// revision in the host's own refs, never fetched: one reading for the
+/// overview's order (ADR 0036), the remotes that may hold records and the
+/// branches that take pull requests. `None` when HEAD names no branch.
+/// Read with no process (129).
+pub(crate) fn default_branch(
+    local: &local_refs::LocalRefs,
+) -> Result<Option<(String, Option<Rev>)>> {
+    let Some(branch) = local.default_branch()? else {
+        return Ok(None);
+    };
+    let at = local.read_ref(&format!("refs/heads/{branch}"))?;
+    Ok(Some((branch, at)))
 }
 
-/// Whether any branch tip of the repository whose common directory is
-/// `common`, its own or a remote's tracking branch as last fetched, has
-/// the policy file (129; rule core.27). Nothing is fetched, and only the
-/// tips are read: a policy in history, in a tag or in a working copy alone
-/// is none a branch holds.
-fn holds_policy(common: &Path) -> Result<bool> {
-    let git = || {
-        let mut c = Command::new("git");
-        c.arg("--git-dir").arg(common).env_remove("GIT_DIR");
-        c
-    };
-    let out = git()
-        .args([
-            "for-each-ref",
-            "--format=%(objectname)",
-            "refs/heads",
-            "refs/remotes",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .context("running git")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "git for-each-ref exited {:?}: {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let listed = String::from_utf8_lossy(&out.stdout);
-    let mut tips: Vec<&str> = Vec::new();
-    for tip in listed.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        if !tips.contains(&tip) {
-            tips.push(tip);
+/// Whether any of `tips` has the policy file (129; rule core.27): a
+/// policy in history, in a tag or in a working copy alone is none a branch
+/// holds. Read with no process, the first tip holding it ending the
+/// reading.
+fn holds_policy(local: &local_refs::LocalRefs, tips: &[Rev]) -> Result<bool> {
+    for tip in tips {
+        if local
+            .read_file(tip, sluice_core::policy::POLICY_PATH)?
+            .is_some()
+        {
+            return Ok(true);
         }
     }
-    if tips.is_empty() {
-        return Ok(false);
-    }
-    // One object asked at a time: cat-file answers each line as it is
-    // asked, so the first tip holding the policy ends the reading.
-    let mut child = git()
-        .args(["cat-file", "--batch-check"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("running git")?;
-    let mut ask = child.stdin.take().context("git cat-file's input")?;
-    let mut answers =
-        std::io::BufReader::new(child.stdout.take().context("git cat-file's output")?);
-    let (mut holds, mut broke) = (false, false);
-    for tip in &tips {
-        let mut line = String::new();
-        let answered = writeln!(ask, "{tip}:{}", sluice_core::policy::POLICY_PATH)
-            .and_then(|()| ask.flush())
-            .and_then(|()| std::io::BufRead::read_line(&mut answers, &mut line));
-        match answered {
-            Ok(n) if n > 0 => {
-                if !line.trim_end().ends_with(" missing") {
-                    holds = true;
-                    break;
-                }
-            }
-            // Its output ended or broke: git says why on its stderr.
-            _ => {
-                broke = true;
-                break;
-            }
-        }
-    }
-    drop(ask);
-    drop(answers);
-    let ended = child.wait_with_output().context("running git")?;
-    if broke {
-        anyhow::bail!(
-            "git cat-file --batch-check exited {:?}: {}",
-            ended.status.code(),
-            String::from_utf8_lossy(&ended.stderr).trim()
-        );
-    }
-    Ok(holds)
+    Ok(false)
 }
 
 /// Whether the directory `dir` is gone, as a repository's git directory
@@ -527,34 +461,29 @@ impl crate::exec::Host for Bound {
         gone(Path::new(repository))
     }
 
-    fn holds_policy(&self) -> Result<bool> {
-        holds_policy(&self.branch.common_dir()?)
+    fn tips(&self) -> Result<Vec<Rev>> {
+        self.branch.local().tips()
+    }
+
+    fn holds_policy(&self, tips: &[Rev]) -> Result<bool> {
+        holds_policy(self.branch.local(), tips)
     }
 
     fn readers(&self) -> Result<PathBuf> {
         Ok(crate::instance::state_dir()?.join("readers"))
     }
 
+    fn next_pass(&self) {
+        self.branch.next_pass();
+        self.state.next_pass();
+        self.pulls.next_pass();
+    }
+
     fn default_branch(&self) -> Result<Option<sluice_core::overview::OrderFrom>> {
-        let common = self.branch.common_dir()?;
-        let Some(branch) = default_branch(&common)? else {
-            return Ok(None);
-        };
         // Its revision here, never fetched: the overview reads it only when
         // the branch has no records.
-        let out = Command::new("git")
-            .arg("--git-dir")
-            .arg(&common)
-            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
-            .arg(format!("refs/heads/{branch}^{{commit}}"))
-            .env_remove("GIT_DIR")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()?;
-        let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let local =
-            (out.status.success() && !full.is_empty()).then(|| sluice_seams::Rev::new(full));
-        Ok(Some(sluice_core::overview::OrderFrom { branch, local }))
+        Ok(default_branch(self.branch.local())?
+            .map(|(branch, local)| sluice_core::overview::OrderFrom { branch, local }))
     }
 }
 
