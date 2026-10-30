@@ -8,7 +8,7 @@
 
 ## 2. The core and the fake stop naming it
 
-- [ ] 2.1 In `crates/sluice-core/src/session.rs`, stop removing `ready` from a command run's tests; keep removing `not_run` and say why in the comment (design D4). Verify: `sluice exec main -- cargo test -p sluice-core` passes.
+- [x] 2.1 In `crates/sluice-core/src/session.rs`, stop removing `ready` from a command run's tests; keep removing `not_run` and say why in the comment (design D4). Verify: `sluice exec main -- cargo test -p sluice-core` passes.
 - [ ] 2.2 In `crates/sluice-seams/src/lib.rs`, drop "readiness" from `Tests::start`'s list of what runs after admission. Verify: `cargo doc -p sluice-seams --no-deps` builds with no warning.
 - [ ] 2.3 In `crates/sluice-fakes/src/lib.rs`, remove `not_ready` and the start refusal that reads `ready`. In `crates/sluice-conformance/tests/could_not_run.rs`, remove `a_host_that_is_not_ready_records_nothing_and_holds_the_queue`, rename and keep the `not_run` half of `a_command_run_is_held_to_neither_readiness_nor_not_run`, change the S43 sample reason to a `not_run` exit's words, and add a test that submits under a policy naming `ready = "false"` and sees exactly one start and a landing (the run-outcome scenario "A combination on a host without what a test needs"). Verify: `sluice exec main -- cargo test -p sluice --features tools --test conformance` and `cargo test -p sluice-conformance` pass.
 - [ ] 2.4 Change the sample reasons in `crates/sluice-core/src/verdict_view.rs` and `crates/sluice/src/profiles/github/render.rs` from "the host failed [tests] ready …" to a `not_run` exit's reason, keeping each test's shape. Verify: `cargo test -p sluice-core verdict_view` and `cargo test -p sluice render` pass, and `git grep -n "tests\] ready" -- crates` finds nothing.
