@@ -1,5 +1,5 @@
 ---
-number: 75
+number: 76
 title: A branch's signed runs are verified with the signers its own policy names, and a host takes its runs only where that policy lists the host's key
 status: accepted
 date: 2026-10-30

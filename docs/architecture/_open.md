@@ -5,6 +5,14 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Accepted, not built
 
+- **core.38 and record 0074** (clause 84 as amended 2026-10-30): today
+  `docker = true` only opens the engine's sockets in the profile and a
+  host with no engine runs the checks and fails them. Accepted
+  2026-10-30 on the user's card; a unit has the executor
+  refuse such a run before claiming it, leave it open, and look at the
+  engine again after a run in which a check failed, a gone engine
+  making the run one with no outcome (0074 as amended 2026-10-30).
+
 - **core.37 and record 0066 as amended** (clauses 84 and 114 as amended
   2026-10-30): today `[tests] ready` is read from the policy and
   `ready_after` runs it after a run that did not pass, making the run
@@ -22,8 +30,10 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Proposed
 
-- **core.38 and record 0074** (clause 84 as amended 2026-10-30): today
-  `docker = true` only opens the engine's sockets in the profile and a
-  host with no engine runs the checks and fails them. Proposed
-  2026-10-30, on the user's card; a unit on their yes has the executor
-  refuse such a run before claiming it and leave it open.
+- **core.39 and record 0075** (clauses 8, 10, 23, 24 and 140, added or
+  amended 2026-10-30): today a submission whose work no required check
+  reads lands with nothing run but joins the chain, waiting for the
+  candidates under test ahead of it. Proposed 2026-10-30, on the
+  user's card; a unit on their yes lands such work beside the chain at
+  the first round that reads it, and lands a formed candidate from the
+  revision it made, carrying its work.
