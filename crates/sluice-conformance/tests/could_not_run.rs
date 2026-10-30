@@ -207,3 +207,147 @@ fn s44_a_fail_set_aside_is_read_by_no_gate_and_its_line_stays() {
     assert_eq!(h.sub(three).state, State::Landed);
     assert!(results(&h).contains(&fail), "the fail's line stays");
 }
+
+/// The bolt policy, its runs asking for the container engine (84).
+fn docker() -> String {
+    policy(false, "fail", 4) + "\n[executor]\ndocker = true\n"
+}
+
+/// What the fake's look at a host whose engine has gone says.
+const GONE: &str = "/var/run/docker.sock refused the connection";
+
+/// What a check that did not pass after the engine went is left with.
+fn engine_gone() -> String {
+    format!("the container engine no longer answers after the run: {GONE}")
+}
+
+/// satisfies: 114, 139; record 0074 (design D5); the host-requirements
+/// spec's "The engine stopped during the run" and "The engine still
+/// answers"
+#[test]
+fn a_check_failed_after_the_engine_went_has_no_outcome_and_a_pass_stands() {
+    let h = Harness::new(&docker());
+    h.w().hold_runs(true);
+    h.fails_with("a:test", "a/lib", "broken");
+    let head = h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    let one = h.submit("unit/a");
+    h.step();
+    assert_eq!(h.w().started().len(), 1);
+    h.w().engine_unmet(Some(GONE));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(
+        not_run_events(&h),
+        [vec![("a:test".to_string(), engine_gone())]]
+    );
+    let c = h.w().started()[0].clone();
+    let mine: Vec<ResultLine> = results(&h)
+        .into_iter()
+        .filter(|r| r.combination == c)
+        .collect();
+    assert!(mine
+        .iter()
+        .any(|r| r.task == "b:test" && r.outcome == Outcome::Pass));
+    assert!(mine.iter().all(|r| r.task != "a:test"), "{mine:?}");
+    assert_ne!(h.sub(one).state, State::Failed);
+    assert!(h.w().delivered().is_empty(), "nobody is blamed");
+
+    // The engine answers again: the combination is tested again, and its
+    // fail, after which the engine still answers, is recorded and blamed.
+    h.w().engine_unmet(None);
+    h.w().hold_runs(false);
+    h.settle();
+    assert_eq!(h.w().started().len(), 2);
+    assert_eq!(h.sub(one).state, State::Failed);
+    let a = h
+        .sub(one)
+        .failed
+        .into_iter()
+        .find(|f| f.task == "a:test")
+        .unwrap();
+    assert!(!a.hash.is_empty() && a.not_run.is_none(), "{a:?}");
+    assert!(results(&h)
+        .iter()
+        .any(|r| r.task == "a:test" && r.outcome == Outcome::Fail));
+    assert_ne!(head, c);
+}
+
+/// satisfies: record 0074 (design D5); the host-requirements spec's
+/// "Every test passed"
+#[test]
+fn a_run_whose_checks_all_passed_never_looks_at_the_engine() {
+    let h = Harness::new(&docker());
+    h.w().hold_runs(true);
+    h.work("unit/a", "agent-a", &[("a/lib", Some("a2"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let looked = h.w().engine_looks().len();
+    h.w().engine_unmet(Some(GONE));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(h.w().engine_looks().len(), looked, "no look after a pass");
+    h.settle();
+    assert_eq!(h.sub(one).state, State::Landed);
+}
+
+/// satisfies: 66; record 0074 (design D5); the host-requirements spec's
+/// "The time limit ended the run"
+#[test]
+fn a_run_its_time_limit_ended_never_looks_at_the_engine() {
+    let h = Harness::new(&docker());
+    h.w().hold_runs(true);
+    h.w().hangs("a:test");
+    h.work("unit/a", "agent-a", &[("a/lib", Some("slow"))]);
+    let one = h.submit("unit/a");
+    h.step();
+    let looked = h.w().engine_looks().len();
+    h.w().engine_unmet(Some(GONE));
+    h.w().complete_all();
+    h.step();
+    assert_eq!(h.w().engine_looks().len(), looked, "no look after a cut");
+    assert_eq!(h.sub(one).state, State::Failed);
+    assert_eq!(h.sub(one).result.as_deref(), Some("timed out"));
+}
+
+/// satisfies: 92, 114, 139; record 0074 (design D5, D6); the
+/// host-requirements spec's "A command runs"
+#[test]
+fn a_session_run_failed_after_the_engine_went_records_no_fail() {
+    let h = Harness::new(&docker());
+    h.fails_with("a:test", "a/lib", "broken");
+    let head = h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    h.w().engine_unmet(Some(GONE));
+    let (report, _) = h.session_run("unit/a");
+    assert_eq!(report.not_run.len(), 1, "{report:?}");
+    assert_eq!(report.not_run[0].task, "a:test");
+    assert_eq!(report.not_run[0].reason, engine_gone());
+    let mine: Vec<ResultLine> = results(&h)
+        .into_iter()
+        .filter(|r| r.combination == head)
+        .collect();
+    assert!(mine.iter().any(|r| r.task == "b:test"));
+    assert!(mine.iter().all(|r| r.task != "a:test"), "{mine:?}");
+
+    // A command's fail is its own, whatever the host lacks.
+    let looked = h.w().engine_looks().len();
+    h.fails_with("false", "a/lib", "broken");
+    let (report, _) = h.session_exec("unit/a", Some("false"));
+    assert!(report.not_run.is_empty(), "{report:?}");
+    assert_eq!(
+        report
+            .tasks
+            .iter()
+            .map(|t| (t.task.as_str(), t.outcome))
+            .collect::<Vec<_>>(),
+        [("false", Outcome::Fail)]
+    );
+    assert_eq!(h.w().engine_looks().len(), looked, "never looked at");
+}

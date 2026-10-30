@@ -65,6 +65,40 @@ sluice status 13 --json | jq '{state, result, tested, failed}'
 `tested.combination` is the revision, `tested.submissions` who was in it,
 `failed[].task` and `failed[].log` the tests and their logs.
 
+## Tests that need the container engine
+
+On a branch whose policy says `[executor] docker = true`, a host whose
+container engine does not answer takes none of the branch's combinations:
+it leaves them for a host whose engine does, and nothing of them runs or is
+recorded there. `sluice status` and `sluice wait` say what a combination
+waits for, and `--json` carries it as `waiting`:
+
+```
+testing feature/x + #12 · 3m10s of 30m · waiting for a host whose container engine answers: build-box: no socket at /var/run/docker.sock
+```
+
+When no host takes it before the branch's `timeout`, the combination is not
+passed, and each test says why:
+
+```
+timed out
+not run: cli:tools
+  cli:tools could not run: no host whose container engine answers took its tests: build-box: no socket at /var/run/docker.sock
+```
+
+Start the engine where sluice runs, as the user it runs as, then submit
+again. A test that did not pass, after which the engine no longer answers,
+has no result: nothing is recorded under its key, nobody is blamed, and the
+combination is tested again. A test that passed keeps its result.
+
+```
+could not run: cli:tools: the container engine no longer answers after the run: /var/run/docker.sock refused the connection
+```
+
+What a test prints is never read as the engine gone: a test that says it
+cannot reach the daemon while the engine still answers is recorded as
+failed.
+
 ## A failure that is not your code
 
 A test can fail because of the host: docker down, a full disk, a slow
@@ -96,8 +130,9 @@ the host could not run cli:tools: once it can, the agent working in tools submit
 ```
 
 sluice tells these apart on its own and records nothing for them: a run
-that never started, a `not_run` exit, and a test the time limit ended. A
-host failure none of them catches is recorded like any fail, under the
+that never started, a `not_run` exit, a test the time limit ended, and, on
+a branch with `docker = true`, a test that did not pass after which the
+container engine no longer answers. A host failure none of them catches is recorded like any fail, under the
 test's key. A later pass on the same key then makes the
 test read as flaky, and on a branch with `flaky = "fail"` the same head
 fails each time it is submitted:

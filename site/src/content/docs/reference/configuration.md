@@ -132,7 +132,7 @@ share as [`[[caches]]`](#caches). The caches an earlier sluice saved in
 | | `"container"` | The tests run in a container from the image the policy names. Planned, for a box that runs no agents ([executors and systems](/sluice/guides/executors-and-systems/)); not built. |
 | `network` | `false`, `"localhost"`, `true` | No network; only 127.0.0.1 and ::1, for tests that start a server and talk to it; or any. |
 | `memory` | e.g. `"8G"` | Refused where the executor cannot hold it, never run without it. |
-| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. |
+| `docker` | `true` | The tests may reach the host's container engine. A container may mount any path, so such a run is never counted as confined. A host whose container engine does not answer, at `DOCKER_HOST`'s socket or the usual ones, runs none of the branch's tests. It leaves them for a host whose engine does, and `sluice status` says what they wait for. A test that did not pass, after which the engine no longer answers, has no result, and the combination is tested again. |
 
 Every result records which executor ran it and what it held. An executor
 that cannot enforce a limit the policy states refuses the run

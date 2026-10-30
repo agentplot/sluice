@@ -500,6 +500,16 @@ pub struct Limits {
     pub docker: bool,
 }
 
+impl Limits {
+    /// 84, record 0074: whether the run asks of its host anything the host
+    /// itself shows, a container engine that answers, which
+    /// [`Tests::unmet`] reads. A run that asks nothing of it is never
+    /// looked at.
+    pub fn asks_of_host(&self) -> bool {
+        self.docker
+    }
+}
+
 /// 83, 84: what an executor held a run to, recorded with every result it
 /// observed (16), so a gate reads confinement from the record and never
 /// from the policy (28, 29).
@@ -753,6 +763,20 @@ pub trait Tests {
     /// 37: a started run's progress; once finished, every check's key,
     /// outcome, executor and whether it was replayed.
     fn progress(&self, run: &RunHandle) -> Result<Progress>;
+
+    /// 84, record 0074: what of the requirements `limits` asks of the host
+    /// this host does not meet, in words: the places it looked and what
+    /// each said. `None` when it meets them all, at once when `limits`
+    /// asks nothing of the host ([`Limits::asks_of_host`]). It reads only
+    /// what the executor can see on the host for itself, where the run
+    /// would reach it, and runs nothing of the repository's (rules core.37,
+    /// core.38).
+    ///
+    /// The core asks it before it claims a run, and claims none while it
+    /// answers a reason; and after a run in which a check did not pass, so
+    /// that a requirement gone during the run leaves those checks with no
+    /// outcome, never a fail (114, 139).
+    fn unmet(&self, limits: &Limits) -> Result<Option<String>>;
 
     /// 71: the most checks running on the host at once, whatever
     /// repositories and branches they serve and whatever their windows.
