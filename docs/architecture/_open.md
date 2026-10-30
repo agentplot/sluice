@@ -19,3 +19,11 @@ when its code lands, and the file is deleted when it is empty.
   another, and a check that failed because the sandbox refused it
   something is recorded as a fail. Built by the change
   `a-checks-key-holds-its-executor`.
+
+## Proposed
+
+- **core.38 and record 0074** (clause 84 as amended 2026-10-30): today
+  `docker = true` only opens the engine's sockets in the profile and a
+  host with no engine runs the checks and fails them. Proposed
+  2026-10-30, on the user's card; a unit on their yes has the executor
+  refuse such a run before claiming it and leave it open.
