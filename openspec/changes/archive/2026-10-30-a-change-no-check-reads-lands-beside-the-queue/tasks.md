@@ -20,7 +20,7 @@
 
 ## 4. The gate
 
-- [ ] 4.1 Commit, run `sluice exec main`, and see every task pass
+- [x] 4.1 Commit, run `sluice exec main`, and see every task pass
 
 ## Workflow follow-up
 
