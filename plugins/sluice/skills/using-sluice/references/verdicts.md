@@ -130,8 +130,9 @@ the host could not run cli:tools: once it can, the agent working in tools submit
 ```
 
 sluice tells these apart on its own and records nothing for them: a run
-that never started, a `not_run` exit, and a test the time limit ended. A
-host failure none of them catches is recorded like any fail, under the
+that never started, a `not_run` exit, a test the time limit ended, and, on
+a branch with `docker = true`, a test that did not pass after which the
+container engine no longer answers. A host failure none of them catches is recorded like any fail, under the
 test's key. A later pass on the same key then makes the
 test read as flaky, and on a branch with `flaky = "fail"` the same head
 fails each time it is submitted:
