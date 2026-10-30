@@ -22,4 +22,4 @@
 
 ## 4. The whole gate
 
-- [ ] 4.1 With the work committed, run the gate's checks. Verify: `sluice exec main` passes every required task, and `git grep -nE "READY_LIMIT|ready_after|\[tests\] ready|not_ready" -- crates site plugins .config docs/architecture/_open.md` finds nothing.
+- [x] 4.1 With the work committed, run the gate's checks. Verify: `sluice exec main` passes every required task, and `git grep -nE "READY_LIMIT|ready_after|\[tests\] ready|not_ready" -- crates site plugins .config docs/architecture/_open.md` finds nothing.
