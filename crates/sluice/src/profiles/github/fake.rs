@@ -16,7 +16,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::app::Repo;
-use super::forge::{Check, Comment, Forge, Posted, Posting, Pull, Review, Standing};
+use super::forge::{
+    latest_opinionated, Check, Comment, Forge, Posted, Posting, Pull, Request, Review, Standing,
+};
 
 /// The author this fake gives every pull request sluice opens.
 pub const LOGIN: &str = "sluice";
@@ -225,6 +227,35 @@ impl Forge for FileForge {
             .collect())
     }
 
+    /// Every open pull request into `base` whole, as GitHub's one query
+    /// reads them: each reviewer's latest review that decides anything,
+    /// and the last ten ready marks.
+    fn requests(&self, _: &Repo, base: &str) -> Result<Vec<Request>> {
+        let mut held = self.held()?;
+        let pulls: Vec<Pull> = held
+            .pulls
+            .iter()
+            .filter(|p| p.open && p.base == base)
+            .cloned()
+            .collect();
+        Ok(pulls
+            .into_iter()
+            .map(|p| {
+                let mut readied = held.readied.remove(&p.number).unwrap_or_default();
+                readied.drain(..readied.len().saturating_sub(10));
+                Request {
+                    reviews: latest_opinionated(
+                        &held.reviews.remove(&p.number).unwrap_or_default(),
+                    ),
+                    checks: held.checks.get(&p.head).cloned().unwrap_or_default(),
+                    posted: held.posted.get(&p.head).cloned().unwrap_or_default(),
+                    readied,
+                    pull: p,
+                }
+            })
+            .collect())
+    }
+
     fn pull(&self, _: &Repo, number: u64) -> Result<Option<Pull>> {
         Ok(self.held()?.pulls.into_iter().find(|p| p.number == number))
     }
@@ -378,6 +409,43 @@ mod tests {
         assert!(!f.pull(&repo, b).unwrap().unwrap().open);
         f.push(a, "aa2").unwrap();
         assert_eq!(f.pull(&repo, a).unwrap().unwrap().head, "aa2");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 136: the one query's answer holds what the reads per request do:
+    /// each request's reviews as `approvals` counts them, the checks and
+    /// sluice's check runs on its head, and its ready marks.
+    #[test]
+    fn requests_read_whole() {
+        let (f, repo, dir) = forge("requests");
+        let a = f
+            .open_by("ann", "main", "unit/a", "aaa", true, None)
+            .unwrap();
+        f.open_by("cat", "bolt/x", "unit/c", "ccc", false, None)
+            .unwrap();
+        f.set_draft(a, false).unwrap();
+        f.review(a, "bob", "APPROVED", "aaa").unwrap();
+        f.review(a, "cat", "APPROVED", "old").unwrap();
+        f.review(a, "cat", "COMMENTED", "aaa").unwrap();
+        f.check("aaa", "qa/approved", Standing::Passed).unwrap();
+        let waiting = Posting {
+            status: Status::Queued,
+            title: "waiting".into(),
+            summary: String::new(),
+            text: None,
+        };
+        f.post(&repo, "aaa", None, &waiting).unwrap();
+        let rs = f.requests(&repo, "main").unwrap();
+        assert_eq!(rs.len(), 1);
+        let r = &rs[0];
+        assert_eq!(r.pull, f.pull(&repo, a).unwrap().unwrap());
+        assert_eq!(
+            approvals(&r.reviews, "aaa"),
+            approvals(&f.reviews(&repo, a).unwrap(), "aaa")
+        );
+        assert_eq!(r.checks, f.checks(&repo, "aaa").unwrap());
+        assert_eq!(r.posted, f.posted_all(&repo, "aaa").unwrap());
+        assert_eq!(r.readied, f.readied(&repo, a).unwrap());
         let _ = std::fs::remove_dir_all(dir);
     }
 

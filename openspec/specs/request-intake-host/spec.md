@@ -1,13 +1,20 @@
-## ADDED Requirements
+# request-intake-host Specification
+
+## Purpose
+Which one host takes a branch's pull requests in, by the instance that
+keeps the branch or the intake mark on its remote, and how a wait on any
+other host follows its pull request on GitHub (137; rule core.33).
+
+## Requirements
 
 ### Requirement: One host takes a branch's pull requests in
-A branch's pull requests SHALL be taken in by one host at a time,
-whichever hosts reach the branch. Where its records are on its remote,
-only the instance that keeps the branch SHALL take them in. Where each
-host keeps its own records, only the host that holds the branch's intake
-mark, `refs/sluice/intake/<branch>` on its remote, SHALL take them in.
-No other host SHALL ask GitHub for the branch's open pull requests (58,
-72, 137; rule core.33).
+A branch's pull requests SHALL be taken in by one host at a time. Where
+its records are on its remote, only the instance that keeps the branch
+SHALL take them in. Where each host keeps its own records, only the
+holder of the branch's intake mark, `refs/sluice/intake/<branch>` on its
+remote, or where none stands the host that finds none, SHALL take them
+in. No other host SHALL ask GitHub for the branch's open pull
+requests (58, 72, 137; rule core.33).
 
 #### Scenario: Records on the remote
 - **WHEN** another host keeps main and its lease has not passed by this host's observation
@@ -21,7 +28,8 @@ No other host SHALL ask GitHub for the branch's open pull requests (58,
 The mark SHALL name the host and whether its holder is the host's
 `sluice run` or a wait, SHALL be renewed by a push leased on the value
 read whenever a third of the host's lease has passed since it was last
-renewed, and SHALL be read in the fetch the branch's round already makes.
+renewed, never at each pass, and SHALL be read in the fetch the branch's
+round already makes.
 A push refused at its lease SHALL leave the mark to the host that moved
 it (45, 137).
 
@@ -30,18 +38,33 @@ it (45, 137).
 - **THEN** B does not take the mark
 
 #### Scenario: Two takers at once
-- **WHEN** hosts A and B both push the mark leased on its absence
+- **WHEN** waits on hosts A and B, where no `sluice run` lives, both push the mark leased on its absence
 - **THEN** one push is refused at its lease, and that host takes nothing in
 
 ### Requirement: The intake mark is taken by rule
-A host SHALL take the mark when it is absent; a `sluice run` SHALL take
-it from a wait at once; any host SHALL take it once it has stood
-unchanged for the lease by the taker's own observation, never by
-comparing the hosts' clocks (73, 137).
+A `sluice run` SHALL push the mark when it starts, leased on its
+absence. A wait on a host where no `sluice run` lives SHALL push it the
+same way where none stands. A step SHALL push none, and SHALL take the
+requests in only where the mark is its host's or none stands. A `sluice
+run` SHALL take the mark from a wait at once; any host SHALL take it
+once it has stood unchanged for the lease by the taker's own
+observation, never by comparing the hosts' clocks (73, 137).
 
-#### Scenario: A mark nobody holds
-- **WHEN** main takes pull requests, keeps its records in each host's files, and has no intake mark
-- **THEN** the first `sluice run` or wait to pass main pushes the mark naming its host, and takes main's pull requests in
+#### Scenario: A driver shows itself
+- **WHEN** main takes pull requests, keeps its records in each host's files, has no intake mark, and `sluice run` on host A starts
+- **THEN** A pushes the mark naming A and a driver, and takes main's pull requests in
+
+#### Scenario: Two drivers see each other
+- **WHEN** `sluice run` on host A holds the mark and `sluice run` on host B starts
+- **THEN** B pushes no mark and takes nothing in
+
+#### Scenario: A wait shows itself
+- **WHEN** main has no intake mark and a wait on host B, where no `sluice run` lives, passes main
+- **THEN** B pushes the mark naming B and a wait, and takes main's pull requests in
+
+#### Scenario: Waits and steps alone keep no mark
+- **WHEN** host A reaches main by a wait and steps alone, and the wait has ended
+- **THEN** no mark stands, and A's steps take main's pull requests in and push none
 
 #### Scenario: A driver takes from a wait
 - **WHEN** a wait on host A holds the mark and `sluice run` on host B passes main
@@ -60,8 +83,8 @@ value, when it ends (137).
 - **THEN** the mark is gone from the remote
 
 ### Requirement: A pull request's submission is advanced only on the host that takes it in
-Where each host keeps its own records, a pass on a host that does not
-hold the mark SHALL withdraw every submission of its own records taken
+Where each host keeps its own records, a pass on a host that finds the
+mark another host's SHALL withdraw every submission of its own records taken
 from a pull request, none landing, saying in the branch's log which host
 takes the branch's pull requests in, and SHALL post and comment nothing
 on the pull request. Submissions from the host's own worktrees SHALL NOT

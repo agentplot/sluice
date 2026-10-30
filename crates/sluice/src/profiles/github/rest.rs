@@ -1,9 +1,10 @@
 //! [`Forge`] over GitHub's REST API, as the app with its installation
 //! token: pull requests, their reviews, the checks on their heads and
 //! their timelines read; sluice's check run and comments posted. A list
-//! is read a hundred at a time until a page comes back short. A pull
-//! request is marked a draft or ready for review through GraphQL, the one
-//! API that can. A check run, a comment or a pull request whose making's
+//! is read a hundred at a time until a page comes back short. A branch's
+//! open pull requests are read whole by one GraphQL query, fifty at a
+//! time, from GraphQL's own allowance (136). A pull request is marked a
+//! draft or ready for review through GraphQL, the one API that can. A check run, a comment or a pull request whose making's
 //! answer was not read is read back on GitHub before it is made again
 //! (134; rule core.29).
 
@@ -13,11 +14,36 @@ use serde_json::{json, Value};
 
 use super::app::{App, Bearer, Call, Repo};
 use super::forge::{
-    Check, Comment, Forge, Posted, Posting, Pull, Review, Standing, Status, SLUICE_CHECK,
+    Check, Comment, Forge, Listed, Posted, Posting, Pull, Request, Review, Standing, Status,
+    SLUICE_CHECK,
 };
 
 /// The most a page of a list holds.
 const PAGE: usize = 100;
+
+/// The query that reads a branch's open pull requests whole, fifty to a
+/// page: about three points of GraphQL's allowance a page (136).
+const REQUESTS: &str = "query($owner: String!, $name: String!, $base: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, baseRefName: $base, first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number id title body isDraft updatedAt headRefOid headRefName
+        author { __typename login } headRepository { nameWithOwner } baseRefName
+        latestOpinionatedReviews(first: 30) { nodes { author { login } state commit { oid } } }
+        timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], last: 10) {
+          nodes { ... on ReadyForReviewEvent { createdAt } }
+        }
+        commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+          __typename
+          ... on CheckRun { databaseId name status conclusion title summary text
+                            checkSuite { app { databaseId } } }
+          ... on StatusContext { context state }
+        } } } } } }
+      }
+    }
+  }
+}";
 
 impl App {
     fn repo_path(repo: &Repo, rest: &str) -> String {
@@ -32,13 +58,26 @@ impl App {
         path: &str,
         items: fn(&Value) -> Option<&Vec<Value>>,
     ) -> Result<Vec<Value>> {
+        Ok(self.pages(repo, path, items)?.0)
+    }
+
+    /// [`App::all`], and whether GitHub sent any page afresh rather than
+    /// answering that what the host keeps of it stands (136).
+    fn pages(
+        &self,
+        repo: &Repo,
+        path: &str,
+        items: fn(&Value) -> Option<&Vec<Value>>,
+    ) -> Result<(Vec<Value>, bool)> {
         let sep = if path.contains('?') { '&' } else { '?' };
         let mut out = Vec::new();
+        let mut changed = false;
         for page in 1.. {
-            let v = self.get(
+            let (v, fresh) = self.get_fresh(
                 &format!("{path}{sep}per_page={PAGE}&page={page}"),
                 Bearer::Repo(repo),
             )?;
+            changed |= fresh;
             let got = items(&v).cloned().unwrap_or_default();
             let n = got.len();
             out.extend(got);
@@ -46,7 +85,7 @@ impl App {
                 break;
             }
         }
-        Ok(out)
+        Ok((out, changed))
     }
 
     /// Make something on `repo` with a `POST` of `body` to `path`, read
@@ -125,7 +164,8 @@ fn run_standing(v: &Value) -> Standing {
 fn status_standing(state: &str) -> Standing {
     match state {
         "success" => Standing::Passed,
-        "pending" => Standing::Pending,
+        // `expected`, GraphQL's: a required status not yet reported.
+        "pending" | "expected" => Standing::Pending,
         _ => Standing::Failed,
     }
 }
@@ -205,6 +245,162 @@ fn graphql_reply(v: &Value) -> Result<()> {
     }
 }
 
+/// The body of the GraphQL request for the page of `base`'s open pull
+/// requests after the cursor `after`.
+fn requests_request(repo: &Repo, base: &str, after: Option<&str>) -> Value {
+    json!({
+        "query": REQUESTS,
+        "variables": { "owner": repo.owner, "name": repo.name, "base": base, "after": after },
+    })
+}
+
+/// A GraphQL enum's value as REST spells it: `IN_PROGRESS` as
+/// `in_progress`.
+fn lower(v: &Value) -> Value {
+    match v.as_str() {
+        Some(s) => json!(s.to_ascii_lowercase()),
+        None => Value::Null,
+    }
+}
+
+fn time(v: &Value) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(v.as_str()?)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+/// One pull request of the query's answer read whole, the check runs of
+/// the app `app` told apart as sluice's own.
+fn request(n: &Value, app: u64) -> Result<Request> {
+    let number = n["number"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("a pull request with no number"))?;
+    // GraphQL names a bot by its login alone, REST with `[bot]`.
+    let author = match (
+        n["author"]["__typename"].as_str(),
+        text(&n["author"]["login"]),
+    ) {
+        (Some("Bot"), login) => format!("{login}[bot]"),
+        (_, login) => login,
+    };
+    let pull = Pull {
+        number,
+        node_id: text(&n["id"]),
+        title: text(&n["title"]),
+        body: text(&n["body"]),
+        author,
+        draft: n["isDraft"].as_bool().unwrap_or(false),
+        open: true,
+        head: text(&n["headRefOid"]),
+        head_ref: text(&n["headRefName"]),
+        head_repo: text(&n["headRepository"]["nameWithOwner"]),
+        base: text(&n["baseRefName"]),
+        updated_at: time(&n["updatedAt"]),
+        merged: false,
+    };
+    let nodes = |v: &Value| v["nodes"].as_array().cloned().unwrap_or_default();
+    let reviews = nodes(&n["latestOpinionatedReviews"])
+        .iter()
+        .map(|r| Review {
+            user: text(&r["author"]["login"]),
+            state: text(&r["state"]),
+            commit: text(&r["commit"]["oid"]),
+        })
+        .collect();
+    let readied = nodes(&n["timelineItems"])
+        .iter()
+        .filter_map(|e| time(&e["createdAt"]))
+        .collect();
+    let contexts = nodes(&n["commits"])
+        .first()
+        .map(|c| nodes(&c["commit"]["statusCheckRollup"]["contexts"]))
+        .unwrap_or_default();
+    // Each check run as REST gives it, the latest of each name: the one
+    // GitHub made last, which has the greatest id.
+    let mut runs: Vec<Value> = Vec::new();
+    let mut statuses: Vec<Check> = Vec::new();
+    for c in &contexts {
+        match c["__typename"].as_str() {
+            Some("CheckRun") => {
+                let run = json!({
+                    "id": c["databaseId"],
+                    "name": c["name"],
+                    "status": lower(&c["status"]),
+                    "conclusion": lower(&c["conclusion"]),
+                    "output": { "title": c["title"], "summary": c["summary"], "text": c["text"] },
+                    "app": { "id": c["checkSuite"]["app"]["databaseId"] },
+                });
+                match runs
+                    .iter_mut()
+                    .find(|r| r["name"] == run["name"] && r["app"]["id"] == run["app"]["id"])
+                {
+                    Some(r) if r["id"].as_u64() < run["id"].as_u64() => *r = run,
+                    Some(_) => {}
+                    None => runs.push(run),
+                }
+            }
+            Some("StatusContext") => statuses.push(Check {
+                name: text(&c["context"]),
+                standing: status_standing(&c["state"].as_str().unwrap_or_default().to_lowercase()),
+            }),
+            _ => {}
+        }
+    }
+    let ours = |r: &&Value| r["app"]["id"].as_u64() == Some(app);
+    let posted = runs
+        .iter()
+        .filter(ours)
+        .filter(|r| {
+            let n = r["name"].as_str().unwrap_or_default();
+            n == SLUICE_CHECK || n.starts_with(&format!("{SLUICE_CHECK} / "))
+        })
+        .filter_map(posted)
+        .collect();
+    let mut checks: Vec<Check> = runs
+        .iter()
+        .filter(|r| !ours(r))
+        .map(|r| Check {
+            name: text(&r["name"]),
+            standing: run_standing(r),
+        })
+        .collect();
+    checks.extend(statuses);
+    Ok(Request {
+        pull,
+        reviews,
+        checks,
+        posted,
+        readied,
+    })
+}
+
+/// A page of the query's answer: its pull requests read whole, and the
+/// cursor of the next page when there is one. An answer with errors is
+/// an error, though GraphQL answers it 200.
+fn requests_page(v: &Value, app: u64) -> Result<(Vec<Request>, Option<String>)> {
+    graphql_reply(v)?;
+    let prs = &v["data"]["repository"]["pullRequests"];
+    if !prs.is_object() {
+        bail!("POST /graphql: GitHub answered no repository's pull requests");
+    }
+    let got = prs["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|n| request(n, app))
+        .collect::<Result<Vec<_>>>()?;
+    let next = match prs["pageInfo"]["hasNextPage"].as_bool() {
+        Some(true) => Some(
+            prs["pageInfo"]["endCursor"]
+                .as_str()
+                .ok_or_else(|| anyhow!("POST /graphql: a next page with no cursor"))?
+                .to_string(),
+        ),
+        _ => None,
+    };
+    Ok((got, next))
+}
+
 fn posted(v: &Value) -> Option<Posted> {
     let status = match (v["status"].as_str(), v["conclusion"].as_str()) {
         (Some("completed"), Some("success")) => Status::Success,
@@ -240,11 +436,35 @@ impl Forge for App {
     }
 
     fn pulls(&self, repo: &Repo, base: &str) -> Result<Vec<Pull>> {
+        Ok(self.listed(repo, base)?.pulls)
+    }
+
+    fn listed(&self, repo: &Repo, base: &str) -> Result<Listed> {
         let path = Self::repo_path(repo, &format!("/pulls?state=open&base={base}"));
-        self.all(repo, &path, Value::as_array)?
-            .iter()
-            .map(pull)
-            .collect()
+        let (items, changed) = self.pages(repo, &path, Value::as_array)?;
+        Ok(Listed {
+            pulls: items.iter().map(pull).collect::<Result<_>>()?,
+            changed,
+        })
+    }
+
+    fn requests(&self, repo: &Repo, base: &str) -> Result<Vec<Request>> {
+        let mut out = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let v = self.post_api(
+                Call::Read,
+                "/graphql",
+                Bearer::Repo(repo),
+                &requests_request(repo, base, after.as_deref()).to_string(),
+            )?;
+            let (got, next) = requests_page(&v, self.id())?;
+            out.extend(got);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(out),
+            }
+        }
     }
 
     fn pull(&self, repo: &Repo, number: u64) -> Result<Option<Pull>> {
@@ -565,6 +785,268 @@ mod tests {
             edit_request(Some("Batch review cards"), "body"),
             json!({ "body": "body", "title": "Batch review cards" })
         );
+    }
+
+    /// A recorded answer of GitHub's to the query, two pull requests, the
+    /// first of a bot's, with a next page.
+    fn recorded() -> Value {
+        serde_json::from_str(
+            r#"{ "data": { "repository": { "pullRequests": {
+            "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjI=" },
+            "nodes": [
+                {
+                    "number": 7, "id": "PR_kw7", "title": "T", "body": "B", "isDraft": false,
+                    "updatedAt": "2026-10-29T10:00:00Z", "headRefOid": "aaa",
+                    "headRefName": "unit/a", "author": { "__typename": "Bot", "login": "sluice" },
+                    "headRepository": { "nameWithOwner": "o/r" }, "baseRefName": "main",
+                    "latestOpinionatedReviews": { "nodes": [
+                        { "author": { "login": "ann" }, "state": "APPROVED", "commit": { "oid": "old" } },
+                        { "author": { "login": "bob" }, "state": "APPROVED", "commit": { "oid": "aaa" } }
+                    ] },
+                    "timelineItems": { "nodes": [ { "createdAt": "2026-10-29T09:00:00Z" }, {} ] },
+                    "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "contexts": { "nodes": [
+                        { "__typename": "CheckRun", "databaseId": 11, "name": "qa/approved",
+                          "status": "COMPLETED", "conclusion": "FAILURE", "title": null,
+                          "summary": null, "text": null, "checkSuite": { "app": { "databaseId": 1 } } },
+                        { "__typename": "CheckRun", "databaseId": 12, "name": "qa/approved",
+                          "status": "COMPLETED", "conclusion": "SUCCESS", "title": null,
+                          "summary": null, "text": null, "checkSuite": { "app": { "databaseId": 1 } } },
+                        { "__typename": "CheckRun", "databaseId": 13, "name": "ci",
+                          "status": "IN_PROGRESS", "conclusion": null, "title": null,
+                          "summary": null, "text": null, "checkSuite": { "app": { "databaseId": 2 } } },
+                        { "__typename": "CheckRun", "databaseId": 21, "name": "sluice",
+                          "status": "QUEUED", "conclusion": null, "title": "waiting",
+                          "summary": "waiting", "text": null,
+                          "checkSuite": { "app": { "databaseId": 4242 } } },
+                        { "__typename": "CheckRun", "databaseId": 22, "name": "sluice / a:test",
+                          "status": "COMPLETED", "conclusion": "FAILURE", "title": "failed",
+                          "summary": "failed: a:test", "text": "| a | b |",
+                          "checkSuite": { "app": { "databaseId": 4242 } } },
+                        { "__typename": "StatusContext", "context": "legacy", "state": "EXPECTED" }
+                    ] } } } } ] }
+                },
+                {
+                    "number": 8, "id": "PR_kw8", "title": "U", "body": "", "isDraft": true,
+                    "updatedAt": "2026-10-29T10:05:00Z", "headRefOid": "bbb",
+                    "headRefName": "unit/b", "author": { "__typename": "User", "login": "cat" },
+                    "headRepository": null, "baseRefName": "main",
+                    "latestOpinionatedReviews": { "nodes": [] },
+                    "timelineItems": { "nodes": [] },
+                    "commits": { "nodes": [ { "commit": { "statusCheckRollup": null } } ] }
+                }
+            ]
+        } } } }"#,
+        )
+        .unwrap()
+    }
+
+    /// 136: the query's answer read as the reads per request read: a
+    /// bot's login as REST gives it, the latest check run of each name
+    /// other systems posted, sluice's own told apart by the app's id, a
+    /// status's standing, the ready marks, and the reviews counted by
+    /// `approvals` as REST's would be.
+    #[test]
+    fn a_recorded_answer_reads_as_requests() {
+        let (rs, next) = requests_page(&recorded(), 4242).unwrap();
+        assert_eq!(next.as_deref(), Some("Y3Vyc29yOjI="));
+        assert_eq!(rs.len(), 2);
+        let a = &rs[0];
+        assert_eq!(
+            (
+                a.pull.number,
+                a.pull.node_id.as_str(),
+                a.pull.author.as_str()
+            ),
+            (7, "PR_kw7", "sluice[bot]")
+        );
+        assert!(a.pull.open && !a.pull.draft && !a.pull.merged);
+        assert_eq!(
+            (
+                a.pull.head.as_str(),
+                a.pull.head_ref.as_str(),
+                a.pull.head_repo.as_str()
+            ),
+            ("aaa", "unit/a", "o/r")
+        );
+        assert_eq!(a.pull.updated_at, time(&json!("2026-10-29T10:00:00Z")));
+        // REST lists every review; the query each reviewer's latest that
+        // decides anything, which counts the same.
+        let rest = [
+            Review {
+                user: "ann".into(),
+                state: "APPROVED".into(),
+                commit: "old".into(),
+            },
+            Review {
+                user: "bob".into(),
+                state: "COMMENTED".into(),
+                commit: "aaa".into(),
+            },
+            Review {
+                user: "bob".into(),
+                state: "APPROVED".into(),
+                commit: "aaa".into(),
+            },
+        ];
+        assert_eq!(super::super::forge::approvals(&a.reviews, "aaa"), 1);
+        assert_eq!(
+            super::super::forge::approvals(&a.reviews, "aaa"),
+            super::super::forge::approvals(&rest, "aaa")
+        );
+        assert_eq!(
+            a.checks,
+            [
+                Check {
+                    name: "qa/approved".into(),
+                    standing: Standing::Passed
+                },
+                Check {
+                    name: "ci".into(),
+                    standing: Standing::Pending
+                },
+                Check {
+                    name: "legacy".into(),
+                    standing: Standing::Pending
+                },
+            ]
+        );
+        assert_eq!(a.posted.len(), 2);
+        assert_eq!(
+            (a.posted[0].id, a.posted[0].name.as_str()),
+            (21, SLUICE_CHECK)
+        );
+        assert_eq!(
+            a.posted[0].posting,
+            Posting {
+                status: Status::Queued,
+                title: "waiting".into(),
+                summary: String::new(),
+                text: None,
+            }
+        );
+        assert_eq!(a.posted[1].posting.status, Status::Failure);
+        assert_eq!(a.posted[1].posting.text.as_deref(), Some("| a | b |"));
+        assert_eq!(a.readied, [time(&json!("2026-10-29T09:00:00Z")).unwrap()]);
+        let b = &rs[1];
+        assert_eq!(
+            (b.pull.author.as_str(), b.pull.head_repo.as_str()),
+            ("cat", "")
+        );
+        assert!(b.pull.draft);
+        assert!(b.reviews.is_empty() && b.checks.is_empty() && b.posted.is_empty());
+
+        let mut last = recorded();
+        last["data"]["repository"]["pullRequests"]["pageInfo"] =
+            json!({ "hasNextPage": false, "endCursor": null });
+        assert_eq!(requests_page(&last, 4242).unwrap().1, None);
+        // Asked again for the next page by its cursor.
+        let asked = requests_request(
+            &Repo::from_url("https://github.com/o/r").unwrap(),
+            "main",
+            Some("Y3Vyc29yOjI="),
+        );
+        assert_eq!(
+            asked["variables"],
+            json!({ "owner": "o", "name": "r", "base": "main", "after": "Y3Vyc29yOjI=" })
+        );
+        assert!(asked["query"]
+            .as_str()
+            .unwrap()
+            .contains("latestOpinionatedReviews"));
+    }
+
+    /// A query GitHub refuses, other than for its allowance, is an error
+    /// in GitHub's words; one that names no repository is one too.
+    #[test]
+    fn a_refused_query_is_an_error() {
+        let refused = json!({ "data": null, "errors": [
+            { "type": "FORBIDDEN", "message": "Resource not accessible by integration" },
+        ] });
+        let e = requests_page(&refused, 4242).unwrap_err().to_string();
+        assert!(e.contains("Resource not accessible by integration"), "{e}");
+        let e = requests_page(&json!({ "data": { "repository": null } }), 4242)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no repository's pull requests"), "{e}");
+    }
+
+    /// 134 as amended 2026-10-28: GitHub's `RATE_LIMITED` answer to the
+    /// query is a `Limited` failure, until the reset GitHub named, and no
+    /// second query is made.
+    #[test]
+    fn a_rate_limited_answer_is_limited() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        const KEY: &[u8] = include_bytes!("../../../tests/profiles/forge/test-key.pem");
+        let reset = Utc::now() + chrono::TimeDelta::minutes(20);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = format!("http://{}", listener.local_addr().unwrap());
+        let queries = Arc::new(AtomicUsize::new(0));
+        let counted = queries.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut r = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                let path = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                let mut len = 0;
+                loop {
+                    let mut h = String::new();
+                    r.read_line(&mut h).unwrap();
+                    if h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap();
+                        }
+                    }
+                }
+                let mut body = vec![0; len];
+                r.read_exact(&mut body).unwrap();
+                let mut headers = String::new();
+                let answer = match path.as_str() {
+                    "/repos/o/r/installation" => json!({ "id": 7, "permissions": {} }),
+                    "/app/installations/7/access_tokens" => json!({
+                        "token": "ghs_t", "expires_at": (Utc::now() + chrono::TimeDelta::hours(1)).to_rfc3339(),
+                    }),
+                    "/graphql" => {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        headers = format!(
+                            "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {}\r\nx-ratelimit-resource: graphql\r\n",
+                            reset.timestamp()
+                        );
+                        json!({ "data": null, "errors": [{
+                            "type": "RATE_LIMITED",
+                            "message": "API rate limit exceeded for installation ID 7.",
+                        }] })
+                    }
+                    _ => json!({ "message": "Not Found" }),
+                };
+                let body = answer.to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let policy = std::rc::Rc::new(crate::retry::Policy::round());
+        let app = App::new(4242, KEY, &api, Box::new(Utc::now), policy).unwrap();
+        let repo = Repo::from_url("https://github.com/o/r").unwrap();
+        let e = app.requests(&repo, "main").unwrap_err();
+        let l = crate::retry::limited(&e).unwrap_or_else(|| panic!("not limited: {e:#}"));
+        assert_eq!(l.until.timestamp(), reset.timestamp());
+        assert!(l.words.contains("API rate limit exceeded"), "{}", l.words);
+        assert_eq!(queries.load(Ordering::SeqCst), 1);
     }
 
     #[test]

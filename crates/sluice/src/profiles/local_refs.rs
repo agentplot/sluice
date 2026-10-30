@@ -294,6 +294,24 @@ impl LocalRefs {
         self.transact(&full_name(branch), change)
     }
 
+    /// Set the ref `name` to `to`, whatever it holds: a copy of a remote's
+    /// ref sluice just pushed, so the next read finds it with no fetch.
+    pub fn write_ref(&self, name: &str, to: &Rev) -> Result<()> {
+        let change = Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: "sluice: pushed".into(),
+            },
+            expected: PreviousValue::Any,
+            new: Target::Object(self.id(to)?),
+        };
+        match self.transact(name, change)? {
+            Moved::Moved => Ok(()),
+            Moved::Elsewhere(_) => bail!("{name} could not be written"),
+        }
+    }
+
     /// Remove the ref `name`, whatever it holds: a pushed branch's local
     /// copies once the remote's is gone. Removing one that is absent does
     /// nothing.

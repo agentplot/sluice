@@ -145,6 +145,10 @@ pub enum Requester {
     Session(String),
     Planner,
     Operator,
+    /// A host's intake handing its own pull requests' submissions over to
+    /// the host that takes the branch's pull requests in, in these words
+    /// (137).
+    Intake(String),
 }
 
 impl Requester {
@@ -153,13 +157,14 @@ impl Requester {
             Requester::Session(a) => a.clone(),
             Requester::Planner => "planner".into(),
             Requester::Operator => "operator".into(),
+            Requester::Intake(words) => words.clone(),
         }
     }
 
     fn may_change(&self, sub: &Submission) -> bool {
         match self {
             Requester::Session(a) => *a == sub.from.agent,
-            Requester::Planner | Requester::Operator => true,
+            Requester::Planner | Requester::Operator | Requester::Intake(_) => true,
         }
     }
 }

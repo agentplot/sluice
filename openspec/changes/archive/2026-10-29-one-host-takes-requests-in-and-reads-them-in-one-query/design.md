@@ -57,8 +57,9 @@ in this pass:
   `{"host":"<peer name>","holder":"driver"|"wait","sluice":"<version>"}`,
   a new commit at each renewal so its id moves. `PushedRefs` gains
   `intake_mark(branch) -> Option<(Rev, Mark)>`, read from the ref the
-  branch's fetch now also brings (`+refs/sluice/intake/<branch>:refs/sluice/<remote>/intake/<branch>`,
-  one fetch, no extra call), and `put_intake_mark(branch, from:
+  branch's fetch now also brings (`+refs/sluice/intake/<branch>*:refs/sluice-fetched/<remote>/intake/<branch>*`
+  with `--prune`, a pattern so that a remote with no mark answers the
+  same fetch, one fetch, no extra call), and `put_intake_mark(branch, from:
   Option<&Rev>, mark)` and `drop_intake_mark(branch, from: &Rev)`, each
   a leased push through `PushedRefs::push` under the retry policy
   (core.5, core.29).
@@ -68,20 +69,32 @@ in this pass:
 
   | The mark | This host | It |
   |---|---|---|
-  | absent | any | takes it (leased on absence) |
-  | its own | any | renews it when a third of `[peers] lease` has passed since `renewed` |
+  | absent | a driver | pushes it (leased on absence) and takes the requests in |
+  | absent | a wait, its host running no driver | pushes it (leased on absence) and takes the requests in |
+  | absent | a step | takes the requests in and pushes nothing |
+  | its own | a driver or a wait | renews it when a third of `[peers] lease` has passed since `renewed` |
+  | its own host's | a step | takes the requests in and pushes nothing |
   | a wait's | a driver | takes it at once |
   | another's, id unchanged for `[peers] lease` since first seen | any | takes it |
   | another's | otherwise | takes nothing in |
 
-  **A branch no other host has touched gets no mark** (the user,
-  2026-10-28). A host that finds the mark absent and no sign that
-  another host has ever taken part in the branch takes the requests in
-  without pushing one; it pushes the mark only once another host has
-  shown itself. What counts as another host having touched the branch,
-  read from the remote alone and never by a fetch of its own (core.27),
-  is settled by this change's first task, which amends clause 137 and
-  record 0071 before anything is built.
+  **A driver shows itself; a branch reached by waits and steps keeps no
+  mark** (the user, 2026-10-29). The remote is all the hosts share, so
+  the mark, read from the remote alone (core.27), is the one sign that
+  a host takes the branch's requests in. A driver pushes it when it
+  starts, leased on its absence, so that a second host's driver finds
+  it and takes nothing in; it renews it when a third of the lease has
+  passed, about every hundred seconds at the default lease, never at
+  each tick. A wait on a host where no driver lives may be beside
+  another host's driver it cannot see, so where it finds no mark it
+  shows itself the same way, holds the mark as a wait and takes the
+  requests in; a driver reads that mark in the fetch of the branch its
+  next round makes and takes it at once, by the table's sixth row. A
+  wait beside its host's driver takes nothing in (the bolt) and so
+  never pushes the mark. A step pushes nothing: it takes the requests
+  in where the mark is its host's or none stands. A wait that holds the
+  mark and ends drops it, so a branch one host reaches by waits and
+  steps alone keeps no mark between them.
 
   A push refused at the lease is another host's take: this host takes
   nothing in this pass and reads the mark again next discovery. A
@@ -92,7 +105,7 @@ in this pass:
   Ctrl-C; a failed drop leaves it to lapse.
 
 **The hand-over.** On a branch whose records are each host's own, a
-pass on a host that does not hold the mark withdraws every entry of its
+pass on a host that finds the mark another host's withdraws every entry of its
 own records submitted from a `pull/<n>` place and neither out nor
 landing (122), with the event naming the host that holds the mark
 (`withdrawn: <host> takes main's pull requests in`). It posts nothing
@@ -189,16 +202,20 @@ question.
   window is one pass, the two queues are each host's own, and a landing
   is a leased push, so nothing lands twice; the hand-over withdraws the
   wait's entry at its next pass.
-- [A branch with no mark is taken in by two hosts until one shows
-  itself] → The user's decision: a repository one host uses pays no
-  push; the first sign of another host brings the mark, and the
-  hand-over settles any request both took in.
+- [A step on one host takes a branch with no mark in while another
+  host's wait or driver pushes it] → For one pass at most: the step's
+  next pass finds the mark another's, and the hand-over settles any
+  request both took in.
+- [A driver on a repository only it reaches pays a push every third of
+  the lease] → The user's decision, so that two drivers on one branch
+  see each other; it is never per tick, and a host that reaches the
+  branch by waits and steps alone pays nothing between them.
 
 ## Migration Plan
 
-The intake mark appears on the remote of a branch that takes requests,
-keeps its records in each host's files and has been touched by more
-than one host, at its first discovery after this sluice is installed; a
+The intake mark appears on the remote of a branch that takes requests
+and keeps its records in each host's files once a driver starts there
+or a wait on a host where no driver lives takes its requests in; a
 host on an older sluice ignores it and takes requests in as today until
 it is upgraded, which the hand-over then settles. Rolling back leaves
 the mark unread and harmless; `git push origin

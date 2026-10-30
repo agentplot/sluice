@@ -1564,3 +1564,133 @@ fn no_token_is_kept_on_the_host() {
     }
     assert!(files > 0, "answers were kept");
 }
+
+// 136; rule core.32: one query reads a branch's open pull requests whole.
+
+/// forge-reads, "Three pull requests, one query" and "Reviews counted as
+/// before", as the app asks: one GraphQL query answers what the reads per
+/// pull request do, each request's reviews counted by `approvals` as its
+/// REST reviews are, other systems' checks and sluice's own check runs on
+/// its head told apart, and its ready marks; and nothing by REST.
+#[test]
+fn one_query_reads_the_open_pull_requests_whole() {
+    use sluice::profiles::github::forge::{approvals, Forge as _, Standing};
+    let (_dir, gh, app, a) = on_github("query-whole", policy());
+    let r = repo();
+    let f = &gh.forge;
+    let b = f
+        .open_by("bob", "main", "unit/b", "bbb", true, None)
+        .unwrap();
+    let c = f
+        .open_by("cat", "main", "unit/c", "ccc", false, Some("cat/r"))
+        .unwrap();
+    f.open_by("dan", "bolt/x", "unit/d", "ddd", false, None)
+        .unwrap();
+    f.set_draft(b, false).unwrap();
+    f.review(a, "ann", "APPROVED", "old").unwrap();
+    f.review(a, "bob", "APPROVED", "aaa").unwrap();
+    f.review(a, "bob", "COMMENTED", "aaa").unwrap();
+    f.check("aaa", "qa/approved", Standing::Passed).unwrap();
+    f.check("aaa", "ci", Standing::Pending).unwrap();
+    app.post(&r, "aaa", None, &waiting()).unwrap();
+    let before = gh.fake.requests().len();
+
+    let whole = app.requests(&r, "main").unwrap();
+    let asked: Vec<String> = gh.fake.requests()[before..]
+        .iter()
+        .map(|q| format!("{} {}", q.method, q.path))
+        .collect();
+    assert_eq!(asked, ["POST /graphql"], "one query, nothing by REST");
+    assert_eq!(gh.queries(), 1);
+    assert_eq!(
+        whole.iter().map(|q| q.pull.number).collect::<Vec<_>>(),
+        [a, b, c]
+    );
+    let pulls = app.pulls(&r, "main").unwrap();
+    for (q, p) in whole.iter().zip(&pulls) {
+        assert_eq!(
+            &q.pull,
+            &sluice::profiles::github::forge::Pull {
+                merged: false,
+                ..p.clone()
+            }
+        );
+    }
+    let qa = &whole[0];
+    assert_eq!(
+        approvals(&qa.reviews, "aaa"),
+        approvals(&app.reviews(&r, a).unwrap(), "aaa")
+    );
+    assert_eq!(approvals(&qa.reviews, "aaa"), 1);
+    let mut checks = qa.checks.clone();
+    let mut rest = app.checks(&r, "aaa").unwrap();
+    checks.sort_by(|x, y| x.name.cmp(&y.name));
+    rest.sort_by(|x, y| x.name.cmp(&y.name));
+    assert_eq!(checks, rest);
+    assert_eq!(qa.posted, app.posted_all(&r, "aaa").unwrap());
+    assert_eq!(whole[1].readied, app.readied(&r, b).unwrap());
+    assert_eq!(whole[1].readied.len(), 1);
+    assert!(!whole[2].pull.from_repo(&r));
+}
+
+/// More open pull requests than a page holds are read fifty at a time,
+/// each page after the last one's cursor.
+#[test]
+fn the_query_reads_fifty_to_a_page() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, gh, app, _) = on_github("query-pages", policy());
+    for i in 0..50 {
+        gh.forge
+            .open_by("ann", "main", &format!("unit/p{i}"), "ppp", false, None)
+            .unwrap();
+    }
+    let whole = app.requests(&repo(), "main").unwrap();
+    assert_eq!(whole.len(), 51);
+    assert_eq!(gh.queries(), 2);
+    let afters: Vec<serde_json::Value> = gh
+        .fake
+        .requests()
+        .iter()
+        .filter(|q| q.path == "/graphql")
+        .map(|q| {
+            serde_json::from_str::<serde_json::Value>(&q.body).unwrap()["variables"]["after"]
+                .clone()
+        })
+        .collect();
+    assert_eq!(afters, [serde_json::Value::Null, json!("50")]);
+}
+
+/// forge-reads, "The query refused", as the app asks: GitHub's error
+/// that is not `RATE_LIMITED` fails the query in GitHub's words, and is
+/// no spent allowance.
+#[test]
+fn a_refused_query_fails_in_githubs_words() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, gh, app, _) = on_github("query-refused", policy());
+    gh.refuse_query(true);
+    let e = app.requests(&repo(), "main").unwrap_err();
+    assert!(sluice::retry::limited(&e).is_none(), "{e:#}");
+    assert!(
+        format!("{e:#}").contains("Resource not accessible by integration"),
+        "{e:#}"
+    );
+}
+
+/// 136: the list says whether it changed since the host last read it:
+/// not on GitHub's 304 for what the host keeps, and so on a 200.
+#[test]
+fn the_list_says_whether_it_changed() {
+    use sluice::profiles::github::forge::Forge as _;
+    let (_dir, state, gh, _) = kept_github("list-changed");
+    let app = kept_app(&gh, state.path(), policy());
+    assert!(app.listed(&repo(), "main").unwrap().changed);
+    let again = app.listed(&repo(), "main").unwrap();
+    assert!(!again.changed);
+    assert_eq!(again.pulls.len(), 1);
+    gh.forge
+        .open_by("bob", "main", "unit/b", "bbb", false, None)
+        .unwrap();
+    let moved = app.listed(&repo(), "main").unwrap();
+    assert!(moved.changed);
+    assert_eq!(moved.pulls.len(), 2);
+}

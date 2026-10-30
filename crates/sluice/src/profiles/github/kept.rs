@@ -20,6 +20,12 @@
 //! - `requests/<owner>/<repo>/<base>.moved`: touched by a submit on the
 //!   host that opened, updated or marked ready a request into the branch;
 //!   newer than the last asking, it asks at once.
+//! - `intake/<owner>/<repo>/<base>.json`: the branch's intake mark as
+//!   this host last saw it on the remote ([`Observed`]): its commit, when
+//!   this host first saw that commit there, and when this host last
+//!   pushed it, so that a host takes another's mark only once it stood
+//!   unchanged for the lease by its own observation, and renews its own
+//!   only when a third of the lease has passed (73, 137).
 //!
 //! Each file is written whole to a file of its own and renamed over the
 //! last, so a reader finds a whole one or the one before; a file that does
@@ -115,6 +121,21 @@ pub struct Reading {
     /// The notifications a comment on it delivered.
     #[serde(default)]
     pub said: Vec<String>,
+    /// Whether this pass's one query read it whole, so that what it lacks
+    /// stands for the pass, whatever it is; never kept.
+    #[serde(skip)]
+    pub whole: bool,
+}
+
+/// 137: a branch's intake mark as this host last saw it: its commit,
+/// when this host first saw that commit, and when this host last pushed
+/// it, `None` for another's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Observed {
+    pub seen: String,
+    pub since: DateTime<Utc>,
+    #[serde(default)]
+    pub renewed: Option<DateTime<Utc>>,
 }
 
 /// The host's `forge/` directory.
@@ -259,6 +280,35 @@ impl Kept {
             return false;
         };
         asked.is_none_or(|asked| DateTime::<Utc>::from(at) > asked)
+    }
+
+    fn intake_path(&self, repo: &Repo, base: &str) -> PathBuf {
+        self.dir
+            .join("intake")
+            .join(&repo.owner)
+            .join(&repo.name)
+            .join(format!("{}.json", crate::runs::flat_name(base)))
+    }
+
+    /// 137: `repo`'s intake mark of `base` as this host last saw it;
+    /// `None` when it saw none, or the file is torn.
+    pub fn observed(&self, repo: &Repo, base: &str) -> Option<Observed> {
+        read(&self.intake_path(repo, base))
+    }
+
+    /// 137: keep `seen` as `repo`'s intake mark of `base` as this host
+    /// sees it, or forget it when `None`.
+    pub fn observe(&self, repo: &Repo, base: &str, seen: Option<&Observed>) -> Result<()> {
+        let path = self.intake_path(repo, base);
+        match seen {
+            Some(seen) => write(&path, seen),
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(e).with_context(|| format!("removing {}", path.display()))
+                }
+                _ => Ok(()),
+            },
+        }
     }
 
     /// The pause kept for `allowance`, standing or past; `None` when none
@@ -436,6 +486,29 @@ mod tests {
         let after = Utc::now() + TimeDelta::seconds(5);
         assert!(!kept.moved_since(&repo, "main", Some(after)));
         assert!(!kept.moved_since(&repo, "bolt/x", Some(before)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 137: the intake mark as this host saw it is kept, read back, and
+    /// forgotten, each branch apart.
+    #[test]
+    fn the_intake_mark_as_seen_is_kept_and_forgotten() {
+        let dir = scratch("intake");
+        let kept = Kept::new(&dir);
+        let repo = Repo::from_url("https://github.com/o/r.git").unwrap();
+        assert_eq!(kept.observed(&repo, "main"), None);
+        let seen = Observed {
+            seen: "abc".into(),
+            since: Utc::now(),
+            renewed: None,
+        };
+        kept.observe(&repo, "bolt/x", Some(&seen)).unwrap();
+        assert_eq!(kept.observed(&repo, "bolt/x"), Some(seen));
+        assert!(dir.join("forge/intake/o/r/bolt%2Fx.json").exists());
+        assert_eq!(kept.observed(&repo, "main"), None);
+        kept.observe(&repo, "bolt/x", None).unwrap();
+        kept.observe(&repo, "bolt/x", None).unwrap();
+        assert_eq!(kept.observed(&repo, "bolt/x"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
