@@ -11,6 +11,8 @@ decision-makers:
 
 Status: accepted by the user on 2026-10-27, on their card.
 
+Amended 2026-10-30: no readiness probe at all, the after-run probe included. The amendment is accepted on the user's own words, not proposed: their words of 2026-10-27 on this record's card ("this just seems to smell. a test could just make itself ready too") rejected probes as such, as they said on 2026-10-30 on record 0073's card ("This is the third time you've come back talking to me about probes but we rejected the idea of probes outright so I don't know why we're talking about probes") and on the planner's card the same day ("There is no fucking ready command. This should have been removed already. I don't understand what the fuck you're talking about. Why aren't you paying attention?"); this record's keeping of an after-run probe was madswan-design's misreading of an accepted decision, corrected here, and no card is asked for the correction. The words of what replaces the probe's attribution are madswan-design's, drawn from clauses 114, 116 and 139 as they stand.
+
 Deciders: the user, on the record's first card (2026-10-27): "this just seems to smell. a test could just make itself ready too", which settles that a check readies itself and no probe stands before a run; madswan-design, on wldn-design's reading of 2026-10-27 relayed by swancloud-design (afterthought/crew-state, swancloud/main, signal 2026-10-27-swancloud-operator-dcf318e8/01), for the shape; the user's yes is asked on the record's card.
 Sources: statement clauses 66, 84, 114, 115; `crates/sluice/src/profiles/checks.rs` on main at 2026-10-27 (`READY_LIMIT`, sixty seconds; the probe run before the plan, the run refused when it fails or runs out of time; the probe run again after a failed run for 114); chuck-herdr-alpha, 2026-10-27 22:15 to 22:38Z: main's combination of 847, 848 and 850 refused three times, "the host is not ready to run the checks: [tests] ready `bun run infra/ministack/host-ready.ts`" past 60 s, under a load of 47 to 152 on 16 cores, the same probe answering in 3 to 5 s by hand in a warm checkout.
 
@@ -28,7 +30,11 @@ The first draft of this record kept the pre-run probe and gave it the policy's t
 
 ## Decision outcome
 
-Option 3.
+Option 3, as amended on 2026-10-30 on the user's words: no probe at all.
+
+**No readiness command, before a run or after one.** The user's words on 2026-10-27 rejected probes as such, not the pre-run one alone, and this record kept an after-run probe for attribution they had not asked for. It goes: `[tests] ready` leaves the policy, sluice asks the host nothing before or after a run, and a host's fault is told from the code's only by what is observed and never inferred (139): the executor's own report of what it refused, and the check's own exit that says it could not run (114). A fail the host caused that neither reports leaves the key by the operator's hand (116, S44), as any wrongly recorded fail does. A probe's answer, in whichever tree it ran, is read as the host's or the candidate's only by inference, which is what wldn met on 2026-10-30 (record 0073, rejected) and what the user's words rule out.
+
+The text below stands as the record of 2026-10-27, superseded where it keeps the after-run probe.
 
 **A check readies itself.** What a check needs, a container engine answering, a stand-in up, a stack listening, the check brings up and waits for, as its test harness does wherever it runs; a wait that outlasts the check's limit fails the check as any slow check fails (66). sluice adds no question of its own in front of it, so no run is refused for a host slow to answer a probe, and there is no budget and no retry to tune.
 
