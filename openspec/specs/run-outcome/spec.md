@@ -2,18 +2,23 @@
 
 ## Purpose
 What a run records when it did not judge its test: a test that could
-not start, one that says it could not run here, or a host that stopped
-being ready. Such a test has no result, so nothing is recorded under its
-key, and a key reads only what tests observed.
+not start, one that says it could not run here, or one that did not pass
+in a run after which the container engine its policy asks for no longer
+answers (the `host-requirements` spec). Such a test has no result, so
+nothing is recorded under its key, and a key reads only what tests
+observed.
 
 ## Requirements
 
 ### Requirement: A test that could not run records no result
 
-When a test's program could not be started, or when it exits with a code
-that the branch's `[tests] not_run` lists, sluice SHALL record no result
-for it under its key. It SHALL list the test as not run, with the reason,
-and read every other test of the run as before.
+When a test's program could not be started, when it exits with a code
+that the branch's `[tests] not_run` lists, or when it did not pass in a
+run after which the host finds that the container engine the branch's
+policy asks for no longer answers (114; the `host-requirements` spec),
+sluice SHALL record no result for it under its key. It SHALL list the
+test as not run, with the reason, and read every other test of the run
+as before.
 
 #### Scenario: An exit the policy names
 
@@ -31,6 +36,16 @@ and read every other test of the run as before.
 - **WHEN** a run's program cannot be started on the host
 - **THEN** every test of the run is listed as not run with the error,
   and none has a result
+
+#### Scenario: An engine gone after the run
+
+- **WHEN** `main`'s policy says `docker = true`, a test passes and
+  another fails, and the container engine no longer answers when the
+  host looks after the run
+- **THEN** `results.jsonl` gains the pass and no line for the failed
+  test, and the run lists it as not run, saying the container engine no
+  longer answers; when the host looks, and where, is the
+  `host-requirements` spec's
 
 ### Requirement: A combination whose tests could not run is tested again
 
