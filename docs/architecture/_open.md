@@ -14,9 +14,10 @@ when its code lands, and the file is deleted when it is empty.
 
 ## Proposed
 
-- **core.36 and record 0073** (clause 84 as amended 2026-10-30): today
-  `ready_after` runs the probe in the run's place at the candidate's
-  tree, so a candidate that removes what the probe runs is read as the
-  host not ready. Proposed 2026-10-30, on the user's card; a unit on
-  their yes brings the place to the branch's revision before the
-  probe.
+- **core.37 and record 0066 as amended** (clauses 84 and 114 as amended
+  2026-10-30): today `[tests] ready` is read from the policy and
+  `ready_after` runs it after a run that did not pass, making the run
+  one with no outcome when it fails. Proposed 2026-10-30, on the user's
+  card; a unit on their yes takes the key, `READY_LIMIT` and the
+  after-run ask out, so a run has no outcome only by 114's three
+  causes.
