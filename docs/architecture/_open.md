@@ -27,3 +27,13 @@ when its code lands, and the file is deleted when it is empty.
   another, and a check that failed because the sandbox refused it
   something is recorded as a fail. Built by the change
   `a-checks-key-holds-its-executor`.
+
+## Proposed
+
+- **core.39 and record 0075** (clauses 8, 10, 23, 24 and 140, added or
+  amended 2026-10-30): today a submission whose work no required check
+  reads lands with nothing run but joins the chain, waiting for the
+  candidates under test ahead of it. Proposed 2026-10-30, on the
+  user's card; a unit on their yes lands such work beside the chain at
+  the first round that reads it, and lands a formed candidate from the
+  revision it made, carrying its work.
