@@ -35,7 +35,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use reader::{Driver, Drives, Reader};
 use sluice_core::overview::{in_queue, BranchView, Held};
-use sluice_core::records::{BranchHold, CopyBehind, Event, FailedTask, State, Submission};
+use sluice_core::records::{Beside, BranchHold, CopyBehind, Event, FailedTask, State, Submission};
 use sluice_core::{
     Accepted, AmendRefusal, Clock, CopyDiffers, Forecast, Forecasted, GroupRequest, Lookup,
     Pending, Requester, Seams, Serves, Sluice, Status, Step, SubmitRefusal, SubmitRequest, Unread,
@@ -2962,7 +2962,11 @@ fn report(
     match sub.state {
         State::Landed => {
             let to = sub.landed_as.clone().expect("a landed submission");
-            writeln!(out, "passed · landed as {}", to.short())?;
+            match sub.beside {
+                // 140: nothing was run, so nothing passed.
+                Some(Beside::Landed) => writeln!(out, "{}", words::landed_beside(&to))?,
+                _ => writeln!(out, "passed · landed as {}", to.short())?,
+            }
         }
         State::Failed => {
             let t = sub.tested.clone().expect("a blamed submission was tested");
@@ -4062,6 +4066,28 @@ fn failed_name(f: &sluice_core::records::FailedTask) -> String {
 /// What a row says of `s` after its columns, naming the submissions it
 /// names as `names` and `said` do.
 fn detail(branch: &str, s: &Submission, names: Option<&Names>, said: &mut BTreeSet<u64>) -> String {
+    let shown = detail_of_state(branch, s, names, said);
+    // 140: what work no check reads at the branch's revision waits behind,
+    // until it lands.
+    match &s.beside {
+        Some(Beside::Behind { behind, why }) if !s.state.is_out() => {
+            let waits = words::waits_beside(*behind, *why);
+            match shown.is_empty() {
+                true => waits,
+                false => format!("{shown} · {waits}"),
+            }
+        }
+        _ => shown,
+    }
+}
+
+/// What `detail` says of a submission in its state alone.
+fn detail_of_state(
+    branch: &str,
+    s: &Submission,
+    names: Option<&Names>,
+    said: &mut BTreeSet<u64>,
+) -> String {
     match s.state {
         State::Failed => {
             // 19: as a waiting submit names it.

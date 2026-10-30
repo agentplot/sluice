@@ -852,6 +852,47 @@ pub trait Tests {
     ) -> Result<Vec<KeptOutTask>> {
         Ok(Vec::new())
     }
+
+    /// 140, 36: the check's affected reading, asked outside any run: for
+    /// each of `reading.pairs`, which of the required checks the change
+    /// from its first revision to its second reads, in pairs' order. A
+    /// change to what the runner names as its own setting (its
+    /// configuration, the toolchain) reads [`Reads::Every`]. A query: it
+    /// takes no place, runs no check and counts nothing against the
+    /// host's bound (13, 71). A runner that cannot say reads every check,
+    /// so nothing it serves lands beside the chain.
+    fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
+        Ok(vec![Reads::Every; reading.pairs.len()])
+    }
+}
+
+/// 140: what the core asks of the check's affected reading.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reading {
+    /// The checks the branch's gate requires, as the policy names them,
+    /// read at the branch's current revision (56).
+    pub required: Vec<String>,
+    /// The policy's `[tests]` table at the branch's current revision.
+    pub tests: Settings,
+    /// Each change asked of: from a revision to that revision extended
+    /// by the work.
+    pub pairs: Vec<(Rev, Rev)>,
+}
+
+/// 140: which required checks one change reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reads {
+    /// These, by the runner's names; none when empty.
+    Checks(Vec<String>),
+    /// Every required check: the runner cannot narrow this change.
+    Every,
+}
+
+impl Reads {
+    /// Whether no required check reads the change.
+    pub fn none(&self) -> bool {
+        matches!(self, Reads::Checks(c) if c.is_empty())
+    }
 }
 
 /// The checks running on the host, every repository's (71).
@@ -1082,6 +1123,8 @@ pub struct Contested {
 pub enum Decided {
     Landed {
         landed_as: Rev,
+        /// 140: landed beside the chain, with no check run.
+        beside: bool,
     },
     Failed {
         failed: Vec<String>,
@@ -1161,6 +1204,8 @@ pub enum Standing {
     Landing,
     Landed {
         landed_as: Rev,
+        /// 140: landed beside the chain, with no check run.
+        beside: bool,
     },
     /// Blamed for the failure its rows show (17, 20).
     Blamed {

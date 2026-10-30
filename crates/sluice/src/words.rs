@@ -2,9 +2,9 @@
 //! a pull request (ADR 0044), a required check that can never pass (ADR
 //! 0050), and an outcome's notice to its session (51).
 
-use sluice_core::records::{FlakyKey, Recorded};
+use sluice_core::records::{BesideWhy, FlakyKey, Recorded};
 use sluice_core::KeptOut;
-use sluice_seams::{Decided, Outcome};
+use sluice_seams::{Decided, Outcome, Rev};
 
 /// `passed` or `failed`.
 pub fn outcome(o: Outcome) -> &'static str {
@@ -120,6 +120,28 @@ pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
     )
 }
 
+/// 140: why a submission landed beside the queue with nothing run.
+const NO_CHECK_READS: &str = "no required check reads its changes";
+
+/// 140: a waiting submit's last line for a submission landed beside the
+/// queue as `landed_as`.
+pub fn landed_beside(landed_as: &Rev) -> String {
+    format!(
+        "landed as {} beside the queue: {NO_CHECK_READS}",
+        landed_as.short()
+    )
+}
+
+/// 140: what a submission that takes the queue though no check reads its
+/// changes at the branch's revision waits for: entry `behind`, whose
+/// checks would read it or whose work it conflicts with.
+pub fn waits_beside(behind: u64, why: BesideWhy) -> String {
+    match why {
+        BesideWhy::Read => format!("waits behind #{behind}: its checks read this change"),
+        BesideWhy::Conflict => format!("conflicts with #{behind}'s work"),
+    }
+}
+
 /// 51: an outcome's notice, one line, the same whether the round pushes it
 /// into the submitting session or the session collects it by `sluice
 /// inbox`: the submission, its branch and its outcome, and for a failure
@@ -127,9 +149,21 @@ pub fn conflict_way_on(worktree: &str, branch: &str) -> String {
 /// it is never taken for the user's typing.
 pub fn notice(id: u64, branch: &str, decided: &Decided) -> String {
     match decided {
-        Decided::Landed { landed_as } => {
+        Decided::Landed {
+            landed_as,
+            beside: false,
+        } => {
             format!(
                 "[sluice] #{id} landed on {branch} as {}.",
+                landed_as.short()
+            )
+        }
+        Decided::Landed {
+            landed_as,
+            beside: true,
+        } => {
+            format!(
+                "[sluice] #{id} landed on {branch} as {} beside the queue: {NO_CHECK_READS}.",
                 landed_as.short()
             )
         }
@@ -195,7 +229,7 @@ pub fn kept_out_refusal(branch: &str, worktree: &str, kept: &[KeptOut]) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use sluice_seams::{Contested, Rev, Submitter};
+    use sluice_seams::{Contested, Submitter};
 
     use super::*;
 
@@ -259,6 +293,24 @@ mod tests {
         );
     }
 
+    /// 140: a landing beside the queue, and what an entry that takes the
+    /// queue instead waits behind, in the record's words.
+    #[test]
+    fn beside_the_queue_in_words() {
+        assert_eq!(
+            landed_beside(&Rev::new("abc1234def")),
+            "landed as abc1234 beside the queue: no required check reads its changes"
+        );
+        assert_eq!(
+            waits_beside(7, BesideWhy::Read),
+            "waits behind #7: its checks read this change"
+        );
+        assert_eq!(
+            waits_beside(7, BesideWhy::Conflict),
+            "conflicts with #7's work"
+        );
+    }
+
     #[test]
     fn a_check_kept_out_of_ci_names_the_agent_in_the_worktree() {
         let one = kept_out_refusal("main", "unit/a", &[kept("cli:e2e", 7)]);
@@ -286,10 +338,21 @@ mod tests {
     fn an_outcomes_notice_is_one_line() {
         let landed = Decided::Landed {
             landed_as: Rev::new("abc1234def"),
+            beside: false,
         };
         assert_eq!(
             notice(12, "main", &landed),
             "[sluice] #12 landed on main as abc1234."
+        );
+        // 140: landed beside the queue, with no check run.
+        let beside = Decided::Landed {
+            landed_as: Rev::new("abc1234def"),
+            beside: true,
+        };
+        assert_eq!(
+            notice(12, "main", &beside),
+            "[sluice] #12 landed on main as abc1234 beside the queue: no required check \
+             reads its changes."
         );
         let failed = |timed_out| Decided::Failed {
             failed: vec!["cli:test".into(), "core:test".into()],

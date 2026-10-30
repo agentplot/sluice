@@ -55,6 +55,7 @@ fn submission_json(s: &Submission) -> serde_json::Value {
         "failed": failed,
         "landed_as": s.landed_as,
         "subject": s.subject,
+        "beside": s.beside,
     })
 }
 

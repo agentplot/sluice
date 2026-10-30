@@ -52,8 +52,8 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sluice_seams::{
     log_tail, AtBound, Enforced, HostRun, KeptOutTask, Limits, Network, NotRun, Outcome, Place,
-    Progress, RunHandle, RunReport, RunRequest, Running, Setting, Settings, Source, TaskLog,
-    TaskProgress, TaskResult, Tests,
+    Progress, Reading, Reads, Rev, RunHandle, RunReport, RunRequest, Running, Setting, Settings,
+    Source, TaskLog, TaskProgress, TaskResult, Tests,
 };
 
 use super::moon::Moon;
@@ -912,6 +912,67 @@ impl Drop for Scratch {
     }
 }
 
+/// 140: a detached worktree of the repository whose common directory is
+/// `common`, made with no hook run, for the runner's affected reading
+/// alone, and removed when it is dropped. No place: nothing runs in it but
+/// the runner's query.
+struct ReadingTree {
+    common: PathBuf,
+    path: PathBuf,
+}
+
+impl ReadingTree {
+    fn make(common: &Path, path: &Path, rev: &Rev) -> Result<ReadingTree> {
+        let tree = ReadingTree {
+            common: common.to_path_buf(),
+            path: path.to_path_buf(),
+        };
+        let at = path
+            .to_str()
+            .ok_or_else(|| anyhow!("{} is not UTF-8", path.display()))?;
+        let out = tree.git(&[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "worktree",
+            "add",
+            "--detach",
+            at,
+            rev.as_str(),
+        ])?;
+        if !out.status.success() {
+            bail!(
+                "git worktree add {at}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(tree)
+    }
+
+    fn git(&self, args: &[&str]) -> Result<std::process::Output> {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.common)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .context("running git")
+    }
+}
+
+impl Drop for ReadingTree {
+    fn drop(&mut self) {
+        if let Some(at) = self.path.to_str() {
+            let _ = self.git(&["worktree", "remove", "--force", at]);
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = self.git(&["worktree", "prune"]);
+    }
+}
+
 pub fn hostname() -> String {
     nix::unistd::gethostname()
         .map(|h| h.to_string_lossy().into_owned())
@@ -1350,6 +1411,59 @@ impl Tests for Checks {
             jobs,
         };
         Moon.kept_out(&cx)
+    }
+
+    /// 140: the moon runner's affected reading, in a worktree of the first
+    /// change's second revision made for it under the check seam's own
+    /// directory and removed once moon has answered, with the run's
+    /// environment and `[tests] toolchain` set up as `kept_out` sets them
+    /// up, outside any executor. It takes no place and is admitted against
+    /// no bound: it runs no check. The command runner's one check reads
+    /// everything.
+    fn reads(&self, reading: &Reading) -> Result<Vec<Reads>> {
+        if text(&reading.tests, "runner")? != Some("moon") || reading.pairs.is_empty() {
+            return Ok(vec![Reads::Every; reading.pairs.len()]);
+        }
+        let tool_argv = match reading.tests.get("toolchain") {
+            None => None,
+            Some(Setting::List(xs)) if !xs.is_empty() => Some(xs.clone()),
+            Some(_) => bail!("[tests] toolchain must be a list of strings, the command first"),
+        };
+        let scratch = Scratch(self.runs.dir(&format!("reading-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&scratch.0);
+        let tmp = scratch.0.join("tmp");
+        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let at = reading.pairs[0].1.clone();
+        let tree = ReadingTree::make(&self.common, &scratch.0.join("tree"), &at)?;
+        let request = RunRequest {
+            place: Place {
+                name: "reading".into(),
+                path: tree.path.clone(),
+                tmp,
+                env: BTreeMap::new(),
+            },
+            revision: at,
+            required: reading.required.clone(),
+            since: None,
+            limit: None,
+            limits: Limits::default(),
+            tests: reading.tests.clone(),
+            replay: false,
+            system: None,
+        };
+        let jobs = self.instance.jobs();
+        let env = environment(&request, jobs, &self.instance.caches);
+        let script = scratch.0.join("toolchain.sh");
+        if let Some(argv) = &tool_argv {
+            toolchain(argv, &tree.path, &env, &script)?;
+        }
+        let cx = Context {
+            request: &request,
+            env: &env,
+            toolchain: tool_argv.is_some().then_some(script.as_path()),
+            jobs,
+        };
+        Moon.reads(&cx, &reading.pairs)
     }
 
     /// ADR 0028: the moon runner's tasks while the run goes; the command
