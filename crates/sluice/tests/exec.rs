@@ -851,6 +851,37 @@ fn the_overview_counts_another_repositorys_combination_in_its_room() {
     }
 }
 
+/// 84, record 0074 (design D6); the host-requirements spec's "The tests
+/// are refused" and "A command runs": on a host whose container engine
+/// does not answer, the tests of a branch that asks for one are refused,
+/// naming where the host looked, and nothing runs or is recorded; a
+/// command after `--` runs.
+#[test]
+fn exec_refuses_the_tests_of_a_branch_whose_engine_does_not_answer() {
+    let s = Setup::new("exec-no-engine");
+    s.policy(&format!("{POLICY}\n[executor]\ndocker = true\n"));
+    let none = Scratch::short();
+    let socket = none.path().join("e.sock");
+    let env = [(ENGINE_SOCKETS, socket.as_path())];
+    let out = s.sluice_with(&env, &["exec", "bolt/x"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let said = text(&out);
+    assert!(
+        said.contains(&format!(
+            "refused: this host's container engine does not answer: no socket at {}; \
+             bolt/x's tests ask for one ([executor] docker = true)",
+            socket.display()
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("running the checks"), "{said}");
+    assert_eq!(s.results(), "", "nothing is recorded");
+    assert!(s.sessions().is_empty(), "nothing runs");
+
+    let out = s.sluice_with(&env, &["exec", "bolt/x", "--", "true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+}
+
 /// 114, 139; record 0074 (design D5); the host-requirements spec's "The
 /// engine stopped during the run": a check that takes the engine away and
 /// fails is not run, with why, and nothing is recorded under its key;

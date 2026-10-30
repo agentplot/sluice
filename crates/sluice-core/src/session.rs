@@ -130,6 +130,19 @@ impl Sluice<'_> {
         )?))
     }
 
+    /// 84, record 0074 (design D6): what this host lacks of what the
+    /// branch's runs ask of it, a container engine that answers, looked
+    /// at before a session run of the branch's tests, which it refuses
+    /// while it lacks one; `None` for a branch whose runs ask nothing of
+    /// the host, which is never looked at. A command's run asks nothing of
+    /// it and is never refused for it.
+    pub fn session_unmet(&self, plan: &SessionPlan) -> Result<Option<String>> {
+        if !plan.policy.limits.asks_of_host() {
+            return Ok(None);
+        }
+        self.seams.tests.unmet(&plan.policy.limits)
+    }
+
     /// 89, 83: a session run of the checks `head` affects against the
     /// branch, or of `command`, in `place`, under the branch's executor,
     /// limits and time limit; never answered from the cache, since what a

@@ -285,6 +285,20 @@ impl Exec<'_> {
                 return Ok(CONFLICT);
             }
         };
+        // 84, record 0074 (design D6): the branch's tests on a host that
+        // lacks what they ask of it are refused, nothing run or recorded;
+        // a command after `--` is the session's own.
+        if self.command.is_empty() {
+            if let Some(why) = s.session_unmet(&plan)? {
+                let text = format!(
+                    "refused: this host's container engine does not answer: {why}; {}'s tests \
+                     ask for one ([executor] docker = true)",
+                    self.branch
+                );
+                told::tell(out, json, Kind::Refused, &text, &[])?;
+                return Ok(CONFLICT);
+            }
+        }
         // 97: a session's place whose worktree is gone is released by the
         // next run on the host, before this one counts.
         tell_abandoned(out, json, &s.release_abandoned()?)?;
