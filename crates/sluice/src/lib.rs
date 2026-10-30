@@ -579,8 +579,44 @@ pub enum Followed {
     /// Its submission on its head landed, failed or conflicts, with what
     /// each submission is called on a pull request.
     Done(Submission, BTreeMap<u64, String>),
+    /// 137: merged, while another host takes its branch's pull requests
+    /// in: sluice's check's title on its head, where it says it landed.
+    Landed { title: String },
+    /// 137: sent back on its head, while another host takes its branch's
+    /// pull requests in: failed, or in conflict, as sluice's check there
+    /// names it.
+    SentBack {
+        conflict: bool,
+        title: String,
+        summary: String,
+    },
     /// Closed without landing.
     Closed,
+}
+
+/// 137: which process takes a branch's pull requests in, for its intake
+/// mark: `sluice run`, the host's driver, which pushes the mark when it
+/// starts; a wait on a host where no driver lives, which pushes it where
+/// none stands and lets it go when it ends; or a step, a submit that does
+/// not wait, or a wait's first pass beside a live driver, which pushes
+/// none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Taker {
+    Driver,
+    Wait,
+    Step,
+}
+
+/// 137: lets go of the intake marks a wait holds when the wait ends, at
+/// every exit, Ctrl-C's among them.
+struct LetGo<'a>(Option<&'a dyn PullRequests>);
+
+impl Drop for LetGo<'_> {
+    fn drop(&mut self) {
+        if let Some(pulls) = self.0 {
+            pulls.let_go();
+        }
+    }
 }
 
 /// A branch whose work arrives as pull requests on its remote (C.5 pull
@@ -593,9 +629,25 @@ pub trait PullRequests {
     fn branches(&self, seams: Seams<'_>) -> Result<Vec<String>>;
 
     /// Before a round of `branch`: submit each pull request ready, withdraw
-    /// each changed, and post each one's state. `false` for a branch that
-    /// takes no pull requests.
-    fn intake(&self, seams: Seams<'_>, clock: &dyn Clock, branch: &str) -> Result<bool>;
+    /// each changed, and post each one's state, where this host takes the
+    /// branch's pull requests in as `taker` (137). `false` for a branch
+    /// that takes no pull requests.
+    fn intake(
+        &self,
+        seams: Seams<'_>,
+        clock: &dyn Clock,
+        branch: &str,
+        taker: Taker,
+    ) -> Result<bool>;
+
+    /// 137: the host that takes `branch`'s pull requests in, as this
+    /// process's last intake found it, where that is another host.
+    fn elsewhere(&self, _branch: &str) -> Option<String> {
+        None
+    }
+
+    /// 137: let go of the intake marks this process holds as a wait.
+    fn let_go(&self) {}
 
     /// Push `worktree`'s branch and open its pull request into `branch`,
     /// or update the one open; `subject`, the submitter's line saying what
@@ -653,7 +705,7 @@ impl PullRequests for () {
         Ok(Vec::new())
     }
 
-    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str) -> Result<bool> {
+    fn intake(&self, _: Seams<'_>, _: &dyn Clock, _: &str, _: Taker) -> Result<bool> {
         Ok(false)
     }
 
@@ -689,6 +741,7 @@ fn intake(
     seams: Seams<'_>,
     clock: &dyn Clock,
     branch: &str,
+    taker: Taker,
     json: bool,
     out: &mut dyn Write,
 ) -> Option<anyhow::Error> {
@@ -697,7 +750,7 @@ fn intake(
         static SAID: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> =
             const { std::cell::Cell::new(None) };
     }
-    let e = pulls.intake(seams, clock, branch).err()?;
+    let e = pulls.intake(seams, clock, branch, taker).err()?;
     let Some(limited) = retry::limited(&e) else {
         telemetry::warn(&format!("sluice: warning: {e:#}"));
         return None;
@@ -1086,7 +1139,7 @@ pub fn run(
         }
         Command::Inbox { worktree, json } => inbox(&s, &worktree, json, out),
         Command::Step { branch, json } => {
-            intake(pulls, seams, clock, &branch, json, out);
+            intake(pulls, seams, clock, &branch, Taker::Step, json, out);
             let round = s.round(&branch)?;
             exec::tell_abandoned(out, json, &round.released)?;
             preview::tell_dropped(out, json, &round.previews)?;
@@ -1196,7 +1249,7 @@ pub fn run(
                     branches.sort();
                     branches.dedup();
                     for branch in branches {
-                        intake(pulls, seams, clock, &branch, false, out);
+                        intake(pulls, seams, clock, &branch, Taker::Driver, false, out);
                         // 26, rule core.14: a branch whose records' read or
                         // round fails is that branch's alone; the pass goes
                         // on to every other branch. 129: one with nothing in
@@ -2552,6 +2605,7 @@ fn wait_on(
         return Ok(Waited::Decided(sub, None));
     }
     let mut reading = Reading::take(waiting.host)?;
+    let _let_go = LetGo(waiting.pulls);
     reading.read(s, waiting, &mut sub)?;
     loop {
         if sub.state.is_out() {
@@ -2596,7 +2650,15 @@ fn wait_on(
             if let Some(pulls) = waiting.pulls {
                 // A spent allowance waited out to the wait's deadline: the
                 // wait's time is up; to Ctrl-C: stopped (134).
-                let spent = intake(pulls, s.seams(), waiting.clock, &branch, waiting.json, out);
+                let spent = intake(
+                    pulls,
+                    s.seams(),
+                    waiting.clock,
+                    &branch,
+                    Taker::Wait,
+                    waiting.json,
+                    out,
+                );
                 if spent.is_some_and(|e| waited_out(&e)) {
                     let code = match INTERRUPTED.load(Ordering::SeqCst) {
                         true => STOPPED,
@@ -2605,12 +2667,20 @@ fn wait_on(
                     return Ok(Waited::Undecided(sub, code));
                 }
             }
-            match s.round(&branch) {
-                Ok(round) => {
+            // 137: another host takes the branch's pull requests in; this
+            // wait runs no round for them.
+            let away = waiting.pulls.and_then(|p| p.elsewhere(&branch));
+            let round = match away {
+                Some(_) => None,
+                None => Some(s.round(&branch)),
+            };
+            match round {
+                None => {}
+                Some(Ok(round)) => {
                     exec::tell_abandoned(out, waiting.json, &round.released)?;
                     exec::tell_releases(out, waiting.json, &round.releases)?;
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     // Ctrl-C reaches the tools a round runs in the foreground.
                     if INTERRUPTED.load(Ordering::SeqCst) {
                         return Ok(Waited::Undecided(sub, STOPPED));
@@ -3368,6 +3438,8 @@ fn submit_pull(
     let mut taken: Option<u64> = None;
     let probe = driven_by(host);
     let mut first = true;
+    // 137: a wait lets go of the intake mark it holds when it ends.
+    let _let_go = LetGo(Some(pulls));
     loop {
         // 135: probed once a pass. The first pass's intake is a submit's
         // own, and `--status`'s: the answer names what it took in. Every
@@ -3375,9 +3447,16 @@ fn submit_pull(
         // while it lives.
         let driven = probe();
         if !driven || first && !matches!(mode, PullMode::Wait { .. }) {
+            // 137: a wait on a host where no driver lives shows itself by
+            // the intake mark; a submit that does not wait, `--status`, and
+            // a submit's first pass beside a live driver push none.
+            let taker = match driven || no_wait || status {
+                true => Taker::Step,
+                false => Taker::Wait,
+            };
             // The user, 2026-10-28: a submit that does not wait fails at
             // once on a spent allowance, naming when it ends (134).
-            match intake(pulls, seams, clock, branch, json, out) {
+            match intake(pulls, seams, clock, branch, taker, json, out) {
                 Some(e) if no_wait => return Err(e),
                 Some(_) if INTERRUPTED.load(Ordering::SeqCst) => return Ok(STOPPED),
                 _ => {}
@@ -3427,6 +3506,9 @@ fn submit_pull(
                     json,
                     out,
                 );
+            }
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => {
+                return across(number, branch, &f, copy.as_ref(), json, out);
             }
             Some(Followed::Closed) => {
                 if json {
@@ -3541,7 +3623,14 @@ fn submit_pull(
                 return still(out, WAITING);
             }
         }
-        let round = if driven { None } else { Some(s.round(branch)) };
+        // 137: no round where another host takes the branch's pull
+        // requests in.
+        let away = pulls.elsewhere(branch).is_some();
+        let round = if driven || away {
+            None
+        } else {
+            Some(s.round(branch))
+        };
         match round {
             None => {}
             Some(Ok(round)) => {
@@ -3671,11 +3760,17 @@ fn submit_pull_group(
     let mut after = Vec::new();
     let probe = driven_by(host);
     let mut first = true;
+    // 137: a wait lets go of the intake mark it holds when it ends.
+    let _let_go = LetGo(Some(pulls));
     let stopped = 'wait: loop {
         // 135: as `submit_pull`, the first pass's intake the submit's own.
         let driven = probe();
         if !driven || first {
-            match intake(pulls, seams, clock, branch, json, out) {
+            let taker = match driven || no_wait {
+                true => Taker::Step,
+                false => Taker::Wait,
+            };
+            match intake(pulls, seams, clock, branch, taker, json, out) {
                 Some(e) if no_wait => return Err(e),
                 Some(_) if INTERRUPTED.load(Ordering::SeqCst) => break 'wait Some(STOPPED),
                 _ => {}
@@ -3716,7 +3811,12 @@ fn submit_pull_group(
         if no_wait || decided.iter().all(Option::is_some) {
             break None;
         }
-        let round = if driven { None } else { Some(s.round(branch)) };
+        let away = pulls.elsewhere(branch).is_some();
+        let round = if driven || away {
+            None
+        } else {
+            Some(s.round(branch))
+        };
         match round {
             None => {}
             Some(Ok(round)) => {
@@ -3777,6 +3877,7 @@ fn submit_pull_group(
             let mut item = match &decided[i] {
                 Some(Followed::Done(sub, _)) => serde_json::to_value(sub)?,
                 Some(Followed::Closed) => serde_json::json!({ "state": "closed" }),
+                Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => across_json(f),
                 _ => serde_json::json!({ "state": state(i) }),
             };
             item["worktree"] = serde_json::json!(w);
@@ -3804,6 +3905,13 @@ fn submit_pull_group(
         let this = match &decided[i] {
             Some(Followed::Done(sub, _)) if json => exit_for(sub),
             Some(Followed::Done(sub, names)) => report(s, sub, branch, names, None, false, out)?,
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) if json => {
+                across_exit(f)
+            }
+            Some(f @ (Followed::Landed { .. } | Followed::SentBack { .. })) => {
+                across_lines(f, out)?;
+                across_exit(f)
+            }
             Some(Followed::Closed) => {
                 if !json {
                     writeln!(out, "#{n} was closed without landing")?;
@@ -3825,6 +3933,70 @@ fn submit_pull_group(
         after_landing(e);
     }
     Ok(stopped.unwrap_or(code))
+}
+
+/// 137: the outcome GitHub shows of pull request `number`, which another
+/// host took in: said with the words a submission's report gives for the
+/// same outcome, as sluice's check on its head names it, and its exit.
+fn across(
+    number: u64,
+    branch: &str,
+    f: &Followed,
+    copy: Option<&CopyDiffers>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<i32> {
+    if json {
+        let mut doc = across_json(f);
+        doc["pull_request"] = serde_json::json!(number);
+        doc["branch"] = serde_json::json!(branch);
+        writeln!(out, "{}", with_copy(doc, copy)?)?;
+    } else {
+        across_lines(f, out)?;
+    }
+    Ok(across_exit(f))
+}
+
+/// 137: [`across`]'s words: `passed · landed as …` for a landing, and
+/// sluice's check's title and summary for a pull request sent back.
+fn across_lines(f: &Followed, out: &mut dyn Write) -> Result<()> {
+    match f {
+        Followed::Landed { title } => writeln!(out, "passed · {title}")?,
+        Followed::SentBack { title, summary, .. } => {
+            writeln!(out, "{title}")?;
+            for l in summary.lines().filter(|l| !l.trim().is_empty()) {
+                writeln!(out, "  {l}")?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// 137: [`across`]'s document: the state, and sluice's check's title.
+fn across_json(f: &Followed) -> serde_json::Value {
+    match f {
+        Followed::Landed { title } => serde_json::json!({ "state": "landed", "title": title }),
+        Followed::SentBack {
+            conflict,
+            title,
+            summary,
+        } => serde_json::json!({
+            "state": if *conflict { "conflict" } else { "failed" },
+            "title": title,
+            "summary": summary,
+        }),
+        _ => serde_json::json!({}),
+    }
+}
+
+/// 137: [`across`]'s exit, a submission's for the same outcome.
+fn across_exit(f: &Followed) -> i32 {
+    match f {
+        Followed::Landed { .. } => LANDED,
+        Followed::SentBack { conflict: true, .. } => CONFLICT,
+        _ => FAILED,
+    }
 }
 
 /// The records seam of a sluice, for reading the log.

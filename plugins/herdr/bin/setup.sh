@@ -22,16 +22,16 @@ cat <<EOF
 sluice for herdr: add these to herdr's config.toml yourself (or to
 whatever generates it), then run \`herdr server reload-config\`.
 
-# The status popup on prefix+s.
+# The status popup on prefix+m.
 [[keys.command]]
-key = "prefix+s"
+key = "prefix+m"
 type = "plugin_action"
 command = "agentplot.sluice.status"
 description = "sluice: the queue"
 
 # Jump to the pane whose submission was blamed.
 [[keys.command]]
-key = "prefix+shift+s"
+key = "prefix+shift+m"
 type = "plugin_action"
 command = "agentplot.sluice.jump"
 description = "sluice: jump to the blamed submission's pane"

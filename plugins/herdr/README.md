@@ -109,17 +109,20 @@ minutes, so nothing stale stays if the plugin stops.
 The plugin changes none of herdr's config. Run the `setup` action
 (`herdr plugin action invoke agentplot.sluice.setup`) to see the snippets
 with this machine's paths filled in, and add them to herdr's `config.toml`
-yourself, or to whatever generates it:
+yourself, or to whatever generates it. The keys, `prefix+m` for the
+queue and `prefix+shift+m` for the jump, were chosen to avoid herdr's own
+default keys; if you have bound them already, pick another free key.
+
 
 ```toml
 [[keys.command]]
-key = "prefix+s"
+key = "prefix+m"
 type = "plugin_action"
 command = "agentplot.sluice.status"
 description = "sluice: the queue"
 
 [[keys.command]]
-key = "prefix+shift+s"
+key = "prefix+shift+m"
 type = "plugin_action"
 command = "agentplot.sluice.jump"
 description = "sluice: jump to the blamed submission's pane"

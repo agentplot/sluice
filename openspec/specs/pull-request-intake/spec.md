@@ -24,12 +24,12 @@ the branch's revision.
 - **THEN** its conditions are still the ones on the branch's revision
 
 ### Requirement: A pull request is submitted when it is ready
-Each asking of a branch's open pull requests SHALL submit every open
-pull request into the branch, from a branch of the same repository,
-that is out of draft and whose head has at least `reviews` approving
-reviews and a passing result for every name in `checks`. Every other
-open pull request SHALL wait, and no check of sluice's SHALL run for it
-(136).
+On the host that takes a branch's pull requests in, each asking of the
+branch's open pull requests SHALL submit every open pull request into
+the branch, from a branch of the same repository, that is out of draft
+and whose head has at least `reviews` approving reviews and a passing
+result for every name in `checks`. Every other open pull request SHALL
+wait, and no check of sluice's SHALL run for it (136, 137).
 
 #### Scenario: Waiting for QA
 - **WHEN** a pull request is out of draft with one approving review and `checks = ["qa/approved"]`, and `qa/approved` has not passed

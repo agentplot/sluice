@@ -420,16 +420,27 @@ impl App {
         bearer: Bearer,
         body: Option<&str>,
     ) -> Result<Value> {
-        let (status, v, text) = self.answer(method, call, path, bearer, body)?;
+        let (status, v, text, _) = self.answer(method, call, path, bearer, body)?;
         if !(200..300).contains(&status) {
             return Err(failed(method, path, status, &v, &text));
         }
         Ok(v)
     }
 
+    /// `GET` an API path as `bearer`: its JSON, and whether GitHub sent it
+    /// afresh, `false` when it answered that the answer the host keeps for
+    /// the path stands (a 304; 136).
+    pub(super) fn get_fresh(&self, path: &str, bearer: Bearer) -> Result<(Value, bool)> {
+        let (status, v, text, fresh) = self.answer("GET", Call::Read, path, bearer, None)?;
+        if !(200..300).contains(&status) {
+            return Err(failed("GET", path, status, &v, &text));
+        }
+        Ok((v, fresh))
+    }
+
     /// `GET` an API path; `None` when GitHub has nothing there (404).
     pub(super) fn get_found(&self, path: &str, bearer: Bearer) -> Result<Option<Value>> {
-        let (status, v, text) = self.answer("GET", Call::Read, path, bearer, None)?;
+        let (status, v, text, _) = self.answer("GET", Call::Read, path, bearer, None)?;
         match status {
             404 => Ok(None),
             200..=299 => Ok(Some(v)),
@@ -438,8 +449,9 @@ impl App {
     }
 
     /// GitHub's answer to a `call`, under the retry policy: its status,
-    /// its JSON and its text, for a success or any status GitHub would
-    /// answer again. A 5xx is tried again, but on a call that makes
+    /// its JSON, its text and whether GitHub sent it afresh rather than
+    /// answering a `GET` from what the host keeps, for a success or any
+    /// status GitHub would answer again. A 5xx is tried again, but on a call that makes
     /// something, which GitHub may have taken; a 401 on the installation's
     /// token is tried again on one bought afresh; a spent allowance is
     /// the policy's to wait out or stop on, no call made while its pause
@@ -453,7 +465,7 @@ impl App {
         path: &str,
         bearer: Bearer,
         body: Option<&str>,
-    ) -> Result<(u16, Value, String)> {
+    ) -> Result<(u16, Value, String, bool)> {
         // The last failure's words, for a token that could not be bought
         // afresh after it.
         let mut said = String::new();
@@ -621,24 +633,25 @@ impl App {
         }
     }
 
-    /// The answer to a call GitHub judged: a `GET`'s 304 answered from
-    /// `kept`, its 200 kept for `url` when it has a version, its 404
-    /// forgetting what was kept.
+    /// The answer to a call GitHub judged, and whether GitHub sent it
+    /// afresh: a `GET`'s 304 answered from `kept`, which it did not, its
+    /// 200 kept for `url` when it has a version, its 404 forgetting what
+    /// was kept.
     fn kept_answer(
         &self,
         url: &str,
         method: &str,
         kept: Option<kept::Answer>,
         r: Reply,
-    ) -> (u16, Value, String) {
+    ) -> (u16, Value, String, bool) {
         let Some(k) = self.kept.as_ref().filter(|_| method == "GET") else {
-            return (r.status, r.v, r.text);
+            return (r.status, r.v, r.text, true);
         };
         match (r.status, kept) {
             (304, Some(a)) => {
                 k.used(url);
                 let v = serde_json::from_str(&a.body).unwrap_or(Value::Null);
-                (200, v, a.body)
+                (200, v, a.body, false)
             }
             (200, _) if r.heard.etag.is_some() || r.heard.last_modified.is_some() => {
                 let a = kept::Answer {
@@ -651,13 +664,13 @@ impl App {
                 if let Err(e) = k.keep(&a) {
                     tracing::warn!("keeping GitHub's answer to {url}: {e:#}");
                 }
-                (r.status, r.v, r.text)
+                (r.status, r.v, r.text, true)
             }
             (404, _) => {
                 k.forget(url);
-                (r.status, r.v, r.text)
+                (r.status, r.v, r.text, true)
             }
-            _ => (r.status, r.v, r.text),
+            _ => (r.status, r.v, r.text, true),
         }
     }
 
