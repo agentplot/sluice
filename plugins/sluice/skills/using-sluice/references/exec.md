@@ -50,11 +50,9 @@ recorded 2 results under their keys for 8d41b6c
 `sluice exec <branch> -- <command>` runs any command the same way and exits
 with its code. It records nothing.
 
-A test that could not run (the policy's `[tests] ready` failed after the
-run, it exited as `[tests] not_run` names, or it could not be started) is
-listed as `could not run: <test>: <why>` and recorded nowhere. A host that
-fails `ready` before the run is refused it, with the command's output. A
-command after `--` is held to neither.
+A test that could not run (it exited as `[tests] not_run` names, or it
+could not be started) is listed as `could not run: <test>: <why>` and
+recorded nowhere. A command after `--` is not held to `not_run`.
 
 `--json` prints one document on stdout:
 `{branch, tasks[{task,hash,outcome,recorded}], missing, not_run[{task,reason}], timed_out, ports, exit}`;

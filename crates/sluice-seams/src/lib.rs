@@ -648,10 +648,9 @@ impl RunDetail {
     }
 }
 
-/// A check a run did not judge: its program could not be started, it
-/// exited as the policy's `not_run` names, or the host failed `ready`
-/// after it (could-not-run-1 114). It has no outcome (60): no result
-/// under its key, and it is run again.
+/// A check a run did not judge: its program could not be started, or it
+/// exited as the policy's `not_run` names (could-not-run-1 114). It has
+/// no outcome (60): no result under its key, and it is run again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotRun {
     pub task: String,
@@ -743,12 +742,12 @@ pub trait Tests {
     /// limit and the request's limits (32, 66; rule core.10). 84: a limit
     /// the executor cannot hold is an error naming it, and nothing runs.
     ///
-    /// 71: before it runs anything, the toolchain, readiness or the
-    /// runner's setup among it, it admits the run against the host's count
-    /// of running checks, every repository's, in one step under the host's
-    /// lock; at the host's bound it fails with [`AtBound`] and nothing
-    /// runs. A session's or a preview's run is admitted only under the
-    /// bound less the part kept for submissions' runs (91, 102).
+    /// 71: before it runs anything, the toolchain or the runner's setup
+    /// among it, it admits the run against the host's count of running
+    /// checks, every repository's, in one step under the host's lock; at
+    /// the host's bound it fails with [`AtBound`] and nothing runs. A
+    /// session's or a preview's run is admitted only under the bound less
+    /// the part kept for submissions' runs (91, 102).
     fn start(&self, request: &RunRequest) -> Result<RunHandle>;
 
     /// 37: a started run's progress; once finished, every check's key,

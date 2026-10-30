@@ -570,7 +570,8 @@ mod tests {
             worktree: None,
         });
         let mut could_not = row("site:check", RowResult::NotRun);
-        could_not.not_run = Some("the host failed [tests] ready `docker info`, 3 runs".into());
+        could_not.not_run =
+            Some("exited 77, which [tests] not_run names: it could not run here, 3 runs".into());
         could_not.key = None;
         view(
             Standing::Blamed { timed_out: false },

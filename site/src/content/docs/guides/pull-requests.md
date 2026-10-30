@@ -375,7 +375,7 @@ Total time: 4m 12s | Comparison time: 9m 40s | Estimated savings: 5m 28s (56% fa
 |----|--------------|-------|---------------|-----------------------------------|
 | 🟥 | `app:test`   | 2m 3s | Failed        | sandbox on box-1 · 2 attempts     |
 | 🟨 | `app:e2e`    | 51s   | Flaky         | passed on the same inputs at …    |
-| ⬛ | `site:check` |       | Could not run | the host failed [tests] ready …   |
+| ⬛ | `site:check` |       | Could not run | exited 77, which not_run names …  |
 | 🟩 | `app:lint`   | 18s   | Passed        | sandbox on box-1                  |
 | 🟪 | `core:test`  |       | Replayed      | from a pass the gate trusts       |
 ```
