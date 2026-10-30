@@ -9,7 +9,9 @@ when its code lands, and the file is deleted when it is empty.
   `docker = true` only opens the engine's sockets in the profile and a
   host with no engine runs the checks and fails them. Accepted
   2026-10-30 on the user's card; a unit has the executor
-  refuse such a run before claiming it and leave it open.
+  refuse such a run before claiming it, leave it open, and look at the
+  engine again after a run in which a check failed, a gone engine
+  making the run one with no outcome (0074 as amended 2026-10-30).
 
 - **core.37 and record 0066 as amended** (clauses 84 and 114 as amended
   2026-10-30): today `[tests] ready` is read from the policy and
