@@ -1109,6 +1109,51 @@ impl World {
             };
         }
         let tree = inner.commits[&request.revision].tree.clone();
+        // A session's command (session-runs-1 clause 89): its one check is
+        // the command, which fails where a rule names it.
+        let command = match (request.tests.get("runner"), request.tests.get("command")) {
+            (Some(sluice_seams::Setting::Text(r)), Some(sluice_seams::Setting::Text(c)))
+                if r == "command" =>
+            {
+                Some(c.clone())
+            }
+            _ => None,
+        };
+        if let Some(command) = command {
+            let outcome = match inner
+                .fail_rules
+                .iter()
+                .any(|(n, f)| *n == command && f(&tree))
+            {
+                true => Outcome::Fail,
+                false => Outcome::Pass,
+            };
+            return RunReport {
+                detail: None,
+                kept_out: Vec::new(),
+                tasks: vec![TaskResult {
+                    took_ms: None,
+                    attempts: None,
+                    task: command,
+                    hash: request.revision.to_string(),
+                    outcome,
+                    source: Source::Ran {
+                        host: inner.host.clone(),
+                    },
+                }],
+                executor: Enforced {
+                    kind: "open".into(),
+                    confined: false,
+                    processors: None,
+                    memory: None,
+                    network: None,
+                    docker: request.limits.docker,
+                },
+                missing: Vec::new(),
+                not_run: Vec::new(),
+                timed_out: false,
+            };
+        }
         let since = request
             .since
             .as_ref()

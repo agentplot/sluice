@@ -447,12 +447,15 @@ impl Exec<'_> {
 
         // 92: recorded only when the worktree holds exactly its head, and
         // only a run of the checks; never a run that hit its time limit.
-        self.summary(out, &report, command.is_some())?;
+        // Design D5: told as the core read it, a check that did not pass
+        // after which the host lost what the run asked of it not run.
         let started = SessionStart {
             place: place.clone(),
             run: run.clone(),
         };
         let finished = s.finish_session(&plan, &session, &started, command.is_some(), &report)?;
+        let report = finished.report;
+        self.summary(out, &report, command.is_some())?;
         unkept(finished.unkept.map_or(Ok(()), |e| Err(anyhow::anyhow!(e))));
         let recorded = match finished.recorded {
             Recorded::Written(n) => {

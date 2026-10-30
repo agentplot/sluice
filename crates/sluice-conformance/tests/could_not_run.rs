@@ -324,3 +324,42 @@ fn a_run_its_time_limit_ended_never_looks_at_the_engine() {
     assert_eq!(h.sub(one).state, State::Failed);
     assert_eq!(h.sub(one).result.as_deref(), Some("timed out"));
 }
+
+/// satisfies: 92, 114, 139; record 0074 (design D5, D6); the
+/// host-requirements spec's "A command runs"
+#[test]
+fn a_session_run_failed_after_the_engine_went_records_no_fail() {
+    let h = Harness::new(&docker());
+    h.fails_with("a:test", "a/lib", "broken");
+    let head = h.work(
+        "unit/a",
+        "agent-a",
+        &[("a/lib", Some("broken")), ("b/lib", Some("b2"))],
+    );
+    h.w().engine_unmet(Some(GONE));
+    let (report, _) = h.session_run("unit/a");
+    assert_eq!(report.not_run.len(), 1, "{report:?}");
+    assert_eq!(report.not_run[0].task, "a:test");
+    assert_eq!(report.not_run[0].reason, engine_gone());
+    let mine: Vec<ResultLine> = results(&h)
+        .into_iter()
+        .filter(|r| r.combination == head)
+        .collect();
+    assert!(mine.iter().any(|r| r.task == "b:test"));
+    assert!(mine.iter().all(|r| r.task != "a:test"), "{mine:?}");
+
+    // A command's fail is its own, whatever the host lacks.
+    let looked = h.w().engine_looks().len();
+    h.fails_with("false", "a/lib", "broken");
+    let (report, _) = h.session_exec("unit/a", Some("false"));
+    assert!(report.not_run.is_empty(), "{report:?}");
+    assert_eq!(
+        report
+            .tasks
+            .iter()
+            .map(|t| (t.task.as_str(), t.outcome))
+            .collect::<Vec<_>>(),
+        [("false", Outcome::Fail)]
+    );
+    assert_eq!(h.w().engine_looks().len(), looked, "never looked at");
+}
