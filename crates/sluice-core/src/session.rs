@@ -328,7 +328,7 @@ impl Sluice<'_> {
         report: &RunReport,
     ) -> Result<usize> {
         let now = self.now();
-        let have = self.results()?;
+        let have = self.results(&plan.branch)?;
         let mut bytes = Vec::new();
         let mut n = 0;
         for t in &report.tasks {

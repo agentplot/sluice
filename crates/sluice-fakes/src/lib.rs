@@ -217,6 +217,9 @@ struct Inner {
     wakes: Vec<String>,
     /// The signer the host's results are recorded as signed by (78).
     signer: Option<String>,
+    /// The hosts whose signing key no branch's policy lists for the signer
+    /// they sign as: what they sign verifies for no gate (78, 87).
+    unlisted: BTreeSet<String>,
     /// Session runs on the host, by worktree: whether each still runs, and
     /// what its `sluice exec` kept of it (ADR 0035).
     sessions: BTreeMap<String, (bool, HostRun)>,
@@ -807,6 +810,20 @@ impl World {
     /// on a branch whose records are on its remote (78).
     pub fn signs_as(&self, signer: &str) {
         self.0.borrow_mut().signer = Some(signer.into());
+    }
+
+    /// From now, this world's host signs with a key no branch's policy
+    /// lists for its signer, or, with `false`, with one they list: the
+    /// results it records are never read back, and its records answer that
+    /// its runs count for no branch (78, 87).
+    pub fn key_unlisted(&self, unlisted: bool) {
+        let mut inner = self.0.borrow_mut();
+        let host = inner.host.clone();
+        if unlisted {
+            inner.unlisted.insert(host);
+        } else {
+            inner.unlisted.remove(&host);
+        }
     }
 
     /// From now, this world's host is `host`: what it observes is its own
@@ -2715,8 +2732,13 @@ impl State for FakeState {
         Ok(id)
     }
 
-    fn results(&self) -> Result<Vec<u8>> {
+    fn results(&self, _: &str) -> Result<Vec<u8>> {
         Ok(self.0 .0.borrow().results.clone())
+    }
+
+    fn verifies_own(&self, _: &str, _: &Rev) -> Result<bool> {
+        let inner = self.0 .0.borrow();
+        Ok(!inner.unlisted.contains(&inner.host))
     }
 
     fn record_results(&self, lines: &[u8]) -> Result<()> {
@@ -2725,6 +2747,10 @@ impl State for FakeState {
             inner.results.extend(lines);
             return Ok(());
         };
+        // Signed with a key no policy lists, it verifies for no gate.
+        if inner.unlisted.contains(&inner.host) {
+            return Ok(());
+        }
         // As the remote refs profile reads a run back: signed by the host's
         // signer, a replay as a replay (core.9).
         for mut l in sluice_core::records::parse_lines::<sluice_core::records::ResultLine>(lines)? {

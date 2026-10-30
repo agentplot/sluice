@@ -367,7 +367,7 @@ fn results_append_once_and_whole() {
     s.record_results(b"{\"run\":1}\n{\"run\":2}\n").unwrap();
     s.record_results(b"{\"run\":2}\n{\"run\":3}\n").unwrap();
     assert_eq!(
-        s.results().unwrap(),
+        s.results("main").unwrap(),
         b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n"
     );
     let log = dir.path().join("sluice/results.jsonl");
@@ -376,7 +376,7 @@ fn results_append_once_and_whole() {
     std::fs::write(&log, cut).unwrap();
     s.record_results(b"{\"run\":4}\n").unwrap();
     assert_eq!(
-        s.results().unwrap(),
+        s.results("main").unwrap(),
         b"{\"run\":1}\n{\"run\":2}\n{\"run\":3}\n{\"run\":4}\n"
     );
 }

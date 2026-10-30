@@ -13,7 +13,6 @@ use sluice::profiles::local_files::LocalFiles;
 use sluice::profiles::pushed_refs::PushedRefs;
 use sluice::profiles::remote_refs::{RemoteRefs, SignerKey, Signing};
 use sluice::retry;
-use sluice::signing::ssh;
 use sluice_core::records::{parse_lines, to_line, ResultKind, ResultLine, RESULT_SCHEMA};
 use sluice_seams::{
     read_refused, Changes, Enforced, Outcome, Rev, State, TaskLog, Written, KEPT_LOGS,
@@ -27,27 +26,19 @@ fn key() -> PrivateKey {
 }
 
 fn allowed(principal: &str, k: &PrivateKey) -> SignerKey {
-    SignerKey::Ssh(
-        ssh::allowed(&format!(
-            "{principal} {}",
-            k.public_key().to_openssh().unwrap()
-        ))
-        .unwrap(),
-    )
+    SignerKey::ssh(&format!(
+        "{principal} {}",
+        k.public_key().to_openssh().unwrap()
+    ))
+    .unwrap()
 }
 
-/// A host's records of `origin`, signing as `signer` with `k`, verifying
-/// the signers in `signers`.
-fn host(
-    repo: &Repo,
-    signers: BTreeMap<String, SignerKey>,
-    signing: Option<(&str, PrivateKey)>,
-) -> RemoteRefs {
+/// A host's records of `origin`, signing as `signer` with `k`.
+fn host(repo: &Repo, signing: Option<(&str, PrivateKey)>) -> RemoteRefs {
     let pushed = Rc::new(PushedRefs::open_as(repo.dir(), "origin", None, recorded()).unwrap());
     RemoteRefs::new(
         &repo.dir().join(".git"),
         pushed,
-        signers,
         signing.map(|(s, key)| Signing {
             signer: s.into(),
             key,
@@ -82,10 +73,7 @@ fn two_hosts(name: &str) -> (Repo, Scratch, Repo) {
 #[test]
 fn two_hosts_write_one_version_and_one_is_refused() {
     let (a, _bare, b) = two_hosts("rr-write");
-    let (ha, hb) = (
-        host(&a, BTreeMap::new(), None),
-        host(&b, BTreeMap::new(), None),
-    );
+    let (ha, hb) = (host(&a, None), host(&b, None));
     let empty = ha.read("main").unwrap();
     assert_eq!((empty.version, empty.files.len()), (0, 0));
     {
@@ -123,7 +111,7 @@ fn two_hosts_write_one_version_and_one_is_refused() {
 #[test]
 fn appends_and_finished_records_keep_their_places() {
     let (a, _bare, _b) = two_hosts("rr-append");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     let mut c = put(&[(".finished/7.json", "{\"id\":7}\n")]);
     c.append.insert("log.jsonl".into(), b"one\n".to_vec());
     assert_eq!(h.write("bolt/x", 0, c).unwrap(), Written::Written(1));
@@ -145,10 +133,7 @@ fn appends_and_finished_records_keep_their_places() {
 #[test]
 fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
     let (a, _bare, b) = two_hosts("rr-finished-again");
-    let (ha, hb) = (
-        host(&a, BTreeMap::new(), None),
-        host(&b, BTreeMap::new(), None),
-    );
+    let (ha, hb) = (host(&a, None), host(&b, None));
     let index = "{\"id\":5,\"state\":\"landed\",\"worktree\":\"unit/a\"}\n";
     let mut c = put(&[(".finished/5.json", "{\"id\":5}\n")]);
     c.append
@@ -180,7 +165,7 @@ fn a_finished_record_put_again_replaces_it_and_leaves_the_index() {
 #[test]
 fn a_refused_state_fetch_is_stale_with_why() {
     let (a, bare, _b) = two_hosts("rr-refused");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     {
         let _g = h.lock("main").unwrap().unwrap();
         h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
@@ -218,7 +203,7 @@ fn a_refused_state_fetch_is_stale_with_why() {
 #[test]
 fn each_profile_keeps_a_refusal_beside_the_records() {
     let (a, _bare, _b) = two_hosts("rr-kept");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     let local = LocalFiles::new(&a.dir().join(".git"));
     {
         let _g = local.lock("bolt/x").unwrap().unwrap();
@@ -259,10 +244,7 @@ fn each_profile_keeps_a_refusal_beside_the_records() {
 #[test]
 fn ids_are_numbered_once_across_hosts() {
     let (a, _bare, b) = two_hosts("rr-ids");
-    let (ha, hb) = (
-        host(&a, BTreeMap::new(), None),
-        host(&b, BTreeMap::new(), None),
-    );
+    let (ha, hb) = (host(&a, None), host(&b, None));
     assert_eq!(ha.allocate_id().unwrap(), 1);
     assert_eq!(hb.allocate_id().unwrap(), 2);
     assert_eq!(ha.allocate_id().unwrap(), 3);
@@ -306,7 +288,7 @@ fn lines(ls: &[ResultLine]) -> Vec<u8> {
 fn signed_runs_are_read_verified_on_another_host() {
     let (a, _bare, b) = two_hosts("rr-signed");
     let (box_key, stranger) = (key(), key());
-    let ha = host(&a, BTreeMap::new(), Some(("box", box_key.clone())));
+    let ha = host(&a, Some(("box", box_key.clone())));
     let mut replay = ran("c:test", Outcome::Pass);
     replay.kind = ResultKind::Replayed;
     replay.host = None;
@@ -318,12 +300,9 @@ fn signed_runs_are_read_verified_on_another_host() {
     ]))
     .unwrap();
 
-    let hb = host(
-        &b,
-        BTreeMap::from([("box".into(), allowed("exec@build-1", &box_key))]),
-        None,
-    );
-    let all: Vec<ResultLine> = parse_lines(&hb.results().unwrap()).unwrap();
+    let hb = host(&b, None);
+    let signers = BTreeMap::from([("box".into(), allowed("exec@build-1", &box_key))]);
+    let all: Vec<ResultLine> = parse_lines(&hb.results_with(&signers).unwrap()).unwrap();
     // The replay is signed with its run, as a replay (108; core.9).
     assert!(all.iter().any(|l| l.kind == ResultKind::Replayed
         && l.task == "c:test"
@@ -340,14 +319,45 @@ fn signed_runs_are_read_verified_on_another_host() {
     let b_test = read.iter().find(|l| l.task == "b:test").unwrap();
     assert_eq!(b_test.outcome, Outcome::Fail);
     // A key the policy does not list proves nothing (S18).
-    let hc = host(
-        &b,
-        BTreeMap::from([("box".into(), allowed("other", &stranger))]),
-        None,
+    let hc = host(&b, None);
+    let strangers = BTreeMap::from([("box".into(), allowed("other", &stranger))]);
+    assert!(
+        parse_lines::<ResultLine>(&hc.results_with(&strangers).unwrap())
+            .unwrap()
+            .is_empty()
     );
-    assert!(parse_lines::<ResultLine>(&hc.results().unwrap())
+    // Nor does a profile asked with no list.
+    assert!(parse_lines::<ResultLine>(&hc.results("main").unwrap())
         .unwrap()
         .is_empty());
+}
+
+/// 78, rule core.22: a statement verified with one branch's key for a
+/// signer is not read as verified when another branch's key for that
+/// signer is asked, in the same profile, and is again when the first is.
+#[test]
+fn a_statement_verified_with_one_key_is_unverified_with_another() {
+    let (a, _bare, b) = two_hosts("rr-two-keys");
+    let (key_a, key_b) = (key(), key());
+    host(&a, Some(("box", key_a.clone())))
+        .record_results(&lines(&[ran("a:test", Outcome::Pass)]))
+        .unwrap();
+    let h = host(&b, None);
+    let read = |signers: &BTreeMap<String, SignerKey>| -> Vec<String> {
+        parse_lines::<ResultLine>(&h.results_with(signers).unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|l| l.task)
+            .collect()
+    };
+    let with_a = BTreeMap::from([("box".into(), allowed("box", &key_a))]);
+    let with_b = BTreeMap::from([("box".into(), allowed("box", &key_b))]);
+    assert_eq!(read(&with_a), ["a:test"]);
+    assert!(
+        read(&with_b).is_empty(),
+        "verified with key A, asked with B"
+    );
+    assert_eq!(read(&with_a), ["a:test"]);
 }
 
 /// Could-not-run-1 116, rule core.11: a result set aside on one host is
@@ -355,8 +365,8 @@ fn signed_runs_are_read_verified_on_another_host() {
 #[test]
 fn a_set_aside_is_read_on_another_host() {
     let (a, _bare, b) = two_hosts("rr-aside");
-    let ha = host(&a, BTreeMap::new(), None);
-    let hb = host(&b, BTreeMap::new(), None);
+    let ha = host(&a, None);
+    let hb = host(&b, None);
     ha.set_aside(b"{\"task\":\"a:test\"}").unwrap();
     hb.set_aside(b"{\"task\":\"b:test\"}").unwrap();
     for h in [&ha, &hb] {
@@ -372,22 +382,21 @@ fn a_set_aside_is_read_on_another_host() {
 fn two_hosts_of_one_signer_keep_both_adds() {
     let (a, _bare, b) = two_hosts("rr-adds");
     let (ka, kb) = (key(), key());
-    host(&a, BTreeMap::new(), Some(("sessions", ka.clone())))
+    host(&a, Some(("sessions", ka.clone())))
         .record_results(&lines(&[ran("a:test", Outcome::Pass)]))
         .unwrap();
-    host(&b, BTreeMap::new(), Some(("sessions", kb.clone())))
+    host(&b, Some(("sessions", kb.clone())))
         .record_results(&lines(&[ran("b:test", Outcome::Pass)]))
         .unwrap();
-    let both = SignerKey::Ssh(
-        ssh::allowed(&format!(
-            "a {}\nb {}\n",
-            ka.public_key().to_openssh().unwrap(),
-            kb.public_key().to_openssh().unwrap()
-        ))
-        .unwrap(),
-    );
-    let reader = host(&a, BTreeMap::from([("sessions".into(), both)]), None);
-    let mut tasks: Vec<String> = parse_lines::<ResultLine>(&reader.results().unwrap())
+    let both = SignerKey::ssh(&format!(
+        "a {}\nb {}\n",
+        ka.public_key().to_openssh().unwrap(),
+        kb.public_key().to_openssh().unwrap()
+    ))
+    .unwrap();
+    let reader = host(&a, None);
+    let signers = BTreeMap::from([("sessions".into(), both)]);
+    let mut tasks: Vec<String> = parse_lines::<ResultLine>(&reader.results_with(&signers).unwrap())
         .unwrap()
         .into_iter()
         .map(|l| l.task)
@@ -401,7 +410,7 @@ fn two_hosts_of_one_signer_keep_both_adds() {
 #[test]
 fn a_host_with_no_signing_key_records_nothing_and_says_so() {
     let (a, _bare, _b) = two_hosts("rr-unsigned");
-    let err = host(&a, BTreeMap::new(), None)
+    let err = host(&a, None)
         .record_results(&lines(&[ran("a:test", Outcome::Pass)]))
         .unwrap_err();
     assert!(format!("{err:#}").contains("[signing]"), "{err:#}");
@@ -412,7 +421,7 @@ fn a_host_with_no_signing_key_records_nothing_and_says_so() {
 #[test]
 fn logs_are_kept_on_the_remote_for_the_last_candidates() {
     let (a, bare, _b) = two_hosts("rr-logs");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     for n in 1..=(KEPT_LOGS + 2) {
         let kept = h
             .keep_logs(
@@ -538,7 +547,7 @@ fn a_sign_of_life_cut_after_it_was_sent_stands() {
         "origin",
         &format!("{}/o/r.git", fake.url()),
     ]);
-    let h = host(&repo, BTreeMap::new(), None);
+    let h = host(&repo, None);
     h.beat("h", b"{}").unwrap();
     let pushes = fake.requests().iter().filter(|r| is_push(r)).count();
     assert_eq!(pushes, 1, "one push");
@@ -551,10 +560,7 @@ fn a_sign_of_life_cut_after_it_was_sent_stands() {
 fn a_state_write_refused_at_the_lease_is_one_push() {
     use std::os::unix::fs::PermissionsExt;
     let (a, _bare, b) = two_hosts("rr-lease-once");
-    let (ha, hb) = (
-        host(&a, BTreeMap::new(), None),
-        host(&b, BTreeMap::new(), None),
-    );
+    let (ha, hb) = (host(&a, None), host(&b, None));
     let at_a = ha.read("main").unwrap().version;
     let at_b = hb.read("main").unwrap().version;
     // Every push of b's runs this, once.
@@ -626,10 +632,7 @@ fn ref_at(repo: &Repo, name: &str) -> Option<String> {
 #[test]
 fn a_ticks_ask_brings_the_branch_and_the_work_in_one_fetch() {
     let (a, _bare, b) = two_hosts("rr-with-branch");
-    let (ha, hb) = (
-        host(&a, BTreeMap::new(), None),
-        host(&b, BTreeMap::new(), None),
-    );
+    let (ha, hb) = (host(&a, None), host(&b, None));
     {
         let _g = hb.lock("main").unwrap().unwrap();
         hb.write("main", 0, put(&[("branch.json", "{}\n")]))
@@ -665,7 +668,7 @@ fn a_ticks_ask_brings_the_branch_and_the_work_in_one_fetch() {
 #[test]
 fn a_branch_the_remote_lacks_still_gives_the_records() {
     let (a, bare, _b) = two_hosts("rr-no-branch");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     {
         let _g = h.lock("main").unwrap().unwrap();
         h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
@@ -693,7 +696,7 @@ fn a_branch_the_remote_lacks_still_gives_the_records() {
 #[test]
 fn a_remote_out_of_reach_gives_the_records_last_fetched() {
     let (a, bare, _b) = two_hosts("rr-with-branch-stale");
-    let h = host(&a, BTreeMap::new(), None);
+    let h = host(&a, None);
     {
         let _g = h.lock("main").unwrap().unwrap();
         h.write("main", 0, put(&[("branch.json", "{}\n")])).unwrap();
@@ -749,7 +752,7 @@ impl Asked {
         a.git(&["branch", "release"]);
         let bare = a.bare_origin();
         let b = Repo::clone_of(bare.path(), &format!("{name}-b"));
-        let other = host(&b, BTreeMap::new(), None);
+        let other = host(&b, None);
         for branch in ["main", "release"] {
             other
                 .write(branch, 0, put(&[("branch.json", "{}\n")]))
@@ -884,4 +887,204 @@ fn a_rounds_read_still_fetches_its_branch() {
     assert_eq!(r.read("main").unwrap().version, 2);
     assert_eq!(s.fetched(), before + 1);
     assert_eq!(r.read_held("main").unwrap().version, 2);
+}
+
+/// A policy keeping `main` and `release` on origin, naming each signer in
+/// `signers` with its keys, every one trusted.
+fn signers_policy(signers: &[(&str, &[&PrivateKey])]) -> String {
+    let mut out = String::new();
+    for (name, keys) in signers {
+        let lines: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{name} {}", k.public_key().to_openssh().unwrap()))
+            .collect();
+        out += &format!("[signers.{name}]\nssh = \"{}\"\n\n", lines.join("\\n"));
+    }
+    let trust: Vec<String> = signers.iter().map(|(n, _)| format!("\"{n}\"")).collect();
+    for b in ["main", "release"] {
+        out += &format!(
+            "[branches.{b}]\nremote = \"origin\"\ntrust = [{}]\n\n",
+            trust.join(", ")
+        );
+    }
+    out
+}
+
+/// A host whose `main` names `main`'s signers and whose `release` names
+/// `release`'s, both on origin, and origin.
+fn branches_on_origin(
+    name: &str,
+    main: &[(&str, &[&PrivateKey])],
+    release: &[(&str, &[&PrivateKey])],
+) -> (Repo, Scratch) {
+    let a = Repo::new(name);
+    a.write(".config/sluice.toml", &signers_policy(main));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "main's signers"]);
+    let bare = a.bare_origin();
+    let policy = signers_policy(release);
+    a.branch("release", "main", &[(".config/sluice.toml", Some(&policy))]);
+    a.git(&["push", "-q", "origin", "release"]);
+    (a, bare)
+}
+
+/// `ls` signed as `signer` with `k`, added to its ref on origin.
+fn sign(repo: &Repo, signer: &str, k: &PrivateKey, ls: &[ResultLine]) {
+    host(repo, Some((signer, k.clone())))
+        .record_results(&lines(ls))
+        .unwrap();
+}
+
+/// A pass of `task` on a combination of `branch`.
+fn passed_on(task: &str, branch: &str) -> ResultLine {
+    let mut l = ran(task, Outcome::Pass);
+    l.branch = branch.into();
+    l
+}
+
+/// This host's records, as a command binds them, verifying nothing it
+/// signs.
+fn records(repo: &Repo) -> sluice::profiles::records::Records {
+    sluice::profiles::records::Records::new(
+        &repo.dir().join(".git"),
+        sluice::profiles::branches::Branches::open_as(repo.dir(), None, recorded()).unwrap(),
+        None,
+    )
+}
+
+/// The tasks of the signed runs `branch`'s gate reads, in order.
+fn signed(r: &sluice::profiles::records::Records, branch: &str) -> Vec<String> {
+    let mut tasks: Vec<String> = parse_lines::<ResultLine>(&r.results(branch).unwrap())
+        .unwrap()
+        .into_iter()
+        .filter(|l| l.signer.is_some())
+        .map(|l| l.task)
+        .collect();
+    tasks.sort();
+    tasks
+}
+
+/// 78, 27, rule core.22: `main` lists key A for `box` and `release` key
+/// B; each branch's runs are verified with its own key, whichever branch
+/// one process reads first.
+#[test]
+fn each_branch_reads_runs_with_its_own_key_whichever_is_read_first() {
+    let (ka, kb) = (key(), key());
+    let (a, _bare) = branches_on_origin("rr-own-keys", &[("box", &[&ka])], &[("box", &[&kb])]);
+    sign(&a, "box", &ka, &[passed_on("a:test", "main")]);
+    sign(&a, "box", &kb, &[passed_on("b:test", "release")]);
+    for order in [["main", "release"], ["release", "main"]] {
+        let r = records(&a);
+        let read: BTreeMap<&str, Vec<String>> = order.iter().map(|b| (*b, signed(&r, b))).collect();
+        assert_eq!(read["main"], ["a:test"], "read {order:?}");
+        assert_eq!(read["release"], ["b:test"], "read {order:?}");
+    }
+}
+
+/// 78, 87, rule core.22: a host signing as `box` with key A has runs that
+/// count for `main`, whose policy lists A, and none for `release`, whose
+/// policy lists B for `box`; a host that signs nothing has none.
+#[test]
+fn a_hosts_runs_count_only_where_the_branch_lists_its_key() {
+    let (ka, kb) = (key(), key());
+    let (a, _bare) = branches_on_origin("rr-own-claims", &[("box", &[&ka])], &[("box", &[&kb])]);
+    let keys = Scratch::new("rr-own-claims-key");
+    let path = keys.path().join("signing");
+    ka.write_openssh_file(&path, ssh_key::LineEnding::LF)
+        .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let r = sluice::profiles::records::Records::new(
+        &a.dir().join(".git"),
+        sluice::profiles::branches::Branches::open_as(a.dir(), None, recorded()).unwrap(),
+        Some(sluice::instance::Signing {
+            signer: "box".into(),
+            key: path,
+        }),
+    );
+    let (main, release) = (Rev::new(a.rev("main")), Rev::new(a.rev("release")));
+    assert!(r.verifies_own("main", &main).unwrap());
+    assert!(!r.verifies_own("release", &release).unwrap());
+    assert!(!records(&a).verifies_own("main", &main).unwrap());
+    assert_eq!(r.lists_read(), 2, "no read again at a revision read");
+    assert!(r.verifies_own("main", &main).unwrap());
+    assert_eq!(r.lists_read(), 2);
+}
+
+/// 78, 56, rule core.31: a signer only the second branch names counts for
+/// it; a key added to `main` on origin while a process runs counts once
+/// that process fetched the revision, its policy read again once for the
+/// move and not again while the revision stands.
+#[test]
+fn a_signer_only_the_second_branch_names_and_a_key_added_later_count() {
+    let (ka, kb, kc) = (key(), key(), key());
+    let (a, bare) = branches_on_origin(
+        "rr-later-key",
+        &[("box", &[&ka])],
+        &[("box", &[&ka]), ("ci", &[&kc])],
+    );
+    sign(&a, "box", &ka, &[passed_on("a:test", "main")]);
+    sign(&a, "box", &kb, &[passed_on("b:test", "main")]);
+    sign(&a, "ci", &kc, &[passed_on("c:test", "release")]);
+    let r = records(&a);
+    assert_eq!(signed(&r, "main"), ["a:test"]);
+    assert_eq!(signed(&r, "release"), ["a:test", "c:test"]);
+    let read = r.lists_read();
+    assert_eq!(signed(&r, "main"), ["a:test"]);
+    assert_eq!(r.lists_read(), read, "nothing moved, nothing read");
+
+    let other = Repo::clone_of(bare.path(), "rr-later-key-b");
+    other.push_change(
+        ".config/sluice.toml",
+        &signers_policy(&[("box", &[&ka, &kb])]),
+    );
+    a.git(&["fetch", "-q", "origin"]);
+    assert_eq!(signed(&r, "main"), ["a:test", "b:test"]);
+    assert_eq!(r.lists_read(), read + 1, "read again for the move");
+    assert_eq!(signed(&r, "main"), ["a:test", "b:test"]);
+    assert_eq!(r.lists_read(), read + 1, "not again at the same revision");
+    assert_eq!(signed(&r, "release"), ["a:test", "c:test"]);
+}
+
+/// 124: `release` is routed to origin, which holds no `release`, and the
+/// host's own `release` names `box`: no signed run counts for it, while
+/// `main`, which origin holds, reads box's run.
+#[test]
+fn a_branch_its_remote_does_not_hold_reads_no_signed_run() {
+    let ka = key();
+    let a = Repo::new("rr-unheld");
+    a.write(".config/sluice.toml", &signers_policy(&[("box", &[&ka])]));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let _bare = a.bare_origin();
+    a.branch("release", "main", &[("notes", Some("only here\n"))]);
+    assert_eq!(ref_at(&a, "refs/remotes/origin/release"), None);
+    sign(&a, "box", &ka, &[passed_on("a:test", "release")]);
+    let r = records(&a);
+    assert!(r.route("release").unwrap().is_some(), "routed to origin");
+    assert!(signed(&r, "release").is_empty());
+    assert_eq!(signed(&r, "main"), ["a:test"]);
+}
+
+/// 78, rule core.22: `scratch` keeps its records in the host's own files
+/// and its policy names no signer; `main` on origin names `box`. None of
+/// box's runs is read for `scratch`, whichever branch was read first.
+#[test]
+fn a_branch_in_the_hosts_own_files_reads_with_its_own_list() {
+    let ka = key();
+    let a = Repo::new("rr-own-files");
+    a.write(".config/sluice.toml", &signers_policy(&[("box", &[&ka])]));
+    a.git(&["add", "-A"]);
+    a.git(&["commit", "-q", "-m", "signers"]);
+    let _bare = a.bare_origin();
+    a.branch(
+        "scratch",
+        "main",
+        &[(".config/sluice.toml", Some("[branches.scratch]\n"))],
+    );
+    sign(&a, "box", &ka, &[passed_on("a:test", "scratch")]);
+    let r = records(&a);
+    assert_eq!(signed(&r, "main"), ["a:test"]);
+    assert!(r.route("scratch").unwrap().is_none(), "in the host's files");
+    assert!(signed(&r, "scratch").is_empty());
 }
